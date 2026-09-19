@@ -1716,6 +1716,34 @@ async function confirmSubmitted(name, text) {
   }
 }
 
+/**
+ * The last text appd pasted into a pane, and when.
+ *
+ * ⚠ SO THE DRAFT GUARD CANNOT DEADLOCK ON THE DAEMON'S OWN LEFTOVERS. A pane
+ * can keep a piece of what we last pasted — the recovery's 'leave' branch
+ * presses no Enter by design, and a frame whose final line carries no newline
+ * stays in the box. Without this the guard reads that as somebody mid-sentence
+ * and holds every later message to that session for ten minutes each.
+ *
+ * In memory, pruned on write, and it never holds more than the sessions pasted
+ * into within the last hold window.
+ */
+const lastPasted = new Map();   // session name -> { text, at }
+
+function rememberPaste(name, text) {
+  const now = Date.now();
+  for (const [k, v] of lastPasted) {
+    if (now - v.at > typing.DRAFT_HOLD_MAX_MS) lastPasted.delete(k);
+  }
+  lastPasted.set(name, { text: String(text || ''), at: now });
+}
+
+/** What appd last put in this pane's box, or null if it has never typed here. */
+function lastPastedText(name) {
+  const v = lastPasted.get(name);
+  return v ? v.text : null;
+}
+
 /** One bracketed paste of `text` into a pane. The half of delivery that repeats. */
 async function pasteOnce(name, text) {
   const target = `=${name}:`;
@@ -1730,6 +1758,7 @@ async function pasteOnce(name, text) {
     await run('tmux', ['delete-buffer', '-b', buf]);     // -d never ran
     return { ok: false, fallback: false, stderr: pb.stderr };
   }
+  rememberPaste(name, text);
   return { ok: true };
 }
 
@@ -1751,12 +1780,21 @@ async function pasteOnce(name, text) {
  * ONCE. A second failure is reported, not retried — a loop here is a pane getting
  * the same message three times the moment its first paste was merely slow.
  */
-async function recoverLostPaste(name, text, settle) {
+async function recoverLostPaste(name, text, settle, before) {
   const fresh = (await capturePaneLines(name)) || settle.lines;
-  const what = typing.recoveryDecision(fresh);
+  const what = typing.recoveryDecision(fresh, { text, before });
   if (what === 'blind') {
     log(typing.pasteLostLogLine(name, settle.waitedMs, fresh));
     return { landed: false, enter: true, recovered: false };
+  }
+  // ⚠ PRESENT, LATE, AND ALONE IS NOT LOST. The bound ran out and the text then
+  // appeared — a loaded host, a pane that repainted slowly. Re-pasting here is
+  // how one message becomes two, which is the failure the whole ONCE rule below
+  // is about; the Enter is all that is owed.
+  if (what === 'landed') {
+    log(`typing: ${name}: pasted text appeared after the ${settle.waitedMs}ms bound; `
+      + 'submitting it rather than re-pasting');
+    return { landed: true, enter: true, recovered: false };
   }
   if (what === 'leave') {
     log(typing.pasteLeftAloneLogLine(name, settle.waitedMs, fresh));
@@ -1792,7 +1830,7 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
     let recovered = false;
     let press = true;
     if (!settle.landed) {
-      const r = await recoverLostPaste(name, text, settle);
+      const r = await recoverLostPaste(name, text, settle, before);
       landed = r.landed;
       recovered = r.recovered;
       press = r.enter;
@@ -1906,6 +1944,46 @@ const STARTUP_GRACE_MS = (() => {
  */
 const unmarkedHeld = new Set();
 
+/**
+ * When a LIVE-VIEW keypress last reached a session — the Screen tab's own typing.
+ *
+ * ⚠ THE HALF OF THE DRAFT GUARD A CAPTURE CANNOT SEE. `composerHoldsDraft` reads
+ * a picture, and a keystroke that has been accepted by the route but not yet
+ * painted by the TUI is not in that picture: on the night of 2026-09-19 the
+ * owner's live-view burst ran at up to nine posts a second. While keys are
+ * arriving the box belongs to the person whatever the capture says, so the route
+ * stamps this and the gate holds for `LIVE_KEYS_WINDOW_MS` after the last one.
+ *
+ * Only live-view input stamps it: raw keys (the Screen tab's keyboard, its
+ * Escape and BTab buttons) and text sent WITHOUT an Enter, which is what the
+ * Screen tab's typing is. A composer send — text AND Enter — is the thing being
+ * guarded, so it must never mark the session as busy on its own behalf.
+ *
+ * In memory, pruned on write, and never a reason to DROP anything.
+ */
+const liveKeysAt = new Map();   // session name -> ms epoch of the last live-view keypress
+
+function markLiveKeys(name) {
+  const now = Date.now();
+  for (const [k, t] of liveKeysAt) {
+    if (now - t > typing.LIVE_KEYS_WINDOW_MS) liveKeysAt.delete(k);
+  }
+  liveKeysAt.set(name, now);
+}
+
+/** How long ago a person last typed into this session's live view, or null. */
+function liveKeysAgoMs(name) {
+  const t = liveKeysAt.get(name);
+  return t == null ? null : Date.now() - t;
+}
+
+/**
+ * The sessions currently held by the DRAFT guard, so the journal line is written
+ * once per hold rather than once per 400 ms poll — the same promise `unmarkedHeld`
+ * makes, and for the same reason.
+ */
+const draftHeld = new Set();
+
 function markLaunching(name) {
   const now = Date.now();
   for (const [k, t] of launchingAt) {
@@ -1978,6 +2056,12 @@ function queueFor(name) {
 function pendingSendCount(name) {
   const q = sendQueues.get(name);
   return q ? q.entries.length : 0;
+}
+
+/** What is still WAITING for this session — what the duplicate guard compares against. */
+function pendingEntries(name) {
+  const q = sendQueues.get(name);
+  return q ? q.entries : [];
 }
 
 /** The last 64 KB of a session's jsonl transcript, plus its size, or null. */
@@ -2076,6 +2160,9 @@ async function checkGates(name) {
   // holding nothing is proof no selector is up, whatever the state file says.
   // `null` — no composer at all — is NOT that proof (see humanAttentionHold).
   const composerEmpty = lines ? typing.composerEmpty(lines) : null;
+  // And the composer's CONTENT, because the draft guard's question is per-entry
+  // ("is what is in there ours?") and only the pump knows whose text is next.
+  const composerHolds = lines ? typing.composerText(lines) : null;
   // And the two facts the SUBMIT refusal turns on (#15): is Claude up at all,
   // and is what is down there a shell prompt waiting to run whatever it is given.
   const composer = lines ? typing.composerDrawn(lines) : false;
@@ -2084,7 +2171,7 @@ async function checkGates(name) {
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, composerEmpty, composer, shell,
+  return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell,
     sessionState: readSessionState(name) };
 }
 
@@ -2224,7 +2311,8 @@ async function pumpQueue(name) {
       // AND a person's message does not skip the STARTUP gate. "A human
       // send never waits for a turn" is about Claude being BUSY; it was never
       // about Claude not being there. `gate.starting` rides on both lanes below.
-      const humanText = !entry.automated && typeof entry.run !== 'function';
+      const textEntry = typeof entry.run !== 'function';
+      const humanText = !entry.automated && textEntry;
       // 3.0.4: the AUTOMATED lane gets a second boundary source — the title
       // hook's state file. `{state:"idle", ts}` stamped after the send was
       // queued is a turn that demonstrably ended, and it is the ONLY boundary a
@@ -2250,9 +2338,29 @@ async function pumpQueue(name) {
         log(`typing: ${name}: a queued message has waited ${Math.round((now - entry.at) / 1000)}s `
           + 'for a turn boundary that never came; sending it now');
       }
+      // ⚠ THE DRAFT GUARD (2026-09-19). Before ANY text is pasted — a person's
+      // or appd's own — whose words are already in the box? A message pasted in
+      // front of somebody's half-typed draft and submitted merges the two into
+      // one sentence the owner never wrote, and the transcript keeps it: the
+      // 04:04:01.611Z record reads `" was think ask againaskadaask questions
+      // again, side note: …"`. The composer is the person's; a send waits for
+      // it, the way it already waits for a dialog.
+      //
+      // Text only. A pane SCRIPT types no text, and the Screen tab's own
+      // keystrokes (`submit:false`) ARE the draft — holding those would take the
+      // terminal keyboard away exactly as the modal refusal once did.
+      const guarded = textEntry && entry.submit !== false;
+      const holdForDraft = typing.draftHold({
+        draft: guarded
+          ? typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name))
+          : null,
+        keysAgoMs: guarded ? liveKeysAgoMs(name) : null,
+        waitedMs: now - entry.at,
+      });
       const d = typing.releaseDecision(humanText
         ? {
           ...gate,
+          draft: holdForDraft,
           // A person's message never waits for CLAUDE (3.0.3) — but one they
           // QUEUED behind a gate is not an interjection, and flushing it into
           // the turn the previous message just started is how the first
@@ -2260,7 +2368,29 @@ async function pumpQueue(name) {
           idle: entry.queuedBehindHuman ? (gate.idle || overdue) : true,
           state: holdForQuestion ? 'hold' : (entry.queuedBehindHuman ? stateSays : null),
         }
-        : { ...gate, state: stateSays });
+        : { ...gate, state: stateSays, draft: holdForDraft });
+      // ⚠ LOGGED OFF `d`, NOT OFF THE HOLD. A trust dialog has a caret of its own
+      // (`❯ 1. Yes, I trust this folder`), so the draft rule says "true" about a
+      // pane whose real answer is `modal` — and modal outranks it. Writing the
+      // line from the hold alone told a reader to go and clear a composer that
+      // was a dialog. Once per hold, like `unmarkedHeld`, because a line per
+      // 400 ms poll is not a journal.
+      if (d.blockedBy === 'draft') {
+        if (!draftHeld.has(name)) {
+          draftHeld.add(name);
+          log(typing.draftHeldLogLine(name, gate.composerHolds));
+        }
+      } else if (draftHeld.delete(name)) {
+        // Which way the hold ended matters: the person sent or cleared their
+        // draft (the ordinary case, and quiet), or the ceiling ran out and the
+        // message is going into their box anyway. The second one is news.
+        if (holdForDraft === false && guarded
+            && typing.composerHoldsDraft(gate.composerHolds, entry.text, lastPastedText(name)) === true) {
+          log(typing.draftOverdueLogLine(name, now - entry.at, gate.composerHolds));
+        } else {
+          log(typing.draftClearedLogLine(name, now - entry.at));
+        }
+      }
       if (!d.release) {
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);
@@ -2323,6 +2453,7 @@ async function pumpQueue(name) {
     else if (!q.lastError || (await sessionExists(name)) === false) {
       sendQueues.delete(name);
       unmarkedHeld.delete(name);
+      draftHeld.delete(name);
     }
   }
 }
@@ -10181,6 +10312,18 @@ const server = http.createServer(async (req, res) => {
        * swallowed with no trace. Neither is true of a keystroke a person just
        * pressed.
        */
+      /**
+       * LIVE-VIEW INPUT, which is what the draft guard's blind half turns on.
+       *
+       * Raw keys are always somebody at a keyboard, and so is text with no Enter
+       * — that is the Screen tab typing into the box rather than sending it. A
+       * composer send (text AND Enter) is the thing being guarded and must never
+       * mark the session on its own behalf. Stamped before anything is queued so
+       * a keypress that arrives while a send waits keeps holding it.
+       */
+      if (rawKeys.length > 0 || (typedKeys.length > 0 && !keys.includes('Enter'))) {
+        markLiveKeys(name);
+      }
       let queued = 0;
       let position = 0;
       let delivered = false;
@@ -10213,6 +10356,37 @@ const server = http.createServer(async (req, res) => {
          * after the paste has already submitted would send an empty second one.
          */
         const wantsEnter = keys.includes('Enter');
+        /**
+         * ⚠ THE SAME MESSAGE, PRESSED AGAIN WHILE THE FIRST IS STILL WAITING.
+         *
+         * What doubled the owner's message on 2026-09-19 was not a re-paste and
+         * not Claude Code's queue: this route was POSTed the identical text three
+         * times — 04:00:16.419Z, 04:00:28.379Z, 04:00:32.818Z — into a queue that
+         * was held, and the queue delivered all three. The client has no retry;
+         * a person pressing Send again at a composer that emptied and then said
+         * nothing for forty-seven seconds is the whole mechanism, and the daemon
+         * had no way to tell that from two messages that happen to read alike.
+         *
+         * A copy STILL IN THE QUEUE is the tell, and the only one taken: nothing
+         * the sender could see has happened to it yet, so the second press asks
+         * for the message to arrive, not to arrive twice. A DELIVERED message is
+         * never an excuse to swallow the next one — `yes` twice in a minute is an
+         * ordinary thing to mean. The answer carries the first copy's own place
+         * in the queue, so the client's "queued (1 waiting)" line stays true.
+         */
+        const dup = wantsEnter
+          ? typing.duplicatePending(pendingEntries(name), typedKeys, Date.now())
+          : null;
+        if (dup) {
+          const q = sendQueues.get(name);
+          const at = q ? q.entries.indexOf(dup) : -1;
+          log(`typing: ${name}: the same message is already queued (${dup.id}); `
+            + 'not queuing it a second time');
+          return sendJson(res, 200, {
+            ok: true, queued: q ? q.entries.length : 0, position: at < 0 ? 0 : at + 1,
+            delivered: false, blockedBy: (q && q.blockedBy) || null, duplicate: true,
+          });
+        }
         const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter });
         if (out.result && !out.result.ok) {
           return sendErr(res, out.result.code || 500, out.result.message);

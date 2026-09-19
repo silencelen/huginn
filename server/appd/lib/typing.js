@@ -666,11 +666,181 @@ function composerEmpty(lines) {
   return COMPOSER_PLACEHOLDER_RE.test(squashed);
 }
 
-/** What a paste that never appeared may do about it: 'blind' | 'resend' | 'leave'. */
-function recoveryDecision(lines) {
+/**
+ * ─── WHOSE TEXT IS IN THE BOX ──────────────────────────────────────────────
+ *
+ * ⚠ THE P1 THIS EXISTS FOR (2026-09-19 04:04:01Z, the owner's own session).
+ * A message queued behind a turn boundary was released into a composer that
+ * already held the owner's half-typed draft — `❯  was think ask againaskada` —
+ * and the daemon did what it has always done: pasted after it, watched the
+ * probe appear (it WAS on screen, amid their words), and pressed Enter. The
+ * transcript recorded one `user` record holding both:
+ *
+ *   " was think ask againaskadaask questions again, side note: i was thinking…"
+ *
+ * Their draft was submitted, as part of a sentence they never wrote. `composerEmpty`
+ * was the only rule that could have spoken and nothing on the DELIVERY path asked
+ * it: the whole composer-is-theirs question lived in the lost-paste RECOVERY, which
+ * only ever runs when a paste failed to appear. A paste that lands perfectly on
+ * top of somebody's draft never went near it.
+ *
+ * So the question is asked BEFORE the paste, by the gate, for every send there is:
+ *
+ *   null   no composer here at all (a shell, a pane still booting). This rule
+ *          cannot speak, and `draftHold` below turns on the difference — a
+ *          session appd types into blind keeps the behaviour it has always had.
+ *   false  empty, the placeholder hint, or the very text we are about to paste
+ *          (a resend, or a collapsed-paste marker left by our own first try —
+ *          the same reading `pasteIndistinguishable` makes).
+ *   true   somebody else's. A draft, or live-view keystrokes still in flight.
+ *
+ * ⚠ THE PROBE, NOT THE WHOLE MESSAGE, on the "ours" half. A pane 100 columns wide
+ * shows the first rows of a long paste and a `[Pasted text +40 lines]` marker for
+ * the rest, so comparing the full text would read every long resend as a stranger's
+ * draft and hold it for ten minutes.
+ */
+function composerHoldsDraft(composerHolds, text, ours = null) {
+  if (composerHolds === null || composerHolds === undefined) return null;
+  const squashed = squashPane(composerHolds);
+  if (!squashed) return false;
+  if (COMPOSER_PLACEHOLDER_RE.test(squashed)) return false;
+  const probe = pasteProbe(text);
+  if (probe && (squashed.includes(probe) || PASTED_MARKER_RE.test(squashed))) return false;
+  // ⚠ AND OUR OWN LEFTOVERS ARE NOT A DRAFT. A pane can strand a piece of the
+  // LAST thing appd pasted into it: the recovery's 'leave' branch deliberately
+  // presses no Enter, and a frame whose final line carries no newline sits in
+  // the box afterwards (`❯ [End brief. Size this project…]`, seen in the
+  // projects suite). Reading that as a person mid-sentence would hold every
+  // later message to that session for the full ten minutes, one after another —
+  // a deadlock built out of a guard. What is left of our own paste is ours to
+  // join; the stalled-submit line above is what owns that problem.
+  //
+  // A SUBSTRING, because what survives is a fragment of what went in — and
+  // never the other way round: a draft that has GROWN past our last paste (the
+  // Screen tab typing character by character, which is exactly how the owner's
+  // draft was built) is not contained in it and stays a draft.
+  const mine = squashPane(ours || '');
+  if (mine && mine.includes(squashed)) return false;
+  return true;
+}
+
+/** How long a queued message may be held by somebody's unsent draft. */
+const DRAFT_HOLD_MAX_MS = QUEUE_MAX_WAIT_MS;
+
+/**
+ * How long after a live-view keypress the composer still belongs to the person.
+ *
+ * ⚠ BECAUSE THE PANE IS A PICTURE AND KEYSTROKES ARE IN FLIGHT. The Screen tab
+ * sends one `/keys` per keypress; between the POST landing and the TUI painting
+ * the character there is a window in which `composerHoldsDraft` truthfully
+ * answers "empty" about a box somebody is actively typing into. On the night of
+ * the incident the burst ran 03:58:25→03:59:11Z at up to nine posts a second.
+ * Five seconds is two orders over the paint and short enough that a person who
+ * stopped typing is not kept waiting for a message they can see is queued.
+ */
+const LIVE_KEYS_WINDOW_MS = 5_000;
+
+/**
+ * Should this send be held because the composer is somebody's, not ours?
+ *
+ * Two ways the box is theirs, and the second is the one a capture cannot see:
+ * text is in it, or a keystroke reached this session in the last few seconds.
+ * Held, never dropped, and BOUNDED — a hold a person cannot see the end of is
+ * the same bug as a message that vanishes, so after `maxMs` the message goes.
+ * The ceiling is the one the attention hold uses, for the same reason: one
+ * number to remember.
+ *
+ * `draft === null` — no composer at all — never holds. A plain shell has no box
+ * to own, and refusing to type into one would break every non-Claude pane the
+ * app can open.
+ */
+function draftHold({ draft = null, keysAgoMs = null, waitedMs = 0,
+  maxMs = DRAFT_HOLD_MAX_MS, keysWindowMs = LIVE_KEYS_WINDOW_MS } = {}) {
+  if (draft === null) return false;
+  const waited = Number(waitedMs);
+  if (Number.isFinite(waited) && waited >= maxMs) return false;
+  if (draft === true) return true;
+  // ⚠ `== null` FIRST, because `Number(null)` is 0 and 0 ms ago is the most
+  // recent keypress there is. Read as a number, "nobody has ever typed here"
+  // became "somebody is typing right now" and held every send on every session
+  // for the width of the window.
+  if (keysAgoMs == null) return false;
+  const ago = Number(keysAgoMs);
+  return Number.isFinite(ago) && ago >= 0 && ago < keysWindowMs;
+}
+
+function draftHeldLogLine(name, holds) {
+  return `typing: ${name}: holding a send — there is unsent text in the live view `
+    + `| composer: ${String(holds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`;
+}
+function draftClearedLogLine(name, waitedMs) {
+  return `typing: ${name}: the live view's composer is free again after ${waitedMs}ms; sending`;
+}
+function draftOverdueLogLine(name, waitedMs, holds) {
+  return `typing: ${name}: unsent text has been in the live view for ${Math.round(waitedMs / 1000)}s `
+    + `and a message cannot wait forever; sending into it anyway `
+    + `| composer: ${String(holds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`;
+}
+
+/**
+ * What a paste that never appeared may do about it.
+ *
+ *   'blind'   no composer at all — press Enter as this always did.
+ *   'resend'  a composer, empty. Re-paste ONCE.
+ *   'landed'  our text IS there after all, in a box that held nothing of anybody
+ *             else's before the paste — it simply arrived after the bound ran
+ *             out. Press Enter; re-pasting would put the message in twice.
+ *   'leave'   a composer holding something that is not ours. Nothing is typed
+ *             and nothing is pressed.
+ *
+ * ⚠ 'landed' IS THE ANSWER THE TIMEOUT COULD NOT GIVE. `pasteLanded` is read
+ * once more on a FRESH capture here, so "absent" and "present, late" stop being
+ * the same verdict — and `before` is what separates "present, late, alone" from
+ * "present, late, on top of a draft", which must never be submitted. When the
+ * pane could not be read before the paste the doubt goes to the message: it is
+ * on screen and a reader can see it, which is better than stranding it.
+ */
+function recoveryDecision(lines, opts = {}) {
+  const { text = null, before = null } = opts;
   const empty = composerEmpty(lines);
   if (empty === null) return 'blind';
-  return empty ? 'resend' : 'leave';
+  if (empty) return 'resend';
+  if (text != null && pasteLanded(lines, text)
+      && composerHoldsDraft(composerText(before), text) !== true) return 'landed';
+  return 'leave';
+}
+
+/**
+ * The same message, POSTed again while the first copy is STILL WAITING.
+ *
+ * ⚠ WHAT ACTUALLY DOUBLED THE OWNER'S MESSAGE (2026-09-19). The daemon did not
+ * re-paste anything and Claude Code did not duplicate anything: the app posted
+ * the same text three times — 04:00:16.419Z, 04:00:28.379Z, 04:00:32.818Z — into
+ * a queue that was held, and the queue faithfully delivered three copies. There
+ * is no retry in the client; a person pressing Send again at a composer that
+ * emptied and then said nothing for forty-seven seconds is the whole mechanism.
+ *
+ * ⚠ AND ONLY AGAINST A COPY THAT HAS NOT GONE YET. "the same words twice in
+ * thirty seconds" is a perfectly ordinary thing to mean — `yes`, `continue`, a
+ * retried one-word answer — so a delivered message is never an excuse to swallow
+ * the next one. A copy still sitting in the queue is different in kind: nothing
+ * the sender could see has happened yet, and pressing Send again asks for the
+ * message to arrive, not to arrive twice. The window caps it so that a send held
+ * behind a ten-minute dialog can still be deliberately repeated.
+ */
+const DUPLICATE_WINDOW_MS = 30 * 1000;
+function duplicatePending(entries, text, nowMs, windowMs = DUPLICATE_WINDOW_MS) {
+  if (!Array.isArray(entries) || typeof text !== 'string' || !text) return null;
+  const now = Number(nowMs);
+  if (!Number.isFinite(now)) return null;
+  for (const e of entries) {
+    if (!e || e.automated || typeof e.run === 'function' || e.submit === false) continue;
+    if (e.text !== text) continue;
+    const at = Number(e.at);
+    if (!Number.isFinite(at) || at <= 0 || now - at > windowMs) continue;
+    return e;
+  }
+  return null;
 }
 
 function pasteResentLogLine(name, waitedMs, lines) {
@@ -925,12 +1095,19 @@ function submitRefusal({ submit = true, composer = false, shell = false } = {}) 
  *              may be thrown at a pane where Claude has not started.
  *   attention  a question is waiting; prose typed into a numbered prompt is
  *              lost or misread. Held, never dropped, for as long as it takes.
+ *   draft      there is unsent text in the live view. Pasting in front of it
+ *              merges two people's sentences into one and submits the result
+ *              (2026-09-19; see `composerHoldsDraft`). LAST of the holds on
+ *              purpose: a dialog pane has no ordinary composer, so `modal` and
+ *              `attention` keep the words they always reported for it, and only
+ *              a plain box with somebody's words in it reaches this line.
  *   then either boundary — the transcript's or the hook's — lets it go.
  */
-function releaseDecision({ idle, paneWhy, state = null, starting = false }) {
+function releaseDecision({ idle, paneWhy, state = null, starting = false, draft = false }) {
   if (paneBlocks(paneWhy)) return { release: false, blockedBy: 'modal' };
   if (starting) return { release: false, blockedBy: 'starting' };
   if (state === 'hold') return { release: false, blockedBy: 'attention' };
+  if (draft) return { release: false, blockedBy: 'draft' };
   if (idle || state === 'release') return { release: true, blockedBy: null };
   return { release: false, blockedBy: 'turn' };
 }
@@ -1023,7 +1200,10 @@ module.exports = {
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
   composerEmpty, recoveryDecision,
+  composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
+  duplicatePending, DUPLICATE_WINDOW_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
+  draftHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
