@@ -1512,10 +1512,43 @@ data class SendKeysResult(
      * False from every older daemon, which is the old behaviour exactly.
      */
     val duplicate: Boolean = false,
+    /**
+     * This send was delivered SYNCHRONOUSLY and went into a composer that was
+     * holding somebody's unsent text (appd 3.6.0). Null in every other case,
+     * including on an older daemon.
+     *
+     * ⚠ D-7. The draft hold is a hold with a ceiling — sixty seconds after the
+     * last live-view keystroke (decision 57) — and when the ceiling is reached
+     * the message goes in anyway, in front of text a person was still typing, and
+     * both are submitted as one prompt. The desktop walker watched
+     * `draft in progress` and `say OK2` become `draft in progresssay OK2`, and
+     * the client said NOTHING: the queued line simply disappeared. Decision 59 is
+     * that the ceiling stays and the silence does not.
+     */
+    val intoDraft: IntoDraft? = null,
 ) {
     /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
     val landed: Boolean get() = delivered || queued <= 0
 }
+
+/**
+ * A delivery that went into somebody's draft anyway (appd 3.6.0, decision 59).
+ *
+ * ⚠ `at` IS EPOCH **SECONDS**, like every other timestamp outside `/v1/headroom`
+ * — the units trap M3 is about. The client has nothing to compute from it, which
+ * is why nothing here converts.
+ *
+ * @param waitedMs how long the message had been held when it went in.
+ * @param composer the first 120 characters of the draft it landed in, already
+ *   whitespace-collapsed by the daemon, so a notice can SHOW what it landed on
+ *   rather than asserting it abstractly.
+ */
+@Serializable
+data class IntoDraft(
+    val at: Long = 0,
+    val waitedMs: Long = 0,
+    val composer: String = "",
+)
 
 /** What the daemon is holding for one session, and why. */
 @Serializable
@@ -1523,9 +1556,27 @@ data class TypingState(
     val queued: Int = 0,
     val delivering: Boolean = false,
     val lastError: String? = null,
-    /** `turn` | `modal` | null — what the queue is waiting on. */
+    /** `turn` | `modal` | `starting` | `attention` | `draft` | `trust` | null. */
     val blockedBy: String? = null,
     val serverTime: Long = 0,
+    /**
+     * How long the HEAD of the queue has been waiting (appd 3.6.0). Zero when
+     * nothing is queued, and never negative however the clock moves.
+     */
+    val waitedMs: Long = 0,
+    /**
+     * The most recent delivery to this session that went into somebody's draft,
+     * or null (appd 3.6.0, decision 59).
+     *
+     * ⚠ IT OUTLIVES THE QUEUE, WHICH IS THE POINT. The daemon reaps the queue
+     * struct the instant it empties — the same instant this notice becomes the
+     * only thing left worth reading — so it is kept in its own map, cleared by
+     * the next ordinary delivery or after an hour. **Read it once
+     * `queued == 0 && !delivering`.**
+     */
+    val intoDraft: IntoDraft? = null,
+    /** The same instant as [serverTime], in SECONDS on every route (appd 3.6.0). */
+    val serverTimeSec: Long = 0,
 )
 
 /**

@@ -1405,6 +1405,7 @@ private fun Composer(
         // that feeds it starts on a queued send and stops when the queue drains —
         // see [SessionController.noteSend].
         val queueState by controller.sendQueue.collectAsState()
+        val draftNotice by controller.draftNotice.collectAsState()
 
         // The shape is [ComposerFrame], shared with the chat composer — including
         // the cap-before-fill that used to live on the line below, which is now one
@@ -1532,6 +1533,29 @@ private fun Composer(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
+        }
+        // ⚠⚠ D-7 / DECISION 59. The draft hold has a ceiling, and when it is
+        // reached the message goes in ON TOP of text somebody was still typing —
+        // both submitted as one prompt. Until now this client's whole account of
+        // that was the queued line disappearing. It stays until dismissed or the
+        // next send, because a reader who put the laptop down must still find it.
+        draftNotice?.let { note ->
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    note,
+                    style = DeskType.rowMeta,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { controller.dismissDraftNotice() }) {
+                    Text("Dismiss", style = DeskType.rowMeta)
+                }
+            }
         }
     }
 }

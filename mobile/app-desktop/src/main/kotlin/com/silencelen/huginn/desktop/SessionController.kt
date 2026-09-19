@@ -9,6 +9,7 @@ import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.IntoDraft
 import com.silencelen.huginn.data.SendKeysResult
 // The shared send-queue vocabulary. This file has its own `SendQueue` (the
 // desktop's sentences, which are not the phone's), so the ONE thing that must
@@ -965,6 +966,43 @@ class SessionController(
 
     private var queueWatch: Job? = null
 
+    private val _draftNotice = MutableStateFlow<String?>(null)
+
+    /**
+     * ⚠⚠ D-7 / DECISION 59. "Your message was sent into text someone was still
+     * typing" — null almost always.
+     *
+     * The draft hold has a ceiling (60 s after the last live-view keystroke) and
+     * when it is reached the message goes in on top of the draft and both are
+     * submitted as one prompt. This client watched `draft in progress` and
+     * `say OK2` leave as `draft in progresssay OK2` and said nothing at all: the
+     * queued line simply disappeared. The daemon now reports it, on the send's
+     * own answer when the delivery was synchronous and on `/typing` otherwise,
+     * and this is where the reader is told.
+     *
+     * Cleared by [dismissDraftNotice] or by the next send — a notice about the
+     * message before last is noise about something already dealt with.
+     */
+    val draftNotice: StateFlow<String?> = _draftNotice.asStateFlow()
+
+    /**
+     * The `at` already reported, so the SAME merge is not raised again on every
+     * poll. The daemon keeps `intoDraft` for an hour on purpose (a parked client
+     * must still see it), which means it is read repeatedly by design.
+     */
+    private var draftNoticeAt: Long = 0
+
+    fun dismissDraftNotice() { _draftNotice.value = null }
+
+    /** Raises the notice for a merge this controller has not reported yet. */
+    private fun noteIntoDraft(into: IntoDraft?) {
+        val at = into?.at ?: return
+        if (at <= 0 || at == draftNoticeAt) return
+        val words = SharedQueue.draftNotice(into) ?: return
+        draftNoticeAt = at
+        _draftNotice.value = words
+    }
+
     /**
      * What a send just did, folded in.
      *
@@ -974,6 +1012,15 @@ class SessionController(
      * line under the composer of every pre-queue host.
      */
     fun noteSend(result: SendKeysResult) {
+        // A new send supersedes the last notice: what the reader needs to know is
+        // where THIS message went, and a strip about the previous one on top of
+        // that is two claims about one composer.
+        _draftNotice.value = null
+        // ⚠ BEFORE THE `landed` RETURN. A delivery that went into somebody's
+        // draft is `delivered:true` — it landed, on top of something — so a check
+        // after the early return would never fire for the synchronous case, which
+        // is the one the sender is standing there watching.
+        noteIntoDraft(result.intoDraft)
         // ⚠ BEFORE THE `landed` RETURN, WHICH A DUPLICATE ALWAYS SATISFIES. The
         // daemon recognised this text as one it already holds (or delivered
         // seconds ago) and did not take it twice — nothing is queued, so the
@@ -1022,6 +1069,11 @@ class SessionController(
     suspend fun pollQueueOnce(): Boolean {
         val state = runCatching { client.typingStatus(name) }.getOrNull() ?: return true
         _sendQueue.value = state
+        // ⚠ ONCE THE QUEUE IS EMPTY, and not before: `intoDraft` outlives the
+        // queue, so while a LATER message is still waiting it describes a
+        // delivery whose result the reader has not seen yet. SharedQueue owns
+        // that rule so both clients obey the same one.
+        if (SharedQueue.draftNoticeReady(state)) noteIntoDraft(state.intoDraft)
         return state.queued > 0
     }
 
@@ -1128,6 +1180,16 @@ object SendQueue {
      * could not deliver (a dead pane, a refused write) and any paraphrase here
      * would be this client guessing about the other end of a queue it does not own.
      */
+    /**
+     * The notice for a delivery that went into somebody's draft, or null.
+     *
+     * A thin arm onto `:core`'s `SendQueue`, kept here so the desktop's own suite
+     * reaches it by the same name as every other sentence on this screen — the
+     * wording itself must not fork, which is why the string lives in `:core`.
+     */
+    fun draftLine(state: TypingState): String? =
+        if (SharedQueue.draftNoticeReady(state)) SharedQueue.draftNotice(state.intoDraft) else null
+
     fun line(state: TypingState): String? {
         state.lastError?.takeIf { it.isNotBlank() }?.let { return "Not sent — $it" }
         // ⚠ BEFORE THE COUNT, because a duplicate has none. The daemon already
