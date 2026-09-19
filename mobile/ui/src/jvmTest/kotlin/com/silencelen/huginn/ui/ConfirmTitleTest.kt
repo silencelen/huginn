@@ -99,4 +99,29 @@ class ConfirmTitleTest {
             assertTrue("Modifier.animateItem()" in text, "$rel must animate a row that moves")
         }
     }
+
+    /**
+     * ⚠ REMOVE ASKS FIRST (P-13 / D-18, decision 60). "Remove" on an app and on
+     * a route deleted instantly — no dialog, no undo — while Kill session and
+     * Archive both confirm by name. Two verbs in one product answering the same
+     * question differently is the finding.
+     */
+    @Test
+    fun `apps and routes confirm their removal, naming the item`() {
+        val shared = read("ui/src/commonMain/kotlin/com/silencelen/huginn/ui/RemoveConfirm.kt")
+        assertTrue("ConfirmTitle(verb, name)" in shared, "the name is the headline, like Kill and Archive")
+
+        for (rel in listOf(
+            "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/settings/SettingsRows.kt",
+            "app/src/main/kotlin/com/silencelen/huginn/ui/AppsScreen.kt",
+            "app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/ui/AppsPane.kt",
+        )) {
+            val text = read(rel)
+            assertTrue("RemoveConfirmDialog(" in text, "$rel removes without asking")
+            assertTrue(
+                "confirmRemove = true" in text,
+                "$rel wires the button straight to the delete rather than to the dialog",
+            )
+        }
+    }
 }

@@ -37,6 +37,8 @@ import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.DaemonChallenge
+import com.silencelen.huginn.ui.REMOVE_ROUTE_BODY
+import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.data.RouteHealth
 
 /**
@@ -762,6 +764,11 @@ private fun RouteForm(
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
+    // ⚠ REMOVE ASKS FIRST (P-13/D-18, decision 60). It used to unpin the address
+    // on the tap, with no dialog and no undo, while Kill session and Archive both
+    // confirm by name — and P-02 is exactly why that matters. One dialog here
+    // covers both shells: the form is shared.
+    var confirmRemove by remember(initialUrl) { mutableStateOf(false) }
     // ⚠ THE FORM ASKS, THEN CLOSES — never the other way round. Confirm used to
     // run two unconditional statements, and since every route action returns
     // Unit into a fire-and-forget coroutine the form was gone before the outcome
@@ -811,11 +818,22 @@ private fun RouteForm(
             ) { Text(confirmLabel) }
             TextButton(onClick = onCancel) { Text("Cancel") }
             if (onRemove != null) {
-                TextButton(onClick = onRemove) {
+                TextButton(onClick = { confirmRemove = true }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
+    }
+    if (confirmRemove && onRemove != null) {
+        RemoveConfirmDialog(
+            verb = "Remove route",
+            // The name the owner gave it, falling back to the address — never an
+            // empty headline.
+            name = name.ifBlank { url },
+            body = REMOVE_ROUTE_BODY,
+            onDismiss = { confirmRemove = false },
+            onConfirm = { confirmRemove = false; onRemove() },
+        )
     }
 }
 
