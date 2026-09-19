@@ -84,11 +84,20 @@ const BANNER_MS = Number(process.env.HG_FAKE_CLAUDE_BANNER_MS || 600);
 const TRUST = process.env.HG_FAKE_CLAUDE_TRUST === '1';
 const PREBUF = process.env.HG_FAKE_CLAUDE_PREBUF === 'stuck' ? 'stuck' : 'lost';
 const TYPED = process.env.HG_FAKE_CLAUDE_TYPED || '';
+/**
+ * The dim inline SUGGESTION the real TUI offers in an EMPTY box (P-14) — the
+ * last thing typed here, drawn in SGR-2 and taken with →. It is not typed and
+ * nobody has agreed to it, but strip the escapes and it is byte-identical to a
+ * draft, which is how `composerHoldsDraft` came to hold sends over one.
+ */
+const GHOST = process.env.HG_FAKE_CLAUDE_GHOST || '';
 
 /** The box, with the status lines UNDER it — the shape that matters. */
 const RULE = '─'.repeat(70);
 function drawComposer(typed = '') {
-  process.stdout.write(`${RULE}\n❯ ${typed}\n${RULE}\n`
+  // A suggestion only ever shows in an empty box, and the first keystroke ends it.
+  const body = typed || (GHOST ? `\u001B[2m${GHOST}\u001B[0m` : '');
+  process.stdout.write(`${RULE}\n❯ ${body}\n${RULE}\n`
     + '  [fake] Fable 5.1 · ctx 4%\n'
     + '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n');
 }
