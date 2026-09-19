@@ -32,7 +32,14 @@ STUB_TMUX=()
 _cleanup() {
   local p d t
   for p in ${STUB_PIDS[@]+"${STUB_PIDS[@]}"}; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
-  for t in ${STUB_TMUX[@]+"${STUB_TMUX[@]}"}; do [ -n "$t" ] && tmux -L "$t" kill-server 2>/dev/null; done
+  # kill-server, then the socket FILE: an exited server leaves a 0-byte socket
+  # behind, and /tmp/tmux-<uid>/ is already a graveyard of them from every suite
+  # in this repo. A gate that adds one per run is a gate nobody wants to run.
+  for t in ${STUB_TMUX[@]+"${STUB_TMUX[@]}"}; do
+    [ -n "$t" ] || continue
+    tmux -L "$t" kill-server 2>/dev/null
+    rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$t" 2>/dev/null
+  done
   for d in ${STUB_DIRS[@]+"${STUB_DIRS[@]}"}; do [ -n "$d" ] && rm -rf "$d"; done
   return 0
 }
