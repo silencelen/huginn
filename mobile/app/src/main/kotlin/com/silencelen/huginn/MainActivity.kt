@@ -84,6 +84,7 @@ import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
 import com.silencelen.huginn.ui.EndVerbs
@@ -1097,6 +1098,25 @@ fun HuginnApp(
             is Dest.Scratchpads, is Dest.Scratchpad -> 5
         }
 
+        // THE CHAT LIST LANDS ON THE LATEST CHAT WHEN YOU ARRIVE FROM ELSEWHERE,
+        // and stays exactly where it was when you come back out of a chat.
+        //
+        // Both halves need the state to live HERE rather than inside ChatsScreen.
+        // Narrow, `Dest.Chat` replaces the list outright, so a position
+        // remembered in the screen dies on the way into the conversation and the
+        // reader loses their place every time they press back — which is the
+        // half that was broken. Hoisted, the position survives the round trip,
+        // and the rule below is what stops it ALSO surviving a trip through
+        // Sessions, where a list 40 rows down reads as one that failed to
+        // refresh. See ChatListScroll for the rule and why null never moves it.
+        val chatsListState = androidx.compose.foundation.lazy.rememberLazyListState()
+        var cameFrom by rememberSaveable { mutableStateOf(destToKey(dest)) }
+        LaunchedEffect(dest) {
+            val to = destToKey(dest)
+            if (ChatListScroll.shouldSnap(cameFrom, to)) chatsListState.scrollToItem(0)
+            cameFrom = to
+        }
+
         // Each surface once, as a lambda, so the narrow and wide layouts are
         // arrangements of the same pieces rather than two copies of them.
         val chatsPane: @Composable (Boolean) -> Unit = { twoPane ->
@@ -1118,6 +1138,7 @@ fun HuginnApp(
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,
+                listState = chatsListState,
             )
         }
         // Its own destination now, not a strip on top of the chat list. A Round is

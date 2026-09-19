@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +43,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
@@ -112,6 +114,15 @@ fun ChatsList(
     /** Present only while a machine is serving — a door onto a 409 is a fake control. */
     onNewLocal: (() -> Unit)? = null,
     verbs: ChatVerbs,
+    /**
+     * The scroll position, HOISTED into the shell.
+     *
+     * The rail's `when (view)` disposes this pane, so a state remembered in here
+     * is a state that means nothing the moment the reader looks at Sessions — and
+     * "where the list was" is a question the SHELL has to answer, because only it
+     * knows where the reader came from. See [ChatListScroll].
+     */
+    rows: LazyListState = rememberLazyListState(),
 ) {
     Column(Modifier.fillMaxSize()) {
         ListHeader("Chats", chats.size, selection.size) {
@@ -136,9 +147,9 @@ fun ChatsList(
             return@Column
         }
         val order = remember(chats) { chats.map { it.id } }
-        // The bar over the list, hoisted state and all: a desktop list pane with
-        // nothing saying how far down it is is a phone screenshot in a window.
-        val rows = rememberLazyListState()
+        // The bar over the list: a desktop list pane with nothing saying how far
+        // down it is is a phone screenshot in a window. The state it reads is the
+        // shell's now — see the parameter.
         Box(Modifier.fillMaxSize()) {
             LazyColumn(Modifier.fillMaxSize(), state = rows) {
                 itemsIndexed(chats, key = { _, it -> it.id }) { i, chat ->

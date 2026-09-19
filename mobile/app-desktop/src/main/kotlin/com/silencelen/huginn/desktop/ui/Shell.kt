@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -82,6 +83,7 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.ui.ArchiveRules
+import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.Splitter
@@ -198,6 +200,22 @@ fun Shell(store: AppStore) {
     val listCollapsed by store.settings.listCollapsed.collectAsState()
     val notifyEnabled by store.settings.notifyEnabled.collectAsState(true)
     val scope = rememberCoroutineScope()
+
+    // THE CHAT LIST LANDS ON THE LATEST CHAT WHEN YOU ARRIVE FROM ANOTHER RAIL
+    // ITEM. Held here rather than in ChatsList because the rail's `when (view)`
+    // disposes that pane — so a position kept inside it is not kept at all — and
+    // because only the shell knows where the reader came FROM, which is the whole
+    // question. Opening a chat does not change the view on this client (the id
+    // beside the list does), so drilling into a conversation never reaches the
+    // rule and never moves the list, which is the behaviour the phone spells out
+    // explicitly. See ChatListScroll.
+    val chatRows = rememberLazyListState()
+    var cameFrom by remember { mutableStateOf(viewKey(view)) }
+    LaunchedEffect(view) {
+        val to = viewKey(view)
+        if (ChatListScroll.shouldSnap(cameFrom, to)) chatRows.scrollToItem(0)
+        cameFrom = to
+    }
 
     // Multi-select, one per list. Held HERE rather than inside the list so it
     // survives switching to Status and back — a selection that evaporates because
@@ -477,6 +495,7 @@ fun Shell(store: AppStore) {
                                                     null
                                                 },
                                                 verbs = chatVerbs,
+                                                rows = chatRows,
                                             )
                                         }
                                     }
@@ -1633,6 +1652,17 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+/**
+ * A destination's name, as [ChatListScroll] knows it.
+ *
+ * Derived rather than spelled out so the rule and this client cannot disagree
+ * about the one key that matters: `View.CHATS.name.lowercase()` happens to equal
+ * [ChatListScroll.CHATS] today, and a rename of the enum constant would silently
+ * turn the snap off rather than failing anything.
+ */
+internal fun viewKey(v: View): String =
+    if (v == View.CHATS) ChatListScroll.CHATS else v.name.lowercase()
 
 /**
  * What the daemon will route to; kept in step with the phone's copy of it.
