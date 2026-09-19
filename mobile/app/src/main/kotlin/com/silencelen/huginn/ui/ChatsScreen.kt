@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -81,6 +83,16 @@ fun ChatsScreen(
      * dismissed; 0 means nobody asked.
      */
     newChatRequest: Int = 0,
+    /**
+     * The list's scroll position, HOISTED into the shell.
+     *
+     * Not a detail of this screen, because the question it answers is asked
+     * across destinations: leaving Chats disposes this composable, so a position
+     * remembered in here is a position that cannot survive the round trip out to
+     * a chat and back — which is exactly the trip the reader wants kept. The
+     * shell owns it, and [ChatListScroll] decides when it is thrown away.
+     */
+    listState: LazyListState = rememberLazyListState(),
 ) {
     var showNew by remember { mutableStateOf(false) }
     // Null = this host. Reset whenever the dialog opens, so a machine picked once
@@ -107,6 +119,7 @@ fun ChatsScreen(
         } else {
             LazyColumn(
                 Modifier.fillMaxSize(),
+                state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
             ) {
                 items(chats, key = { it.id }) { chat ->
