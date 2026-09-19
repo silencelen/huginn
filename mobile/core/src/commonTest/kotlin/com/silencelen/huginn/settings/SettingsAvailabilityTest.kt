@@ -22,7 +22,7 @@ class SettingsAvailabilityTest {
     private val all = SettingsProbe(
         headroom = true, quickActions = true, alerts = true, padsAvailable = true,
         localServe = true, appLockAvailable = true, enrolable = true,
-        savedAccounts = 3, diagnostics = true, selfUpdate = true,
+        savedAccounts = 3, diagnostics = true, selfUpdate = true, keepAwake = true,
     )
 
     /**
@@ -80,6 +80,22 @@ class SettingsAvailabilityTest {
 
         val two = all.copy(savedAccounts = 2)
         assertTrue(rotation.all { it in SettingsCatalog.itemsOf("usage", two, Surface.PHONE).map { i -> i.id } })
+    }
+
+    /**
+     * The keep-awake details are gated on the SWITCH, not just on the endpoint:
+     * the shared form draws them `if (draft.keepAwake)`, so a catalog that
+     * offered them regardless put a search hit in front of a row its own page
+     * hides.
+     */
+    @Test
+    fun keepAwakeDetailsNeedTheSwitch() {
+        val off = all.copy(keepAwake = false)
+        val shown = SettingsCatalog.itemsOf("usage", off, Surface.PHONE).map { it.id }
+        assertTrue("usage.keep-awake" in shown, "the switch itself has to stay reachable: $shown")
+        assertTrue("usage.keep-awake-model" !in shown, "$shown")
+        assertTrue("usage.keep-awake-quiet" !in shown, "$shown")
+        assertTrue(shown.size > 3, "the rest of usage must survive: $shown")
     }
 
     @Test

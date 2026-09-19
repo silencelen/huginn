@@ -65,6 +65,10 @@ enum class Surface { PHONE, DESKTOP, BOTH }
  * @param selfUpdate this build has an update channel. Compile-time on both
  *   clients and deliberately never a setting (`AppStore.kt:96-104`,
  *   `DesktopUpdater.kt:52-68`), so a store build simply has no update rows.
+ * @param keepAwake the SAVED keep-awake switch is on. Two rows — the model for
+ *   that request, and quiet hours — are drawn by the shared form only
+ *   `if (draft.keepAwake)`, so without this fact the catalog claimed them on
+ *   every headroom host and search offered a row that its own page hides.
  */
 data class SettingsProbe(
     val headroom: Boolean = false,
@@ -77,6 +81,7 @@ data class SettingsProbe(
     val savedAccounts: Int = 0,
     val diagnostics: Boolean = false,
     val selfUpdate: Boolean = false,
+    val keepAwake: Boolean = false,
 )
 
 /**
@@ -211,6 +216,16 @@ object SettingsCatalog {
      * setting that cannot do anything.
      */
     private val headroomOn: (SettingsProbe) -> Boolean = { it.headroom }
+
+    /**
+     * ⚠ THE TWO ROWS THE FORM DRAWS ONLY WHEN THE SWITCH IS ON.
+     * `HeadroomSettingsView` puts the model picker and the quiet-hours field
+     * behind `if (draft.keepAwake)`; a catalog item that said "available" anyway
+     * broke the catalog's own rule — an unavailable row is HIDDEN and excluded
+     * from search, "because a hit that opens onto a hidden row is worse than no
+     * hit". Searching *quiet hours* with keep-awake off did exactly that.
+     */
+    private val keepAwakeOn: (SettingsProbe) -> Boolean = { it.headroom && it.keepAwake }
     private val canRotate: (SettingsProbe) -> Boolean = { it.headroom && it.savedAccounts > 1 }
 
     private val usage = SettingsCategory(
@@ -330,14 +345,14 @@ object SettingsCatalog {
                 title = "Model for that request",
                 summary = "Which model the keep-awake request runs on. The cheapest one that counts.",
                 keywords = listOf("keep awake", "haiku", "model", "cheap", "cost"),
-                availability = headroomOn,
+                availability = keepAwakeOn,
             ),
             SettingsItem(
                 id = "usage.keep-awake-quiet",
                 title = "Quiet hours",
                 summary = "A span of the day when huginn spends nothing keeping a window open.",
                 keywords = listOf("keep awake", "quiet", "hours", "night", "overnight", "schedule", "pause"),
-                availability = headroomOn,
+                availability = keepAwakeOn,
             ),
             SettingsItem(
                 id = "usage.plan",
