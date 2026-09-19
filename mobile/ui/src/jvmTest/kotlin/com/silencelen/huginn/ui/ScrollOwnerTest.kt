@@ -8,12 +8,12 @@ import kotlin.test.assertTrue
 /**
  * EVERY DESTINATION THAT HOSTS A SHARED LIST SCROLLS EXACTLY ONCE.
  *
- * ⚠⚠ THE BUG THIS EXISTS FOR. `ConsolesView` is a plain `Column` and the phone
+ * ⚠⚠ THE BUG THIS EXISTS FOR. `AppsView` is a plain `Column` and the phone
  * hosted it in a `Box(fillMaxSize())`, so the page could not scroll AT ALL: the
- * rebind approval card — the rest of its commands, its note and its only
- * control, **Copy steps** — sat off the bottom of the owner's Fold with no
- * gesture that would reach it. A card whose only control is unreachable is a
- * feature that is not there. The same shape on `ProjectsListView` cuts off every
+ * rows past the fold — and, on a failing one, its whole inline fix with its only
+ * control, **Copy fix** — sat off the bottom of the owner's Fold with no
+ * gesture that would reach them. A control that is unreachable is a feature that
+ * is not there. The same shape on `ProjectsListView` cuts off every
  * project past the fold.
  *
  * ⚠ AND EXACTLY ONCE IS THE OTHER HALF. The desktop wraps both views in
@@ -35,15 +35,15 @@ class ScrollOwnerTest {
 
     /** The shared views that take a [scroll] answer, and the two shells that give one. */
     private val shared = listOf(
-        "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/ConsolesView.kt",
+        "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/AppsView.kt",
         "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/ProjectsListView.kt",
     )
     private val phone = listOf(
-        "app/src/main/kotlin/com/silencelen/huginn/ui/ConsolesScreen.kt",
+        "app/src/main/kotlin/com/silencelen/huginn/ui/AppsScreen.kt",
         "app/src/main/kotlin/com/silencelen/huginn/ui/ProjectsScreen.kt",
     )
     private val desktop = listOf(
-        "app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/ui/ConsolesPane.kt",
+        "app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/ui/AppsPane.kt",
         "app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/ui/ProjectsPane.kt",
     )
 
