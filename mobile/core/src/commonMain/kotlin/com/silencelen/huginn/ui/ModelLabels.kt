@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.ModelChoice
 
 /**
@@ -77,14 +78,23 @@ object ModelLabels {
         if (site == PickerSite.SESSION) return claude.ifEmpty { FALLBACK_MODELS }
         if (started && isLocal(current, models)) {
             val host = models.firstOrNull { it.id == current }?.host
-            val sameMachine = models.filter { it.family == "local" && it.available && it.host != null && it.host == host }
+            val sameMachine = models
+                .filter { it.family == "local" && it.available && it.host != null && it.host == host }
+                // ⚠ AN EMBEDDER IS NEVER A CHAT MODEL (P-21) — except the one
+                // already selected, which is a fact about this chat rather than
+                // an offer, and removing it would leave a menu that cannot
+                // describe its own state.
+                .filter { !isEmbedding(it) || it.id == current }
                 .map { it.id to it.display }
             // The machine vanished from the catalog: the only honest menu is
             // the current row itself — nothing else can be switched to.
             return sameMachine.ifEmpty { listOf((current ?: "") to model(current, models)) }
         }
         if (started) return claude.ifEmpty { FALLBACK_MODELS }
-        val local = models.filter { it.family == "local" && it.available }.map { it.id to it.display }
+        // ⚠ EMBEDDERS ARE NOT OFFERED (P-21): `nomic-embed` was pickable as a
+        // conversational model on two machines, and it answers a vector.
+        val local = models.filter { it.family == "local" && it.available && !isEmbedding(it) }
+            .map { it.id to it.display }
         return (claude.ifEmpty { FALLBACK_MODELS }) + local
     }
 
@@ -98,4 +108,90 @@ object ModelLabels {
     /** The effort menu, as (value, label) pairs like [options]. */
     fun effortOptions(): List<Pair<String, String>> =
         EFFORTS.map { it to it.replaceFirstChar { c -> c.uppercase() } }
+
+    // ------------------------------------------------ the new-chat picker (P-03/P-21)
+
+    /**
+     * One row of the new-chat picker's WHERE IT RUNS / LOCAL AI lists, and
+     * whether it can be picked.
+     *
+     * ⚠ REACHABILITY IS CARRIED, NOT INFERRED AT THE DRAW SITE. The phone's
+     * dialog greyed the MACHINE `DATATREEX` as "not reachable" and then drew
+     * `Qwen3 8B - DATATREEX` and `Nomic Embed - DATATREEX` underneath it at full
+     * brightness, as pickable options (P-21). Two rows about one machine,
+     * disagreeing, four millimetres apart.
+     */
+    data class PickRow<T>(val row: T, val reachable: Boolean)
+
+    /**
+     * Whether a model row is an EMBEDDING model.
+     *
+     * ⚠ NEVER A CHAT MODEL, IN ANY STATE (P-21). `nomic-embed` was offered as a
+     * conversational model on two machines. An embedder answers a vector, not a
+     * sentence; picking one produces a chat that cannot work and a support
+     * question about why. The serving catalog carries no capability field, so the
+     * tell is the name — and "embed" does not appear in the name of any chat
+     * model anybody ships.
+     */
+    fun isEmbedding(model: ModelChoice): Boolean =
+        "embed" in model.id.lowercase() || "embed" in model.display.lowercase()
+
+    /**
+     * The machines a chat can run on, REACHABLE FIRST.
+     *
+     * Serving (`generate`) rows are absent: they are not places a claude run can
+     * live — their machines are reached through the local-AI list — and their
+     * `-llm` credential name is shown nowhere else in the product.
+     *
+     * ⚠ REACHABLE FIRST, AND STABLE WITHIN EACH HALF. The picker does not scroll
+     * on a phone the size of the owner's (P-03: the eleventh option was off the
+     * bottom and unreachable by any gesture), and the shells now scroll it — but
+     * the option somebody actually wants should not be the one they have to
+     * scroll for. `sortedBy` is stable in the standard library, so the daemon's
+     * own order survives inside each group and the list does not reshuffle
+     * whenever a machine checks in.
+     */
+    fun chatHosts(devices: List<Device>): List<PickRow<Device>> =
+        devices.filter { it.scope != "generate" }
+            .map { PickRow(it, it.online) }
+            .sortedBy { if (it.reachable) 0 else 1 }
+
+    /**
+     * The local models a chat can be started on, reachable first, embedders gone.
+     *
+     * ⚠⚠ A MODEL IS AS REACHABLE AS ITS MACHINE, NOT AS ITS CREDENTIAL. A box
+     * enrolled twice — a claude row and a `generate` row — is ONE machine wearing
+     * two credentials, and the daemon says so with `Device.machine`. `available`
+     * on the model row reflects only the serving credential's check-in, which is
+     * how `DATATREEX` could read "not reachable" as a machine while its models
+     * read as live. A machine with a row that has stopped checking in is a
+     * machine in an unknown state, and the picker says the same thing about every
+     * row that names it.
+     *
+     * Unreachable rows are SHOWN and unselectable rather than hidden, the same
+     * rule the machine list has always followed: a model that vanishes leaves the
+     * reader wondering whether the enrolment is gone.
+     */
+    fun localChatRows(models: List<ModelChoice>, devices: List<Device>): List<PickRow<ModelChoice>> {
+        val byId = devices.associateBy { it.id }
+        // machine key -> is every row on that machine checking in
+        val machineOk = HashMap<String, Boolean>()
+        for (d in devices) {
+            val key = d.machine ?: continue
+            machineOk[key] = (machineOk[key] ?: true) && d.online
+        }
+        return models.asSequence()
+            .filter { it.family == "local" }
+            .filterNot { isEmbedding(it) }
+            .map { m ->
+                val serving = m.host?.let { byId[it] }
+                val machine = serving?.machine
+                val ok = m.available &&
+                    (serving == null || serving.online) &&
+                    (machine == null || machineOk[machine] != false)
+                PickRow(m, ok)
+            }
+            .sortedBy { if (it.reachable) 0 else 1 }
+            .toList()
+    }
 }
