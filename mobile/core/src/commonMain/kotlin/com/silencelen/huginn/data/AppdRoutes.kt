@@ -248,9 +248,13 @@ object RouteResolver {
      *   route answered moments ago, so the dots refresh. It still cannot move
      *   off a healthy active route, which is what makes the answer *"Still on
      *   X"* rather than a surprise reconnect.
-     * @param probe true when HUGINN answered at that URL — not merely something.
-     *   See `HuginnClient.provesDaemon`: a probe that counts any HTTP responder
-     *   is how a stranger on the LAN gets preferred over a live daemon.
+     * @param probe true when HUGINN **PROVED** it is at that URL — not merely
+     *   that something answered, and since decision 58 not merely that something
+     *   answered in huginn's shape either. `HuginnClient.probe` is that answer:
+     *   it is the token-proving challenge, because a probe that counts any HTTP
+     *   responder is how a stranger on the LAN gets preferred over a live daemon
+     *   (kcore #59/#78) and a probe that counts a forgeable header is how one
+     *   gets handed the bearer 129 times in two minutes (D-1).
      */
     suspend fun resolve(
         book: RouteBook,
@@ -258,6 +262,44 @@ object RouteResolver {
         now: Long = 0,
         force: Boolean = false,
         probe: suspend (PinnedRoute) -> Boolean,
+    ): Outcome = resolveProving(book, health, now, force) {
+        if (probe(it)) RouteProof.PROVEN else RouteProof.NONE
+    }
+
+    /**
+     * What one probe learned. Three answers, because [ANSWERED] is a real state
+     * and is NOT a degree of success.
+     */
+    enum class RouteProof {
+        /** Nothing, or somebody else's web page. */
+        NONE,
+
+        /**
+         * Something huginn-SHAPED is there and did not prove it holds the token:
+         * a daemon older than 3.6.0, or an impostor. Treated as a failure for
+         * every purpose except the sentence on the row.
+         */
+        ANSWERED,
+
+        /** The challenge matched. The only answer that may move the bearer. */
+        PROVEN,
+    }
+
+    /**
+     * The same resolution, with the probe allowed to distinguish "nothing there"
+     * from "something there that cannot prove itself" (decision 58).
+     *
+     * ⚠ ONLY [RouteProof.PROVEN] COUNTS AS HEALTHY. The extra state changes what
+     * a row SAYS and nothing about what is chosen — an address this client cannot
+     * identify is an address it will not hand the bearer to, whether the reason is
+     * an old daemon or a fake, because from here those are the same bytes.
+     */
+    suspend fun resolveProving(
+        book: RouteBook,
+        health: Map<String, RouteHealth> = emptyMap(),
+        now: Long = 0,
+        force: Boolean = false,
+        probe: suspend (PinnedRoute) -> RouteProof,
     ): Outcome {
         if (book.routes.isEmpty()) return Outcome(Choice.Empty, health)
         val active = book.active
@@ -317,14 +359,14 @@ object RouteResolver {
         book: RouteBook,
         health: Map<String, RouteHealth>,
         now: Long,
-        probe: suspend (PinnedRoute) -> Boolean,
+        probe: suspend (PinnedRoute) -> RouteProof,
     ): Pair<Map<String, RouteHealth>, Set<String>> {
         val results = coroutineScope {
             val started = book.routes.map { route ->
                 async {
                     val began = kotlin.time.TimeSource.Monotonic.markNow()
-                    val ok = probe(route)
-                    route.id to (ok to began.elapsedNow().inWholeMilliseconds)
+                    val proof = probe(route)
+                    route.id to (proof to began.elapsedNow().inWholeMilliseconds)
                 }
             }
             started.map { it.await() }
@@ -332,11 +374,17 @@ object RouteResolver {
 
         val next = health.toMutableMap()
         for ((id, r) in results) {
-            val (ok, rtt) = r
+            val (proof, rtt) = r
             val was = next[id] ?: RouteHealth()
-            next[id] = if (ok) was.copy(lastOkAt = now, lastRttMs = rtt) else was.copy(lastFailAt = now)
+            next[id] = when (proof) {
+                RouteProof.PROVEN -> was.copy(lastOkAt = now, lastRttMs = rtt)
+                // ⚠ A FAILURE *AND* A NOTE. Both stamps, because everything that
+                // chooses reads `lastFailAt` and only the row reads the other.
+                RouteProof.ANSWERED -> was.copy(lastFailAt = now, lastUnprovenAt = now)
+                RouteProof.NONE -> was.copy(lastFailAt = now)
+            }
         }
-        return next to results.filterValues { it.first }.keys
+        return next to results.filterValues { it.first == RouteProof.PROVEN }.keys
     }
 
     /**

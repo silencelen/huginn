@@ -1963,12 +1963,12 @@ class AppStore(
      */
     private suspend fun resolveRoute(force: Boolean = false) {
         _resolvingRoute.value = true
-        val outcome = RouteResolver.resolve(
+        val outcome = RouteResolver.resolveProving(
             book = _routeBook.value,
             health = _routeHealth.value,
             now = System.currentTimeMillis(),
             force = force,
-        ) { client.probe(it.url) }
+        ) { client.probeProof(it.url) }
         _resolvingRoute.value = false
         saveHealth(outcome.health)
         // Cleared on EVERY resolution before it is set again: an offer describes

@@ -217,13 +217,20 @@ class DesktopSetupProbes(
         // answers at that address" from "something answers and does not like your
         // bearer" — and it used to ask a TOKEN-GATED route, so on every fresh
         // install a correct address failed with the word "unauthorized" and sent
-        // the reader after a token the flow had not offered yet. The 401 plus the
-        // `X-Huginn-Appd` header IS the proof of a daemon (`provesDaemon`), and
-        // the header carries the version, so nothing is lost by asking without a
-        // bearer — and a bearer is exactly what must not be sent to an address
-        // that has not been proven to be huginn yet.
+        // the reader after a token the flow had not offered yet. It asks
+        // unauthenticated — a bearer is exactly what must not be sent to an
+        // address that has not been proven to be huginn yet.
+        //
+        // ⚠ AND IT REPORTS THREE OUTCOMES, NOT TWO (decision 58). Proved is the
+        // ordinary answer from a 3.6+ daemon. `answered` without a proof is a
+        // daemon too old for the challenge — a real one, and also exactly what an
+        // impostor looks like — so the step PASSES with that said out loud rather
+        // than failing a correct address on an older host. The person typed this
+        // address themselves, which is the explicit choice; what `proven` gates
+        // is the path where NOBODY chose, and that is `RouteResolver`'s
+        // auto-switch, which refuses it (see `AppdRoutes.resolve`).
         val probe = store.client.probeDaemon(url)
-        check(probe.proven) { "nothing at that address answered as huginn" }
+        check(probe.proven || probe.answered) { "nothing at that address answered as huginn" }
         HuginnClient.probeWords(probe)
     }
 

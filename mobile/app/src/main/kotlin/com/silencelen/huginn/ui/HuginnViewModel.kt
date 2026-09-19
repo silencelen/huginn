@@ -1107,12 +1107,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun resolveRoute(silent: Boolean = false, force: Boolean = false) {
         viewModelScope.launch {
             _resolvingRoute.value = true
-            val outcome = RouteResolver.resolve(
+            val outcome = RouteResolver.resolveProving(
                 book = _routeBook.value,
                 health = _routeHealth.value,
                 now = System.currentTimeMillis(),
                 force = force,
-            ) { client.probe(it.url) }
+            ) { client.probeProof(it.url) }
             _resolvingRoute.value = false
             saveHealth(outcome.health)
             // Cleared on EVERY resolution before it is set again: an offer is a

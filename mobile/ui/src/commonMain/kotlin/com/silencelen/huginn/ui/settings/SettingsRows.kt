@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.DaemonChallenge
 import com.silencelen.huginn.data.RouteHealth
 
 /**
@@ -853,11 +854,18 @@ internal fun middleElide(text: String, max: Int = ROUTE_URL_MAX): String {
     return text.take(max - 1 - keepEnd) + "…" + text.takeLast(keepEnd)
 }
 
-/** "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness. */
+/**
+ * "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness.
+ *
+ * ⚠ AND THE THIRD WITNESS (decision 58). A route where something huginn-shaped
+ * answers but cannot produce the token proof is not "could not be reached" — that
+ * sentence sends somebody to debug a network that is fine — and it is not reached
+ * either. It says what it is, and that is also the sentence an impostor earns.
+ */
 internal fun routeAddressLine(url: String, health: RouteHealth?, nowMs: Long): String =
     listOfNotNull(
         middleElide(url).takeIf { it.isNotBlank() },
-        reachedWords(health, nowMs),
+        if (health?.unproven == true) DaemonChallenge.NOT_PROVEN else reachedWords(health, nowMs),
     ).joinToString(" · ")
 
 /** "last reached 4m ago", from either witness — and nothing at all before both. */
