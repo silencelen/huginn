@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.ArchivedSession
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -105,5 +106,44 @@ class ArchivedSessionsViewTest {
         // the two.
         assertTrue(ARCHIVE_EMPTY.contains("claude --resume"), ARCHIVE_EMPTY)
         assertTrue(ARCHIVE_EMPTY.contains("ends it for good"), ARCHIVE_EMPTY)
+    }
+
+    // ---------------------------------------------------- the summary line
+
+    /**
+     * The archived row's summary is Claude's own closing message, which is
+     * MARKDOWN — and the row draws it as one line in one style. The walk caught
+     * the result verbatim: "Wrap-up is complete. Here is the closing state.
+     * **Committed and recorded on huginn** - Commit `50d523d` on `main`…".
+     *
+     * Same answer as the chats list: a one-line row cannot carry a bold span, so
+     * the only honest options are to show the markers or to take them off, and
+     * the markers are an instruction to a renderer that is not running here.
+     */
+    @Test
+    fun `the summary loses the markers the row cannot draw`() {
+        assertEquals(
+            "Wrap-up is complete. Committed and recorded on huginn - Commit 50d523d on main",
+            Markdown.plainInline(
+                "Wrap-up is complete. **Committed and recorded on huginn** - Commit `50d523d` on `main`",
+            ),
+        )
+    }
+
+    @Test
+    fun `the row asks for the plain form rather than drawing the markdown`() {
+        // A source gate, because the drawing itself has no test harness in this
+        // module. THE CALL is the rule: `Text(row.lastMessage)` is the defect.
+        val root = generateSequence(File("").absoluteFile) { it.parentFile }
+            .firstOrNull { File(it, "settings.gradle.kts").isFile }
+            ?: error("cannot find the gradle root from ${File("").absolutePath}")
+        val f = File(root, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/ArchivedSessionsView.kt")
+        assertTrue(f.isFile, "ArchivedSessionsView.kt not found at ${f.absolutePath}")
+        val text = f.readText()
+        assertTrue(text.length > 3_000, "read as ${text.length} chars — wrong file")
+        assertTrue(
+            text.contains("Markdown.plainInline(it)"),
+            "the summary is drawn as raw markdown again",
+        )
     }
 }

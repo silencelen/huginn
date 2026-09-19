@@ -167,7 +167,13 @@ private fun ArchivedSessionRow(
                     maxLines = 3,
                 )
             }
-            row.lastMessage?.takeIf { it.isNotBlank() }?.let {
+            // ⚠ plainInline, like the chats row. This is a MARKDOWN summary drawn
+            // as one line in one style, and the walk caught what that looks like:
+            // "Wrap-up is complete. Here is the closing state. **Committed and
+            // recorded on huginn** - Commit `50d523d` on `main`…" — the markers
+            // are instructions to a renderer that is not running on this row.
+            row.lastMessage?.takeIf { it.isNotBlank() }?.let { Markdown.plainInline(it) }
+                ?.takeIf { it.isNotBlank() }?.let {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     it,
