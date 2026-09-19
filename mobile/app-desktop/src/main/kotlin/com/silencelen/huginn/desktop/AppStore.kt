@@ -15,6 +15,7 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.ARCHIVE_TRANSCRIPT_GONE
 import com.silencelen.huginn.ui.ArchiveRules
+import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
@@ -1512,8 +1513,12 @@ class AppStore(
      * report through their own channel, like every other create here.
      */
     suspend fun startLocalChat() {
-        val local = client.models().firstOrNull { it.family == "local" && it.available }
-            ?: throw IllegalStateException("no machine is serving local models right now")
+        // ⚠ NOT MERELY THE FIRST LOCAL ROW (P-21). The serving catalog carries
+        // `nomic-embed` beside the chat models, and an embedder answers a vector
+        // — "the first available" would open a chat that cannot work.
+        val local = client.models().firstOrNull {
+            it.family == "local" && it.available && !ModelLabels.isEmbedding(it)
+        } ?: throw IllegalStateException("no machine is serving local models right now")
         val made = client.createChat("ask", model = local.id)
         openChat(made.id)
         openView(View.CHATS)
