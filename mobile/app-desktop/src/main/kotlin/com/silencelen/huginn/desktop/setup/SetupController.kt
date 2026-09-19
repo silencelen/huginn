@@ -165,6 +165,9 @@ class SetupController(
     fun close() {
         _visible.value = false
         _awaitingAnswer.value = false
+        // A half-typed bearer is not something to keep in memory once the screen
+        // holding it is gone. See [SetupDrafts].
+        SetupDrafts.clear()
     }
 
     /** Pre-answers arriving from the installer, once, at startup. */
@@ -217,6 +220,8 @@ class SetupController(
     fun primary() {
         if (_busy.value) return
         val s = _state.value
+        // The finish card's button is the way out, not a way on.
+        if (s.finished) { close(); return }
         when (s.statusOf(s.current)) {
             is StepStatus.Passed, is StepStatus.Skipped -> advance()
             else -> run(s.current)
@@ -242,10 +247,25 @@ class SetupController(
         finishIfDone()
     }
 
+    /**
+     * The flow is over — RECORDED, AND STILL ON SCREEN.
+     *
+     * ⚠ IT USED TO HIDE THE WINDOW HERE, and that is how the finish line got
+     * lost. [SetupFlow.summary] is the whole point of the machine — what works,
+     * what was declined, what could not be proven — and answering the last step
+     * advanced the flow straight into this, so the reader's final sight of the
+     * tally was the count taken BEFORE their own last answer. "Not now" on step
+     * seven dropped them into the app having never read it.
+     *
+     * `setupDone` is written immediately regardless: the flow is finished whether
+     * or not anybody reads the summary, and a crash between here and the Close
+     * button must not raise the whole wizard again on the next launch.
+     */
     private fun finishIfDone() {
         if (!_state.value.finished) return
         settings.setSetupDone(true)
-        _visible.value = false
+        _note.value = null
+        _awaitingAnswer.value = false
     }
 
     // --------------------------------------------------------------- probes

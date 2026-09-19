@@ -195,6 +195,23 @@ class SetupControllerTest {
     }
 
     @Test
+    fun `a machine with nowhere to post is never asked whether it saw anything`() {
+        // ⚠⚠ THE STEP ASKED FOR CONFIRMATION OF SOMETHING THAT NEVER HAPPENED.
+        // With no tray and no libnotify the backend's post is a no-op, and the
+        // flow went on to "did it appear?" beside a "Yes, I saw it" button — a
+        // pass recordable for a route that cannot deliver, which then holds the
+        // household's Telegram fallback back for a window that shows nothing.
+        // `Notifiers.testRefusal` makes it a failure before anything is posted;
+        // this asserts the consequence, which is that no question is armed.
+        val refusal = "nothing on this computer can show a notification"
+        val c = controller(probes = FakeProbes(notifyResult = Result.failure(IllegalStateException(refusal))))
+        c.rerun(at = SetupStep.NOTIFY)
+        c.primary()
+        assertFalse(c.awaitingAnswer.value, "no Yes button over a notification that was never posted")
+        assertEquals(StepStatus.Failed(refusal), c.state.value.statusOf(SetupStep.NOTIFY))
+    }
+
+    @Test
     fun `autostart records the flag only when the file was really written`() {
         val settings = freshSettings()
         val probes = FakeProbes(autostartResult = Result.failure(IllegalStateException(Autostart.NOT_PACKAGED)))
@@ -236,13 +253,26 @@ class SetupControllerTest {
     }
 
     @Test
-    fun `walking to the end marks the install done and puts the window back`() {
+    fun `walking to the end marks the install done and shows the tally before it goes`() {
         val settings = freshSettings()
         val c = controller(settings)
         c.open(routeBookEmpty = true)
         repeat(SetupFlow.STEPS.size) { c.skip() }
-        assertTrue(settings.setupDoneNow())
-        assertFalse(c.visible.value, "the flow gets out of the way when it is finished")
+
+        assertTrue(settings.setupDoneNow(), "finished is finished whether or not anybody reads the summary")
+        // ⚠ IT USED TO HIDE ITSELF HERE, and that is how the finish line was
+        // lost: `SetupFlow.summary` is the whole point of the machine — what
+        // works, what was declined, what could not be proven — and it was drawn
+        // only in the footer, which updates as you go. So the last answer
+        // advanced the flow, the window closed, and the reader's final sight of
+        // the tally was the count taken BEFORE their own last answer.
+        assertTrue(c.state.value.finished)
+        assertTrue(c.visible.value, "the last answer must not close the window over the tally")
+        assertEquals("0 of 7 set up · 7 skipped", SetupFlow.summary(c.state.value))
+
+        // The finish card's one button is the way out.
+        c.primary()
+        assertFalse(c.visible.value)
         // And it does not come back uninvited on the next launch.
         assertFalse(
             SetupController(settings, FakeProbes(), CoroutineScope(Dispatchers.Unconfined))

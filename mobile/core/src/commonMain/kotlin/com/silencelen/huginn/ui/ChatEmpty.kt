@@ -19,6 +19,13 @@ package com.silencelen.huginn.ui
  * arrives, so deciding on it alone would tell someone sending their opening
  * message that its history is missing. GONE needs BOTH: the chat ran, AND the
  * daemon refused the transcript.
+ *
+ * ⚠ IN `:core` RATHER THAN IN A SHELL, because the fault is the DAEMON's 409
+ * meaning two things and both clients read it. The desktop had the identical bug
+ * for the identical reason (`ChatController.loadTranscript`'s `neverRan`), and a
+ * second copy of this rule would be a second place for the two facts to collapse
+ * back into one. Pure Kotlin, no Compose: the phone and the desktop draw it
+ * differently and decide it identically.
  */
 data class ChatEmptyCopy(val title: String, val body: String)
 

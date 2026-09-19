@@ -432,7 +432,7 @@ fun Shell(store: AppStore) {
                                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                                             ) {
                                                 Column(Modifier.padding(12.dp)) {
-                                                    Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
+                                                    Text("Serve local AI from this computer", style = MaterialTheme.typography.labelLarge)
                                                     Text(
                                                         "This machine may be able to run small AI models and offer them " +
                                                             "in huginn's chat menus — private, on your own hardware. " +
@@ -756,6 +756,25 @@ fun railViews(
     add(View.SETTINGS)
 }
 
+/**
+ * Whether this pass of the poll should ask `GET /v1/consoles` again.
+ *
+ * ⚠⚠ UNTIL IT HAS ANSWERED, NOT ONCE. The old condition was `tick == 0 ||
+ * view == CONSOLES`, and on a fresh install tick 0 lands while the setup flow is
+ * still open and no token has been saved: the call comes back 401, which is an
+ * answer about the BEARER and not about the feature. Nothing asked again — and
+ * the one place that would have, the Consoles pane, is behind the rail item
+ * [railViews] had just hidden. Consoles was therefore unreachable for the whole
+ * first session while the daemon served four rows the entire time; Projects and
+ * Pages survived the identical 401 only because they are refreshed every tick.
+ *
+ * So: null is "no answer yet" and gets asked again, `true`/`false` are answers
+ * and stop the probing, and the pane in front of the reader keeps its own poll
+ * either way because the ROWS move even when the feature question is settled.
+ */
+fun shouldProbeConsoles(available: Boolean?, view: View): Boolean =
+    available == null || view == View.CONSOLES
+
 @Composable
 private fun NavRail(
     current: View,
@@ -897,7 +916,10 @@ private fun NavRail(
                 label = "Pages",
                 count = list.size,
                 active = current == View.SCRATCHPADS,
-                tip = "Pages · notes you keep, and the one you hand to a message",
+                // Short enough to land on one line of a 320dp card. The long
+                // version read as a dangling half-sentence for as long as a
+                // tooltip's text was being clipped rather than wrapped.
+                tip = "Pages · your notes, and the one a message carries",
                 // No mark. A page is only ever changed by the person reading this
                 // rail, so there is nothing here that could need them — and a dot
                 // that never means anything is a dot nobody reads.

@@ -150,3 +150,56 @@ class SetupScaffoldTest {
         }
     }
 }
+
+/**
+ * THE FINISH LINE, WHICH THE FLOW COUNTED AND NEVER SHOWED.
+ *
+ * ⚠ [SetupFlow.summary] IS THE POINT OF THE WHOLE MACHINE — "what works, what
+ * you chose not to do, what is actually broken", three numbers said separately
+ * because they mean three different things. It was drawn in the footer beside
+ * the buttons, where it updates as you go, and then the last answer ADVANCED
+ * THE FLOW and the controller closed the window: the reader's last sight of it
+ * was the count before their final answer was in it. Pressing "Not now" on step
+ * 7 dropped them straight into the app having never read the tally.
+ *
+ * So the flow has one more state — finished and still on screen — and its
+ * primary button closes it.
+ */
+class SetupFinishTest {
+
+    private fun everythingAnswered(): SetupState {
+        var s = SetupState()
+        for (step in SetupFlow.STEPS) {
+            s = s.copy(current = step)
+            s = if (step == SetupStep.LOCAL_AI) SetupFlow.fail(s, "this machine can't serve") else SetupFlow.pass(s, "ok")
+        }
+        return s.copy(finished = true)
+    }
+
+    @Test
+    fun `a finished flow offers a way out rather than a way on`() {
+        assertEquals("Close", SetupScaffoldRules.primaryLabel(everythingAnswered()))
+    }
+
+    @Test
+    fun `nothing is skippable or continuable once it is over`() {
+        val done = everythingAnswered()
+        assertFalse(SetupScaffoldRules.canSkip(done), "there is no step left to decline")
+        assertFalse(SetupScaffoldRules.canMoveOn(done), "nor anything to move on to")
+    }
+
+    @Test
+    fun `the tally that gets shown counts the last answer too`() {
+        val summary = SetupFlow.summary(everythingAnswered())
+        assertEquals("6 of 7 set up · 1 could not be proven", summary)
+    }
+
+    @Test
+    fun `the finish line has a heading of its own`() {
+        assertTrue(SetupScaffoldRules.FINISHED_TITLE.isNotBlank())
+        assertFalse(
+            SetupScaffoldRules.FINISHED_TITLE.contains("complete", ignoreCase = true),
+            "'setup complete' over two failures is the sentence this product does not write",
+        )
+    }
+}

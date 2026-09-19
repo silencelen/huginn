@@ -58,6 +58,9 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.ChatEmptyCopy
+import com.silencelen.huginn.ui.chatEmptyCopy
+import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.Status
@@ -72,7 +75,10 @@ import com.silencelen.huginn.desktop.ChatController
 import com.silencelen.huginn.desktop.Composer
 import com.silencelen.huginn.desktop.ui.common.ComposerAction
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextAlign
 import com.silencelen.huginn.desktop.ui.common.ComposerFrame
+import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.attach.AttachButton
 import com.silencelen.huginn.desktop.attach.AttachFilePicker
 import com.silencelen.huginn.desktop.attach.AttachStatus
@@ -170,6 +176,8 @@ fun ChatView(
     val models by controller.models.collectAsState()
     val suggestions by controller.suggestions.collectAsState()
     val pendingSend by controller.pendingSend.collectAsState()
+    // Which of the transcript route's two 409s this chat got. See ChatController.
+    val messagesGone by controller.messagesGone.collectAsState()
 
     // A deleted chat must not stay on screen: the pane would be showing a
     // conversation the daemon no longer has, and every action on it would 404.
@@ -276,7 +284,7 @@ fun ChatView(
     Row(Modifier.fillMaxSize()) {
     Column(Modifier.weight(1f).fillMaxHeight()) {
         ChatTopBar(
-            title = detail?.title ?: "Untitled",
+            title = ChatRules.title(detail?.title) ?: "Untitled",
             running = running,
             activity = activity,
             mode = detail?.mode,
@@ -348,7 +356,11 @@ fun ChatView(
 
                 events.isEmpty() && !streaming && pendingSend == null ->
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        NewChatHint(detail?.mode ?: "ask")
+                        // ⚠ TWO DIFFERENT THINGS WEARING ONE FACE. An empty
+                        // transcript is either a chat nobody has written in yet or
+                        // one whose messages the host no longer has — and the
+                        // daemon says both with a 409. See `chatMessagesGone`.
+                        EmptyChatState(chatEmptyCopy(messagesGone, detail?.mode ?: "ask"))
                     }
 
                 // The four selection verbs, over the transcript and NOWHERE else:
@@ -757,18 +769,19 @@ private fun ThinkingLine() {
 
 /** A chat that has never run. Says what this kind of chat can do, and nothing else. */
 @Composable
-private fun NewChatHint(mode: String) {
+private fun EmptyChatState(copy: ChatEmptyCopy) {
     Column(
         Modifier.padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Text(if (mode == "act") "Act mode" else "Ask mode", style = MaterialTheme.typography.titleMedium)
+        Text(copy.title, style = MaterialTheme.typography.titleMedium)
         Text(
-            if (mode == "act") "Runs on the host with tools: files, commands, the web."
-            else "Reasoning and memory, no tools.",
+            copy.body,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(max = Frame.prose),
         )
     }
 }
