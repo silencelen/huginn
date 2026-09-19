@@ -107,6 +107,21 @@ function mkModal(suffix) {
   madeSessions.add(name);
   return name;
 }
+/**
+ * The ONE dialog whose pre-selected answer is destructive, drawn the way Claude
+ * Code draws it on a fresh cwd. `dialogWhy` has told this apart from an ordinary
+ * selector since 3.5.0; until 3.6.0 `releaseDecision` flattened it back to
+ * 'modal' and the word never reached a client (M2).
+ */
+function mkTrust(suffix) {
+  const name = `${PFX}-${suffix}`;
+  const dialog = 'Accessing workspace:\\n\\n Quick safety check: Is this a project you created or one'
+    + ' you trust?\\n\\n ❯ 1. Yes, I trust this folder\\n   2. No, exit\\n\\n Enter to confirm · Esc to cancel\\n';
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${dialog}"; sleep 600'`]);
+  madeSessions.add(name);
+  return name;
+}
 function writeState(name, { state = 'idle', transcript = null } = {}) {
   fs.writeFileSync(path.join(stateDir, name), JSON.stringify({
     state, sessionId: `sid-${name}`, transcript, cwd: tmp, ts: Math.floor(Date.now() / 1000),
@@ -662,4 +677,39 @@ test('a bad key name is refused BEFORE the text is typed, not after', async () =
   assert.match(body.error, /key not allowed/);
   await wait(400);
   assert.equal(fs.readFileSync(out, 'utf8'), '', 'the pane got nothing: a 400 means nothing happened');
+});
+
+test('the FOLDER-TRUST dialog reports blockedBy:"trust", not a generic "modal"', async () => {
+  // ⚠ THE FAIL-FIRST FOR M2. Against 3.5.2 both of the assertions below read
+  // 'modal': `dialogWhy` returns 'trust', `paneBlocks` accepts it, and then
+  // `releaseDecision` threw the distinction away — so the word the 3.5.1
+  // changelog advertises (modal/trust/starting/attention/draft) could never be
+  // emitted, and `SendQueue.note()` had no branch for a case it never saw.
+  //
+  // It is the one dialog worth naming: its pre-selected answer is "No, exit", so
+  // the blind keystroke that gets past every other dialog KILLS the session
+  // here — and `GET /screen` reports prompt:null / ask:null for it, so there are
+  // no tappable options either. "A dialog is open on the screen" sends a reader
+  // looking for buttons that do not exist.
+  const name = mkTrust('trustdialog');
+  writeState(name, { transcript: writeTranscript(name, [TURN]) });
+  for (let i = 0; i < 40 && !/trust this folder/.test(capture(name)); i++) await wait(100);
+  assert.match(capture(name), /trust this folder/, 'precondition: the dialog is really up');
+
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'this would be swallowed', keys: ['Enter'] }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.delivered, false, 'held, as any dialog holds a send');
+  assert.equal(body.blockedBy, 'trust', "the send's own answer names THIS dialog");
+  assert.equal((await typingOf(name)).blockedBy, 'trust', 'and the poll says the same word');
+
+  // An ordinary selector is still 'modal': the distinction is the point, and a
+  // rename of the general case would break every client that reads it.
+  const other = mkModal('trustcontrast');
+  writeState(other, { transcript: writeTranscript(other, [TURN]) });
+  const m = await api(`/v1/sessions/${other}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'a model picker is not a trust prompt', keys: ['Enter'] }),
+  });
+  assert.equal(m.body.blockedBy, 'modal');
 });

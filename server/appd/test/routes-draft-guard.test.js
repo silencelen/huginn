@@ -435,7 +435,7 @@ test('the duplicate guard holds behind ANY wait, not just a draft', async () => 
   const text = 'the same words, pressed twice at a dialog';
 
   const first = await send(name, text);
-  assert.equal(first.body.blockedBy, 'modal', 'precondition: a dialog is holding the queue');
+  assert.equal(first.body.blockedBy, 'trust', 'precondition: the trust dialog is holding the queue');
   assert.equal(first.body.queued, 1);
 
   const second = await send(name, text);
