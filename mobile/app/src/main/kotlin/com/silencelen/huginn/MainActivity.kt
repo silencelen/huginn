@@ -756,6 +756,7 @@ fun HuginnApp(
     // session is queued and delivered at the next turn boundary; without this the
     // composer emptied and nothing anywhere said where the message went.
     val typing by vm.typing.collectAsState()
+    val draftNotices by vm.draftNotices.collectAsState()
     // The 5-hour session window, under the Status icon. A DIFFERENT NUMBER from the
     // pill above it — the pill is the worst window anywhere, this is the one that
     // decides whether the next hour of work finishes — and null draws nothing.
@@ -1518,6 +1519,8 @@ fun HuginnApp(
                     )
                 },
                 queueNote = com.silencelen.huginn.ui.SendQueue.note(typing[name]),
+                draftNotice = draftNotices[name],
+                onDismissDraftNotice = { vm.dismissDraftNotice(name) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessionWorking,

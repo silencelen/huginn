@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Mic
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.Screen
@@ -153,6 +155,17 @@ fun SessionScreen(
      * otherwise; [com.silencelen.huginn.ui.SendQueue] writes it.
      */
     queueNote: String? = null,
+    /**
+     * ⚠⚠ D-7 / DECISION 59. "Your message was sent into text someone was still
+     * typing: …" — null almost always.
+     *
+     * The daemon's draft hold has a ceiling, and past it the queued message is
+     * pasted in front of somebody's unsent text and both are submitted as one
+     * prompt. The client's whole account of that used to be the queued line
+     * disappearing. Stays until [onDismissDraftNotice] or the next send.
+     */
+    draftNotice: String? = null,
+    onDismissDraftNotice: () -> Unit = {},
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -247,6 +260,8 @@ fun SessionScreen(
                     quickActions = quickActions,
                     onSelectionAction = onSelectionAction,
                     queueNote = queueNote,
+                    draftNotice = draftNotice,
+                    onDismissDraftNotice = onDismissDraftNotice,
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -339,6 +354,8 @@ private fun SessionConversation(
     quickActions: com.silencelen.huginn.data.QuickActions? = null,
     onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
     queueNote: String? = null,
+    draftNotice: String? = null,
+    onDismissDraftNotice: () -> Unit = {},
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -646,6 +663,34 @@ private fun SessionConversation(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp),
                 )
+            }
+            // ⚠⚠ THE MESSAGE THAT WENT IN ON TOP OF SOMEBODY'S DRAFT (D-7). Above
+            // the input row for the same reason the queue line is: the row owns
+            // the keyboard and navigation inset, so anything after it is laid out
+            // under the keyboard. In the error ink, because the thing that
+            // happened is that two people's sentences were submitted as one.
+            draftNotice?.let {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismissDraftNotice, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Dismiss the notice",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
             Row(
                 Modifier
