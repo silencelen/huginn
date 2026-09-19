@@ -38,7 +38,9 @@
   "creditsEverEnabled": true,
   "decimalPlaces": 2,
   "disabledReason": "org_level_disabled_until",
-  "userDisabled": false
+  "userDisabled": false,
+  "daily": null,
+  "weekly": null
  },
  "spend": {
   "usedMinor": 0,
