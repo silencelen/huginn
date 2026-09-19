@@ -666,7 +666,8 @@ test('typingSnapshot reports the queue, and reports no block when nothing waits'
   const s = t.typingSnapshot(q, 1_757_900_000_123);
   assert.deepEqual(s, {
     queued: 2, delivering: true, lastError: null, blockedBy: 'turn',
-    waitedMs: 4_000, serverTime: 1_757_900_000,
+    waitedMs: 4_000, intoDraft: null, serverTime: 1_757_900_000,
+    serverTimeSec: 1_757_900_000,
   });
   const idle = t.typingSnapshot({ entries: [], delivering: false, lastError: 'x', blockedBy: 'turn' }, 0);
   assert.equal(idle.blockedBy, null, 'nothing queued cannot be blocked by anything');
@@ -676,8 +677,24 @@ test('typingSnapshot reports the queue, and reports no block when nothing waits'
 test('typingSnapshot of a session that has never sent is all zeroes, not a crash', () => {
   const s = t.typingSnapshot(undefined, 1_757_900_000_000);
   assert.deepEqual(s, {
-    queued: 0, delivering: false, lastError: null, blockedBy: null, waitedMs: 0, serverTime: 1_757_900_000,
+    queued: 0, delivering: false, lastError: null, blockedBy: null, waitedMs: 0,
+    intoDraft: null, serverTime: 1_757_900_000, serverTimeSec: 1_757_900_000,
   });
+});
+
+test('intoDraft is rendered in SECONDS and clipped to 120 characters', () => {
+  // ⚠ DECISION 59, AND THE UNIT IS THE POINT. Every timestamp outside
+  // /v1/headroom is epoch seconds; this one is stored in ms and rendered here,
+  // so there is exactly one place that could get it wrong.
+  const at = 1_757_900_000_123;
+  const long = `${'x'.repeat(200)}`;
+  const v = t.intoDraftView({ at, waitedMs: 61_234.6, composer: `  a  draft\n  wrapped  ` });
+  assert.deepEqual(v, { at: 1_757_900_000, waitedMs: 61_235, composer: 'a draft wrapped' },
+    'seconds, a rounded wait, and the pane\'s wrapping squashed out of the quote');
+  assert.equal(t.intoDraftView({ at, waitedMs: 0, composer: long }).composer.length, 120,
+    'a long draft is clipped, not carried whole');
+  assert.equal(t.intoDraftView(null), null, 'and "it never happened" is null, not an empty object');
+  assert.equal(t.intoDraftView({ composer: 'x' }), null, 'a record with no timestamp is no record');
 });
 
 test('typingSnapshot says how long the head of the queue has waited', () => {
