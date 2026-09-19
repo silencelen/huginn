@@ -287,6 +287,15 @@ class AppStore(
     private val _sessionName = MutableStateFlow<String?>(null)
     val sessionName: StateFlow<String?> = _sessionName.asStateFlow()
 
+    /**
+     * The conversation this pane was showing when it ended, for the card that
+     * says so. Null once the reader has moved on. See [noteSessionEnded].
+     */
+    data class EndedSession(val name: String, val title: String?, val atMs: Long)
+
+    private val _sessionEnded = MutableStateFlow<EndedSession?>(null)
+    val sessionEnded: StateFlow<EndedSession?> = _sessionEnded.asStateFlow()
+
     /** Settings, at a named drawer — the palette's door, and the only one. */
     fun openSettings(categoryId: String) {
         settingsPane.open(categoryId)
@@ -334,8 +343,37 @@ class AppStore(
         // session opened while an archive was up would otherwise be drawn
         // underneath a read-only conversation that is still claiming the pane.
         _archiveRead.value = null
+        // And so does the ended card, which is about the LAST conversation this
+        // pane held. Navigating anywhere is the reader having moved on; only
+        // [noteSessionEnded] puts it back, and it does so after this call.
+        _sessionEnded.value = null
         _sessionName.value = name
     }
+
+    /**
+     * The session the reader was READING has ended.
+     *
+     * ⚠⚠ IT USED TO JUST VANISH. `SessionView` closed itself on `gone` and the
+     * detail pane fell back to the first-run empty state — "No session open /
+     * Every tmux session on the host is on the left…" plus the keyboard hints —
+     * on top of a transcript somebody was in the middle of reading. Nothing said
+     * the session had ended, and a wrapped-up session is not archived (only
+     * `Archive…` writes a row), so the conversation was not reachable from the
+     * UI at all afterwards. A pane that was showing a conversation owes an
+     * account of where it went.
+     *
+     * The moment is stamped because the answer is not final yet: a graceful
+     * archive lands its row a few seconds later, and the card upgrades itself to
+     * carry the transcript and the resume command when it does. See
+     * [com.silencelen.huginn.desktop.ui.common.archiveFor].
+     */
+    fun noteSessionEnded(name: String, title: String?) {
+        openSession(null)
+        _sessionEnded.value = EndedSession(name, title, System.currentTimeMillis())
+    }
+
+    /** The reader has read it. */
+    fun clearSessionEnded() { _sessionEnded.value = null }
 
     /** Escape: close the open item, or fall back to the chats list. */
     fun back() {
@@ -378,7 +416,7 @@ class AppStore(
                     list.size,
                     delta,
                 )
-                list.getOrNull(i)?.let { _sessionName.value = it.name }
+                list.getOrNull(i)?.let { _sessionName.value = it.name; _sessionEnded.value = null }
             }
             else -> Unit
         }
@@ -1779,8 +1817,10 @@ class AppStore(
     fun openArchive(row: ArchivedSession) {
         _view.value = View.SESSIONS
         // The live session lets go of the pane, for the same reason the archive
-        // does in [openSession]: one detail half, one occupant.
+        // does in [openSession]: one detail half, one occupant. And so does the
+        // ended card — reading the archive IS the thing it was offering.
         _sessionName.value = null
+        _sessionEnded.value = null
         if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
         _archiveRead.value = ArchiveRead(id = row.id, title = ArchiveRules.label(row), loading = true)
         scope.launch {

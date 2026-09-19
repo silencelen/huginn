@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ArchivedSession
+import com.silencelen.huginn.ui.ArchiveRules
 
 /**
  * Empty, loading and nothing-selected — told apart.
@@ -139,6 +142,146 @@ fun noSessionOpenCopy(listCollapsed: Boolean): EmptyPaneCopy = if (listCollapsed
             "Right-click" to "rename, interrupt, end",
         ),
     )
+}
+
+// ------------------------------------------------- the session that just ended
+//
+// ⚠⚠ THE CONVERSATION SIMPLY VANISHED. A session that wraps up while somebody is
+// reading it took the pane down to the generic first-run empty state — "No
+// session open / Every tmux session on the host is on the left…" plus the
+// keyboard hints — over a transcript that was being read a second earlier.
+// Nothing said the session had ended. And a wrapped-up session is NOT archived
+// (only `Archive…` writes a row), so afterwards the conversation was not
+// reachable from the UI at all: it did not appear under Archived, and the
+// session it belonged to no longer existed.
+//
+// A pane that was showing a conversation owes an account of where it went. What
+// it can honestly offer depends on what the host kept, which is the whole of the
+// rule below.
+
+/**
+ * What the pane says after the conversation in it ended.
+ *
+ * A headline of its own rather than an [EmptyPaneCopy], because this pane is not
+ * empty — something happened in it, and the difference between "nothing is open"
+ * and "the thing you were reading finished" is the entire point.
+ *
+ * @param resume the exact command that brings the conversation back, as the HOST
+ *   built it. ⚠ NEVER assembled here: `ArchivedSession.resumeCommand` is the
+ *   daemon's string, and a second implementation of it would eventually disagree
+ *   about a directory with a space in it.
+ * @param archiveId the archive row to open in this pane, when the transcript is
+ *   still readable. Null when there is nothing to read.
+ */
+data class EndedSessionCopy(
+    val headline: String,
+    val sentence: String,
+    val resume: String? = null,
+    val archiveId: String? = null,
+)
+
+/**
+ * How long after a session ends an archive row may still be ITS archive row.
+ *
+ * ⚠ A tmux NAME IS REUSED WITHIN HOURS on this host — the archive list is keyed
+ * on the Claude session uuid for exactly that reason. So a row is only this
+ * session's if it was archived around the time this session ended; without the
+ * window, wrapping up `sql` would offer the resume command of last week's `sql`.
+ * Generous in the other direction because a graceful archive returns while the
+ * session is still winding down, so the row can be stamped slightly BEFORE the
+ * client notices it is gone.
+ */
+const val ARCHIVE_MATCH_SLACK_MS: Long = 5 * 60 * 1000
+
+/** This session's archive row, if the host wrote one. See [ARCHIVE_MATCH_SLACK_MS]. */
+fun archiveFor(rows: List<ArchivedSession>, name: String, endedAtMs: Long): ArchivedSession? =
+    rows.filter { it.tmuxName == name && it.archivedAt >= endedAtMs - ARCHIVE_MATCH_SLACK_MS }
+        .maxByOrNull { it.archivedAt }
+
+/**
+ * The card, as a pure function of what the host kept.
+ *
+ * Three states, and each one is a different thing to offer:
+ *
+ *  * **Archived, transcript present.** The best case: the conversation is
+ *    readable without bringing anything back, and the resume command is on file.
+ *  * **Archived, transcript swept.** `ArchiveRules.startsFresh` — Claude Code
+ *    deletes its own after `cleanupPeriodDays` and the host's copy can be gone
+ *    too. Said out loud, because a resume that opens a BLANK conversation in the
+ *    right directory looks exactly like a success.
+ *  * **Not archived.** A wrap-up ends a session without writing a row, so there
+ *    is no stored copy and no resume command. Offering either would be inventing
+ *    one; what it CAN say is that archiving is the verb that would have kept it.
+ */
+fun sessionEndedCopy(name: String, title: String?, archived: ArchivedSession?): EndedSessionCopy {
+    val label = title?.takeIf { it.isNotBlank() } ?: name
+    val headline = "“$label” ended"
+    if (archived == null) {
+        return EndedSessionCopy(
+            headline = headline,
+            sentence = "The session finished and was not archived, so this host kept no copy of " +
+                "the conversation. Archive… on a session is what stores one, along with the " +
+                "command that brings it back.",
+        )
+    }
+    val readable = ArchiveRules.canView(archived)
+    return EndedSessionCopy(
+        headline = headline,
+        sentence = if (readable) {
+            "It was archived, so the whole conversation is still here to read — " +
+                "and the command that brings it back is below."
+        } else {
+            "It was archived, but neither this host nor Claude Code still has the " +
+                "transcript, so resuming it would open an empty conversation in the " +
+                "right folder rather than this one."
+        },
+        resume = archived.resumeCommand?.takeIf { it.isNotBlank() },
+        archiveId = archived.id.takeIf { readable },
+    )
+}
+
+/**
+ * The detail pane after the session in it ended: a headline, a sentence, and the
+ * one or two things there are to do about it.
+ *
+ * Laid out like [NothingOpen] because it occupies the same pane, and a card that
+ * arrived in a different shape would read as a different screen rather than as
+ * the same one answering a question.
+ */
+@Composable
+fun SessionEndedCard(
+    copy: EndedSessionCopy,
+    onOpenArchive: (String) -> Unit,
+    onCopyResume: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.widthIn(max = 420.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Space.tight),
+        ) {
+            Text(copy.headline, style = MaterialTheme.typography.titleSmall, textAlign = TextAlign.Center)
+            Text(
+                copy.sentence,
+                style = DeskType.rowMeta,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Row(
+                Modifier.padding(top = Space.unit),
+                horizontalArrangement = Arrangement.spacedBy(Space.tight),
+            ) {
+                copy.archiveId?.let { id ->
+                    TextButton(onClick = { onOpenArchive(id) }) { Text("Read the transcript") }
+                }
+                copy.resume?.let { command ->
+                    TextButton(onClick = { onCopyResume(command) }) { Text("Copy resume command") }
+                }
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
+        }
+    }
 }
 
 /**
