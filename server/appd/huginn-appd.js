@@ -2046,7 +2046,14 @@ function setFamilyProbe(fn) { familyProbe = typeof fn === 'function' ? fn : null
 function queueFor(name) {
   let q = sendQueues.get(name);
   if (!q) {
-    q = { entries: [], blockedBy: null, delivering: false, lastError: null, timer: null, pumping: false };
+    q = {
+      entries: [], blockedBy: null, delivering: false, lastError: null, timer: null, pumping: false,
+      // ⚠ WHEN THIS QUEUE LAST PUT SOMETHING IN THE PANE. The automated lane's
+      // boundary test asks "has a turn ended SINCE this entry was queued?", and
+      // the honest start of that window is not the moment the entry arrived —
+      // it is the moment the queue last typed. See the `Math.max` in pumpQueue.
+      deliveredAt: 0,
+    };
     sendQueues.set(name, q);
   }
   return q;
@@ -2319,7 +2326,17 @@ async function pumpQueue(name) {
       // session whose transcript never gets a turn marker ever has; `attention`
       // is the opposite verdict and holds, because a numbered prompt is on
       // screen and prose typed into one is lost or misread.
-      const stateSays = typing.stateVerdict(gate.sessionState, entry.at);
+      // ⚠ `Math.max(entry.at, q.deliveredAt)`, NOT `entry.at`. The hook writes
+      // ONE `{state:"idle", ts}` per turn boundary, and `stateVerdict` releases
+      // every entry queued BEFORE that stamp — so two automated messages that
+      // arrived while one turn was running were both released by the single
+      // idle the end of that turn wrote, pasted back to back, and Claude Code
+      // absorbed the second into the turn the first had just started. Measured
+      // as two different notices landing as one prompt. The window each entry
+      // is judged against starts at the LATER of "when it was queued" and "when
+      // this queue last typed into the pane": after a delivery, only an idle
+      // stamped after THAT release is a boundary the next entry may ride.
+      const stateSays = typing.stateVerdict(gate.sessionState, Math.max(entry.at, q.deliveredAt || 0));
       // 3.3.x (#13): the hook's `attention` now reaches a PERSON's message too.
       // It is the only authoritative "a numbered prompt is on screen" the
       // daemon has, and the pane — which is a picture, and missed a dialog
@@ -2435,6 +2452,11 @@ async function pumpQueue(name) {
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
       } finally { q.delivering = false; }
+      // The stamp the NEXT entry's boundary test starts from (see queueFor).
+      // Only on success: a paste that never reached the pane started no turn,
+      // and moving the window for it would hold the entry behind it for a
+      // boundary that has nothing to do with anything appd did.
+      if (r.ok) q.deliveredAt = Date.now();
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
