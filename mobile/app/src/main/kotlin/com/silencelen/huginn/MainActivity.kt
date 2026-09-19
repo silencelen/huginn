@@ -1088,7 +1088,7 @@ fun HuginnApp(
     killTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text("Kill $name?") },
+            title = { com.silencelen.huginn.ui.ConfirmTitle(EndVerbs.HARD, name) },
             text = { Text("Ends the tmux session and whatever Claude is doing in it.") },
             confirmButton = {
                 TextButton(onClick = {
@@ -1103,7 +1103,7 @@ fun HuginnApp(
     softEndTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { softEndTarget = null },
-            title = { Text("${EndVerbs.SOFT} $name?") },
+            title = { com.silencelen.huginn.ui.ConfirmTitle(EndVerbs.SOFT, name) },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
