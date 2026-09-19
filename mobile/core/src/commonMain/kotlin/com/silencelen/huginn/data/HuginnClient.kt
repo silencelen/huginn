@@ -260,6 +260,15 @@ class HuginnClient(
         }
     }
 
+    /**
+     * This install's id, exactly as it goes out in `X-Huginn-Client`.
+     *
+     * Exposed because the daemon now answers with the id of whoever holds a
+     * session's pane-size lease, and "is that us?" is a question the UI has to be
+     * able to answer without keeping a second copy of the id.
+     */
+    val clientId: String get() = clientIdProvider().trim()
+
     private fun HttpRequestBuilder.build(path: String, method: HttpMethod, tier: Tier, body: Any?) {
         this.method = method
         url(absolute(path))
@@ -795,9 +804,15 @@ class HuginnClient(
     }
 
     /**
-     * @param cols/rows  the phone's real geometry; the server leases a tmux resize
-     *   so Claude Code re-wraps to fit instead of the phone showing a window of a
-     *   laptop-shaped layout.
+     * @param cols/rows  this client's real geometry. DESCRIPTIVE ONLY unless
+     *   [live] is set: the daemon captures the pane as it is and reshapes nothing.
+     * @param live       this client is in LIVE VIEW — the mode that sends keys —
+     *   and is therefore entitled to lease the tmux window at [cols] x [rows] so
+     *   Claude Code re-wraps to fit. DEFAULTS TO FALSE, and the default is the
+     *   safety property: every call site that has not thought about it reports
+     *   its size without claiming somebody else's terminal (owner decision 52).
+     *   A second live client does not take the lease off the first; the answer's
+     *   `leaseHeldBy` names whoever has it.
      * @param knownHash  long-poll: return only once the screen differs from this.
      * @param waitMs     how long the server may hold the request.
      * @param force      resize even though another client is attached.
@@ -810,6 +825,7 @@ class HuginnClient(
         knownHash: String? = null,
         waitMs: Int = 0,
         force: Boolean = false,
+        live: Boolean = false,
     ): Screen {
         val q = buildList {
             if (cols != null && rows != null) { add("cols=$cols"); add("rows=$rows") }
@@ -817,6 +833,9 @@ class HuginnClient(
             if (knownHash != null) add("hash=$knownHash")
             if (waitMs > 0) add("wait=$waitMs")
             if (force) add("force=1")
+            // ABSENT, not `live=0`, for the negative case: absent is what every
+            // client built before this sends, so one spelling covers both.
+            if (live) add("live=1")
         }.joinToString("&")
         val path = "/v1/sessions/$name/screen" + if (q.isEmpty()) "" else "?$q"
         // A long poll outlives the normal read timeout but must still time out.
