@@ -3,6 +3,8 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
 import com.silencelen.huginn.data.ProjectLead
+import com.silencelen.huginn.data.ProjectDeleted
+import com.silencelen.huginn.data.ProjectEndRefusal
 import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMember
@@ -687,5 +689,77 @@ class ProjectRulesTest {
     fun `the cap is checked before the request`() {
         assertNull(ProjectRules.capProblem(11, 1))
         assertEquals("a project holds at most 12 members", ProjectRules.capProblem(12, 1))
+    }
+
+    /**
+     * ⚠⚠ "PROJECT REMOVED" ALONE IS A LIE BY OMISSION when a graceful delete
+     * could not reach every member. Those sessions are ALIVE, with no project
+     * behind them, and nothing else on the host will ever mention them again —
+     * the record they belonged to has gone.
+     */
+    @Test
+    fun `a delete says what it could not wind down, by name`() {
+        val done = ProjectDeleted(
+            ok = true,
+            ended = listOf("lora-pcb", "lora-lead"),
+            mode = "graceful",
+            refused = listOf(
+                ProjectEndRefusal("lora-firmware", "lora/firmware", "a dialog is open on the screen"),
+                ProjectEndRefusal("lora-test", "lora/test", "a question is waiting on the screen"),
+            ),
+        )
+        assertEquals(
+            "Project removed · ended 2 · 2 sessions were not wound down: lora-firmware, lora-test",
+            ProjectRules.deletedWords(done),
+        )
+    }
+
+    /** One is singular, and the word has to agree or the line reads as a bug. */
+    @Test
+    fun `one refusal is one session`() {
+        val done = ProjectDeleted(
+            ok = true,
+            ended = emptyList(),
+            mode = "graceful",
+            refused = listOf(ProjectEndRefusal("lora-firmware", "lora/firmware", "a dialog is open")),
+        )
+        assertEquals(
+            "Project removed · 1 session was not wound down: lora-firmware",
+            ProjectRules.deletedWords(done),
+        )
+    }
+
+    /**
+     * ⚠ "NOT WOUND DOWN", NEVER "FAILED". Nothing broke — those sessions are
+     * working — and the word has to leave a reader expecting to find them rather
+     * than expecting wreckage.
+     */
+    @Test
+    fun `the words do not read as a breakage`() {
+        val line = ProjectRules.deletedWords(
+            ProjectDeleted(refused = listOf(ProjectEndRefusal("a", "p/a", "busy"))),
+        ).lowercase()
+        for (word in listOf("failed", "error", "crashed", "lost")) {
+            assertFalse(word in line, "'$word' would send somebody looking for wreckage: $line")
+        }
+    }
+
+    /** The ordinary delete is unchanged: no refusals, no clause. */
+    @Test
+    fun `a clean delete says only what it did`() {
+        assertEquals("Project removed", ProjectRules.deletedWords(ProjectDeleted(ok = true)))
+        assertEquals(
+            "Project removed · ended 3",
+            ProjectRules.deletedWords(ProjectDeleted(ok = true, ended = listOf("a", "b", "c"))),
+        )
+    }
+
+    /** A daemon too old to send the key looks exactly like nothing refused. */
+    @Test
+    fun `an older daemon's answer reads as a clean delete`() {
+        assertEquals(
+            "Project removed · ended 1",
+            ProjectRules.deletedWords(ProjectDeleted(ok = true, ended = listOf("a"), mode = "now")),
+        )
     }
 }

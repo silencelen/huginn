@@ -2499,8 +2499,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { done ->
                     if (_projectDetail.value?.project?.id == id) _projectDetail.value = null
                     _projectMembers.value = _projectMembers.value - id
-                    _toast.value = if (done.ended.isEmpty()) "Project removed"
-                    else "Project removed · ended ${done.ended.size}"
+                    // ⚠ INCLUDING WHAT WAS NOT WOUND DOWN. A member sitting on a
+                    // dialog cannot be typed at, so the daemon skips it and
+                    // deletes the record anyway — those sessions are alive with
+                    // no project behind them, and "Project removed" alone gives a
+                    // reader no reason to go and find them.
+                    _toast.value = ProjectRules.deletedWords(done)
                     refreshProjects()
                 }
                 .onFailure { _toast.value = errText(it) }

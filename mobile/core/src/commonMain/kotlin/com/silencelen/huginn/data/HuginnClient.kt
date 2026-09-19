@@ -879,6 +879,21 @@ class HuginnClient(
     )?.let { decode<TranscriptPage>(it) }
 
     /**
+     * ⚠⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN, and the daemon says so with a
+     * 409 (appd 3.5.2). A project stores its members BY TMUX NAME, their
+     * `claudeName` was minted from the slug and the role when `claude --name`
+     * launched them, and the native peer registry is joined back through that
+     * pair — so renaming one here orphans the session from its cluster silently:
+     * the record goes on naming a session that is gone, the dashboard row reads
+     * "not present" forever, and `/message` answers 409 about a session sitting
+     * right there.
+     *
+     * The refusal NAMES the project and says to drop the member first, so it is
+     * shown VERBATIM — [errorFrom] lifts the daemon's `error` string, both shells
+     * print a HuginnException's message unchanged, and a summary of our own would
+     * lose the half that is the instruction. A no-op rename (the desktop's field
+     * answering with what is already in it) is left alone by the daemon.
+     *
      * @return the name the daemon ACTUALLY gave the session, which is not always
      *   the one asked for: tmux silently rewrites '.' to '_' and still exits 0,
      *   so the daemon reads the name back off tmux and answers with that. A
