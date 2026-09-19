@@ -233,6 +233,12 @@ fun AccountsEditor(
             "1 · Start sign-in    2 · Approve in the browser    3 · Paste the code" +
                 "        (now: step $step)",
             Modifier.padding(top = 14.dp),
+            // ⚠ THREE LINES, BECAUSE THE POINT OF THE SENTENCE IS AT ITS END.
+            // `EditorNote` defaults to one, and at one line a phone cut this at
+            // "3 · Paste the co…" — losing the step marker, which is the entire
+            // difference between "nothing happened" and "it is waiting for you".
+            // Same fix as the autoswitch note above it.
+            maxLines = 3,
         )
 
         val pendingUrl = loginUrl
