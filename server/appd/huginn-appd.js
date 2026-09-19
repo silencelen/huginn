@@ -1618,6 +1618,32 @@ const SOFT_END_AUTO = process.env.HUGINN_APPD_SOFT_END_AUTO !== '0';
 const softEnds = new Map(); // session name -> pending record (lib/softend)
 
 /**
+ * Arm the auto-end — but ONLY from the send's real outcome (#9).
+ *
+ * ⚠ `submitted !== false`, NOT `settled === true`. The state that must never arm
+ * a kill is the one where the phrase is demonstrably still sitting in a composer
+ * — `recoveryDecision` returning 'leave', which skips the Enter, and a
+ * confirmSubmitted that timed out with the text still there. Both report
+ * `submitted: false`. A pane with no composer at all (a plain shell, an inert
+ * pane) reports `null`, and refusing to arm there would break the auto-end for
+ * every non-Claude pane.
+ *
+ * Named because THREE callers need exactly this rule — `/soft-end`, the archive
+ * route's graceful half, and a project's graceful delete — and a copy of it that
+ * armed on the 200 instead of on the settle is what #9 was.
+ */
+function armSoftEndFromSettle(name, v, what = 'soft-end') {
+  const r = (v && v.result) || {};
+  if (v && v.delivered && r.ok && r.submitted !== false) {
+    softEnds.set(name, createPending(Date.now()));
+    return true;
+  }
+  log(`${what}: ${name}: the wrap-up phrase did not land `
+    + `(${(v && v.dropped) || r.message || 'not submitted'}); not arming the auto-end`);
+  return false;
+}
+
+/**
  * Put TEXT into a pane and submit it — the one delivery path.
  *
  *   printf %s "$text" | tmux load-buffer -b <buf> -     # stdin: no length limit
@@ -1864,20 +1890,12 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
   return { ok: true, how: 'send-keys' };
 }
 
-/**
- * Type a line into a pane and submit it, for the callers that send a FIXED
- * phrase (soft end, /compact) rather than a queued message.
- *
- * Same delivery as sendTextToPane — these used chunk-free `send-keys -l`, which
- * is the path with the newline trap — kept in run()'s `{err, stderr}` shape
- * because that is what its two callers translate into an HTTP error. Not
- * queued: both are deliberate interventions whose whole point is to arrive now.
- */
-async function sendLineToPane(name, text) {
-  const r = await sendTextToPane(name, text);
-  if (r.ok) return { err: null, stderr: '' };
-  return { err: new Error(r.message), stderr: r.stderr || r.message };
-}
+// ⚠ `sendLineToPane` IS GONE (3.5.2). It was the raw-paste shortcut "for the
+// callers that send a FIXED phrase" — and every one of those callers turned out
+// to be a place a wrap-up phrase could be typed at a live dialog (#9). /soft-end
+// and /compact moved to the queue in 3.3.x; a project's graceful delete was the
+// last one, and with it the helper. A fixed phrase is still a send: it goes
+// through enqueueSend like everything else, and the gates apply.
 
 // ---- the send queue --------------------------------------------------------
 //
@@ -2046,7 +2064,14 @@ function setFamilyProbe(fn) { familyProbe = typeof fn === 'function' ? fn : null
 function queueFor(name) {
   let q = sendQueues.get(name);
   if (!q) {
-    q = { entries: [], blockedBy: null, delivering: false, lastError: null, timer: null, pumping: false };
+    q = {
+      entries: [], blockedBy: null, delivering: false, lastError: null, timer: null, pumping: false,
+      // ⚠ WHEN THIS QUEUE LAST PUT SOMETHING IN THE PANE. The automated lane's
+      // boundary test asks "has a turn ended SINCE this entry was queued?", and
+      // the honest start of that window is not the moment the entry arrived —
+      // it is the moment the queue last typed. See the `Math.max` in pumpQueue.
+      deliveredAt: 0,
+    };
     sendQueues.set(name, q);
   }
   return q;
@@ -2319,7 +2344,17 @@ async function pumpQueue(name) {
       // session whose transcript never gets a turn marker ever has; `attention`
       // is the opposite verdict and holds, because a numbered prompt is on
       // screen and prose typed into one is lost or misread.
-      const stateSays = typing.stateVerdict(gate.sessionState, entry.at);
+      // ⚠ `Math.max(entry.at, q.deliveredAt)`, NOT `entry.at`. The hook writes
+      // ONE `{state:"idle", ts}` per turn boundary, and `stateVerdict` releases
+      // every entry queued BEFORE that stamp — so two automated messages that
+      // arrived while one turn was running were both released by the single
+      // idle the end of that turn wrote, pasted back to back, and Claude Code
+      // absorbed the second into the turn the first had just started. Measured
+      // as two different notices landing as one prompt. The window each entry
+      // is judged against starts at the LATER of "when it was queued" and "when
+      // this queue last typed into the pane": after a delivery, only an idle
+      // stamped after THAT release is a boundary the next entry may ride.
+      const stateSays = typing.stateVerdict(gate.sessionState, Math.max(entry.at, q.deliveredAt || 0));
       // 3.3.x (#13): the hook's `attention` now reaches a PERSON's message too.
       // It is the only authoritative "a numbered prompt is on screen" the
       // daemon has, and the pane — which is a picture, and missed a dialog
@@ -2435,6 +2470,11 @@ async function pumpQueue(name) {
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
       } finally { q.delivering = false; }
+      // The stamp the NEXT entry's boundary test starts from (see queueFor).
+      // Only on success: a paste that never reached the pane started no turn,
+      // and moving the window for it would hold the entry behind it for a
+      // boundary that has nothing to do with anything appd did.
+      if (r.ok) q.deliveredAt = Date.now();
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
@@ -5855,6 +5895,31 @@ async function projectDashboard(project) {
     rate,
     members: rows.map(projectsLib.dashboardMemberRow),
   };
+}
+
+/**
+ * Which project, if any, a TMUX SESSION belongs to — and as what.
+ *
+ * ⚠ THE NAME IS THE KEY, and that is the whole reason this exists. A project
+ * record stores its members by tmux name (`joinMembers`: "the lookup is by
+ * tmuxName"), the peer names are minted from the slug and the role at launch,
+ * and the native registry rows are matched back through the same pair. Renaming
+ * a member's session therefore orphans it from its project with nothing
+ * anywhere saying so — the record goes on naming a session that no longer
+ * exists, the dashboard row reads "not present" forever, and `/message` answers
+ * 409 for a session sitting right there. So the rename route asks this first.
+ *
+ * Reads the store rather than a memo: adopting, dropping and renaming are all
+ * rare, and a stale answer here is a wrong refusal or a lost membership.
+ */
+function projectOfSession(name) {
+  if (!name) return null;
+  for (const project of listProjects()) {
+    for (const member of projectsLib.memberList(project)) {
+      if (member.name === name) return { project, member };
+    }
+  }
+  return null;
 }
 
 /** The member (or the lead) a `from`/`to` names: by role, by tmux name, or by
@@ -10177,6 +10242,25 @@ const server = http.createServer(async (req, res) => {
       if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
       if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
+      // ⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN (3.5.2). The project record
+      // stores members by tmux name, its `claudeName` was minted from the slug
+      // and the role when `claude --name` launched it, and the native peer
+      // registry is joined back through that pair — so a rename here orphans the
+      // session from its project silently: the record goes on naming a session
+      // that is gone, the dashboard row reads "not present" forever, and
+      // `/message` answers 409 about a session sitting right there. Refused with
+      // the project NAMED, because "drop it from the project first" is only
+      // actionable if you know which one. A no-op rename (the desktop's rename
+      // field answering with what is already in it) is left alone.
+      if (to !== from) {
+        const owner = projectOfSession(from);
+        if (owner) {
+          return sendErr(res, 409,
+            `'${from}' is the ${owner.member.role} session of the project "${owner.project.name}" — `
+            + 'its name is what the project and the peer registry know it by. Drop it from the '
+            + 'project first (DELETE /v1/projects/<id>/members/<role>), then rename it');
+        }
+      }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
       if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
       // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
@@ -10484,23 +10568,7 @@ const server = http.createServer(async (req, res) => {
       const out = await enqueueSend(name, phrase, {
         origin: 'soft-end',
         submit: true,
-        onSettle: (v) => {
-          if (!auto) return;
-          const r = v.result || {};
-          // ⚠ `submitted !== false`, NOT `settled === true`. The state that must
-          // never arm a kill is the one where the phrase is demonstrably still
-          // sitting in a composer — `recoveryDecision` returning 'leave', which
-          // skips the Enter, and a confirmSubmitted that timed out with the text
-          // still there. Both report `submitted: false`. A pane with no composer
-          // at all (a plain shell, an inert pane) reports `null`, and refusing to
-          // arm there would break the auto-end for every non-Claude pane.
-          if (v.delivered && r.ok && r.submitted !== false) {
-            softEnds.set(name, createPending(Date.now()));
-            return;
-          }
-          log(`soft-end: ${name}: the wrap-up phrase did not land `
-            + `(${v.dropped || (r.message || 'not submitted')}); not arming the auto-end`);
-        },
+        onSettle: (v) => { if (auto) armSoftEndFromSettle(name, v); },
       });
       if (out.result && !out.result.ok) {
         return sendErr(res, out.result.code || 500, out.result.message);
@@ -11627,6 +11695,109 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 201, projectsLib.publicProject(project));
     }
 
+    /**
+     * MEMBERSHIP, for sessions this daemon did NOT spawn.
+     *
+     * The Wave 3 contract's leftover: a cluster is not always born as one. The
+     * ordinary case is a session the owner already has open — a scratch shell
+     * that turned into the firmware work — which belongs in the project beside
+     * the ones that were spawned, on the dashboard, in the peer relay and in the
+     * graceful end.
+     *
+     * ⚠ ADOPT DOES NOT LAUNCH ANYTHING AND DROP DOES NOT END ANYTHING. Both are
+     * edits to a RECORD. `POST /spawn` is the route that creates sessions and
+     * `DELETE /v1/projects/:id?end=…` is the one that ends them; a membership
+     * verb that quietly did either would be the surprise this block exists to
+     * avoid. Dropping a member leaves it running, unadopted, exactly where it
+     * was.
+     *
+     * ⚠ AND AN ADOPTED MEMBER'S PEER NAME IS READ, NOT INVENTED. `claudeName` is
+     * what `claude --name` was given at LAUNCH, and an adopted session was
+     * launched without one of ours — so the native registry is asked for the
+     * name it actually registered, and `<slug>/<role>` is only the label when it
+     * has none. Writing the conventional name over a session that never had it
+     * would put a peer address in the record that nothing can deliver to.
+     */
+    if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})\/members(?:\/([a-z0-9][a-z0-9-]{0,15}))?$/))) {
+      const projectId = m[1];
+      const roleInPath = m[2] || '';
+      const project = loadProject(projectId);
+      if (!project) return sendErr(res, 404, 'no such project');
+
+      if (req.method === 'POST' && !roleInPath) {
+        const body = await readJsonBody(req);
+        const taken = projectsLib.memberList(project).map((x) => x.role);
+        const badRole = projectsLib.roleProblem(body.role, taken);
+        if (badRole) return sendErr(res, 400, badRole);
+        const role = String(body.role).trim();
+        if ((project.members || []).length >= projectsLib.MAX_MEMBERS) {
+          return sendErr(res, 409, `that is the ${projectsLib.MAX_MEMBERS}-session limit for one project`);
+        }
+        // `name` is the TMUX session being adopted. Absent, it is the name this
+        // project would have given the role — so adopting a member that was
+        // spawned here and then dropped needs no arguments.
+        const raw = body.name == null || body.name === ''
+          ? projectsLib.tmuxNameFor(project.slug, role) : body.name;
+        const badName = nameProblem(raw);
+        if (badName) return sendErr(res, 400, badName);
+        const name = canonName(raw);
+        const found = await sessionExists(name);
+        if (found === null) return sendErr(res, 503, 'tmux is not answering right now');
+        if (!found) return sendErr(res, 404, `there is no session called '${name}' to adopt`);
+        const owner = projectOfSession(name);
+        if (owner) {
+          return sendErr(res, 409, `'${name}' is already the ${owner.member.role} session of `
+            + `the project "${owner.project.name}"`);
+        }
+        const st = readSessionState(name);
+        const native = st && st.sessionId ? nativeRegistryEntry(st.sessionId) : null;
+        const member = projectsLib.memberRow({
+          role,
+          name,
+          claudeName: (native && native.name) || projectsLib.claudeNameFor(project.slug, role),
+          sessionId: (st && st.sessionId) || null,
+          cwd: (st && st.cwd) || null,
+          firstPrompt: null,
+          // When it JOINED, which is the only moment this record can honestly
+          // stamp — appd did not launch it and has no idea when it started.
+          spawnedAt: Math.floor(Date.now() / 1000),
+        });
+        const saved = updateProject(projectId, (proj) => {
+          proj.members = [...(proj.members || []).filter((x) => x.role !== role), member];
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        log(`project ${project.slug}: adopted ${name} as ${role}`);
+        return sendJson(res, 201, { ok: true, member, project: projectsLib.publicProject(saved) });
+      }
+
+      if (req.method === 'DELETE' && roleInPath) {
+        if (roleInPath === projectsLib.LEAD_ROLE) {
+          return sendErr(res, 409, 'the lead is the project — delete the project instead');
+        }
+        const member = (project.members || []).find((x) => x.role === roleInPath);
+        if (!member) return sendErr(res, 404, `this project has no ${roleInPath} session`);
+        const saved = updateProject(projectId, (proj) => {
+          proj.members = (proj.members || []).filter((x) => x.role !== roleInPath);
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        // The persona is the member's copy of its instructions; a readable path
+        // to a project's instructions for a session that is no longer in it is
+        // the same "orders from a ghost" the delete route unlinks for.
+        try { fs.unlinkSync(projectRenderPath(projectId, roleInPath)); } catch { /* never was one */ }
+        log(`project ${project.slug}: dropped ${member.name} (${roleInPath}); the session is still running`);
+        return sendJson(res, 200, {
+          ok: true,
+          dropped: member,
+          // Said in the body, because "drop" and "end" are one keystroke apart
+          // in every client and this route does exactly one of them.
+          ended: false,
+          project: projectsLib.publicProject(saved),
+        });
+      }
+
+      return sendErr(res, 404, 'no such project route');
+    }
+
     if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
       const projectId = m[1];
       const sub = m[2] || '';
@@ -11822,15 +11993,42 @@ const server = http.createServer(async (req, res) => {
         const raw = String(body.end || (q === '1' ? 'graceful' : q || ''));
         const end = raw === 'now' || raw === 'graceful' ? raw : '';
         const ended = [];
+        const refused = [];
         if (end === 'now' || end === 'graceful') {
           for (const member of projectsLib.memberList(project)) {
             if (!(await sessionExists(member.name))) continue;
             if (end === 'graceful') {
-              // The existing wind-down: the phrase goes into the composer and the
-              // settle timer ends the session once idle has held. Not a wait the
-              // caller sits through.
-              const r = await sendLineToPane(member.name, SOFT_END_PHRASE);
-              if (!r.err) { softEnds.set(member.name, createPending(Date.now())); ended.push(member.name); }
+              // ⚠ THE #9 HOLE, CLOSED. This used to call `sendLineToPane`, which
+              // is a raw paste — no dialog check, no queue, no gates — so a
+              // member sitting on a permission or folder-trust dialog had the
+              // wrap-up phrase TYPED AT THE SELECTOR (where it is swallowed with
+              // no trace) and the auto-end armed on the 200 anyway. The same
+              // pane, in the same second, correctly held a person's message with
+              // `blockedBy:"modal"`, because that path goes through the queue.
+              // Now this one does too: the pane refusal `/soft-end` makes first,
+              // then the ordinary send queue, then the arming from the SETTLE.
+              const blocked = await dialogRefusal(member.name);
+              if (blocked) {
+                refused.push({ name: member.name, claudeName: member.claudeName, why: blocked });
+                log(`project ${project.slug}: ${member.name} not wound down — ${blocked}`);
+                continue;
+              }
+              // The wind-down: the phrase goes into the composer and the settle
+              // timer ends the session once idle has held. Not a wait the caller
+              // sits through — a member that is mid-turn simply queues.
+              const out = await enqueueSend(member.name, SOFT_END_PHRASE, {
+                origin: 'soft-end',
+                submit: true,
+                onSettle: (v) => armSoftEndFromSettle(member.name, v, `project ${project.slug}`),
+              });
+              if (out.result && !out.result.ok) {
+                refused.push({
+                  name: member.name, claudeName: member.claudeName,
+                  why: out.result.message || 'the wrap-up phrase could not be delivered',
+                });
+                continue;
+              }
+              ended.push(member.name);
             } else {
               const r = await hardEndSession(member.name);
               if (!r.err) ended.push(member.name);
@@ -11839,8 +12037,13 @@ const server = http.createServer(async (req, res) => {
         }
         try { fs.unlinkSync(projectPath(projectId)); } catch { /* already gone */ }
         unlinkPersonas(projectId);
-        log(`project ${project.slug}: deleted${ended.length ? `, ended ${ended.join(', ')}` : ''}`);
-        return sendJson(res, 200, { ok: true, ended, mode: end || 'none' });
+        log(`project ${project.slug}: deleted${ended.length ? `, ended ${ended.join(', ')}` : ''}`
+          + `${refused.length ? `, ${refused.length} refused` : ''}`);
+        // `refused` is a NEW key and always present: a member whose dialog was in
+        // the way is still running with no project behind it, and the one client
+        // that can say so is the one that asked for the delete. An older client
+        // ignores the key and behaves exactly as it did.
+        return sendJson(res, 200, { ok: true, ended, refused, mode: end || 'none' });
       }
 
       return sendErr(res, 404, 'no such project route');
@@ -11958,7 +12161,12 @@ const server = http.createServer(async (req, res) => {
       if (iconMatch && req.method === 'GET') {
         const found = apps.icon(iconMatch[1]);
         if (!found.ok) return sendErr(res, 404, 'no icon for that app');
-        const etag = filesLib.etagFor(found.size, found.mtimeMs);
+        // ⚠ KEYED ON `iconAt`, NOT ON THE FILE'S mtime. The hourly refresh
+        // rewrites the cache whether or not the bytes differ, so an mtime ETag
+        // invalidated every client's copy of every icon every hour. `iconAt`
+        // moves only when the picture does (lib/apps.js refreshIcon); the mtime
+        // is the fallback for a cache written before this field existed.
+        const etag = filesLib.etagFor(found.size, found.iconAt ? found.iconAt * 1000 : found.mtimeMs);
         // Private and short, like /v1/files/image: the token is the only thing
         // in front of this, and the list is polled while the view is open.
         const cacheHeaders = {

@@ -547,7 +547,19 @@ test('approving the current rev creates the members and tells the lead their nam
   // hook is stood in for. Without this the line below waits for a turn boundary
   // that a static transcript can never produce.
   const leadState = JSON.parse(fs.readFileSync(path.join(stateDir, 'stick-lead'), 'utf8'));
-  writeState('stick-lead', 'idle', { sessionId: leadState.sessionId, transcript: leadState.transcript, ts: now() + 1 });
+  const beat = (ahead) => writeState('stick-lead', 'idle',
+    { sessionId: leadState.sessionId, transcript: leadState.transcript, ts: now() + ahead });
+  beat(1);
+
+  // ⚠ TWO MESSAGES, TWO BOUNDARIES (3.5.2). The BRIEF was queued into this same
+  // lead at creation and is still waiting in front of this notice, and one
+  // `idle` stamp is one turn boundary: it releases the head and nothing else,
+  // because a second automated line pasted straight after the first is spliced
+  // into the turn the first one just started. The frozen fixture has to stand
+  // the hook in again, once the brief has actually gone.
+  assert.match(await fileUntil(outFor('stick-lead'), /project brief/, 25_000), /Huginn project brief/);
+  await wait(1_200);
+  beat(3);
 
   // Typed, not sent as a peer message: appd must never appear in the peer
   // registry as something with authority over these sessions.

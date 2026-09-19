@@ -499,6 +499,58 @@ test('patching the identity preserves the rest of a large config file', () => {
   assert.strictEqual(cfg.oauthAccount.emailAddress, 'someone@example.com');
 });
 
+test('a SYMLINKED ~/.claude.json keeps its link, its target and its mode (#29 sibling)', () => {
+  // ⚠ THE FAIL-FIRST. readFileSync follows a symlink and renameSync REPLACES
+  // it, so before this the first account switch turned a `~/.claude.json`
+  // linked into a dotfiles repo into a plain file: the repo's copy and the
+  // CLI's became two different files, silently and permanently, and every later
+  // edit in the repo stopped reaching Claude Code. Exactly the case
+  // install-hooks.js and repairDefaultModel each resolve on purpose.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+  const credPath = path.join(root, '.credentials.json');
+  const real = path.join(root, 'dotfiles', 'claude.json');
+  fs.mkdirSync(path.dirname(real));
+  fs.writeFileSync(real, JSON.stringify({ unrelated: 'state', projects: { a: 1 } }), { mode: 0o640 });
+  const link = path.join(root, '.claude.json');
+  fs.symlinkSync(real, link);
+  const store = new AccountStore(path.join(root, 'accounts'), credPath, link);
+
+  assert.strictEqual(store.writeOauthAccount(idBlock('someone@example.com')), true);
+
+  assert.strictEqual(fs.lstatSync(link).isSymbolicLink(), true, 'the link must survive the write');
+  assert.strictEqual(fs.readlinkSync(link), real, 'and still point where it did');
+  const cfg = JSON.parse(fs.readFileSync(real, 'utf8'));
+  assert.strictEqual(cfg.oauthAccount.emailAddress, 'someone@example.com', 'the TARGET is what changed');
+  assert.strictEqual(cfg.unrelated, 'state', 'and the rest of that file is untouched');
+  // The mode is the owner's choice, and a rename takes the tmp's bits with it —
+  // so a hardcoded 0600 here would silently narrow every host's config file.
+  assert.strictEqual(fs.statSync(real).mode & 0o777, 0o640);
+  assert.strictEqual(fs.existsSync(`${real}.huginn-tmp`), false, 'no tmp left beside it');
+  assert.strictEqual(fs.existsSync(`${link}.huginn-tmp`), false);
+
+  // Removing the block goes through the same path and must not detach it either.
+  assert.strictEqual(store.writeOauthAccount(null), true);
+  assert.strictEqual(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.strictEqual('oauthAccount' in JSON.parse(fs.readFileSync(real, 'utf8')), false);
+});
+
+test('a config write that cannot land leaves no half-written tmp behind', () => {
+  // The unlink-on-failure half — already true before the symlink fix, guarded
+  // here because the tmp's PATH moved (it is now beside the link's TARGET). A
+  // `.huginn-tmp` left beside the owner's 115 KB config is litter at best and a
+  // confusing copy of their identity at worst.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));
+  const cfgPath = path.join(root, '.claude.json');
+  fs.writeFileSync(cfgPath, JSON.stringify({ unrelated: 'state' }));
+  const store = new AccountStore(path.join(root, 'accounts'), path.join(root, '.credentials.json'), cfgPath);
+  // A DIRECTORY where the tmp wants to be: writeFileSync throws EISDIR.
+  fs.mkdirSync(`${cfgPath}.huginn-tmp`);
+
+  assert.strictEqual(store.writeOauthAccount(idBlock('someone@example.com')), false);
+  assert.strictEqual(JSON.parse(fs.readFileSync(cfgPath, 'utf8')).unrelated, 'state',
+    'a refused write leaves the live config exactly as it was');
+});
+
 test('a store with no config path still switches credentials', () => {
   // Identity handling is additive; its absence must not break the swap.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acct-'));

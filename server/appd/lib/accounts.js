@@ -177,14 +177,31 @@ class AccountStore {
     let cfg;
     try { cfg = JSON.parse(fs.readFileSync(this.configPath, 'utf8')); } catch { return false; }
     if (account) cfg.oauthAccount = account; else delete cfg.oauthAccount;
-    const tmp = `${this.configPath}.huginn-tmp`;
+    // ⚠ RESOLVE THE LINK FIRST (#29's sibling). readFileSync FOLLOWS a symlink;
+    // renameSync REPLACES it. `~/.claude.json` linked into a dotfiles repo — the
+    // same arrangement install-hooks.js and repairDefaultModel both resolve on
+    // purpose — was therefore DETACHED by the first account switch: the daemon
+    // wrote a regular file over the link, and from then on the repo's copy and
+    // the CLI's were two different files with nothing saying so. Silent, and
+    // permanent. `realpathSync` on the link's own path, not on the directory,
+    // because the link may point anywhere.
+    let dest = this.configPath;
+    try { dest = fs.realpathSync(this.configPath); } catch { /* not a link, or not there */ }
+    const tmp = `${dest}.huginn-tmp`;
     try {
-      const mode = (fs.statSync(this.configPath).mode & 0o777) || 0o600;
+      // ⚠ AND CARRY THE TARGET'S MODE, twice. `statSync` follows the link, so
+      // the bits read here are the real file's; and `writeFileSync`'s `mode` is
+      // a CREATE mode only, so a tmp left behind by an interrupted run keeps
+      // whatever it already had — the rename then takes those bits with it.
+      const mode = (fs.statSync(dest).mode & 0o777) || 0o600;
       fs.writeFileSync(tmp, JSON.stringify(cfg), { mode });
-      fs.renameSync(tmp, this.configPath);
+      fs.chmodSync(tmp, mode);
+      fs.renameSync(tmp, dest);
       return true;
     } catch {
-      try { fs.unlinkSync(tmp); } catch { }
+      // Leaving a `.huginn-tmp` beside the owner's 115 KB config is litter at
+      // best and a confusing half-written copy at worst.
+      try { fs.unlinkSync(tmp); } catch { /* never existed */ }
       return false;
     }
   }

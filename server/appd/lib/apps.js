@@ -552,6 +552,13 @@ function appRow(rec, probe, extra = {}) {
     latencyMs: Number.isFinite(p.latencyMs) ? p.latencyMs : null,
     httpStatus: Number.isFinite(p.httpStatus) ? p.httpStatus : null,
     icon: extra.icon === true,
+    // ⚠ WHEN THE CACHED BYTES LAST CHANGED, in SECONDS — 0 when there is no
+    // icon. It exists so a client can key its own image cache on something that
+    // moves ONLY when the picture does: `version` is the row's edit history and
+    // never moves for a refetch, and the bytes' mtime moves on every refetch
+    // whether or not they differ. Without it a phone kept drawing the old icon
+    // until the app was reinstalled (the client backlog, 3.5.0).
+    iconAt: Number(extra.iconAt) > 0 ? Number(extra.iconAt) : 0,
     reachable: reachOf(extra.reachable),
   };
 }
@@ -1221,82 +1228,120 @@ async function getBounded(url, opts = {}, hops = 0) {
   return { ok: true, url, contentType, bytes };
 }
 
+/** One attribute off a `<link>` tag, quoted, single-quoted or bare. */
+function linkAttr(tag, name) {
+  const re = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+  const m = tag.match(re);
+  const v = m ? m.slice(1).find((x) => x != null) : null;
+  return v == null ? '' : v.trim();
+}
+
+/** Is this candidate a PNG — the one raster every client here can draw? */
+function isPngCandidate(type, href) {
+  if (type) return type === 'image/png';
+  return /\.png(?:[?#]|$)/i.test(href);
+}
+
+/** At most this many linked candidates are fetched, so one page cannot turn an
+ *  hourly refresh into a crawl. Worst case per app: the page, three candidates,
+ *  and `/favicon.ico` — five bounded requests. */
+const ICON_CANDIDATE_MAX = 3;
+
 /**
- * The `href` of the page's own icon link, or ''.
+ * Every icon this page names, BEST FIRST.
  *
  * ⚠ THE `rel` IS A TOKEN LIST AND IT IS MATCHED AS ONE. `/\bicon\b/` also
- * matches `apple-touch-icon` and `mask-icon`, which are a 180px PNG and a
- * monochrome SVG — neither is the favicon, and one of them is routinely 100 KB.
- * The tokens accepted are exactly `icon` and `shortcut icon`, which is what
- * decision 53 names.
+ * matches `apple-touch-icon` and `mask-icon`; `mask-icon` is a monochrome SVG
+ * and is never a candidate.
+ *
+ * ⚠⚠ AND THE ORDER IS THE POINT (3.5.2). `.ico` DOES NOT DECODE ON ANDROID —
+ * the app draws an initial-letter tile for every row whose icon is one, which is
+ * most of them, because `/favicon.ico` used to be asked first and answered
+ * first. SVG is no better there. So the ranking prefers a PNG the page names
+ * outright, then `apple-touch-icon` (a 180px PNG by convention, and the one
+ * every site with a mobile presence has), and only then whatever else the page
+ * calls its icon. `/favicon.ico` is the LAST thing tried, in [fetchIcon] — not
+ * in this list at all, because it is not something the page said.
+ *
+ * Document order inside a tier, so a page that names two PNGs gets the one it
+ * put first.
  */
-function iconHrefFromHtml(html) {
-  const text = String(html || '');
-  for (const tag of text.match(/<link\b[^>]*>/gi) || []) {
-    const rel = (tag.match(/\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i) || []).slice(1).find((x) => x != null);
-    if (!rel) continue;
-    const tokens = rel.trim().toLowerCase().split(/\s+/);
-    if (!tokens.includes('icon')) continue;
-    if (tokens.some((t) => t !== 'icon' && t !== 'shortcut')) continue;
-    const href = (tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i) || []).slice(1).find((x) => x != null);
-    if (href && href.trim()) return href.trim();
+function iconCandidatesFromHtml(html) {
+  const png = [];
+  const apple = [];
+  const rest = [];
+  for (const tag of String(html || '').match(/<link\b[^>]*>/gi) || []) {
+    const rel = linkAttr(tag, 'rel');
+    const href = linkAttr(tag, 'href');
+    if (!rel || !href) continue;
+    const tokens = rel.toLowerCase().split(/\s+/);
+    const type = linkAttr(tag, 'type').toLowerCase().split(';')[0].trim();
+    // `icon` and `shortcut icon`, which is what decision 53 names.
+    if (tokens.includes('icon') && tokens.every((t) => t === 'icon' || t === 'shortcut')) {
+      (isPngCandidate(type, href) ? png : rest).push(href);
+    } else if (tokens.includes('apple-touch-icon') || tokens.includes('apple-touch-icon-precomposed')) {
+      apple.push(href);
+    }
   }
-  return '';
+  return [...png, ...apple, ...rest].slice(0, ICON_CANDIDATE_MAX);
 }
 
 /**
- * This app's favicon: `/favicon.ico` first, then the page's own `<link rel=icon>`.
+ * This app's favicon: the best thing the PAGE names, and `/favicon.ico` last.
  *
- * Decision 53. Three bounded requests at the very worst — the well-known path,
- * the page, the href the page named — and every one of them capped at
- * [ICON_MAX_BYTES] and [ICON_TIMEOUT_MS].
+ * Decision 53, re-ordered in 3.5.2 — see [iconCandidatesFromHtml] for why the
+ * well-known path went to the back (`.ico` does not decode on Android, and it
+ * is what most hosts answer that path with). At worst five bounded requests:
+ * the page, up to [ICON_CANDIDATE_MAX] candidates, and `/favicon.ico` — every
+ * one capped at [ICON_MAX_BYTES] and [ICON_TIMEOUT_MS], and this runs at most
+ * once an hour per app.
  *
- * ⚠ `image/*` OR NOTHING. A host that answers `/favicon.ico` with its SPA's
- * index.html — which is most of them — must not have 40 KB of HTML cached as
- * this app's icon and served back with an image content type. The type is the
- * test, not the extension and not the status code.
+ * ⚠ `image/*` OR NOTHING, at every step. A host that answers `/favicon.ico`
+ * with its SPA's index.html — which is most of them — must not have 40 KB of
+ * HTML cached as this app's icon and served back with an image content type.
+ * The type is the test, not the extension and not the status code.
+ *
+ * ⚠ SAME ORIGIN, exactly as [ICON_MAX_REDIRECTS] demands of a redirect, and for
+ * the identical reason: the host rule was applied to the address that was
+ * STORED. A `<link rel=icon href="https://cdn.example.com/…">` is a page telling
+ * a root-equivalent daemon which public host to fetch from, on a timer, forever.
+ * An app's icon comes off the app.
  */
 async function fetchIcon(rawUrl, opts = {}) {
-  const isImage = (r) => r.ok && r.contentType.startsWith('image/');
-  let wellKnown = null;
-  try {
-    wellKnown = await getBounded(new URL('/favicon.ico', rawUrl).href, opts);
-  } catch (e) {
-    wellKnown = { ok: false, why: reachError(e) };
-  }
-  if (wellKnown && isImage(wellKnown)) {
-    return { ok: true, bytes: wellKnown.bytes, contentType: wellKnown.contentType, from: wellKnown.url };
+  const isImage = (r) => !!r && r.ok && r.contentType.startsWith('image/');
+  const got = async (url) => {
+    try { return await getBounded(url, opts); } catch (e) { return { ok: false, why: reachError(e) }; }
+  };
+  const asIcon = (r) => ({ ok: true, bytes: r.bytes, contentType: r.contentType, from: r.url });
+
+  const page = await got(rawUrl);
+  const isHtml = page.ok && /^text\/html|^application\/xhtml/.test(page.contentType);
+  // The FIRST candidate failure, kept so the refusal says something specific
+  // rather than reporting only what `/favicon.ico` did at the end.
+  let firstNote = null;
+  const note = (why) => { if (!firstNote) firstNote = why; };
+  if (isHtml) {
+    const origin = new URL(page.url).origin;
+    for (const href of iconCandidatesFromHtml(page.bytes.toString('utf8'))) {
+      let target;
+      try { target = new URL(href, page.url); } catch { note('the icon it names is not an address'); continue; }
+      if (target.origin !== origin) { note('the icon it names is on another host'); continue; }
+      const linked = await got(target.href);
+      if (isImage(linked)) return asIcon(linked);
+      note(linked.ok ? 'the linked icon is not an image' : linked.why);
+    }
   }
 
-  let page;
-  try {
-    page = await getBounded(rawUrl, opts);
-  } catch (e) {
-    return { ok: false, why: reachError(e) };
-  }
+  // ⚠ LAST, NOT FIRST. Kept because a page that names nothing usually still has
+  // one, and an `.ico` a client cannot draw is still better than no row icon on
+  // the shells that can.
+  const wellKnown = await got(new URL('/favicon.ico', rawUrl).href);
+  if (isImage(wellKnown)) return asIcon(wellKnown);
+
+  if (firstNote) return { ok: false, why: firstNote };
   if (!page.ok) return { ok: false, why: page.why };
-  if (!/^text\/html|^application\/xhtml/.test(page.contentType)) {
-    return { ok: false, why: 'no icon and the page is not html' };
-  }
-  const href = iconHrefFromHtml(page.bytes.toString('utf8'));
-  if (!href) return { ok: false, why: 'the page names no icon' };
-  let target;
-  try { target = new URL(href, page.url); } catch { return { ok: false, why: 'the icon it names is not an address' }; }
-  // ⚠ SAME ORIGIN, exactly as [ICON_MAX_REDIRECTS] demands of a redirect, and
-  // for the identical reason: the host rule was applied to the address that was
-  // STORED. An `<link rel=icon href="https://cdn.example.com/…">` is a page
-  // telling a root-equivalent daemon which public host to fetch from, on a
-  // five-minute timer, forever. An app's icon comes off the app.
-  if (target.origin !== new URL(page.url).origin) return { ok: false, why: 'the icon it names is on another host' };
-  let linked;
-  try {
-    linked = await getBounded(target.href, opts);
-  } catch (e) {
-    return { ok: false, why: reachError(e) };
-  }
-  if (!linked.ok) return { ok: false, why: linked.why };
-  if (!linked.contentType.startsWith('image/')) return { ok: false, why: 'the linked icon is not an image' };
-  return { ok: true, bytes: linked.bytes, contentType: linked.contentType, from: linked.url };
+  if (!isHtml) return { ok: false, why: 'no icon and the page is not html' };
+  return { ok: false, why: 'the page names no icon and /favicon.ico is not an image' };
 }
 
 // --- the icon cache, on disk
@@ -1325,6 +1370,12 @@ function writeIconMeta(dir, id, meta, fs = nodeFs) {
   return meta;
 }
 
+/** The cached bytes, or null. Read to answer ONE question: are the bytes that
+ *  just came off the app the same ones we already have (see [iconAt])? */
+function readIconBytes(dir, id, fs = nodeFs) {
+  try { return fs.readFileSync(iconFile(dir, id)); } catch { return null; }
+}
+
 /** tmp+rename, like every other write here: a reader never sees half an icon. */
 function writeIconBytes(dir, id, bytes, fs = nodeFs) {
   const file = iconFile(dir, id);
@@ -1347,7 +1398,13 @@ function iconOf(dir, id, fs = nodeFs) {
   try {
     const st = fs.statSync(iconFile(dir, id));
     if (!st.size) return { ok: false };
-    return { ok: true, file: iconFile(dir, id), contentType: meta.contentType, size: st.size, mtimeMs: st.mtimeMs };
+    return {
+      ok: true, file: iconFile(dir, id), contentType: meta.contentType,
+      size: st.size, mtimeMs: st.mtimeMs,
+      // SECONDS, and the thing an ETag should be built on: `mtimeMs` moves every
+      // time the hourly refresh rewrites identical bytes.
+      iconAt: Number(meta.iconAt) > 0 ? Number(meta.iconAt) : 0,
+    };
   } catch {
     return { ok: false };
   }
@@ -1711,18 +1768,28 @@ function createStore(opts = {}) {
     } catch (e) {
       got = { ok: false, why: (e && e.message) || 'failed' };
     }
+    // ⚠ CARRIED ACROSS BOTH BRANCHES. The stamp belongs to the BYTES, not to the
+    // fetch: an hourly refresh that brings back the identical picture must not
+    // move it, or every client re-downloads every icon every hour for nothing.
+    const wasAt = Number(meta && meta.iconAt) > 0 ? Number(meta.iconAt) : 0;
     try {
       forgetIcon(rec.id);
       if (got.ok) {
+        const had = meta && meta.contentType ? readIconBytes(dir, rec.id, fs) : null;
+        const same = wasAt > 0 && meta.contentType === got.contentType && had && had.equals(got.bytes);
+        const iconAt = same ? wasAt : Math.floor(nowMs() / 1000);
         writeIconBytes(dir, rec.id, got.bytes, fs);
         writeIconMeta(dir, rec.id, {
           contentType: got.contentType, sourceUrl: rec.url, from: got.from,
-          bytes: got.bytes.length, fetchedAtMs: nowMs(),
+          bytes: got.bytes.length, fetchedAtMs: nowMs(), iconAt,
         }, fs);
         return true;
       }
-      // A failure is recorded too — see [iconMetaFile].
-      writeIconMeta(dir, rec.id, { contentType: null, sourceUrl: rec.url, why: got.why, fetchedAtMs: nowMs() }, fs);
+      // A failure is recorded too — see [iconMetaFile]. `iconAt` rides along so
+      // a page that flaps for an hour and then serves the same icon again does
+      // not invalidate every client's copy of it.
+      writeIconMeta(dir, rec.id,
+        { contentType: null, sourceUrl: rec.url, why: got.why, fetchedAtMs: nowMs(), iconAt: wasAt }, fs);
     } catch { /* a cache that cannot be written is a cache that is not used */ }
     return false;
   }
@@ -1736,12 +1803,14 @@ function createStore(opts = {}) {
    * can change it, all of which are in this closure.
    */
   const iconKnown = new Map();
-  function hasIcon(id) {
+  /** `{ icon, iconAt }` for a row — both answers off the one cached read. */
+  function iconFacts(id) {
     const key = String(id);
     if (iconKnown.has(key)) return iconKnown.get(key);
-    const ok = iconOf(dir, key, fs).ok;
-    iconKnown.set(key, ok);
-    return ok;
+    const found = iconOf(dir, key, fs);
+    const facts = { icon: found.ok, iconAt: found.ok ? found.iconAt : 0 };
+    iconKnown.set(key, facts);
+    return facts;
   }
   function forgetIcon(id) { iconKnown.delete(String(id)); }
 
@@ -1835,7 +1904,7 @@ function createStore(opts = {}) {
   }
 
   function rowOf(rec) {
-    return appRow(rec, probes.get(rec.id), { icon: hasIcon(rec.id), reachable: reaches.get(rec.id) });
+    return appRow(rec, probes.get(rec.id), { ...iconFacts(rec.id), reachable: reaches.get(rec.id) });
   }
 
   function rows() { return load().consoles.map(rowOf); }
@@ -1914,7 +1983,7 @@ function createStore(opts = {}) {
       if (!rec) return null;
       const { probe, reach } = await observe(rec);
       record(rec, probe, reach);
-      return appRow(rec, probe, { icon: hasIcon(rec.id), reachable: reach });
+      return appRow(rec, probe, { ...iconFacts(rec.id), reachable: reach });
     },
     stop() { if (timer) { clearInterval(timer); timer = null; } },
   };
@@ -1952,8 +2021,9 @@ module.exports = {
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
   portOf, hostnameOf, fixLines, normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
-  readBounded, getBounded, iconHrefFromHtml, fetchIcon,
-  iconsDir, iconFile, iconMetaFile, readIconMeta, writeIconMeta, writeIconBytes, removeIcon, iconOf, iconDue,
+  readBounded, getBounded, iconCandidatesFromHtml, ICON_CANDIDATE_MAX, fetchIcon,
+  iconsDir, iconFile, iconMetaFile, readIconMeta, writeIconMeta, readIconBytes, writeIconBytes,
+  removeIcon, iconOf, iconDue,
   probeApp, probeAll, probeChange,
   storePath, markerPath, readEnvelope, writeEnvelope, createStore, store,
 };

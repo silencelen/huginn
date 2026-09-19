@@ -879,49 +879,100 @@ test('a row that was already here and now fails is MARKED, never deleted', async
 
 // ------------------------------------------------------ favicons (decision 53)
 
-test('the page’s icon link is read as a TOKEN LIST, so apple-touch-icon is not the favicon', () => {
-  // ⚠ `/\bicon\b/` ALSO MATCHES `apple-touch-icon` and `mask-icon` — a 180px PNG
-  // and a monochrome SVG, neither of which is the favicon and one of which is
-  // routinely 100 KB. Decision 53 names `icon` and `shortcut icon`.
-  assert.equal('/f.png', appsLib.iconHrefFromHtml('<link rel="icon" href="/f.png">'));
-  assert.equal('/f.ico', appsLib.iconHrefFromHtml("<link rel='shortcut icon' href='/f.ico'>"));
-  assert.equal('/f.png', appsLib.iconHrefFromHtml('<link rel=icon href=/f.png>'), 'unquoted attributes are legal html');
-  assert.equal('', appsLib.iconHrefFromHtml('<link rel="apple-touch-icon" href="/big.png">'));
-  assert.equal('', appsLib.iconHrefFromHtml('<link rel="mask-icon" href="/m.svg">'));
-  assert.equal('', appsLib.iconHrefFromHtml('<link rel="stylesheet" href="/a.css">'));
-  assert.equal('/f.png', appsLib.iconHrefFromHtml(
-    '<link rel="stylesheet" href="/a.css"><link rel="apple-touch-icon" href="/b.png"><link rel="icon" href="/f.png">'),
-  'and it keeps looking past the ones that are not it');
+test('the page’s icon links are read as a TOKEN LIST and ranked PNG first', () => {
+  // ⚠ `/\bicon\b/` ALSO MATCHES `apple-touch-icon` and `mask-icon`. `mask-icon`
+  // is a monochrome SVG and is never a candidate; `apple-touch-icon` is a 180px
+  // PNG and is the SECOND choice, because a PNG is the one raster every client
+  // here can draw.
+  const c = appsLib.iconCandidatesFromHtml;
+  assert.deepEqual(['/f.png'], c('<link rel="icon" href="/f.png">'));
+  assert.deepEqual(['/f.ico'], c("<link rel='shortcut icon' href='/f.ico'>"));
+  assert.deepEqual(['/f.png'], c('<link rel=icon href=/f.png>'), 'unquoted attributes are legal html');
+  assert.deepEqual([], c('<link rel="mask-icon" href="/m.svg">'), 'a monochrome SVG is not a favicon');
+  assert.deepEqual([], c('<link rel="stylesheet" href="/a.css">'));
+  assert.deepEqual([], c('<link rel="icon">'), 'a link with no href names nothing');
+
+  // ⚠⚠ THE ORDER IS THE FEATURE (3.5.2). `.ico` does not decode on Android and
+  // neither does SVG, so a declared PNG wins, then apple-touch-icon, then
+  // whatever else the page calls its icon — whatever order they appear in.
+  assert.deepEqual(['/f32.png', '/touch.png', '/f.svg'], c(
+    '<link rel="apple-touch-icon" href="/touch.png">'
+    + '<link rel="icon" type="image/svg+xml" href="/f.svg">'
+    + '<link rel="icon" type="image/png" href="/f32.png">'),
+  'type wins over document order');
+  assert.deepEqual(['/by-extension.png?v=3', '/f.ico'],
+    c('<link rel="shortcut icon" href="/f.ico"><link rel="icon" href="/by-extension.png?v=3">'),
+    'a .png href with no type is still a png, cache-buster and all');
+  assert.deepEqual(['/a.png', '/b.png'], c(
+    '<link rel="icon" href="/a.png"><link rel="icon" href="/b.png">'),
+  'document order inside a tier');
+
+  // Bounded: one page cannot turn an hourly refresh into a crawl.
+  const many = Array.from({ length: 9 }, (_, i) => `<link rel="icon" href="/i${i}.svg">`).join('');
+  assert.equal(appsLib.ICON_CANDIDATE_MAX, c(many).length);
 });
 
-test('an icon is fetched from /favicon.ico first, and from the page’s link when there is none', async () => {
+test('the icon comes from the page’s best link, and /favicon.ico is the LAST resort', async () => {
+  // ⚠ THE ORDER REVERSED IN 3.5.2, and the reason is on the other end of the
+  // wire: `.ico` DOES NOT DECODE ON ANDROID. Asking `/favicon.ico` first meant
+  // nearly every row answered with an `.ico` and the phone drew an
+  // initial-letter tile for an app that had a perfectly good PNG one link away.
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+  const ico = Buffer.from('00000100', 'hex');
   let served = [];
   const server = http.createServer((req, res) => {
     served.push(req.url);
-    if (req.url === '/favicon.ico' && server.wellKnown) {
-      res.writeHead(200, { 'content-type': 'image/x-icon' }); return res.end(png);
+    if (req.url === '/favicon.ico') {
+      res.writeHead(200, { 'content-type': 'image/x-icon' }); return res.end(ico);
     }
-    if (req.url === '/favicon.ico') { res.writeHead(404); return res.end(); }
     if (req.url === '/brand.png') { res.writeHead(200, { 'content-type': 'image/png' }); return res.end(png); }
     res.writeHead(200, { 'content-type': 'text/html' });
-    res.end('<html><head><link rel="icon" href="/brand.png"></head><body></body></html>');
+    res.end(server.names
+      ? '<html><head><link rel="icon" href="/brand.png"></head><body></body></html>'
+      : '<html><head></head><body>no links here</body></html>');
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/`;
   try {
-    server.wellKnown = true;
-    const direct = await within(9000, appsLib.fetchIcon(base), 'the well-known fetch');
-    assert.equal(true, direct.ok);
-    assert.equal('image/x-icon', direct.contentType);
-    assert.deepEqual(['/favicon.ico'], served, 'the page is not fetched at all when the well-known path answers');
-
-    served = [];
-    server.wellKnown = false;
+    server.names = true;
     const linked = await within(9000, appsLib.fetchIcon(base), 'the linked fetch');
     assert.equal(true, linked.ok);
-    assert.equal('image/png', linked.contentType);
-    assert.deepEqual(['/favicon.ico', '/', '/brand.png'], served, 'the page is read ONCE, then the href it named');
+    assert.equal('image/png', linked.contentType, 'the PNG the page named, not the .ico it also serves');
+    assert.deepEqual(['/', '/brand.png'], served,
+      'the page is read ONCE and /favicon.ico is not asked at all when the page names something better');
+
+    // A page that names nothing still gets the well-known path — an `.ico` a
+    // client cannot draw is still better than no icon on the shells that can.
+    served = [];
+    server.names = false;
+    const fallback = await within(9000, appsLib.fetchIcon(base), 'the well-known fallback');
+    assert.equal(true, fallback.ok);
+    assert.equal('image/x-icon', fallback.contentType);
+    assert.deepEqual(['/', '/favicon.ico'], served, 'and only then');
+  } finally {
+    server.close();
+  }
+});
+
+test('a candidate that is not an image is skipped, and the next one is tried', async () => {
+  // The apple-touch-icon a page names but does not serve is the ordinary case:
+  // the SPA answers every unknown path with index.html. A fetcher that stopped
+  // at the first candidate would cache nothing for a page that has a real icon.
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const served = [];
+  const server = http.createServer((req, res) => {
+    served.push(req.url);
+    if (req.url === '/real.ico') { res.writeHead(200, { 'content-type': 'image/x-icon' }); return res.end(png); }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><head><link rel="apple-touch-icon" href="/gone.png">'
+      + '<link rel="icon" href="/real.ico"></head></html>');
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    const r = await within(9000, appsLib.fetchIcon(`http://127.0.0.1:${server.address().port}/`), 'the skip fetch');
+    assert.equal(true, r.ok);
+    assert.equal('image/x-icon', r.contentType);
+    assert.deepEqual(['/', '/gone.png', '/real.ico'], served, 'tried in rank order, stopped at the first image');
   } finally {
     server.close();
   }
