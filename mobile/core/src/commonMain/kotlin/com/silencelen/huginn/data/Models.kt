@@ -1920,7 +1920,21 @@ data class Device(
      * running its claude and is single-job: it will not poll again until that
      * child exits, minutes or hours later.
      */
-    val awaitingPoll: Boolean = false
+    val awaitingPoll: Boolean = false,
+    /**
+     * Whether a lock screen withdraws anything on this machine — its owner's
+     * "Keep act mode while locked" answer, reported so a reader can tell a box
+     * running unattended on purpose from one nobody has locked.
+     *
+     * Three states, like [persistent] and for the same reason: the daemon omits
+     * the field for a row whose runner never said, and reading absence as
+     * `false` would claim every machine enrolled before this existed had been
+     * asked and had declined. Null renders nothing.
+     *
+     * DISPLAY ONLY here. [locked] and [effectiveScope] already carry the
+     * authority; this is the sentence that explains why they agree.
+     */
+    val actWhileLocked: Boolean? = null,
 )
 
 /** One entry of a serving machine's advertised catalog. Display only. */
