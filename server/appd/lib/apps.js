@@ -556,6 +556,82 @@ function appRow(rec, probe, extra = {}) {
   };
 }
 
+// ---------------------------------------- the 3.4 wire, for the alias (dec. 56)
+
+/**
+ * The row fields a client older than 3.5.0 knows, IN THE ORDER IT SAW THEM.
+ *
+ * ⚠ ORDER IS PART OF THIS. Not because JSON cares — it does not — but because
+ * the only way to check a shape nobody can run any more is to compare it
+ * key-for-key against a body captured from the old contract
+ * (mobile/app/src/test/resources/consoles.json), and a set comparison would pass
+ * a body that had quietly grown a field.
+ */
+const LEGACY_ROW_FIELDS = [
+  'id', 'name', 'url', 'kind', 'notes', 'addedAt', 'version',
+  'up', 'lastProbeAt', 'latencyMs', 'httpStatus',
+];
+
+/**
+ * One app, as `/v1/consoles` answered before 3.5.0.
+ *
+ * ⚠⚠ THE ALIAS ANSWERS THE OLD BODY, NOT THE NEW ONE. That IS the point of
+ * keeping it for one release: an un-updated app 3.5.x or desktop 1.5.x still
+ * draws its Consoles page. Renaming `consoles` to `apps` under the old path
+ * would have every one of those clients decode an EMPTY list and show a feature
+ * that had silently lost its contents — worse than the 404 the alias exists to
+ * avoid, because a 404 at least hides the surface (HuginnClient.consoles()
+ * returns null and `consolesAvailable` goes false).
+ *
+ * `unit`, `icon` and `reachable` are DROPPED rather than left to be ignored.
+ * The old clients are `ignoreUnknownKeys = true` and would tolerate them, but
+ * "the alias answers the 3.4 body" is only a statement anybody can check if it
+ * is exactly true.
+ *
+ * `reachableFrom` comes back as the constant it always was. It is still honest —
+ * the liveness probe does run on this host — and it is the field the old copy
+ * hangs its caveat on.
+ */
+function legacyConsoleRow(row) {
+  const r = row || {};
+  const out = {};
+  for (const f of LEGACY_ROW_FIELDS) out[f] = r[f];
+  // ⚠ DEFINITE VALUES EVEN OFF A BARE RECORD. `undefined` does not survive
+  // JSON.stringify — it DELETES the key — so a row handed here without its
+  // probe fields would reach an old client missing `up` and `httpStatus`
+  // entirely. Those are exactly the fields whose absence it renders as
+  // "never checked".
+  if (out.up !== true && out.up !== false) out.up = null;
+  out.lastProbeAt = Number(out.lastProbeAt) || 0;
+  out.latencyMs = Number.isFinite(out.latencyMs) ? out.latencyMs : null;
+  out.httpStatus = Number.isFinite(out.httpStatus) ? out.httpStatus : null;
+  out.reachableFrom = 'host';
+  return out;
+}
+
+/**
+ * `GET /v1/consoles` as it was: the rows, the caps, the two list-level words and
+ * the approval card.
+ *
+ * ⚠ `approval: null`, NOT A CARD. Decision 55 deleted the card, and a daemon
+ * that kept synthesising one would be handing an old client four root commands
+ * computed from a belief this version no longer holds (the D11 exemption, the
+ * hard-coded 192.168.2.131). `ConsoleApproval?` is nullable in the client that
+ * reads this (Models.kt at desktop-v1.5.1), so null is a shape it already
+ * decodes; the card simply does not draw. The remedy lives on the rows of
+ * `/v1/apps`, where the client that can show it is.
+ */
+function legacyConsoleList(rows) {
+  return {
+    consoles: (rows || []).map(legacyConsoleRow),
+    max: MAX_APPS,
+    kinds: [...KINDS],
+    reachableFrom: 'host',
+    probeIntervalMs: PROBE_INTERVAL_MS,
+    approval: null,
+  };
+}
+
 /** Insertion order, which is the order the owner chose. Ties never happen (ids are unique). */
 function sortApps(rows) {
   return [...(rows || [])];
@@ -1871,6 +1947,7 @@ module.exports = {
   hostClass, parseAppUrl, urlProblem, normalizeUrl,
   nameProblem, notesProblem, idProblem, unitProblem,
   buildRecord, storedAddedAt, noProbe, noReach, reachOf, appRow, sortApps,
+  LEGACY_ROW_FIELDS, legacyConsoleRow, legacyConsoleList,
   findApp, add, patch, rename, setUrl, remove,
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
