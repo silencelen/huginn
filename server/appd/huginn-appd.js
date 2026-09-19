@@ -301,6 +301,64 @@ function authorized(req) {
   return got.length === want.length && crypto.timingSafeEqual(got, want);
 }
 
+/**
+ * ─── PROVING THIS IS THE DAEMON, WITHOUT HANDING ANYBODY THE TOKEN ─────────
+ *
+ * ⚠ D-1 (round-2 review, 2026-09-19). Auto-switch adopted any route-book address
+ * that answered with a non-blank `X-Huginn-Appd` header and then sent it the real
+ * bearer token — 129 authenticated requests to a fake in about two minutes on the
+ * desktop walker's bench. The header is a fingerprint, and a fingerprint anybody
+ * can print is not proof. `HuginnClient.provesDaemon`'s own comment already named
+ * the fix and said it needed a daemon change; decision 58 is that change.
+ *
+ * The client picks a fresh random nonce, asks for it UNAUTHENTICATED, and adopts
+ * the address only if the answer equals the HMAC it computes itself. An impostor
+ * that does not hold the token cannot produce one, so the token never leaves the
+ * client until the address has proved it already has it.
+ *
+ * ⚠ WHY PUBLISHING HMAC(token, nonce) IS SAFE, since this route will hand one to
+ * anybody who asks:
+ *
+ *   * HMAC-SHA256 is a pseudo-random function of its key. Seeing outputs for
+ *     chosen inputs reveals nothing about the key short of breaking SHA-256 —
+ *     this is the same property that lets every API sign requests this way.
+ *   * The key is the daemon's bearer token: 32 bytes from `openssl rand -hex 32`,
+ *     minted by deploy.sh and refused under 32 characters. 256 bits is not
+ *     guessable, so an offline attack on a proof has nothing to chew on.
+ *   * The nonce is the CLIENT'S, not ours, so a proof recorded from one exchange
+ *     cannot be replayed at a different client's challenge.
+ *   * The token itself is never read into the response and never logged: the
+ *     request line this daemon writes is the PATH only, so the nonce does not
+ *     reach the journal either.
+ *
+ * The rate limit is not about secrecy, it is about CPU: an unauthenticated route
+ * that does a keyed hash per call is a free amplifier otherwise. Twenty a second
+ * per client address is far above any real client (one per route probe) and far
+ * below anything worth having.
+ */
+const CHALLENGE_NONCE_RE = /^[0-9a-fA-F]{16,64}$/;
+const CHALLENGE_PER_SECOND = 20;
+const challengeHits = new Map();       // remote address -> { second, n }
+
+function challengeAllowed(addr) {
+  const key = String(addr || 'unknown');
+  const second = Math.floor(Date.now() / 1000);
+  // Pruned on write, like every other in-memory map here: one entry per client
+  // address that asked in the current second, and nothing older survives a call.
+  for (const [k, v] of challengeHits) {
+    if (v.second !== second) challengeHits.delete(k);
+  }
+  const cur = challengeHits.get(key);
+  if (!cur || cur.second !== second) { challengeHits.set(key, { second, n: 1 }); return true; }
+  cur.n += 1;
+  return cur.n <= CHALLENGE_PER_SECOND;
+}
+
+/** The proof itself: HMAC-SHA256 over the nonce EXACTLY as it was asked for. */
+function challengeProof(nonce) {
+  return crypto.createHmac('sha256', TOKEN).update(String(nonce), 'utf8').digest('hex');
+}
+
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
@@ -9234,6 +9292,27 @@ const server = http.createServer(async (req, res) => {
   // `setHeader`, not writeHead: it then rides on every path out of this
   // function, streamed artifacts and the auth refusal included.
   res.setHeader('X-Huginn-Appd', VERSION);
+
+  /**
+   * ⚠ BEFORE THE AUTH CHECK, AND THAT IS THE WHOLE POINT (decision 58). A client
+   * deciding whether an address is really this daemon has not handed over the
+   * token yet — that decision is what stops it handing the token to a fake. See
+   * `challengeProof` above for why answering this in the clear is safe.
+   *
+   * Before `noteClientAddress` too: a port scanner must not be able to teach this
+   * daemon a new address that every app then has to answer on, and that rule has
+   * nothing to do with whether the caller can prove anything.
+   */
+  if (req.method === 'GET' && p === '/v1/challenge') {
+    if (!challengeAllowed(req.socket.remoteAddress)) {
+      return sendErr(res, 429, 'too many challenges from this address — slow down');
+    }
+    const nonce = u.searchParams.get('nonce');
+    if (!nonce || !CHALLENGE_NONCE_RE.test(nonce)) {
+      return sendErr(res, 400, 'nonce must be 16 to 64 hexadecimal characters');
+    }
+    return sendJson(res, 200, { proof: challengeProof(nonce), version: VERSION });
+  }
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
 
