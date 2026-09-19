@@ -77,7 +77,7 @@ fun ConsolesPane(store: AppStore) {
             Text("No consoles yet", style = MaterialTheme.typography.titleMedium)
             Text(
                 "A console is an internal page this host serves — a dashboard, a tool, a lab. " +
-                    "Huginn lists them, says whether each one answered when it was last probed " +
+                    "huginn lists them, says whether each one answered when it was last probed " +
                     "from the host, and opens them in your browser.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

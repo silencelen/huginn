@@ -432,7 +432,7 @@ fun Shell(store: AppStore) {
                                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                                             ) {
                                                 Column(Modifier.padding(12.dp)) {
-                                                    Text("Serve local AI from this PC", style = MaterialTheme.typography.labelLarge)
+                                                    Text("Serve local AI from this computer", style = MaterialTheme.typography.labelLarge)
                                                     Text(
                                                         "This machine may be able to run small AI models and offer them " +
                                                             "in huginn's chat menus — private, on your own hardware. " +
