@@ -127,6 +127,17 @@ function validateRegistration(raw, now) {
       // A device that says nothing about being locked is treated as unlocked;
       // one that never reports it simply never drops.
       locked: b.locked === true,
+      // Whether that lock WITHDRAWS anything — the machine's own standing
+      // answer, set on the machine and nowhere else. Two facts wear the word
+      // `locked`: what the screen is doing (above, always reported honestly)
+      // and what it means here (this). Keeping them apart is why the scope
+      // lattice did not have to grow a dimension to express the setting.
+      //
+      // ⚠ A REAL BOOLEAN OR NOTHING, and BOTH booleans are kept. Absence is a
+      // runner that predates the field and must stay absent — but `false` is
+      // the shape of somebody turning the setting back OFF, and dropping it
+      // would leave this row granting act on a machine that revoked it.
+      ...(typeof b.actWhileLocked === 'boolean' ? { actWhileLocked: b.actWhileLocked } : {}),
       root: typeof b.root === 'string' ? b.root.slice(0, 300) : null,
       version: typeof b.version === 'string' ? b.version.slice(0, 40) : null,
       // What the device says it SERVES — display only, never routing authority
@@ -182,7 +193,26 @@ function effectiveScope(device) {
   // would sideways-GRANT ask, a claude mode the row has no engine for. (This
   // also fixed a latent widen: a locked junk-scope device used to LIFT to look.)
   if (table.EXCLUSIVE_SCOPES.includes(enrolled)) return enrolled;
-  return device.locked ? table.LOCK_DROPS_TO : enrolled;
+  return lockWithdraws(device) ? table.LOCK_DROPS_TO : enrolled;
+}
+
+/**
+ * Whether this device's lock actually takes anything away.
+ *
+ * The lock rule exists because nobody is sitting there, and on most machines
+ * that is exactly right. On some it is not: a box whose whole job is to be
+ * available — one somebody reaches over RDP, one that sits headless in a rack —
+ * has an owner who has decided, once, on the machine, that a lock screen is not
+ * a statement about whether work may run. "Keep act mode while locked" is that
+ * decision, and this is the single place the daemon reads it.
+ *
+ * ⚠ ONLY A REAL `true`. Absent (a runner older than the field) and anything
+ * else both mean the default, which is today's behaviour: the lock withdraws.
+ * The machine is still the enforcement — this only decides whether the daemon
+ * bothers offering the work, and it must not offer what the runner will refuse.
+ */
+function lockWithdraws(device) {
+  return !!device.locked && device.actWhileLocked !== true;
 }
 
 /** Whether `scope` is at least as wide as `needed`. Internal — see scopeCovers. */
@@ -234,7 +264,10 @@ function canRun(device, mode, now, state = null) {
     // Blame the lock only when unlocking would actually help — the enrolled
     // scope covers the mode and only the lock-drop is in the way. Anything
     // else names the scope, because the scope is what somebody would change.
-    const lockedBlame = device.locked && scopeCovers(enrolled, needed);
+    // ...and only when the lock is still taking something away. On a machine set
+    // to keep act while locked it never is, so the refusal names the scope,
+    // which is the thing somebody would actually have to change.
+    const lockedBlame = lockWithdraws(device) && scopeCovers(enrolled, needed);
     return {
       ok: false,
       reason: lockedBlame
@@ -255,6 +288,11 @@ function noteSeen(state, id, now, patch = {}) {
   if (!d) return state;
   d.lastSeen = now;
   if (typeof patch.locked === 'boolean') d.locked = patch.locked;
+  // Carried on the beat, in BOTH directions. The scope beside it works this way
+  // for the same reason: the setting is edited on the machine, and the only
+  // thing that ever re-registers is a restart. A narrowing that waited for one
+  // would leave this row granting act for as long as the runner stayed up.
+  if (typeof patch.actWhileLocked === 'boolean') d.actWhileLocked = patch.actWhileLocked;
   if (typeof patch.version === 'string') d.version = patch.version.slice(0, 40);
   if (SCOPES.includes(patch.scope)) d.scope = patch.scope;
   // Carried on the beat too, so `huginn local persist` on a serving machine is
@@ -294,6 +332,10 @@ function deviceView(id, device, now) {
     // Omitted, never defaulted — see validateRegistration. A client that reads
     // this as a tri-state renders nothing for a row that never said.
     ...(typeof device.persistent === 'boolean' ? { persistent: device.persistent } : {}),
+    // Same tri-state, same reason: a row from a runner that predates the setting
+    // renders nothing rather than claiming the owner chose the default. The
+    // honest `locked` above is unaffected — this says what that lock MEANS here.
+    ...(typeof device.actWhileLocked === 'boolean' ? { actWhileLocked: device.actWhileLocked } : {}),
   };
 }
 
