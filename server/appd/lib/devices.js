@@ -322,8 +322,16 @@ function deviceView(id, device, now) {
     root: device.root ?? null,
     version: device.version ?? null,
     online: isOnline(device, now),
+    // ⚠ MILLISECONDS, AND THEY STAY THAT WAY (M3, round-2 review). Every other
+    // timestamp this daemon serves outside /v1/headroom is epoch SECONDS; these
+    // two are ms, the Kotlin models carry the note, and the deployed clients
+    // read them. Changing the unit under a shipped client turns "3 minutes ago"
+    // into "56 years ago", so the ms fields are kept and DEPRECATED for one
+    // release, with a correctly-named seconds sibling beside each.
     lastSeen: device.lastSeen ?? null,
     registeredAt: device.registeredAt ?? null,
+    lastSeenSec: device.lastSeen == null ? null : Math.floor(device.lastSeen / 1000),
+    registeredAtSec: device.registeredAt == null ? null : Math.floor(device.registeredAt / 1000),
     // Derived at view time too, so a row persisted before machines existed
     // groups correctly even before its runner re-registers.
     machine: device.machine || deriveMachine(device),

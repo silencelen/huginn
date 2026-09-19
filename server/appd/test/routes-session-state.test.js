@@ -339,3 +339,49 @@ test('a pending plan approval is "needs you" too', async () => {
   assert.equal((await row(name)).state, 'attention',
     'ExitPlanMode holds the session exactly as an AskUserQuestion does');
 });
+
+// ------------------------------------- a brand-new session's empty state (P-04)
+
+test('a session whose transcript has not been written yet says so, not "gone"', async () => {
+  // ⚠ THE FAIL-FIRST FOR P-04 / D-10. Both walkers hit this independently: a
+  // session four seconds old showed, as its whole conversation, "recorded
+  // transcript file is gone". On the phone the first frame said the right thing
+  // and then settled on the wrong one, because the state file ALREADY carries a
+  // transcript path Claude Code has not written to yet — so `fs.existsSync`
+  // loses and the "gone" branch wins for every brand-new session there is.
+  // Nothing is gone. Against 3.5.2 every assertion below reads "…is gone".
+  const name = mkAsking('freshtranscript');
+  const notYet = path.join(tmp, `${name}-unwritten.jsonl`);
+  fs.writeFileSync(path.join(stateDir, name), JSON.stringify({
+    state: 'idle', sessionId: `sid-${name}`, transcript: notYet, cwd: tmp, ts: now(),
+  }));
+  assert.equal(fs.existsSync(notYet), false, 'precondition: the hook has not written it');
+
+  for (const route of ['transcript', 'overview', 'graph']) {
+    const { status, body } = await api(`/v1/sessions/${name}/${route}`);
+    assert.equal(status, 409, `${route}: ${JSON.stringify(body)}`);
+    assert.match(body.error, /no transcript recorded for this session yet/,
+      `${route} must say the session is fresh, not that something was lost`);
+    assert.doesNotMatch(body.error, /gone/, `${route} must not claim a loss`);
+  }
+});
+
+test('a transcript this daemon HAS read and that then disappears is "gone"', async () => {
+  // The other half, and the reason the softer sentence is not simply always
+  // right: a file that existed and does not any more IS a loss, and a reader
+  // told "nothing yet" about a conversation they had would be misled.
+  const name = mkAsking('lostranscript');
+  const file = path.join(tmp, `${name}.jsonl`);
+  fs.writeFileSync(file, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\n`);
+  fs.writeFileSync(path.join(stateDir, name), JSON.stringify({
+    state: 'idle', sessionId: `sid-${name}`, transcript: file, cwd: tmp, ts: now(),
+  }));
+  const ok = await api(`/v1/sessions/${name}/transcript`);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+
+  fs.rmSync(file);
+  const { status, body } = await api(`/v1/sessions/${name}/transcript`);
+  assert.equal(status, 409);
+  assert.match(body.error, /recorded transcript file is gone/,
+    'a path this daemon has read once is one that existed');
+});

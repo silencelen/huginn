@@ -207,8 +207,9 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/v1/ping` | liveness + version |
-| GET | `/v1/account` | signed-in account (`claude auth status`) |
+| GET | `/v1/ping` | liveness + version, plus `via {addr, port}` — which of this host's addresses you dialled. **Requires the bearer token** (the 401 it answers without one, carrying `X-Huginn-Appd`, is itself the daemon's fingerprint) |
+| GET | `/v1/challenge` | **unauthenticated.** `?nonce=<16-64 hex>` → `{proof, version}` where `proof` is hex HMAC-SHA256 with the bearer token as KEY over the nonce exactly as sent. A client verifies it against its own copy of the token and adopts a route only on a match, so the token is never sent to an address that has not already proved it holds one — a forgeable `X-Huginn-Appd` header is a fingerprint, not proof. Publishing it is safe: HMAC is a pseudo-random function of its key, the key is 256 bits, and the nonce is yours so a recorded proof cannot be replayed at your challenge. Bad or missing nonce → 400; 20/s per client address, then 429 |
+| GET | `/v1/account` | signed-in account (`claude auth status`; the credentials themselves when `HUGINN_APPD_CLAUDE_DIR` is set, so it can never answer from the real CLI past the override, and always agrees with `/v1/plan`) |
 | POST | `/v1/account/login` | starts interactive sign-in in a `login` session; returns the URL |
 | POST | `/v1/account/logout` | needs `{confirm:"logout"}`; signs out the whole host |
 | GET | `/v1/usage` | cached ccusage summary (today + 7 days) |
@@ -218,14 +219,14 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | DELETE | `/v1/accounts/<slug>` | forget a saved login |
 | GET | `/v1/status` | uptime, load, disk, Claude version, MemPalace reachability |
 | GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews |
-| POST | `/v1/sessions` | `{name}`; letters/digits/underscore, canonically lowercase |
+| POST | `/v1/sessions` | `{name}`; must START with a letter, digit or underscore and may then also contain `-` and `.` (a `.` is refused by its own check), max 50 chars, canonically lowercase. Reserved names (`plan`, `ask`, `compacting`, …) are refused — they collide with the state directory's own sidecars |
 | DELETE | `/v1/sessions/<name>` | kill-session |
 | POST | `/v1/sessions/<name>/rename` | `{name}`; moves the state file with it |
 | GET | `/v1/sessions/<name>/screen` | `?cols=&rows=` report the viewer's grid (descriptive; the pane is captured as it is), `?live=1` additionally takes the pane-size LEASE and resizes tmux — one holder per session, keyed on `X-Huginn-Client`, and a second live client is answered with `leaseHeldBy` rather than taking it; `?history=` adds scrollback, `?hash=&wait=` long-polls, `?force=1` resizes past an attached client |
 | DELETE | `/v1/sessions/<name>/size` | release the resize lease now; only the holder's release counts (`{released}` says whether it did) |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
-| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main. Text up to 100,000 chars, delivered by bracketed paste, and QUEUED until a real turn boundary so it is never spliced into the answer being written; interrupt keys are never queued |
-| GET | `/v1/sessions/<name>/typing` | what is waiting to be typed into this session and why it has not gone yet |
+| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main. Text up to 100,000 chars, delivered by bracketed paste. **`keys:["Enter"]` is what makes a text send a SEND**: `{text}` on its own types into the composer and does not submit — that is the live view's typing path, and `delivered:true` there means the text landed in the box, not that a turn started. Answers `{ok, queued, position, delivered, blockedBy, intoDraft}`, plus `duplicate:true` when the same message is already queued or was just delivered. `blockedBy` is one of `modal`, `trust`, `starting`, `attention`, `draft`, `turn`, or null. A person's message is delivered at once (3.5.1); only a gate holds it. Interrupt keys are never queued |
+| GET | `/v1/sessions/<name>/typing` | what is waiting to be typed into this session and why it has not gone yet: `{queued, delivering, lastError, blockedBy, waitedMs, intoDraft, serverTime, serverTimeSec}`. `intoDraft` is the last delivery to this session that landed in somebody's unsent draft — `{at (seconds), waitedMs, composer}` or null, cleared by the next ordinary delivery. The draft hold ends 60 s after the last live-view keystroke (5 s when the box reads empty), and this is how a client says what happened when it did |
 | POST | `/v1/sessions/<name>/answer` | `{option}` or `{options:[…]}` for multi-select, plus `fingerprint?`; answers a numbered prompt. Refuses with 409 if the pane no longer shows that question |
 | GET | `/v1/watch` | change signal; `?stream=1` is SSE with a 25s keepalive, otherwise a long poll |
 | GET | `/v1/clients` | which phones have checked in, and how recently |
@@ -242,7 +243,6 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/chats/<id>/stream?since=<seq>` | reattach to an in-flight run |
 | POST | `/v1/chats/<id>/cancel` | SIGTERM then SIGKILL |
 | POST | `/v1/uploads` | raw bytes, any type, ≤128MB (streamed to disk); server names the file, returns its path; pruned after 7 days |
-| GET | `/v1/models` | the pickable model list, discovered from the installed Claude Code binary |
 | POST | `/v1/account/login/code` | pastes the OAuth code into the login pane and waits for credentials to change |
 | GET | `/v1/account/login/state` | how the interactive sign-in is going |
 | GET | `/v1/desktop-kt/manifest` | the desktop client's appd-side update feed — the transition path for installed 0.5.x clients; newer ones fetch from the [GitHub release](#the-desktop-client) |
@@ -251,14 +251,14 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/sessions/<name>/agents` | the individual agents behind a fan-out; `?all=1` adds every workflow member |
 | GET | `/v1/sessions/<name>/agents/<agentId>/transcript` | one agent's own transcript, paged like the parent's |
 | GET | `/v1/autoswitch` · POST | automatic account rotation state / `{enabled}`. An alias onto `headroom.settings.accountSwitch`, kept for one release |
-| GET | `/v1/headroom` | the whole usage picture: every account's three windows, what is stalled, what is held, what the arbiter last decided and why |
+| GET | `/v1/headroom` | the whole usage picture: every account's three windows, what is stalled, what is held (`held[]`), the STOP sentinels, `keepAwake`, and what the arbiter last decided and why. ⚠ **every timestamp on this route is milliseconds** — `serverTime`, `readAt`, `sentinels.*.since`, `held[].since`, `arbiter.last*At`, `keepAwake.*` — which is the one documented exception to this daemon's epoch-seconds convention. `serverTimeSec` means seconds here and everywhere else |
 | PATCH | `/v1/headroom/settings` | thresholds, ladder order, default model, auto-resume + phrase, account auto-switch |
 | POST | `/v1/sessions/<name>/headroom/undo` | put a laddered session back on the model it was moved off (the Undo button) |
 | POST | `/v1/accounts/<slug>/refresh` | refresh one saved login's OAuth token now. It never refuses: asking it for the ACTIVE login answers `200 {ok:true, status:"active_skipped"}`, because a running `claude` holds that token in memory. The route that refuses is `/activate`, with a 409 whose text names the date |
-| POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; one better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
-| GET | `/v1/rounds` · POST | scheduled recurring runs (list); POST creates one from `{title, prompt, goal?, schedule, …}` |
+| POST | `/v1/rounds/polish` | `{field, title?, prompt?, goal?, mode?}`; `field` is `prompt` or `goal` (anything else is a 400) and the rest is context. One better draft of that field, as a proposal a person accepts — never applied, and 200 with `{error}` when the model cannot answer |
+| GET | `/v1/rounds` · POST | scheduled recurring runs (list); POST creates one from `{title, prompt, goal?, schedule, …}`, where `schedule` is `{kind:"weekly", days:[0-6], at:"HH:MM", tz?}` (or `daily`/`hourly`). ⚠ `nextRunAt` is **milliseconds** while `createdAt` and `updatedAt` beside it are seconds; `nextRunAt` is DEPRECATED for one release, read `nextRunAtSec` (null when not armed) |
 | GET | `/v1/rounds/<id>` · PATCH · DELETE | one round: view / edit its schedule+goal / delete it and its run history |
-| GET | `/v1/devices` | enrolled devices — machines that run dispatched `act`/`generate` work — with each one's scope and liveness |
+| GET | `/v1/devices` | enrolled devices — machines that run dispatched `act`/`generate` work — with each one's scope and liveness. ⚠ `lastSeen` and `registeredAt` are **milliseconds** and are DEPRECATED for one release; read `lastSeenSec` / `registeredAtSec` (null when never seen). `actWhileLocked` is present only when the device said |
 | POST | `/v1/devices` | enrol/register a device |
 | DELETE | `/v1/devices/<id>` | unenrol; stops offering work (does not reach onto the machine) |
 | POST | `/v1/devices/<id>/beat` | runner heartbeat + advertised scope; the response carries `cancel` for the device's in-flight run |
@@ -269,6 +269,36 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/sessions/<name>/overview` | what this run has spent and what it did; 409 until the Claude hook has recorded a transcript. Deliberately not in the session list or the watch digest |
 | GET | `/v1/sessions/<name>/graph` | the map of the same run; `?size=&agentBytes=` is a two-part cursor and answers `{unchanged:true}` while neither has moved |
 | POST | `/v1/sessions/<name>/meta` | `{goals?, notes?, autoResume?}`; `autoResume` is three-valued (`true`/`false`/`null` = follow the global setting). Kept against the Claude session id and not the window name, so 409 before a first prompt has landed |
+| POST | `/v1/sessions/<name>/soft-end` | type a wrap-up phrase and (when `auto`) end the session once it settles. `{phrase?, auto?, force?}`. Through the send queue, so a dialog or a waiting question holds it; 409 while a question is on screen, and 409 with `force` unset when no Claude state was ever recorded (the pane may be a plain shell, where the phrase would EXECUTE) |
+| POST | `/v1/sessions/<name>/compact` | ask the session to compact its context. Same queue and the same 409s |
+| POST | `/v1/sessions/<name>/archive` | `{}` wraps up gracefully and archives on settle (`{archived:false, pending:true, mode, phrase}`); the row keeps the transcript and a `resumeCommand` |
+| GET | `/v1/archive` | archived sessions, newest first: `title`, `cwd`, `model`, `effort`, `permissionMode`, `gitBranch`, `lastMessage`, `transcriptPath`, `transcriptBytes`, `resumeCommand`, and `live`/`revivedAt`/`revivedAs` once revived |
+| GET | `/v1/archive/<id>` · PATCH · DELETE | one archived row: view / retitle / forget it |
+| GET | `/v1/archive/<id>/transcript` | the archived conversation, the same structured events as a live session; 404 for an unknown id |
+| POST | `/v1/archive/<id>/revive` | start that conversation again (`claude --resume`) → `{ok, name, resumed}`; 409 when it is already running, naming the session |
+| GET | `/v1/projects` · POST | clusters of sessions working one brief. POST takes `{name, kind, brief, cwd}` — `kind` is one of `software`, `infra`, `hardware`, `docs`, `research`, `other`, and an untrusted `cwd` is refused `409 {reason:"untrusted-cwd"}` rather than pre-trusted |
+| GET | `/v1/projects/<id>` · DELETE | one project. `DELETE ?end=graceful` (or `{end:"graceful"\|"now"}`) also winds the sessions down and answers `{ended:[], refused:[{name, claudeName, why}]}`; with no `end=` it deletes the record and ends nothing |
+| GET | `/v1/projects/<id>/dashboard` | live roll-up: `totals` (turns, tokens, `estCost.byModel`, compactions), `rate`, and a per-member list with `state`, `needsYou`, `pendingSends`, `headroom` |
+| POST | `/v1/projects/<id>/spawn` | `{approve:true, manifestRev}` — spawning is the owner's decision, so `approve:false` is a 400 and a stale `manifestRev` a 409 carrying the project to re-draw from |
+| POST | `/v1/projects/<id>/message` | `{from, to, text}`; appd types one member's words into another's pane, through the send queue and every gate on it. Arrives in the reader's transcript as `kind:"system"` with `project:{id, name, from}` — never as their own bubble |
+| POST | `/v1/projects/<id>/members` · DELETE `…/members/<role>` | adopt a session you already have open as `{name, role}` (omit `name` and it derives `<slug>-<role>`), or drop one. The lead cannot be dropped — delete the project instead |
+| GET | `/v1/apps` · POST | the apps this host serves, with `kinds` for the picker. Adding one PROBES it at every address a client of this daemon has arrived on plus huginn's own, and refuses with 422 and the exact lines that would fix it when any fails |
+| GET | `/v1/apps/<id>` · PATCH · DELETE | one app row |
+| POST | `/v1/apps/<id>/probe` | re-check reachability now |
+| GET | `/v1/apps/<id>/icon` | the app's own favicon, cached and re-fetched at most hourly, ETag/304, `nosniff`; `icon:false` on the row when it serves none |
+| GET/POST/PATCH/DELETE | `/v1/consoles*` | the pre-3.5.2 spelling of `/v1/apps*`, kept for one release |
+| PATCH | `/v1/quick-actions` | the wording behind the four selection buttons. No GET — the current values ride the `/v1/status` poll every client already runs |
+| GET | `/v1/models` | the pickable model list, discovered from the installed Claude Code binary; `?local=1` adds the models the enrolled local-AI devices advertise |
+
+**Timestamps are epoch SECONDS**, with `/v1/headroom` (and the `headroom` block
+inside `/v1/status`) as the documented all-milliseconds exception. Three fields
+sit outside that and cannot be changed under the shipped clients, so each has a
+correctly-named seconds sibling and the old spelling is **deprecated for one
+release**: `lastSeen`/`registeredAt` on `/v1/devices` → `lastSeenSec` /
+`registeredAtSec`; `Round.nextRunAt` → `nextRunAtSec`; and `serverTime`, which
+means seconds on `/typing`, `/clients`, `/watch` and `/agents` and milliseconds
+on `/headroom` → `serverTimeSec`, which means seconds on every route that
+carries either.
 
 SSE events: `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`,
 `error`, `done`. Each run keeps a bounded replay buffer so a phone that locks

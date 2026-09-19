@@ -489,6 +489,14 @@ test('/v1/autoswitch keeps `last.at` in SECONDS, and loses none of the row', asy
   const hr = (await api('/v1/headroom')).body;
   assert.equal(hr.arbiter.lastAction.at, seededSwitchAt, 'headroom epochs are milliseconds');
   assert.ok(hr.serverTime > 1e11, 'including serverTime, which used to be the odd one out');
+  // ⚠ M3 (3.6.0): ONE FIELD NAME, TWO UNITS is the trap. `serverTime` is seconds
+  // on /v1/clients, /v1/watch, /typing and /agents and milliseconds here, and
+  // nothing on the wire told them apart. Both routes now also carry
+  // `serverTimeSec`, which means the same thing everywhere; the ms spelling
+  // stays because every deployed client reads it.
+  assert.equal(hr.serverTimeSec, Math.floor(hr.serverTime / 1000),
+    'serverTimeSec is the same instant, in seconds, on the ms route');
+  assert.ok(hr.serverTimeSec < 1e11, 'and it really is seconds');
   assert.equal(typeof hr.arbiter.lastResumeAt, 'number', 'and lastResumeAt is a NUMBER, never null');
 });
 

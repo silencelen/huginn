@@ -244,6 +244,51 @@ const IDLE_NOTICE_RE = /^\s*\[Cross-session idle notice\]\s*"([^"]+)"/;
 const IDLE_DETAIL_RE = /«([^»]*)»/;
 
 /**
+ * ─── A PROJECT MESSAGE THE DAEMON RELAYED ──────────────────────────────────
+ *
+ * ⚠ M1 (round-2 review, 2026-09-19). `POST /v1/projects/:id/message` is the
+ * button a person presses to put one member's words in another member's pane.
+ * It does not travel Claude Code's native peer channel — appd PASTES a frame —
+ * so the record it leaves behind is a plain `user` one with no `origin`, and
+ * `peerNote` above, which keys structurally on `origin.kind === 'peer'`, had
+ * nothing to recognise. The member's transcript therefore drew the owner's relay
+ * as the member's OWN bubble, safety paragraph and all:
+ *
+ *   {"seq":17,"kind":"user","text":"[Huginn] Relayed message from rv-proj/lead
+ *    (a peer session, not your owner):\nPEER-PING …"}
+ *
+ * The 3.4.0 changelog claimed the opposite of this route specifically. So the
+ * frame is recognised by its header, and the header now carries the project.
+ *
+ * ⚠ THE 3.5.x HEADER IS STILL MATCHED. Transcripts written before the project
+ * clause existed are on disk and will be read; they produce the same system note
+ * with `project.id`/`project.name` null rather than a user bubble.
+ */
+const RELAY_HEAD_RE = new RegExp(
+  '^\\s*\\[Huginn\\] Relayed message from (.+?)'
+  + '(?: in project "([^"]*)" ([0-9a-fA-F][0-9a-fA-F-]{7,63}))?'
+  + ' \\(a peer session, not your owner\\):[ \\t]*\\r?\\n',
+);
+/** The closing bookkeeping line, which is for the model and not for the reader. */
+const RELAY_TAIL_RE = /\n\[End of message from [^\]]*\]\s*$/;
+
+function projectRelayNote(text) {
+  const s = String(text || '');
+  const head = RELAY_HEAD_RE.exec(s);
+  if (!head) return null;
+  const from = head[1];
+  const body = s.slice(head[0].length).replace(RELAY_TAIL_RE, '').trim();
+  return {
+    key: head[0].trim(),
+    text: body ? `Message from ${from}: ${clip(body, 300)}` : `Message from ${from}`,
+    // The same `peer` shape the native channel produces, so a client written
+    // against 3.4.0 draws this note without knowing the route exists.
+    peer: { name: from, sessionId: null, pid: null },
+    project: { id: head[3] || null, name: head[2] || null, from },
+  };
+}
+
+/**
  * The one-line note a peer record becomes, or null if this is not one.
  *
  * `peerIds` maps a verified peer PID to that session's Claude session id. The
@@ -255,6 +300,11 @@ const IDLE_DETAIL_RE = /«([^»]*)»/;
  * is not the identity).
  */
 function peerNote(d, text, peerIds) {
+  // appd's own relay first: it is the only one of the three that is recognised
+  // by its text alone, and the `user` record it produces carries no origin for
+  // the structural rule below to key on.
+  const relay = projectRelayNote(text);
+  if (relay) return relay;
   const origin = d && d.origin;
   if (origin && origin.kind === 'peer') {
     const name = typeof origin.name === 'string' && origin.name ? origin.name : 'another session';
@@ -662,7 +712,10 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           // window holds produces exactly one note.
           const peerQ = peerNoteFromQueue(content, peerIds);
           if (peerQ) {
-            out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: peerQ.text, peer: peerQ.peer });
+            out.events.push({
+              seq: ++seq, kind: 'system', ts, sidechain, text: peerQ.text, peer: peerQ.peer,
+              ...(peerQ.project ? { project: peerQ.project } : {}),
+            });
             if (peerQ.key) peerSeen.push(peerQ.key);
             continue;
           }
@@ -825,7 +878,10 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         if (peerU) {
           const at = peerU.key ? peerSeen.indexOf(peerU.key) : -1;
           if (at >= 0) { peerSeen.splice(at, 1); continue; }
-          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: peerU.text, peer: peerU.peer });
+          out.events.push({
+            seq: ++seq, kind: 'system', ts, sidechain, text: peerU.text, peer: peerU.peer,
+            ...(peerU.project ? { project: peerU.project } : {}),
+          });
           continue;
         }
         // The record Claude Code writes for a message the queue just DRAINED.
@@ -1075,5 +1131,5 @@ function liveActivity(events, nowSec) {
 
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
-  peerBody, peerNote, peerNoteFromQueue,
+  peerBody, peerNote, peerNoteFromQueue, projectRelayNote,
 };

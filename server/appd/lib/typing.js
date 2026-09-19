@@ -457,6 +457,68 @@ const SUBMIT_CONFIRM_MS = 1_000;
 const SUBMIT_CONFIRM_POLL_MS = 100;
 
 /**
+ * ─── THE GHOST IS NOT A DRAFT ──────────────────────────────────────────────
+ *
+ * ⚠ P-14 (2026-09-19). Claude Code draws an inline SUGGESTION in an empty
+ * composer — the last thing you typed here, offered back in dim text, taken
+ * with →. The raw row is
+ *
+ *   '\x1b[39m❯\xa0\x1b[2mrun sleep 10 in the background then say doneB\x1b[0m'
+ *
+ * with the cursor still at column 2: the box is EMPTY and Claude Code is
+ * proposing something. Strip the escapes and it is indistinguishable from
+ * somebody's half-typed sentence, which is exactly what `composerHoldsDraft`
+ * said about it (verified against a live pane: `composerText` = the suggestion,
+ * `composerEmpty` = false, `composerHoldsDraft` = true). The 3.5.1 belt-and-
+ * braces — text AND a live-view keypress inside 60 s — saves it only for
+ * somebody who has NOT just used the Screen tab, which is the one person the
+ * guard is for. A phantom `blockedBy:"draft"` holds their next message for a
+ * minute over a suggestion nobody typed.
+ *
+ * The tell is the dim attribute itself (SGR 2), so the pane has to be captured
+ * WITH its escapes (`tmux capture-pane -e`) and the dim runs dropped before the
+ * text is read. `\x1b[0m` and `\x1b[22m` end a run; a multi-parameter SGR is
+ * read parameter by parameter, because `\x1b[2;37m` is one sequence saying two
+ * things.
+ *
+ * ⚠ THE CARET AND THE WHITESPACE ARE NEVER DROPPED, whatever they are drawn in.
+ * `composerText` finds the box by its `❯`, and a build that dimmed the caret
+ * would make this function delete the composer — turning the draft guard off
+ * silently, which is worse than the bug it fixes. Whitespace is kept for the
+ * same structural reason; `squashPane` removes it from the comparison anyway.
+ *
+ * A capture taken WITHOUT `-e` carries no escapes at all, so this is a no-op on
+ * one — every existing caller and fixture reads exactly as it did.
+ */
+const ESC = '\u001B';
+function stripGhost(line) {
+  const s = String(line || '');
+  if (!s.includes(ESC)) return s;
+  let out = '';
+  let dim = false;
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === ESC && s[i + 1] === '[') {
+      let j = i + 2;
+      while (j < s.length && !(s[j] >= '@' && s[j] <= '~')) j++;
+      if (j < s.length && s[j] === 'm') {
+        for (const part of s.slice(i + 2, j).split(';')) {
+          const n = Number(part === '' ? '0' : part);
+          if (n === 2) dim = true;
+          else if (n === 0 || n === 22) dim = false;
+        }
+      }
+      i = j < s.length ? j + 1 : s.length;
+      continue;
+    }
+    const ch = s[i];
+    if (!dim || ch === '❯' || /\s/.test(ch)) out += ch;
+    i++;
+  }
+  return out;
+}
+
+/**
  * The composer's own content, as opposed to anything else with a caret on it.
  *
  * ⚠ AND IT IS THE **LAST** CARET, NOT THE FIRST. Claude Code echoes a SUBMITTED
@@ -476,9 +538,9 @@ const SUBMIT_CONFIRM_POLL_MS = 100;
  * callers below rely on the difference.
  */
 const RULE_RE = /^[─━—–_=-]{3,}$/;
-function composerText(lines) {
+function composerText(lines, { dropGhost = false } = {}) {
   const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
-  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  const plain = arr.map((l) => stripAnsi(dropGhost ? stripGhost(l) : String(l)).replace(/\s+$/, ''));
   let last = -1;
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return null;
@@ -1103,6 +1165,15 @@ function submitRefusal({ submit = true, composer = false, shell = false } = {}) 
  * Order is the order of harm:
  *   modal      a dialog SWALLOWS a message with no trace anywhere, and nothing
  *              overrides that.
+ *   trust      the SAME hold, named. It is the one dialog whose pre-selected
+ *              answer is destructive ("No, exit"), and `/screen` reports no
+ *              prompt and no options for it either, so "a dialog is open on the
+ *              screen" sends a reader looking for buttons that are not there.
+ *              ⚠ M2 (round-2 review): `dialogWhy` has told the two apart since
+ *              3.5.0 and its comment said "a caller that logs `why` should be
+ *              able to say so" — and then this line flattened both to 'modal',
+ *              so the word the 3.5.1 changelog advertises could never reach a
+ *              client. It is the pane's own verdict, passed through.
  *   starting   there is no application in the pane yet, so the paste and its
  *              Enter go nowhere at all. Outranks everything below, and unlike
  *              the turn gate it holds a PERSON's message too — 3.0.3's rule is
@@ -1119,7 +1190,7 @@ function submitRefusal({ submit = true, composer = false, shell = false } = {}) 
  *   then either boundary — the transcript's or the hook's — lets it go.
  */
 function releaseDecision({ idle, paneWhy, state = null, starting = false, draft = false }) {
-  if (paneBlocks(paneWhy)) return { release: false, blockedBy: 'modal' };
+  if (paneBlocks(paneWhy)) return { release: false, blockedBy: paneWhy === 'trust' ? 'trust' : 'modal' };
   if (starting) return { release: false, blockedBy: 'starting' };
   if (state === 'hold') return { release: false, blockedBy: 'attention' };
   if (draft) return { release: false, blockedBy: 'draft' };
@@ -1190,14 +1261,46 @@ function dropMessage(reason, entry = {}) {
 }
 
 /**
+ * What a client is owed when a message went into somebody's draft anyway.
+ *
+ * ⚠ DECISION 59 (2026-09-19). The ceiling stays where `draftHold` puts it — 60 s
+ * after the last live-view keystroke — because a hold a person cannot see the end
+ * of is the same bug as a message that vanishes. But the daemon KNOWS when it
+ * pasted in front of somebody's sentence (`draftOverdueLogLine` is written from
+ * exactly that verdict) and until now the only place it said so was the journal.
+ * A person who was typing deserves to be told that their next message went in on
+ * top of it, in the app, where they are.
+ *
+ *   at        epoch SECONDS, like every other timestamp outside /v1/headroom
+ *   waitedMs  how long the message had been held when it went
+ *   composer  the first 120 characters of the draft it went into, so the notice
+ *             can show what it landed on rather than asserting it abstractly
+ *
+ * Stored in ms and rendered here, so the caller keeps one clock.
+ */
+function intoDraftView(rec, max = 120) {
+  if (!rec || !rec.at) return null;
+  return {
+    at: Math.floor(rec.at / 1000),
+    waitedMs: Math.max(0, Math.round(Number(rec.waitedMs) || 0)),
+    composer: String(rec.composer || '').replace(/\s+/g, ' ').trim().slice(0, max),
+  };
+}
+
+/**
  * The `GET /v1/sessions/:name/typing` body, from in-memory state only.
  *
  * `waitedMs` is how long the HEAD of the queue has been waiting — the client's
  * half of "late beats lost": a message held ninety seconds behind a turn can say
  * so, instead of looking to its sender like nothing happened. Zero when nothing
  * is queued, and never negative however the clock moves.
+ *
+ * `intoDraft` is the LAST delivery to this session that landed in somebody's
+ * draft, or null. It deliberately outlives the queue struct — that is reaped the
+ * moment the queue empties, which is the same moment the notice becomes worth
+ * reading — so the caller passes it in separately.
  */
-function typingSnapshot(q, nowMs = Date.now()) {
+function typingSnapshot(q, nowMs = Date.now(), intoDraft = null) {
   const head = q && Array.isArray(q.entries) && q.entries.length ? q.entries[0] : null;
   return {
     queued: q && Array.isArray(q.entries) ? q.entries.length : 0,
@@ -1205,7 +1308,12 @@ function typingSnapshot(q, nowMs = Date.now()) {
     lastError: (q && q.lastError) || null,
     blockedBy: q && q.entries && q.entries.length ? (q.blockedBy || null) : null,
     waitedMs: head && head.at ? Math.max(0, nowMs - head.at) : 0,
+    intoDraft: intoDraftView(intoDraft),
     serverTime: Math.floor(nowMs / 1000),
+    // 3.6.0: the same instant in SECONDS under a name that says so. `serverTime`
+    // above is already seconds HERE and milliseconds on /v1/headroom, which is
+    // the trap M3 is about; this field means the same thing on every route.
+    serverTimeSec: Math.floor(nowMs / 1000),
   };
 }
 
@@ -1214,7 +1322,7 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision,
+  composerEmpty, recoveryDecision, stripGhost,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
@@ -1225,5 +1333,5 @@ module.exports = {
   hasHumanUserRecord, kindOf,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
   startingUp, startingUnmarked, bufferName,
-  releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot,
+  releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
 };

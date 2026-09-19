@@ -636,3 +636,20 @@ test('deleting a device twice says so rather than pretending', async () => {
   const again = await api(`/v1/devices/${dev.id}`, { method: 'DELETE' });
   assert.equal(again.status, 404, 'a retry can read this as "the row is gone"');
 });
+
+test('device rows carry both timestamp spellings, and the seconds one is seconds (M3)', async () => {
+  // ⚠ ONE DAEMON, TWO UNITS. Everything outside /v1/headroom is epoch seconds;
+  // `lastSeen` and `registeredAt` here are milliseconds and nothing on the wire
+  // said so. The units cannot be changed under a shipped client — the Kotlin
+  // models carry the ms note and read them — so both spellings ship and the ms
+  // pair is deprecated for one release.
+  const d = await enrol({ name: 'units' });
+  assert.ok(d.lastSeen > 1e11, 'the ms field is still milliseconds');
+  assert.equal(d.lastSeenSec, Math.floor(d.lastSeen / 1000));
+  assert.equal(d.registeredAtSec, Math.floor(d.registeredAt / 1000));
+  assert.ok(d.lastSeenSec < 1e11 && d.registeredAtSec < 1e11, 'and the siblings really are seconds');
+
+  const list = await api('/v1/devices');
+  const row = list.body.devices.find((x) => x.id === d.id);
+  assert.equal(row.lastSeenSec, Math.floor(row.lastSeen / 1000), 'on the list as well as the create');
+});
