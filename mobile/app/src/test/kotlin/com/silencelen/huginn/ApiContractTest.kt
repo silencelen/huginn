@@ -182,6 +182,19 @@ class ApiContractTest {
             list.devices.size,
             list.devices.count { it.effectiveScope.isNotBlank() },
         )
+        // ⚠ THE TRI-STATE, both halves. A machine whose owner turned "Keep act
+        // mode while locked" on reports `locked: true` with `own`/`own`, and the
+        // only thing separating it from a machine nobody has locked is this
+        // field. Reading its ABSENCE as false would put "acting while locked" on
+        // every row from a daemon that predates it.
+        val remote = list.devices.single { it.name == "A-REMOTE-BOX" }
+        assertTrue("a locked machine still reports its screen", remote.locked)
+        assertEquals("own", remote.effectiveScope)
+        assertEquals(true, remote.actWhileLocked)
+        assertNull(
+            "a row that never said must decode as null, never as false",
+            list.devices.first { it.name == "A-LAPTOP" }.actWhileLocked,
+        )
     }
 
     // ------------------------------------------------- headroom (3.0.0)
