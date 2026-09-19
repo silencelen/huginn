@@ -295,15 +295,105 @@ test('every row says where the probe ran from', () => {
 
 // ------------------------------------------------------------- the seed list
 
-test('the seed is the contract’s four pages, addressed the way a phone would open them', () => {
-  const seeded = consoles.seedConsoles(100);
+test('the seed is the contract’s four pages, at the address the daemon was handed', () => {
+  // ⚠ D10, AND THE REASON THIS TAKES AN ADDRESS AT ALL. The four seeded units
+  // bind this host's TAILNET address; the name `huginn` resolves to its LAN
+  // address. A seed pinned to the name therefore addresses an interface on
+  // which none of them listen — `curl http://huginn:8088/` answers nothing
+  // while `curl http://100.97.198.90:8088/` answers 200 — so every row read
+  // "not answering from the host" forever, in the one deployment that has these
+  // units. The probe could never pass, whatever anybody did.
+  const seeded = consoles.seedConsoles('100.97.198.90', 100);
   assert.deepEqual(['armap', 'jtyper', 'board', 'btc15m'], seeded.map((c) => c.id));
   assert.deepEqual(
-    ['http://huginn:8088/', 'http://huginn:8091/', 'http://huginn:8092/', 'http://huginn:8093/'],
+    ['http://100.97.198.90:8088/', 'http://100.97.198.90:8091/',
+      'http://100.97.198.90:8092/', 'http://100.97.198.90:8093/'],
     seeded.map((c) => c.url),
-    'the host’s own name and not 127.0.0.1 — loopback would make the probe pass and the tap fail',
+    'the address the daemon itself binds — the one interface these units are on',
   );
   for (const c of seeded) assert.equal(null, consoles.urlProblem(c.url), `${c.id} must pass the daemon's own rule`);
+});
+
+test('the seed address is chosen from what the daemon can offer, skipping the wildcard it binds', () => {
+  // ⚠ THE CASE THE LIVE HOST IS IN. huginn-appd's unit sets
+  // HUGINN_APPD_BIND=0.0.0.0 so the tailnet, mesh and loopback pins a client
+  // holds all reach one listener. A fix that read only the bind would resolve
+  // to `0.0.0.0`, fall back to the name, and change nothing on the one host
+  // that has this defect — so the daemon offers its bind AND the address
+  // `tailscale ip -4` gives, and the first that stands up wins.
+  assert.equal('100.97.198.90', consoles.pickHostAddr('0.0.0.0', '100.97.198.90'));
+  assert.equal('192.168.2.117', consoles.pickHostAddr('192.168.2.117', '100.97.198.90'), 'a real bind is already the answer');
+  assert.equal('', consoles.pickHostAddr('0.0.0.0', ''), 'and nothing on offer is not a guess');
+  assert.equal('', consoles.pickHostAddr('::', 'example.com'), 'a public host is never an answer here');
+  assert.equal('fd00::5', consoles.pickHostAddr('fd00::5'), 'a mesh ULA is an address this registry accepts');
+  assert.equal('', consoles.pickHostAddr('fe80::1%eth0'), 'a link-local with a zone id means nothing to another process');
+});
+
+test('the wildcard the daemon binds seeds the fallback, not a URL nothing can open', () => {
+  assert.equal('http://huginn:8088/', consoles.seedConsoles(consoles.pickHostAddr('0.0.0.0'), 100)[0].url);
+  assert.equal('http://100.97.198.90:8088/',
+    consoles.seedConsoles(consoles.pickHostAddr('0.0.0.0', '100.97.198.90'), 100)[0].url);
+});
+
+test('a daemon that knows no address of its own falls back to the host name rather than inventing one', () => {
+  // The fallback is the OLD seed, exactly: a host that cannot say where it is
+  // should write what it used to write, not a guess and not an empty row.
+  for (const nothing of [undefined, null, '', '   ', 42]) {
+    assert.deepEqual(
+      ['http://huginn:8088/', 'http://huginn:8091/', 'http://huginn:8092/', 'http://huginn:8093/'],
+      consoles.seedConsoles(nothing, 100).map((c) => c.url),
+      `${JSON.stringify(nothing)} is not an address`,
+    );
+  }
+});
+
+test('an address the daemon would refuse on a typed row cannot arrive through the seed either', () => {
+  // `HUGINN_APPD_BIND=0.0.0.0` is a legal way to start this daemon and a
+  // meaningless thing to put in a URL. The seed is not exempt from the rule
+  // every other row in this registry is judged by.
+  for (const bad of ['0.0.0.0', '::', 'example.com', '8.8.8.8']) {
+    assert.equal('http://huginn:8088/', consoles.seedConsoles(bad, 100)[0].url, `${bad} must not be seeded`);
+  }
+});
+
+// ------------------------------------------------- re-seeding an existing store
+
+test('a row still carrying the old seeded address is re-pointed; one the owner edited is not', () => {
+  // The fix has to reach the stores that already exist — a daemon that only
+  // seeds correctly on a host that has never run it leaves every real
+  // installation with four rows that can never answer. The line between "the
+  // old seed wrote this" and "the owner chose this" is the EXACT previous
+  // literal, and nothing looser: a path, a port or a host of their own is them
+  // speaking, and this must never overwrite it.
+  const list = [
+    consoles.buildRecord({ id: 'armap', name: 'Architecture map', url: 'http://huginn:8088/' }, 100),
+    consoles.buildRecord({ id: 'jtyper', name: 'jtyper trainer', url: 'http://huginn:9099/' }, 100),
+    consoles.buildRecord({ id: 'board', name: 'PCB board view', url: 'http://huginn:8092/boards' }, 100),
+    consoles.buildRecord({ id: 'btc15m', name: 'BTC 15m simulator', url: 'http://127.0.0.1:8093/' }, 100),
+    consoles.buildRecord({ id: 'mine', name: 'Something of my own', url: 'http://huginn:8088/' }, 100),
+  ];
+  const r = consoles.migrateSeedUrls(list, '100.97.198.90');
+  assert.deepEqual(['armap'], r.changed, 'only a seed row still holding the literal the old seed wrote');
+  assert.equal('http://100.97.198.90:8088/', r.consoles[0].url);
+  assert.equal(2, r.consoles[0].version, 'the address moved, so a client holding version 1 is holding a stale row');
+  assert.equal('http://huginn:9099/', r.consoles[1].url, 'a re-pointed row is the owner speaking');
+  assert.equal('http://huginn:8092/boards', r.consoles[2].url, 'and so is a row with a path on it');
+  assert.equal('http://127.0.0.1:8093/', r.consoles[3].url, 'and so is a row already moved by hand');
+  assert.equal('http://huginn:8088/', r.consoles[4].url, 'a row the owner made is not a seed row, whatever it points at');
+});
+
+test('re-seeding twice changes nothing the second time', () => {
+  const once = consoles.migrateSeedUrls(consoles.seedConsoles(null, 100), '100.97.198.90');
+  assert.equal(4, once.changed.length, 'precondition: a pre-D10 store is four stale rows');
+  assert.deepEqual([], consoles.migrateSeedUrls(once.consoles, '100.97.198.90').changed,
+    'the file is rewritten once, not on every load');
+});
+
+test('a daemon with no address of its own re-points nothing', () => {
+  assert.deepEqual([], consoles.migrateSeedUrls(consoles.seedConsoles(null, 100), '').changed,
+    'there is nowhere better to move them to, so they are left alone');
+  assert.deepEqual([], consoles.migrateSeedUrls(consoles.seedConsoles(null, 100), '0.0.0.0').changed,
+    'and a wildcard bind is not an address either');
 });
 
 // ------------------------------------------------------------ the approval card
@@ -485,6 +575,64 @@ test('the store seeds once, and an owner who empties it is not argued with', () 
     assert.equal(0, store.list().length);
     assert.equal(0, store.list().length, 'and listing again does not put them back');
     assert.equal(0o600, fs.statSync(consoles.storePath(dir)).mode & 0o777, 'tmp+rename at 0600 like every other store here');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a store that has never existed seeds straight at the address it was given', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-seedaddr-'));
+  try {
+    const store = consoles.createStore({ dir, hostAddr: '127.0.0.1', fetch: async () => { throw new Error('no probing'); } });
+    store.stop();
+    assert.deepEqual([
+      'http://127.0.0.1:8088/', 'http://127.0.0.1:8091/', 'http://127.0.0.1:8092/', 'http://127.0.0.1:8093/',
+    ], store.list().map((c) => c.url));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the store re-points the rows a pre-D10 daemon wrote, once, and says so', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-reseed-'));
+  try {
+    // Exactly what a daemon before this fix left on disk.
+    consoles.writeEnvelope(dir, { schema: consoles.SCHEMA, seeded: true, consoles: consoles.seedConsoles(null, 100) });
+    const lines = [];
+    const store = consoles.createStore({
+      dir,
+      hostAddr: '100.97.198.90',
+      log: (l) => lines.push(l),
+      fetch: async () => { throw new Error('no probing'); },
+    });
+    store.stop();
+    assert.deepEqual([
+      'http://100.97.198.90:8088/', 'http://100.97.198.90:8091/',
+      'http://100.97.198.90:8092/', 'http://100.97.198.90:8093/',
+    ], store.list().map((c) => c.url));
+    const onDisk = JSON.parse(fs.readFileSync(consoles.storePath(dir), 'utf8'));
+    assert.equal('http://100.97.198.90:8088/', onDisk.consoles[0].url, 'and it survived the trip through the file');
+    assert.equal(1, lines.length, `one journal line, not one per load — got ${JSON.stringify(lines)}`);
+
+    // ⚠ load() is called by every read path here. A migration that fired on each
+    // one would rewrite the store forever and log forever with it.
+    store.list(); store.rows(); store.get('armap');
+    assert.equal(1, lines.length, 'said once');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a row the owner re-pointed survives a daemon that learned its own address', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-reseed-'));
+  try {
+    const seeded = consoles.seedConsoles(null, 100);
+    seeded[1] = consoles.buildRecord({ ...seeded[1], url: 'http://huginn:8091/trainer' }, 100);
+    consoles.writeEnvelope(dir, { schema: consoles.SCHEMA, seeded: true, consoles: seeded });
+    const store = consoles.createStore({ dir, hostAddr: '100.97.198.90', fetch: async () => { throw new Error('no probing'); } });
+    store.stop();
+    assert.equal('http://huginn:8091/trainer', store.get('jtyper').url, 'their edit is not a seed to be re-applied');
+    assert.equal('http://100.97.198.90:8088/', store.get('armap').url, 'and its untouched sibling still moves');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
