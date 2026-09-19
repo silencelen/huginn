@@ -14,7 +14,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.localTimeFormat
 import com.silencelen.huginn.ui.RowTimeTooltip
@@ -63,7 +62,11 @@ fun Tip(text: String, modifier: Modifier = Modifier, content: @Composable () -> 
         // 400ms: long enough that sweeping the pointer across a list does not
         // trail popups, short enough to feel like an answer rather than a wait.
         delayMillis = 400,
-        tooltipPlacement = TooltipPlacement.CursorPoint(offset = DpOffset(12.dp, 16.dp)),
+        // ⚠ THE OFFSET IS SHARED WITH THE LINK PEEK'S, and it must differ from
+        // it: both popups are reachable at one cursor — this wraps every
+        // transcript row, the peek wraps a link inside one — and they used to sit
+        // at the same point, so this card covered the URL. See [CursorOverlays].
+        tooltipPlacement = TooltipPlacement.CursorPoint(offset = CursorOverlays.ROW_TIP),
         content = content,
     )
 }
