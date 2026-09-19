@@ -1,5 +1,11 @@
 # Huginn changelog
 
+## 3.5.2 — 2026-09-18
+
+- The route form's placeholder is `huginn.example.net` instead of an `example.ts.net` name: the
+  devstore's string scan reads any `.ts.net` host in the APK as a private endpoint and held 3.5.1
+  back at last-known-good. Same RFC 2606 example domain, nothing else changes.
+
 ## 3.5.1 — 2026-09-18
 
 A read-only walk of 3.5.0 on the Fold, and what it found.

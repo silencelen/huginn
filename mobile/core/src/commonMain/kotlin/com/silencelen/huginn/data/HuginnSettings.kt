@@ -188,7 +188,7 @@ interface HuginnSettings {
          * `.example.` is reserved (RFC 2606) and resolves nowhere, so this cannot
          * become a live address by accident.
          */
-        const val ROUTE_URL_PLACEHOLDER: String = "https://huginn.example.ts.net:8787"
+        const val ROUTE_URL_PLACEHOLDER: String = "https://huginn.example.net:8787"
         const val DEFAULT_FONT_SCALE: Float = 9f
 
         /** The bounds a font scale is clamped to, wherever it is set from. */
