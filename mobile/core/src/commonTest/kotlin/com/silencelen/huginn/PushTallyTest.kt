@@ -118,8 +118,11 @@ class PushTallyTest {
         assertFalse(r.rebaselined)
     }
 
-    @Test
-    fun `the note is one line and names the cause`() {
-        assertEquals("host counter restarted — re-baselined", PushTally.REBASELINED_NOTE)
-    }
+    /**
+     * The wording moved. `REBASELINED_NOTE` was a terse line printed BELOW the
+     * two totals it explained; the re-baseline is now a clause inside
+     * `DeliveryCopy.pushCounts`'s provenance sentence, beside the lifetime it
+     * belongs with, and `DeliveryCopyTest` holds it there. What stays here is
+     * the RECONCILIATION — this object's actual job.
+     */
 }

@@ -234,6 +234,51 @@ class RouteResolverTest {
         assertEquals(false, RouteHealth(lastOkAt = 1, lastFailAt = 2).reachable)
     }
 
+    // ------------------------------------------------- ordinary traffic
+
+    /**
+     * ⚠⚠ THE WITNESS IS A SEPARATE FIELD FROM THE PROBE'S, AND THAT IS THE WHOLE
+     * POINT. `lastOkAt` is read by [RouteResolver.HYSTERESIS_MS] — a route that
+     * answered within the last minute is not re-interrogated — so writing
+     * ordinary traffic into it would mean the three-failures-in-a-row re-probe,
+     * which by definition happens seconds after the last success, would find the
+     * active route "fresh" and never sweep. A laptop that moved networks would
+     * stay broken exactly as it did before the re-probe existed.
+     */
+    @Test
+    fun `ordinary traffic marks the route reached without feeding the hysteresis`() {
+        val touched = RouteResolver.touch(emptyMap(), "r0", NOW)
+        assertEquals(NOW, touched.getValue("r0").lastSeenAt)
+        assertEquals(0L, touched.getValue("r0").lastOkAt, "the probe's own record is not forged")
+        assertEquals(true, touched.getValue("r0").reachable, "traffic that worked is proof it is reachable")
+    }
+
+    @Test
+    fun `a touch never moves the clock backwards and never invents a route`() {
+        val held = mapOf("r0" to RouteHealth(lastSeenAt = NOW))
+        assertEquals(held, RouteResolver.touch(held, "r0", NOW - 5_000), "an older success may not win")
+        assertEquals(held, RouteResolver.touch(held, null, NOW), "nothing active, nothing to record")
+        assertEquals(held, RouteResolver.touch(held, "  ", NOW), "a blank id is not a route")
+        assertEquals(held, RouteResolver.touch(held, "r0", 0), "no clock, no witness")
+    }
+
+    @Test
+    fun `a touch leaves the probe's failure standing until traffic is newer than it`() {
+        val failed = mapOf("r0" to RouteHealth(lastFailAt = NOW))
+        assertEquals(false, failed.getValue("r0").reachable)
+        assertEquals(
+            true,
+            RouteResolver.touch(failed, "r0", NOW + 1_000).getValue("r0").reachable,
+            "traffic AFTER the failed probe is the newer evidence",
+        )
+        assertEquals(
+            false,
+            RouteResolver.touch(mapOf("r0" to RouteHealth(lastFailAt = NOW)), "r0", NOW - 1_000)
+                .getValue("r0").reachable,
+            "traffic from before it is not",
+        )
+    }
+
     // ----------------------------------------------------- failure counter
 
     /**

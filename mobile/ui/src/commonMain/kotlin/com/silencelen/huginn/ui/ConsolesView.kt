@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -60,9 +62,23 @@ fun ConsolesView(
     onEdit: ((Console) -> Unit)? = null,
     /** Hands the approval's whole text to the shell's clipboard. */
     onCopyApproval: ((String) -> Unit)? = null,
+    /**
+     * Whether THIS view owns the scroll.
+     *
+     * ⚠ EXACTLY ONE OWNER PER SHELL, and the default is "not me" because the
+     * desktop's is already there. The phone hosted this column in a plain
+     * `Box(fillMaxSize())` and the page could not scroll at all: the approval
+     * card's remaining commands, its note and its only control — Copy steps —
+     * sat below the fold with no gesture that would reach them. The desktop pane
+     * wraps the same view in `ReadingPane`, which IS a `verticalScroll`, so a
+     * view that scrolled unconditionally would nest two of them there — which
+     * Compose answers by swallowing the gesture rather than by throwing.
+     */
+    scroll: Boolean = false,
 ) {
     val applied = ConsoleRules.approvalApplied(approval)
-    Column(modifier.fillMaxWidth()) {
+    val scrollState = rememberScrollState()
+    Column(modifier.fillMaxWidth().let { if (scroll) it.verticalScroll(scrollState) else it }) {
         if (header != null) {
             Text(
                 header,
