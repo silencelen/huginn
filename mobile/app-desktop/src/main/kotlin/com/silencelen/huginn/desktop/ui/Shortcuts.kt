@@ -270,6 +270,11 @@ fun shortcutHelp(traySupported: Boolean): List<Pair<String, String>> = SHORTCUT_
 val SHORTCUT_HELP: List<Pair<String, String>> = listOf(
     "Enter" to "Send the message you are typing",
     "Shift Enter" to "New line instead of sending",
+    // Said here because the composer's placeholder is one ellipsised line and
+    // cannot carry it, and because Tab moving the focus ring is the change a
+    // reader is most likely to go looking for a note about.
+    "Tab / Shift Tab" to "Move to the next / previous control (Send, clip, chips)",
+    "Ctrl Tab" to "Type a real tab character into the message",
     "Ctrl K" to "Find a chat or session",
     "Ctrl 1 / 2 / 3" to "Chats / Sessions / Status",
     "Ctrl ," to "Settings",
