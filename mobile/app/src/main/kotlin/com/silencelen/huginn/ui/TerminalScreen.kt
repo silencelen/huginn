@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -82,6 +83,15 @@ fun TerminalScreen(
     onSendText: (String, Boolean) -> Unit,
     onSendKeys: (List<String>) -> Unit,
     onLive: (LiveInput.Op) -> Unit,
+    /**
+     * Live typing turned on or off.
+     *
+     * ⚠ HOISTED PURELY FOR THE PANE-SIZE LEASE (owner decision 52). `liveTyping`
+     * below is per-visit view state and stays here, but the view model is the one
+     * that builds the screen poll, and only a poll made in live mode may claim the
+     * owner's tmux window. Defaulted so nothing else has to care.
+     */
+    onLiveMode: (Boolean) -> Unit = {},
     micGranted: Boolean,
     onRequestMic: () -> Unit,
     onForceResize: () -> Unit,
@@ -93,6 +103,10 @@ fun TerminalScreen(
     // keystroke, instead of composing in the bubble and sending. Per-visit rather
     // than persisted: it is a way of leaning in, not a configuration.
     var liveTyping by rememberSaveable(session) { mutableStateOf(false) }
+    // Both directions, and on leaving the composition: the lease must not outlive
+    // the keyboard that justified it.
+    LaunchedEffect(session, liveTyping) { onLiveMode(liveTyping) }
+    DisposableEffect(session) { onDispose { onLiveMode(false) } }
     // Optimistic echo state for live typing; rules live in LocalEcho (pure).
     var echo by remember(session) { mutableStateOf(LocalEcho.Echo()) }
     var prevCursor by remember(session) { mutableStateOf<Pair<Int, Int>?>(null) }
