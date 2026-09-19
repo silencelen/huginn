@@ -61,6 +61,10 @@ fun ConsolesScreen(
             onProbe = onProbe,
             onEdit = { editing = it },
             onCopyApproval = onCopyApproval,
+            // ⚠ THIS DESTINATION IS THE SCROLL. Nothing else on it scrolls — the
+            // approval card's remaining commands, its note and its only control,
+            // Copy steps, were simply off the bottom of the phone.
+            scroll = true,
             modifier = Modifier.fillMaxSize(),
         )
         ExtendedFloatingActionButton(

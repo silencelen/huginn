@@ -68,6 +68,9 @@ fun ProjectsScreen(
             onOpenProject = onOpenProject,
             onOpenMember = { _, live -> onOpenMember(live) },
             onCreate = null,
+            // The same rule as Consoles: this destination owns the scroll, because
+            // nothing around the tree provides one.
+            scroll = true,
         )
 
         ExtendedFloatingActionButton(
