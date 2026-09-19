@@ -127,4 +127,52 @@ class LockProbeTest {
             "no quser (it is absent on some editions) falls back to today's rule, not to a refusal")
         assertEquals(true, LockProbe.verdict("nonsense that is not a table", setOf(1)))
     }
+
+    // ------------------------------------------------- locked vs unknowable
+    //
+    // ⚠⚠ "COULD NOT ANSWER" IS NOT "LOCKED", and conflating them cost the owner a
+    // whole class of machine. `loginctl show-session self -p LockedHint` exits
+    // non-zero with *"Caller does not belong to any known session"* on a box with
+    // no logind session at all — an LXC, a container, `startx` without
+    // `pam_systemd`, a kiosk — the probe folds stderr in, and `!contains(
+    // "lockedhint=no")` read that sentence as a locked screen. The device row sat
+    // `locked: true, effectiveScope: look` forever and Settings told the reader to
+    // unlock a machine with no screen.
+    //
+    // The FENCE is unchanged: unknown is still locked, still read-only, still no
+    // Act. What changed is that the reading says which of the two it is.
+
+    @Test
+    fun theLinuxProbeTellsLockedApartFromUnanswerable() {
+        assertEquals(LockProbe.Reading.UNLOCKED, LockProbe.linuxReading("lockedhint=no"))
+        assertEquals(LockProbe.Reading.LOCKED, LockProbe.linuxReading("lockedhint=yes"))
+        assertEquals(
+            LockProbe.Reading.UNKNOWN,
+            LockProbe.linuxReading("caller does not belong to any known session"),
+            "no logind session is not a locked screen — this is the whole bug",
+        )
+        assertEquals(LockProbe.Reading.UNKNOWN, LockProbe.linuxReading(null), "loginctl is not installed")
+        assertEquals(LockProbe.Reading.UNKNOWN, LockProbe.linuxReading(""), "and neither is silence")
+    }
+
+    @Test
+    fun anUnknownReadingIsStillLockedToTheFence() {
+        // The policy default does not move: what a machine may DO with an
+        // unanswerable probe is exactly what it could do before.
+        assertEquals(true, LockProbe.Reading.UNKNOWN.locked)
+        assertEquals(false, LockProbe.Reading.UNKNOWN.known)
+        assertEquals(true, LockProbe.Reading.LOCKED.locked)
+        assertEquals(true, LockProbe.Reading.LOCKED.known, "a locked screen IS an answer")
+        assertEquals(false, LockProbe.Reading.UNLOCKED.locked)
+        assertEquals(true, LockProbe.Reading.UNLOCKED.known)
+    }
+
+    @Test
+    fun theWindowsProbeSaysUnknownWhenItCouldNotAsk() {
+        assertEquals(LockProbe.Reading.UNKNOWN, LockProbe.reading(rdpActive, null),
+            "without the lock screens nothing can be ruled out, and nothing was read either")
+        assertEquals(LockProbe.Reading.LOCKED, LockProbe.reading(consoleActive, setOf(1)))
+        assertEquals(LockProbe.Reading.UNLOCKED, LockProbe.reading(rdpActive, setOf(1)))
+        assertEquals(LockProbe.Reading.UNLOCKED, LockProbe.reading(noUser, emptySet()))
+    }
 }
