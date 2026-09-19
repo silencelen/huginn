@@ -53,6 +53,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.withTimeoutOrNull
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
@@ -144,6 +145,7 @@ fun MarkdownText(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                is MdBlock.Table -> TableGrid(b)
                 is MdBlock.Image -> PathImage(b.src, b.alt, viewer)
                 is MdBlock.Code -> CodeCard(b, onCopy)
                 MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -208,6 +210,87 @@ private fun PathImage(src: String, alt: String, viewer: ImageViewerState) {
 }
 
 private val THUMB_MAX = 260.dp
+
+/**
+ * A table, drawn as a compact grid.
+ *
+ * ⚠ IT SCROLLS SIDEWAYS INSIDE ITSELF, and that is the whole shape of this
+ * composable. A table is the one thing Claude writes that has no honest narrow
+ * form: wrapping a row turns a grid into a paragraph, and letting it set its own
+ * width would make the TRANSCRIPT scroll horizontally — every message on the
+ * screen dragged sideways to read one table. The same answer the code card
+ * reached, for the same reason.
+ *
+ * The header is bold with a rule under it and nothing else: the columns are the
+ * grid, so ruling every row would be drawing the table twice.
+ */
+@Composable
+private fun TableGrid(b: MdBlock.Table) {
+    val widths = remember(b) { columnWidths(b.rows) }
+    val total = remember(widths) { widths.fold(0.dp) { acc, w -> acc + w } }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        // ⚠ EVERY CHILD IN HERE IS EXPLICITLY WIDTH-SET. Inside a horizontal
+        // scroll the incoming maxWidth is infinite, so a `fillMaxWidth()` child —
+        // the divider was one — has nothing to fill.
+        Box(Modifier.horizontalScroll(rememberScrollState())) {
+            Column(Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                b.rows.forEachIndexed { r, row ->
+                    Row {
+                        row.forEachIndexed { c, cell ->
+                            Text(
+                                cell,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = if (b.header && r == 0) FontWeight.Bold else null,
+                                color = if (b.header && r == 0) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .width(widths.getOrElse(c) { TABLE_COL_MIN })
+                                    .padding(horizontal = 5.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                    if (r == 0 && b.header) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            modifier = Modifier.width(total),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val TABLE_COL_MIN = 44.dp
+private val TABLE_COL_MAX = 210.dp
+
+/** Rough width of one character of `bodySmall`, plus a cell's own padding. */
+private const val TABLE_CHAR_DP = 6.6f
+private const val TABLE_CELL_PAD_DP = 12f
+
+/**
+ * How wide a table column is drawn, from the longest cell in it.
+ *
+ * AN ESTIMATE, DELIBERATELY. Measuring text to size a column needs a
+ * SubcomposeLayout and two passes over every cell, on a surface that re-renders
+ * on every streamed delta. The cost of being wrong is bounded in the direction
+ * that matters: a cell that overruns its estimate WRAPS inside its column, so a
+ * bad guess buys a taller row and never a cut word.
+ */
+fun tableColumnWidth(longestCellChars: Int): Dp =
+    (longestCellChars * TABLE_CHAR_DP + TABLE_CELL_PAD_DP).dp.coerceIn(TABLE_COL_MIN, TABLE_COL_MAX)
+
+/** One width per column, from the longest cell anywhere in that column. */
+internal fun columnWidths(rows: List<List<androidx.compose.ui.text.AnnotatedString>>): List<Dp> {
+    val columns = rows.firstOrNull()?.size ?: 0
+    return List(columns) { c ->
+        tableColumnWidth(rows.maxOfOrNull { it.getOrNull(c)?.text?.length ?: 0 } ?: 0)
+    }
+}
 
 /**
  * Text that may carry link spans, plus the reveal of where a link goes.
