@@ -280,17 +280,32 @@ fun SettingsReadOnlyRow(
     value: String? = null,
     summary: String? = null,
     highlighted: Boolean = false,
+    /**
+     * How many lines the value may wrap onto. Two suits a version or a state
+     * word; a PATH wants more, because the half that identifies it is the end.
+     */
+    maxLines: Int = 2,
+    /**
+     * Offered when the value is worth having in a paste buffer rather than only
+     * on screen — a log path, an install directory, an id. Null draws nothing.
+     */
+    onCopy: (() -> Unit)? = null,
 ) {
     RowFrame(id, title, summary, highlighted, modifier) {
-        if (!value.isNullOrBlank()) {
-            Text(
-                value,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 320.dp),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!value.isNullOrBlank()) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = maxLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 320.dp),
+                )
+            }
+            if (onCopy != null) {
+                TextButton(onClick = onCopy) { Text("Copy") }
+            }
         }
     }
 }
