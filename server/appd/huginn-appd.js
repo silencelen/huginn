@@ -1472,9 +1472,23 @@ async function paneReadFailed(res, name) {
 // window keeps `manual` forever and every release path misses it, including the
 // sweeps. Verified on tmux 3.6b. Leases therefore record the concrete
 // `#{window_id}` (`@14`) and operate on that.
-const leases = new Map(); // session name -> {windowId, cols, rows, expiresAt}
-const LEASE_MS = 90_000;
-const LEASE_SWEEP_MS = 15_000;
+//
+// ⚠ ONE HOLDER PER SESSION, AND ONLY A CLIENT IN LIVE VIEW MAY BE IT (owner
+// decision 52). Two clients with the same session open used to report their own
+// geometry on every poll, and the last poll won: the owner's real pane was
+// measured walking 152x44 <-> 107x44 three times in ninety seconds with nobody
+// typing. So the lease now records WHOSE it is — the `X-Huginn-Client` install
+// id — and a second live client is answered with the holder's name rather than
+// being allowed to take the window off them. The holder only loses it by
+// releasing, or by going silent for [LEASE_MS].
+const leases = new Map(); // session name -> {windowId, cols, rows, clientId, expiresAt}
+// `HUGINN_APPD_LEASE_MS` is TEST-ONLY: ninety seconds is far too long to prove
+// expiry against, and a suite that waits it out is a suite nobody runs. Clamped
+// so a stray drop-in cannot pin a window for an hour or churn the sweeper.
+const LEASE_MS = Math.max(500, Math.min(600_000, Number(process.env.HUGINN_APPD_LEASE_MS) || 90_000));
+// Derived, not a second knob: at the default it is exactly the 15 s it always
+// was, and shortening the lease shortens the sweep with it.
+const LEASE_SWEEP_MS = Math.max(200, Math.min(15_000, Math.floor(LEASE_MS / 6)));
 
 async function currentWindowId(name) {
   const { err, stdout } = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{window_id}']);
@@ -1483,11 +1497,34 @@ async function currentWindowId(name) {
   return /^@\d+$/.test(id) ? id : null;
 }
 
-async function acquireSize(name, cols, rows) {
+/** Who holds this session's lease right now, or null. Expired = nobody. */
+function leaseHolder(name, now = Date.now()) {
+  const l = leases.get(name);
+  if (!l || l.expiresAt <= now) return null;
+  return l;
+}
+
+/**
+ * Take or renew the lease for [clientId].
+ *
+ * @returns {{ok: boolean, heldBy: string|null}} `ok` false with a `heldBy` means
+ *   somebody else is in live view on this session and the window is theirs. It
+ *   is not an error — the caller still serves the screen, at the holder's size.
+ */
+async function acquireSize(name, cols, rows, clientId = '') {
   cols = Math.max(20, Math.min(300, Math.floor(cols)));
   rows = Math.max(10, Math.min(200, Math.floor(rows)));
+
+  // ⚠ THE OWNERSHIP CHECK COMES FIRST, BEFORE ANY TMUX CALL. Asking tmux for the
+  // window id of a session somebody else is holding is work done to reach a
+  // refusal, and on the flapping path it was three processes per poll per client.
+  const holder = leaseHolder(name);
+  if (holder && (holder.clientId || '') !== (clientId || '')) {
+    return { ok: false, heldBy: holder.clientId || null };
+  }
+
   const windowId = await currentWindowId(name);
-  if (!windowId) return false;
+  if (!windowId) return { ok: false, heldBy: null };
 
   const cur = leases.get(name);
   // A window switch makes the old lease stale: hand that window back before
@@ -1500,13 +1537,13 @@ async function acquireSize(name, cols, rows) {
   const held = leases.get(name);
   if (!held || held.cols !== cols || held.rows !== rows) {
     const a = await run('tmux', ['set-option', '-t', windowId, 'window-size', 'manual']);
-    if (a.err) return false;
+    if (a.err) return { ok: false, heldBy: null };
     const b = await run('tmux', ['resize-window', '-t', windowId, '-x', String(cols), '-y', String(rows)]);
-    if (b.err) { await releaseWindow(windowId, name); leases.delete(name); return false; }
-    log(`lease ${name} ${windowId} -> ${cols}x${rows}`);
+    if (b.err) { await releaseWindow(windowId, name); leases.delete(name); return { ok: false, heldBy: null }; }
+    log(`lease ${name} ${windowId} -> ${cols}x${rows}${clientId ? ` (${clientId})` : ''}`);
   }
-  leases.set(name, { windowId, cols, rows, expiresAt: Date.now() + LEASE_MS });
-  return true;
+  leases.set(name, { windowId, cols, rows, clientId: clientId || '', expiresAt: Date.now() + LEASE_MS });
+  return { ok: true, heldBy: clientId || null };
 }
 
 /** Unsetting restores the inherited default and tmux re-fits any client at once. */
@@ -1515,8 +1552,19 @@ async function releaseWindow(windowId, label) {
   log(`lease released: ${label} ${windowId}`);
 }
 
-async function releaseSize(name) {
+/**
+ * Hand the window back.
+ *
+ * @param byClientId  null for the daemon's OWN release paths (the sweeper, a
+ *   session ending, shutdown) — those release unconditionally. A string is a
+ *   client asking, and a client may only release its own lease: one viewer
+ *   leaving its screen tab must not yank the window out from under another
+ *   viewer who is typing into it.
+ * @returns whether anything was actually released.
+ */
+async function releaseSize(name, byClientId = null) {
   const l = leases.get(name);
+  if (l && byClientId !== null && (l.clientId || '') !== byClientId) return false;
   leases.delete(name);
   if (l) await releaseWindow(l.windowId, name);
   else {
@@ -1524,6 +1572,7 @@ async function releaseSize(name) {
     const id = await currentWindowId(name);
     if (id) await releaseWindow(id, name);
   }
+  return true;
 }
 
 setInterval(() => {
@@ -2846,11 +2895,19 @@ function promptFor(name, lines) {
 
 /**
  * @param name    session
- * @param opts.cols/rows  request this geometry (takes/renews a lease)
+ * @param opts.cols/rows  the viewer's geometry. Only reshapes tmux when
+ *   `opts.live` is set; otherwise it is the viewer describing itself, not
+ *   asking for anything.
+ * @param opts.live       the caller is in LIVE VIEW — the mode that sends keys.
+ *   THE ONLY THING THAT TAKES A LEASE (owner decision 52). A client that is
+ *   merely displaying the pane reads it as it is.
+ * @param opts.clientId   `X-Huginn-Client`; who the lease would belong to.
  * @param opts.history    include this many scrollback lines above the screen
  * @param opts.force      resize even though another client is attached
  */
-async function captureScreen(name, { cols = null, rows = null, history = 0, force = false } = {}) {
+async function captureScreen(name, {
+  cols = null, rows = null, history = 0, force = false, live = false, clientId = '',
+} = {}) {
   const fmt = '#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}\t#{session_attached}\t' +
     '#{alternate_on}\t#{history_size}\t#{window-size}';
   let dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
@@ -2859,7 +2916,11 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
 
   // Refuse to shrink a window somebody is actually looking at unless told to.
   let resizeBlocked = false;
-  if (cols && rows) {
+  // ⚠ `live` GATES THE WHOLE BLOCK, and that is the change. `cols`/`rows` still
+  // arrive on every poll — the clients report what they can draw, and the
+  // capture below is of a pane that may now be a different shape than the
+  // viewer — but describing yourself is not the same as claiming the window.
+  if (cols && rows && live) {
     // "Blocked" means a resize is NEEDED and refused — not merely that a client is
     // attached. The distinction is what fixes the returning banner: after "fit
     // anyway" forced the resize, every later poll still had an attached client, so
@@ -2872,10 +2933,10 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
       // Already fits. Renew a lease we hold so the sweeper does not hand the
       // window back mid-view; if we hold none, the size is somebody else's doing
       // and setting `manual` on their window would be a real change, not a renewal.
-      if (leases.has(name)) await acquireSize(name, cols, rows);
+      if (leases.has(name)) await acquireSize(name, cols, rows, clientId);
     } else if (attached > 0 && !force) {
       resizeBlocked = true;
-    } else if (await acquireSize(name, cols, rows)) {
+    } else if ((await acquireSize(name, cols, rows, clientId)).ok) {
       // Only re-read geometry when the resize actually changed something; a
       // renewal of an identical lease issues no tmux command and cannot have
       // moved the pane.
@@ -2908,6 +2969,11 @@ async function captureScreen(name, { cols = null, rows = null, history = 0, forc
     historySize: Number(hist),
     windowSize: wsize,
     sizeLeased: leases.has(name),
+    // WHOSE lease it is, so a client that asked for one and did not get it can
+    // say so truthfully instead of drawing a "leased here" mark over somebody
+    // else's claim. Null with `sizeLeased` true means a holder that sent no
+    // install id (an older client) — still held, just not nameable.
+    leaseHeldBy: (leases.get(name) || {}).clientId || null,
     resizeBlocked,
     lines,
     scrollback,
@@ -9543,6 +9609,12 @@ const server = http.createServer(async (req, res) => {
         rows: Number(q.get('rows')) || null,
         history: Number(q.get('history')) || 0,
         force: q.get('force') === '1',
+        // ⚠ THE DECLARATION OF LIVE VIEW. Absent — which is every client built
+        // before this — means "render the pane as it is": those clients stop
+        // resizing panes, which is the point. Only the surface that is actually
+        // typing sends it.
+        live: q.get('live') === '1',
+        clientId: String(req.headers['x-huginn-client'] || '').trim().slice(0, 64),
       };
       // Long poll: hold the request until the screen actually differs from what
       // the phone already has. An idle session then costs one parked request
@@ -9580,6 +9652,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, {
           unchanged: true, hash: scr.hash, width: scr.width, height: scr.height,
           attachedClients: scr.attachedClients, sizeLeased: scr.sizeLeased,
+          leaseHeldBy: scr.leaseHeldBy,
           resizeBlocked: scr.resizeBlocked,
         });
       }
@@ -9588,9 +9661,20 @@ const server = http.createServer(async (req, res) => {
 
     // Explicitly hand the pane size back to tmux (so an attached laptop re-fits
     // immediately rather than waiting for the lease to lapse).
+    //
+    // ⚠ ONLY THE HOLDER'S RELEASE COUNTS. Every client calls this when it leaves
+    // its screen tab, and a client that never held the lease calling it used to
+    // release whoever did — the second half of the flap, and the reason a viewer
+    // switching tabs could unpin a window somebody else was typing into.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/size$/)) && req.method === 'DELETE') {
-      await releaseSize(m[1]);
-      return sendJson(res, 200, { ok: true });
+      const who = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
+      const released = await releaseSize(m[1], who);
+      // Not an error: a client releasing something it does not hold has simply
+      // done nothing, which is exactly what it wanted from its own point of view.
+      return sendJson(res, 200, {
+        ok: true, released,
+        leaseHeldBy: (leases.get(m[1]) || {}).clientId || null,
+      });
     }
 
     // Structured conversation for a tmux session, straight from its Claude Code

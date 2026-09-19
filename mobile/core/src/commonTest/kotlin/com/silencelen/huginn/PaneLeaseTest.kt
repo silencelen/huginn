@@ -15,7 +15,8 @@ import kotlin.test.assertNull
  */
 class PaneLeaseTest {
 
-    private val open = PaneLease.wanted("sess", visible = true, wantsGrid = true, cols = 120, rows = 40)
+    private val open =
+        PaneLease.wanted("sess", visible = true, wantsGrid = true, live = true, cols = 120, rows = 40)
 
     @Test
     fun aVisibleGridViewWantsItsMeasuredGeometry() {
@@ -26,32 +27,36 @@ class PaneLeaseTest {
     fun aHiddenWindowWantsNothing() {
         // The failure this whole object exists for: minimize, keep polling, pin
         // someone else's window for as long as the app runs.
-        assertNull(PaneLease.wanted("sess", visible = false, wantsGrid = true, cols = 120, rows = 40))
+        assertNull(PaneLease.wanted("sess", visible = false, wantsGrid = true, live = true,
+            cols = 120, rows = 40))
     }
 
     @Test
     fun aConversationViewWantsNothing() {
         // Reading the transcript does not need tmux reshaped, so it must not lease.
-        assertNull(PaneLease.wanted("sess", visible = true, wantsGrid = false, cols = 120, rows = 40))
+        assertNull(PaneLease.wanted("sess", visible = true, wantsGrid = false, live = true,
+            cols = 120, rows = 40))
     }
 
     @Test
     fun noSessionWantsNothing() {
-        assertNull(PaneLease.wanted(null, visible = true, wantsGrid = true, cols = 120, rows = 40))
+        assertNull(PaneLease.wanted(null, visible = true, wantsGrid = true, live = true,
+            cols = 120, rows = 40))
     }
 
     @Test
     fun anUnmeasuredGridWantsNothing() {
         // Before the first layout pass there is no honest answer, and guessing one
         // leases a size, then leases a second size a frame later.
-        assertNull(PaneLease.wanted("sess", visible = true, wantsGrid = true, cols = null, rows = null))
+        assertNull(PaneLease.wanted("sess", visible = true, wantsGrid = true, live = true,
+            cols = null, rows = null))
     }
 
     @Test
     fun geometryIsClampedToWhatTheDaemonAccepts() {
-        val small = PaneLease.wanted("s", true, true, 4, 2)
+        val small = PaneLease.wanted("s", true, true, true, 4, 2)
         assertEquals(PaneLease.Want("s", 20, 10), small)
-        val huge = PaneLease.wanted("s", true, true, 9_000, 9_000)
+        val huge = PaneLease.wanted("s", true, true, true, 9_000, 9_000)
         assertEquals(PaneLease.Want("s", 300, 200), huge)
     }
 
@@ -70,7 +75,7 @@ class PaneLeaseTest {
 
     @Test
     fun switchingSessionReleasesThePreviousOne() {
-        val other = PaneLease.wanted("other", true, true, 80, 24)
+        val other = PaneLease.wanted("other", true, true, true, 80, 24)
         assertEquals("sess", PaneLease.toRelease("sess", other))
     }
 
@@ -78,8 +83,76 @@ class PaneLeaseTest {
     fun aResizeOfTheSameSessionIsNotARelease() {
         // The daemon replaces the geometry in place; releasing between sizes would
         // hand the window back and re-take it on every drag step.
-        val resized = PaneLease.wanted("sess", true, true, 100, 30)
+        val resized = PaneLease.wanted("sess", true, true, true, 100, 30)
         assertNull(PaneLease.toRelease("sess", resized))
+    }
+
+    // -------------------------------------------- live view is what leases
+
+    /**
+     * OWNER DECISION 52, as the one rule everything else reduces to.
+     *
+     * Two clients with the same session open, neither typing, walked the owner's
+     * real pane 152x44 <-> 107x44 three times in ninety seconds — each poll
+     * reporting its own geometry, the last poll winning. Watching a pane is not a
+     * reason to reshape somebody's terminal.
+     */
+    @Test
+    fun aGridThatIsOnlyBeingWatchedLeasesNothing() {
+        assertNull(
+            PaneLease.wanted("sess", visible = true, wantsGrid = true, live = false,
+                cols = 120, rows = 40),
+            "a visible, measured, foreground pane still may not claim the window",
+        )
+    }
+
+    @Test
+    fun enteringLiveViewIsWhatTakesTheLease() {
+        assertEquals(
+            PaneLease.Want("sess", 120, 40),
+            PaneLease.wanted("sess", visible = true, wantsGrid = true, live = true,
+                cols = 120, rows = 40),
+        )
+    }
+
+    @Test
+    fun leavingLiveViewReleasesWhatWasHeld() {
+        // The exit path: the reader taps out of the keyboard mode but stays on the
+        // tab. `wanted` goes null, and `toRelease` therefore hands the window back
+        // without the view being torn down at all.
+        val watching = PaneLease.wanted("sess", true, true, live = false, cols = 120, rows = 40)
+        assertEquals("sess", PaneLease.toRelease("sess", watching))
+    }
+
+    @Test
+    fun aWatchedGridStillReportsItsSize() {
+        // REPORTING IS NOT CLAIMING. The daemon captures the pane as it is; the
+        // geometry still travels so a client can say what it can draw, and the
+        // separation is what lets the lease go without the view going blind.
+        assertEquals(
+            PaneLease.Want("sess", 120, 40),
+            PaneLease.reported("sess", visible = true, wantsGrid = true, cols = 120, rows = 40),
+        )
+        assertNull(PaneLease.reported("sess", visible = false, wantsGrid = true, 120, 40))
+    }
+
+    // ------------------------------------------- the phone's shape of it
+
+    @Test
+    fun aPhonePollReportsItsGridAndClaimsNothingUntilLive() {
+        val watching = PaneLease.poll(cols = 60, rows = 30, liveView = false)
+        assertEquals(PaneLease.Poll(60, 30, live = false), watching,
+            "the Screen tab merely on display must not lease")
+        val typing = PaneLease.poll(cols = 60, rows = 30, liveView = true)
+        assertEquals(PaneLease.Poll(60, 30, live = true), typing)
+    }
+
+    @Test
+    fun aPhonePollWithNoMeasurementClaimsNothing() {
+        // Live mode entered before the first layout pass: there is no geometry to
+        // lease at, and claiming one at null would be claiming a guess.
+        assertEquals(PaneLease.Poll(null, null, live = false),
+            PaneLease.poll(cols = null, rows = null, liveView = true))
     }
 }
 

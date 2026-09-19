@@ -388,6 +388,15 @@ data class Screen(
     val historySize: Int = 0,
     val windowSize: String? = null,
     val sizeLeased: Boolean = false,
+    /**
+     * The install id of whoever holds the pane-size lease, or null for nobody.
+     *
+     * Null WITH [sizeLeased] true means a holder that sent no id (a client older
+     * than the named lease). Present and not this client's own id means the
+     * window belongs to another live viewer and this client's geometry was not
+     * applied — the one thing a "leased here" mark must not claim otherwise.
+     */
+    val leaseHeldBy: String? = null,
     /** True when a resize was refused because another client is attached. */
     val resizeBlocked: Boolean = false,
     val hash: String? = null,

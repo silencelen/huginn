@@ -221,8 +221,8 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | POST | `/v1/sessions` | `{name}`; letters/digits/underscore, canonically lowercase |
 | DELETE | `/v1/sessions/<name>` | kill-session |
 | POST | `/v1/sessions/<name>/rename` | `{name}`; moves the state file with it |
-| GET | `/v1/sessions/<name>/screen` | `?cols=&rows=` leases a resize, `?history=` adds scrollback, `?hash=&wait=` long-polls, `?force=1` resizes past an attached client |
-| DELETE | `/v1/sessions/<name>/size` | release the resize lease now |
+| GET | `/v1/sessions/<name>/screen` | `?cols=&rows=` report the viewer's grid (descriptive; the pane is captured as it is), `?live=1` additionally takes the pane-size LEASE and resizes tmux — one holder per session, keyed on `X-Huginn-Client`, and a second live client is answered with `leaseHeldBy` rather than taking it; `?history=` adds scrollback, `?hash=&wait=` long-polls, `?force=1` resizes past an attached client |
+| DELETE | `/v1/sessions/<name>/size` | release the resize lease now; only the holder's release counts (`{released}` says whether it did) |
 | GET | `/v1/sessions/<name>/transcript` | structured events; `?offset=` tails |
 | POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`; keys validated against an allowlist. A scratchpad is sent as a PATH the pane's Claude can read, not as its text — `null` means Main. Text up to 100,000 chars, delivered by bracketed paste, and QUEUED until a real turn boundary so it is never spliced into the answer being written; interrupt keys are never queued |
 | GET | `/v1/sessions/<name>/typing` | what is waiting to be typed into this session and why it has not gone yet |
