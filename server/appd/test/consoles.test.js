@@ -412,9 +412,10 @@ test('the approval card carries exactly the commands the contract names, and app
     'systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
     'systemctl edit jtyper-trainer.service   # same',
     'systemctl edit boardserver.service      # same',
-    'systemctl restart armap jtyper-trainer boardserver',
-    "ss -ltnp | grep -E '8088|8091|8092'",
-  ], card.steps[0].commands, 'btc15m-sim is absent because it already falls back to 0.0.0.0');
+    'systemctl edit btc15m-sim.service       # same, but its bind is in sim/app.py, not the unit',
+    'systemctl restart armap jtyper-trainer boardserver btc15m-sim',
+    "ss -ltnp | grep -E '8088|8091|8092|8093'",
+  ], card.steps[0].commands, 'all four, because all four bind the tailnet address');
 
   assert.equal('/etc/pve/firewall/117.fw', card.steps[1].file);
   assert.deepEqual([
@@ -424,6 +425,43 @@ test('the approval card carries exactly the commands the contract names, and app
     'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8093 -log nolog',
   ], card.steps[1].commands, 'one source, one port each — the convention already in that file');
   assert.equal('heimdall', card.steps[1].where, 'another machine entirely, which this daemon never touches');
+});
+
+test('the rebind step names every unit, and claims nothing about any of them', () => {
+  // ⚠ D11. The card used to exempt btc15m-sim as "already binds 0.0.0.0" while
+  // its own firewall step opened 8093 — two halves of one card disagreeing
+  // about the same service. `ss -ltn` says 100.97.198.90:8093: the 0.0.0.0 in
+  // sim/app.py is the FALLBACK for a host with no tailscale address, not what
+  // it does here. The list is now simply all four, which is also the only
+  // version of it this daemon could ever check.
+  const card = consoles.approvalCard(false, '/tmp/marker');
+  const rebind = card.steps.find((s) => s.id === 'rebind');
+  for (const unit of ['armap', 'jtyper-trainer', 'boardserver', 'btc15m-sim']) {
+    assert.ok(rebind.commands.some((c) => c.includes(`systemctl edit ${unit}.service`)), `${unit} must be named`);
+    assert.ok(rebind.commands.some((c) => c.startsWith('systemctl restart') && c.includes(unit)),
+      `${unit} must be restarted by the same step that edits it`);
+  }
+  assert.ok(!/\balready\b/i.test(JSON.stringify(card)),
+    'no unit is claimed to be done already — this daemon cannot see any host but its own, and was wrong about this one');
+
+  // The two halves have to cover the same set of ports, which is the drift
+  // that produced D11 in the first place.
+  const ports = (text) => (text.match(/8\d{3}/g) || []).filter((v, i, a) => a.indexOf(v) === i).sort();
+  assert.deepEqual(['8088', '8091', '8092', '8093'], ports(rebind.commands.join(' ')));
+  assert.deepEqual(['8088', '8091', '8092', '8093'],
+    ports(card.steps.find((s) => s.id === 'firewall').commands.join(' ')),
+    'the firewall block still opens one port per unit, and every unit the rebind names');
+});
+
+test('the card says where the probe runs and what applying it would change', () => {
+  // The old copy said the probe "can reach them" and your devices cannot. Half
+  // of that was false for the entire life of the feature (D10): nothing could
+  // reach them, from anywhere. What is true is where the probe runs.
+  const { why } = consoles.approvalCard(false, '/tmp/marker');
+  assert.match(why, /from the host/i, 'it must say where the probe runs');
+  assert.match(why, /phone/i, 'and what is still not true after it passes');
+  assert.match(why, /does not run these commands/i, 'and that nothing here executes (decision 47)');
+  assert.ok(!/^Three /.test(why), 'four units, not three');
 });
 
 test('nothing in the card is a verb this daemon could run', () => {
