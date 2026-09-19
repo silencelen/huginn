@@ -34,6 +34,8 @@ import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.ui.AppFormFields
 import com.silencelen.huginn.ui.AppRules
+import com.silencelen.huginn.ui.REMOVE_APP_BODY
+import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.ui.AppsView
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -205,6 +207,18 @@ private fun AppEditorDialog(
     onConfirm: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
+    // ⚠ REMOVE ASKS FIRST (D-18, decision 60). It deleted the row on the click
+    // with no dialog and no undo, while Kill and Archive both confirm by name.
+    var confirmRemove by remember(form.name) { mutableStateOf(false) }
+    if (confirmRemove && onDelete != null) {
+        RemoveConfirmDialog(
+            verb = "Remove app",
+            name = form.name.ifBlank { form.url },
+            body = REMOVE_APP_BODY,
+            onDismiss = { confirmRemove = false },
+            onConfirm = { confirmRemove = false; onDelete() },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleSmall) },
@@ -222,7 +236,7 @@ private fun AppEditorDialog(
         },
         dismissButton = {
             if (onDelete != null) {
-                TextButton(onClick = onDelete) { Text("Remove") }
+                TextButton(onClick = { confirmRemove = true }) { Text("Remove") }
             } else {
                 TextButton(onClick = onDismiss) { Text("Cancel") }
             }
