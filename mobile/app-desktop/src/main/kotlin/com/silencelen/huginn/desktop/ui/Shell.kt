@@ -72,7 +72,7 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.Console
+import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.Device
@@ -172,12 +172,12 @@ fun Shell(store: AppStore) {
     // destination that 404s is worse than one that is not offered.
     val padsAvailable by store.padsAvailable.collectAsState()
     val projects by store.projects.collectAsState()
-    val consoles by store.consoles.collectAsState()
+    val appList by store.apps.collectAsState()
     // The same probe contract as pages, and the same reading of null: not yet
     // answered hides the door, because an icon that appears and then vanishes
     // moves every icon under it while somebody is reaching for one.
     val projectsAvailable by store.projectsAvailable.collectAsState()
-    val consolesAvailable by store.consolesAvailable.collectAsState()
+    val appsAvailable by store.appsAvailable.collectAsState()
     val loaded by store.listsLoaded.collectAsState()
     // Its OWN flag. The sessions list used to be told "loaded" by the chats fetch
     // returning, so a start where chats answered and sessions did not drew "No
@@ -278,7 +278,7 @@ fun Shell(store: AppStore) {
 
     // ONE answer about what this host offers, read by the rail, the palette and
     // the window's key handler. See [railViews] for why null hides.
-    val offered = railViews(padsAvailable, projectsAvailable, consolesAvailable)
+    val offered = railViews(padsAvailable, projectsAvailable, appsAvailable)
 
     WithHuginnMenus {
         // ⚠⚠ THE FRAME HAD NO IDEA HOW WIDE IT WAS, which is the root under most
@@ -349,10 +349,14 @@ fun Shell(store: AppStore) {
                         // read as one session busier than it is.
                         projectsWaiting = projects.sumOf { it.waiting },
                         projectsBusy = projects.sumOf { it.busy },
-                        consoles = consoles.size,
+                        apps = appList.apps.size,
                         // Only a real `false`. A row nobody has probed is `null`,
-                        // and after a daemon restart that is every row.
-                        consolesDown = consoles.count { it.up == false },
+                        // and after a daemon restart that is every row. A row that
+                        // answers here but not where your devices are counts too:
+                        // it is a door the reader cannot walk through.
+                        appsDown = appList.apps.count {
+                            it.up == false || it.reachable.ok == false
+                        },
                         // The 5-hour session window, under the Status icon. Computed
                         // here because this is where both halves already are; the rail
                         // draws whatever it is handed and nothing when that is null.
@@ -555,9 +559,9 @@ fun Shell(store: AppStore) {
 
                             View.ROUNDS -> RoundsPane(store)
                             View.DEVICES -> DevicesPane(store)
-                            // Both columns, like Devices: a console row already
+                            // Both columns, like Devices: an app row already
                             // carries everything there is to say about a URL.
-                            View.CONSOLES -> ConsolesPane(store)
+                            View.APPS -> AppsPane(store)
 
                             View.STATUS -> StatusView(status, plan, usage, route, watchConnected)
                             // The whole store: each category page takes a different
@@ -580,7 +584,7 @@ fun Shell(store: AppStore) {
                     devices = devices,
                     pads = pads,
                     projects = projects,
-                    consoles = consoles,
+                    apps = appList.apps,
                     selected = if (view == View.SESSIONS) sessionSel.size else chatSel.size,
                     error = error,
                     onDismissError = { store.clearError() },
@@ -722,7 +726,7 @@ fun Shell(store: AppStore) {
  * WHAT THE RAIL OFFERS, in the order it draws it — and the one answer the palette
  * and the keyboard ask too.
  *
- * ⚠⚠ A FEATURE PROBE HIDES THREE DOORS, NOT ONE. Pages, Projects and Consoles
+ * ⚠⚠ A FEATURE PROBE HIDES THREE DOORS, NOT ONE. Pages, Projects and Apps
  * each exist only on a daemon that answers their route, and each has a rail icon,
  * a palette row and (for two of them) a chord. Deciding that three times gave the
  * page panel its own bug once already — a flag that said "open" against a daemon
@@ -741,7 +745,7 @@ fun Shell(store: AppStore) {
 fun railViews(
     padsAvailable: Boolean?,
     projectsAvailable: Boolean?,
-    consolesAvailable: Boolean?,
+    appsAvailable: Boolean?,
 ): List<View> = buildList {
     add(View.CHATS)
     add(View.SESSIONS)
@@ -750,21 +754,21 @@ fun railViews(
     if (projectsAvailable == true) add(View.PROJECTS)
     add(View.ROUNDS)
     add(View.DEVICES)
-    if (consolesAvailable == true) add(View.CONSOLES)
+    if (appsAvailable == true) add(View.APPS)
     if (padsAvailable == true) add(View.SCRATCHPADS)
     add(View.STATUS)
     add(View.SETTINGS)
 }
 
 /**
- * Whether this pass of the poll should ask `GET /v1/consoles` again.
+ * Whether this pass of the poll should ask `GET /v1/apps` again.
  *
  * ⚠⚠ UNTIL IT HAS ANSWERED, NOT ONCE. The old condition was `tick == 0 ||
- * view == CONSOLES`, and on a fresh install tick 0 lands while the setup flow is
+ * view == APPS`, and on a fresh install tick 0 lands while the setup flow is
  * still open and no token has been saved: the call comes back 401, which is an
  * answer about the BEARER and not about the feature. Nothing asked again — and
- * the one place that would have, the Consoles pane, is behind the rail item
- * [railViews] had just hidden. Consoles was therefore unreachable for the whole
+ * the one place that would have, the Apps pane, is behind the rail item
+ * [railViews] had just hidden. The page was therefore unreachable for the whole
  * first session while the daemon served four rows the entire time; Projects and
  * Pages survived the identical 401 only because they are refreshed every tick.
  *
@@ -772,8 +776,8 @@ fun railViews(
  * and stop the probing, and the pane in front of the reader keeps its own poll
  * either way because the ROWS move even when the feature question is settled.
  */
-fun shouldProbeConsoles(available: Boolean?, view: View): Boolean =
-    available == null || view == View.CONSOLES
+fun shouldProbeApps(available: Boolean?, view: View): Boolean =
+    available == null || view == View.APPS
 
 @Composable
 private fun NavRail(
@@ -798,9 +802,9 @@ private fun NavRail(
     projects: Int,
     projectsWaiting: Int,
     projectsBusy: Int,
-    consoles: Int,
-    /** Consoles the host's own probe could not reach. Null verdicts are NOT counted. */
-    consolesDown: Int,
+    apps: Int,
+    /** Apps the reader cannot reach — down, or answering only on the host. Null verdicts are NOT counted. */
+    appsDown: Int,
     /** The 5-hour session window under the Status icon; null draws no line. */
     sessionUsage: UsageFill?,
     onSelect: (View) -> Unit,
@@ -892,19 +896,19 @@ private fun NavRail(
             // lit for something nobody needs to do anything about.
             mark = if (devicesBusy > 0) MaterialTheme.colorScheme.primary else null,
         ) { onSelect(View.DEVICES) }
-        if (View.CONSOLES in offered) {
+        if (View.APPS in offered) {
             RailItem(
                 icon = Icons.Outlined.Dashboard,
-                label = "Consoles",
-                count = consoles,
-                active = current == View.CONSOLES,
-                tip = railCountTip(nounFor(consoles, "console"), consoles, consolesDown, "not answering"),
-                // ⚠ ONLY A REAL `false` MARKS. A console the host has not probed
-                // yet is `null`, and after a daemon restart that is EVERY row —
-                // probe state lives in memory. A rail that lit red for those
-                // would send somebody to restart four healthy services.
-                mark = if (consolesDown > 0) MaterialTheme.colorScheme.error else null,
-            ) { onSelect(View.CONSOLES) }
+                label = "Apps",
+                count = apps,
+                active = current == View.APPS,
+                tip = railCountTip(nounFor(apps, "app"), apps, appsDown, "you cannot reach"),
+                // ⚠ ONLY A REAL `false` MARKS. An app the host has not probed yet
+                // is `null`, and after a daemon restart that is EVERY row — probe
+                // state lives in memory. A rail that lit red for those would send
+                // somebody to restart four healthy services.
+                mark = if (appsDown > 0) MaterialTheme.colorScheme.error else null,
+            ) { onSelect(View.APPS) }
         }
         pads?.let { list ->
             RailItem(
@@ -1219,7 +1223,7 @@ private fun StatusLine(
     devices: List<Device>,
     pads: List<Scratchpad>,
     projects: List<ProjectRow>,
-    consoles: List<Console>,
+    apps: List<App>,
     selected: Int,
     error: String?,
     onDismissError: () -> Unit,
@@ -1321,7 +1325,7 @@ private fun StatusLine(
                     View.DEVICES -> countWords(groupByMachine(devices).size, "device")
                     View.SCRATCHPADS -> countWords(pads.size, "page")
                     View.PROJECTS -> countWords(projects.size, "project")
-                    View.CONSOLES -> countWords(consoles.size, "console")
+                    View.APPS -> countWords(apps.size, "app")
                     View.STATUS -> "status"
                     View.SETTINGS -> "settings"
                 },
