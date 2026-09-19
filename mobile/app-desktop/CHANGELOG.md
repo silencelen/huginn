@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 1.6.1
+
+- **A route that answers is offered by name** instead of passed over in silence, and the desktop
+  remembers which addresses were working when it was last open.
+- **Sending the same message twice says it is already on its way.** Selecting backwards in the
+  composer and pressing Up no longer risks your draft.
+- **Archived conversations can be read without reviving them.**
+- **Projects:** bring an open session into a project, drop a member without stopping it, see which
+  sessions a deleted project left running, and read why a member cannot be renamed.
+- An app whose icon changed shows the new one without a restart; a pinned route's "last reached" is
+  kept current by ordinary polls.
+
 ## 1.6.0
 
 - **Consoles are now Apps** — the things huginn makes and hosts itself. Every app shows its own

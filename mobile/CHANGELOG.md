@@ -1,5 +1,18 @@
 # Huginn changelog
 
+## 3.6.1 — 2026-09-19
+
+- **A route that answers is offered by name** instead of passed over in silence, and the app
+  remembers which addresses were working when it was last open.
+- **Sending the same message twice says it is already on its way**, instead of leaving the composer
+  looking as though it had swallowed it.
+- **Archived conversations can be read without reviving them** (View on the archived row).
+- **Projects:** a session you already had open can be brought into a project, a member can be dropped
+  without stopping it, deleting a project says which of its sessions are still running, and renaming
+  a session that belongs to a project explains why it cannot be.
+- An app whose icon changed shows the new one without a restart; a question that arrives by push can
+  no longer have its answer buttons replaced a second later by a blank "waiting for your answer".
+
 ## 3.6.0 — 2026-09-18
 
 Apps, and the notes from the review walk.
