@@ -63,7 +63,7 @@ class ProjectMenusTest {
     @Test
     fun `a member row offers three verbs and Rename is not one of them`() {
         val labels = labelsOf(projectMenu(project("active"), member, verbs()))
-        assertEquals(listOf("Open", "Message…", "End session"), labels)
+        assertEquals(listOf("Open", "Message…", "Kill session"), labels)
         assertFalse(
             labels.any { it.startsWith("Rename") },
             "the rename route refuses a project member with a 409; the item could only ever fail: $labels",
@@ -128,7 +128,7 @@ class ProjectMenusTest {
         assertEquals(row.id, opened, "the project row opens the project")
         projectMenu(row, member, v).first { it.label == "Open" }.onClick()
         assertEquals("statusflap-db", opened, "the member row opens the MEMBER, by its tmux name")
-        projectMenu(row, member, v).first { it.label == "End session" }.onClick()
-        assertEquals("statusflap-db", ended, "End addresses the tmux session, never the project")
+        projectMenu(row, member, v).first { it.label == "Kill session" }.onClick()
+        assertEquals("statusflap-db", ended, "Kill addresses the tmux session, never the project")
     }
 }

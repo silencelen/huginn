@@ -84,8 +84,11 @@ import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
+import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
+import com.silencelen.huginn.ui.EndVerbs
+import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
@@ -112,6 +115,7 @@ import com.silencelen.huginn.ui.SendTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
+import com.silencelen.huginn.ui.theme.verbInk
 import com.silencelen.huginn.widget.FleetWidget
 
 class MainActivity : FragmentActivity() {
@@ -1026,7 +1030,7 @@ fun HuginnApp(
     softEndTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { softEndTarget = null },
-            title = { Text("Wind down $name?") },
+            title = { Text("${EndVerbs.SOFT} $name?") },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
@@ -1094,6 +1098,25 @@ fun HuginnApp(
             is Dest.Scratchpads, is Dest.Scratchpad -> 5
         }
 
+        // THE CHAT LIST LANDS ON THE LATEST CHAT WHEN YOU ARRIVE FROM ELSEWHERE,
+        // and stays exactly where it was when you come back out of a chat.
+        //
+        // Both halves need the state to live HERE rather than inside ChatsScreen.
+        // Narrow, `Dest.Chat` replaces the list outright, so a position
+        // remembered in the screen dies on the way into the conversation and the
+        // reader loses their place every time they press back — which is the
+        // half that was broken. Hoisted, the position survives the round trip,
+        // and the rule below is what stops it ALSO surviving a trip through
+        // Sessions, where a list 40 rows down reads as one that failed to
+        // refresh. See ChatListScroll for the rule and why null never moves it.
+        val chatsListState = androidx.compose.foundation.lazy.rememberLazyListState()
+        var cameFrom by rememberSaveable { mutableStateOf(destToKey(dest)) }
+        LaunchedEffect(dest) {
+            val to = destToKey(dest)
+            if (ChatListScroll.shouldSnap(cameFrom, to)) chatsListState.scrollToItem(0)
+            cameFrom = to
+        }
+
         // Each surface once, as a lambda, so the narrow and wide layouts are
         // arrangements of the same pieces rather than two copies of them.
         val chatsPane: @Composable (Boolean) -> Unit = { twoPane ->
@@ -1115,6 +1138,7 @@ fun HuginnApp(
                 onDelete = { vm.deleteChat(it) },
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,
+                listState = chatsListState,
             )
         }
         // Its own destination now, not a strip on top of the chat list. A Round is
@@ -1753,7 +1777,7 @@ fun HuginnApp(
                                             // or removes the FIRST item while the
                                             // menu is open — shifting every item
                                             // below it by a row, so a tap aimed at
-                                            // "Wind down…" lands on "Kill session…".
+                                            // "Wrap up" lands on "Kill session".
                                             val links = remember(surfaceMenu) { linksOn(vm.screen.value) }
                                             if (links.size == 1) {
                                                 DropdownMenuItem(text = { Text("Copy link") },
@@ -1772,10 +1796,28 @@ fun HuginnApp(
                                                 onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
                                             DropdownMenuItem(text = { Text("Compact context") },
                                                 onClick = { surfaceMenu = false; vm.compactSession(d.name) })
-                                            DropdownMenuItem(text = { Text("Wind down…") },
-                                                onClick = { surfaceMenu = false; softEndTarget = d.name })
-                                            DropdownMenuItem(text = { Text("Kill session…") },
-                                                onClick = { surfaceMenu = false; killTarget = d.name })
+                                            // The pair, in the two reds — same
+                                            // words and same token as the session
+                                            // list's row menu and the desktop's
+                                            // right-click. See EndVerbs.
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        EndVerbs.soft(1),
+                                                        color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                onClick = { surfaceMenu = false; softEndTarget = d.name },
+                                            )
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        EndVerbs.hard(1),
+                                                        color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                onClick = { surfaceMenu = false; killTarget = d.name },
+                                            )
                                         }
                                         is Dest.Chat -> {
                                             DropdownMenuItem(text = { Text("Rename chat") },
