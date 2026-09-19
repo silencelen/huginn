@@ -1,8 +1,10 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.Chat
-import com.silencelen.huginn.data.Console
-import com.silencelen.huginn.data.ConsoleApproval
+import com.silencelen.huginn.data.App
+import com.silencelen.huginn.data.AppCreate
+import com.silencelen.huginn.data.AppForm
+import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
 import com.silencelen.huginn.data.ArchivedSession
@@ -15,7 +17,7 @@ import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.device.DeviceRunner
-import com.silencelen.huginn.desktop.ui.shouldProbeConsoles
+import com.silencelen.huginn.desktop.ui.shouldProbeApps
 import com.silencelen.huginn.desktop.update.BuildInfo
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.SentHistory
@@ -73,8 +75,8 @@ enum class View {
      */
     PROJECTS,
 
-    /** The internal pages this host serves. Hidden on the same terms. */
-    CONSOLES,
+    /** The things huginn makes and hosts itself. Hidden on the same terms. */
+    APPS,
     STATUS,
     SETTINGS,
 }
@@ -234,6 +236,10 @@ class AppStore(
         fetch = { client.uploadBytes(it) },
         decoder = SkiaImageBytesDecoder(),
         fetchPath = { path, session -> client.imageBytes(path, session) },
+        // And a third: an app's favicon, keyed on its id and version. Against a
+        // daemon with no icon route it 404s into the negative cache and the row
+        // draws its initial-letter tile.
+        fetchIcon = { id -> client.appIconBytes(id) },
     )
 
     init {
@@ -276,10 +282,10 @@ class AppStore(
         if (v == View.STATUS) scope.launch { refreshStatus() }
         // The same argument for the two Wave 3 panes, whose per-project and
         // per-host calls are deliberately NOT in the list poll: arriving on a
-        // folded-open tree or a console list that fills five seconds later looks
+        // folded-open tree or an apps list that fills five seconds later looks
         // exactly like a feature that is not working.
         if (v == View.PROJECTS) scope.launch { refreshProjectMembers(); refreshProjectDashboard() }
-        if (v == View.CONSOLES) scope.launch { refreshConsoles() }
+        if (v == View.APPS) scope.launch { refreshApps() }
     }
     /**
      * Settings' own navigation: which drawer is open, what is typed in its search
@@ -956,35 +962,41 @@ class AppStore(
             .onFailure { note(Faults.ACTION, it) }
     }
 
-    // -------------------------------------------------------------- consoles
+    // ------------------------------------------------------------------ apps
 
-    private val _consoles = MutableStateFlow<List<Console>>(emptyList())
-    val consoles: StateFlow<List<Console>> = _consoles.asStateFlow()
+    private val _apps = MutableStateFlow(AppList())
+    val apps: StateFlow<AppList> = _apps.asStateFlow()
 
     /**
-     * The registry-wide rebind approval, or null when there is nothing to approve.
-     *
-     * ⚠ NOTHING IN THIS APP APPLIES IT AND THERE IS NO ROUTE THAT COULD. The steps
-     * rebind a systemd unit on the huginn host and add firewall lines on heimdall;
-     * the card that draws them has a Copy control and no other (decision 47).
+     * Whether this daemon HAS apps. Same probe contract as [projectsAvailable] —
+     * and the client asks BOTH `/v1/apps` and `/v1/consoles` before answering
+     * false, because a daemon older than the 3.6 rename only serves the old one.
      */
-    private val _consoleApproval = MutableStateFlow<ConsoleApproval?>(null)
-    val consoleApproval: StateFlow<ConsoleApproval?> = _consoleApproval.asStateFlow()
+    private val _appsAvailable = MutableStateFlow<Boolean?>(null)
+    val appsAvailable: StateFlow<Boolean?> = _appsAvailable.asStateFlow()
 
-    /** Whether this daemon HAS consoles. Same probe contract as [projectsAvailable]. */
-    private val _consolesAvailable = MutableStateFlow<Boolean?>(null)
-    val consolesAvailable: StateFlow<Boolean?> = _consolesAvailable.asStateFlow()
+    /**
+     * The daemon's answer to the last add, or null.
+     *
+     * ⚠⚠ IT HOLDS A REFUSAL, NOT JUST A SUCCESS (decision 54). A 422 says the app
+     * does not answer on the addresses this window's devices arrive from and
+     * carries the lines that would fix it; the dialog stays open on it with every
+     * typed field intact. A fault note would have dropped both.
+     */
+    private val _appAdd = MutableStateFlow<AppCreate?>(null)
+    val appAdd: StateFlow<AppCreate?> = _appAdd.asStateFlow()
 
-    suspend fun refreshConsoles() {
-        runCatching { client.consoles() }
+    fun clearAppAdd() { _appAdd.value = null }
+
+    suspend fun refreshApps() {
+        runCatching { client.apps() }
             .onSuccess { list ->
                 if (list == null) {
-                    _consolesAvailable.value = false
+                    _appsAvailable.value = false
                     return@onSuccess
                 }
-                _consolesAvailable.value = true
-                _consoles.value = list.consoles
-                _consoleApproval.value = list.approval
+                _appsAvailable.value = true
+                _apps.value = list
             }
             // ⚠⚠ A THROW IS NOT AN ANSWER, AND TREATING IT AS ONE HID THE FEATURE
             // FOR A WHOLE SESSION. This had no `onFailure` at all, which reads as
@@ -992,46 +1004,76 @@ class AppStore(
             // ran once, so unknown was final. `probeGet` already turns the
             // feature's own 404 into a null LIST above; everything that lands here
             // is a 401 during setup, a dead route or a timeout, none of which say
-            // anything about whether this daemon has consoles. So the flag is left
-            // null and `shouldProbeConsoles` asks again next tick.
+            // anything about whether this daemon has apps. So the flag is left
+            // null and `shouldProbeApps` asks again next tick.
             .onFailure {
-                if (it is HuginnClient.HuginnException && it.code == 404) _consolesAvailable.value = false
+                if (it is HuginnClient.HuginnException && it.code == 404) _appsAvailable.value = false
             }
     }
 
-    /** Probe one console now, from the host, and adopt the refreshed row. */
-    suspend fun probeConsole(id: String) {
-        runCatching { client.probeConsole(id) }
-            .onSuccess { row -> _consoles.value = _consoles.value.map { if (it.id == row.id) row else it } }
-            .onFailure { note(Faults.ACTION, it) }
-    }
-
-    suspend fun createConsole(name: String, url: String, kind: String?, notes: String?) {
-        runCatching { client.createConsole(name, url, kind, notes) }
-            .onSuccess { refreshConsoles() }
+    /** Probe one app now and adopt the refreshed row. */
+    suspend fun probeApp(id: String) {
+        runCatching { client.probeApp(id) }
+            .onSuccess { row -> _apps.value = _apps.value.let { l -> l.copy(apps = l.apps.map { if (it.id == row.id) row else it }) } }
             .onFailure { note(Faults.ACTION, it) }
     }
 
     /**
-     * Edit one console.
+     * Add an app.
+     *
+     * ⚠⚠ THE 422 IS PUBLISHED, NOT NOTED (decision 54). It is the daemon saying
+     * the prerequisite failed and handing over the lines that would clear it; the
+     * dialog draws them under the fields it still holds.
+     */
+    suspend fun addApp(form: AppForm) {
+        runCatching {
+            client.createApp(
+                name = form.name.trim(),
+                url = form.url.trim(),
+                kind = form.kind?.trim()?.ifBlank { null },
+                notes = form.notes.trim().ifBlank { null },
+                unit = form.unit.trim().ifBlank { null },
+            )
+        }
+            .onSuccess { answer ->
+                _appAdd.value = answer
+                if (answer.ok) refreshApps()
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
+     * Edit one app.
      *
      * ⚠ THE 409 IS AN ANSWER, carrying the row as the host now holds it — the
      * saveScratchpad shape. The other client having saved first is the ordinary
      * outcome of two devices on one registry, so the current row is adopted
      * rather than thrown at the reader.
      */
-    suspend fun saveConsole(id: String, version: Int, name: String?, url: String?, kind: String?, notes: String?) {
-        runCatching { client.saveConsole(id, version, name = name, url = url, kind = kind, notes = notes) }
+    suspend fun saveApp(id: String, version: Int, form: AppForm) {
+        runCatching {
+            client.saveApp(
+                id,
+                version,
+                name = form.name.trim(),
+                url = form.url.trim(),
+                kind = form.kind?.trim()?.ifBlank { null },
+                notes = form.notes.trim(),
+                unit = form.unit.trim(),
+            )
+        }
             .onSuccess { saved ->
-                _consoles.value = _consoles.value.map { if (it.id == saved.console.id) saved.console else it }
-                if (saved.conflict) refreshConsoles()
+                _apps.value = _apps.value.let { l ->
+                    l.copy(apps = l.apps.map { if (it.id == saved.app.id) saved.app else it })
+                }
+                if (saved.conflict) refreshApps()
             }
             .onFailure { note(Faults.ACTION, it) }
     }
 
-    suspend fun deleteConsole(id: String) {
-        runCatching { client.deleteConsole(id) }
-            .onSuccess { refreshConsoles() }
+    suspend fun deleteApp(id: String) {
+        runCatching { client.deleteApp(id) }
+            .onSuccess { refreshApps() }
             .onFailure { note(Faults.ACTION, it) }
     }
 
@@ -1825,13 +1867,13 @@ class AppStore(
                     refreshProjectMembers()
                     refreshProjectDashboard()
                 }
-                // UNTIL IT ANSWERS, as well as while Consoles is open. It used
+                // UNTIL IT ANSWERS, as well as while Apps is open. It used
                 // to be `tick == 0`, and the comment here predicted the failure it
                 // then had — a probe that only ran on the pane nobody can reach
                 // hides the door to itself — while missing the trigger: the 401 a
                 // fresh install's first tick gets while setup is still open is not
-                // an answer about the feature. See `shouldProbeConsoles`.
-                if (shouldProbeConsoles(_consolesAvailable.value, _view.value)) refreshConsoles()
+                // an answer about the feature. See `shouldProbeApps`.
+                if (shouldProbeApps(_appsAvailable.value, _view.value)) refreshApps()
                 // ⚠ THE TWO SESSION LISTS MOVE TOGETHER. A graceful archive leaves
                 // the session on screen for as long as its turn runs and then
                 // moves it — so a Sessions poll that did not also fetch the

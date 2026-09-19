@@ -583,8 +583,8 @@ fun main(args: Array<String>) {
                         if (store.projectsAvailable.value == true) store.openView(View.PROJECTS)
                         true
                     }
-                    shortcut == Shortcut.VIEW_CONSOLES -> {
-                        if (store.consolesAvailable.value == true) store.openView(View.CONSOLES)
+                    shortcut == Shortcut.VIEW_APPS -> {
+                        if (store.appsAvailable.value == true) store.openView(View.APPS)
                         true
                     }
                     // Only where it can actually appear: toggling a panel into a
@@ -752,14 +752,14 @@ fun main(args: Array<String>) {
                                 SettingsSurface.DESKTOP,
                             ),
                             projects = store.projects.collectAsState().value,
-                            consoles = store.consoles.collectAsState().value,
+                            apps = store.apps.collectAsState().value.apps,
                             // The SAME list the rail is drawn from: a palette row
                             // onto a feature this daemon does not have is the one
                             // door a reader who cannot find something walks into.
                             offered = com.silencelen.huginn.desktop.ui.railViews(
                                 store.padsAvailable.collectAsState().value,
                                 store.projectsAvailable.collectAsState().value,
-                                store.consolesAvailable.collectAsState().value,
+                                store.appsAvailable.collectAsState().value,
                             ),
                             onDismiss = { paletteOpen.value = false },
                             onPick = { item ->
@@ -779,9 +779,9 @@ fun main(args: Array<String>) {
                                     // reader then has to search again is a step
                                     // backwards. A URL that will not open is
                                     // copied instead of silently doing nothing.
-                                    is PaletteItem.OpenConsole ->
+                                    is PaletteItem.OpenApp ->
                                         if (!openInBrowser(item.url)) {
-                                            store.openView(View.CONSOLES)
+                                            store.openView(View.APPS)
                                         }
                                     is PaletteItem.Verb -> when (item.shortcut) {
                                         Shortcut.NEW_ASK -> newChat("ask")
@@ -794,7 +794,7 @@ fun main(args: Array<String>) {
                                         Shortcut.VIEW_SETTINGS -> store.openView(View.SETTINGS)
                                         Shortcut.VIEW_SCRATCHPADS -> store.openView(View.SCRATCHPADS)
                                         Shortcut.VIEW_PROJECTS -> store.openView(View.PROJECTS)
-                                        Shortcut.VIEW_CONSOLES -> store.openView(View.CONSOLES)
+                                        Shortcut.VIEW_APPS -> store.openView(View.APPS)
                                         // Same gate as the chord: the verb is
                                         // offered from everywhere, and it can
                                         // only do anything in a conversation.

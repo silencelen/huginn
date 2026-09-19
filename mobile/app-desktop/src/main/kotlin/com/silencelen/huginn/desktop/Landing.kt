@@ -52,7 +52,7 @@ object Landing {
         // walks transcripts on the host, and a window that opened on one would
         // start that work before anybody had asked for it.
         View.PROJECTS -> "projects"
-        View.CONSOLES -> "consoles"
+        View.APPS -> "apps"
         // Never written — the caller filters on [persistable] — but an encoder that
         // silently produced "chats" for Settings would be a landing bug nobody
         // could read off the file.
@@ -73,7 +73,12 @@ object Landing {
         "devices" -> View.DEVICES
         "pages" -> View.SCRATCHPADS
         "projects" -> View.PROJECTS
-        "consoles" -> View.CONSOLES
+        "apps" -> View.APPS
+        // The name this view had until 1.6. A settings file written by 1.5 says
+        // "consoles"; the pane it means is this one, and a window that opened on
+        // Sessions instead would be the rename quietly costing somebody their
+        // place. Parsed, never written.
+        "consoles" -> View.APPS
         else -> DEFAULT
     }
 }
