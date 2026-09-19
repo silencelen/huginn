@@ -280,17 +280,32 @@ fun SettingsReadOnlyRow(
     value: String? = null,
     summary: String? = null,
     highlighted: Boolean = false,
+    /**
+     * How many lines the value may wrap onto. Two suits a version or a state
+     * word; a PATH wants more, because the half that identifies it is the end.
+     */
+    maxLines: Int = 2,
+    /**
+     * Offered when the value is worth having in a paste buffer rather than only
+     * on screen — a log path, an install directory, an id. Null draws nothing.
+     */
+    onCopy: (() -> Unit)? = null,
 ) {
     RowFrame(id, title, summary, highlighted, modifier) {
-        if (!value.isNullOrBlank()) {
-            Text(
-                value,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 320.dp),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (!value.isNullOrBlank()) {
+                Text(
+                    value,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = maxLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 320.dp),
+                )
+            }
+            if (onCopy != null) {
+                TextButton(onClick = onCopy) { Text("Copy") }
+            }
         }
     }
 }
@@ -439,6 +454,16 @@ fun SettingsRouteListRow(
     highlighted: Boolean = false,
     finding: Boolean = false,
     note: String? = null,
+    /**
+     * Ghost text for an EMPTY address field — the shape of an address, not one.
+     *
+     * ⚠ IT USED TO BE THE FIELD'S INITIAL VALUE, and the value was a real tailnet
+     * IP compiled into the app. A fresh install anywhere but the owner's house
+     * therefore opened its first form pre-filled with somebody else's machine, to
+     * be deleted before anything could be typed — and pressing Add without
+     * noticing pinned a route to a host that is not yours. See
+     * [com.silencelen.huginn.data.HuginnSettings.ROUTE_URL_PLACEHOLDER].
+     */
     suggestedUrl: String = "",
 ) {
     var editing by remember { mutableStateOf<String?>(null) }
@@ -529,7 +554,8 @@ fun SettingsRouteListRow(
         if (adding) {
             RouteForm(
                 initialName = "",
-                initialUrl = suggestedUrl,
+                initialUrl = "",
+                urlPlaceholder = suggestedUrl,
                 confirmLabel = "Add",
                 refusal = { routeFormRefusal(book, null, it) },
                 onConfirm = { name, url -> actions.add(name, url); adding = false },
@@ -651,6 +677,8 @@ private fun RouteForm(
     initialName: String,
     initialUrl: String,
     confirmLabel: String,
+    /** Shown while the field is empty. Never becomes the value. */
+    urlPlaceholder: String = "",
     /** Why this address cannot be saved — asked BEFORE the form closes. */
     refusal: (String) -> String?,
     onConfirm: (String, String) -> Unit,
@@ -679,6 +707,16 @@ private fun RouteForm(
             onValueChange = { url = it; refused = null },
             singleLine = true,
             label = { Text("Address") },
+            placeholder = urlPlaceholder.takeIf { it.isNotBlank() }?.let {
+                {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            },
             isError = refused != null,
             supportingText = refused?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
             modifier = Modifier.padding(top = 6.dp).widthIn(max = 420.dp).fillMaxWidth(),

@@ -153,6 +153,21 @@ class SettingsDesktopTest {
         assertEquals("no token saved", SettingsSummaries.of("privacy", live().copy(tokenSet = false)))
         assertEquals("close to tray on", SettingsSummaries.of("appearance", live()))
         assertEquals("closing quits", SettingsSummaries.of("appearance", live().copy(closeToTray = false)))
+        // ⚠ THE SETTING IS NOT THE BEHAVIOUR ON A MACHINE WITH NO TRAY. `Main.kt`
+        // has always been right — `if (closeToTray && isTraySupported) hide else
+        // quit()` — and only the copy was wrong: the summary read "close to tray
+        // on" and the row promised "Closing the window leaves huginn running in
+        // the tray" on a box where closing the window quits. Verified: the
+        // process was gone.
+        assertEquals(
+            "closing quits (no system tray here)",
+            SettingsSummaries.of("appearance", live().copy(traySupported = false)),
+            "a toggle that is on but cannot take effect must say so",
+        )
+        assertEquals(
+            "closing quits (no system tray here)",
+            SettingsSummaries.of("appearance", live().copy(closeToTray = false, traySupported = false)),
+        )
         assertEquals("1.1.0 · up to date", SettingsSummaries.of("updates", live()))
         assertEquals(
             "1.1.0 · 1.2.0 ready to install",

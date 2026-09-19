@@ -97,11 +97,19 @@ fun DevicesSection(
  * group; the `-llm` row becomes the "serves local AI" facet of its machine.
  */
 data class MachineGroup(val rows: List<Device>) {
-    val claude: List<Device> = rows.filter { it.scope != "generate" }
-    val serving: List<Device> = rows.filter { it.scope == "generate" }
+    val claude: List<Device> = rows.filter { it.scope != DeviceRules.SERVING_SCOPE }
+    val serving: List<Device> = rows.filter { it.scope == DeviceRules.SERVING_SCOPE }
     /** The name a person knows the box by — its claude row's, when it has one. */
     val head: Device = claude.firstOrNull() ?: rows.first()
-    val online: Boolean = rows.any { it.online }
+
+    /**
+     * ⚠ [DeviceRules.reachable], NOT `rows.any { it.online }`. This used to count
+     * an always-up `-llm` serving row as the machine being reachable, while the
+     * card's own per-row line — read off the claude row — said "not reachable".
+     * The rail tooltip and this card are the two readers and they disagreed. See
+     * `DeviceRulesTest`.
+     */
+    val online: Boolean = DeviceRules.reachable(rows)
 
     /** Whether this card IS the machine the reader is sitting at. */
     fun isThisMachine(machineKey: String?): Boolean =

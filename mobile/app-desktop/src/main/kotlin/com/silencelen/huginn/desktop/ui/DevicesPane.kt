@@ -59,7 +59,7 @@ fun DevicesPane(store: AppStore) {
             Text("No devices yet", style = MaterialTheme.typography.titleMedium)
             Text(
                 "A device is another machine that can run work in its own context. " +
-                    "Turn on \"Give Huginn access to this PC\" in Settings, on the machine " +
+                    "Turn on \"Let huginn run work on this computer\" in Settings, on the machine " +
                     "you want to offer, and it appears here. A machine with no desktop app " +
                     "offers itself with \"huginn device on\".",
                 style = MaterialTheme.typography.bodyMedium,
@@ -106,11 +106,11 @@ fun DevicesPane(store: AppStore) {
             text = {
                 Text(
                     if (g.serving.isEmpty()) {
-                        "Huginn stops offering it work. Nothing changes on ${g.head.name} itself — " +
+                        "huginn stops offering it work. Nothing changes on ${g.head.name} itself — " +
                             "if its runner is still going it will enrol again. Stop it there to " +
                             "make this stick."
                     } else {
-                        "Huginn stops offering it work and its local models. Nothing changes on " +
+                        "huginn stops offering it work and its local models. Nothing changes on " +
                             "${g.head.name} itself — a runner or serving service still going there " +
                             "simply re-enrols. Stop them there (“huginn device off”, " +
                             "“huginn local off”) to make this stick."

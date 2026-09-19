@@ -118,3 +118,43 @@ class StreamPickerRowTest {
         assertTrue(items.none { streamChipSelected(it, "agent-zzz") })
     }
 }
+
+/**
+ * THE FOLD'S OWN GEOMETRY.
+ *
+ * ⚠ THE CAP USED TO SLICE ROWS. It was a flat 240dp over rows of whatever height
+ * the text happened to make, so the unfolded list cut its top and bottom rows in
+ * half — and with no fade and no scrollbar a torn row reads as a rendering fault
+ * rather than as "there is more below". Both clients: the desktop over a
+ * transcript and the phone over the conversation.
+ *
+ * The fix is arithmetic rather than judgment, which is why it can be asserted:
+ * every row is pinned to one height and the ceiling is a whole number of them,
+ * so a partly-drawn row is unrepresentable.
+ */
+class StreamSheetGeometryTest {
+
+    @Test
+    fun `the cap is a whole number of rows`() {
+        assertEquals(STREAM_SHEET_ROW_HEIGHT * STREAM_SHEET_ROWS, STREAM_SHEET_MAX_HEIGHT)
+        assertTrue(STREAM_SHEET_ROWS >= 5, "fewer than a handful and the fold is not worth opening")
+    }
+
+    @Test
+    fun `the ceiling is still about a screenful rather than the screen`() {
+        // The number the original cap was chosen at — the fold exists so a
+        // session that fanned out hundreds of times does not own the window.
+        assertTrue(
+            STREAM_SHEET_MAX_HEIGHT.value in 200f..280f,
+            "the fold should still cost about what it used to: $STREAM_SHEET_MAX_HEIGHT",
+        )
+    }
+
+    @Test
+    fun `the search box says what it searches`() {
+        assertTrue(
+            STREAM_SHEET_FILTER_LABEL.lowercase().contains("filter"),
+            "198 rows behind a pill need a way in, and it has to be labelled: $STREAM_SHEET_FILTER_LABEL",
+        )
+    }
+}

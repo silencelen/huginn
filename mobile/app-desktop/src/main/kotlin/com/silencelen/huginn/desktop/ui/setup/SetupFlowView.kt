@@ -32,6 +32,7 @@ import com.silencelen.huginn.desktop.setup.Autostart
 import com.silencelen.huginn.desktop.setup.ClaudePath
 import com.silencelen.huginn.desktop.setup.LocalAiOutcome
 import com.silencelen.huginn.desktop.setup.SetupController
+import com.silencelen.huginn.desktop.setup.SetupDrafts
 import com.silencelen.huginn.desktop.setup.SetupHost
 import com.silencelen.huginn.desktop.setup.SetupProbes
 import com.silencelen.huginn.desktop.ui.settings.ClaudePathField
@@ -140,21 +141,29 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                 summary = "The addresses that reach huginn, tried in this order.",
                 finding = resolving,
                 note = routeNote,
-                suggestedUrl = HuginnSettings.DEFAULT_BASE_URL,
+                suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
             )
         }
 
         SetupStep.TOKEN -> {
             var token by remember { mutableStateOf(settings.tokenNow()) }
+            // ⚠ THE DRAFT IS PUBLISHED, because the probe runs outside this
+            // composition and cannot see a `remember`. Without it "Try the token"
+            // read the SAVED token and answered "no token saved yet" at a field
+            // the reader had just pasted into — the step's button contradicting
+            // the step's own field. `DesktopSetupProbes.token` commits this
+            // before it tries anything.
+            SetupDrafts.token = token
             SettingsFieldRow(
                 id = "host.token",
                 title = "Token",
                 value = token,
-                onValueChange = { token = it },
+                onValueChange = { token = it; SetupDrafts.token = it },
                 secret = true,
-                summary = "The bearer this app sends with every request.",
+                summary = "The bearer this app sends with every request. " +
+                    "\"Try the token\" uses what is in this box.",
                 trailing = {
-                    Button(onClick = { scope.launch { settings.setToken(token) } }) { Text("Save token") }
+                    Button(onClick = { scope.launch { settings.setToken(token.trim()) } }) { Text("Save token") }
                 },
             )
         }
@@ -204,20 +213,32 @@ class DesktopSetupProbes(
     override suspend fun route(): Result<String> = runCatching {
         val url = store.settings.baseUrlNow()
         check(url.isNotBlank()) { HuginnClient.NO_ROUTE }
-        // `/v1/ping` needs no token, which is exactly what makes it the right
-        // probe for THIS step: it separates "nothing answers at that address"
-        // from "something answers and does not like your bearer", and those two
-        // have completely different fixes.
-        val ping = store.client.ping()
-        val where = ping.via?.addr?.let { addr -> ping.via?.port?.let { "$addr:$it" } ?: addr } ?: url
-        val version = ping.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
-        "$version answered at $where"
+        // ⚠⚠ THE PROBE, NOT `ping()`. This step exists to separate "nothing
+        // answers at that address" from "something answers and does not like your
+        // bearer" — and it used to ask a TOKEN-GATED route, so on every fresh
+        // install a correct address failed with the word "unauthorized" and sent
+        // the reader after a token the flow had not offered yet. The 401 plus the
+        // `X-Huginn-Appd` header IS the proof of a daemon (`provesDaemon`), and
+        // the header carries the version, so nothing is lost by asking without a
+        // bearer — and a bearer is exactly what must not be sent to an address
+        // that has not been proven to be huginn yet.
+        val probe = store.client.probeDaemon(url)
+        check(probe.proven) { "nothing at that address answered as huginn" }
+        HuginnClient.probeWords(probe)
     }
 
     override suspend fun token(): Result<String> = runCatching {
-        check(store.settings.tokenNow().isNotBlank()) {
-            "no token saved yet — paste the one from the huginn host above"
+        // ⚠ THE FIELD, COMMITTED FIRST. This read `tokenNow()` alone, which is
+        // only written by the separate "Save token" button — so on a fresh
+        // install, with the field visibly full, the one control the step offers
+        // answered "no token saved yet". Committing before the probe also means
+        // a token that turns out to work is the one the very next request
+        // carries, rather than one the reader has to go back and save again.
+        val wanted = SetupDrafts.tokenToUse(SetupDrafts.token, store.settings.tokenNow())
+        check(wanted.isNotBlank()) {
+            "no token yet — paste the one from the huginn host into the box above"
         }
+        if (wanted != store.settings.tokenNow()) store.settings.setToken(wanted)
         // THE CHECK NOTHING DID. The token field's only feedback was the words
         // "token saved", printed whether or not the daemon would ever accept it.
         val status = store.client.status()
@@ -270,6 +291,13 @@ class DesktopSetupProbes(
 
     override suspend fun postTestNotification(): Result<String> = runCatching {
         val n = notifier()
+        // ⚠⚠ ASKED ONLY WHEN THERE IS SOMETHING TO SEE. With no tray and no
+        // libnotify the backend's `post` is a no-op, and the step went straight on
+        // to "did it appear?" with a Yes button — a pass recordable for a route
+        // that cannot deliver. A step that cannot be attempted fails with the
+        // reason instead, and `SetupController` never arms the question on a
+        // failure.
+        Notifiers.testRefusal(n)?.let { error(it) }
         // A real one, through the real backend, rather than a claim about what
         // the backend supports. `Notifiers.describe` was until now reported ONLY
         // to a stdout that a packaged Windows launcher does not have.

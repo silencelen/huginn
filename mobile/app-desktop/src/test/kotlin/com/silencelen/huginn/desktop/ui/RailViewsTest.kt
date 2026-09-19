@@ -104,3 +104,41 @@ class RailViewsTest {
         assertEquals(null, match(ctrl = false, shift = false, alt = false, key = "J"))
     }
 }
+
+/**
+ * WHEN THE CONSOLES PROBE IS ASKED AGAIN, which is the other half of [railViews].
+ *
+ * ⚠⚠ A PROBE THAT RAN ONCE, AT TICK 0, HID THE DOOR TO ITSELF FOR A WHOLE
+ * SESSION. On a fresh install the first poll fires while the setup flow is still
+ * open and no token has been saved, so `GET /v1/consoles` is a 401 rather than a
+ * 404 or a list — an answer about the BEARER, not about the feature. The old
+ * condition (`tick == 0 || view == CONSOLES`) then never asked again, and the
+ * only place that would have asked was the pane the rail had stopped offering.
+ * Projects and Pages recovered from the identical 401 for one reason: they are
+ * refreshed on every tick.
+ *
+ * So the rule is "until it has ANSWERED", not "once": null means the question is
+ * still open, and a question that is still open gets asked again.
+ */
+class ConsoleProbeScheduleTest {
+
+    @Test
+    fun `an unanswered probe is asked again on the next tick`() {
+        assertTrue(
+            shouldProbeConsoles(available = null, view = View.SESSIONS),
+            "null is 'no answer yet' — a 401 during setup must not end the probing",
+        )
+    }
+
+    @Test
+    fun `an answered probe is not asked again from another pane`() {
+        assertFalse(shouldProbeConsoles(available = true, view = View.SESSIONS), "answered: present")
+        assertFalse(shouldProbeConsoles(available = false, view = View.SESSIONS), "answered: absent")
+    }
+
+    @Test
+    fun `the consoles pane keeps its own poll whatever the probe said`() {
+        assertTrue(shouldProbeConsoles(available = true, view = View.CONSOLES), "rows move while it is open")
+        assertTrue(shouldProbeConsoles(available = false, view = View.CONSOLES))
+    }
+}
