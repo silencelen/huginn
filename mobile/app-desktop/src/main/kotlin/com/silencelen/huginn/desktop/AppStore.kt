@@ -1119,6 +1119,23 @@ class AppStore(
     private val _routeHealth = MutableStateFlow<Map<String, RouteHealth>>(emptyMap())
     val routeHealth: StateFlow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
 
+    /**
+     * Marks the active route as having just worked, from REAL traffic — the
+     * phone's `noteRouteReached` twin, so the desktop's route rows say "last
+     * reached" from ordinary polls and not only after "Find live route".
+     *
+     * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so
+     * the three-failures re-probe still sweeps rather than finding the dead
+     * route "fresh" seconds after its last success.
+     */
+    private fun noteRouteReached() {
+        _routeHealth.value = RouteResolver.touch(
+            _routeHealth.value,
+            _routeBook.value.active?.id,
+            System.currentTimeMillis(),
+        )
+    }
+
     private val _resolvingRoute = MutableStateFlow(false)
     val resolvingRoute: StateFlow<Boolean> = _resolvingRoute.asStateFlow()
 
@@ -1578,7 +1595,7 @@ class AppStore(
 
     suspend fun refreshStatus() {
         runCatching { client.status() }
-            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok() }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok(); noteRouteReached() }
             .onFailure { note(Faults.STATUS, it) }
         runCatching { client.plan() }.onSuccess { _plan.value = it }
         runCatching { client.usage() }.onSuccess { _usage.value = it }
@@ -1595,7 +1612,7 @@ class AppStore(
      */
     suspend fun refreshStatusShelf() {
         runCatching { client.status() }
-            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok() }
+            .onSuccess { _status.value = it; faults.ok(Faults.STATUS); routeFailures.ok(); noteRouteReached() }
             .onFailure { note(Faults.STATUS, it) }
     }
 
