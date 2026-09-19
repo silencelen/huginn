@@ -36,6 +36,7 @@ import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.desktop.diag.AppLog
+import com.silencelen.huginn.desktop.notify.Notifiers
 import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.update.UpdateState
@@ -386,6 +387,19 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
         else if (present) "claiming: this window has been attended recently"
         else "not claiming: window hidden or unattended, so Telegram stays live",
         highlighted = SettingsRowStyle.isHighlighted("notify.claim-route", mark),
+    )
+    // ⚠ THE FACT THIS PAGE WAS PROMISED AND DID NOT CARRY. The notification setup
+    // step's failure text says "Notifications in Settings shows which path this
+    // computer is using", and it did not — a machine with no tray and no
+    // libnotify saw the claim toggle above and nothing else, while the startup
+    // log and `Copy diagnostics` both already knew. Read-only because it is not a
+    // choice: nothing in this app installs a notification daemon.
+    SettingsReadOnlyRow(
+        id = Notifiers.PATH_ROW_ID,
+        title = "How notifications reach this computer",
+        value = Notifiers.pathWords(AppLog.notifierName),
+        summary = Notifiers.pathSummary(AppLog.notifierName),
+        highlighted = SettingsRowStyle.isHighlighted(Notifiers.PATH_ROW_ID, mark),
     )
 }
 

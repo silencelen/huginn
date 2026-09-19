@@ -80,6 +80,39 @@ object Notifiers {
         return awt ?: NoNotifier
     }
 
+    /** The Settings row that reports [pathWords]. Named here so the catalog and the page agree. */
+    const val PATH_ROW_ID: String = "notify.path"
+
+    /**
+     * The sentence a machine with nowhere to post gets — the reason, in the same
+     * words the startup log and `Copy diagnostics` already use.
+     */
+    const val NOWHERE_TO_POST: String =
+        "nothing on this computer can show a notification: no system tray and no libnotify"
+
+    /**
+     * Which backend a notification would actually take, as one word for a
+     * read-only Settings row.
+     *
+     * ⚠ THE APP KNEW THIS AND DID NOT SAY IT. It is logged at startup and it is
+     * in the diagnostics blob, while Settings → Notifications carried only the
+     * CLAIM toggle — so on a machine where nothing can be posted the page offered
+     * a switch for a route that does not exist and said nothing about it. The
+     * notification setup step's own failure text sends the reader here.
+     *
+     * @param name [com.silencelen.huginn.desktop.diag.AppLog.notifierName], which
+     *   is null exactly when the chosen backend is [NoNotifier].
+     */
+    fun pathWords(name: String?): String = name?.trim()?.takeIf { it.isNotEmpty() } ?: "none"
+
+    /** Why that is the path, and where attention goes when there is none. */
+    fun pathSummary(name: String?): String =
+        if (pathWords(name) == "none") {
+            "$NOWHERE_TO_POST. Anything that needs you goes to Telegram instead."
+        } else {
+            "Notifications are posted through ${pathWords(name)} while this window is claiming the route."
+        }
+
     /** One honest line for the log at startup, and for the diagnostics blob. */
     fun describe(notifier: Notifier): String = buildString {
         append("notifications via ").append(notifier.name)
