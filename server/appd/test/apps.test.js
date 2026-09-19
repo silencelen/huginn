@@ -522,14 +522,14 @@ test('a failing row carries the exact rebind and firewall lines, and only for th
   const fix = appsLib.fixLines(rec, [
     { addr: '100.97.198.90', ok: true },
     { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ]);
+  ], { '192.168.2.117': ['192.168.2.131'] });
   assert.deepEqual([
     '# on huginn — 192.168.2.117 does not reach this app',
     'systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of 100.97.198.90',
     'systemctl restart jtyper-trainer.service',
     'ss -ltn | grep :8091',
     '# on heimdall — /etc/pve/firewall/117.fw',
-    'IN ACCEPT -source 192.168.2.117 -p tcp -dport 8091 -log nolog',
+    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog',
   ], fix);
 });
 
@@ -541,11 +541,11 @@ test('a row with no unit still gets an instruction, naming the address it does a
   const fix = appsLib.fixLines(rec, [
     { addr: '100.97.198.90', ok: true },
     { addr: '192.168.2.117', ok: false, error: 'no route' },
-  ]);
+  ], { '192.168.2.117': ['192.168.2.131'] });
   assert.ok(fix.some((l) => l.startsWith('bind 0.0.0.0 instead of 100.97.198.90')), fix.join('\n'));
   assert.ok(fix.some((l) => l.includes('name it on the row')), 'and it says how to get the exact line');
   assert.ok(!fix.some((l) => l.startsWith('systemctl edit')), 'never a systemctl line with no unit in it');
-  assert.ok(fix.includes('IN ACCEPT -source 192.168.2.117 -p tcp -dport 9100 -log nolog'),
+  assert.ok(fix.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 9100 -log nolog'),
     'the port comes off the row, not off a hard-coded list of four');
 });
 
@@ -555,12 +555,15 @@ test('one firewall line per FAILING address, and none for the ones that answered
     { addr: '100.97.198.90', ok: true },
     { addr: '192.168.2.117', ok: false, error: 'connection refused' },
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
-  ]);
+  ], { '100.97.198.90': ['100.97.198.91'], '192.168.2.117': ['192.168.2.131'], '127.0.0.1': ['127.0.0.1'] });
   const rules = fix.filter((l) => l.startsWith('IN ACCEPT'));
   assert.deepEqual([
-    'IN ACCEPT -source 192.168.2.117 -p tcp -dport 8088 -log nolog',
-    'IN ACCEPT -source 127.0.0.1 -p tcp -dport 8088 -log nolog',
-  ], rules, 'an address that already answers does not need a rule opened for it');
+    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
+  ], rules, 'the client on the failing address — and nothing for the address that already answers');
+  assert.ok(!rules.some((l) => l.includes('100.97.198.91')),
+    'the tailnet client arrived somewhere that WORKS, so it needs nothing opened');
+  assert.ok(fix.includes('# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'),
+    `the other failing address is loopback and wants no rule at all: ${fix.join(' | ')}`);
   assert.deepEqual([], appsLib.fixLines(rec, [{ addr: '100.97.198.90', ok: true }]),
     'and a row that passes carries no lines at all — that was the old card’s whole problem');
 });
@@ -606,6 +609,230 @@ test('nothing in the fix lines is a verb this daemon could run', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'apps.js'), 'utf8');
   for (const forbidden of ['child_process', 'execFile', 'spawn(']) {
     assert.ok(!source.includes(forbidden), `lib/apps.js must never reach for ${forbidden}`);
+  }
+});
+
+// ------------------------------------- the CLIENT's address (the fix source)
+
+test('the firewall source is the CLIENT huginn saw, never the address it arrived on', () => {
+  // ⚠⚠ THE BUG THIS SECTION EXISTS FOR. `-source <arrival>` is huginn's OWN
+  // address on that network (192.168.2.117, 127.0.0.1) — a PVE rule on CT 117
+  // with the container's own IP as source matches no client that ever dials it,
+  // so the whole paste was a no-op that looked like a fix. The source a rule
+  // needs is the other end of the socket: the client as this daemon sees it,
+  // which on the LAN side is the Yggdrasil gateway's NAT address.
+  const rec = appsLib.buildRecord({
+    id: 'jtyper', name: 'jtyper trainer', url: 'http://100.97.198.90:8091/', unit: 'jtyper-trainer.service',
+  }, 100);
+  const fix = appsLib.fixLines(rec, [
+    { addr: '100.97.198.90', ok: true },
+    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
+  ], { '192.168.2.117': ['192.168.2.131'] });
+  assert.ok(fix.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog'),
+    `the client, not the listener: ${fix.join(' | ')}`);
+  assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT') && l.includes('192.168.2.117')),
+    'huginn’s own address is never a -source — that rule can never match');
+});
+
+test('a tailnet client is emitted as itself, and loopback is recorded but never a source', () => {
+  // Tailnet traffic does not traverse the veth rules at all, so the line changes
+  // nothing — but it is TRUE, it is one line, and a person reading the block can
+  // see which client the daemon is talking about. A LOOPBACK remote is the
+  // opposite: `-source 127.0.0.1` in a bridge firewall is a rule that can never
+  // match anything, which is the same defect this change exists to remove.
+  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
+  const fix = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], {
+    '192.168.2.117': ['100.97.198.91', '127.0.0.1'],
+  });
+  assert.ok(fix.includes('IN ACCEPT -source 100.97.198.91 -p tcp -dport 8088 -log nolog'),
+    `the tailnet client rides as itself: ${fix.join(' | ')}`);
+  assert.ok(!fix.some((l) => l.includes('127.0.0.1')), 'and loopback never reaches a firewall file');
+  assert.ok(!fix.some((l) => l.includes('100.64.0.0')), 'a tailnet address is never widened either');
+});
+
+test('three clients in one /24 collapse to the /24; two stay as themselves', () => {
+  // A household puts a phone, a laptop and a tablet on one VLAN, and three rules
+  // that differ in the last octet are three rules somebody has to maintain. Two
+  // is not a pattern — widening on two would open a /24 on the strength of a
+  // coincidence.
+  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
+  const three = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], {
+    '192.168.2.117': ['192.168.2.131', '192.168.2.44', '192.168.2.77'],
+  }).filter((l) => l.startsWith('IN ACCEPT'));
+  assert.deepEqual(['IN ACCEPT -source 192.168.2.0/24 -p tcp -dport 8088 -log nolog'], three,
+    'three in one /24 is one rule, not three');
+
+  const two = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], {
+    '192.168.2.117': ['192.168.2.131', '192.168.2.44'],
+  }).filter((l) => l.startsWith('IN ACCEPT'));
+  assert.deepEqual([
+    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
+    'IN ACCEPT -source 192.168.2.44 -p tcp -dport 8088 -log nolog',
+  ], two, 'two devices are two devices');
+
+  // Different /24s are never merged, however many there are.
+  const spread = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], {
+    '192.168.2.117': ['192.168.2.131', '192.168.7.54', '10.0.0.9'],
+  }).filter((l) => l.startsWith('IN ACCEPT'));
+  assert.equal(3, spread.length, `three networks are three rules: ${spread.join(' | ')}`);
+});
+
+test('an address no client has arrived from gets a COMMENT, never an invented source', () => {
+  // ⚠ THE ONE THING THIS MUST NOT DO IS GUESS. A daemon that has learned an
+  // arrival address but never seen a client on it has nothing true to put after
+  // `-source`, and the old code's answer — the arrival address — was a rule that
+  // could not match. A comment is followable; a wrong rule is not.
+  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
+  const fix = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], {});
+  assert.ok(fix.includes('# no client has reached huginn on 192.168.2.117 yet — add its network here'),
+    `the comment names the arrival it is about: ${fix.join(' | ')}`);
+  assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT')), 'and there is no rule at all');
+
+  // ⚠ THE BACKSTOP. A loopback CLIENT on one of this host's routable addresses
+  // is not a source either, and the sentence has to stay true — the daemon HAS
+  // seen somebody there, so "no client has reached huginn" would be a lie.
+  const onlyLocal = appsLib.fixLines(rec, [{ addr: '192.168.2.117', ok: false }], { '192.168.2.117': ['127.0.0.1'] });
+  assert.ok(onlyLocal.includes('# only loopback has reached huginn on 192.168.2.117 — '
+    + 'a loopback client is not a firewall source, add its network here'),
+  `a different, true sentence: ${onlyLocal.join(' | ')}`);
+  assert.ok(!onlyLocal.some((l) => l.startsWith('IN ACCEPT')), 'and never -source 127.0.0.1');
+});
+
+test('a failing LOOPBACK address asks for no firewall line at all, and says why', () => {
+  // ⚠⚠ LOOPBACK NEVER CROSSES THE VETH CHAIN, so nothing in 117.fw has any say
+  // over it: step 1 — binding the unit to 0.0.0.0 — is the entire remedy for
+  // this address, and it fixes itself the moment that lands. The live retrofit
+  // proved the shape: jtyper-trainer and boardserver rebound to 0.0.0.0, one
+  // `-source 192.168.2.131` line added on heimdall for the LAN, and all three of
+  // 100.97.198.90, 127.0.0.1 and 192.168.2.117 came back ok. A rule for 127.0.0.1
+  // would have been a third line somebody pasted as root for no effect — the
+  // same defect as naming the arrival address, wearing a different address.
+  const rec = appsLib.buildRecord({
+    id: 'board', name: 'PCB board view', url: 'http://100.97.198.90:8092/', unit: 'boardserver.service',
+  }, 100);
+  const fix = appsLib.fixLines(rec, [
+    { addr: '127.0.0.1', ok: false, error: 'connection refused' },
+    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
+  assert.deepEqual([
+    '# on huginn — 127.0.0.1, 192.168.2.117 do not reach this app',
+    'systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 100.97.198.90',
+    'systemctl restart boardserver.service',
+    'ss -ltn | grep :8092',
+    '# on heimdall — /etc/pve/firewall/117.fw',
+    '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
+    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8092 -log nolog',
+  ], fix, 'one rule, for the one address a rule can do anything about');
+
+  // And on its own, the heimdall half is a single line saying there is nothing
+  // to do there — not an empty section a reader has to interpret.
+  const alone = appsLib.fixLines(rec, [{ addr: '127.0.0.1', ok: false }], { '127.0.0.1': ['127.0.0.1'] });
+  assert.deepEqual(['# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'],
+    alone.slice(alone.indexOf('# on heimdall — /etc/pve/firewall/117.fw') + 1));
+  assert.ok(!alone.some((l) => l.startsWith('IN ACCEPT')), 'nothing for a firewall to accept');
+});
+
+test('the store records WHICH clients arrived on which address, folded, capped and expiring', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-remotes-'));
+  let clock = 1789000000000;
+  try {
+    const store = appsLib.createStore({
+      dir, icons: false, hostAddr: '', nowMs: () => clock, fetch: async () => { throw new Error('no probing'); },
+    });
+    store.stop();
+    assert.deepEqual({}, store.clientRemotes(), 'a daemon nobody has connected to knows nothing');
+
+    store.noteClientAddress('192.168.2.117', '::ffff:192.168.2.131');
+    store.noteClientAddress('192.168.2.117', '192.168.2.131');
+    store.noteClientAddress('127.0.0.1', '127.0.0.1');
+    store.noteClientAddress('192.168.2.117', '0.0.0.0');
+    assert.deepEqual({ '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(),
+      'the mapped spelling folded into the one address it is, and the wildcard was never a client');
+
+    // ⚠ RECORDED, THEN WITHHELD. Loopback is on the wire because it is what the
+    // daemon knows and a client may want to show it; [fixLines] is where it is
+    // refused, because that is where it would become a rule.
+    assert.deepEqual(['127.0.0.1'], store.clientRemotes()['127.0.0.1']);
+
+    // Persisted in the envelope, under the arrival it belongs to — the set is a
+    // fact about this host's clients, accumulated over days.
+    store.list();
+    const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
+    const lan = onDisk.clientAddresses.find((e) => e.addr === '192.168.2.117');
+    assert.deepEqual(['192.168.2.131'], lan.remotes.map((r) => r.addr));
+    assert.ok(lan.remotes[0].lastSeenAt > 0, 'with the stamp that makes it expire');
+
+    // The cap is per ARRIVAL, oldest dropped first.
+    for (let i = 1; i <= appsLib.MAX_CLIENT_REMOTES + 4; i++) {
+      clock += 1000;
+      store.noteClientAddress('192.168.2.117', `10.0.0.${i}`);
+    }
+    const capped = store.clientRemotes()['192.168.2.117'];
+    assert.equal(appsLib.MAX_CLIENT_REMOTES, capped.length, `capped at ${appsLib.MAX_CLIENT_REMOTES}: ${capped.join(', ')}`);
+    assert.ok(!capped.includes('192.168.2.131'), 'the oldest went first');
+    assert.ok(capped.includes(`10.0.0.${appsLib.MAX_CLIENT_REMOTES + 4}`), 'and the newest is there');
+
+    // ⚠ AND IT FORGETS, on the arrival set's own clock. A phone that was on the
+    // LAN once in March must not still be a firewall rule in September.
+    clock += (appsLib.CLIENT_ADDR_TTL_SEC + 60) * 1000;
+    assert.deepEqual({}, store.clientRemotes(), 'seven days without being seen again is gone');
+    clock += 1000;
+    store.noteClientAddress('192.168.2.117', '192.168.2.131');
+    assert.deepEqual({ '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(), 'and one poll brings it back');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a store written before 3.5.2 loads, with its arrivals intact and nobody behind them', () => {
+  // ⚠ THE UPGRADE PATH IS A FILE ON DISK. Every installation's envelope has
+  // `clientAddresses` with no `remotes` key in it; a daemon that read that as a
+  // broken entry would drop days of arrival addresses on the first read after an
+  // upgrade and start allowing adds it refused the hour before.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-remotes-legacy-'));
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    appsLib.writeEnvelope(dir, {
+      schema: appsLib.SCHEMA,
+      seeded: true,
+      consoles: [],
+      clientAddresses: [{ addr: '192.168.2.117', lastSeenAt: now - 60 }],
+    });
+    const store = appsLib.createStore({
+      dir, icons: false, hostAddr: '', fetch: async () => { throw new Error('no probing'); },
+    });
+    store.stop();
+    assert.deepEqual(['192.168.2.117'], store.addresses(), 'the arrival survived the upgrade');
+    assert.deepEqual({ '192.168.2.117': [] }, store.clientRemotes(),
+      'and it is known to have nobody behind it, which is what the comment line says');
+    assert.deepEqual([], appsLib.addrEntry({ addr: '192.168.2.117', lastSeenAt: now }).remotes,
+      'a definite empty array, never absent');
+
+    // And the next client teaches it one, in place, without disturbing the rest.
+    store.noteClientAddress('192.168.2.117', '192.168.2.131');
+    assert.deepEqual({ '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes());
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a remote is only remembered for the arrival it actually came in on', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-remotes-split-'));
+  try {
+    const store = appsLib.createStore({
+      dir, icons: false, hostAddr: '', fetch: async () => { throw new Error('no probing'); },
+    });
+    store.stop();
+    store.noteClientAddress('192.168.2.117', '192.168.2.131');
+    store.noteClientAddress('100.97.198.90', '100.97.198.91');
+    assert.deepEqual({ '100.97.198.90': ['100.97.198.91'], '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(),
+      'the rule a failing LAN address needs is the LAN client, not whatever last dialled the tailnet');
+    // An arrival with no client attached is still an arrival — the probe asks it.
+    store.noteClientAddress('127.0.0.5');
+    assert.deepEqual([], store.clientRemotes()['127.0.0.5'], 'known, and known to have nobody behind it');
+    assert.ok(store.addresses().includes('127.0.0.5'), 'and the probe still checks it');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -711,11 +938,38 @@ test('every known address is asked, and one that does not answer makes the app u
     assert.equal(true, fail.addresses[0].ok);
     assert.equal(false, fail.addresses[1].ok);
     assert.ok(fail.addresses[1].error, 'and it says why, because "unreachable" with no reason is not actionable');
-    assert.ok(fail.fix.includes(`IN ACCEPT -source 127.0.0.2 -p tcp -dport ${port} -log nolog`),
-      `the failing address is the one in the rule: ${fail.fix.join(' | ')}`);
+    // ⚠ AND BOTH OF THESE ARE LOOPBACK, so the remedy is the rebind alone — see
+    // the loopback test above. The firewall half says so rather than going quiet.
+    assert.ok(fail.fix.includes('# 127.0.0.2 passes on its own once the unit binds 0.0.0.0'),
+      `no rule for a loopback address, and it says why: ${fail.fix.join(' | ')}`);
+    assert.ok(!fail.fix.some((l) => l.startsWith('IN ACCEPT')));
   } finally {
     server.close();
   }
+});
+
+test('the probe hands the CLIENTS to the fix lines, not the addresses it dialled', async () => {
+  // ⚠ NO SOCKET IN THIS TEST AT ALL. The injected fetch fails every address, so
+  // the probe reaches the fix lines with a LAN arrival — the one shape that
+  // earns a firewall rule — without this unit test dialling a LAN address.
+  const rec = appsLib.buildRecord({
+    id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service',
+  }, 100);
+  const r = await appsLib.reachabilityProbe(rec, ['192.168.2.117'], {
+    fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
+    remotes: { '192.168.2.117': ['192.168.2.131'] },
+  });
+  assert.equal(false, r.ok);
+  assert.deepEqual(['192.168.2.117'], r.addresses.map((a) => a.addr), 'the ARRIVAL address is what was asked');
+  assert.ok(r.fix.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog'),
+    `and the CLIENT is what the rule names: ${r.fix.join(' | ')}`);
+
+  // Without the map there is nothing true to put after -source, and it says so.
+  const blind = await appsLib.reachabilityProbe(rec, ['192.168.2.117'], {
+    fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
+  });
+  assert.ok(blind.fix.includes('# no client has reached huginn on 192.168.2.117 yet — add its network here'),
+    blind.fix.join(' | '));
 });
 
 test('a 5xx from an address is unreachable FROM there, with the status as the reason', async () => {

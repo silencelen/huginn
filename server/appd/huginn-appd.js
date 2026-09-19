@@ -9147,6 +9147,15 @@ const server = http.createServer(async (req, res) => {
   // answer on, because a device that can reach huginn to read the Apps list can
   // reach the apps it is reading about.
   //
+  // ⚠⚠ AND `remoteAddress` IS THE OTHER HALF, ADDED IN 3.5.2. The arrival
+  // address is one of THIS container's own, so a PVE rule on 117 reading
+  // `-source 192.168.2.117` matches nothing inbound and every firewall line the
+  // Apps rows emitted was inert. The client address — 192.168.2.131 for a phone
+  // NATted by the Yggdrasil LAN gateway, a 100.x for a tailnet client — is the
+  // only thing here a `-source` can honestly be, and this is the one place the
+  // daemon can see it. It is recorded UNDER the arrival it came in on, because
+  // the question a failing address asks is "who reaches huginn HERE".
+  //
   // Here rather than inside the /v1/apps block: a client that polls /v1/status
   // and never opens the Apps page has still proved that address reaches this
   // daemon, and an address only learned by visiting the page would let the first
@@ -9155,7 +9164,10 @@ const server = http.createServer(async (req, res) => {
   // AFTER the auth check, deliberately: /v1/ping is unauthenticated, and a port
   // scanner must not be able to teach this daemon a new address that every app
   // then has to answer on. In memory, flushed lazily — see noteClientAddress.
-  try { appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR }).noteClientAddress(req.socket.localAddress); } catch { /* not a reason to fail a request */ }
+  try {
+    appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
+      .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
+  } catch { /* not a reason to fail a request */ }
 
   try {
     let m;   // shared by the path-matching routes below
@@ -12121,6 +12133,13 @@ const server = http.createServer(async (req, res) => {
           // Every address an app has to answer on, so a client can say what the
           // check was against instead of showing a refusal with no subject.
           clientAddresses: apps.addresses(),
+          // ⚠ AND WHO HAS ARRIVED ON EACH — additive, 3.5.2, `{arrival: [client]}`.
+          // The arrival addresses say what was CHECKED; these say what the fix
+          // lines can put after `-source`, which is the only address in this
+          // payload a firewall rule on heimdall could ever match. An arrival
+          // with an empty list is a real state and is on the wire as one.
+          // NOT on the alias: /v1/consoles answers the frozen 3.4 body.
+          clientRemotes: apps.clientRemotes(),
         });
       }
 
