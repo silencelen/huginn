@@ -659,12 +659,19 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("updates.copy-diagnostics", mark),
         modifier = Modifier.padding(top = 12.dp),
     )
+    // ⚠ A PATH IS IDENTIFIED BY ITS END. This row ellipsised a long log path at
+    // 320dp and offered nothing else — no wrap, no copy, no way to widen it —
+    // while "This install" directly beneath it wrapped in full, so the one line
+    // somebody wants when they are about to go and read the file was the one
+    // line they could not have. Four lines and a Copy.
     SettingsReadOnlyRow(
         id = "updates.log-path",
         title = "Log file",
         value = AppLog.path ?: "memory only",
         summary = if (AppLog.path == null) "The log file could not be opened, so it is kept in memory." else null,
         highlighted = SettingsRowStyle.isHighlighted("updates.log-path", mark),
+        maxLines = 4,
+        onCopy = AppLog.path?.let { path -> { clipboard.setText(AnnotatedString(path)) } },
     )
     SettingsReadOnlyRow(
         id = "updates.install-path",
