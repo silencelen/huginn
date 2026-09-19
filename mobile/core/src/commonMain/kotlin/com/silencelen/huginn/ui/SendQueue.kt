@@ -29,6 +29,12 @@ object SendQueue {
     fun note(state: TypingState?): String? {
         val s = state ?: return null
         s.lastError?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // ⚠ BEFORE THE COUNT, because a duplicate usually has no count. The
+        // daemon dropped a send it already holds (or delivered seconds ago), so
+        // there is nothing in the queue that belongs to THIS tap — and falling
+        // through to `queued <= 0 -> null` is what leaves the composer looking
+        // as though the message vanished, which is the whole complaint.
+        if (s.blockedBy == DUPLICATE_REASON) return DUPLICATE
         if (s.queued <= 0) return null
         val waiting = "(${s.queued} waiting)"
         // `modal` is a DIFFERENT wait and needs different words: a dialog is open
@@ -68,8 +74,35 @@ object SendQueue {
      * so the first sentence is the right one. Null from an older daemon, which is
      * the old sentence exactly.
      */
-    fun seed(result: SendKeysResult): TypingState? =
-        if (result.landed) null else TypingState(queued = result.queued, blockedBy = result.blockedBy)
+    fun seed(result: SendKeysResult): TypingState? = when {
+        // ⚠ CHECKED BEFORE `landed`, WHICH A DUPLICATE ALWAYS IS. The daemon did
+        // not queue this send — it already has the text — so `queued` is 0 and
+        // the old rule returned null: the composer emptied and said nothing, on
+        // exactly the send whose fate a reader most wants explained.
+        result.duplicate -> TypingState(queued = result.queued, blockedBy = DUPLICATE_REASON)
+        result.landed -> null
+        else -> TypingState(queued = result.queued, blockedBy = result.blockedBy)
+    }
+
+    /**
+     * The composer's word for a send the daemon already had.
+     *
+     * ⚠ IT SAYS THE MESSAGE IS FINE. "Duplicate", "rejected" or "not sent" would
+     * all be read as "retype it", which is what produced the three copies in the
+     * first place. The one fact worth giving is that the text is on its way.
+     */
+    const val DUPLICATE: String = "That message is already on its way"
+
+    /**
+     * The `blockedBy` word this client MINTS for a duplicate.
+     *
+     * The daemon's 3.5.1 answer carries `duplicate: true` rather than a reason
+     * word, and the seed has to survive as far as [note] somehow; `blockedBy` is
+     * already "why this send is not on the pane yet" and needs no second field
+     * to carry one more reason. A daemon that later sends the word itself lands
+     * on the same sentence, which is the right outcome either way.
+     */
+    const val DUPLICATE_REASON: String = "duplicate"
 
     /**
      * The mark on a session's list row, or null when nothing is waiting.

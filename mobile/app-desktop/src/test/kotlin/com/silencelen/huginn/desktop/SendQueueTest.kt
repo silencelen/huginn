@@ -241,4 +241,42 @@ class SendQueueTest {
 
         scope.cancel()
     }
+
+    /**
+     * ⚠ THE SEND THAT SAID NOTHING AT ALL. appd 3.5.1 drops an identical human
+     * text it already holds (or delivered within 30 s) and answers
+     * `duplicate: true` — nothing is queued for this press, so `landed` is true
+     * and `noteSend` returned on its very first line. The composer emptied in
+     * silence, which is the same screen as a message that vanished: exactly the
+     * complaint the whole send queue exists to answer.
+     */
+    @Test
+    fun `a duplicate says the message is already on its way`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = controller(scope) { """{"queued":0}""" }
+
+        c.noteSend(SendKeysResult(ok = true, queued = 0, position = 0, delivered = false, duplicate = true))
+        assertEquals(
+            "That message is already on its way",
+            SendQueue.line(c.sendQueue.value),
+            "the composer must say the message is fine, not fall silent",
+        )
+
+        // ⚠ AND IT CLEARS. The seed is this client's guess; the daemon's own
+        // account of what is pending replaces it, so the line cannot outlive the
+        // message it describes.
+        assertTrue(!c.pollQueueOnce(), "the poll finds nothing held and stops")
+        assertNull(SendQueue.line(c.sendQueue.value))
+
+        scope.cancel()
+    }
+
+    /** The sentence is :core's, once, so the two clients cannot drift on it. */
+    @Test
+    fun `both clients render the same duplicate sentence`() {
+        assertEquals(
+            com.silencelen.huginn.ui.SendQueue.DUPLICATE,
+            SendQueue.line(TypingState(queued = 0, blockedBy = com.silencelen.huginn.ui.SendQueue.DUPLICATE_REASON)),
+        )
+    }
 }

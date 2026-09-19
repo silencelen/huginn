@@ -10,6 +10,11 @@ import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.data.SendKeysResult
+// The shared send-queue vocabulary. This file has its own `SendQueue` (the
+// desktop's sentences, which are not the phone's), so the ONE thing that must
+// not exist twice — the word a duplicate is carried under and the sentence it
+// renders as — is imported from :core under an alias rather than retyped.
+import com.silencelen.huginn.ui.SendQueue as SharedQueue
 import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.data.TypingState
@@ -969,6 +974,24 @@ class SessionController(
      * line under the composer of every pre-queue host.
      */
     fun noteSend(result: SendKeysResult) {
+        // ⚠ BEFORE THE `landed` RETURN, WHICH A DUPLICATE ALWAYS SATISFIES. The
+        // daemon recognised this text as one it already holds (or delivered
+        // seconds ago) and did not take it twice — nothing is queued, so the
+        // early return above fired and the composer emptied with no word at all,
+        // on the one send whose fate a reader most wants explained. SendQueue
+        // owns the sentence; both clients say it.
+        if (result.duplicate) {
+            _sendQueue.value = TypingState(
+                queued = result.queued,
+                delivering = false,
+                blockedBy = SharedQueue.DUPLICATE_REASON,
+            )
+            // Still watched: the next /typing answer is the daemon's own account
+            // of what is actually pending, and it replaces this seed — which is
+            // how the line clears itself once the original has landed.
+            watchQueue()
+            return
+        }
         if (result.landed) return
         // ⚠ AND `blockedBy`, WHICH THIS USED TO THROW AWAY. The composer line is
         // drawn from this state until the first `/typing` poll answers, and with
@@ -1107,6 +1130,11 @@ object SendQueue {
      */
     fun line(state: TypingState): String? {
         state.lastError?.takeIf { it.isNotBlank() }?.let { return "Not sent — $it" }
+        // ⚠ BEFORE THE COUNT, because a duplicate has none. The daemon already
+        // holds this text (appd 3.5.1) so nothing was queued for this press, and
+        // `queued <= 0 -> null` is precisely the silence this object exists to
+        // stop. Sentence from :core so the two clients cannot drift on it.
+        if (state.blockedBy == SharedQueue.DUPLICATE_REASON) return SharedQueue.DUPLICATE
         if (state.queued <= 0) return null
         val waiting = if (state.queued == 1) "1 waiting" else "${state.queued} waiting"
         return when (state.blockedBy) {

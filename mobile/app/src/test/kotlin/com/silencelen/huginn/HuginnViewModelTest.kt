@@ -638,6 +638,25 @@ class HuginnViewModelTest {
         assertNull("a delivered send never showed one", SendQueue.seed(SendKeysResult(ok = true, delivered = true)))
     }
 
+    /**
+     * ⚠ THE OTHER WAY THE COMPOSER FALLS SILENT. appd 3.5.1 drops a human send it
+     * already holds — or delivered within the last 30 seconds — and answers
+     * `duplicate: true`. Nothing is queued for that press, so `landed` is true
+     * and the seed used to be null: the composer emptied and said nothing, which
+     * is the same screen as the message being lost. It is precisely the screen
+     * that produced the three-copies P1, because the reader retypes.
+     */
+    @Test
+    fun `a duplicate send is explained rather than passed over in silence`() {
+        val dup = SendKeysResult(ok = true, queued = 0, position = 0, delivered = false, duplicate = true)
+        assertTrue("nothing of it is waiting, which is why `landed` cannot be the gate", dup.landed)
+        val seeded = SendQueue.seed(dup)
+        assertNotNull("the phone seeds its composer line from the send's own answer", seeded)
+        assertEquals("That message is already on its way", SendQueue.note(seeded))
+        // And it is the daemon's next word, not this one, that has the last say.
+        assertNull(SendQueue.note(TypingState(queued = 0)))
+    }
+
 
     // ------------------------------------------------ #71 auto-switch ordering
 
