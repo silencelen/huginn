@@ -838,6 +838,107 @@ assert.equal(r.retryDelayMs(99), 30000, "capped, so a long outage is not a busy 
 ' && ok "a 401 stops delivery without stopping the child, and blips back off" \
    || bad "a 401 is still retried twice a second, or kills the run"
 
+# ⚠ "KEEP ACT MODE WHILE LOCKED" — the one setting that decides whether a lock
+# screen withdraws authority. Two facts wear the word `locked`: what the machine
+# REPORTS (honest, rides every frame home) and what the POLICY may see (the
+# owner's standing answer applied to it). gateLocked is the whole of the second,
+# and the case matrix in shared/device-policy-cases.json is deliberately NOT
+# involved: the lattice did not change, the signal feeding it did.
+node -e '
+const assert = require("assert");
+const r = require(process.cwd() + "/client/huginn-device");
+const REF = "this machine is locked, so it is read-only until someone unlocks it";
+const work = (mode) => ({ id: "w", chatId: "c", prompt: "p", mode });
+
+assert.equal(r.gateLocked(true,  false), true,  "locked + setting off must still gate");
+assert.equal(r.gateLocked(true,  true),  false, "locked + setting on must NOT gate");
+assert.equal(r.gateLocked(false, false), false, "unlocked is unlocked");
+assert.equal(r.gateLocked(false, true),  false, "unlocked + setting on is still unlocked");
+// ⚠ ONLY A REAL `true`. An absent key is every device.json written before this
+// existed, and a truthy string is what a hand-edited "actWhileLocked": "no"
+// would be - a machine running Bash unattended because it read a denial as
+// consent.
+assert.equal(r.gateLocked(true, undefined), true, "an absent setting is OFF");
+assert.equal(r.gateLocked(true, "no"), true, "a string is not a yes");
+assert.equal(r.gateLocked(true, 1), true, "nor is a 1");
+
+assert.equal(r.refusal("own", r.gateLocked(true, false), "act"), REF,
+  "the refusal a person already knows must not change wording");
+assert.equal(r.refusal("own", r.gateLocked(true, true), "act"), null,
+  "with the setting on, act runs while locked");
+// It widens the LOCK and nothing else: a look machine is still a look machine.
+assert.equal(r.refusal("look", r.gateLocked(true, true), "act"),
+  "this machine is set to look, which cannot run act",
+  "the setting must not sideways-widen the scope");
+const granted = r.argvFor(work("act"), "own", r.gateLocked(true, true)).join(" ");
+assert.ok(/--allowedTools [^-]*Bash/.test(granted), "act while locked must carry the act grant: " + granted);
+const refused = r.argvFor(work("act"), "own", r.gateLocked(true, false)).join(" ");
+assert.ok(/--disallowedTools [^-]*Bash/.test(refused), "act refused must keep the read-only argv: " + refused);
+assert.equal(r.cwdFor("work", r.gateLocked(true, true), "/root-dir"), "/root-dir",
+  "a work run keeps its root when the setting holds the scope up");
+// And this runner still reports NO lock state of its own - a headless box has
+// no session to lock, and inventing one is the fake signal the file refuses.
+assert.equal(r.locked(), false, "the headless runner must not start claiming a lock");
+' && ok "the act-while-locked gate is the only thing it changes" \
+   || bad "the act-while-locked gate is wrong, or it moved the scope lattice"
+
+# ⚠ AND IT SURVIVES THE ROUND TRIP, IN BOTH DIRECTIONS. A setting that can only
+# be turned ON is a trapdoor, and one whose OFF never reaches the daemon leaves
+# the pre-check granting act on a machine whose owner revoked it — the narrowing
+# that does not travel. Needs a listener, so it SKIPS LOUDLY rather than
+# reporting green on a box where it could not bind.
+AW=$(mktemp -d)
+cat > "$AW/stub.js" <<'STUB'
+const fs = require("fs"); const http = require("http");
+const s = http.createServer((q, r) => {
+  let b = ""; q.on("data", (c) => { b += c; });
+  q.on("end", () => {
+    fs.appendFileSync(process.argv[3], `${q.method} ${q.url} ${b}\n`);
+    r.writeHead(q.method === "POST" ? 201 : 200, { "Content-Type": "application/json" });
+    r.end(JSON.stringify({ id: "33333333-3333-3333-3333-333333333333", scope: "work" }));
+  });
+});
+s.on("error", () => process.exit(1));
+s.listen(0, "127.0.0.1", () => fs.writeFileSync(process.argv[2], String(s.address().port)));
+setTimeout(() => process.exit(0), 30000);
+STUB
+node "$AW/stub.js" "$AW/port" "$AW/reqs" >/dev/null 2>&1 &
+AW_PID=$!; STUB_PIDS+=("$AW_PID"); STUB_DIRS+=("$AW")
+AW_PORT=$(stub_port "$AW/port")
+if [ -z "$AW_PORT" ]; then
+  skip "act-while-locked round trip (the stub could not bind)"
+else
+  printf 'tok\n' > "$AW/appd-token"
+  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on \
+    --url "http://127.0.0.1:$AW_PORT" --scope own --act-while-locked >/dev/null 2>&1
+  node -e '
+    const fs = require("fs");
+    const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (c.actWhileLocked !== true) { console.error("device.json: " + JSON.stringify(c.actWhileLocked)); process.exit(1); }
+    const body = JSON.parse(fs.readFileSync(process.argv[2], "utf8").trim().split("\n").pop().replace(/^\S+ \S+ /, ""));
+    if (body.actWhileLocked !== true) { console.error("enrol body: " + JSON.stringify(body)); process.exit(1); }
+    if (body.locked !== false) { console.error("the reported lock state must stay honest: " + JSON.stringify(body)); process.exit(1); }
+  ' "$AW/device.json" "$AW/reqs" \
+    && ok "--act-while-locked is stored and enrolled with, and the reported lock stays honest" \
+    || bad "--act-while-locked did not survive to the config or the wire"
+  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on --no-act-while-locked >/dev/null 2>&1
+  node -e '
+    const fs = require("fs");
+    const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (c.actWhileLocked !== false) { console.error("device.json: " + JSON.stringify(c.actWhileLocked)); process.exit(1); }
+    const body = JSON.parse(fs.readFileSync(process.argv[2], "utf8").trim().split("\n").pop().replace(/^\S+ \S+ /, ""));
+    if (body.actWhileLocked !== false) { console.error("enrol body: " + JSON.stringify(body)); process.exit(1); }
+  ' "$AW/device.json" "$AW/reqs" \
+    && ok "--no-act-while-locked travels too: turning it off is not a local-only fact" \
+    || bad "turning act-while-locked off did not reach the config or the daemon"
+  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on --act-while-locked=true >/dev/null 2>&1
+  [ $? -eq 2 ] && ok "the =value spelling is refused, not read as a boolean" \
+    || bad "--act-while-locked=true was accepted"
+  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on --act-while-locked --no-act-while-locked >/dev/null 2>&1
+  [ $? -eq 2 ] && ok "asking for both at once is refused rather than resolved by order" \
+    || bad "both spellings at once were silently resolved"
+fi
+
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
 node --check client/huginn-llm-shim && ok "huginn-llm-shim parses" || bad "huginn-llm-shim does not parse"
