@@ -847,6 +847,170 @@ test('recoveryDecision re-pastes ONLY into a composer that is drawn and empty', 
   assert.equal(t.recoveryDecision([]), 'blind', 'nor can a pane tmux answered nothing for');
 });
 
+// ----------------------------------------------- whose text is in the box
+
+/**
+ * THE PANE THAT COST THE OWNER THEIR SENTENCE (2026-09-19 04:04:01Z).
+ *
+ * Shaped like the real capture: an ordinary composer with an unsent DRAFT in it,
+ * typed in the live view minutes earlier and invisible to every other surface.
+ * A paste into this box joins the draft, and the Enter submits both.
+ */
+const DRAFT_PANE = [
+  '                                                             ◉ xhigh · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯  was think ask againaskada',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [huginnv20] Fable 5.1 · main ~5',
+  '  ⏵⏵ auto mode on (shift+tab to cycle)',
+];
+/** The same box a moment later: the draft, with the pasted message joined onto it. */
+const MERGED_PANE = [
+  '                                                             ◉ xhigh · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯  was think ask againaskadaask questions again, side note: i was thinking that',
+  'if a device can reach huginn to see the apps page',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [huginnv20] Fable 5.1 · main ~5',
+];
+const MESSAGE = 'ask questions again, side note: i was thinking that if a device can '
+  + 'reach huginn to see the apps page';
+
+test('composerHoldsDraft separates somebody ELSE\'s words from ours and from nothing', () => {
+  // null / false / true, and the daemon turns on all three: a pane with no box
+  // is never held, an empty box or our own text is not a draft, and anything
+  // else is a person mid-sentence.
+  const holds = (lines) => t.composerHoldsDraft(t.composerText(lines), MESSAGE);
+  assert.equal(holds(['root@huginn:~/netplan#']), null, 'a shell has no box to own');
+  assert.equal(holds([]), null, 'nor has a pane tmux answered nothing for');
+  assert.equal(holds(SENT_PANE), false, 'an empty box is nobody\'s');
+  assert.equal(holds(FRESH_COMPOSER), false, 'and neither is the dim placeholder hint');
+  assert.equal(holds(DRAFT_PANE), true, 'THIS is the one the owner lost a sentence to');
+});
+
+test('a box already holding OUR text is not read as a stranger\'s draft', () => {
+  // A resend, or a collapsed-paste marker our own first try left behind. Reading
+  // either as somebody's draft would hold the message for the full ten minutes
+  // for no reason — the same trap `pasteIndistinguishable` was written to dodge.
+  assert.equal(t.composerHoldsDraft(t.composerText(STUCK_PANE), STUCK_TEXT), false,
+    'that is our message sitting there, not theirs');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', MESSAGE), false,
+    'a collapsed paste is how most long messages LOOK once they land');
+});
+
+test('a box holding what APPD last pasted is our leftover, not a stranger\'s draft', () => {
+  // ⚠ THE DEADLOCK THE GUARD WOULD OTHERWISE BUILD. A pane can strand a piece of
+  // the last thing appd pasted — the recovery's 'leave' branch presses no Enter
+  // on purpose, and a frame whose final line carries no newline sits in the box
+  // (seen for real: `❯ [End brief. Size this project…]`). Read as somebody
+  // mid-sentence, every later message to that session waits ten minutes.
+  const frame = '[Huginn project brief]\nPropose two sessions.\n[End brief. Size this project.]';
+  assert.equal(t.composerHoldsDraft('[End brief. Size this project.]', MESSAGE, frame), false,
+    'what is left of our own paste is ours to join');
+  assert.equal(t.composerHoldsDraft(' was think ask againaskada', MESSAGE, 'a'), true,
+    'a draft GROWN past our last paste — the Screen tab, character by character — is still theirs');
+  assert.equal(t.composerHoldsDraft(' was think ask againaskada', MESSAGE, null), true,
+    'and a session appd has never typed into has no leftovers to confuse it with');
+});
+
+test('draftHold holds for a draft, and for keys still in flight, and not forever', () => {
+  // ⚠ THE SECOND CLAUSE IS THE ONE A CAPTURE CANNOT ANSWER. A keypress accepted
+  // by the route but not yet painted is in no capture at all, so an empty-LOOKING
+  // box during live-view typing is not an empty box.
+  assert.equal(t.draftHold({ draft: true }), true);
+  assert.equal(t.draftHold({ draft: false }), false, 'an empty box releases at once');
+  assert.equal(t.draftHold({ draft: null, keysAgoMs: 0 }), false,
+    'a pane with no composer is never held by this rule, whatever was typed at it');
+  assert.equal(t.draftHold({ draft: false, keysAgoMs: 100 }), true,
+    'somebody is typing into it right now');
+  assert.equal(t.draftHold({ draft: false, keysAgoMs: t.LIVE_KEYS_WINDOW_MS }), false,
+    'and the window lapses when they stop');
+  // ⚠ `Number(null)` IS 0, AND 0 MS AGO IS THE MOST RECENT KEYPRESS THERE IS.
+  // Read as a number rather than checked for null, "nobody has ever typed here"
+  // became "somebody is typing right now" and held every send on every session.
+  assert.equal(t.draftHold({ draft: false, keysAgoMs: null }), false,
+    'never typed into is not typed into a moment ago');
+  assert.equal(t.draftHold({ draft: true, waitedMs: t.DRAFT_HOLD_MAX_MS }), false,
+    'a hold a person cannot see the end of is the same bug as a message that vanishes');
+});
+
+test('releaseDecision reports `draft`, and ranks it under the holds that swallow', () => {
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, draft: true }),
+    { release: false, blockedBy: 'draft' });
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, draft: false }),
+    { release: true, blockedBy: null });
+  // A dialog pane has no ordinary composer, so those keep the words they have
+  // always reported for it — a client that says "there is unsent text in the
+  // live view" at a trust prompt is telling a reader to do the wrong thing.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: 'modal', draft: true }),
+    { release: false, blockedBy: 'modal' });
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, starting: true, draft: true }),
+    { release: false, blockedBy: 'starting' });
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, state: 'hold', draft: true }),
+    { release: false, blockedBy: 'attention' });
+  // And it outranks a boundary: a turn that ended does not make the box ours.
+  assert.deepEqual(t.releaseDecision({ idle: true, paneWhy: null, state: 'release', draft: true }),
+    { release: false, blockedBy: 'draft' });
+});
+
+test('recoveryDecision tells `our text, late` from `our text, on top of a draft`', () => {
+  // ⚠ THE DISTINCTION THE TIMEOUT COULD NOT MAKE. Both look like "the box is not
+  // empty"; one wants an Enter and the other must never get one.
+  assert.equal(t.recoveryDecision(SENT_PANE, { text: MESSAGE, before: SENT_PANE }), 'resend',
+    'still nothing there: the lost band, unchanged');
+  assert.equal(t.recoveryDecision(MERGED_PANE, { text: MESSAGE, before: SENT_PANE }), 'landed',
+    'ours arrived after the bound, into a box that was empty before it: press Enter');
+  assert.equal(t.recoveryDecision(MERGED_PANE, { text: MESSAGE, before: DRAFT_PANE }), 'leave',
+    'ours is there AMID their words — submitting that is the bug, and re-pasting doubles it');
+  assert.equal(t.recoveryDecision(DRAFT_PANE, { text: MESSAGE, before: DRAFT_PANE }), 'leave',
+    'ours never arrived and their draft is in the way');
+  assert.equal(t.recoveryDecision(STUCK_PANE), 'leave',
+    'called with no text at all it answers exactly as it always did');
+});
+
+// ------------------------------------------- the same message, pressed twice
+
+test('duplicatePending recognises a second press of a copy that has not gone yet', () => {
+  // The three POSTs of 2026-09-19, in a row: 04:00:16.419, 04:00:28.379,
+  // 04:00:32.818, identical text, into a queue that was held.
+  const now = 1_758_254_432_818;
+  const queued = [{ text: 'ask questions again', at: now - 16_399, origin: 'client', submit: true }];
+  assert.ok(t.duplicatePending(queued, 'ask questions again', now), 'the same words, still waiting');
+  assert.equal(t.duplicatePending(queued, 'ask questions AGAIN', now), null,
+    'a different message is never swallowed — that would lose one, which is worse');
+  assert.equal(t.duplicatePending([], 'ask questions again', now), null,
+    'nothing queued means nothing to be a second press OF: a delivered message is fair game');
+  assert.equal(t.duplicatePending(queued, 'ask questions again', now + t.DUPLICATE_WINDOW_MS), null,
+    'and a send held behind a ten-minute dialog can still be deliberately repeated');
+});
+
+test('duplicatePending never speaks for appd\'s own lines, jobs or live-view keys', () => {
+  const now = Date.now();
+  const same = { text: 'x', at: now, submit: true };
+  assert.equal(t.duplicatePending([{ ...same, automated: true }], 'x', now), null,
+    'an automated line has its own drop rules and is not a person pressing Send');
+  assert.equal(t.duplicatePending([{ ...same, run: () => {} }], 'x', now), null,
+    'a pane script types no text');
+  assert.equal(t.duplicatePending([{ ...same, submit: false }], 'x', now), null,
+    'the Screen tab typing the same character twice means it twice');
+  assert.equal(t.duplicatePending(null, 'x', now), null);
+  assert.equal(t.duplicatePending([same], '', now), null);
+});
+
+test('the draft guard writes its own journal lines, carrying the box', () => {
+  // A hold nobody can see is the bug the 43 lost messages taught; whatever else
+  // changes, a message waiting says so on disk, with what it is waiting for.
+  const held = t.draftHeldLogLine('huginnv20', ' was think ask againaskada');
+  assert.match(held, /huginnv20/);
+  assert.match(held, /unsent text in the live view/);
+  assert.match(held, /was think ask againaskada/);
+  assert.match(t.draftClearedLogLine('huginnv20', 4200), /composer is free again after 4200ms/);
+  const over = t.draftOverdueLogLine('huginnv20', 600_000, 'half a thought');
+  assert.match(over, /600s/);
+  assert.match(over, /sending into it anyway/);
+  assert.match(over, /half a thought/);
+});
+
 test('the recovery writes its own journal line, carrying the pane', () => {
   const resent = t.pasteResentLogLine('mcserver', 3000, SENT_PANE);
   assert.match(resent, /mcserver/);
