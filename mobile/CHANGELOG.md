@@ -1,5 +1,30 @@
 # Huginn changelog
 
+## 3.7.0 — unreleased
+
+The phone's half of the round-two review.
+
+- **What you type into the live view is what arrives.** A burst delivered faster than a finger —
+  gesture typing, a clipboard paste, a dictation commit — was repeated several times over, so five
+  characters could reach the pane as fifteen. While the keyboard is up the prompt line and cursor
+  now stay on screen instead of sitting behind the key row, and coming back to a session that is
+  still in live mode re-claims the terminal window it is typing into rather than only saying it has.
+- **A new session opens on its conversation**, where the composer is, instead of on whichever tab
+  was last used — which on a session that has done nothing was an empty stats page with nowhere to
+  type.
+- **Nothing sits under the system navigation bar any more.** Overview, Status, Apps, an archived
+  conversation, Host & sign-in and Devices all ended with their last row underneath it. Held
+  sideways, the conversation no longer runs under the navigation strip on the right edge, the
+  navigation rail scrolls so **Devices** can actually be reached, and "New session" is a button at
+  the corner of its own list rather than a pill floating over the middle of the screen.
+- **The add-route form clears the keyboard.** Address and Add were behind it and the page would not
+  scroll, so taps aimed at Address landed back in Name and put the URL on the end of the name.
+- **A project can be ended from the phone** — leave its sessions running, wind them down, or end
+  them now. Until now a project started here stranded its sessions in the Sessions list.
+- **"Wrap up" lines up with the other verbs** in a session's menu, and the refusal you get when an
+  app is not reachable from your devices carries **Copy fix** beside the dialog's own buttons, so
+  the lines can be copied without discovering a scroll.
+
 ## 3.6.1 — 2026-09-19
 
 - **A route that answers is offered by name** instead of passed over in silence, and the app
