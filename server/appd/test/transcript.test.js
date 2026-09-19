@@ -10,7 +10,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder, startsAtBoundary, injectedByTool, typedByHuman, skillNameFromBody } = require("../lib/transcript");
+const { readTranscript, workflowName, digestToolInput, machineText, describeMachineText, humanRemainder, startsAtBoundary, injectedByTool, typedByHuman, notificationEcho, skillNameFromBody } = require("../lib/transcript");
 
 function writeFixture(records) {
   const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'tr-')), 's.jsonl');
@@ -185,9 +185,10 @@ test('an Agent call is labelled with its description', () => {
 });
 
 test('a message queued mid-turn is shown, not dropped', () => {
-  // Verified against a real transcript: a message typed while Claude is working
-  // is written ONLY as queue-operation records and never becomes a `user`
-  // record, so dropping these made every follow-up invisible in the app.
+  // Verified against a real transcript: while a message typed during a turn is
+  // still waiting, queue-operation records are its only trace, so dropping them
+  // made every follow-up invisible in the app. (What happens once the queue
+  // lets go of it is the `remove`/`dequeue` split tested below.)
   const p = writeFixture([
     { type: 'user', message: { content: 'first' }, timestamp: T },
     { type: 'queue-operation', operation: 'enqueue', content: 'second, sent while busy', timestamp: T },
@@ -1200,4 +1201,150 @@ test('skillNameFromBody takes the directory, or admits it does not know', () => 
   assert.equal(skillNameFromBody('Base directory for this skill: /tmp/scratch/skills/kratos-kvm/'), 'kratos-kvm');
   assert.equal(skillNameFromBody('# Workflow authoring reference\n\nA workflow...'), '');
   for (const bad of ['', null, undefined, 42]) assert.equal(skillNameFromBody(bad), '');
+});
+
+// ------------------------------------- a background-task notification, twice
+//
+// Owner report, phone: the transcript shows PAIRS of identical system notes —
+// `Agent "…" finished` and `Background command "…" completed (exit code 0)`
+// back to back, same `ts`, same text, adjacent `seq`.
+//
+// A task-notification is written TWICE: once as a `queue-operation` enqueue and
+// again, ~40 ms later, as an ordinary `user` record carrying the same element
+// (`origin: {kind: 'task-notification'}`). The queued-message dedupe covers only
+// `user`-kind events, so machine text had none at all and both copies drew a
+// note. Against the real records (test/fixtures/transcripts/, see its README),
+// because the pairing is in fields no hand-written fixture would think to add.
+
+const NOTIFY_FIXTURE = path.join(__dirname, 'fixtures', 'transcripts', 'task-notification-echo.jsonl');
+
+test('a task notification written as BOTH a queue record and a user record is one note', () => {
+  const t = readTranscript(NOTIFY_FIXTURE);
+  const notes = t.events.filter((e) => e.kind === 'system');
+  assert.deepStrictEqual(notes.map((e) => e.text), [
+    'Agent "Review walk: phone app 3.5.0 over ADB (read-only)" finished',
+    'Background command "Extract strings from claude.exe" completed (exit code 0)',
+  ], `one note per notification: ${JSON.stringify(notes.map((e) => e.text))}`);
+  // The echo must not leak out as a message either — it is a `user` record.
+  assert.deepStrictEqual(t.events.filter((e) => e.kind === 'user'), []);
+  // ORDER: the note belongs where the agent reported back, between the turn
+  // that was running and the turn the notification started.
+  assert.deepStrictEqual(t.events.map((e) => e.kind),
+    ['assistant', 'system', 'assistant', 'system']);
+});
+
+test('a notification absorbed mid-turn still gets its note', () => {
+  // The commoner of the two shapes and the reason the note is drawn from the
+  // QUEUE record: a notification that lands while Claude is still working is
+  // `remove`d into the running turn (`reason: "absorbed_mid_turn"`) and Claude
+  // Code never writes a `user` record for it. Measured across 955 transcripts
+  // on this host: 645 of 1031 machine-text enqueues have no `user` echo at all,
+  // so a reader that waited for one would lose two notifications in three.
+  const t = readTranscript(NOTIFY_FIXTURE);
+  const absorbed = t.events.filter((e) => /Extract strings/.test(e.text || ''));
+  assert.strictEqual(absorbed.length, 1, 'absorbed mid-turn: drawn once, from the queue record');
+  assert.strictEqual(absorbed[0].kind, 'system');
+});
+
+test('the same notification twice over is two notes, not one', () => {
+  // The one-shot rule. The same background command finishing twice writes the
+  // same text twice, and both times it is news.
+  const note = '<task-notification>\n<status>completed</status>\n'
+    + '<summary>Background command "tail the log" completed (exit code 0)</summary>\n</task-notification>';
+  const p = writeFixture([
+    { type: 'queue-operation', operation: 'enqueue', content: note, timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', timestamp: T, origin: { kind: 'task-notification' }, message: { content: note } },
+    { type: 'assistant', timestamp: T, message: { content: [{ type: 'text', text: 'ok' }] } },
+    { type: 'queue-operation', operation: 'enqueue', content: note, timestamp: T },
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T },
+    { type: 'user', timestamp: T, origin: { kind: 'task-notification' }, message: { content: note } },
+  ]);
+  const notes = readTranscript(p).events.filter((e) => e.kind === 'system');
+  assert.strictEqual(notes.length, 2, 'two separate reports are two notes');
+});
+
+test('resuming a tail does not duplicate a notification split across pages', () => {
+  // The split-window twin, and the shape a live phone actually hits: the poll is
+  // 2.5 s, the queue record and its echo are ~40 ms apart, so they land in the
+  // same page nearly always — but "nearly" is the whole bug class (#34/#37), and
+  // a page that ends between them used to hand the reader the note again.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-notify-split-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  const note = '<task-notification>\n<status>completed</status>\n'
+    + '<summary>Agent "the review walk" finished</summary>\n</task-notification>';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }) +
+      L({ type: 'queue-operation', operation: 'enqueue', content: note }));
+    const page1 = readTranscript(p);
+    assert.deepStrictEqual(page1.events.map((e) => e.kind), ['assistant', 'system'],
+      'the page that holds the queue record draws the note');
+
+    fs.appendFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', origin: { kind: 'task-notification' }, message: { content: note } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'reading it' }] } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+
+    const merged = page1.events.concat(page2.events);
+    const notes = merged.filter((e) => e.kind === 'system' && /the review walk/.test(e.text));
+    assert.strictEqual(notes.length, 1,
+      `the reader already had this note; it must not arrive twice: ${JSON.stringify(merged.map((e) => e.text))}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a cold open still draws a notification whose queue record scrolled off', () => {
+  // The mirror, and why the echo cannot simply be deleted: with no earlier page
+  // holding the note, the `user` record is the only copy the reader will get.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-notify-cold-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  const note = '<task-notification>\n<status>completed</status>\n'
+    + '<summary>Agent "the review walk" finished</summary>\n</task-notification>';
+  try {
+    fs.writeFileSync(p,
+      L({ type: 'queue-operation', operation: 'dequeue' }) +
+      L({ type: 'user', origin: { kind: 'task-notification' }, message: { content: note } }) +
+      L({ type: 'assistant', message: { content: [{ type: 'text', text: 'reading it' }] } }));
+    const t = readTranscript(p);
+    assert.deepStrictEqual(t.events.map((e) => e.text),
+      ['Agent "the review walk" finished', 'reading it']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ordinary machine text that never went through the queue is untouched', () => {
+  // The bound on the suppression. A slash command, an image caption and a
+  // system-reminder are `user` records with machine text and NO queue record —
+  // suppressing those on a resume would silently delete every command chip.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tr-notify-bound-'));
+  const p = path.join(dir, 'session.jsonl');
+  const L = (o) => JSON.stringify(o) + '\n';
+  try {
+    fs.writeFileSync(p, L({ type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } }));
+    const page1 = readTranscript(p);
+    fs.appendFileSync(p,
+      L({ type: 'user', message: { content: '<command-name>/effort</command-name><command-args>max</command-args>' } }) +
+      L({ type: 'user', message: { content: 'and now the real question' } }));
+    const page2 = readTranscript(p, { offset: page1.nextOffset });
+    assert.deepStrictEqual(page2.events.map((e) => e.text), ['/effort max', 'and now the real question']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('notificationEcho keys on the harness field, never on the text', () => {
+  const note = '<task-notification>\n<summary>Agent "x" finished</summary>\n</task-notification>';
+  assert.ok(notificationEcho({ origin: { kind: 'task-notification' } }));
+  // A person who literally types the element is not the harness echoing itself.
+  assert.ok(!notificationEcho({ origin: { kind: 'human' }, message: { content: note } }));
+  assert.ok(!notificationEcho({ origin: { kind: 'peer' } }));
+  for (const bad of [null, undefined, {}, { origin: null }, { origin: 'task-notification' }, 42]) {
+    assert.ok(!notificationEcho(bad));
+  }
 });
