@@ -841,7 +841,7 @@ EOF
         echo "  (previous version saved as $(basename "$dest").bak)"
       else
         rm -f "$tmp" 2>/dev/null
-        echo "huginn: update failed (gh unavailable or errored, and scp fallback failed)" >&2; return 1
+        echo "huginn: update failed (gh unavailable or errored, and the $uh mirror did not answer either)" >&2; return 1
       fi
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
