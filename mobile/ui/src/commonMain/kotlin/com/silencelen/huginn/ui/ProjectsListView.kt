@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -71,9 +73,18 @@ fun ProjectsListView(
     header: String? = "Projects",
     /** Null hides the control: a shell with nowhere to put a create sheet offers none. */
     onCreate: (() -> Unit)? = null,
+    /**
+     * Whether THIS view owns the scroll. Same rule and same reason as
+     * [ConsolesView]: the phone hosts this column in a `Box(fillMaxSize())` and
+     * nothing else there scrolls, so every project past the fold is unreachable;
+     * the desktop's pane already scrolls around it and a second one nested inside
+     * swallows the gesture instead of throwing.
+     */
+    scroll: Boolean = false,
 ) {
     val ordered = remember(projects) { ProjectRules.orderedProjects(projects) }
-    Column(modifier.fillMaxWidth()) {
+    val scrollState = rememberScrollState()
+    Column(modifier.fillMaxWidth().let { if (scroll) it.verticalScroll(scrollState) else it }) {
         if (header != null) {
             Row(
                 Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp),
