@@ -161,6 +161,14 @@ EOF
       echo "[build] one test file failed — re-running $RETRY_FILE alone, once."
       if node --test "$RETRY_FILE"; then
         echo "[gate] retried once: $RETRY_FILE"
+        # Every failure in the full run belonged to this one file (nothing else
+        # failed) and the file has just passed alone, so credit them back. Still
+        # the FULL run's numbers — its '# fail' is the file's healthy count, now
+        # proved; the retry's own '# pass' is never read. Without this a flake
+        # in any file bigger than the floor's margin refused a green tree
+        # (1733 counted against a floor of 1740 on 2026-09-19, 12 tests flaked).
+        NODE_FAILED="$(grep -oE '^# fail [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
+        NODE_COUNT=$((NODE_COUNT + NODE_FAILED))
       else
         rm -f "$NODE_LOG"; echo "[build] server tests failed twice on $RETRY_FILE — refusing." >&2; exit 1
       fi
