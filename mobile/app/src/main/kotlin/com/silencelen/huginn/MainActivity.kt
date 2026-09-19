@@ -1376,6 +1376,9 @@ fun HuginnApp(
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
                 onLive = { vm.sendLive(name, it) },
+                // Live typing is what entitles this phone to reshape the owner's
+                // tmux window; leaving it hands the window straight back.
+                onLiveMode = { vm.setLiveView(it) },
                 agents = agents,
                 onAgentsOpen = { vm.startAgentsPolling(name) },
                 onAgentsClose = { vm.stopAgentsPolling() },

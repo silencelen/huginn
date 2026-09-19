@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.PaneLease
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.TypingState
@@ -70,6 +71,68 @@ class HuginnViewModelTest {
 
     private fun fixture(name: String): String =
         javaClass.classLoader!!.getResourceAsStream(name)!!.bufferedReader().readText()
+
+    // --------------------------------------------------- the pane-size lease
+
+    /**
+     * THE PHONE'S HALF OF OWNER DECISION 52.
+     *
+     * The Screen tab polls the pane the whole time it is on display, and used to
+     * report `?cols=&rows=` on every one of those polls — which took a lease over
+     * the owner's real tmux window. With the desktop doing the same thing on the
+     * same session the pane flapped 152x44 <-> 107x44 three times in ninety
+     * seconds, nobody typing.
+     *
+     * `startScreenPolling` asks [PaneLease.poll] what to put on the wire, so the
+     * rule is testable here: this view model is an `AndroidViewModel` and this
+     * host has no device, so a pure delegate is the only way any of it is reached.
+     */
+    @Test
+    fun `the screen poll claims the window only in live typing mode`() {
+        // Screen tab open, reading. Geometry travels (the daemon still wants to
+        // know what the phone can draw); the claim does not.
+        val viewing = PaneLease.poll(cols = 60, rows = 30, liveView = false)
+        assertEquals(60, viewing.cols)
+        assertEquals(30, viewing.rows)
+        assertFalse("watching a pane must not reshape somebody's terminal", viewing.live)
+
+        // The keyboard is up and every keystroke is going into the pane. NOW the
+        // phone's geometry is the one the pane should be wrapped for.
+        val typing = PaneLease.poll(cols = 60, rows = 30, liveView = true)
+        assertTrue("live typing is what entitles the phone to the window", typing.live)
+
+        // Live mode entered before the first measurement: nothing honest to claim.
+        assertFalse(PaneLease.poll(cols = null, rows = null, liveView = true).live)
+    }
+
+    /**
+     * OPENING A SESSION TAKES NOTHING, AND CLOSING ONE OWES NOTHING BACK.
+     *
+     * The phone polls the pane from the moment a session opens — the Conversation
+     * tab draws its question card off that poll — and the Screen tab may never be
+     * opened at all. Two things follow, and the phone got both wrong: the poll on
+     * open must carry no claim (no measurement has happened and nobody is typing),
+     * and leaving must put no `DELETE /size` on the wire, because against the
+     * pre-decision-52 daemon that release landed on whoever DID hold the window.
+     * Closing a conversation could therefore unpin somebody else's live pane.
+     */
+    @Test
+    fun `opening a session takes no lease, and leaving it releases nothing`() {
+        // Session open, Conversation tab: polled, never measured, not live.
+        val onOpen = PaneLease.poll(cols = null, rows = null, liveView = false)
+        assertFalse("opening a session must claim nothing", onOpen.live)
+        assertNull(onOpen.cols)
+
+        // The Screen tab on display, measured, still not typing: still no claim.
+        assertFalse(PaneLease.poll(cols = 60, rows = 30, liveView = false).live)
+
+        // And the release rule the view model runs on the way out: nothing held,
+        // nothing owed — so no request is built at all.
+        assertNull("a session that was never leased owes no release",
+            PaneLease.toRelease(held = null, wanted = null))
+        assertEquals("what WAS leased is still handed back", "jtyper",
+            PaneLease.toRelease(held = "jtyper", wanted = null))
+    }
 
     // ------------------------------------------------------------ the pill
 
