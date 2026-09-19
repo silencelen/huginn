@@ -142,6 +142,13 @@ object PlanFormat {
      * owner flipped is the owner's to flip back, and a reached limit is money
      * already spent. Saying "disabled" to all three was how a real $100.55
      * managed to look like nothing at all.
+     *
+     * ⚠ EVERY ONE OF THESE IS READ DIRECTLY UNDER THE AMOUNT LINE, so none of
+     * them may be a word that continues it. The enabled state was the bare word
+     * "on", and the walk photographed what that does: "$0.00 of $100.00 used"
+     * with a lone "on" on the line below, which reads as the head of a sentence
+     * that lost its tail — "used on" what? It pairs with "turned off" now, which
+     * is the same switch said the other way round.
      */
     fun extraUsageState(
         enabled: Boolean,
@@ -150,7 +157,7 @@ object PlanFormat {
         userDisabled: Boolean? = null,
     ): String = when {
         enabled && spendLimitReached -> "limit reached"
-        enabled -> "on"
+        enabled -> "turned on"
         userDisabled == true -> "turned off"
         disabledReason == "org_level_disabled_until" -> "paused until the monthly reset"
         spendLimitReached -> "limit reached, now paused"

@@ -16,7 +16,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -153,12 +156,31 @@ private fun RoundRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
+                // ⚠ THE VERDICT IS NOT METADATA. "Needs you" sat in the same
+                // muted grey as "4 days ago · 8 items" while Pause / Run now /
+                // Edit took the accent beside it — the controls louder than the
+                // thing they are controls for. The word takes the mark's own
+                // colour, from the mark's own vocabulary; what follows it is the
+                // metadata it was wrongly wearing. One Text, so the line still
+                // ellipsises as one line.
                 Text(
-                    listOfNotNull(
-                        roundStatusLabel(status, acked).takeIf { round.lastRun != null },
-                        agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
-                        itemCountWords(round.lastRun),
-                    ).joinToString(" · "),
+                    buildAnnotatedString {
+                        val label = roundStatusLabel(status, acked).takeIf { round.lastRun != null }
+                        val rest = listOfNotNull(
+                            agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
+                            itemCountWords(round.lastRun),
+                        )
+                        if (label != null) {
+                            withStyle(
+                                SpanStyle(
+                                    color = statusColor(status, acked),
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            ) { append(label) }
+                            if (rest.isNotEmpty()) append(" · ")
+                        }
+                        append(rest.joinToString(" · "))
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -201,16 +223,27 @@ private fun StatusDot(status: RoundStatus, acknowledged: Boolean = false, modifi
     // MARK is the thing that pulls the eye across a list, and leaving it lit for
     // something already handled is how a screen of Rounds stops being scannable.
     val effective = if (acknowledged) RoundStatus.OK else status
-    val color: Color = when (effective) {
-        RoundStatus.ACTION -> MaterialTheme.colorScheme.error
-        RoundStatus.ATTENTION -> MaterialTheme.colorScheme.primary
-        RoundStatus.OK -> MaterialTheme.colorScheme.onSurfaceVariant
-        RoundStatus.UNKNOWN -> MaterialTheme.colorScheme.outline
-        RoundStatus.NEVER_RUN -> MaterialTheme.colorScheme.outlineVariant
-    }
     // The quiet states are drawn SMALLER as well as duller, so a screen of
     // healthy Rounds recedes and the one that wants something stands out
     // without any of them being loud.
     val size = if (effective == RoundStatus.OK || effective == RoundStatus.NEVER_RUN) 6.dp else 8.dp
-    Surface(color = color, shape = CircleShape, modifier = modifier.size(size)) {}
+    Surface(color = statusColor(status, acknowledged), shape = CircleShape, modifier = modifier.size(size)) {}
 }
+
+/**
+ * The colour of a Round's state — for the dot AND for the word, from one
+ * vocabulary in `:core` ([roundStatusColorKey]).
+ *
+ * Two mappings for one fact is how a row came to carry a red dot and a grey
+ * verdict, which is a row telling the reader two different things about the
+ * same run.
+ */
+@Composable
+private fun statusColor(status: RoundStatus, acknowledged: Boolean): Color =
+    when (roundStatusColorKey(status, acknowledged)) {
+        "error" -> MaterialTheme.colorScheme.error
+        "primary" -> MaterialTheme.colorScheme.primary
+        "outline" -> MaterialTheme.colorScheme.outline
+        "outlineVariant" -> MaterialTheme.colorScheme.outlineVariant
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }

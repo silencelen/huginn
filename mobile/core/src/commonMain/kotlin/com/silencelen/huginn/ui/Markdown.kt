@@ -17,9 +17,15 @@ import androidx.compose.ui.text.withStyle
  * being flattened into prose (which is what v1 did, and it made any answer
  * containing a command unreadable on a phone).
  *
- * Deliberately not a full CommonMark implementation: no tables, no nested lists,
- * no reference links. Unsupported syntax degrades to its literal text rather than
+ * Deliberately not a full CommonMark implementation: no nested lists, no
+ * reference links. Unsupported syntax degrades to its literal text rather than
  * disappearing, which is the safe failure for a reader.
+ *
+ * GFM PIPE TABLES ARE IN (3.5.1). "No tables" was a deliberate line here until
+ * the walk on the owner's Fold put the two tabs side by side: the Screen tab drew
+ * an answer's table as a box table — that is Claude Code's own terminal doing it —
+ * while the Conversation tab drew forty lines of raw `| # | Item |` pipes. The
+ * same answer, and the app's own rendering was the worse of the two.
  */
 sealed interface MdBlock {
     data class Paragraph(val text: AnnotatedString) : MdBlock
@@ -34,6 +40,16 @@ sealed interface MdBlock {
      * fetch. A src it cannot draw falls back to [alt] as ordinary prose.
      */
     data class Image(val src: String, val alt: String) : MdBlock
+    /**
+     * A GFM pipe table. [rows] is RECTANGULAR — a short row is padded with empty
+     * cells by the parser, because a grid cannot draw a hole and the columns of
+     * every row below a ragged one would otherwise stop lining up.
+     *
+     * [header] says whether `rows[0]` is a heading rather than data; it is true
+     * only when the source carried a `|---|---|` delimiter under it. The
+     * delimiter row itself is never a row.
+     */
+    data class Table(val rows: List<List<AnnotatedString>>, val header: Boolean) : MdBlock
     data object Rule : MdBlock
 }
 
@@ -88,6 +104,17 @@ object Markdown {
                     out.add(MdBlock.Image(m.groupValues[2].trim(), m.groupValues[1].trim()))
                     i++
                 }
+                // Before HEADING and BULLET, neither of which a `|` line can
+                // match, and after the fence so a table inside a code block stays
+                // code. A run that turns out not to be a table falls back into the
+                // paragraph as the literal text it was written as.
+                isTableRow(line) -> {
+                    val raw = mutableListOf<String>()
+                    while (i < lines.size && isTableRow(lines[i])) { raw.add(lines[i]); i++ }
+                    val table = tableBlock(raw) { inline(it) }
+                    if (table != null) { flushPara(); out.add(table) }
+                    else raw.forEach { para.append(it).append('\n') }
+                }
                 HEADING.matches(line) -> {
                     flushPara()
                     val m = HEADING.find(line)!!
@@ -126,6 +153,102 @@ object Markdown {
     private val RULE = Regex("^(-{3,}|\\*{3,}|_{3,})$")
     private val CONT = Regex("^\\s{2,}\\S.*$")
     private val IMAGE_LINE = Regex("^!\\[([^\\]]*)\\]\\(([^()]+)\\)$")
+
+    // ------------------------------------------------------------ pipe tables
+
+    /** A delimiter cell: `---`, `:--`, `--:` or `:-:`. */
+    private val TABLE_DELIM = Regex("^:?-+:?$")
+
+    /**
+     * Whether [line] could be a row of a pipe table.
+     *
+     * The bar must OPEN the line, and there must be a second one: "pipe it | into
+     * grep" is a sentence, and a parser that turned it into a one-cell grid would
+     * be a worse bug than the one this feature fixes. A `\|` does not count —
+     * it is a pipe a cell contains, not a cell boundary.
+     */
+    private fun isTableRow(line: String): Boolean {
+        val t = line.trim()
+        return t.startsWith("|") && unescapedPipes(t) >= 2
+    }
+
+    private fun unescapedPipes(t: String): Int {
+        var n = 0
+        var i = 0
+        while (i < t.length) {
+            if (t[i] == '\\' && i + 1 < t.length) { i += 2; continue }
+            if (t[i] == '|') n++
+            i++
+        }
+        return n
+    }
+
+    /** One row's cells, trimmed, with each `\|` unescaped to the pipe it stands for. */
+    private fun tableCells(line: String): List<String> {
+        val t = line.trim()
+        val cells = mutableListOf<String>()
+        val cur = StringBuilder()
+        var i = if (t.startsWith("|")) 1 else 0
+        while (i < t.length) {
+            val c = t[i]
+            when {
+                c == '\\' && i + 1 < t.length && t[i + 1] == '|' -> { cur.append('|'); i += 2 }
+                c == '|' -> { cells.add(cur.toString().trim()); cur.setLength(0); i++ }
+                else -> { cur.append(c); i++ }
+            }
+        }
+        // A row written without its closing bar still ends in a cell.
+        val tail = cur.toString().trim()
+        if (tail.isNotEmpty()) cells.add(tail)
+        return cells
+    }
+
+    private fun isDelimiterRow(cells: List<String>): Boolean =
+        cells.isNotEmpty() && cells.all { TABLE_DELIM.matches(it) }
+
+    /**
+     * A run of bar-delimited lines as a table, or null when it is only prose.
+     *
+     * TWO lines, or one line and a delimiter. A single `| like this |` on its own
+     * is a sentence somebody wrapped in bars, and drawing it as a one-row grid is
+     * the false positive that would make this feature unwelcome.
+     */
+    private fun tableBlock(raw: List<String>, inline: (String) -> AnnotatedString): MdBlock.Table? {
+        val rows = raw.map { tableCells(it) }
+        val headed = rows.size >= 2 && isDelimiterRow(rows[1])
+        if (!headed && rows.size < 2) return null
+        val body = if (headed) listOf(rows[0]) + rows.drop(2) else rows
+        if (body.isEmpty()) return null
+        val width = body.maxOf { it.size }
+        return MdBlock.Table(
+            rows = body.map { r -> List(width) { c -> inline(r.getOrElse(c) { "" }) } },
+            header = headed,
+        )
+    }
+
+    /**
+     * Every table in [src] replaced by its first row, cells joined by " · ".
+     *
+     * For [plainInline] alone. A chats row is one line in one style: the pipes and
+     * the `|---|` rule are instructions to a renderer that is not running there,
+     * and the first row is the label the rest of the table hangs off.
+     */
+    private fun flattenTables(src: String): String {
+        if (!src.contains('|')) return src
+        val lines = src.split("\n")
+        val out = mutableListOf<String>()
+        var i = 0
+        while (i < lines.size) {
+            if (!isTableRow(lines[i])) { out.add(lines[i]); i++; continue }
+            val raw = mutableListOf<String>()
+            while (i < lines.size && isTableRow(lines[i])) { raw.add(lines[i]); i++ }
+            val rows = raw.map { tableCells(it) }
+            val headed = rows.size >= 2 && isDelimiterRow(rows[1])
+            if (headed || rows.size >= 2) out.add(rows[0].joinToString(" · "))
+            else out.addAll(raw)
+        }
+        return out.joinToString("\n")
+    }
 
     /**
      * The schemes a label is allowed to become a clickable link for.
@@ -182,9 +305,13 @@ object Markdown {
      * Block syntax is NOT touched — a leading `#` or `-` is one character and
      * reads as the punctuation it is, while a lost `**` pair reads as an error.
      * Newlines become spaces, because the caller wanted one line.
+     *
+     * THE ONE EXCEPTION IS A TABLE, which is not punctuation but a whole grid:
+     * left alone it filled the row with `| # | Item | What I need | |---|---|---|`.
+     * It flattens to its first row, cells joined by " · " — see [flattenTables].
      */
     fun plainInline(src: String): String =
-        inline(src.replace("\r\n", "\n")).text.replace('\n', ' ').trim()
+        inline(flattenTables(src.replace("\r\n", "\n"))).text.replace('\n', ' ').trim()
 
     /**
      * Inline spans: `code`, **bold**, *italic*, ~~strike~~ and [text](url).

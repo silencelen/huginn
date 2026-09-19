@@ -41,6 +41,31 @@ fun roundStatusLabel(s: RoundStatus, acknowledged: Boolean = false): String {
     }
 }
 
+/**
+ * WHICH COLOUR ROLE A ROUND'S STATE TAKES — one vocabulary for the dot and for
+ * the word, because they are the same fact said twice.
+ *
+ * The walk on the owner's Fold found "Needs you" drawn in the muted colour of
+ * metadata, in the same breath as "4 days ago · 8 items", while Pause / Run now /
+ * Edit took the accent. A needs-you word is a STATE MARK: the row's red dot and
+ * the row's verdict cannot disagree about how loud that is, and the controls
+ * must not be the loudest thing on a row that wants something.
+ *
+ * Words rather than colours because `:core` has no theme — the same arrangement
+ * as [HeadroomRules.severityColorKey], which the plan card's meter already uses.
+ * An acknowledged report draws like a clean one, exactly as the dot does.
+ */
+fun roundStatusColorKey(s: RoundStatus, acknowledged: Boolean = false): String {
+    if (acknowledged) return "muted"
+    return when (s) {
+        RoundStatus.ACTION -> "error"
+        RoundStatus.ATTENTION -> "primary"
+        RoundStatus.OK -> "muted"
+        RoundStatus.UNKNOWN -> "outline"
+        RoundStatus.NEVER_RUN -> "outlineVariant"
+    }
+}
+
 /** Whether this run's report has been read and dealt with. */
 fun isAcknowledged(run: RoundRun?): Boolean = (run?.acknowledgedAt ?: 0L) > 0L
 
