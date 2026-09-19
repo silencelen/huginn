@@ -256,9 +256,10 @@ test('the approval card rides the list, unapplied, with the exact commands', asy
     'systemctl edit atlas.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address',
     'systemctl edit jotter.service   # same',
     'systemctl edit boardserver.service      # same',
-    'systemctl restart atlas jotter-trainer boardserver',
-    "ss -ltnp | grep -E '8088|8091|8092'",
-  ], approval.steps[0].commands);
+    'systemctl edit bursar-sim.service       # same, but its bind is in sim/app.py, not the unit',
+    'systemctl restart atlas jotter-trainer boardserver bursar-sim',
+    "ss -ltnp | grep -E '8088|8091|8092|8093'",
+  ], approval.steps[0].commands, 'all four units — the firewall step below already opens all four ports');
   assert.deepEqual([
     'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8088 -log nolog',
     'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog',
