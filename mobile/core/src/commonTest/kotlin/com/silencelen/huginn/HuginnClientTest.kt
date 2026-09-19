@@ -792,6 +792,65 @@ class HuginnClientTest {
         assertFalse("actWhileLocked" in lastBody(), lastBody())
     }
 
+
+    // ------------------------------------------ an archived conversation
+
+    /**
+     * The archive's conversation comes from its OWN route, keyed on the Claude
+     * session uuid.
+     *
+     * ⚠ NOT A TMUX NAME, AND THAT IS WHY THE ROUTE EXISTS. Every other transcript
+     * route gates on the session being live and reads state keyed on its name;
+     * both are gone once a session is archived, and the name itself is reused on
+     * this host within hours.
+     */
+    @Test
+    fun `an archived transcript is read from the archive route`() = runTest {
+        val id = "9f1c8b52-5d2a-4a21-9f65-1a2b3c4d5e6f"
+        val page = ok("""{"events":[{"kind":"user","text":"hello"}],"archived":true}""")
+            .archiveTranscript(id)
+        assertEquals("/v1/archive/$id/transcript", seen.last().url.encodedPath)
+        assertEquals(listOf("hello"), page?.events?.map { it.text })
+        assertTrue(page?.archived == true, "the daemon says so on every window")
+    }
+
+    /** Paged exactly like a session's: `until` walks backwards into history. */
+    @Test
+    fun `it pages the same way a live transcript does`() = runTest {
+        ok("""{"events":[]}""").archiveTranscript("a", limit = 50, until = 4096)
+        val q = seen.last().url.parameters
+        assertEquals("50", q["limit"])
+        assertEquals("4096", q["until"])
+    }
+
+    /**
+     * ⚠⚠ NULL IS TWO ANSWERS AT ONCE, ON PURPOSE. A daemon older than the route
+     * 404s, and so does an archive this daemon does not have. Both mean "there is
+     * nothing here to open", and both must leave a row that quietly does not
+     * offer the door rather than one that offers an error — the feature-probe
+     * shape `projects` and `scratchpads` already use.
+     */
+    @Test
+    fun `a 404 is an answer, not a failure`() = runTest {
+        val page = client { respondError(HttpStatusCode.NotFound, """{"error":"no such archived session"}""") }
+            .archiveTranscript("a")
+        assertNull(page)
+    }
+
+    /**
+     * ⚠ A 409 IS A DIFFERENT ANSWER AND IT THROWS, so the daemon's own sentence
+     * can be shown verbatim. Which of the two copies went is the one fact this
+     * whole feature exists to be honest about, and a summary of ours would lose it.
+     */
+    @Test
+    fun `a transcript nobody kept arrives as the daemon's own sentence`() = runTest {
+        val why = "no transcript was kept for this archive, and Claude Code no longer has one"
+        val thrown = assertFailsWith<HuginnClient.HuginnException> {
+            client { respondError(HttpStatusCode.Conflict, """{"error":"$why"}""") }.archiveTranscript("a")
+        }
+        assertEquals(409, thrown.code)
+        assertEquals(why, thrown.message)
+    }
 }
 
 /**
