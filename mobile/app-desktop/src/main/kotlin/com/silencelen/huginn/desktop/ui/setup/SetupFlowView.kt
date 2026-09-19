@@ -32,6 +32,7 @@ import com.silencelen.huginn.desktop.setup.Autostart
 import com.silencelen.huginn.desktop.setup.ClaudePath
 import com.silencelen.huginn.desktop.setup.LocalAiOutcome
 import com.silencelen.huginn.desktop.setup.SetupController
+import com.silencelen.huginn.desktop.setup.SetupDrafts
 import com.silencelen.huginn.desktop.setup.SetupHost
 import com.silencelen.huginn.desktop.setup.SetupProbes
 import com.silencelen.huginn.desktop.ui.settings.ClaudePathField
@@ -146,15 +147,23 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
 
         SetupStep.TOKEN -> {
             var token by remember { mutableStateOf(settings.tokenNow()) }
+            // ⚠ THE DRAFT IS PUBLISHED, because the probe runs outside this
+            // composition and cannot see a `remember`. Without it "Try the token"
+            // read the SAVED token and answered "no token saved yet" at a field
+            // the reader had just pasted into — the step's button contradicting
+            // the step's own field. `DesktopSetupProbes.token` commits this
+            // before it tries anything.
+            SetupDrafts.token = token
             SettingsFieldRow(
                 id = "host.token",
                 title = "Token",
                 value = token,
-                onValueChange = { token = it },
+                onValueChange = { token = it; SetupDrafts.token = it },
                 secret = true,
-                summary = "The bearer this app sends with every request.",
+                summary = "The bearer this app sends with every request. " +
+                    "\"Try the token\" uses what is in this box.",
                 trailing = {
-                    Button(onClick = { scope.launch { settings.setToken(token) } }) { Text("Save token") }
+                    Button(onClick = { scope.launch { settings.setToken(token.trim()) } }) { Text("Save token") }
                 },
             )
         }
@@ -219,9 +228,17 @@ class DesktopSetupProbes(
     }
 
     override suspend fun token(): Result<String> = runCatching {
-        check(store.settings.tokenNow().isNotBlank()) {
-            "no token saved yet — paste the one from the huginn host above"
+        // ⚠ THE FIELD, COMMITTED FIRST. This read `tokenNow()` alone, which is
+        // only written by the separate "Save token" button — so on a fresh
+        // install, with the field visibly full, the one control the step offers
+        // answered "no token saved yet". Committing before the probe also means
+        // a token that turns out to work is the one the very next request
+        // carries, rather than one the reader has to go back and save again.
+        val wanted = SetupDrafts.tokenToUse(SetupDrafts.token, store.settings.tokenNow())
+        check(wanted.isNotBlank()) {
+            "no token yet — paste the one from the huginn host into the box above"
         }
+        if (wanted != store.settings.tokenNow()) store.settings.setToken(wanted)
         // THE CHECK NOTHING DID. The token field's only feedback was the words
         // "token saved", printed whether or not the daemon would ever accept it.
         val status = store.client.status()
