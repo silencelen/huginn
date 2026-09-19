@@ -1117,6 +1117,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Marks the active route as having just worked, from REAL traffic.
+     *
+     * See [RouteResolver.touch]: it writes `lastSeenAt`, never `lastOkAt`, so the
+     * three-failures re-probe still sweeps rather than finding the dead route
+     * "fresh" seconds after its last success.
+     */
+    private fun noteRouteReached() {
+        _routeHealth.value = RouteResolver.touch(
+            _routeHealth.value,
+            _routeBook.value.active?.id,
+            System.currentTimeMillis(),
+        )
+    }
+
+    /**
      * Forgets the note under the route list. Opening or cancelling a route form
      * is the moment it stops being true, and on this client nothing else ever
      * cleared it — a refusal from ten minutes ago sat under the list for the
@@ -1725,6 +1740,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess {
                     _status.value = it; _statusError.value = null; _connected.value = true
                     routeFailures.ok()
+                    // ⚠ ORDINARY TRAFFIC IS A WITNESS AND NOTHING ELSE WAS ONE.
+                    // Only `RouteResolver.resolve()` ever wrote the health map, so
+                    // a route this app had been talking to all day still read
+                    // "never reached" on the Settings list until somebody pressed
+                    // Find live route. `touch` records it as `lastSeenAt`, which
+                    // the rows read and the hysteresis deliberately does not.
+                    noteRouteReached()
                 }
                 .onFailure {
                     _statusError.value = errText(it)
