@@ -11,7 +11,9 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.data.SessionMetaSaver
+import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.RoundDraft
+import com.silencelen.huginn.ui.ARCHIVE_TRANSCRIPT_GONE
 import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
@@ -305,7 +307,14 @@ class AppStore(
     }
 
     fun openChat(id: String?) { _view.value = View.CHATS; _chatId.value = id }
-    fun openSession(name: String?) { _view.value = View.SESSIONS; _sessionName.value = name }
+    fun openSession(name: String?) {
+        _view.value = View.SESSIONS
+        // ⚠ THE ARCHIVE LETS GO. Both take the same detail half, and a live
+        // session opened while an archive was up would otherwise be drawn
+        // underneath a read-only conversation that is still claiming the pane.
+        _archiveRead.value = null
+        _sessionName.value = name
+    }
 
     /** Escape: close the open item, or fall back to the chats list. */
     fun back() {
@@ -904,6 +913,54 @@ class AppStore(
         return outcome
     }
 
+    /**
+     * ADOPT a session that is already running into this project.
+     *
+     * ⚠ IT LAUNCHES NOTHING. The record gains a row and the session carries on
+     * exactly as it was. A 409 is an ANSWER — the session already belongs to
+     * another cluster and the daemon NAMES it, which is the whole fix — and it
+     * goes to [projectRefusal] verbatim, like a create's and a spawn's. The other
+     * refusals (400 a role taken / "lead" / not a name, 404 no such session, 503
+     * tmux not answering) are the daemon's sentences too, so they land in the
+     * same place rather than in the fault bar where the form cannot see them.
+     */
+    suspend fun adoptMember(id: String, role: String, name: String) {
+        _projectRefusal.value = null
+        runCatching { client.adoptMember(id, role, name) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** DROP a member. ⚠ THE SESSION KEEPS RUNNING — nothing is ended. */
+    suspend fun dropMember(id: String, role: String) {
+        _projectRefusal.value = null
+        runCatching { client.dropMember(id, role) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /**
+     * A thrown refusal as a SENTENCE, for a form to print under itself.
+     *
+     * The daemon's own words where there are any: every membership refusal is
+     * also the instruction ("drop it from the project first, then rename it"),
+     * and a summary of ours would lose the half that says what to do.
+     */
+    private fun refusalTextFor(t: Throwable): String =
+        (t as? HuginnClient.HuginnException)?.message?.takeIf { it.isNotBlank() }
+            ?: t.message?.takeIf { it.isNotBlank() }
+            ?: "that change was refused"
+
     /** Turn the proposal down. The manifest is kept at its rev; only the status moves. */
     suspend fun discardProposal(id: String) {
         runCatching { client.discardProposal(id) }
@@ -942,8 +999,14 @@ class AppStore(
      */
     suspend fun deleteProject(id: String, end: String? = null) {
         runCatching { client.deleteProject(id, end) }
-            .onSuccess {
+            .onSuccess { done ->
                 if (_projectId.value == id) openProject(null)
+                // ⚠ SAID WHEN SOMETHING WAS NOT WOUND DOWN, and only then. A
+                // member on a permission or folder-trust dialog cannot be typed
+                // at, so the daemon skips it and removes the record anyway —
+                // those sessions are alive with no project behind them. This pane
+                // is the only one that knows, so it is the only one that can say.
+                if (done.refused.isNotEmpty()) _projectRefusal.value = ProjectRules.deletedWords(done)
                 refreshProjects()
                 refreshSessions()
             }
@@ -1157,9 +1220,22 @@ class AppStore(
     private val _routeBook = MutableStateFlow(settings.routeBookNow())
     val routeBook: StateFlow<RouteBook> = _routeBook.asStateFlow()
 
-    /** The state dots and "last reached" words. Never an input to selection. */
-    private val _routeHealth = MutableStateFlow<Map<String, RouteHealth>>(emptyMap())
+    /**
+     * The state dots and "last reached" words. Never an input to selection.
+     *
+     * ⚠ SEEDED FROM THE STORE, not empty. An empty map makes every launch skip
+     * the hysteresis and take the first address that answers in the owner's
+     * order — see [com.silencelen.huginn.data.HuginnSettings.routeHealth].
+     */
+    private val _routeHealth = MutableStateFlow(settings.routeHealthNow())
     val routeHealth: StateFlow<Map<String, RouteHealth>> = _routeHealth.asStateFlow()
+
+    /**
+     * A route that answered and that this client WILL NOT ADOPT BY ITSELF — see
+     * [RouteResolver.Choice.Stay.Candidate]. Offered under the list, null otherwise.
+     */
+    private val _routeCandidate = MutableStateFlow<com.silencelen.huginn.data.PinnedRoute?>(null)
+    val routeCandidate: StateFlow<com.silencelen.huginn.data.PinnedRoute?> = _routeCandidate.asStateFlow()
 
     /**
      * Marks the active route as having just worked, from REAL traffic — the
@@ -1171,11 +1247,19 @@ class AppStore(
      * route "fresh" seconds after its last success.
      */
     private fun noteRouteReached() {
-        _routeHealth.value = RouteResolver.touch(
+        val next = RouteResolver.touch(
             _routeHealth.value,
             _routeBook.value.active?.id,
             System.currentTimeMillis(),
         )
+        if (next == _routeHealth.value) return
+        saveHealth(next)
+    }
+
+    /** The health cache and its persisted copy, together. */
+    private fun saveHealth(health: Map<String, RouteHealth>) {
+        _routeHealth.value = health
+        scope.launch { runCatching { settings.setRouteHealth(health, System.currentTimeMillis()) } }
     }
 
     private val _resolvingRoute = MutableStateFlow(false)
@@ -1199,6 +1283,15 @@ class AppStore(
     fun clearRouteNote() { _routeNote.value = null }
 
     fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
+
+    /**
+     * Adopt the offered route — the person saying so that [RouteResolver] waits
+     * for before it will send a bearer over a plain-http address nobody typed.
+     */
+    fun useRouteCandidate(id: String) {
+        _routeCandidate.value = null
+        activateRoute(id)
+    }
 
     fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
 
@@ -1618,9 +1711,75 @@ class AppStore(
 
     suspend fun deleteArchive(row: ArchivedSession) {
         runCatching { client.deleteArchive(row.id) }
-            .onSuccess { refreshArchives() }
+            .onSuccess {
+                // The pane cannot outlive the row it is reading.
+                if (_archiveRead.value?.id == row.id) _archiveRead.value = null
+                refreshArchives()
+            }
             .onFailure { note(Faults.ACTION, it) }
     }
+
+    // ------------------------------------------ one archive, read only
+
+    /**
+     * The conversation of ONE archived session, as the detail pane draws it.
+     *
+     * ⚠ NOT A SESSION, AND NOT POLLED. Every other detail this store holds is
+     * keyed on a tmux NAME and followed; this is keyed on the Claude session
+     * uuid, read once from a copy on disk, and has nothing behind it to poll or
+     * type at. It shares the detail half with [SessionView], so exactly one of
+     * the two may be set — see [openSession].
+     */
+    data class ArchiveRead(
+        val id: String,
+        val title: String?,
+        val page: TranscriptPage? = null,
+        val loading: Boolean = true,
+        /** Why there is nothing to show: the copy is gone, or the read failed. */
+        val note: String? = null,
+    )
+
+    private val _archiveRead = MutableStateFlow<ArchiveRead?>(null)
+    val archiveRead: StateFlow<ArchiveRead?> = _archiveRead.asStateFlow()
+
+    /** Open one archive in the detail pane, read only. */
+    fun openArchive(row: ArchivedSession) {
+        _view.value = View.SESSIONS
+        // The live session lets go of the pane, for the same reason the archive
+        // does in [openSession]: one detail half, one occupant.
+        _sessionName.value = null
+        if (_archiveRead.value?.id == row.id && _archiveRead.value?.loading == false) return
+        _archiveRead.value = ArchiveRead(id = row.id, title = ArchiveRules.label(row), loading = true)
+        scope.launch {
+            val outcome = runCatching { client.archiveTranscript(row.id) }
+            val current = _archiveRead.value
+            // A late answer must not paint itself over whatever the reader opened
+            // while it was in flight.
+            if (current?.id != row.id) return@launch
+            _archiveRead.value = outcome.fold(
+                onSuccess = { page ->
+                    // ⚠ NULL IS THE 404 — "no such archive" AND "this daemon has
+                    // no such route" at once. Either way there is nothing to read.
+                    current.copy(
+                        page = page,
+                        loading = false,
+                        note = if (page == null) ARCHIVE_TRANSCRIPT_GONE else null,
+                    )
+                },
+                // The 409 carries the daemon's own sentence about which copies
+                // went, which beats any summary of ours.
+                onFailure = { t ->
+                    current.copy(
+                        loading = false,
+                        note = (t as? HuginnClient.HuginnException)?.message
+                            ?: t.message ?: ARCHIVE_TRANSCRIPT_GONE,
+                    )
+                },
+            )
+        }
+    }
+
+    fun closeArchive() { _archiveRead.value = null }
 
     /**
      * One read of `/v1/headroom`.
@@ -1738,7 +1897,11 @@ class AppStore(
             force = force,
         ) { client.probe(it.url) }
         _resolvingRoute.value = false
-        _routeHealth.value = outcome.health
+        saveHealth(outcome.health)
+        // Cleared on EVERY resolution before it is set again: an offer describes
+        // the sweep that just ran, and a stale one invites a person to hand the
+        // bearer to a host that has since gone quiet.
+        _routeCandidate.value = (outcome.choice as? RouteResolver.Choice.Stay.Candidate)?.candidate
         _routeNote.value = when (val choice = outcome.choice) {
             is RouteResolver.Choice.Empty -> null
             is RouteResolver.Choice.Pinned -> "pinned to ${choice.route.name} — switch automatically to move"
