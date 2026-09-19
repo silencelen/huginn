@@ -82,6 +82,7 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.ui.ArchiveRules
+import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.desktop.Responsive
 import com.silencelen.huginn.desktop.Splitter
 import com.silencelen.huginn.desktop.View
@@ -697,7 +698,7 @@ fun Shell(store: AppStore) {
                                 target.names.forEach { store.client.softEndSession(it) }
                                 store.refreshSessions()
                             }
-                            // Drafts and history ARE cleared, unlike a wind-down:
+                            // Drafts and history ARE cleared, unlike a wrap-up:
                             // this session is going, and the text typed at it is
                             // not coming with it. The store re-throws a refusal so
                             // the daemon's own sentence ("answer the waiting
@@ -1396,7 +1397,7 @@ sealed interface ConfirmTarget {
     /** A wrap-up request, not a destruction: the session ends only after it settles. */
     data class SoftEndSessions(val names: List<String>) : ConfirmTarget
 
-    /** End for good, keeping the way back. A wind-down that leaves a row behind. */
+    /** End for good, keeping the way back. A wrap-up that leaves a row behind. */
     data class ArchiveSessions(val names: List<String>) : ConfirmTarget
 
     /** Forget an archived row AND the copy of the conversation it was keeping. */
@@ -1551,15 +1552,15 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
         is ConfirmTarget.KillSessions ->
             if (target.names.size == 1) {
                 Triple(
-                    "End ${target.names.first()}?",
+                    "Kill ${target.names.first()}?",
                     "The tmux session and anything running inside it stop.",
-                    "End session",
+                    EndVerbs.hard(1),
                 )
             } else {
                 Triple(
-                    "End ${target.names.size} sessions?",
+                    "Kill ${target.names.size} sessions?",
                     "Each tmux session and anything running inside it stops.",
-                    "End ${target.names.size}",
+                    "Kill ${target.names.size}",
                 )
             }
         is ConfirmTarget.ArchiveSessions ->
@@ -1591,7 +1592,7 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
         is ConfirmTarget.SoftEndSessions ->
             if (target.names.size == 1) {
                 Triple(
-                    "Wind down ${target.names.first()}?",
+                    "${EndVerbs.SOFT} ${target.names.first()}?",
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
                         "If auto-end is on for the host, the session ends on its own once it settles; " +
                         "a wrap-up question keeps it open.",
@@ -1599,14 +1600,16 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
                 )
             } else {
                 Triple(
-                    "Wind down ${target.names.size} sessions?",
+                    "${EndVerbs.SOFT} ${target.names.size} sessions?",
                     "Each gets the wrap-up instruction and, with auto-end on, ends once it settles.",
                     "Send wrap-up",
                 )
             }
     }
-    // A wind-down sends a message and an archive keeps everything it ends; only
-    // the verbs that actually lose something are red.
+    // A wrap-up sends a message and an archive keeps everything it ends; only
+    // the verbs that actually lose something are red. (The MENU rows differ: the
+    // wrap-up is a lighter red there, because it sits beside the kill and has to
+    // read as its pair. A confirm button has no such neighbour.)
     val destructive = target !is ConfirmTarget.SoftEndSessions && target !is ConfirmTarget.ArchiveSessions
     AlertDialog(
         onDismissRequest = onDismiss,

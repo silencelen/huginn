@@ -86,6 +86,8 @@ import com.silencelen.huginn.notify.Foreground
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.ChatScreen
 import com.silencelen.huginn.ui.EmptyState
+import com.silencelen.huginn.ui.EndVerbs
+import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
 import com.silencelen.huginn.ui.DevicesScreen
@@ -112,6 +114,7 @@ import com.silencelen.huginn.ui.SendTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
+import com.silencelen.huginn.ui.theme.verbInk
 import com.silencelen.huginn.widget.FleetWidget
 
 class MainActivity : FragmentActivity() {
@@ -1026,7 +1029,7 @@ fun HuginnApp(
     softEndTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { softEndTarget = null },
-            title = { Text("Wind down $name?") },
+            title = { Text("${EndVerbs.SOFT} $name?") },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
@@ -1753,7 +1756,7 @@ fun HuginnApp(
                                             // or removes the FIRST item while the
                                             // menu is open — shifting every item
                                             // below it by a row, so a tap aimed at
-                                            // "Wind down…" lands on "Kill session…".
+                                            // "Wrap up" lands on "Kill session".
                                             val links = remember(surfaceMenu) { linksOn(vm.screen.value) }
                                             if (links.size == 1) {
                                                 DropdownMenuItem(text = { Text("Copy link") },
@@ -1772,10 +1775,28 @@ fun HuginnApp(
                                                 onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
                                             DropdownMenuItem(text = { Text("Compact context") },
                                                 onClick = { surfaceMenu = false; vm.compactSession(d.name) })
-                                            DropdownMenuItem(text = { Text("Wind down…") },
-                                                onClick = { surfaceMenu = false; softEndTarget = d.name })
-                                            DropdownMenuItem(text = { Text("Kill session…") },
-                                                onClick = { surfaceMenu = false; killTarget = d.name })
+                                            // The pair, in the two reds — same
+                                            // words and same token as the session
+                                            // list's row menu and the desktop's
+                                            // right-click. See EndVerbs.
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        EndVerbs.soft(1),
+                                                        color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                onClick = { surfaceMenu = false; softEndTarget = d.name },
+                                            )
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        EndVerbs.hard(1),
+                                                        color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                                                    )
+                                                },
+                                                onClick = { surfaceMenu = false; killTarget = d.name },
+                                            )
                                         }
                                         is Dest.Chat -> {
                                             DropdownMenuItem(text = { Text("Rename chat") },

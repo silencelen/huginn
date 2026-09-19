@@ -6,6 +6,7 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
+import com.silencelen.huginn.ui.VerbTone
 
 // Warm near-black with a parchment ink: a terminal that does not look like a
 // terminal emulator. Dark is the primary target (this app is read at night, on a
@@ -68,6 +70,35 @@ private val LightColors = lightColorScheme(
     outline = Color(0xFFD3CAC0),
     error = Color(0xFFB3261E),
 )
+
+/**
+ * How much of the error red a verb that ends something gently gets.
+ *
+ * ⚠ ONE TOKEN, DEFINED ONCE, and the reason is that the alternative was each
+ * shell picking its own lighter red — which is the drift this whole module
+ * exists to prevent, and the kind nobody sees until a phone is held up beside
+ * the laptop running the same session.
+ *
+ * An alpha over [ColorScheme.error] rather than `errorContainer`: the container
+ * roles are NOT defined in either scheme above (see PaletteTest — a role the
+ * theme never chose is not a colour anyone picked), and a tint of the hard red
+ * is also the honest description of what this means. It reads as the same red,
+ * quieter, which is exactly the relationship "Wrap up" has to "Kill session".
+ */
+const val SOFT_VERB_ALPHA: Float = 0.7f
+
+/**
+ * The ink for a menu row or button, by how hard its verb lands.
+ *
+ * Takes the scheme rather than reading `MaterialTheme` so it is an ordinary
+ * function a test can call: the pairing is a DECISION, and a decision expressed
+ * only inside a composable is one nobody can assert.
+ */
+fun verbInk(tone: VerbTone, scheme: ColorScheme): Color = when (tone) {
+    VerbTone.PLAIN -> scheme.onSurface
+    VerbTone.SOFT -> scheme.error.copy(alpha = SOFT_VERB_ALPHA)
+    VerbTone.DESTRUCTIVE -> scheme.error
+}
 
 /**
  * Syntax colours. Restrained on purpose: five hues that sit inside the app's warm
