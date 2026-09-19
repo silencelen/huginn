@@ -12,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,6 +71,18 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.silencelen.huginn.ui.bottomNavInsets
+import com.silencelen.huginn.ui.sideNavInsets
+import com.silencelen.huginn.ui.systemNavPadding
+import com.silencelen.huginn.ui.imeAndSystemNavPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.first
@@ -1331,6 +1344,7 @@ fun HuginnApp(
             }
             SessionsScreen(
                 sessions = sessions,
+                twoPane = twoPane,
                 // Empty when the daemon has no projects, which draws the list
                 // exactly as it has always been drawn — see projectEntries.
                 groups = if (projectDoors.grouping)
@@ -1515,6 +1529,11 @@ fun HuginnApp(
                         onStopOrDispose { vm.stopOverviewPolling() }
                     }
                     SessionOverviewView(
+                        // ⚠ THE LAST CARD USED TO SIT UNDER THE SYSTEM BAR. The
+                        // Conversation and Screen faces both end in a composer
+                        // that pays the inset; this one ends in a list and paid
+                        // nothing. See ui/Insets.kt.
+                        modifier = Modifier.systemNavPadding(),
                         overview = overview,
                         graph = sessionGraph,
                         plan = plan,
@@ -1648,6 +1667,12 @@ fun HuginnApp(
             }
             val read = archiveRead?.takeIf { it.id == id }
             com.silencelen.huginn.ui.ArchivedTranscriptView(
+                // A pushed destination with no composer and no bar under it, so
+                // the inset is the shell's to pay — the last line of an archived
+                // conversation was ending under the system navigation. The
+                // view's HORIZONTAL gutters are `:ui`'s own business and are
+                // left to the shared batch (P-10).
+                modifier = Modifier.systemNavPadding(),
                 events = read?.page?.events.orEmpty(),
                 title = read?.title ?: row?.let { com.silencelen.huginn.ui.ArchiveRules.label(it) },
                 truncated = read?.page?.transcriptTruncated == true,
@@ -1821,6 +1846,11 @@ fun HuginnApp(
             )
         }
 
+        // Whether a Material `NavigationBar` is under the body — which decides
+        // who owes the bottom system inset. Hoisted out of the `bottomBar` slot
+        // because the BODY has to know it too: see the consume below.
+        val barShown = !isChild && !wide
+
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -1961,7 +1991,7 @@ fun HuginnApp(
                 )
             },
             bottomBar = {
-                if (!isChild && !wide) {
+                if (barShown) {
                     NavigationBar {
                         NavigationBarItem(
                             selected = section == 0,
@@ -1993,61 +2023,107 @@ fun HuginnApp(
             snackbarHost = { SnackbarHost(snackbar) },
             // Zero, deliberately: Scaffold's default contentWindowInsets ALSO
             // reserves the navigation-bar height, and every composer already
-            // applies navigationBarsPadding() itself — the two stacked into a
+            // pays the navigation inset itself — the two stacked into a
             // doubled band of dead space under the entry bubble (tallest on
             // 3-button One UI, where the bar is a real 48dp inset). One owner
-            // per inset: the bars and composers handle their own.
+            // per inset; the body below says which owner, once, by consuming
+            // what the bars have already eaten. See ui/Insets.kt.
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { pad ->
-            Row(Modifier.fillMaxSize().padding(pad)) {
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(pad)
+                    // ⚠ THE SIDE BAR IS THE FRAME'S TO PAY. Held sideways this
+                    // phone moves the system navigation to an EDGE, and nothing
+                    // under here was paying for it: the conversation ran to
+                    // x=2483 of 2520 with the ends of its lines under the
+                    // back/home/recents strip. Paid once, and CONSUMED by the
+                    // same call, so no pane has to know which way the phone is
+                    // being held.
+                    .windowInsetsPadding(sideNavInsets())
+                    // The app bar above has already paid the status bar, and a
+                    // NavigationBar below pays its own bottom inset. Saying so
+                    // is what lets every screen in here call systemNavPadding()
+                    // unconditionally instead of each one knowing whether it is
+                    // a tab or a pushed destination — the knowledge we got wrong
+                    // in both directions (a missing inset on six screens, a
+                    // DOUBLED one on Status).
+                    .consumeWindowInsets(WindowInsets.systemBars.only(WindowInsetsSides.Top))
+                    .then(
+                        if (barShown) Modifier.consumeWindowInsets(bottomNavInsets())
+                        else Modifier
+                    )
+            ) {
                 if (wide) {
+                    // ⚠ THE RAIL SCROLLS. It carries SIX destinations and the
+                    // cover screen held sideways is not tall enough for them:
+                    // "Devices" was half-drawn at the bottom edge with no way to
+                    // reach it, because a NavigationRail does not scroll and the
+                    // weighted spacer pushed the last two off the end. A rail
+                    // that silently drops a destination is worse than one that
+                    // is a scroll long, so the spacer is gone and the column
+                    // scrolls.
                     NavigationRail {
-                        Spacer(Modifier.height(8.dp))
-                        NavigationRailItem(
-                            selected = section == 0,
-                            onClick = { onTab(0) },
-                            icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
-                            label = { Text("Chats") },
-                        )
-                        NavigationRailItem(
-                            selected = section == 1,
-                            onClick = { onTab(1) },
-                            icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
-                            label = { Text("Sessions") },
-                        )
-                        NavigationRailItem(
-                            selected = section == 3,
-                            onClick = { onTab(3) },
-                            icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
-                            label = { Text("Rounds") },
-                        )
-                        NavigationRailItem(
-                            selected = section == 2,
-                            onClick = { onTab(2) },
-                            icon = { StatusIcon(sessionUsage) },
-                            label = { Text("Status") },
-                        )
-                        Spacer(Modifier.weight(1f))
-                        // Its own footing, at last. The fleet used to share the
-                        // Settings slot because it was "a child of Settings, not a
-                        // bar item"; Settings' Devices drawer now holds only the
-                        // row that opens this, so the machines are a place you go
-                        // rather than a setting you change. RAIL ONLY — the bottom
-                        // bar stays four, because giving this a bar slot would
-                        // cost one of the four a place it earns every day.
-                        NavigationRailItem(
-                            selected = section == 6,
-                            onClick = { vm.refreshDevices(); dest = Dest.Devices },
-                            icon = { Icon(Icons.Filled.Devices, contentDescription = "Devices") },
-                            label = { Text("Devices") },
-                        )
-                        NavigationRailItem(
-                            selected = section == 4,
-                            onClick = { dest = Dest.Settings },
-                            icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
-                            label = { Text("Settings") },
-                        )
-                        Spacer(Modifier.height(8.dp))
+                        Column(
+                            Modifier
+                                .fillMaxHeight()
+                                .verticalScroll(rememberScrollState())
+                                .systemNavPadding(),
+                            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Spacer(Modifier.height(8.dp))
+                            NavigationRailItem(
+                                selected = section == 0,
+                                onClick = { onTab(0) },
+                                icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
+                                label = { Text("Chats") },
+                            )
+                            NavigationRailItem(
+                                selected = section == 1,
+                                onClick = { onTab(1) },
+                                icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                                label = { Text("Sessions") },
+                            )
+                            NavigationRailItem(
+                                selected = section == 3,
+                                onClick = { onTab(3) },
+                                icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                                label = { Text("Rounds") },
+                            )
+                            NavigationRailItem(
+                                selected = section == 2,
+                                onClick = { onTab(2) },
+                                icon = { StatusIcon(sessionUsage) },
+                                label = { Text("Status") },
+                            )
+                            // A GAP, NOT A WEIGHT. Inside a scroll there is no
+                            // bottom to push anything to, and `weight(1f)` against an
+                            // infinite height is what clipped the rail in the first
+                            // place.
+                            Spacer(Modifier.height(20.dp))
+                            // Its own footing, at last. The fleet used to share the
+                            // Settings slot because it was "a child of Settings, not a
+                            // bar item"; Settings' Devices drawer now holds only the
+                            // row that opens this, so the machines are a place you go
+                            // rather than a setting you change. RAIL ONLY — the bottom
+                            // bar stays four, because giving this a bar slot would
+                            // cost one of the four a place it earns every day.
+                            NavigationRailItem(
+                                selected = section == 6,
+                                onClick = { vm.refreshDevices(); dest = Dest.Devices },
+                                icon = { Icon(Icons.Filled.Devices, contentDescription = "Devices") },
+                                label = { Text("Devices") },
+                            )
+                            NavigationRailItem(
+                                selected = section == 4,
+                                onClick = { dest = Dest.Settings },
+                                icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
+                                label = { Text("Settings") },
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
                     }
                 }
 
