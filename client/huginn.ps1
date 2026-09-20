@@ -242,7 +242,7 @@ function _Huginn-FetchFile {
   }
   Remove-Item -Force -ErrorAction SilentlyContinue $tmp
   # ⚠ AND A FETCH THAT FAILED IS A FAILURE. This was the last Write-Host-and-
-  # return-normally path in the file (the rest went in 1.5.1): `huginn device
+  # return-normally path in the file (the rest went in 1.5.0): `huginn device
   # update` with no gh and no mirror printed "could not fetch huginn-device" on
   # the HOST stream and left $? True and $LASTEXITCODE 0, so a Windows script or
   # a `&&` chain read "the runner was not installed" as "the runner is
