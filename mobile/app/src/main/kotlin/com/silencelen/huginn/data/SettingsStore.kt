@@ -191,6 +191,9 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val RUNNING_CHATS = stringSetPreferencesKey("running_chats")
         private val WATCH = booleanPreferencesKey("watch_continuously")
         private val DRAFTS = stringPreferencesKey("drafts")
+
+        /** The session open when this client was last looked at. See [lastOpenSession]. */
+        private val LAST_OPEN_SESSION = stringPreferencesKey("last_open_session")
         private val CLIENT_ID = stringPreferencesKey("client_id")
         private val CHAT_RUNS = stringPreferencesKey("chat_runs")
         private val HEADROOM_STALLED = stringSetPreferencesKey("headroom_stalled")
@@ -502,5 +505,19 @@ class SettingsStore(private val context: Context) : HuginnSettings {
     override suspend fun setDrafts(value: Map<String, String>) {
         val encoded = SettingsCodec.encodeDrafts(value)
         context.dataStore.edit { it[DRAFTS] = encoded }
+    }
+
+    /**
+     * ⚠ THE READER'S PLACE, ACROSS A COLD START (P-35). `rememberSaveable` holds
+     * it across a fold and a rotate and loses it to a force-stop, a low-memory
+     * kill and a reboot — which on a phone is most of the ways an app closes.
+     * See [HuginnSettings.lastOpenSession] for why the restore then waits for
+     * the first sessions fetch before it acts on this.
+     */
+    override val lastOpenSession: Flow<String> =
+        prefs.map { it[LAST_OPEN_SESSION].orEmpty() }
+
+    override suspend fun setLastOpenSession(value: String) {
+        context.dataStore.edit { it[LAST_OPEN_SESSION] = value }
     }
 }
