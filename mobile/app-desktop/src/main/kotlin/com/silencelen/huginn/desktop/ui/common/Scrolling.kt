@@ -142,3 +142,26 @@ fun ReadingPane(
         PaneScrollbar(scroll)
     }
 }
+
+/**
+ * One transcript row, held to the conversation's reading measure (D-24).
+ *
+ * ⚠ ON THE ROW, NOT ON THE LIST. The cap has to be inside the `LazyColumn` for
+ * two reasons the pane would lose if it were outside: the scrollbar hangs off
+ * the pane's right EDGE (a bar floating 800px in from the window edge is a bar
+ * nobody reaches for), and the wheel target stays the whole pane rather than a
+ * column in the middle of it. What is capped is the text, which is the thing
+ * that was 1840px wide.
+ *
+ * ⚠ CAP BEFORE FILL. `fillMaxWidth` hands down fixed constraints and a `widthIn`
+ * inside them can only coerce into them — `CapBeforeFillTest` greps the tree for
+ * the other order.
+ *
+ * A `Box` rather than a `Column`: the rows decide their own alignment (a user
+ * bubble hangs off the right, an answer starts at the left), and this only tells
+ * them how much room that alignment applies to.
+ */
+@Composable
+fun TranscriptColumn(content: @Composable () -> Unit) {
+    Box(Modifier.widthIn(max = Frame.transcript).fillMaxWidth()) { content() }
+}

@@ -170,9 +170,15 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
 
         SetupStep.CLAUDE -> ClaudePathField(store)
 
-        SetupStep.DEVICE -> DeviceSection(store)
+        // ⚠ D-13. `intro = false` — THE SCAFFOLD ABOVE ALREADY SAID IT. Both of
+        // these sections carry their own heading and blurb in Settings, where
+        // there is no step title over them; hosted here they printed the step's
+        // own subtitle back with four words changed, twice in a row (steps 4 and
+        // 5). Exactly the same call the autostart row gets below, for exactly the
+        // same reason. `SetupIntroTest` greps for these two arguments.
+        SetupStep.DEVICE -> DeviceSection(store, intro = false)
 
-        SetupStep.LOCAL_AI -> LocalServeSection(store)
+        SetupStep.LOCAL_AI -> LocalServeSection(store, intro = false)
 
         SetupStep.NOTIFY -> {
             val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)

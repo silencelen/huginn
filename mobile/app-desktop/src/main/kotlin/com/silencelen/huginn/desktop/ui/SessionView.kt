@@ -107,6 +107,7 @@ import com.silencelen.huginn.desktop.ui.common.ComposerFrame
 import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
+import com.silencelen.huginn.desktop.ui.common.TranscriptColumn
 import com.silencelen.huginn.desktop.ui.common.WithTranscriptSelectionMenu
 import com.silencelen.huginn.desktop.ui.common.rememberSelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.Space
@@ -975,8 +976,11 @@ private fun ConversationTab(
                         // something. `TranscriptGroups.keys` also guarantees the keys
                         // are distinct, because a duplicate key THROWS and takes the
                         // whole conversation view with it.
+                        // ⚠ D-24. Held to the conversation's reading measure, the
+                        // same one the chat pane uses — assistant prose had no
+                        // cap at all while the user's own bubble did.
                         items(count = rows.size, key = { keys[it] }) { i ->
-                            TranscriptRowItem(rows[i], onCopy)
+                            TranscriptColumn { TranscriptRowItem(rows[i], onCopy) }
                         }
                     }
                 }

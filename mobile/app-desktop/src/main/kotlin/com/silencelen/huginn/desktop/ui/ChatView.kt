@@ -77,6 +77,7 @@ import com.silencelen.huginn.desktop.ChatController
 import com.silencelen.huginn.desktop.Composer
 import com.silencelen.huginn.desktop.ui.common.ComposerAction
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import com.silencelen.huginn.desktop.ui.common.TranscriptColumn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.text.style.TextAlign
 import com.silencelen.huginn.desktop.ui.common.ComposerFrame
@@ -383,19 +384,27 @@ fun ChatView(
                             contentPadding = PaddingValues(vertical = metrics.rowPadding),
                             verticalArrangement = Arrangement.spacedBy(metrics.rowSpacing),
                         ) {
+                            // ⚠ D-24. Every row the conversation is made of goes
+                            // through the same reading measure — the answer, the
+                            // message still going out, and the turn arriving —
+                            // or the column would change width as a reply lands.
                             items(rows.size, key = { rowKeys[it] }) { i ->
-                                TranscriptRowItem(rows[i], onCopy = rememberCopy())
+                                TranscriptColumn {
+                                    TranscriptRowItem(rows[i], onCopy = rememberCopy())
+                                }
                             }
                             pendingSend?.let { text ->
                                 item("pending") {
-                                    TranscriptEventItem(
-                                        TranscriptEvent(seq = -1, kind = "user", text = text),
-                                        onCopy = rememberCopy(),
-                                    )
+                                    TranscriptColumn {
+                                        TranscriptEventItem(
+                                            TranscriptEvent(seq = -1, kind = "user", text = text),
+                                            onCopy = rememberCopy(),
+                                        )
+                                    }
                                 }
                             }
                             if (streaming) {
-                                item("streaming") { StreamingBlock(partial, activity) }
+                                item("streaming") { TranscriptColumn { StreamingBlock(partial, activity) } }
                             }
                         }
                     }

@@ -1355,7 +1355,29 @@ class AppStore(
     /** Forgets the note under the route list — a form opening or being cancelled. */
     fun clearRouteNote() { _routeNote.value = null }
 
-    fun activateRoute(id: String) = editRoutes { it.activate(id).withAutoSwitch(false) }
+    /**
+     * Pin this route — and SAY that pinning turned the search off.
+     *
+     * ⚠ D-22. "USE" HAD A SECOND EFFECT NOBODY ANNOUNCED. Pressing it on a route
+     * row silently wrote `autoSwitch = false`; the toggle 190px below flipped and
+     * rewrote its own summary, which is the whole of the notice a reader got —
+     * and only if they happened to be looking at it rather than at the row they
+     * had just pressed. The pairing is CORRECT (choosing a route by hand and
+     * having the resolver move off it again is the bug the pin exists to prevent),
+     * so what was missing was the sentence, not the behaviour.
+     *
+     * Said only when it actually changed something: a book that was already
+     * pinned gets no note, because nothing happened to report.
+     */
+    fun activateRoute(id: String) {
+        scope.launch {
+            val wasAuto = _routeBook.value.autoSwitch
+            if (!editRoutesNow { it.activate(id).withAutoSwitch(false) }) return@launch
+            // AFTER the edit: `editRoutesNow` clears the note on every success, so
+            // a note set before it would be the one thing this call did not do.
+            if (wasAuto) _routeNote.value = autoSwitchOffNote(_routeBook.value.activeName)
+        }
+    }
 
     /**
      * Adopt the offered route — the person saying so that [RouteResolver] waits
@@ -2262,6 +2284,19 @@ class AppStore(
 
         /** Appended below the text when "Ask in new chat" could not make one. */
         const val NEW_CHAT_FAILED: String = "\n\n(could not open a new chat, so this is here instead: "
+
+        /**
+         * What "Use" says about the setting it just turned off (D-22).
+         *
+         * It NAMES the toggle rather than describing the rule, and points at the
+         * one on screen rather than offering a second control: the switch is
+         * already below the list, and a note with its own button would be two
+         * places to turn one thing back on. Pure, so the sentence is asserted
+         * rather than read off a screenshot.
+         */
+        fun autoSwitchOffNote(name: String): String =
+            "Now using ${name.ifBlank { "this route" }} — \"Switch automatically\" is off, so huginn " +
+                "stays here even when it stops answering. Turn it back on with the switch below."
         const val POLL_MS: Long = 5_000
 
         /** Passes of the 5s poll between headroom reads: 6 × 5s = 30s. */
