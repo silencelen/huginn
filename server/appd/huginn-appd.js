@@ -5484,7 +5484,7 @@ async function refreshProfile(slug) {
       post: postRefreshToken,
       lock: () => oauthlock.acquire(CLAUDE_DIR),
     });
-    log(`refresh ${slug}: ${status}`);
+    log(`refresh ${slug}: ${oauthRefresh.statusLine(status)}`);
     return status;
   } finally {
     refreshInFlight.delete(slug);
