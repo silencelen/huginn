@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## 3.7.0 — unreleased
+## 3.7.0 — 2026-09-19
 
 The phone's half of the round-two review.
 
