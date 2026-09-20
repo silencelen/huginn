@@ -348,6 +348,46 @@ test('a session cwd does not smuggle its own symlinks or traversals in either', 
   assert.equal((await get({ path: '../elsewhere/secret.png', session: name })).status, 403);
 });
 
+test('⚠ ?session= is held to the session-name GRAMMAR, not just to being live', async () => {
+  // The only session name in the daemon that arrives outside a route path.
+  // Every other one comes through `/v1/sessions/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})`
+  // and is shaped by that regex before anything touches it; this one was taken
+  // off the query string with nothing but a .trim().
+  //
+  // WHY THAT MATTERS, and why the escape below is a slash and not a `..`: the
+  // name is ALSO a filename, `path.join(STATE_DIR, name)`, and the cwd read out
+  // of whatever that join lands on becomes a SERVING ROOT for this route. A `..`
+  // happens to be unreachable because tmux rewrites a dot to an underscore and
+  // the daemon compares the echo — but that is tmux's spelling rule doing the
+  // containing, by accident, and it is not a rule this daemon owns. A SLASH tmux
+  // keeps verbatim (measured), so a session called `a/b` resolves a state file
+  // one directory down from the state dir, somewhere no hook ever writes and
+  // nothing else in this file can reach.
+  const loot = path.join(outside, 'loot.png');
+  fs.writeFileSync(loot, PNG_1PX);
+
+  const evil = `${PFX}-sub/evil`;
+  sh('tmux', ['new-session', '-d', '-s', evil, '-c', tmp, '-x', '80', '-y', '40', 'cat']);
+  madeSessions.add(evil);
+  assert.equal(sh('tmux', ['display-message', '-p', '-t', `=${evil}:`, '#{session_name}']).trim(),
+    evil, 'precondition: tmux keeps a slash in a session name, so this one IS live');
+  fs.mkdirSync(path.join(stateDir, `${PFX}-sub`), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, evil), JSON.stringify({
+    state: 'idle', sessionId: 'sid-evil', transcript: null, cwd: outside, ts: nowSec() + 2,
+  }));
+
+  const r = await get({ path: loot, session: evil });
+  assert.equal(r.status, 403,
+    'a name outside the grammar contributes no root, however live tmux says it is');
+
+  // The control, without which the 403 above could just as well mean "that file
+  // was never servable": the SAME file, from the SAME cwd, reached through a
+  // name the grammar allows.
+  const ok = mkSession('lootable', outside);
+  assert.equal((await get({ path: loot, session: ok })).status, 200,
+    'the cwd, the file and the plumbing are all fine — it is the name that is refused');
+});
+
 // ------------------------------------------------------------------ the sweep
 
 test('every 200 this route can produce carries nosniff', async () => {
