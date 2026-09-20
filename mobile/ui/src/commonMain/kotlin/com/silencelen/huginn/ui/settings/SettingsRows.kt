@@ -560,9 +560,18 @@ fun SettingsRouteListRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (!book.isFull) {
-                TextButton(onClick = { adding = !adding; actions.clearNote() }) {
-                    Text(if (adding) "Cancel" else "Add a route")
+            // ⚠⚠ ONE CANCEL, NOT TWO (P-31/D-12). This control used to turn
+            // itself into a "Cancel" while ALSO rendering the form's own Cancel
+            // 190 px below it — two identical verbs for one action, stacked, in
+            // both the setup flow and Settings. The form owns the way out of the
+            // form: its Cancel sits beside the Add it undoes, which is where a
+            // person looks. So the opener simply stops being drawn while the
+            // thing it opens is on screen.
+            if (adding) {
+                // Nothing. The form below is the whole control set.
+            } else if (!book.isFull) {
+                TextButton(onClick = { adding = true; actions.clearNote() }) {
+                    Text("Add a route")
                 }
             } else {
                 Text(
@@ -685,7 +694,15 @@ private fun RouteRow(
                     route.name,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                    maxLines = 1,
+                    // ⚠ TWO LINES (P-30). A route called `rv-route-test` rendered
+                    // as **"rv-route-te…"** with a third of the row empty — four
+                    // controls take their intrinsic widths out of this row first,
+                    // so what is left for a NAME is narrow and was spent on an
+                    // ellipsis. A name wraps where an address cannot (it has no
+                    // scheme and no port to lose), and the owner chose this
+                    // string, so it is the one thing in the row they will look
+                    // for. Past two lines, Edit holds the whole of it in a field.
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
@@ -884,7 +901,39 @@ internal fun routeAddressLine(url: String, health: RouteHealth?, nowMs: Long): S
     listOfNotNull(
         middleElide(url).takeIf { it.isNotBlank() },
         if (health?.unproven == true) DaemonChallenge.NOT_PROVEN else reachedWords(health, nowMs),
+        // ⚠ A RED DOT WITH NOTHING BESIDE IT IS A COLOUR, NOT A FACT (P-30). The
+        // working route said "reached just now" and the failing ones said
+        // NOTHING — the dot was the only thing that had noticed, and a reader who
+        // has not learnt this app's dot vocabulary has no way in. Placed after
+        // the witness so a route that once worked keeps both halves of its story.
+        failedWords(health, nowMs),
     ).joinToString(" · ")
+
+/**
+ * Why the dot is red — "did not answer 2m ago" — or null.
+ *
+ * ⚠ ONLY WHEN THE LAST THING THAT HAPPENED WAS A FAILURE. A route reached a
+ * second ago and probed unsuccessfully an hour before that is working; reciting
+ * the old failure under it would be the row arguing with its own dot. And an
+ * UNPROVEN route already has its own sentence ([DaemonChallenge.NOT_PROVEN]),
+ * which is more specific than this one and says the same thing twice if both run.
+ */
+internal fun failedWords(health: RouteHealth?, nowMs: Long): String? {
+    // ⚠ `reachable == false` IS THE DOT'S OWN QUESTION, asked of the same
+    // property [dotColour] asks. Re-deriving "is it failing" here is how a row
+    // ends up arguing with the mark beside it.
+    if (health == null || health.reachable != false || health.unproven) return null
+    val at = health.lastFailAt
+    if (at <= 0 || nowMs <= 0) return null
+    val secs = ((nowMs - at) / 1000).coerceAtLeast(0)
+    val words = when {
+        secs < 60 -> "just now"
+        secs < 3600 -> "${secs / 60}m ago"
+        secs < 86_400 -> "${secs / 3600}h ago"
+        else -> "${secs / 86_400}d ago"
+    }
+    return "did not answer $words"
+}
 
 /** "last reached 4m ago", from either witness — and nothing at all before both. */
 internal fun reachedWords(health: RouteHealth?, nowMs: Long): String? {
