@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.6.2 — 2026-09-20
+
+- **`GET /v1/files/image?session=` now holds the session name to the grammar** every
+  other route enforces. It was the one name that reached `readSessionState`'s
+  `path.join` with nothing but a `.trim()`, and tmux keeps a slash verbatim — so a
+  live session named `a/b` resolved a state file below the state dir and made
+  whatever `cwd` it named servable. A name that fails the grammar is a 403 now,
+  with a test that gets 200 against the old daemon (CodeQL alert #12).
+
 ## 3.6.1 — 2026-09-19
 The low-severity half of the round-two release review, plus the one finding that only ever showed
 up in CI. Nothing here changes a wire contract; every one of them is a sentence, a status or a file
