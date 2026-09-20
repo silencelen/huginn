@@ -1063,8 +1063,8 @@ function portOf(rawUrl) {
  */
 function fixLines(rec, addresses = [], remotes = {}) {
   const seen = Array.isArray(addresses) ? addresses : [];
-  const failing = seen.filter((a) => a && a.ok === false).map((a) => a.addr);
-  if (!failing.length) return [];
+  const failed = seen.filter((a) => a && a.ok === false);
+  if (!failed.length) return [];
   const answering = seen.filter((a) => a && a.ok === true).map((a) => a.addr);
   const port = portOf(rec && rec.url);
   const unit = cleanUnit(rec && rec.unit);
@@ -1074,23 +1074,57 @@ function fixLines(rec, addresses = [], remotes = {}) {
   const bound = answering[0] || hostnameOf(rec && rec.url);
   const out = [];
 
-  out.push(`# on huginn — ${failing.join(', ')} ${failing.length === 1 ? 'does' : 'do'} not reach this app`);
-  if (unit) {
-    const note = UNIT_BIND_NOTES[unit];
-    out.push(`systemctl edit ${unit}   # ExecStart: bind 0.0.0.0 instead of ${bound || 'one address'}`
-      + (note ? `  (${note})` : ''));
-    out.push(`systemctl restart ${unit}`);
-  } else {
-    out.push(`bind 0.0.0.0 instead of ${bound || 'the one address it answers on'}`
-      + ' — huginn does not know which unit serves this app, so name it on the row to get the exact line');
+  // ⚠⚠ "REFUSED" AND "TIMED OUT" ARE OPPOSITE FACTS (r2 L4). They used to share
+  // one remedy. A refusal is the kernel saying nothing is listening at that
+  // address, which is exactly what a rebind repairs. A timeout is the SYN NOT
+  // being refused — the app accepted the connection and never wrote a byte, or
+  // something on the path is dropping packets — and `ss -ltn` will show the port
+  // listening, so a reader sent to `bind 0.0.0.0` finds a unit already bound the
+  // way they were just told to bind it and has learned nothing. `reachOne`
+  // already keeps the two words apart; only this function ran them together.
+  const silent = failed.filter(reachedButSilent);
+  const unbound = failed.filter((a) => !reachedButSilent(a));
+
+  if (unbound.length) {
+    const addrs = unbound.map((a) => a.addr);
+    out.push(`# on huginn — ${addrs.join(', ')} ${addrs.length === 1 ? 'does' : 'do'} not reach this app`);
+    if (unit) {
+      const note = UNIT_BIND_NOTES[unit];
+      out.push(`systemctl edit ${unit}   # ExecStart: bind 0.0.0.0 instead of ${bound || 'one address'}`
+        + (note ? `  (${note})` : ''));
+      out.push(`systemctl restart ${unit}`);
+    } else {
+      out.push(`bind 0.0.0.0 instead of ${bound || 'the one address it answers on'}`
+        + ' — huginn does not know which unit serves this app, so name it on the row to get the exact line');
+    }
+    out.push(`ss -ltn | grep :${port}`);
   }
-  out.push(`ss -ltn | grep :${port}`);
-  out.push(`# on heimdall — ${FIREWALL_FILE}`);
+
+  if (silent.length) {
+    const addrs = silent.map((a) => a.addr);
+    const words = [...new Set(silent.map((a) => String(a.error || 'did not answer')))].join(', ');
+    out.push(`# on huginn — ${addrs.join(', ')} ${addrs.length === 1 ? 'was' : 'were'} not refused `
+      + `(${words}), so the bind is not what is wrong — the app is not answering`);
+    if (unit) {
+      out.push(`systemctl status ${unit}`);
+      out.push(`journalctl -u ${unit} -n 50 --no-pager`);
+      out.push(`systemctl restart ${unit}`);
+    } else {
+      out.push('look at the app itself, not its bind — huginn does not know which unit serves it, '
+        + 'so name it on the row to get the exact lines');
+    }
+  }
+
+  // ---- the firewall half, on the other machine.
+  //
   // Identical lines are collapsed across arrivals: one client reaching huginn on
   // two of its addresses is one rule, and a paste block with the same rule twice
   // in it is a block somebody has to read twice to be sure.
+  const section = [];
+  let openTheFile = false;
   const said = new Set();
-  for (const addr of failing) {
+  for (const row of failed) {
+    const addr = row.addr;
     // ⚠ A FAILING LOOPBACK ARRIVAL NEEDS NO RULE, AND SAYING SO IS THE FIX.
     // Loopback never crosses the veth chain, so nothing in 117.fw has any say
     // over it: once step 1 binds the unit to 0.0.0.0 it answers on 127.0.0.1 by
@@ -1098,21 +1132,46 @@ function fixLines(rec, addresses = [], remotes = {}) {
     // boardserver, with `-source 192.168.2.131` added on heimdall for the LAN,
     // left all three of 100.97.198.90, 127.0.0.1 and 192.168.2.117 reading ok.
     // A rule here would be a third inert line pasted into a root shell.
-    if (hostClass(addr) === 'loopback') { out.push(loopbackNeedsNoRule(addr)); continue; }
+    if (hostClass(addr) === 'loopback') { section.push(loopbackNeedsNoRule(addr, reachedButSilent(row))); continue; }
+    openTheFile = true;
     const known = remotesOf(remotes, addr);
     const sources = firewallSources(known);
     if (!sources.length) {
-      out.push(known.length ? onlyLoopbackHere(addr) : noClientHere(addr));
+      section.push(known.length ? onlyLoopbackHere(addr) : noClientHere(addr));
       continue;
     }
     for (const src of sources) {
       const line = `IN ACCEPT -source ${src} -p tcp -dport ${port} -log nolog`;
       if (said.has(line)) continue;
       said.add(line);
-      out.push(line);
+      section.push(line);
     }
   }
+  // ⚠ NO HEADER WITHOUT LINES (r2 L3). Naming another machine's root-owned file
+  // is an instruction to go and open it, and on a daemon whose only client
+  // address is loopback — every fresh install, and every daemon reached only
+  // through an ssh tunnel — every failing address answers to step 1 alone, so
+  // the header stood over nothing but the sentence saying there was nothing to
+  // do. `openTheFile` is the honest test: a rule to add, or a placeholder naming
+  // the source the reader has to fill in. Loopback is neither.
+  if (openTheFile) out.push(`# on heimdall — ${FIREWALL_FILE}`);
+  out.push(...section);
   return out;
+}
+
+/**
+ * Whether this failure happened AFTER something took the connection.
+ *
+ * `timed out` is the probe's deadline: the socket was not refused, so either the
+ * app accepted and went quiet or a DROP (not a REJECT) ate the packets. `http
+ * 5xx` is the server answering to say it is broken. Neither is a bind. Anything
+ * else — refused, no route, a name that does not resolve, an unrecognised errno
+ * — is treated as "nothing is listening there", which is the bind story and the
+ * safe default for a word this function has not seen before.
+ */
+function reachedButSilent(row) {
+  const e = String((row && row.error) || '');
+  return e === 'timed out' || /^http \d/.test(e);
 }
 
 /**
@@ -1122,8 +1181,13 @@ function fixLines(rec, addresses = [], remotes = {}) {
  * [fixLines] — and a reader who has just been handed a firewall file needs to be
  * told that the address they can see failing is not in it.
  */
-function loopbackNeedsNoRule(addr) {
-  return `# ${addr} passes on its own once the unit binds 0.0.0.0`;
+function loopbackNeedsNoRule(addr, silent = false) {
+  // ⚠ AND NOT "ONCE THE UNIT BINDS 0.0.0.0" WHEN IT ALREADY DOES. A loopback
+  // address that ACCEPTED the connection has proved the bind (r2 L4); the only
+  // true half of this sentence there is that no firewall can change it.
+  return silent
+    ? `# ${addr} is loopback — no firewall rule anywhere can change what it does`
+    : `# ${addr} passes on its own once the unit binds 0.0.0.0`;
 }
 
 /** The comment that stands where a source would be when nobody has arrived there. */
@@ -1320,12 +1384,24 @@ async function reachabilityProbe(rec, addrs = [], opts = {}) {
   return { ok, checkedAt, addresses, fix: ok ? [] : fixLines(rec, addresses, opts.remotes || {}), note: '' };
 }
 
-/** The sentence a 422 says. Names the addresses, because that is the whole refusal. */
+/**
+ * The sentence a 422 says. Names the addresses, because that is the whole refusal.
+ *
+ * ⚠ AND NAMES WHAT HAPPENED AT THEM (r2 L4). "Fix the bind first" was said to
+ * every refusal, including the one where every address ACCEPTED the connection
+ * and went quiet — a diagnosis the measurement in the same body contradicts.
+ */
 function reachRefusal(reach) {
-  const failing = (reach && Array.isArray(reach.addresses) ? reach.addresses : [])
-    .filter((a) => a && a.ok === false).map((a) => a.addr);
-  return `this app does not answer at ${failing.join(', ') || 'the addresses huginn answers on'}`
-    + ' — a device that can reach huginn has to be able to reach the app, so fix the bind first';
+  const rows = (reach && Array.isArray(reach.addresses) ? reach.addresses : [])
+    .filter((a) => a && a.ok === false);
+  const where = rows.map((a) => a.addr).join(', ') || 'the addresses huginn answers on';
+  const head = `this app does not answer at ${where}`
+    + ' — a device that can reach huginn has to be able to reach the app';
+  if (rows.length && rows.every(reachedButSilent)) {
+    const words = [...new Set(rows.map((a) => String(a.error || 'did not answer')))].join(', ');
+    return `${head}. The connection was not refused (${words}), so this is the app, not the bind`;
+  }
+  return `${head}, so fix the bind first`;
 }
 
 // ------------------------------------------------------- favicons (decision 53)
@@ -2308,7 +2384,7 @@ module.exports = {
   findApp, add, patch, rename, setUrl, remove,
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
-  portOf, hostnameOf, fixLines, remotesOf, firewallSources, slash24,
+  portOf, hostnameOf, fixLines, reachedButSilent, remotesOf, firewallSources, slash24,
   noClientHere, onlyLoopbackHere, loopbackNeedsNoRule,
   normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,
   readBounded, getBounded, iconCandidatesFromHtml, ICON_CANDIDATE_MAX, fetchIcon,
