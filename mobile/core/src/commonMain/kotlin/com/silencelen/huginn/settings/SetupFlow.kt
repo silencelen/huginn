@@ -57,12 +57,21 @@ enum class SetupStep {
 /**
  * Where one step stands.
  *
- * FOUR STATES AND NOT THREE. "Skipped" exists so that declining a step is
+ * FIVE STATES AND NOT THREE. "Skipped" exists so that declining a step is
  * representable as an answer rather than as a failure — the owner's rule for
  * this flow, and the difference between a finish line that reads "3 set up, 4
  * skipped" and one that reads like a broken install. [Failed] carries the
  * reason VERBATIM, because the daemon's own sentence about a refused token is
  * worth more than any wording invented here.
+ *
+ * ⚠ AND [Checked], WHICH THE FLOW WENT WITHOUT AND LIED FOR (D-15). The local-AI
+ * step runs a real capability check whose answer is *not* an outcome: the
+ * machine can serve, and whether it will is a click on a consent card that only
+ * a person may make. With nowhere to put that, the controller wrote the verdict
+ * to a NOTE — which is not part of the step's state — and left the step
+ * [Pending], so a screen that had just printed "This machine can serve (class
+ * C), 2548 MB to download." also said "not checked yet", counted nothing in the
+ * tally, and still offered the check that had just run.
  */
 sealed interface StepStatus {
 
@@ -76,13 +85,30 @@ sealed interface StepStatus {
     data class Failed(val reason: String) : StepStatus
 
     /**
+     * The probe ran; the choice is still the reader's. [detail] is what it found.
+     *
+     * ⚠ NOT A PASS AND NOT A SKIP, and that is the whole reason it exists.
+     * [Passed] would claim this machine serves models it has not downloaded;
+     * [Skipped] would record a decision nobody made. It is the honest middle:
+     * the machine has said its half.
+     */
+    data class Checked(val detail: String) : StepStatus
+
+    /**
      * The reader said no, or the step could not be offered. [why] is empty for a
      * plain decline; a gated step that never got its chance says so.
      */
     data class Skipped(val why: String = "") : StepStatus
 
-    /** Answered either way — the only question [SetupFlow.next] asks. */
-    val resolved: Boolean get() = this !is Pending
+    /**
+     * Answered either way — the only question [SetupFlow.next] asks.
+     *
+     * ⚠ [Checked] IS NOT RESOLVED. A step waiting on a person has not been
+     * answered, whatever the machine now knows about it; counting it as answered
+     * would walk the reader past the one question the flow cannot answer for
+     * them, and would let [allResolved] call a flow finished over an open choice.
+     */
+    val resolved: Boolean get() = this !is Pending && this !is Checked
 }
 
 /**
@@ -191,6 +217,16 @@ object SetupFlow {
     fun fail(state: SetupState, reason: String): SetupState =
         record(state, state.current, StepStatus.Failed(reason))
 
+    /**
+     * The probe answered and the next move is the reader's. See [StepStatus.Checked].
+     *
+     * Records WITHOUT advancing, unlike [skip]: the step the reader is standing
+     * on is the step whose question is still open, and moving them off it is the
+     * one thing this state must not do.
+     */
+    fun checked(state: SetupState, detail: String): SetupState =
+        record(state, state.current, StepStatus.Checked(detail))
+
     /** The reader declined. An ANSWER — the flow moves on and the finish line counts it. */
     fun skip(state: SetupState): SetupState =
         next(record(state, state.current, StepStatus.Skipped()))
@@ -225,6 +261,15 @@ object SetupFlow {
         for (i in (from + 1)..STEPS.lastIndex) {
             val step = STEPS[i]
             if (s.statusOf(step).resolved) continue
+            // ⚠ A CHECKED STEP IS LANDED ON, NOT REASONED ABOUT. Its probe has
+            // already run, so neither of the two clauses below can be true of it
+            // honestly: an installer's decline is older than the check, and
+            // "huginn has to answer first" would relabel a reader's open choice
+            // as a decline they never made when the gate re-opens under it (a
+            // retry on the address does exactly that).
+            if (s.statusOf(step) is StepStatus.Checked) {
+                return s.copy(current = step, finished = false)
+            }
             // The DECLINE is checked before the gate on purpose: when a reader
             // unticked a component AND the daemon never answered, the truthful
             // reason is the one they gave, not the one the machine would have.
@@ -286,10 +331,15 @@ object SetupFlow {
      */
     fun summary(state: SetupState): String {
         val passed = STEPS.count { state.statusOf(it) is StepStatus.Passed }
+        val waiting = STEPS.count { state.statusOf(it) is StepStatus.Checked }
         val skipped = STEPS.count { state.statusOf(it) is StepStatus.Skipped }
         val failed = STEPS.count { state.statusOf(it) is StepStatus.Failed }
         val parts = buildList {
             add("$passed of ${STEPS.size} set up")
+            // Second, and before the two settled counts: it is the only clause
+            // that names something still to do. A checked step counted as
+            // nothing at all is how "4 of 7" came to sit under a printed verdict.
+            if (waiting > 0) add("$waiting waiting on you")
             if (skipped > 0) add("$skipped skipped")
             if (failed > 0) add("$failed could not be proven")
         }
@@ -369,6 +419,7 @@ object SetupFlow {
                     StepStatus.Pending -> null
                     is StepStatus.Passed -> StoredStep(step.name, "passed", st.detail)
                     is StepStatus.Failed -> StoredStep(step.name, "failed", st.reason)
+                    is StepStatus.Checked -> StoredStep(step.name, "checked", st.detail)
                     is StepStatus.Skipped -> StoredStep(step.name, "skipped", st.why)
                 }
             },
@@ -387,6 +438,7 @@ object SetupFlow {
                 val status = when (s.state) {
                     "passed" -> StepStatus.Passed(s.detail)
                     "failed" -> StepStatus.Failed(s.detail)
+                    "checked" -> StepStatus.Checked(s.detail)
                     "skipped" -> StepStatus.Skipped(s.detail)
                     // A state written by a build this one does not know is not a
                     // reason to throw away the rest of the file.

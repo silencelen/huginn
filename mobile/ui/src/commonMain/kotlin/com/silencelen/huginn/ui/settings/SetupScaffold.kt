@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.settings.SetupFlow
@@ -70,6 +71,15 @@ enum class SetupTone {
 
     /** Answered "no". Not a failure — deliberately quieter than one. */
     DECLINED,
+
+    /**
+     * The check ran and the next move is the reader's (D-15).
+     *
+     * Its own mark because it is none of the other four: not waiting (something
+     * HAS happened), not proven (nothing is serving yet), not refused (the check
+     * worked), and not declined (nobody has declined anything).
+     */
+    WAITING_ON_YOU,
 }
 
 /**
@@ -156,7 +166,7 @@ object SetupScaffoldRules {
      * on the last step is "Done" rather than a "Next" pointing at nothing.
      */
     fun primaryLabel(state: SetupState): String {
-        if (state.finished) return "Close"
+        if (state.finished) return CLOSE
         val step = state.current
         val last = step == SetupFlow.STEPS.last()
         return when (state.statusOf(step)) {
@@ -181,18 +191,41 @@ object SetupScaffoldRules {
             "Nothing here is final — Settings can run this again, and a re-run changes nothing that already works."
 
     /**
-     * Every step is skippable, and the label says so plainly.
+     * ⚠ ONE WAY OUT, CALLED ONE THING (D-14).
      *
-     * "Not now" rather than "Skip" on the optional halves: the three that follow
-     * the connection are offers, and a person declining an offer has not skipped
-     * a duty.
+     * The finish bar carried "Close setup" in the footer AND "Close" as the
+     * primary, 8 dp apart, both doing the one thing — the same defect as the
+     * add-route form's two Cancels, and the same fix: one control, one word. The
+     * footer's hatch is what stands down, because on the finish card the primary
+     * IS the way out and a flow whose last screen has no obvious exit is the
+     * thing [CLOSE] exists to prevent.
      */
-    fun skipLabel(step: SetupStep): String =
-        if (step in SetupFlow.GATE) "Skip for now" else "Not now"
+    const val CLOSE: String = "Close setup"
 
-    /** A step already answered has nothing to decline; the button goes rather than greys. */
-    fun canSkip(state: SetupState): Boolean =
-        !state.finished && state.statusOf(state.current) == StepStatus.Pending
+    /** Everywhere except the finish card, where [primaryLabel] already says it. */
+    fun showsCloseButton(state: SetupState): Boolean = !state.finished
+
+    /**
+     * ⚠ EVERY STEP IS SKIPPABLE, AND ONE VERB SAYS SO (D-14).
+     *
+     * It said "Skip for now" on the address and the token and "Not now" on
+     * claude, this computer and local AI — a distinction between duties and
+     * offers that is real to whoever wrote it and invisible to whoever reads it,
+     * since no step is a duty. One verb, and it is the one the flow RECORDS:
+     * the rail says "skipped" and the tally counts "2 skipped", so a button
+     * saying "Not now" left the reader to work out that those were the same
+     * answer.
+     */
+    const val SKIP: String = "Skip for now"
+
+    /**
+     * A step already answered has nothing to decline; the button goes rather than greys.
+     *
+     * ⚠ A CHECKED STEP IS STILL DECLINABLE. Its probe has run, but the answer is
+     * the reader's and one of the two answers is no — see [StepStatus.Checked].
+     */
+    fun canSkip(state: SetupState): Boolean = !state.finished &&
+        state.statusOf(state.current).let { it == StepStatus.Pending || it is StepStatus.Checked }
 
     /**
      * ⚠ THE WAY OUT OF A FAILED STEP, and it had to be its own button.
@@ -219,8 +252,22 @@ object SetupScaffoldRules {
         StepStatus.Pending -> SetupTone.WAITING
         is StepStatus.Passed -> SetupTone.PROVEN
         is StepStatus.Failed -> SetupTone.REFUSED
+        is StepStatus.Checked -> SetupTone.WAITING_ON_YOU
         is StepStatus.Skipped -> SetupTone.DECLINED
     }
+
+    /**
+     * How many lines a rail entry's state line may use (D-16).
+     *
+     * ⚠ IT WAS ONE, inside `widthIn(max = 320.dp)`, so the notification step's
+     * failure read "nothing on this computer can show a notification: …" and
+     * stopped at the colon — with no tooltip, no expand, and no way to read the
+     * rest except by navigating back to the step. A [StepStatus.Failed]'s reason
+     * is the far end's own sentence and is the entire argument for running the
+     * probe; a line that ends before it has not been given. Three, the same
+     * answer `EditorNoteLines` and the archived row's warning arrived at.
+     */
+    const val RAIL_REASON_LINES: Int = 3
 
     /**
      * What a step's state reads as under its name.
@@ -235,8 +282,16 @@ object SetupScaffoldRules {
         StepStatus.Pending -> "not checked yet"
         is StepStatus.Passed -> status.detail.ifBlank { "checked" }
         is StepStatus.Failed -> status.reason.ifBlank { "did not answer" }
+        // ⚠ BOTH HALVES, and in this order (D-15). The check's own finding comes
+        // after the state because the state is what the row was getting wrong:
+        // this line used to read "not checked yet" beside a printed verdict.
+        is StepStatus.Checked ->
+            if (status.detail.isBlank()) CHECKED_WORDS else "$CHECKED_WORDS — ${status.detail}"
         is StepStatus.Skipped -> if (status.why.isBlank()) "skipped" else "skipped — ${status.why}"
     }
+
+    /** What a [StepStatus.Checked] step is, in four words: the machine has answered, you have not. */
+    const val CHECKED_WORDS: String = "checked, waiting on you"
 }
 
 /**
@@ -367,13 +422,15 @@ fun SetupScaffold(
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
             Spacer(Modifier.weight(1f))
-            // Always reachable, at every step: a flow you cannot leave is one
-            // people force-quit rather than finish.
-            TextButton(onClick = onClose, enabled = !busy) { Text("Close setup") }
+            // Reachable at every step: a flow you cannot leave is one people
+            // force-quit rather than finish. ⚠ EXCEPT ON THE FINISH CARD, where
+            // the primary button is already this action under a second name —
+            // see [SetupScaffoldRules.CLOSE].
+            if (SetupScaffoldRules.showsCloseButton(state)) {
+                TextButton(onClick = onClose, enabled = !busy) { Text(SetupScaffoldRules.CLOSE) }
+            }
             if (SetupScaffoldRules.canSkip(state)) {
-                TextButton(onClick = onSkip, enabled = !busy) {
-                    Text(SetupScaffoldRules.skipLabel(state.current))
-                }
+                TextButton(onClick = onSkip, enabled = !busy) { Text(SetupScaffoldRules.SKIP) }
             }
             // A failed step's primary is a retry, so without this there is
             // nothing on screen that moves forward — see [canMoveOn].
@@ -420,12 +477,16 @@ private fun SetupRail(state: SetupState, onOpenStep: (SetupStep) -> Unit) {
                     fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
                 )
                 Spacer(Modifier.weight(1f))
+                // ⚠ IT WRAPS (D-16). Right-aligned so the column of state lines
+                // still reads as one edge, and capped in width so a long reason
+                // cannot push the step's own name off the other side.
                 Text(
                     SetupScaffoldRules.stateWords(status),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = SetupScaffoldRules.RAIL_REASON_LINES,
                     overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
                     modifier = Modifier.widthIn(max = 320.dp),
                 )
             }
@@ -441,4 +502,9 @@ private fun toneColour(tone: SetupTone): Color = when (tone) {
     // Quieter than a failure and quieter than a pass: a decline is a settled
     // answer nobody needs to act on.
     SetupTone.DECLINED -> MaterialTheme.colorScheme.outline
+    // Full-strength ink: louder than WAITING's muted variant, because something
+    // has happened, and deliberately NOT the accent, which in this rail means
+    // proven. `secondary` would have been the obvious third colour and is the
+    // blue D-26 is about — it is not defined in the light scheme at all.
+    SetupTone.WAITING_ON_YOU -> MaterialTheme.colorScheme.onSurface
 }
