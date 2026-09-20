@@ -428,7 +428,10 @@ private fun SessionRow(
             // preview line exists (the list's capture takes no `-e`), so
             // `PanePreview` uses the same structural tell `pane.js` does. Kept
             // and drawn as the composer rather than as something the session did.
-            session.preview.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { line ->
+            // ⚠ D-27. AND IT TOOK THE FIRST LINE WHATEVER IT WAS. A Claude pane
+            // that has just drawn a horizontal rule gives `————————…` as the whole
+            // of what a session is doing. See [previewSnippet].
+            previewSnippet(session.preview)?.let { line ->
                 if (PanePreview.isComposerLine(line)) {
                     Text(
                         line,
@@ -479,6 +482,49 @@ internal fun sessionAddressable(name: String): Boolean =
 /** What a row that will not open says instead. The fix is in tmux, not here. */
 internal const val UNADDRESSABLE_NOTE =
     "huginn cannot address this name — rename it in tmux"
+
+/**
+ * The one line of a pane capture worth putting on a row — or none.
+ *
+ * ⚠ D-27. THE ROW SHOWED A RULE. The picker was `preview.firstOrNull()`, and the
+ * daemon's capture is the pane's last few lines verbatim: a Claude pane that has
+ * just drawn a separator hands back `————————————————`, which the row then
+ * printed as its entire account of what that session is doing. The line is
+ * REAL — nothing is being hidden — it simply carries no information, and a row
+ * whose snippet is a rule is worse than a row with no snippet at all, because
+ * the reader spends a beat trying to read it.
+ *
+ * So the first line with a WORD in it wins. Blank lines and rules are stepped
+ * over rather than dropped from the capture: this decides what one row shows and
+ * nothing else — the Screen tab still renders every line the host sent.
+ *
+ * A rule is defined by what it is made of rather than by a length: box-drawing,
+ * dashes, underscores, equals and bullets in any mixture, with nothing else. One
+ * `-` on its own is a rule by that rule, and it is: a lone dash is not a report
+ * of anything either.
+ *
+ * Returns null when the whole capture is rules and blanks, which draws no
+ * snippet — the honest answer, and the one the row already handles.
+ */
+internal fun previewSnippet(preview: List<String>): String? =
+    preview.asSequence()
+        .map { it.trim() }
+        .firstOrNull { it.isNotEmpty() && !isRuleLine(it) }
+
+/**
+ * Nothing but rule furniture. The set is the separator glyphs Claude Code and
+ * the shells it runs actually draw — light, heavy, double and dashed
+ * box-drawing, the three dash widths, underscore, equals, the middle dot used as
+ * a spacer, and the asterisk of a markdown thematic break.
+ *
+ * Deliberately NOT `#` or `>`: a bare root prompt and a bare quote mark say
+ * something about the pane even when they say nothing else, and a set that grows
+ * to cover every lonely punctuation mark ends up skipping real output.
+ */
+private fun isRuleLine(trimmed: String): Boolean =
+    trimmed.all { it in RULE_GLYPHS || it.isWhitespace() }
+
+private const val RULE_GLYPHS = "─━═╌┄┈-–—_=·•*"
 
 /** "2 bg", "1 bg · 3 agents" — the shortest true form of what the tip spells out. */
 fun bgLabel(bgShells: Int, bgAgents: Int): String = buildList {
