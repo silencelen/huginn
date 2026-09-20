@@ -76,9 +76,24 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
  * What an app IS, for the row's chip. A label and nothing more — it grants
  * nothing, filters nothing and is not part of any join.
  *
- * An unknown word is COERCED to `other` rather than refused, the same tolerance
- * parseManifest applies to model/effort/mode: a client from a later version that
- * learned a fifth kind must not be unable to write a row against this daemon.
+ * ⚠ REFUSED ON THE WAY IN, COERCED ON THE WAY OUT (r2 L2). Those are two
+ * different questions and they used to share one answer.
+ *
+ *   WRITING — [kindProblem], a 400. This list rides on the list body as `kinds`
+ *   precisely so an editor is not a second copy of it (AppRules.kindChoices
+ *   takes the daemon's list over its own mirror), and silently rewriting a
+ *   caller's word to `other` undoes that: the caller is told 201 and gets a row
+ *   with a chip they did not ask for, with nothing anywhere saying the value was
+ *   discarded. `POST /v1/projects` has answered 400 for the same mistake since
+ *   it shipped, and two routes in one daemon answering one mistake two ways is
+ *   the thing a client author cannot design against.
+ *
+ *   READING — [cleanKind], silent. A row that decoded is a row that renders, so
+ *   a record written by a LATER daemon that learned a sixth kind degrades to a
+ *   chip with the wrong label, never to a list that will not draw.
+ *
+ * An ABSENT kind is not a mistake; it means `other`, and `{name, url}` stays a
+ * legal body.
  */
 const KINDS = ['dashboard', 'tool', 'docs', 'lab', 'other'];
 const DEFAULT_KIND = 'other';
@@ -467,10 +482,26 @@ function idFor(name) {
     || `app${Math.floor(Date.now() / 1000) % 100000}`;
 }
 
-/** Unknown words become `other` rather than an error. See [KINDS]. */
+/** What a STORED kind reads as. Unknown words become `other`. See [KINDS]. */
 function cleanKind(raw) {
   const k = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
   return KINDS.includes(k) ? k : DEFAULT_KIND;
+}
+
+/**
+ * Whether a kind a CALLER supplied can be written, as a sentence or null.
+ *
+ * Absent and empty are fine (they mean `other`). Present and unknown is a 400,
+ * and the sentence lists the vocabulary rather than just naming the field —
+ * `kinds` is on the list body, but a caller who got this wrong has just shown
+ * they were not reading it.
+ */
+function kindProblem(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw !== 'string') return `kind is one of ${KINDS.join(', ')}`;
+  const k = raw.trim().toLowerCase();
+  if (k === '' || KINDS.includes(k)) return null;
+  return `kind is one of ${KINDS.join(', ')}`;
 }
 
 // -------------------------------------------------------------- the record
@@ -687,6 +718,8 @@ function add(list, input = {}, now = Math.floor(Date.now() / 1000)) {
   if (badNotes) return { ok: false, status: 400, error: badNotes };
   const badUnit = unitProblem(input.unit);
   if (badUnit) return { ok: false, status: 400, error: badUnit };
+  const badKind = kindProblem(input.kind);
+  if (badKind) return { ok: false, status: 400, error: badKind };
 
   const id = input.id ? String(input.id) : idFor(input.name);
   // Grammar is a 400 — what was typed cannot be an id at all. A COLLISION is a
@@ -743,7 +776,11 @@ function patch(list, id, changes = {}) {
     if (bad) return { ok: false, status: 400, error: bad };
     next.unit = cleanUnit(changes.unit);
   }
-  if (changes.kind !== undefined) next.kind = cleanKind(changes.kind);
+  if (changes.kind !== undefined) {
+    const bad = kindProblem(changes.kind);
+    if (bad) return { ok: false, status: 400, error: bad };
+    next.kind = cleanKind(changes.kind);
+  }
   next.version = rec.version + 1;
 
   return {
@@ -2263,7 +2300,7 @@ module.exports = {
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
   REBIND_MARKER_NAME, STORE_NAME, SCHEMA, FIREWALL_FILE, UNIT_BIND_NOTES,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,
-  oneLine, cleanName, cleanKind, cleanUnit, idFor,
+  oneLine, cleanName, cleanKind, kindProblem, cleanUnit, idFor,
   hostClass, parseAppUrl, urlProblem, normalizeUrl,
   nameProblem, notesProblem, idProblem, unitProblem,
   buildRecord, storedAddedAt, noProbe, noReach, reachOf, appRow, sortApps,

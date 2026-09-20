@@ -505,6 +505,19 @@ test('an app that answers everywhere can be added, and it is in the list afterwa
   assert.ok(rowOf(await list(), 'board-view'));
 });
 
+test('an unknown kind is a 400 on the wire, before any probe runs (L2)', async () => {
+  // ⚠ AND BEFORE THE NETWORK. The shape rules come first precisely so a body
+  // that cannot be a row never costs a probe — this one names an address that
+  // WOULD pass, so a 400 here also proves the order.
+  const r = await api('/v1/apps', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Hologram', url: `http://127.0.0.1:${okPort}/holo`, kind: 'hologram' }),
+  });
+  assert.equal(400, r.status, JSON.stringify(r.body));
+  assert.match(r.body.error, /kind is one of/, r.body.error);
+  assert.equal(null, rowOf(await list(), 'hologram'), 'and nothing was written');
+});
+
 test('an app that does not answer at every known address is REFUSED with 422 and the lines that would fix it', async () => {
   // ⚠ DECISION 54. The shape is fine and the world is not: `hangPort` accepts
   // the connection and says nothing, so the address this daemon's clients
