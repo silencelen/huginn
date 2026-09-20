@@ -1,5 +1,5 @@
 [versions]
-agp = "9.1.1"
+agp = "9.3.1"
 # FCM: the only push transport Google delivers into Doze.
 google-services = "4.4.2"
 firebase-bom = "33.7.0"
@@ -7,7 +7,7 @@ biometric = "1.1.0"
 # Forced ABOVE the 1.2.5 that biometric drags in: that FragmentActivity rejects
 # the request codes the modern activity-result launcher generates.
 fragment = "1.8.5"
-kotlin = "2.3.21"
+kotlin = "2.4.10"
 compose-bom = "2024.12.01"
 # Compose Multiplatform, used ONLY by :core so shared code can name
 # androidx.compose.ui types (Color, AnnotatedString) from commonMain. Pinned to
@@ -16,7 +16,7 @@ compose-bom = "2024.12.01"
 compose-multiplatform = "1.7.3"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
-coroutines = "1.9.0"
+coroutines = "1.11.0"
 kotlinx-serialization = "1.7.3"
 # The HTTP layer, and it lives in :core so both clients share one. 3.0.x needs
 # no Kotlin bump (same reasoning as compose-multiplatform above), and its OkHttp
@@ -69,7 +69,7 @@ androidx-glance-material3 = { group = "androidx.glance", name = "glance-material
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebase-bom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
 androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
-androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.3.7" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.2" }
 androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "fragment" }
 
 [plugins]

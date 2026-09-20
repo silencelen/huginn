@@ -1,0 +1,124 @@
+# CodeQL, as an ADVANCED workflow rather than GitHub's default setup.
+#
+# WHY THIS FILE EXISTS. Default setup ran two analyses: javascript-typescript,
+# which passed, and java-kotlin, whose `autobuild` step ran `./gradlew assemble`
+# and died on every push to main from 2026-09-18 onward with
+#
+#     Execution failed for task ':app:processDebugGoogleServices'
+#     > File google-services.json is missing.
+#
+# That file is per-deployment and gitignored on purpose (mobile/.gitignore says
+# so, and mobile/README.md says which .example to copy), so autobuild — which
+# takes the tree exactly as checked out — can never satisfy it. Default setup has
+# no place to put a build step, so the choice was to lose Kotlin scanning
+# entirely or to own the build. This owns the build.
+#
+# ⚠ THE STUB IS BUILT FROM THE CHECKED-IN TEMPLATE, NEVER FROM THE REAL FILE.
+# app/google-services.json.example carries placeholders (project 000000000000,
+# key YOUR_FIREBASE_ANDROID_API_KEY) and the right package name, which is all
+# :app:compileDebugKotlin needs — the plugin only turns those values into string
+# resources. Nothing here reads, derives from, or reconstructs the owner's real
+# Firebase ids. This repo is public.
+#
+# ⚠ DEFAULT SETUP MUST BE OFF FOR THIS TO UPLOAD. GitHub rejects an advanced
+# workflow's results while default setup is enabled. One command, once, after
+# this file is on main:
+#
+#     gh api -X PATCH repos/silencelen/huginn/code-scanning/default-setup \
+#       -f state=not-configured
+#
+name: CodeQL
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Keeps the weekly cadence default setup ran on, so a rule change in a new
+    # CodeQL release is still noticed on a quiet week.
+    - cron: '17 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The daemon, the CLI and the hooks. No build: the JS extractor reads
+          # the sources, and there is nothing to install — server/appd has zero
+          # npm dependencies.
+          - language: javascript-typescript
+            build-mode: none
+          # The phone app, the desktop client and the two shared modules.
+          - language: java-kotlin
+            build-mode: manual
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        if: matrix.language == 'java-kotlin'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # 17, because that is the JAVA_HOME mobile/scripts/build.sh pins and
+          # the toolchain the release APK is actually built with.
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up the Android SDK
+        if: matrix.language == 'java-kotlin'
+        uses: android-actions/setup-android@v4
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Placeholders only — see the header. Written before the build because
+      # :app:compileDebugKotlin depends on the resources the google-services
+      # plugin generates from it.
+      - name: Stub Firebase config from the checked-in template
+        if: matrix.language == 'java-kotlin'
+        run: |
+          cp mobile/app/google-services.json.example mobile/app/google-services.json
+          echo "placeholder google-services.json in place (project_id: $(
+            grep -o '"project_id": *"[^"]*"' mobile/app/google-services.json))"
+
+      # COMPILE, not assemble. autobuild's `assemble` also packages, signs and
+      # lints, none of which the extractor needs, and each of which is another
+      # way for this job to go red over something that is not a security finding.
+      # The four modules named here are every Kotlin source set that ships:
+      # :core and :ui build for both targets (jvm for the desktop client,
+      # android for the phone), :app is the phone, :app-desktop is the desktop.
+      #
+      # --no-daemon is the house rule for every gradle call on a build host.
+      - name: Build the Kotlin sources for the extractor
+        if: matrix.language == 'java-kotlin'
+        working-directory: mobile
+        run: |
+          ./gradlew --no-daemon \
+            :core:compileKotlinJvm :core:compileDebugKotlinAndroid \
+            :ui:compileKotlinJvm :ui:compileDebugKotlinAndroid \
+            :app:compileDebugKotlin \
+            :app-desktop:compileKotlin
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          # Matches the category default setup used, so the alerts already filed
+          # against /language:java-kotlin and /language:javascript-typescript
+          # carry over instead of being refiled as a new set.
+          category: /language:${{ matrix.language }}

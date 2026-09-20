@@ -2,11 +2,13 @@
 # daemon's node --test suite (zero npm dependencies — no install step at all)
 # and static checks over every shell surface.
 #
-# The Kotlin suites are NOT here yet: they need the Android SDK + Gradle caching
+# The Kotlin TEST suites are NOT here: they need the Android SDK + Gradle caching
 # to be worth running in CI, and today they gate releases locally instead
 # (mobile/scripts/build.sh runs both suites and asserts the test COUNT before
-# any APK; release-desktop.sh likewise). Add a gradle job deliberately, not as
-# an afterthought.
+# any APK; release-desktop.sh likewise). Add a gradle test job deliberately, not
+# as an afterthought. The Kotlin code does get COMPILED on a hosted runner now —
+# codeql.yml builds :core/:ui/:app/:app-desktop for the java-kotlin extractor —
+# so "does it still compile against a fresh SDK" is answered there.
 name: CI
 on:
   push:
@@ -17,44 +19,112 @@ on:
 permissions:
   contents: read
 
+# One run per ref. main took ten pushes in a day during the huginn 3 train and
+# every superseded run kept a runner busy reporting on a commit nobody was
+# waiting for. PR runs are cancelled when a new commit lands; main runs are NOT,
+# because on main the per-commit verdict is the record — a bisect needs it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   daemon-tests:
     name: huginn-appd tests (node --test)
     runs-on: ubuntu-latest
+    # The suite runs in ~4 minutes. Without a bound, a test that hangs on a
+    # socket or a child process holds a runner for the 360-minute default.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
+          # What the daemon actually runs in production (v22.x). server/setup.sh
+          # still installs Node 20 as the floor for a fresh host, so a 22-only
+          # feature would pass here and break a new install — that gap is real
+          # and belongs to the installer, not to this file.
           node-version: '22'
+          # No `cache:` on purpose. The daemon has ZERO npm dependencies and
+          # therefore no lockfile; setup-node's cache REQUIRES one and fails the
+          # step looking for it. There is nothing to restore.
       # Explicit glob, same as deploy.sh: a bare directory arg is MODULE_NOT_FOUND
       # to node --test, and a glob matching nothing would exit 0 having run zero
       # tests — so the count is asserted too, exactly like the deploy gate.
       # Redirect, never pipe: `| tee` under bash-without-pipefail returns tee's 0
       # and a red suite reads green.
-      - run: |
+      - name: node --test, with the count held to the shared floor
+        run: |
           node --test server/appd/test/*.test.js > /tmp/appd-tests.tap 2>&1 && RC=0 || RC=$?
           cat /tmp/appd-tests.tap
           [ "$RC" -eq 0 ] || exit "$RC"
+          # The floor comes from scripts/test-floors.env, the ONE place it is
+          # written, because this step used to assert `> 0` — the exact shape
+          # that file exists to stamp out. A suite that stops being DISCOVERED
+          # (a renamed directory, a glob that matches four files instead of
+          # eighty-five) exits 0 having run a handful, and `> 0` calls that green.
+          . scripts/test-floors.env
           PASSED=$(grep -oE '^# pass [0-9]+' /tmp/appd-tests.tap | grep -oE '[0-9]+')
-          [ "${PASSED:-0}" -gt 0 ] || { echo "zero tests ran"; exit 1; }
+          [ "${PASSED:-0}" -ge "${APPD_MIN:?floor missing from scripts/test-floors.env}" ] || {
+            echo "appd tests ran ${PASSED:-0}, floor is $APPD_MIN — refusing." >&2; exit 1; }
+          echo "appd tests: $PASSED passed (floor $APPD_MIN)"
+      # if: always() — the TAP is worth most on the run that FAILED, and a failed
+      # step skips everything after it by default. Without this the only copy of
+      # a red suite's output is inside a step log that has to be scrolled.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: appd-tests-tap
+          path: /tmp/appd-tests.tap
+          if-no-files-found: warn
+          retention-days: 14
       - run: node --check server/appd/huginn-appd.js
 
   shell:
     name: shellcheck + syntax
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      # bash -n proves it parses; shellcheck reviews it. The two clients are a
-      # sourced pair — huginn.ps1 has no parser on a Linux runner, so its check
-      # is the sync rule in CONTRIBUTING, not CI.
-      - run: |
-          bash -n client/huginn.sh client/install.sh server/setup.sh \
-                  server/appd/deploy.sh mobile/scripts/build.sh \
-                  mobile/scripts/ship.sh mobile/scripts/release-desktop.sh \
-                  scripts/github-release.sh assets/brand/generate.sh
-      - run: |
-          shellcheck -S warning client/huginn.sh server/setup.sh \
-                     server/bin/cc server/bin/huginn-status \
-                     server/appd/deploy.sh scripts/github-release.sh \
-                     || true   # advisory for now: the scripts predate shellcheck in CI;
-                               # tighten to enforcing once the existing findings are triaged
+      # ⚠ THE LIST IS FOUND, NOT WRITTEN DOWN. It replaces a hand-kept list of
+      # eight that had drifted eleven behind the tree — every server/bin/*
+      # command, scripts/test-client.sh, client/termux-detach-button.sh, and
+      # server/appd/hooks/huginn-headroom-gate, which is the hook that decides
+      # whether a subagent is allowed to start.
+      #
+      # A file counts as a shell surface if its first line says so: a bash/sh
+      # shebang, or the `# shellcheck shell=bash` directive that client/huginn.sh
+      # carries instead, because it is SOURCED into a ~/.bashrc and a sourced
+      # file has no shebang to read. mobile/gradlew is Gradle-generated and not
+      # ours to lint.
+      - name: find every shell surface in the tree
+        run: |
+          git ls-files | while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            # head -c first: a tracked binary with no newline would otherwise be
+            # read whole, and tr -d strips the NULs that make bash warn on the way.
+            head -c 200 -- "$f" 2>/dev/null | head -n1 | tr -d '\0' \
+              | grep -qE '^(#!.*[ /](bash|sh)( |$)|# shellcheck shell=(ba)?sh)' \
+              && printf '%s\n' "$f"
+          done | grep -vx 'mobile/gradlew' > /tmp/shell-surfaces.txt || true
+          N=$(wc -l < /tmp/shell-surfaces.txt)
+          # The floor this repo's own lesson demands: a finder that matches
+          # nothing loops zero times and exits 0. Nineteen today.
+          [ "$N" -ge 15 ] || { echo "found $N shell surfaces — the finder is broken, refusing." >&2; exit 1; }
+          echo "$N shell surfaces:"
+          sed 's/^/  /' /tmp/shell-surfaces.txt
+      # ⚠ ONE FILE PER CALL, and that is the whole point. `bash -n a.sh b.sh c.sh`
+      # syntax-checks a.sh and hands b.sh and c.sh to it as $1 and $2 — measured
+      # here: a file with an unterminated `if` exits 2 in first position and 0 in
+      # second. The step this replaces named eight files on one line, so seven of
+      # them were never parsed at all.
+      - name: bash -n
+        run: |
+          RC=0
+          while IFS= read -r f; do bash -n "$f" || RC=1; done < /tmp/shell-surfaces.txt
+          exit "$RC"
+      - name: shellcheck (advisory)
+        run: |
+          # shellcheck, unlike bash -n, really does take a list.
+          mapfile -t SCRIPTS < /tmp/shell-surfaces.txt
+          shellcheck -S warning "${SCRIPTS[@]}" \
+            || true   # advisory for now: the scripts predate shellcheck in CI;
+                      # tighten to enforcing once the existing findings are triaged
