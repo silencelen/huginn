@@ -72,6 +72,7 @@ fun ColumnScope.StartupRow(store: AppStore, mark: String? = null) {
         },
         summary = note ?: Autostart.describe(ClaudePath.isWindows()),
         highlighted = SettingsRowStyle.isHighlighted(ID, mark),
+        modifier = revealMark(ID),
     )
 }
 
@@ -99,6 +100,6 @@ fun ColumnScope.RunSetupAgainRow(mark: String? = null) {
         summary = "Walks the address, the token, claude, this computer, local AI, notifications " +
             "and autostart, checking each one. Nothing is reset — it only re-checks.",
         highlighted = SettingsRowStyle.isHighlighted("host.run-setup", mark),
-        modifier = Modifier,
+        modifier = revealMark("host.run-setup"),
     )
 }

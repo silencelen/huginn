@@ -114,6 +114,38 @@ object Notifiers {
         }
 
     /**
+     * What the CLAIM row says, told the same fact the PATH row below it is told.
+     *
+     * ⚠ D-31. TWO ADJACENT SENTENCES THAT CONTRADICTED EACH OTHER. The claim read
+     * "claiming: this window has been attended recently" directly above "How
+     * notifications reach this computer — **none** — nothing on this computer can
+     * show a notification". Both were true of their own state and neither was true
+     * of the machine: the toggle described PRESENCE, the row described the
+     * BACKEND, and a reader has no way to know those are different questions.
+     *
+     * So the claim reads the backend as well. The order is the order the reader
+     * needs it in — turned off is a choice they made, nowhere to post is a fact
+     * about the machine, and presence is the only one of the three that changes
+     * minute to minute. Nothing here is a new refusal: the daemon claim is already
+     * gated by [Notifier.canDeliver], and this is that same gate said out loud.
+     *
+     * @param name [com.silencelen.huginn.desktop.diag.AppLog.notifierName] — the
+     *   chosen backend, null exactly when it is [NoNotifier].
+     */
+    fun claimWords(enabled: Boolean, present: Boolean, name: String?): String = when {
+        !enabled -> "off — huginn falls back to Telegram"
+        // NOT `NOWHERE_TO_POST` verbatim: the row directly below this one already
+        // carries the reason in full, and two identical sentences stacked is the
+        // other way to make a page unreadable. This says the CONSEQUENCE for the
+        // control it is attached to; that row says why.
+        pathWords(name) == "none" ->
+            "claiming nothing — there is no way to show a notification on this computer, " +
+                "so Telegram stays live whatever this is set to"
+        present -> "claiming: this window has been attended recently"
+        else -> "not claiming: window hidden or unattended, so Telegram stays live"
+    }
+
+    /**
      * Why a test notification must not even be attempted, or null when it can be.
      *
      * ⚠⚠ THE STEP ASKED A READER TO CONFIRM SOMETHING THAT NEVER HAPPENED. With
