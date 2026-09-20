@@ -223,7 +223,12 @@ class SetupController(
         // The finish card's button is the way out, not a way on.
         if (s.finished) { close(); return }
         when (s.statusOf(s.current)) {
-            is StepStatus.Passed, is StepStatus.Skipped -> advance()
+            // ⚠ Checked BELONGS HERE (D-15). Its probe has already run and its
+            // answer is on screen; re-entering `run` re-probed and put the
+            // reader back exactly where they were, which is what made the step
+            // look inert. The choice itself is the consent card in the step
+            // body, or "Skip for now" beside this button.
+            is StepStatus.Passed, is StepStatus.Skipped, is StepStatus.Checked -> advance()
             else -> run(s.current)
         }
     }
@@ -289,7 +294,16 @@ class SetupController(
                         // Neither. The consent card is on this very screen and
                         // pressing it is a human's job — the step stays open
                         // rather than claiming a machine serves when it does not.
-                        is LocalAiOutcome.Offered -> _note.value = o.plan
+                        //
+                        // ⚠ AND IT IS RECORDED (D-15). The note alone is not
+                        // part of the step's state, so the rail read "not
+                        // checked yet" and the tally counted nothing beside a
+                        // printed verdict. `StepStatus.Checked` says both halves
+                        // truthfully: the machine answered, you have not.
+                        is LocalAiOutcome.Offered -> {
+                            _note.value = o.plan
+                            put(SetupFlow.checked(_state.value, o.plan))
+                        }
                     }
                     SetupStep.NOTIFY -> probes.postTestNotification().fold(
                         onSuccess = {
