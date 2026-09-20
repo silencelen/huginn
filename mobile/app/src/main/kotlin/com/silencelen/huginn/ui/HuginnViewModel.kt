@@ -938,6 +938,32 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _drafts = MutableStateFlow<Map<String, String>>(emptyMap())
     val drafts: StateFlow<Map<String, String>> = _drafts.asStateFlow()
+
+    /**
+     * The session that was open when this client was last looked at, read once at
+     * startup — see [com.silencelen.huginn.data.HuginnSettings.lastOpenSession].
+     *
+     * ⚠ NULL UNTIL THE STORE HAS BEEN READ, and null is not "nothing was open":
+     * the shell only acts on a NAME, so a slow DataStore delays the restore
+     * rather than cancelling it. Cleared to "" once restored so a reader who
+     * then navigates back to the list is not dragged into the session again.
+     */
+    private val _lastOpenSession = MutableStateFlow<String?>(null)
+    val lastOpenSession: StateFlow<String?> = _lastOpenSession.asStateFlow()
+
+    /**
+     * Remember where the reader is, so a cold start can come back to it.
+     *
+     * ⚠ A SESSION ONLY, and the list is a real answer. Leaving the session for
+     * the list is a choice, and coming back to a session the reader deliberately
+     * left would be this feature overriding them.
+     */
+    fun rememberOpenSession(name: String?) {
+        val next = name.orEmpty()
+        if (_lastOpenSession.value == next) return
+        _lastOpenSession.value = next
+        viewModelScope.launch { runCatching { settings.setLastOpenSession(next) } }
+    }
     private var draftSaveJob: Job? = null
 
     fun setDraft(key: String, text: String) {
@@ -1028,6 +1054,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _notifyEnabled.value = settings.notifyEnabled.first()
             _watchEnabled.value = settings.watchEnabled.first()
             _drafts.value = settings.drafts.first()
+            _lastOpenSession.value = settings.lastOpenSession.first()
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
             _routeBook.value = settings.routeBook.first()
@@ -1120,20 +1147,28 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // minutes ago invites a person to hand the bearer to a host that has
             // since gone quiet.
             _routeCandidate.value = (outcome.choice as? RouteResolver.Choice.Stay.Candidate)?.candidate
-            when (val choice = outcome.choice) {
-                is RouteResolver.Choice.Empty ->
-                    if (!silent) _toast.value = "No routes yet — add the address huginn answers on"
-                is RouteResolver.Choice.Pinned ->
-                    if (!silent) _toast.value = "Route is pinned — unpin to switch automatically"
-                is RouteResolver.Choice.NoRoute ->
-                    if (!silent) _toast.value = "No route to huginn — is a VPN connected?"
-                is RouteResolver.Choice.Stay ->
-                    if (!silent) _toast.value = "Still on ${choice.route.name}"
+            // ⚠⚠ THE SWEEP REPORTS WHERE IT WAS ASKED FROM (P-30). "Find live
+            // route" lives on the Settings route list, and its only answer was a
+            // toast raised by the screen UNDERNEATH Settings — so on the phone
+            // the button produced no spinner, no message and no change that
+            // anybody could see, on a control whose whole job is to tell you
+            // whether a network still works. The note lands on the route list
+            // itself, which is the desktop's behaviour already; the toast stays
+            // for the times this runs from somewhere else.
+            val words = when (val choice = outcome.choice) {
+                is RouteResolver.Choice.Empty -> "No routes yet — add the address huginn answers on"
+                is RouteResolver.Choice.Pinned -> "Route is pinned — unpin to switch automatically"
+                is RouteResolver.Choice.NoRoute -> "No route to huginn — is a VPN connected?"
+                is RouteResolver.Choice.Stay -> "Still on ${choice.route.name}"
                 is RouteResolver.Choice.Switched -> {
                     editRoutesNow { it.activate(choice.route.id) }
-                    _toast.value = "Switched to ${choice.route.name}"
+                    "Switched to ${choice.route.name}"
                 }
             }
+            // A SWITCH is news wherever the reader is, so it is said either way —
+            // that was already the rule and it is kept.
+            if (!silent || outcome.choice is RouteResolver.Choice.Switched) _toast.value = words
+            if (!silent) _routeNote.value = words
         }
     }
 
