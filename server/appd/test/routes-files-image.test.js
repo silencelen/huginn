@@ -131,12 +131,13 @@ before(async () => {
   await startDaemon();
   // ⚠ IS THE DAEMON ON THIS PORT OURS? The pid formula gives 50 slots, and a
   // daemon leaked by an earlier run (a test process killed before after() could
-  // fire) sits on one, answers /v1/ping happily because ping needs no token, and
-  // rejects ours — which surfaces as every test 401ing and reads like a code bug.
+  // fire) sits on one and refuses OUR token. /v1/ping is authenticated like
+  // every other route, so the start loop never sees its 200 and every test here
+  // 401s — which reads like a code bug and is not one.
   const own = await get({ path: '/nope' });
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
-      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+      + `test run — it refuses our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
