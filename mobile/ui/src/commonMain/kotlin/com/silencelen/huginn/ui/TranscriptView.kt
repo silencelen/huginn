@@ -55,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.data.RelayProject
 
 /**
  * The two measurements a transcript row cannot decide for itself, handed down by
@@ -210,7 +211,16 @@ fun TranscriptEventItem(
     val reveal = LocalRowTime.current
     Box(Modifier.padding(start = indent).then(press)) {
         when (ev.kind) {
-            "user" -> reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
+            // ⚠⚠ M1. A RELAY IS NEVER THE READER'S OWN WORDS. The Projects
+            // "send to member" button pastes a frame into the pane, so the
+            // record it leaves is a plain `user` one — and this drew the owner's
+            // relay as the MEMBER'S own bubble, safety paragraph and all. appd
+            // 3.6.0 re-kinds it `system`; the check here is the backstop for a
+            // transcript, a cache or a daemon that does not, because a row that
+            // names a project came from somewhere else by definition.
+            "user" -> if (ev.project != null) ProjectRelayNote(ev) else {
+                reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
+            }
             // A usage limit arrives AS an assistant record — Claude Code writes its
             // own error into the transcript the same way it writes an answer — so
             // the kind cannot separate them and the flag has to. See [isLimitNotice].
@@ -226,7 +236,9 @@ fun TranscriptEventItem(
             // `@handle` preview slugifies the slash (`lora-stick/docs` →
             // `@lora-stick-docs`), so the rendered line cannot be read back into
             // an addressable name. See TranscriptEvent.peer.
-            "system" -> SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
+            "system" -> if (ev.project != null) ProjectRelayNote(ev) else {
+                SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
+            }
             else -> Unit
         }
     }
@@ -783,6 +795,51 @@ private fun SystemNote(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
     )
+}
+
+/**
+ * A message another member's session sent through a PROJECT (M1).
+ *
+ * ⚠ THE ATTRIBUTION IS A LINE OF ITS OWN, above the message. The note's text
+ * already begins "Message from <peer>: …", which says who — and on a Projects
+ * screen, where several members talk at once, "who" without "which project"
+ * leaves a reader holding half an address. The project's name is the daemon's,
+ * off the frame's header, and absent on a transcript written before that header
+ * carried one — in which case the line shortens to the sender rather than
+ * inventing a project.
+ */
+@Composable
+private fun ProjectRelayNote(ev: TranscriptEvent) {
+    Column(Modifier.fillMaxWidth()) {
+        relayAttribution(ev.project)?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
+        }
+        SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
+    }
+}
+
+/**
+ * "lora-stick · from lora-stick/lead" — which project relayed this, and who sent
+ * it.
+ *
+ * Pure so both the line and its absence can be asserted. Null when there is no
+ * project row at all; the sender alone when the transcript predates the header
+ * clause that names the project, because a made-up project name on an
+ * attribution line is worse than a short one.
+ */
+fun relayAttribution(project: RelayProject?): String? {
+    val p = project ?: return null
+    val from = p.from.trim()
+    val name = p.name?.trim()?.takeIf { it.isNotEmpty() }
+    if (from.isEmpty()) return name
+    return if (name == null) "from $from" else "$name · from $from"
 }
 
 /**

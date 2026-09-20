@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.AccountSwitch
+import com.silencelen.huginn.settings.KeepAwakeCopy
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.ModelChoice
 
@@ -354,14 +355,14 @@ fun HeadroomSettingsSection(
             // it takes. The OFF wording says what is given up rather than
             // nothing, so the two states read as a choice instead of as a feature
             // and its absence.
+            // ⚠ ONE SENTENCE, FROM `KeepAwakeCopy` (P-20). This page and a
+            // settings search for "keep" described the same toggle two
+            // contradictory ways — "Nothing is spent" here against "Spends a
+            // fraction of a cent" there — because the OFF copy was being read as
+            // the feature's description. The cost is stated in the ON state and
+            // the OFF state now talks about the switch.
             Text(
-                if (draft.keepAwake) {
-                    "Sends one tiny request when no 5-hour window is running, at most once per " +
-                        "window. It spends a fraction of a cent and a sliver of the weekly pool."
-                } else {
-                    "Nothing is spent. A session that starts after an idle spell begins a fresh " +
-                        "5-hour window and gets all of it."
-                },
+                if (draft.keepAwake) KeepAwakeCopy.WHAT else KeepAwakeCopy.OFF,
                 style = MaterialTheme.typography.bodyMedium,
             )
         }

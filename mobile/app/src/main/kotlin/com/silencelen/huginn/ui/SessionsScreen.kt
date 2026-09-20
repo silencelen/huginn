@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -122,6 +123,29 @@ fun SessionsScreen(
     var renameTo by remember { mutableStateOf("") }
     val nowMs = remember(archives) { System.currentTimeMillis() }
 
+    // ⚠⚠ P-02. WHICH ROW'S ⋮ IS OPEN, HOISTED. It used to be `var menu by
+    // remember` inside SessionRow, which meant nothing outside the row could
+    // know a gesture was in progress — and the list re-sorts by `activityAt`
+    // every poll, so the walker's tap on row 2's "Kill session" raised
+    // "Wrap up rv-desktop-1?". Now the open row is state up here, and it is one
+    // of the things that freezes the order.
+    var openMenu by remember { mutableStateOf<String?>(null) }
+    val frozen = openMenu != null || confirmKill != null || confirmSoftEnd != null ||
+        confirmArchive != null || confirmDeleteArchive != null || renaming != null
+    // What the reader is currently looking at. Recorded on every unfrozen render
+    // and held to while anything is open — see `OrderLock`, which is where the
+    // rule lives and where it is asserted.
+    var shownOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    val ordered = OrderLock.order(shownOrder, sessions, frozen) { it.name }
+    val orderedGroups = if (groups.isEmpty()) groups else groups.map { g ->
+        g.copy(sessions = OrderLock.order(shownOrder, g.sessions, frozen) { it.name })
+    }
+    if (!frozen) {
+        val drawn = if (groups.isEmpty()) OrderLock.keysOf(ordered) { it.name }
+        else orderedGroups.flatMap { g -> OrderLock.keysOf(g.sessions) { it.name } }
+        if (drawn != shownOrder) shownOrder = drawn
+    }
+
     Box(Modifier.fillMaxSize()) {
         if (sessions.isEmpty()) {
             // ⚠ THE ARCHIVE STILL SHOWS HERE. A host whose sessions have all been
@@ -152,22 +176,30 @@ fun SessionsScreen(
                 // ONE row renderer, used flat or under a heading. Two copies of
                 // it is how a session row grows an action in one arrangement and
                 // not the other.
-                val row: @Composable (Session) -> Unit = { s ->
+                val row: @Composable (Session, Modifier) -> Unit = { s, mod ->
                     SessionRow(
                         s,
                         selected = s.name == selectedName,
+                        menuOpen = openMenu == s.name,
+                        onMenu = { open -> openMenu = if (open) s.name else null },
                         onOpen = { onOpen(s.name) },
                         onKill = { confirmKill = s.name },
                         onSoftEnd = { confirmSoftEnd = s.name },
                         onArchive = if (archiveAvailable == true) ({ confirmArchive = s.name }) else null,
                         onRename = { renaming = s.name; renameTo = s.name },
+                        modifier = mod,
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
                 if (groups.isEmpty()) {
-                    items(sessions, key = { it.name }) { s -> row(s) }
+                    // ⚠ `animateItem` IS THE OTHER HALF OF P-02. When the list
+                    // DOES re-sort — which it must, the moment nothing is open —
+                    // a row that teleports is a row nobody can follow. Moving it
+                    // is what lets a reader see that the thing they were aiming
+                    // at went somewhere, instead of discovering it by pressing.
+                    items(ordered, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
                 } else {
-                    for (g in groups) {
+                    for (g in orderedGroups) {
                         val p = g.project
                         if (p != null) {
                             item(key = "project:${p.id}") {
@@ -179,7 +211,7 @@ fun SessionsScreen(
                             // naming a category nothing is outside of.
                             item(key = "ungrouped") { SectionLabel(SESSIONS_UNGROUPED) }
                         }
-                        items(g.sessions, key = { it.name }) { s -> row(s) }
+                        items(g.sessions, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
                     }
                 }
                 // At the BOTTOM of the live list, collapsed, rather than a fifth
@@ -273,7 +305,7 @@ fun SessionsScreen(
     confirmKill?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmKill = null },
-            title = { Text("Kill $name?") },
+            title = { ConfirmTitle(EndVerbs.HARD, name) },
             text = { Text("The session and anything running inside it are terminated. Unsaved work in that session is lost.") },
             confirmButton = {
                 TextButton(onClick = { confirmKill = null; onKill(name) }) { Text(EndVerbs.HARD) }
@@ -285,7 +317,7 @@ fun SessionsScreen(
     confirmArchive?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmArchive = null },
-            title = { Text("Archive $name?") },
+            title = { ConfirmTitle("Archive", name) },
             text = {
                 Text(
                     "Claude is asked to wrap up, and the session is ended once it settles. " +
@@ -303,7 +335,7 @@ fun SessionsScreen(
     confirmDeleteArchive?.let { row ->
         AlertDialog(
             onDismissRequest = { confirmDeleteArchive = null },
-            title = { Text("Forget ${ArchiveRules.label(row)}?") },
+            title = { ConfirmTitle("Forget", ArchiveRules.label(row)) },
             // Named for what is actually lost. "Delete" against a row that looks
             // like a list entry reads as tidying; the copy of the conversation
             // going with it is the part worth a sentence.
@@ -318,7 +350,7 @@ fun SessionsScreen(
     confirmSoftEnd?.let { name ->
         AlertDialog(
             onDismissRequest = { confirmSoftEnd = null },
-            title = { Text("${EndVerbs.SOFT} $name?") },
+            title = { ConfirmTitle(EndVerbs.SOFT, name) },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
@@ -337,16 +369,24 @@ fun SessionsScreen(
 private fun SessionRow(
     s: Session,
     selected: Boolean,
+    /**
+     * ⚠ HOISTED (P-02). This was `var menu by remember` in here, so the screen
+     * could not tell that a gesture was in progress and the list went on
+     * re-sorting underneath the open menu. The owner of the state is now the
+     * screen, which is also what freezes the order.
+     */
+    menuOpen: Boolean,
+    onMenu: (Boolean) -> Unit,
     onOpen: () -> Unit,
     onKill: () -> Unit,
     onSoftEnd: () -> Unit = {},
     /** Null on a daemon without the archive feature, which is what hides the item. */
     onArchive: (() -> Unit)? = null,
     onRename: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .then(
                 if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -434,11 +474,20 @@ private fun SessionRow(
 
             if (s.preview.isNotEmpty()) {
                 Spacer(Modifier.height(3.dp))
-                s.preview.takeLast(2).forEach { line ->
+                // ⚠ P-14. `❯ run sleep 10 in the background then say doneB` on a
+                // row nobody had typed into: Claude Code's dim inline SUGGESTION,
+                // drawn here in the same weight as output and reading as a
+                // pending prompt. The dimness is gone by the time a preview line
+                // exists (the list's capture has no `-e`), so `PanePreview` uses
+                // the same structural tell `pane.js` does. Kept, and drawn as the
+                // composer rather than as something the session did.
+                PanePreview.rows(s.preview.takeLast(2)).forEach { row ->
                     Text(
-                        line,
+                        row.text,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (row.hint) MaterialTheme.colorScheme.outline
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = if (row.hint) FontStyle.Italic else null,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -464,14 +513,14 @@ private fun SessionRow(
         }
 
         Box {
-            IconButton(onClick = { menu = true }) {
+            IconButton(onClick = { onMenu(true) }) {
                 Icon(Icons.Filled.MoreVert, contentDescription = "Session actions")
             }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
                 DropdownMenuItem(
                     text = { Text("Rename") },
                     leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
-                    onClick = { menu = false; onRename() },
+                    onClick = { onMenu(false); onRename() },
                 )
                 // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. Both are drawn
                 // in the destructive palette — the kill in the full `error` red,
@@ -495,7 +544,7 @@ private fun SessionRow(
                             tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
                         )
                     },
-                    onClick = { menu = false; onSoftEnd() },
+                    onClick = { onMenu(false); onSoftEnd() },
                 )
                 // Between the wrap-up and the kill, where it belongs: it is a
                 // wrap-up that leaves something behind. Neither red — ending a
@@ -505,7 +554,7 @@ private fun SessionRow(
                     DropdownMenuItem(
                         text = { Text("Archive…") },
                         leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) },
-                        onClick = { menu = false; onArchive() },
+                        onClick = { onMenu(false); onArchive() },
                     )
                 }
                 DropdownMenuItem(
@@ -517,7 +566,7 @@ private fun SessionRow(
                             tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
                         )
                     },
-                    onClick = { menu = false; onKill() },
+                    onClick = { onMenu(false); onKill() },
                 )
             }
         }

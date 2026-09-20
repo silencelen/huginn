@@ -1,6 +1,11 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +22,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,11 +73,14 @@ fun AppFormFields(
     // lines. A control that cannot be reached is a feature that is not there,
     // which is the same rule `ScrollOwnerTest` holds for the list. This lives here
     // rather than in `AppsView.kt` precisely so that gate keeps counting one.
+    val scroll = rememberScrollState()
+    Box(modifier.fillMaxWidth().heightIn(max = FORM_MAX_HEIGHT)) {
     Column(
-        modifier
+        Modifier
             .fillMaxWidth()
-            .heightIn(max = FORM_MAX_HEIGHT)
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(scroll)
+            // Room for the track on the right, so a long line never runs under it.
+            .padding(end = SCROLL_GUTTER),
     ) {
         OutlinedTextField(
             value = form.name,
@@ -109,6 +121,53 @@ fun AppFormFields(
             Spacer(Modifier.height(8.dp))
             AppRefusalPanel(form, refusal, onCopyFix)
         }
+    }
+    // ⚠⚠ P-23 / D-19. NOTHING SAID THE BLOCK SCROLLED. The refusal is excellent
+    // content — the addresses that did not answer, then a `# on huginn` comment,
+    // then the firewall lines — and on first render it was cut mid-line at the
+    // dialog's bottom edge with the comment half a row tall and every actual fix
+    // line hidden. The surface DID scroll; there was no reason for a reader to
+    // suspect it, so what they saw was a dialog that had run out of room.
+    //
+    // A drawn track rather than a platform scrollbar: `:ui` is common code and
+    // Compose has no multiplatform scrollbar. It is present only when there is
+    // something below, which makes its appearance the affordance.
+    FormScrollTrack(scroll, Modifier.align(Alignment.TopEnd))
+    }
+}
+
+/**
+ * The right-edge track: where you are in the form and that there is more of it.
+ *
+ * Drawn only when the content overflows, so the ordinary five-field form has
+ * nothing extra on it at all.
+ */
+@Composable
+private fun FormScrollTrack(scroll: ScrollState, modifier: Modifier = Modifier) {
+    val max = scroll.maxValue
+    if (max <= 0 || max == Int.MAX_VALUE) return
+    val colour = MaterialTheme.colorScheme.onSurfaceVariant
+    Canvas(modifier.fillMaxHeight().width(SCROLL_GUTTER)) {
+        val trackW = 3f.coerceAtMost(size.width)
+        val x = size.width - trackW
+        val visible = size.height
+        // The thumb is the visible fraction of the whole, floored so it stays
+        // grabbable-looking on a very long refusal.
+        val whole = visible + max
+        val thumbH = (visible * visible / whole).coerceAtLeast(24f).coerceAtMost(visible)
+        val y = (visible - thumbH) * (scroll.value.toFloat() / max)
+        drawRoundRect(
+            color = colour.copy(alpha = 0.18f),
+            topLeft = Offset(x, 0f),
+            size = Size(trackW, visible),
+            cornerRadius = CornerRadius(trackW / 2, trackW / 2),
+        )
+        drawRoundRect(
+            color = colour.copy(alpha = 0.55f),
+            topLeft = Offset(x, y),
+            size = Size(trackW, thumbH),
+            cornerRadius = CornerRadius(trackW / 2, trackW / 2),
+        )
     }
 }
 
@@ -224,3 +283,6 @@ fun AppKindPicker(selected: String?, kinds: List<String>, onPick: (String) -> Un
  * of them gets wrong.
  */
 private val FORM_MAX_HEIGHT = 560.dp
+
+/** The strip on the right the form leaves for [FormScrollTrack]. */
+private val SCROLL_GUTTER = 8.dp

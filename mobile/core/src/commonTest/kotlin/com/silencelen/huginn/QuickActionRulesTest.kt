@@ -2,9 +2,11 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.ui.QuickActionRules
+import com.silencelen.huginn.ui.TableMarks
 import com.silencelen.huginn.ui.SelectionAction
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertSame
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -201,5 +203,102 @@ class QuickActionRulesTest {
         // Quote against a daemon that serves nothing is still the frame — that is
         // the whole reason it is the verb offered on its own.
         assertEquals("> ls -la", QuickActionRules.textFor(SelectionAction.QUOTE, null, "ls -la"))
+    }
+
+    // ------------------------------------------- a selection across a table (D-5)
+
+    private val CELL = TableMarks.CELL
+    private val ROW = TableMarks.ROW
+
+    /**
+     * ⚠⚠ D-5. `TableGrid` draws each cell as its own `Text` inside the
+     * transcript's `SelectionContainer` — which is what makes it a grid — so a
+     * drag across a table came back as every cell run together:
+     *
+     *     …markdown table of three rows…PlanetMoonsEarthThe MoonMarsPhobos, Deimos
+     *
+     * No column break, no row break, and the prose running straight into the
+     * table. Selecting across a table is the ordinary way to quote data. The
+     * cells now carry invisible marks and this is where the pipes come back.
+     */
+    @Test
+    fun `a selection across a table comes back as markdown rows`() {
+        val selected = "Planet${CELL}Moons$ROW" + "Earth${CELL}The Moon$ROW" + "Mars${CELL}Phobos, Deimos$ROW"
+        assertEquals(
+            "| Planet | Moons |\n| Earth | The Moon |\n| Mars | Phobos, Deimos |",
+            QuickActionRules.tableRows(selected),
+        )
+    }
+
+    @Test
+    fun `quoting a table quotes the rows, one per line`() {
+        val selected = "Planet${CELL}Moons$ROW" + "Earth${CELL}The Moon$ROW"
+        assertEquals(
+            "> | Planet | Moons |\n> | Earth | The Moon |",
+            QuickActionRules.quoteBlock(selected),
+        )
+    }
+
+    /**
+     * The walker's exact shape: a drag that started in one speaker's message and
+     * ran down into a table in the other's. The prose gets its own line instead
+     * of running into the first cell.
+     */
+    @Test
+    fun `prose that runs into a table is separated from it`() {
+        val selected = "ease answer with a markdown table.${CELL}Planet${CELL}Moons$ROW" + "Earth${CELL}The Moon$ROW"
+        assertEquals(
+            "| ease answer with a markdown table. | Planet | Moons |\n| Earth | The Moon |",
+            QuickActionRules.tableRows(selected),
+            "every marked segment is a row; nothing runs together any more",
+        )
+    }
+
+    /**
+     * ⚠ A PARTIAL SELECTION IS NOT AN ERROR. A drag that starts in the middle of
+     * a table gets the cells it covered, as a shorter row — never an invented
+     * cell and never a run-on.
+     */
+    @Test
+    fun `a drag that starts mid-table gets the cells it covered`() {
+        assertEquals(
+            "| The Moon |\n| Mars | Phobos, Deimos |",
+            QuickActionRules.tableRows("The Moon$ROW" + "Mars${CELL}Phobos, Deimos$ROW"),
+        )
+    }
+
+    /** Ordinary prose never crossed a table and comes back untouched. */
+    @Test
+    fun `text with no marks is returned exactly`() {
+        val plain = "just a sentence\nand another"
+        assertSame(plain, QuickActionRules.tableRows(plain))
+        assertEquals(plain, QuickActionRules.copyText(plain))
+    }
+
+    /**
+     * ⚠⚠ THE MARKS MUST NEVER TRAVEL. A zero-width character in a composer is a
+     * zero-width character in a prompt, and in a shell command it is worse than
+     * confusing. Every exit a selection has goes through `copyText` or
+     * `textFor`.
+     */
+    @Test
+    fun `no exit from a selection carries the marks`() {
+        val selected = "A${CELL}B$ROW"
+        for (out in listOf(
+            QuickActionRules.copyText(selected),
+            QuickActionRules.quoteBlock(selected),
+            QuickActionRules.quote("look:", selected),
+            QuickActionRules.compose("explain {selection}", selected),
+            QuickActionRules.textFor(SelectionAction.EXPLAIN, null, selected),
+            QuickActionRules.textFor(SelectionAction.QUOTE, null, selected),
+        )) {
+            assertFalse(TableMarks.marked(out), "a mark escaped into: ${out.map { it.code }}")
+        }
+    }
+
+    @Test
+    fun `strip removes them and nothing else`() {
+        assertEquals("AB", TableMarks.strip("A${CELL}B$ROW"))
+        assertEquals("plain", TableMarks.strip("plain"))
     }
 }

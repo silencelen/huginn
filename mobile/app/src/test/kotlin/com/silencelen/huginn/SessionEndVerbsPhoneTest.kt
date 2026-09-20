@@ -81,12 +81,21 @@ class SessionEndVerbsPhoneTest {
     fun `the confirm dialogs are titled with the verb that opened them`() {
         // A row saying "Wrap up" that raises a dialog headed "Wind down andrev?"
         // is the half-rename that reads as two different features.
-        val sessions = source("SessionsScreen.kt")
-        assertTrue("the kill dialog is not titled for its verb", sessions.contains("Text(\"Kill \$name?\")"))
+        //
+        // ⚠ THE TITLE IS NOW TWO LINES (P-02). The list re-sorts under the finger,
+        // so this dialog is the last thing between a mis-targeted tap and an ended
+        // session — the verb is a quiet label and the session NAME is the headline.
+        // `ConfirmTitle` takes them apart; `ConfirmTitleTest` in :ui guards the
+        // sizes. What this gate still owns is that the verb is the SHARED one.
         for (name in surfaces.keys) {
+            val text = source(name)
             assertTrue(
-                "$name titles its wrap-up dialog with something other than the verb",
-                source(name).contains("\${EndVerbs.SOFT} \$name?"),
+                "$name titles its kill dialog with something other than the shared verb",
+                text.contains("ConfirmTitle(EndVerbs.HARD, name)"),
+            )
+            assertTrue(
+                "$name titles its wrap-up dialog with something other than the shared verb",
+                text.contains("ConfirmTitle(EndVerbs.SOFT, name)"),
             )
         }
     }

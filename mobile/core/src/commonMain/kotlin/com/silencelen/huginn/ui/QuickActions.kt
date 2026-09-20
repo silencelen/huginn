@@ -47,6 +47,47 @@ sealed interface SelectionBarItem {
     data object Cancel : SelectionBarItem
 }
 
+/**
+ * ⚠⚠ THE MARKS THAT SURVIVE A SELECTION ACROSS A TABLE (D-5).
+ *
+ * `TableGrid` draws each cell as its own `Text`, inside the transcript's
+ * `SelectionContainer` — which is what makes a grid a grid, and which means the
+ * toolkit hands a selection back as every cell's characters run together with
+ * nothing at all between them:
+ *
+ *     ease answer with a markdown table…PlanetMoonsEarthThe MoonMarsPhobos, Deimos
+ *
+ * No column break, no row break, and the text running straight out of one
+ * speaker's message into the other's. Selecting across a table is the ordinary
+ * way to quote data, and this is what Copy and Quote produced.
+ *
+ * The fix is to put the structure INTO the drawn text, invisibly: every cell ends
+ * with [CELL] and every row with [ROW], both zero-width invisible format
+ * characters that no real answer contains. The grid looks exactly the same; the
+ * flattened selection now carries where the boundaries were, and
+ * [QuickActionRules.tableRows] puts the pipes back.
+ *
+ * ⚠ EVERY EXIT FROM A SELECTION MUST GO THROUGH [QuickActionRules.tableRows] or
+ * [strip]. A marker that reaches a composer is a zero-width character in a
+ * prompt: harmless to read, confusing in a shell command. The app's own Copy,
+ * Quote, Explain, Execute and Ask all pass through `textFor`/`copyText`; the
+ * platform's own toolbar Copy is the one path this cannot reach, so the desktop's
+ * context menu offers its own Copy ahead of it.
+ */
+object TableMarks {
+    /** Between two cells of one row. U+2063 INVISIBLE SEPARATOR. */
+    const val CELL: Char = '\u2063'
+
+    /** At the end of a row. U+2064 INVISIBLE PLUS. */
+    const val ROW: Char = '\u2064'
+
+    /** The two marks, for a caller that only wants them gone. */
+    fun strip(text: String): String = text.filterNot { it == CELL || it == ROW }
+
+    /** Whether this text came out of a table at all. */
+    fun marked(text: String): Boolean = text.any { it == CELL || it == ROW }
+}
+
 object QuickActionRules {
 
     /**
@@ -126,6 +167,9 @@ object QuickActionRules {
      * selected and trimming it would destroy the only part that matters.
      */
     fun quoteBlock(selection: String): String {
+        // normalise() ALSO reassembles table rows (D-5), so a quote of a
+        // selection that crossed a grid comes out as markdown rows rather than
+        // as every cell run together.
         val lines = normalise(selection).split("\n").dropLastWhile { it.isBlank() }
         val framed = lines.joinToString("\n") { if (it.isBlank()) ">" else "> $it" }
         return if (framed.length <= SELECTION_MAX) framed else framed.take(SELECTION_MAX) + TRUNCATED
@@ -185,7 +229,62 @@ object QuickActionRules {
         else -> current + SEPARATOR + addition
     }
 
-    private fun normalise(s: String): String = s.replace("\r\n", "\n").replace("\r", "\n")
+    /**
+     * The selection as MARKDOWN — the table rows put back together (D-5).
+     *
+     * Every cell of a drawn table ends with [TableMarks.CELL] and every row with
+     * [TableMarks.ROW], so a flattened selection carries its own structure and
+     * this is where it becomes text again:
+     *
+     * ```
+     * Planet⁣Moons⁤Earth⁣The Moon⁤   →   | Planet | Moons |
+     *                                    | Earth | The Moon |
+     * ```
+     *
+     * ⚠ A PARTIAL SELECTION IS NOT AN ERROR. A drag that starts in the middle of
+     * a table gets the cells it actually covered, as a shorter row; a drag that
+     * runs from prose into a table gets the prose on its own line and the rows
+     * under it. Both are better than the run-on the reader would otherwise paste,
+     * and neither invents a cell that was not selected.
+     *
+     * Text with no marks at all comes back untouched, which is every selection
+     * that never crossed a table.
+     */
+    fun tableRows(selection: String): String {
+        if (!TableMarks.marked(selection)) return selection
+        // The row mark IS a line boundary: splitting on it and joining with a
+        // newline is also what separates a table from the prose beside it, which
+        // ran together in the walker's paste.
+        val parts = selection.split(TableMarks.ROW)
+        val out = ArrayList<String>(parts.size)
+        for ((i, part) in parts.withIndex()) {
+            // A trailing empty part is the mark at the very end of the selection,
+            // not an empty row.
+            if (part.isEmpty() && i == parts.lastIndex) continue
+            // ⚠ A ROW MARK FOLLOWED IT, SO IT WAS A ROW — even with one cell. A
+            // drag that starts in the middle of a table covers the tail of one
+            // row (which carries no cell mark at all, only the row's) and then
+            // whole rows after it; reading that first fragment as prose put a
+            // bare `The Moon` above a table.
+            val row = i < parts.lastIndex || TableMarks.CELL in part
+            if (!row) { out += part; continue }
+            val cells = part.split(TableMarks.CELL)
+            out += cells.joinToString(" | ", prefix = "| ", postfix = " |") { it.trim() }
+        }
+        return out.joinToString("\n")
+    }
+
+    /**
+     * What the CLIPBOARD gets for a selection — the app's own Copy.
+     *
+     * The same reassembly as [textFor], because a table copied out of a
+     * conversation is a table somebody is about to paste somewhere, and because
+     * the marks must not travel.
+     */
+    fun copyText(selection: String): String = normalise(selection)
+
+    private fun normalise(s: String): String =
+        tableRows(s).replace("\r\n", "\n").replace("\r", "\n")
 }
 
 /**
