@@ -137,6 +137,26 @@ object Frame {
      */
     val reading = 840.dp
 
+    /**
+     * How wide the CONVERSATION column is allowed to get.
+     *
+     * ⚠ D-24. THE USER'S OWN WORDS WERE CAPPED AND THE ANSWER WAS NOT. The shell
+     * sets `userBubbleMaxWidth = 640.dp` (`Main.kt`) precisely because an
+     * uncapped bubble on a wide window is a bar — and assistant prose, markdown
+     * lists and the table card had no cap at all. Measured at a 2196px window: an
+     * assistant paragraph 1840px wide beside a 770px user bubble on the same row,
+     * so the two halves of one conversation were set to two different measures
+     * and the longer one was the one with the paragraphs in it.
+     *
+     * [reading]'s number rather than a second opinion: a conversation is a pane
+     * that is READ, which is the same question Status, Settings and Devices
+     * already answered, and the phone caps those at the same 840. Left-snapped
+     * like every other capped surface here (owner, 09-15) — the rows keep their
+     * own alignment inside it, so a user bubble still hangs off the right edge of
+     * the column and an answer still starts at the left of it.
+     */
+    val transcript = reading
+
     /** A state dot, in the row's own text flow. Never a bar. */
     val dot = 7.dp
 
