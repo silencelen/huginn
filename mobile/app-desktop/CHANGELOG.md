@@ -25,6 +25,36 @@ Round two of the release walk, from the desktop's side.
 - **A route's "last reached" is kept current by every request that works**, not only by the status
   poll — which is polled only while the Status pane is open, so the row aged on the route serving
   everything.
+- **huginn proves an address is huginn before trusting it with your token.** "Switch automatically"
+  used to adopt any address in your route book that merely *looked* like the daemon — a header
+  anybody can print — and then send it the real token. It now asks the address a question only the
+  daemon can answer and moves there only on a correct answer; anything else is shown as "answers,
+  cannot prove it is huginn" and is never adopted on its own. A host running a daemon older than
+  3.6 reads the same way, and setup will still connect to it if you choose to.
+- **The session list stops moving under the pointer.** While a row's menu is open the order is
+  frozen — the walk wound down somebody else's session that way — rows animate when the list does
+  re-sort, and a confirm dialog puts the session's **name** in the largest text on screen.
+- **A message that went in on top of text somebody was still typing says so**, quoting what it
+  landed in. Until now the queued note simply vanished and the two messages arrived merged as one.
+- **A wrap-up that turned into a question says so** instead of looking exactly like one that
+  finished.
+- **Copying or quoting a selection across a table keeps the table.** Every cell used to run
+  together with no column or row breaks at all.
+- **Removing an app or a route asks first**, naming it, the way Kill and Archive already did.
+- **Projects have a menu on the row as well as the header**, so a project can be renamed, paused,
+  archived or deleted straight from the list.
+- **The 422 refusal shows that it scrolls**, and "Copy fix" is beside the dialog's own buttons —
+  these are lines you are expected to run on another machine.
+- **An archived conversation gets the live one's margins** and says "Archived · read-only".
+- **A message relayed through a project reads as a relay**, naming the project and the member it
+  came from, rather than appearing as something you typed.
+- **A proposal's brief can be opened in full** before you approve it.
+- **The keep-awake setting is described one way** — it said "Nothing is spent" on one page and
+  "Spends a fraction of a cent" on another, about the same switch.
+- **The dim suggestion Claude Code offers back from history** is no longer drawn on a session's row
+  as though it were a message waiting to send.
+- **An embedding model is no longer offered as a chat model**, including as the target of
+  "New local chat".
 
 ## 1.6.1
 
