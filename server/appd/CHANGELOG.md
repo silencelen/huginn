@@ -9,6 +9,83 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.6.1 — 2026-09-19
+The low-severity half of the round-two release review, plus the one finding that only ever showed
+up in CI. Nothing here changes a wire contract; every one of them is a sentence, a status or a file
+that was telling a reader something untrue.
+
+- **`/v1/ping` is authenticated, and the source finally says so.** `authorized()` has run above the
+  ping route with no exemption since the route existed — but the comment at the auth check, thirty
+  test files and `deploy.sh` all justified the leaked-daemon guard with "ping needs no token". The
+  guard works for the opposite reason: a foreign daemon on the port refuses OUR token, so the
+  caller's start loop never sees a 200 at all. The route that genuinely answers without a token is
+  `/v1/challenge` (3.6.0), which returns before the auth check, and that is what a client's route
+  probe uses. The README's auth paragraph, which still said the token is required "on every route",
+  names the one exception now. A new test refuses to let the claim back in.
+- **An app `kind` the caller got wrong is a 400.** `POST /v1/apps {"kind":"nope"}` answered 201 and
+  stored `other`, while the same mistake on `POST /v1/projects` has always been a 400. The list body
+  publishes `kinds` precisely so an editor is not a second copy of the vocabulary, and quietly
+  rewriting the word undoes that: a row with a chip nobody asked for, and nothing to say the value
+  was discarded. An absent kind still means `other`; a kind read off DISK is still coerced, so a row
+  written by a later daemon that learned a sixth kind renders with the wrong label rather than not
+  at all.
+- **The apps 422 fix block stops sending readers to the wrong machine.** Two defects in one block.
+  It printed `# on heimdall — /etc/pve/firewall/117.fw` and then had nothing to put under it
+  whenever every failing address was loopback — which is every fresh install and every daemon
+  reached through an ssh tunnel; the header now appears only when a line belongs in that file. And
+  an address that TIMED OUT was handed `bind 0.0.0.0`: a timeout means the connection was not
+  refused, so `ss -ltn` will show the port listening and the reader follows the instruction to a
+  unit already bound the way they were just told to bind it. Refused, no-route and unresolvable
+  addresses keep the rebind story; timed-out and 5xx ones get their own sentence and `systemctl
+  status` / `journalctl` instead. The 422's own words stop saying "fix the bind first" when nothing
+  was refused.
+- **A project create refusal names the field the caller actually left out.** `{"name":"x"}` was
+  answered "kind is one of software, infra, …" — a sentence about a field they never touched, while
+  the brief they forgot went unmentioned; `{name, brief, cwd}` against an untrusted directory got
+  the same answer, so the 409 whose sentence IS the fix was unreachable until they guessed. Kind is
+  the one field nobody can leave blank (the create sheet preselects a chip, the CLI defaults it), so
+  a kind that is PRESENT and wrong is still answered in its place in the form, quoting what was
+  sent, and a MISSING one is checked after brief and cwd.
+- **The lead's rename 409 names a fix that works.** It said "drop it from the project first (DELETE
+  /v1/projects/<id>/members/<role>)" — to the lead as well, and that route answers the lead with its
+  own 409, "the lead is the project — delete the project instead". The only instruction the daemon
+  gave pointed at a door the daemon holds shut. The lead now gets its own sentence (delete the
+  project, which leaves the session running; or PATCH it if the display name was all they wanted),
+  and both sentences carry the project's real id instead of a `<id>` placeholder.
+- **A raw-key send answers `delivered:true`, because it was.** `POST …/keys {"keys":["Escape"]}`
+  reported `delivered:false`. Raw keys never go through the queue — they are a person at a keyboard
+  and cannot wait — so the key was in the pane before the response was written; the `false` belonged
+  to the text branch a key-only body never enters. Both clients seed their send-queue note from this
+  object, so an Escape read back as "not sent yet" on the one send that can never be waiting.
+- **`/run/huginn-claude-state` is swept at startup and daily.** `clearSessionState` runs on create
+  and on end, THROUGH the daemon, so a session killed at a terminal or by a reboot leaks its state
+  file: 40-odd on this host on 2026-09-19, the oldest dead since July, beside a 0-byte `.tmp` from an
+  interrupted hook write and both spellings of the sidecar directories. The sweep is timid on
+  purpose — a tmux read that FAILS sweeps nothing (a failure to observe is not an observation), and a
+  file is taken only when its session is gone AND it has not been touched for a week, which is long
+  enough that a conversation somebody meant to revive still has its transcript mapping. A `*.tmp`
+  older than the window goes whoever owns it, and an EMPTY legacy sidecar directory goes with it.
+- **The refresher stops calling the active login dead.** `refresh <uuid>: known_dead_refresh_token`
+  sat in the journal against the account the arbiter had just switched TO — which reads as a DR
+  problem and is not one: the marker was written months earlier while that profile was inactive, and
+  the active guard sat below it. The guard moves above every verdict, because a profile this daemon
+  has decided not to touch has no opinion to give about how refreshable it is. `active_skipped` is
+  still the wire word; the journal now reads "active profile — skipped, Claude Code refreshes it
+  live".
+- **The revive route stops quoting the pre-1.3.0 name rule.** "letters, digits, underscore" has not
+  described session names since the dash became legal, and says nothing about the dot (refused
+  because tmux rewrites it to `_` and exits 0) or the reserved names. It asks `nameProblem` now, like
+  the create route.
+- **CI: the hook-gate startup test is hermetic.** `a gate bound to a different sentinel directory is
+  called out at startup (#28)` passed on this host and failed on every GitHub Actions run. Both
+  halves named the real `/var/lib/huginn-appd/headroom`, and the second spawn set no
+  `HUGINN_APPD_DATA` at all — so on a hosted runner it died at module load with `EACCES: mkdir
+  '/var/lib/huginn-appd/chats'` and never reached "listening on", and on this host it was a test
+  writing into the LIVE daemon's store. What is under test is whether the daemon notices a gate bound
+  where it does not arm, which is a comparison between two paths; neither has to be a real one. Both
+  spawns are scratch now, ~/.claude included. The assertion is unchanged and gained one: the warning
+  must name where the gate IS watching.
+
 ## 3.6.0 — 2026-09-19
 - **A message is never welded to a person's draft again.** 3.5.0's guard held a send while somebody
   had unsent text in the live view, and 3.5.1 keyed it on keystrokes the daemon itself had relayed —
