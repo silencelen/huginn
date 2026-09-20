@@ -24,6 +24,31 @@ The shared half of the round-three review — the same code both clients draw fr
 - **One Cancel on the add-route form** — it had two, in the setup flow and in Settings.
 - **A route that failed says when**, beside the red dot that was previously the only thing that had
   noticed, and a long route name wraps rather than truncating.
+Round three: the small things the round-two walk listed and nobody had got to. Nothing here
+changes what a control does — they are all about a screen telling you the truth.
+
+- **Setup steps 4 and 5 stop repeating themselves.** "Let huginn run work here" and "Serve local AI
+  from this computer" each printed the step's own subtitle back at you with a few words changed,
+  one line under it. The step keeps its heading; the form below it no longer brings a second one.
+- **"Close to tray" greys out on a machine with no tray.** The row already said "there is no system
+  tray on this computer, so closing the window quits huginn" — over a switch that was on and fully
+  live. Your setting is kept untouched, so a machine that gains a tray gets your answer back.
+- **Pressing "Use" on a route says what else it did.** Choosing a route by hand also turns "Switch
+  automatically" off — deliberately, so nothing moves you off the route you just picked — and now
+  it says so, and points at the switch that turns it back on.
+- **A settings search result takes you to the row.** Searching *awake* found "Keep a window
+  rotating", opened Usage & headroom at the top and left the match two screens below the fold. The
+  pane now scrolls to what you searched for. Rows inside the big shared forms land on the form.
+- **Answers are held to a reading measure.** On a wide window an assistant paragraph ran the whole
+  width of the screen while your own message beside it was correctly capped — one conversation set
+  to two measures. Chats, sessions and archived transcripts now share the one column.
+- **A session's one-line preview skips a rule.** A pane that had just drawn `————————` showed that
+  as the whole of what the session was doing.
+- **"CLI sync" can be read.** It ended mid-word with no way to see the rest; it now wraps and can
+  be copied.
+- **Notifications stops contradicting itself.** "claiming: this window has been attended recently"
+  sat directly above "nothing on this computer can show a notification". The claim row now reads
+  the same fact the row under it does.
 
 ## 1.7.0
 

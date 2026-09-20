@@ -233,6 +233,18 @@ class SettingsPaneState(initial: String?, private val persist: (String) -> Unit)
     private var highlightFor: String? by mutableStateOf(null)
 
     /**
+     * How many search hits have been opened. NOT a fact about any row — it is
+     * how the page tells two arrivals at the SAME row apart (D-23).
+     *
+     * `SettingsReveal` moves the pane once per arrival and then latches, so
+     * without this, searching for a row, scrolling away and searching for the
+     * same row again would find a reveal that had already spent itself: the
+     * second journey would open the drawer and not move.
+     */
+    var arrival: Int by mutableStateOf(0)
+        private set
+
+    /**
      * The two facts the list needs that nothing else in this app already
      * collects: who is signed in, and how many logins the host has saved.
      *
@@ -276,6 +288,7 @@ class SettingsPaneState(initial: String?, private val persist: (String) -> Unit)
     fun openHit(hit: SettingsSearch.Hit) {
         highlight = hit.item.id
         highlightFor = hit.category.id
+        arrival++
         select(hit.category.id)
     }
 

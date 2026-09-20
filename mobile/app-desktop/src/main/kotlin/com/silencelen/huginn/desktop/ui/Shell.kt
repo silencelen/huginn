@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -594,6 +595,17 @@ fun Shell(store: AppStore) {
                                         truncated = archive.page?.transcriptTruncated == true,
                                         onCopy = { copy(it) },
                                         note = archive.note,
+                                        // ⚠ D-24, AND ON THE WHOLE VIEW rather than on its
+                                        // rows. An archived conversation is a conversation
+                                        // and was running to the window edge at 2196px like
+                                        // the live one; but this view owns its own
+                                        // `LazyColumn` in `:ui`, so the shell cannot reach
+                                        // the rows — the cap goes on what the shell CAN
+                                        // reach, which makes the whole read-only pane one
+                                        // capped, left-snapped column. Cap before fill.
+                                        modifier = Modifier
+                                            .widthIn(max = Frame.transcript)
+                                            .fillMaxWidth(),
                                     )
                                 } else if (sessionEnded != null) {
                                     // ⚠⚠ THE PANE OWES AN ACCOUNT OF WHERE THE
