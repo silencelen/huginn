@@ -8,7 +8,7 @@
 | `huginn <name>` | a separate named session (e.g. `huginn work`) |
 | `huginn solo [name]` | attach **and detach all other clients** — resume full-screen (kick your phone) |
 | `huginn list` / `ls` | list running sessions + attach status |
-| `huginn status` / `st` | health: uptime, auth (subscription), sessions, disk |
+| `huginn status` / `st` | health: uptime, auth (subscription), sessions, disk. Colour only when stdout is a terminal and `NO_COLOR` is unset, so it pipes and captures clean |
 | `huginn headroom` | how much plan usage is left on each saved account, what the daemon is holding or has moved, and why — see [Headroom](#headroom-usage-limits) |
 | `huginn rename <old> <new>` / `mv` | rename a session (e.g. promote `main` to a name, freeing `main`) |
 | `huginn end <name> [--force]` | **soft end**: ask Claude to wrap up and commit, then end the session once it goes idle (if auto-end is on for the host). `--force` sends the phrase into a pane with no recorded Claude state. A daemon feature — there is no tmux fallback |
@@ -37,7 +37,9 @@
 
 Every daemon-backed verb runs **on the host** (see the README's [`ssh` + `tmux`](../README.md#-isnt-this-just-ssh--tmux) note): the bearer token is read there and never reaches the client, and `HUGINN_HOST` decides which box you ssh to, not which daemon a client dials.
 
-`<Tab>` completes subcommands. Override the target host per-device with `HUGINN_HOST` (PowerShell: `$env:HUGINN_HOST`, bash: `export HUGINN_HOST`).
+**`huginn <verb> --help`** prints that verb's own usage and exits 0, answered by the client with no ssh — `huginn archive --help`, `huginn device --help`, `huginn local --help`. (The host-side renderers take `--help` too, for when you are on the host: `huginn-archive --help`, `huginn-headroom --help`.)
+
+`<Tab>` completes subcommands, sub-verbs (`device`, `local`, `projects`) and live session names. Override the target host per-device with `HUGINN_HOST` (PowerShell: `$env:HUGINN_HOST`, bash: `export HUGINN_HOST`).
 
 [ccusage]: https://github.com/ryoppippi/ccusage
 
@@ -74,7 +76,9 @@ Your session lives in tmux **on the host**, so a dropped link — laptop sleep, 
 
 ## Named terminal tabs
 
-The attach renames your terminal tab/window to **`huginn:<session>`** — so `huginn costtracking` shows a `huginn:costtracking` tab in Windows Terminal (and iTerm/Termux) — and restores the previous title when you leave. Disable with **`HUGINN_NO_TITLE=1`** (`$env:HUGINN_NO_TITLE='1'`). If a tab won't rename, check your terminal isn't configured to suppress application title changes (or has a pinned tab title).
+The attach renames your terminal tab/window to the **session name** — so `huginn costtracking` shows a `costtracking` tab in Windows Terminal (and iTerm/Termux) — and puts the previous title back when you leave. Disable with **`HUGINN_NO_TITLE=1`** (`$env:HUGINN_NO_TITLE='1'`).
+
+Restoring it needs the terminal's **title stack** (`CSI 22 t` / `CSI 23 t`): the bash client pushes your title before renaming and pops it on the way out, because there is no portable way to *ask* a terminal what its title is — the reply would arrive on stdin and race whatever the shell reads next. xterm, Windows Terminal, iTerm2, VTE (GNOME Terminal), kitty, alacritty and foot all support it; a terminal that does not simply ignores both sequences and keeps the session name. (The PowerShell client reads and restores `$Host.UI.RawUI.WindowTitle` instead, which needs no stack.) The title is only written when stdout is a terminal. If a tab won't rename, check your terminal isn't configured to suppress application title changes (or has a pinned tab title).
 
 ## Projects
 
@@ -120,6 +124,20 @@ offers and what the host sees, including whether it keeps acting while the scree
 keeps the runner up; `huginn device update` refreshes the runner from the pinned sources.
 `huginn devices` (plural) is the host's list of every enrolled machine.
 
+**The address the runner dials.** Enrolling needs one thing ssh cannot provide by itself: the
+runner talks to the daemon *directly*, over HTTP, so it needs an address rather than an alias.
+The client works it out from the link it is already trusted on — `$SSH_CONNECTION`'s third field
+is the address this machine just reached the host at — falling back to an IPv4 the host actually
+holds, and to loopback when the host *is* this machine (a shell on the host itself exports no
+`$SSH_CONNECTION`). Say it yourself with **`huginn device on --url http://<host>:8787`**, which
+wins outright; the same applies to `huginn local on`.
+
+**There is no route book here, on purpose.** The phone and desktop apps pin a list of addresses
+per daemon and try them in order; this client has exactly one route — the ssh alias — because it
+is an ssh front end that runs everything host-side. The consequence worth knowing: a device
+enrolled from the CLI and one enrolled from an app can end up holding different addresses for the
+same daemon. Fix that in the app's route list, or with `--url` here.
+
 ## Headroom (usage limits)
 
 `huginn headroom` prints, per saved Claude login, the **fullest** of the three windows a plan has
@@ -163,7 +181,8 @@ the host for that lane and the run fails instead of falling back.
 |---|---|
 | `HUGINN_HOST` | target host / SSH alias (default `huginn`) |
 | `HUGINN_NO_RECONNECT` | set to `1` to disable auto-reconnect |
-| `HUGINN_NO_TITLE` | set to `1` to disable terminal-tab naming |
+| `HUGINN_NO_TITLE` | set to `1` to disable terminal-tab naming (and the title save/restore with it) |
+| `NO_COLOR` | set to anything: `huginn status` drops its ANSI colour. It is also dropped whenever stdout is not a terminal |
 | `HUGINN_UPDATE_HOST` | the host `huginn update` and the runner fetches fall back to when `gh` is unavailable. **Pinned by default and deliberately not `HUGINN_HOST`** — this is the host whose code your shell then runs, so overriding it is a trust decision and the client says so every time |
 | `HUGINN_DEVICE_DIR` | where `huginn device` keeps `device.json` and its copy of the appd token (default `~/.config/huginn`) |
 | `HUGINN_DEVICE_REFRESH` | set to anything to re-fetch the device runner on the next `device on` |
@@ -186,7 +205,11 @@ type `uninstall` first (`--yes` skips that), and it does the two halves in this 
 2. **The disk, second.** `~/.huginn` (the client, the device runner, the local-AI
    manager), `~/.config/huginn` (the enrolment and its copy of the appd token),
    `~/.config/huginn-local` (models, sessions, runtime — often several GB), and the
-   `source ~/.huginn/huginn.sh` line the installer put in your profile.
+   `source ~/.huginn/huginn.sh` line the installer put in your profile — in **each** of
+   `~/.bashrc`, `~/.zshrc` and `~/.profile` that has it. (`install.sh` wires `~/.bashrc`
+   always, `~/.zshrc` when it exists or zsh is your login shell, and `~/.profile` only when
+   it already exists — with a shell-guarded line there, since `/bin/sh` cannot source a
+   bash script. Windows: the one `$PROFILE`.)
 
 If the host is unreachable the uninstall **still finishes** — an uninstaller does not get
 a second run — and it names the row it stranded so you can retire it from the host later.
