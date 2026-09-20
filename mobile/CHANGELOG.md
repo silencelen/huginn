@@ -44,6 +44,9 @@ The phone's round-three review: the small things, and the two that were quietly 
 - **Nothing on a list sits under its button.** The last remaining cases: a host whose sessions have
   all been archived, where the archive rows were the only thing on screen and were underneath "New
   session".
+- **"Copy resume" fits the row it is in.** The archived session's third action read "Copy resume
+  co…" — a button label cut off rather than a value — and it copies exactly what it always did, the
+  session's own `claude --resume` command.
 
 ## 3.7.0 — 2026-09-19
 
