@@ -50,6 +50,7 @@ import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
 import com.silencelen.huginn.ui.OrderLock
 import com.silencelen.huginn.ui.PanePreview
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
@@ -254,6 +255,10 @@ fun SessionsList(
      * Null hides the verb — the shape every optional action here takes.
      */
     onViewArchive: ((ArchivedSession) -> Unit)? = null,
+    // How many project sessions this list does NOT draw — they are on the
+    // Projects page and nowhere else; see ProjectRules.splitByProject.
+    inProjects: Int = 0,
+    onOpenProjects: (() -> Unit)? = null,
 ) {
     // Collapsed by default, and remembered only as long as the pane is: the
     // archive is a footnote to this list. A section that came back open would
@@ -286,6 +291,7 @@ fun SessionsList(
                     "New starts one on the host with Claude Code already running in it. " +
                         "Sessions started from a terminal appear here too.",
                 )
+                InProjectsNote(inProjects, onOpenProjects)
                 // ⚠ AND THE ARCHIVE STILL SHOWS. A host whose sessions have all
                 // been archived has an empty session list and is not an empty
                 // host; "No tmux sessions" with no way to reach what was put away
@@ -337,11 +343,38 @@ fun SessionsList(
                     }
                     if (i < ordered.lastIndex) RowRule()
                 }
+                // The project sessions are not in this list; this is the one line
+                // that says so.
+                if (inProjects > 0) item(key = "in-projects") { InProjectsNote(inProjects, onOpenProjects) }
                 // Under the live rows, inside the same scroller — the archive is
                 // where this list ENDS, not a second pane competing with it.
                 item { archived() }
             }
             PaneScrollbar(rows)
+        }
+    }
+}
+
+/**
+ * The line under the live rows that says where the project sessions went.
+ *
+ * ⚠ A PROJECT SESSION IS NEVER ON THIS PAGE (owner rule, 2026-09-19): it is on
+ * its project's dashboard and nowhere else, because a copy of it here read as
+ * a second, unrelated session — the widgetshub lead sat in this list between
+ * two hand-made ones and looked like a session that had failed to do
+ * something. This is the list's only admission that they exist: a count, and
+ * the way there. Nothing is drawn when nothing is hidden.
+ */
+@Composable
+private fun InProjectsNote(count: Int, onOpenProjects: (() -> Unit)?) {
+    val words = ProjectRules.hiddenWords(count) ?: return
+    Row(
+        Modifier.fillMaxWidth().padding(start = Space.wide, end = Space.tight, top = Space.unit, bottom = Space.unit),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Muted(words, Modifier.weight(1f))
+        if (onOpenProjects != null) {
+            TextButton(onClick = onOpenProjects) { Text("Projects", style = DeskType.rail) }
         }
     }
 }
