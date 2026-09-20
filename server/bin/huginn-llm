@@ -31,7 +31,13 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+      # ⚠ THE HEADER, NOT A LINE RANGE. This was `sed -n '2,20p'`, and line 20
+      # is `set -u` - so the help ended with a line of this file's own source,
+      # which is exactly the sort of thing that makes a person wonder what else
+      # leaked. A count drifts the moment anybody adds a sentence above; the
+      # comment BLOCK cannot, so the block is what is printed: from line 2 until
+      # the first line that is not a comment.
+      awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     --*) echo "huginn-llm: unknown flag $1" >&2; exit 2 ;;
     *) PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
   esac
