@@ -11941,8 +11941,30 @@ const server = http.createServer(async (req, res) => {
       // client branches on; the sentence beside it stays the thing a person
       // reads, because it is also the instruction.
       if (badSlug) return sendJson(res, 409, { error: badSlug, reason: 'slug-taken' });
-      const kind = projectsLib.KINDS.includes(body.kind) ? body.kind : null;
-      if (!kind) return sendErr(res, 400, `kind is one of ${projectsLib.KINDS.join(', ')}`);
+      /**
+       * ⚠ A KIND THE CALLER TYPED IS CHECKED HERE; A MISSING ONE IS CHECKED LAST
+       * (r2 L5). Two different mistakes, and running them together answered the
+       * wrong question.
+       *
+       * The form's order is Name, Kind, Brief, Directory — but Kind is the one
+       * field nobody can leave blank. CreateProjectSheet draws it as chips with
+       * the first one already selected, and `huginn projects new` defaults it to
+       * `other`. So a body that arrives WITHOUT a kind is not somebody who
+       * mis-filled the chips; it is a caller who has not finished the body, and
+       * the fields they can genuinely have missed are the ones they type. Saying
+       * "kind is one of …" to that caller is a sentence about a field they never
+       * touched while the brief they actually forgot goes unmentioned — two 400s
+       * to learn one thing, and the untrusted-cwd 409 (whose sentence IS the
+       * fix) unreachable until they guess.
+       *
+       * A kind that is PRESENT and wrong is a value somebody chose, so it is
+       * answered in its own place in the form, quoting what they sent.
+       */
+      const kindGiven = body.kind !== undefined && body.kind !== null && body.kind !== '';
+      if (kindGiven && !projectsLib.KINDS.includes(body.kind)) {
+        return sendErr(res, 400, `'${String(body.kind).slice(0, 40)}' is not a project kind — `
+          + `kind is one of ${projectsLib.KINDS.join(', ')}`);
+      }
       const badBrief = projectsLib.briefProblem(body.brief);
       if (badBrief) return sendErr(res, 400, badBrief);
 
@@ -11964,6 +11986,13 @@ const server = http.createServer(async (req, res) => {
           reason: 'untrusted-cwd',
         });
       }
+
+      // Everything a person TYPES is in place; now the field the form always
+      // fills for them. See the ⚠ above for why it is last and not third.
+      if (!kindGiven) {
+        return sendErr(res, 400, `a project needs a kind — one of ${projectsLib.KINDS.join(', ')}`);
+      }
+      const kind = body.kind;
 
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
       if (await sessionExists(leadTmux)) {

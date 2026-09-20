@@ -361,6 +361,49 @@ test('the name, the kind, the brief and the slug are all refused before anything
   assert.equal(1, (await api('/v1/projects')).body.projects.length, 'and none of them made a project');
 });
 
+test('a create refusal names the field the caller actually left out (L5)', async () => {
+  const bad = async (body) => (await api('/v1/projects', { method: 'POST', body: JSON.stringify(body) }));
+
+  // ⚠ THE ORDER A PERSON FILLS THE FORM IS NOT THE ORDER OF THE `if`s. Kind is
+  // the one field nobody can leave blank — CreateProjectSheet preselects a chip
+  // and `huginn projects new` defaults it to `other` — so a body that arrives
+  // without one is a caller who has not finished it, and the fields they can
+  // genuinely have missed are the ones they TYPE. The kind check ran first
+  // anyway, so `{name}` was answered "kind is one of software, infra, …": a
+  // sentence about a field the caller never touched, while the brief they
+  // actually forgot went unmentioned. Two 400s to learn one thing.
+  const noBrief = await bad({ name: 'Order A' });
+  assert.equal(400, noBrief.status);
+  assert.match(noBrief.body.error, /needs a brief/, noBrief.body.error);
+
+  // Same for the directory, which is the field after it.
+  const badCwd = await bad({ name: 'Order B', brief: 'size this', cwd: 'relative/path' });
+  assert.equal(400, badCwd.status);
+  assert.match(badCwd.body.error, /absolute path/, badCwd.body.error);
+
+  // And an untrusted directory still reaches its own 409 with the fix in it,
+  // rather than being masked by a kind nobody supplied.
+  const untrusted = await bad({ name: 'Order C', brief: 'size this', cwd: path.join(tmp, 'untrusted') });
+  assert.equal(409, untrusted.status, JSON.stringify(untrusted.body));
+  assert.equal('untrusted-cwd', untrusted.body.reason);
+
+  // With everything a person types in place, the missing kind is finally what is
+  // wrong — and the sentence says it is MISSING, not that it is wrong.
+  const noKind = await bad({ name: 'Order D', brief: 'size this', cwd });
+  assert.equal(400, noKind.status);
+  assert.match(noKind.body.error, /needs a kind/, noKind.body.error);
+  assert.match(noKind.body.error, /software, infra, hardware, docs, research, other/);
+
+  // A kind the caller DID type and got wrong is still answered first, in its own
+  // place in the form, and the sentence quotes what they sent.
+  const wrongKind = await bad({ name: 'Order E', kind: 'nope' });
+  assert.equal(400, wrongKind.status);
+  assert.match(wrongKind.body.error, /'nope' is not a project kind/, wrongKind.body.error);
+
+  const names = (await api('/v1/projects')).body.projects.map((x) => x.name);
+  assert.deepEqual([], names.filter((n) => n.startsWith('Order ')), 'and none of them made a project');
+});
+
 // -------------------------------------------------------------- the proposal
 
 test('a tagged block in the lead\'s turn becomes a proposal the owner can act on', async () => {
