@@ -10868,6 +10868,22 @@ const server = http.createServer(async (req, res) => {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
+      /**
+       * ⚠ A KEY-ONLY SEND IS DELIVERED, AND THE ANSWER HAS TO SAY SO (r2 L7).
+       *
+       * Raw keys never go through the queue — they are a person at a keyboard
+       * and cannot wait — so they are in the pane by the time this line runs,
+       * and `delivered` was still the `false` it was initialised to two hundred
+       * lines up: the value belongs to the TEXT branch, which a `{keys:[...]}`
+       * body never enters. Both clients seed their send-queue note from this
+       * object (SendQueue.seed), so an Escape or a BTab read back as "not sent
+       * yet" on the one send that can never be waiting for anything.
+       *
+       * Only when there was no text. A body carrying both is a message with
+       * keystrokes attached, and `delivered` there is the MESSAGE's fate, which
+       * is what the note is about.
+       */
+      if (typedKeys.length === 0 && rawKeys.length > 0) delivered = true;
       return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy, intoDraft });
     }
 
