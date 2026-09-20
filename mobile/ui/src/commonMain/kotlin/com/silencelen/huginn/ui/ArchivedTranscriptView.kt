@@ -74,6 +74,20 @@ fun ArchivedTranscriptView(
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
+        // ⚠ SAID ONCE, AT THE TOP (P-34/D-29). Everything about this view is a
+        // conversation — the same rows, the same colours — and the ONLY thing
+        // distinguishing it from a live one was the absence of a composer, which
+        // is an absence, and absences are not read. The header says what this is
+        // before the first row does.
+        Text(
+            READ_ONLY_BANNER,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+                .padding(horizontal = ARCHIVE_GUTTER, vertical = 6.dp),
+        )
         if (note != null) {
             Box(
                 Modifier.weight(1f).fillMaxWidth().padding(24.dp),
@@ -91,7 +105,13 @@ fun ArchivedTranscriptView(
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            contentPadding = PaddingValues(vertical = 8.dp),
+            // ⚠⚠ P-10. THE ROWS RAN EDGE TO EDGE. Every assistant line was laid
+            // out from x=0 to x=1080 on the owner's Fold — flush against both
+            // screen edges, with words clipped off the right ("…run it detached"
+            // lost its tail) and user bubbles overhanging — while the LIVE
+            // conversation insets to 37…1043. Same gutters as the live one, from
+            // one constant, because two numbers is how they drift apart again.
+            contentPadding = PaddingValues(horizontal = ARCHIVE_GUTTER, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             if (truncated) {
@@ -104,7 +124,7 @@ fun ArchivedTranscriptView(
                         TRUNCATED_NOTE,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                     )
                 }
             }
@@ -114,7 +134,7 @@ fun ArchivedTranscriptView(
                         EMPTY_NOTE,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
                     )
                 }
             }
@@ -127,6 +147,23 @@ fun ArchivedTranscriptView(
 
 /** The frame's test tag, so a source gate can name the destination it guards. */
 const val ARCHIVE_TRANSCRIPT_TAG: String = "archive.transcript"
+
+/**
+ * The horizontal inset the LIVE conversation uses, so the archive reads as the
+ * same surface. One constant on purpose: the archived view had none at all
+ * (P-10) precisely because the number lived in the live screens and nowhere
+ * else.
+ */
+val ARCHIVE_GUTTER = 14.dp
+
+/**
+ * What this view IS, said before the first row (D-29).
+ *
+ * "Read-only" rather than "you cannot type here": the reason there is nothing to
+ * send to is that the tmux session is gone, and a reader who knows that also
+ * knows why Revive exists on the row they came from.
+ */
+const val READ_ONLY_BANNER: String = "Archived · read-only"
 
 /**
  * ⚠ BOTH COPIES HAVE TO BE GONE FOR THIS TO BE TRUE, and which one went is not

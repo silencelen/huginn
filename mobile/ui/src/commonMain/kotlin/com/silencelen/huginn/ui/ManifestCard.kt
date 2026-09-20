@@ -16,6 +16,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -86,15 +90,40 @@ fun ManifestCard(
                 Spacer(Modifier.height(4.dp))
                 Text(it, style = MaterialTheme.typography.bodyMedium)
             }
-            manifest.scope.trim().takeIf { it.isNotEmpty() }?.let {
+            manifest.scope.trim().takeIf { it.isNotEmpty() }?.let { scope ->
                 Spacer(Modifier.height(4.dp))
+                // ⚠⚠ P-16. THE CARD ASKS FOR CONSENT TO TEXT IT HID. The brief was
+                // clipped at six lines with an ellipsis and NO way to open it —
+                // the walker's was over 500 characters — with Spawn, Edit and
+                // Discard directly underneath. You have to be able to read the
+                // whole thing before you approve it.
+                var open by remember(scope) { mutableStateOf(false) }
+                // Offered only when there is something behind the fold, and the
+                // cut is MEASURED rather than guessed from a character count: a
+                // brief of six short lines has nothing to open, and a control
+                // over nothing is worse than no control. Recorded only while
+                // folded — expanded, there is no overflow to see, and the value
+                // that opened it is the one that keeps "Show less" on screen.
+                var clipped by remember(scope) { mutableStateOf(false) }
                 Text(
-                    it,
+                    scope,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 6,
+                    maxLines = if (open) Int.MAX_VALUE else SCOPE_LINES,
                     overflow = TextOverflow.Ellipsis,
+                    onTextLayout = { if (!open) clipped = it.hasVisualOverflow },
                 )
+                if (clipped) {
+                    TextButton(
+                        onClick = { open = !open },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            if (open) "Show less" else "Show the whole brief",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
             }
             Spacer(Modifier.height(6.dp))
             Text(
@@ -228,3 +257,11 @@ private fun CardAction(label: String, enabled: Boolean, onClick: () -> Unit) {
  */
 const val MANIFEST_ALREADY_SPAWNED: String =
     "These sessions have already been created from this proposal."
+
+/**
+ * How much of a proposal's brief is shown before the disclosure (P-16).
+ *
+ * Six lines was the old hard cut with no way past it; it stays as the FOLD
+ * rather than as the ceiling.
+ */
+private const val SCOPE_LINES: Int = 6
