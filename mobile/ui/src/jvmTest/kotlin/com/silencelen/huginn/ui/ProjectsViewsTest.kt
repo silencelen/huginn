@@ -38,6 +38,8 @@ class ProjectsViewsTest {
         manifestRev: Int = 0,
         manifestSummary: String? = null,
         endedReason: String? = null,
+        /** A project the daemon has no lead row for yet — see the rollup tests. */
+        leadPresent: Boolean = true,
     ) = ProjectRow(
         id = "6f0d2c41-0000-4000-8000-0000000000b2",
         name = "Status page flap",
@@ -46,7 +48,7 @@ class ProjectsViewsTest {
         status = status,
         cwd = cwd,
         memberCount = members, alive = alive, busy = busy, waiting = waiting,
-        lead = ProjectLead(name = "statusflap-lead", claudeName = "statusflap/lead", present = true),
+        lead = if (leadPresent) ProjectLead(name = "statusflap-lead", claudeName = "statusflap/lead", present = true) else null,
         manifestRev = manifestRev,
         manifestSummary = manifestSummary,
         endedReason = endedReason,
@@ -105,7 +107,10 @@ class ProjectsViewsTest {
         // The one thing a proposed project is FOR is being answered, so the
         // summary rides the subtitle rather than waiting behind a tap.
         assertEquals(
-            "no members yet · two sessions: docs and fw · /root/netplan/dev-ledger/lora-stick",
+            // ⚠ "just the lead so far", not "no members yet" (P-33/D-20): the
+            // MEMBERS list under this header shows the lead, so the header
+            // saying nobody is here contradicts the list below it.
+            "just the lead so far · two sessions: docs and fw · /root/netplan/dev-ledger/lora-stick",
             projectSubtitle(
                 row(
                     members = 0, alive = 0, busy = 0, waiting = 0,
@@ -123,8 +128,16 @@ class ProjectsViewsTest {
     fun `a missing directory leaves no dangling separator`() {
         assertEquals("1 of 3 working · 1 needs you", projectSubtitle(row(cwd = ""), nowMs))
         assertEquals(
-            "no members yet",
+            "just the lead so far",
             projectSubtitle(row(members = 0, alive = 0, busy = 0, waiting = 0, cwd = ""), nowMs),
+        )
+        // No lead registered either: genuinely nobody, and the old sentence.
+        assertEquals(
+            "no members yet",
+            projectSubtitle(
+                row(members = 0, alive = 0, busy = 0, waiting = 0, cwd = "", leadPresent = false),
+                nowMs,
+            ),
         )
     }
 
@@ -229,7 +242,9 @@ class ProjectsViewsTest {
             project = row(),
             rate = ProjectRate(activeRecently = true, tokensPerMin10 = 1800, tokensPerMin60 = 1400),
         )
-        assertEquals("1800 tokens/min over 10m · 1400 over 60m", dashboardPace(d))
+        // ⚠ THE APP'S NUMBER WORDS (P-33). It used to print the raw long —
+        // "41383 tokens/min" beside a "561.6k" two cards away.
+        assertEquals("1.8k/min over 10m · 1.4k/min over 60m", dashboardPace(d))
         assertNull(dashboardPace(ProjectDashboard(project = row())), "no rate, no line")
         assertNull(
             dashboardPace(ProjectDashboard(project = row(), rate = ProjectRate())),
@@ -260,7 +275,7 @@ class ProjectsViewsTest {
                 "tmux  statusflap-db",
                 "model  fable · moved to opus",
                 "agents  2",
-                "work  14 turns · 59000 tokens · $2.60",
+                "work  14 turns · 59.0k tokens · $2.60",
             ),
             memberDetailLines(m),
         )
