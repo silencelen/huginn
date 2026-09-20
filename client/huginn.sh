@@ -44,11 +44,36 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # listening on v6: a bracketed v6 url is a persisted ECONNREFUSED. So on a v6 ssh
 # path the host is asked for an IPv4 it actually holds, and the bracketed literal
 # is kept only as the last answer - correct syntax, and an honest failure.
+#
+# ⚠ AND AN EMPTY $SSH_CONNECTION IS NOT A DEAD END ANY MORE. It used to be:
+# `[ -n "$a" ] || return 1`, and the caller turned that into "could not work out
+# how to reach huginn's daemon" with nothing to do about it. It is empty in two
+# ordinary situations - a shell running ON the host itself (the alias points at
+# this machine, so there is no ssh session to have exported it) and an sshd whose
+# ForceCommand/Match wrapper does not pass the variable on. Both of those can be
+# answered: the host is asked for an address it actually holds, and when the host
+# IS this machine the daemon is on our own loopback, which is the one address
+# that cannot change under us. Only when nothing can be learned at all is it a
+# refusal - and the caller then names `--url`, which every runner accepts.
+#
+# NOTE ON ROUTES: the apps pin a ROUTE BOOK (several addresses per daemon, tried
+# in order, with a witness). The CLI deliberately has none - it is an ssh front
+# end that runs host-side, so it has exactly one route, the ssh alias, and the
+# address below is only ever handed to the local RUNNER, which is the piece that
+# does have to dial the daemon directly. A device enrolled from here and one
+# enrolled from an app can therefore hold different addresses for the same
+# daemon; fix that in the app's route book, or with `--url` here.
 _huginn_srv_url() {
-  local H="$1" a v4
+  local H="$1" a v4 there here
   a="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}' | tr -d '[:space:]')"
-  [ -n "$a" ] || return 1
   case "$a" in
+    '')
+      # Nothing to learn from the link. Is the host this very machine?
+      there="$(ssh -T "$H" 'cat /etc/machine-id 2>/dev/null' 2>/dev/null | tr -d '[:space:]')"
+      here="$(cat /etc/machine-id 2>/dev/null | tr -d '[:space:]')"
+      if [ -n "$there" ] && [ "$there" = "$here" ]; then
+        printf 'http://127.0.0.1:8787'; return 0
+      fi ;;
     *:*) ;;
     *) printf 'http://%s:8787' "$a"; return 0 ;;
   esac
@@ -57,7 +82,19 @@ _huginn_srv_url() {
   case "$v4" in
     [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'http://%s:8787' "$v4"; return 0 ;;
   esac
+  [ -n "$a" ] || return 1
   printf 'http://[%s]:8787' "$a"
+}
+
+# Did the caller already say where the daemon is? `huginn device on --url ...`
+# (and --url=...) is the out when neither the ssh link nor the host can answer,
+# and re-deriving one on top of it would put two --url flags on the runner's
+# argv - the kind of thing that works until the day the parser stops taking the
+# last one.
+_huginn_has_url() {
+  local a
+  for a in "$@"; do case "$a" in --url|--url=*) return 0 ;; esac; done
+  return 1
 }
 
 _huginn_device_fetch() {
@@ -125,10 +162,19 @@ _huginn_device() {
         fi
       fi
       # See _huginn_srv_url: the address is the one this machine just reached the
-      # host at, bracketed when it is an IPv6 literal.
-      srv="$(_huginn_srv_url "$H")"
-      [ -n "$srv" ] || { echo "huginn device: could not work out how to reach $H's daemon" >&2; return 1; }
-      node "$runner" on --url "$srv" "$@"
+      # host at, bracketed when it is an IPv6 literal. An explicit --url wins
+      # outright - it is the answer to this question, not an extra opinion.
+      if _huginn_has_url "$@"; then
+        node "$runner" on "$@"
+      else
+        srv="$(_huginn_srv_url "$H")"
+        [ -n "$srv" ] || {
+          echo "huginn device: could not work out how to reach $H's daemon" >&2
+          echo "               (no ssh address to go on, and $H named no global IPv4)" >&2
+          echo "               say it yourself: huginn device on --url http://<host>:8787" >&2
+          return 1; }
+        node "$runner" on --url "$srv" "$@"
+      fi
       ;;
     update)
       _huginn_device_fetch force && echo "huginn device: runner is now $(node "$runner" version)" ;;
@@ -207,9 +253,17 @@ _huginn_local() {
           echo "huginn local: could not read the appd token from $H" >&2; return 1
         fi
       fi
-      srv="$(_huginn_srv_url "$H")"
-      [ -n "$srv" ] || { echo "huginn local: could not work out how to reach $H's daemon" >&2; return 1; }
-      HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "$srv" "$@"
+      if _huginn_has_url "$@"; then
+        HUGINN_LOCAL_DIR="$dir" node "$mgr" on "$@"
+      else
+        srv="$(_huginn_srv_url "$H")"
+        [ -n "$srv" ] || {
+          echo "huginn local: could not work out how to reach $H's daemon" >&2
+          echo "              (no ssh address to go on, and $H named no global IPv4)" >&2
+          echo "              say it yourself: huginn local on --url http://<host>:8787" >&2
+          return 1; }
+        HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "$srv" "$@"
+      fi
       ;;
     update)
       _huginn_local_fetch force || return 1
@@ -269,11 +323,19 @@ _huginn_uninstall() {
   local hdir="$HOME/.huginn"
   local ddir="${HUGINN_DEVICE_DIR:-$HOME/.config/huginn}"
   local ldir="${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}"
-  local rc="$HOME/.bashrc"
   local cfg="$HOME/.ssh/config"
-  # The EXACT line install.sh appends. Matched whole-line and fixed-string, so a
-  # profile somebody hand-wrote differently is reported rather than rewritten.
-  local rcline='[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh'
+  # ⚠ THREE FILES, BECAUSE THE INSTALLER WIRES THREE. This knew only ~/.bashrc,
+  # so on a machine whose login shell is zsh (every recent macOS, and plenty of
+  # Linux) the uninstaller left the source line behind in ~/.zshrc and every new
+  # shell went on defining a `huginn` function whose file had just been deleted.
+  # The list and the two spellings are install.sh's own - see the RCLINE/PROFILE
+  # comments there - and they are matched WHOLE-LINE and fixed-string, so a line
+  # somebody hand-wrote differently is reported rather than rewritten.
+  local -a rcfiles=("$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile")
+  local -a rclines=(
+    '[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh'
+    '[ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] && [ -f ~/.huginn/huginn.sh ] && . ~/.huginn/huginn.sh'
+  )
   local havenode=; command -v node >/dev/null 2>&1 && havenode=1
   local -a removed=() left=()
 
@@ -284,7 +346,7 @@ _huginn_uninstall() {
   echo "      this machine's device enrolment and its copy of the appd token"
   echo "  $ldir"
   echo "      the local-AI tier: models, sessions, runtime (can be several GB)"
-  echo "  the 'source ~/.huginn/huginn.sh' line in $rc"
+  echo "  the 'source ~/.huginn/huginn.sh' line in ~/.bashrc, ~/.zshrc or ~/.profile"
   echo
   echo "It unenrols this machine from huginn FIRST, while the tokens still exist."
   [ -n "$all" ] && echo "--all: the 'Host huginn' SSH stanza goes too, and its key IF it is huginn's own."
@@ -351,23 +413,30 @@ _huginn_uninstall() {
     removed+=("$hdir")
   fi
 
-  # 4. The profile line.
-  if [ -f "$rc" ] && grep -qxF "$rcline" "$rc"; then
-    local grc
-    grep -vxF "$rcline" "$rc" > "$rc.huginn-uninstall"; grc=$?
-    # 0 = lines kept, 1 = the file was only that line. Anything else is a read
-    # error, and truncating somebody's .bashrc over one is not a trade worth
-    # making.
-    if [ "$grc" -le 1 ]; then
-      mv -f "$rc.huginn-uninstall" "$rc"
-      removed+=("the source line in $rc")
-    else
-      rm -f "$rc.huginn-uninstall"
-      left+=("the source line in $rc - could not rewrite it (read error)")
+  # 4. The profile line, in every file the installer may have written it to.
+  local rc rcline hit grc
+  for rc in "${rcfiles[@]}"; do
+    [ -f "$rc" ] || continue
+    hit=
+    for rcline in "${rclines[@]}"; do
+      grep -qxF -- "$rcline" "$rc" || continue
+      hit=1
+      grep -vxF -- "$rcline" "$rc" > "$rc.huginn-uninstall"; grc=$?
+      # 0 = lines kept, 1 = the file was only that line. Anything else is a read
+      # error, and truncating somebody's .bashrc over one is not a trade worth
+      # making.
+      if [ "$grc" -le 1 ]; then
+        mv -f "$rc.huginn-uninstall" "$rc"
+        removed+=("the source line in $rc")
+      else
+        rm -f "$rc.huginn-uninstall"
+        left+=("the source line in $rc - could not rewrite it (read error)")
+      fi
+    done
+    if [ -z "$hit" ] && grep -q '\.huginn/huginn\.sh' "$rc"; then
+      left+=("a hand-edited '.huginn/huginn.sh' line in $rc - it is not the one the installer wrote, so it was left")
     fi
-  elif [ -f "$rc" ] && grep -q '\.huginn/huginn\.sh' "$rc"; then
-    left+=("a hand-edited '.huginn/huginn.sh' line in $rc - it is not the one the installer wrote, so it was left")
-  fi
+  done
 
   # 5. SSH. Left by default; see the note on this function.
   local key='' ours=
@@ -436,15 +505,36 @@ _huginn_valid_name() { [[ "${1,,}" =~ ^[a-z0-9_][a-z0-9_-]{0,49}$ ]]; }
 # `huginn ls` has just printed sends somebody looking for an error they did not
 # make. The completion cache is already live `tmux ls` output, so telling them
 # apart costs no round trip and no ssh.
+#
+# ⚠ AND IT SAYS WHICH RULE, because two of the three were never mentioned. Both
+# `huginn kill -box` and a 51-character name used to produce "use lowercase
+# letters, digits, _ and -; no dots, spaces or *" - a sentence that describes a
+# name which is, by that text, perfectly valid, so the refusal read as a bug in
+# the client. The rule is the daemon's own (nameProblem, server/appd/
+# huginn-appd.js): ^[a-z0-9_][a-z0-9_-]{0,49}$ - at most 50 characters, and '-'
+# may not lead. Named one at a time, in the daemon's order, so the sentence a
+# person gets here is the sentence they would have got from the host.
 _huginn_bad_name() {   # $1 = the name, $2 = the noun for the message
-  local H="${HUGINN_HOST:-huginn}"
-  if [ -n "$_HUGINN_SESS_CACHE" ] && grep -qxF -- "$1" <<<"$_HUGINN_SESS_CACHE"; then
-    echo "huginn: '$1' exists on the host but this client cannot address it" >&2
+  local H="${HUGINN_HOST:-huginn}" n="$1" why=
+  if [ -n "$_HUGINN_SESS_CACHE" ] && grep -qxF -- "$n" <<<"$_HUGINN_SESS_CACHE"; then
+    echo "huginn: '$n' exists on the host but this client cannot address it" >&2
     echo "        (names here are lowercase letters, digits, _ and -). Rename it from the" >&2
-    echo "        desktop app, or: ssh $H -t \"tmux attach -t '=$1'\"" >&2
-  else
-    echo "huginn: invalid ${2:-session name} '$1' (use lowercase letters, digits, _ and -; no dots, spaces or *)" >&2
+    echo "        desktop app, or: ssh $H -t \"tmux attach -t '=$n'\"" >&2
+    return 1
   fi
+  case "$n" in
+    '')   why='a session needs a name' ;;
+    *.*)  why='a "." is rewritten to "_" by tmux, so the name you asked for would not be the name you got' ;;
+    [!a-zA-Z0-9_]*)
+          why="it starts with '${n:0:1}' - a name starts with a letter, digit or _" ;;
+  esac
+  if [ -z "$why" ] && [ "${#n}" -gt 50 ]; then
+    why="it is ${#n} characters long - a name is at most 50"
+  fi
+  echo "huginn: invalid ${2:-session name} '$n'" >&2
+  [ -z "$why" ] || echo "        $why" >&2
+  echo "        (letters, digits, _ and -, starting with a letter, digit or _, up to 50" >&2
+  echo "         characters; no dots, spaces or *. Case-insensitive.)" >&2
   return 1
 }
 # tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
@@ -658,13 +748,36 @@ _huginn_desktop_platform() {
 # 'huginn costtracking' labels the tab 'costtracking' (Windows Terminal /
 # iTerm / Termux). tmux set-titles defaults OFF, so the inner Claude TUI's title
 # sequences are absorbed by tmux and never reach this terminal -> our title sticks
-# for the whole session; reset on exit. Opt out: export HUGINN_NO_TITLE=1
+# for the whole session. Opt out: export HUGINN_NO_TITLE=1
+#
+# ⚠ AND IT IS PUT BACK, NOT OVERWRITTEN. This used to end with
+# `printf '\033]0;%s\007' "${HOSTNAME:-shell}"` - which sets the title to the
+# HOSTNAME, a string that was very probably never in that tab. Both docs promise
+# restoration ("Restored when you leave"), so a tab that came back reading
+# `huginn` instead of the `~/src/thing` it said before was the docs being wrong
+# in the one place a person would notice.
+#
+# There is no portable way to ASK a terminal what its title is - the reply to
+# CSI 21 t arrives on stdin, where it would race whatever the shell reads next -
+# so the terminal is asked to remember it instead: CSI 22 t pushes the current
+# title onto its own title stack and CSI 23 t pops it back (xterm's
+# XTWINOPS/title-stack, supported by xterm, Windows Terminal, iTerm2, VTE,
+# kitty, alacritty, foot). A terminal without the stack ignores both - unknown
+# CSI sequences are swallowed, not printed - and keeps the session name, which
+# is still a title about this window rather than a hostname.
+#
+# Only when stdout is a TTY: piped or captured, those escapes are bytes in
+# somebody's file.
 _huginn_attach() {
   # $1=host  $2=session (default main)  $3=non-empty => start in solo
   local H="$1" session="${2:-main}" solo="$3" delay=2 rc remote t0 elapsed quick=0 tgt
   session="$(_huginn_canon_name "$session")"   # case-insensitive: 'Test' -> 'test'
   tgt="$(_huginn_tmux_target "$session")"
-  [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "$session"
+  local title=
+  { [ -z "$HUGINN_NO_TITLE" ] && [ -t 1 ]; } && title=1
+  # Push first, THEN set: the stack has to be given the old title while it is
+  # still the current one.
+  [ -n "$title" ] && printf '\033[22;0t\033]0;%s\007' "$session"
   remote="cc $session${solo:+ solo}"
   while :; do
     t0=$SECONDS
@@ -698,28 +811,17 @@ _huginn_attach() {
     remote="tmux has-session -t $tgt 2>/dev/null || { echo 'huginn: session $session no longer exists on $H'; exit 0; }; if [ \"\$(tmux list-clients -t $tgt 2>/dev/null | wc -l)\" -ge 2 ]; then cc $session; else cc $session solo; fi"
     delay=$(( delay * 2 > 15 ? 15 : delay * 2 ))
   done
-  [ -z "$HUGINN_NO_TITLE" ] && printf '\033]0;%s\007' "${HOSTNAME:-shell}"   # reset tab on leaving
+  [ -n "$title" ] && printf '\033[23;0t'   # pop: the title that was there before
   return "$rc"
 }
 
-huginn() {
-  local H="${HUGINN_HOST:-huginn}"
-  case "$1" in
-    "")
-      _huginn_attach "$H"
-      ;;
-    '?'|help|/help|-h|--help)
-      # The banner rides its own QUOTED heredoc: the art's backslashes and
-      # punctuation must reach the terminal verbatim, while the body heredoc
-      # below stays unquoted so $HUGINN_REPO/$HUGINN_UPDATE_HOST expand.
-      cat <<'EOF'
-
-        _
-       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
-       //\
-    =~/_/
-EOF
-      cat <<EOF
+# --- help -----------------------------------------------------------------
+# The ONE list of verbs, and the ONE place each one is described. `huginn help`
+# prints it whole; `huginn <verb> --help` prints the entry (and its continuation
+# lines) for that verb alone - see _huginn_verb_help, which reads this rather
+# than carrying a second copy that would drift from it.
+_huginn_help_body() {
+  cat <<EOF
 
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
@@ -731,9 +833,9 @@ EOF
                               (if auto-end is on) end it once it goes idle
                               (--force: send it into a pane with no Claude state)
   huginn rounds               what this host does on a schedule, and what it found
-  huginn headroom             usage left per account, what huginn moved or is holding, and why
+  huginn headroom [--json]    usage left per account, what huginn moved or is holding, and why
   huginn devices              machines that can run a chat in their own context
-  huginn projects             clusters of sessions with roles, and who is waiting
+  huginn projects [--json]    clusters of sessions with roles, and who is waiting
   huginn projects show <name> a project's members, one line each
   huginn projects new <name>  start one (launches its lead session)
                               --brief "<the lead's whole first message>"|-
@@ -744,13 +846,23 @@ EOF
                               [--now: end them outright | --keep-sessions: leave them running]
   huginn device [status]      what THIS machine offers huginn, and what huginn sees
   huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
+                              [--url URL: the daemon's address, when ssh cannot say]
+                              [--act-while-locked | --no-act-while-locked: whether a
+                              lock screen withdraws 'act' on this machine (default: it does)]
   huginn device off           stop offering it
+  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device serve         the runner itself - this is what systemd starts
+  huginn device unit          print a systemd unit that keeps the runner up [--system]
   huginn llm "prompt"         one question to the local tier (a serving machine answers, not Claude)
+                              [--model ROW] [--timeout S]; 'huginn llm -' reads stdin
   huginn local [status]       what THIS machine serves as local AI, if anything
   huginn local on             serve local models from this machine (optional, ~5 GB)
   huginn local plan           what 'on' would install here, without installing anything
+  huginn local persist        make an existing install survive logout (system units, or linger)
+  huginn local doctor         exits nonzero when this install is not doing what it says
+  huginn local update         re-fetch the manager and the pinned runtime
+  huginn local unit           print the unit files this tier installs [--system]
   huginn local off            stop serving  [--purge-models] [--purge]
-  huginn device unit          print a systemd unit that keeps the runner up
   huginn kill <name>          hard end: stop the session now
   huginn archive <name>       end it for good and keep the way back: the title,
                               the cwd, a copy of the transcript and the exact
@@ -776,6 +888,8 @@ EOF
   huginn version              show client version
   huginn help | ? | /help     this help
 
+  Any verb takes --help for its own usage, answered here without touching the host:
+  'huginn archive --help', 'huginn device --help'.
   Session names are lowercase letters, digits, '_' and '-' (no dots, spaces or *),
   up to 50 characters, and must start with a letter, digit or '_'. Case-insensitive
   ('Test' and 'test' are the same session).
@@ -784,11 +898,85 @@ EOF
   Host via the 'huginn' SSH alias; override with HUGINN_HOST.
   Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during the
   wait to stop. Disable with HUGINN_NO_RECONNECT=1.
-  The terminal tab is named after the session (<name>); HUGINN_NO_TITLE=1 off.
+  The terminal tab is named after the session (<name>) and the title that was
+  there before is put back when you leave; HUGINN_NO_TITLE=1 off.
   A state icon leads the tab title while Claude runs: working / needs-you / waiting
   (set host-side by the claude hooks; needs the server's title hook installed).
-
 EOF
+}
+
+# `huginn <verb> --help` - ONE convention, and it used to be four. `projects`
+# and `llm` printed their full help and exited 0; `headroom` printed a one-line
+# usage and exited 1; `archive` answered "invalid session name '--help'". A
+# person types --help when something has already surprised them, and two of
+# those made it look like a second mistake.
+#
+# ANSWERED HERE, NEVER OVER SSH. Help that needs the network is help you cannot
+# read on the train, and three of the four spellings above cost an ssh round trip
+# to say something this file already knows. Exit 0: asking for help is not an
+# error.
+#
+# $1 = the verb as typed. Prints its block out of _huginn_help_body and returns
+# 0; returns 1 when the verb has no entry, so the caller falls through to its
+# normal dispatch (and a bare `huginn --help` is still the whole help).
+_huginn_verb_help() {
+  local v="$1"
+  # Aliases resolve to the spelling the help list uses, so `huginn st --help`
+  # and `huginn status --help` are the same answer.
+  case "$v" in
+    ls)                v=list ;;
+    st)                v=status ;;
+    mv)                v=rename ;;
+    round)             v=rounds ;;
+    project)           v=projects ;;
+    unarchive)         v=revive ;;
+    cost|ccusage)      v=usage ;;
+    enrol|enroll)      v=device ;;
+  esac
+  _huginn_help_body | awk -v v="$v" '
+    {
+      if ($0 ~ /^[[:space:]]*$/)            { keep = 0 }
+      else if ($0 ~ /^  huginn([ ]|$)/)     { keep = ($2 == v) }
+      else if ($0 ~ /^  [^ ]/)              { keep = 0 }
+      if (keep) { print; n++ }
+    }
+    END { exit (n ? 0 : 1) }
+  ' || return 1
+  echo
+  echo "  (huginn help for everything else)"
+}
+
+huginn() {
+  local H="${HUGINN_HOST:-huginn}"
+  # --help on a VERB, before anything is dispatched or sent: one convention for
+  # all of them, answered locally, exit 0. See _huginn_verb_help. A verb with no
+  # entry falls through untouched, so `huginn --hlp` is still a refused session
+  # name and `huginn help` is still the whole help.
+  case "${2:-}" in
+    -h|--help)
+      _huginn_verb_help "$1" && return 0
+      # No entry: say so rather than falling through to the attach path, which
+      # would ssh to the host and open a session named after the typo while the
+      # person is standing there asking to be told something.
+      echo "huginn: no help for '$1' - run 'huginn help' for the list of verbs" >&2
+      return 1 ;;
+  esac
+  case "$1" in
+    "")
+      _huginn_attach "$H"
+      ;;
+    '?'|help|/help|-h|--help)
+      # The banner rides its own QUOTED heredoc: the art's backslashes and
+      # punctuation must reach the terminal verbatim, while the body (see
+      # _huginn_help_body) stays unquoted so $HUGINN_REPO/$HUGINN_UPDATE_HOST expand.
+      cat <<'EOF'
+
+        _
+       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
+       //\
+    =~/_/
+EOF
+      _huginn_help_body
       ;;
     version|--version|-v)
       echo "huginn-cli $HUGINN_VERSION  (host: $H)" ;;
@@ -1119,11 +1307,17 @@ _huginn_sessions() {
   fi
   printf '%s\n' "$_HUGINN_SESS_CACHE"
 }
+# ⚠ EVERY VERB THAT TAKES SUB-VERBS HAS TO BE HERE, and `projects` was not:
+# `huginn projects <TAB>` completed to NOTHING while `device` and `local` beside
+# it completed fine, which reads as "this verb takes no arguments" - for the one
+# verb whose whole grammar is arguments. `local` was also a release behind
+# (`persist` shipped in 1.1.0), and the aliases the dispatcher accepts - ls, st,
+# mv, round, project, ccusage, unarchive - were completable in neither client.
 _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds headroom devices device local llm projects solo rename mv kill end archive revive -p -y usage cost desktop update uninstall version help"
+  cmds="list ls status st rounds round headroom devices device local llm projects project solo rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
@@ -1136,13 +1330,19 @@ _huginn_complete() {
       desktop)
         mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
       device)
-        mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve" -- "$cur") ;;
+        mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve --help" -- "$cur") ;;
       local)
-        mapfile -t COMPREPLY < <(compgen -W "status on plan off unit update doctor" -- "$cur") ;;
+        mapfile -t COMPREPLY < <(compgen -W "status on plan persist off unit update doctor --help" -- "$cur") ;;
+      projects|project)
+        mapfile -t COMPREPLY < <(compgen -W "list show new spawn msg end --json --help" -- "$cur") ;;
+      headroom)
+        mapfile -t COMPREPLY < <(compgen -W "--json --help" -- "$cur") ;;
       uninstall)
         mapfile -t COMPREPLY < <(compgen -W "--all --yes" -- "$cur") ;;
       --scope)
         mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
+      --kind)
+        mapfile -t COMPREPLY < <(compgen -W "software infra hardware docs research other" -- "$cur") ;;
       today|yesterday|week|month)   # optional report-type override after a date shortcut
         mapfile -t COMPREPLY < <(compgen -W "daily monthly weekly session blocks statusline" -- "$cur") ;;
       *) COMPREPLY=() ;;
