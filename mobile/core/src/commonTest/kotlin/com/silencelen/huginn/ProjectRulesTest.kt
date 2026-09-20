@@ -76,11 +76,13 @@ class ProjectRulesTest {
         manifestSummary: String? = null,
         untagged: Boolean = false,
         endedReason: String? = null,
+        /** A project the daemon has no lead row for yet — see the rollup tests. */
+        leadPresent: Boolean = true,
     ) = ProjectRow(
         id = id, name = name, slug = slug, kind = "software", status = status,
         cwd = "/root/netplan/status-page",
         memberCount = members, alive = alive, busy = busy, waiting = waiting,
-        lead = ProjectLead(name = "$slug-lead", claudeName = "$slug/lead", present = true),
+        lead = if (leadPresent) ProjectLead(name = "$slug-lead", claudeName = "$slug/lead", present = true) else null,
         manifestRev = manifestRev, manifestSummary = manifestSummary, untaggedSeen = untagged,
         endedReason = endedReason, createdAt = nowSec - 86_400, updatedAt = nowSec - 100, rev = 3,
     )
@@ -385,9 +387,41 @@ class ProjectRulesTest {
             "1 of 3 working · 1 needs you · 1 not running",
             ProjectRules.rollupWords(row(members = 4, alive = 3, busy = 1, waiting = 1)),
         )
-        assertEquals("no members yet", ProjectRules.rollupWords(row(members = 0)))
+        assertEquals("no members yet", ProjectRules.rollupWords(row(members = 0, leadPresent = false)))
         // A cluster whose members are all gone says so rather than "0 of 0".
         assertEquals("none running", ProjectRules.rollupWords(row(members = 3, alive = 0)))
+    }
+
+    /**
+     * ⚠⚠ "NO MEMBERS YET" OVER A MEMBERS LIST SHOWING THE LEAD (P-33/D-20).
+     *
+     * The counts drop the lead on purpose — an idle cluster whose lead is
+     * thinking must not read as one session busy — but the MEMBERS list below the
+     * header does not, so between "created" and "spawned" the header contradicted
+     * the list directly underneath it. That is the whole window in which somebody
+     * is watching a new project.
+     */
+    @Test
+    fun `a project that is only its lead says so, instead of saying nobody is here`() {
+        assertEquals(ProjectRules.LEAD_ONLY, ProjectRules.rollupWords(row(members = 0)))
+        assertEquals("just the lead so far", ProjectRules.rollupWords(row(members = 0)))
+        // No lead registered either: genuinely nobody, and the old sentence.
+        assertEquals("no members yet", ProjectRules.rollupWords(row(members = 0, leadPresent = false)))
+        // ⚠ THE COUNT IS UNCHANGED. Only the sentence over zero members is.
+        assertEquals(0, ProjectRules.rollup(row(members = 0)).members, "the lead is still not a member")
+        assertTrue(ProjectRules.rollup(row(members = 0)).lead)
+        // And a cluster that HAS members never says it: the counts speak.
+        assertEquals("1 of 1 working", ProjectRules.rollupWords(row(members = 1, alive = 1, busy = 1)))
+    }
+
+    @Test
+    fun `the member-list rollup sees the lead the same way`() {
+        // The two paths must not disagree — one is a ProjectRow, the other a live
+        // member list, and the dashboard picks whichever it has.
+        val leadOnly = listOf(live("lead", lead = true))
+        assertEquals(ProjectRules.LEAD_ONLY, ProjectRules.rollupWords(leadOnly))
+        assertEquals(0, ProjectRules.rollup(leadOnly).members)
+        assertEquals("no members yet", ProjectRules.rollupWords(emptyList()))
     }
 
     @Test
