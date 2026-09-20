@@ -2,7 +2,7 @@
 agp = "9.3.1"
 # FCM: the only push transport Google delivers into Doze.
 google-services = "4.4.2"
-firebase-bom = "33.7.0"
+firebase-bom = "34.19.0"
 biometric = "1.1.0"
 # Forced ABOVE the 1.2.5 that biometric drags in: that FragmentActivity rejects
 # the request codes the modern activity-result launcher generates.
