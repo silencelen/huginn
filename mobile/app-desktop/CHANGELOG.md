@@ -49,6 +49,26 @@ changes what a control does — they are all about a screen telling you the trut
 - **Notifications stops contradicting itself.** "claiming: this window has been attended recently"
   sat directly above "nothing on this computer can show a notification". The claim row now reads
   the same fact the row under it does.
+- **Setup uses one word per action.** The last screen offered "Close setup" and "Close" eight pixels
+  apart, both of which closed setup, and the decline button said "Skip for now" on the first two
+  steps and "Not now" on the next three. There is one way out, called one thing, and one decline
+  verb — the word the flow actually records when you press it.
+- **The local-AI check stops pretending it never ran.** "Check what this computer can serve" ran a
+  real check and printed its verdict — *"This machine can serve (class C), 2548 MB to download."* —
+  while the step in the list still read "not checked yet", the tally still read "4 of 7", and the
+  button still offered the same check. The flow had no way to say "the machine has answered and the
+  choice is yours"; it has one now, the step says so, the tally counts it as waiting on you, and the
+  button moves you on instead of running the check again. It is still not a pass: nothing claims
+  this computer serves anything until you turn it on.
+- **A step that could not be proven can be read.** The reason sat on one line and was cut — "nothing
+  on this computer can show a notification: …" — with no tooltip and no way to see the rest short of
+  going back to the step. The far end's own sentence is the point of running the check, so it now
+  wraps.
+- **"Copy resume" fits the row it is in.** The archived session's third action read "Copy resume
+  co…" — a button label cut off rather than a value. It copies the same `claude --resume` command.
+- **The New session dialog quotes the same rule the phone does.** It explained the naming rule in
+  its own words, naming the characters as symbols and saying nothing about the length limit the host
+  really does enforce. Both clients now read one sentence, taken from the host's own rule.
 
 ## 1.7.0
 
