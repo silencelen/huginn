@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.data.IntoDraft
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.TypingState
 
@@ -112,4 +113,60 @@ object SendQueue {
      */
     fun rowMark(pendingSends: Int): String? =
         if (pendingSends > 0) "$pendingSends queued" else null
+
+    // ------------------------------------------- the message that went in anyway
+
+    /**
+     * ⚠⚠ D-7, DECISION 59. THE ONE THING BOTH CLIENTS USED TO SAY NOTHING ABOUT.
+     *
+     * The draft hold is a hold with a ceiling: sixty seconds after the last
+     * live-view keystroke, and then the queued message is pasted in front of
+     * whatever is in the composer and submitted as one prompt. The desktop walker
+     * watched `draft in progress` and `say OK2` leave as
+     * `draft in progresssay OK2` — and the client's account of it was that the
+     * "Queued" line vanished and a merged user bubble appeared. Decision 59 keeps
+     * the ceiling and ends the silence: the daemon reports it (`intoDraft` on
+     * `/typing` and on the `/keys` answer) and both clients say so.
+     *
+     * The sentence names the ACT and then SHOWS the text, because "your message
+     * was merged" invites the reader to guess which one and with what; the
+     * composer excerpt is what turns it into something they can go and look at.
+     * The daemon has already collapsed the whitespace and cut it to 120
+     * characters.
+     *
+     * @return null when nothing went into a draft — which is almost always.
+     */
+    fun draftNotice(into: IntoDraft?): String? {
+        val d = into ?: return null
+        if (d.at <= 0) return null
+        val composer = d.composer.trim()
+        if (composer.isEmpty()) return DRAFT_NOTICE_BARE
+        return "$DRAFT_NOTICE_LEAD “$composer” — check the session"
+    }
+
+    /** The lead-in, alone in the suite so the two sentences below cannot drift. */
+    const val DRAFT_NOTICE_LEAD: String =
+        "Your message was sent into text someone was still typing:"
+
+    /**
+     * When the daemon reported the delivery but not what it landed in — an empty
+     * `composer`, which happens when the draft was whitespace or the capture
+     * raced the paste. Still worth saying: the fact is the merge, not the quote.
+     */
+    const val DRAFT_NOTICE_BARE: String =
+        "Your message was sent into text someone was still typing — check the session"
+
+    /**
+     * Whether a `/typing` answer is worth reading [draftNotice] out of yet.
+     *
+     * ⚠ THE DAEMON'S OWN RULE, MOVED HERE SO BOTH SHELLS OBEY IT. `intoDraft`
+     * deliberately outlives the queue, so it is present WHILE a later message is
+     * still queued — and a notice raised then describes a delivery the reader has
+     * not seen the result of. Read it once the queue is empty and nothing is in
+     * flight.
+     */
+    fun draftNoticeReady(state: TypingState?): Boolean {
+        val s = state ?: return false
+        return s.queued <= 0 && !s.delivering && s.intoDraft != null
+    }
 }

@@ -48,17 +48,34 @@ import kotlinx.serialization.json.jsonPrimitive
  * [huginnHttpEngine].
  */
 /**
- * What an unauthenticated `GET /v1/ping` said about the host at [address].
+ * What an unauthenticated probe said about the host at [address].
  *
  * A boolean was enough for route RESOLUTION — pick the first address that is
  * huginn — and not enough for the first-run flow, which has to tell the reader
  * what answered. See [HuginnClient.probeDaemon].
  *
+ * ⚠⚠ [proven] AND [answered] ARE DIFFERENT QUESTIONS AND ONLY ONE OF THEM MAY
+ * MOVE THE BEARER (D-1, decision 58). `answered` is a fingerprint: the
+ * `X-Huginn-Appd` header, or a 401 in the daemon's own JSON shape. Both are
+ * free-text response fields, and a thirty-line Python server printing them was
+ * adopted by auto-switch and handed 129 authenticated requests in two minutes on
+ * the review bench. `proven` is the token-proving challenge in [DaemonChallenge]
+ * — an answer an impostor without the token cannot compute. **Adoption reads
+ * `proven`. Nothing else may.**
+ *
  * @param version the daemon's own, from the header it stamps on every response
- *   including the 401. Null on a daemon too old to stamp it, which still proves
- *   itself by the shape of its refusal.
+ *   including the 401, or from the challenge's body. Null on a daemon too old to
+ *   stamp it.
+ * @param answered something huginn-SHAPED is at that address. Useful to SAY
+ *   (a pre-3.6 daemon 404s the challenge and is still a real daemon); never
+ *   sufficient to adopt.
  */
-data class DaemonProbe(val proven: Boolean, val version: String?, val address: String)
+data class DaemonProbe(
+    val proven: Boolean,
+    val version: String?,
+    val address: String,
+    val answered: Boolean = proven,
+)
 
 class HuginnClient(
     private val baseUrlProvider: () -> String,
@@ -173,16 +190,19 @@ class HuginnClient(
         private val probeJson = Json { ignoreUnknownKeys = true }
 
         /**
-         * Whether a probe reply PROVES the daemon rather than merely a socket.
+         * Whether a probe reply looks like huginn — A FINGERPRINT, NOT PROOF.
          *
-         * ⚠ THE BEARER FOLLOWS THE ROUTE. `probe` used to return true for any
-         * completed HTTP exchange — a NAS's login page, a printer, a captive
-         * portal, a 404 from whoever holds that DHCP lease today — and the
-         * resolver then made that host the active route, after which the very
-         * next call handed it a root-equivalent daemon token in cleartext. A
-         * live path is not the question; a live *huginn* is.
+         * ⚠⚠ RENAMED FROM `provesDaemon`, AND THE RENAME IS THE FIX. It returned
+         * true for any non-blank [APPD_HEADER], and `RouteResolver` adopted the
+         * address on that answer and sent it the real bearer on the next request.
+         * The D-1 bench proved exactly how cheap that is to forge: a thirty-line
+         * Python server answering `401` + `X-Huginn-Appd: 9.9.9` collected 129
+         * authenticated requests in about two minutes. Both markers below are
+         * free-text response fields; anybody can print them.
          *
-         * Two markers, neither of which requires the token:
+         * So this now answers only the weaker question it could ever answer —
+         * *is something huginn-shaped here* — and [DaemonChallenge] answers the
+         * one adoption reads. Two markers, neither requiring the token:
          *
          *  - [APPD_HEADER] on the response, whatever the status.
          *  - a `401` whose body is the daemon's own JSON error shape. `/v1/ping`
@@ -190,12 +210,11 @@ class HuginnClient(
          *    a real daemon, and the shape is narrow enough that a stranger's
          *    plain-text or HTML 401 does not pass.
          *
-         * Neither is unforgeable — an active attacker can copy both — and that is
-         * not what this is for: it closes the case where an ordinary host that
-         * happens to answer is PREFERRED over a live daemon. The durable fix is a
-         * token-proving challenge, which needs a daemon change.
+         * Still worth computing: it separates "nothing is there" from "a daemon
+         * too old to answer the challenge is there", which is a sentence the
+         * setup flow has to be able to say.
          */
-        fun provesDaemon(appdHeader: String?, status: Int, body: String): Boolean {
+        fun answersLikeDaemon(appdHeader: String?, status: Int, body: String): Boolean {
             if (!appdHeader.isNullOrBlank()) return true
             if (status != 401) return false
             val error = runCatching { probeJson.decodeFromString<ApiError>(body).error }.getOrNull()
@@ -205,18 +224,26 @@ class HuginnClient(
         /**
          * What an unauthenticated probe PROVED, in the words a reader gets.
          *
-         * The version is the daemon's own, off [APPD_HEADER]; a daemon older than
-         * the release that added the header proves itself by its JSON refusal and
-         * has no version to give, so the sentence shortens rather than inventing
-         * one. Pure, because this is the line the first-run flow prints and a
-         * sentence nobody can assert is a sentence that quietly says the wrong
-         * thing at 11sp under a green dot.
+         * The version is the daemon's own, off [APPD_HEADER] or the challenge's
+         * body; a daemon older than the release that added the header has none to
+         * give, so the sentence shortens rather than inventing one. Pure, because
+         * this is the line the first-run flow prints and a sentence nobody can
+         * assert is a sentence that quietly says the wrong thing at 11sp under a
+         * green dot.
+         *
+         * ⚠ THREE OUTCOMES NOW, NOT TWO (decision 58). An address that answers
+         * like huginn but cannot produce the challenge proof is a REAL STATE — a
+         * daemon older than 3.6.0 — and it is also exactly what an impostor looks
+         * like. The sentence says so and stops there; whether that is enough to
+         * connect is the reader's call in the setup flow, and never auto-switch's.
          */
         fun probeWords(probe: DaemonProbe): String {
             if (probe.address.isBlank()) return NO_ROUTE
             val where = probe.address.removePrefix("https://").removePrefix("http://").trimEnd('/')
             val what = probe.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
-            return "$what answered at $where"
+            if (probe.proven) return "$what answered at $where, and proved it"
+            if (probe.answered) return "$what at $where ${DaemonChallenge.NOT_PROVEN} — a daemon older than 3.6"
+            return "nothing at $where answered as huginn"
         }
     }
 
@@ -350,19 +377,35 @@ class HuginnClient(
         call(path, HttpMethod.Post, tier, body)
 
     /**
-     * Is HUGINN answering at [candidate]? Not "is anything answering" — see
-     * [provesDaemon] for why that question was the wrong one and what it cost.
+     * Has HUGINN PROVED it is at [candidate]? Not "is anything answering", and
+     * since decision 58 not "does anything here look like huginn" either — see
+     * [answersLikeDaemon] for why those questions were the wrong ones and what
+     * they cost.
      *
      * Unauthenticated, and deliberately: a probe that carried the bearer would
-     * disclose it to exactly the stranger this is trying to detect. `GET
-     * /v1/ping` without a token is a 401 from a real daemon, which is the
-     * cheapest thing it can be asked to say.
+     * disclose it to exactly the stranger this is trying to detect. The challenge
+     * route is unauthenticated by design at the daemon, ahead of its own auth
+     * check, for precisely this exchange.
      *
      * Lives on the client rather than in the UI so route resolution works the
      * same way from the desktop client, and so this module owns every socket the
      * app opens.
      */
     suspend fun probe(candidate: String): Boolean = probeDaemon(candidate).proven
+
+    /**
+     * The same probe, keeping the middle state — for `RouteResolver.resolveProving`,
+     * so a row can say "answers, cannot prove it is huginn" instead of the false
+     * and actionable-looking "could not be reached".
+     */
+    suspend fun probeProof(candidate: String): RouteResolver.RouteProof {
+        val p = probeDaemon(candidate)
+        return when {
+            p.proven -> RouteResolver.RouteProof.PROVEN
+            p.answered -> RouteResolver.RouteProof.ANSWERED
+            else -> RouteResolver.RouteProof.NONE
+        }
+    }
 
     /**
      * The same probe, ANSWERING RATHER THAN NODDING.
@@ -382,10 +425,43 @@ class HuginnClient(
     suspend fun probeDaemon(candidate: String): DaemonProbe {
         val address = AppdRoutes.normalize(candidate)
         if (address.isBlank()) return DaemonProbe(proven = false, version = null, address = "")
-        return runCatching {
+        val root = withScheme(address)
+
+        // ⚠ THE CHALLENGE FIRST, AND USUALLY THE ONLY REQUEST. A 3.6+ daemon
+        // proves itself here and there is nothing left to ask; only the failing
+        // paths — an older daemon, a stranger, a dead port — pay for the second
+        // round trip below, and those are the ones this client is not about to
+        // send a bearer to anyway.
+        val nonce = DaemonChallenge.newNonce()
+        val challenge = runCatching {
             val resp = http.request {
                 method = HttpMethod.Get
-                url(withScheme(address) + "/v1/ping")
+                url(root + DaemonChallenge.PATH + "?nonce=" + nonce.encodeURLParameter())
+                timeout {
+                    connectTimeoutMillis = PROBE_TIMEOUT_MS
+                    socketTimeoutMillis = PROBE_TIMEOUT_MS
+                    requestTimeoutMillis = PROBE_TIMEOUT_MS
+                }
+            }
+            val header = resp.headers[APPD_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+            if (!resp.status.isSuccess()) return@runCatching Triple(false, header, true)
+            val body = runCatching { probeJson.decodeFromString<ChallengeAnswer>(resp.bodyAsText()) }.getOrNull()
+            val proven = DaemonChallenge.matches(tokenProvider(), nonce, body?.proof)
+            Triple(proven, body?.version?.takeIf { it.isNotBlank() } ?: header, true)
+        }.getOrElse { Triple(false, null, false) }
+
+        if (challenge.first) {
+            return DaemonProbe(proven = true, version = challenge.second, address = address, answered = true)
+        }
+
+        // Not proved. The remaining question is only what to SAY: an address
+        // where nothing is listening and one holding a daemon too old for the
+        // challenge are different facts, and the setup flow prints the
+        // difference. Never an input to adoption — see `DaemonProbe`.
+        val fingerprint = runCatching {
+            val resp = http.request {
+                method = HttpMethod.Get
+                url("$root/v1/ping")
                 timeout {
                     connectTimeoutMillis = PROBE_TIMEOUT_MS
                     socketTimeoutMillis = PROBE_TIMEOUT_MS
@@ -393,15 +469,22 @@ class HuginnClient(
                 }
             }
             val version = resp.headers[APPD_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
-            DaemonProbe(
-                // Bounded by the probe timeouts above: a host that dribbles a body
-                // at a probe fails the same way one that never answers does.
-                proven = provesDaemon(version, resp.status.value, resp.bodyAsText()),
-                version = version,
-                address = address,
-            )
-        }.getOrElse { DaemonProbe(proven = false, version = null, address = address) }
+            // Bounded by the probe timeouts above: a host that dribbles a body
+            // at a probe fails the same way one that never answers does.
+            answersLikeDaemon(version, resp.status.value, resp.bodyAsText()) to version
+        }.getOrElse { false to null }
+
+        return DaemonProbe(
+            proven = false,
+            version = fingerprint.second ?: challenge.second,
+            address = address,
+            answered = fingerprint.first,
+        )
     }
+
+    /** The `GET /v1/challenge` body (appd 3.6.0). */
+    @Serializable
+    private data class ChallengeAnswer(val proof: String = "", val version: String = "")
 
     // ------------------------------------------------------------ status
 

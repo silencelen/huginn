@@ -133,6 +133,35 @@ fun ProjectsList(store: AppStore) {
     val refusal by store.projectRefusal.collectAsState()
     val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
+    // ⚠⚠ D-8. THE VERBS HAD NO DOOR ON THIS LIST. Open / Rename / Pause /
+    // Archive / Delete existed only behind a secondary click on the project TITLE
+    // in the DETAIL header — no chevron, no ⋮, no hover mark — and a right-click
+    // on a row here offered nothing at all. The menu is the same
+    // `projectMenu(project, verbs)` the crumb builds, so the two cannot drift;
+    // what was missing was somewhere to press.
+    var renaming by remember { mutableStateOf<ProjectRow?>(null) }
+    var deleting by remember { mutableStateOf<ProjectRow?>(null) }
+    var messaging by remember { mutableStateOf<Pair<ProjectRow, ProjectMemberState>?>(null) }
+    val verbs = ProjectVerbs(
+        open = { store.openProject(it.id) },
+        rename = { renaming = it },
+        setStatus = { p, status -> scope.launch { store.saveProject(p.id, p.rev, status = status) } },
+        delete = { deleting = it },
+        // The member half is never reached from a PROJECT row's menu — see
+        // `projectMenu(project, verbs)`, which offers four items and none of them
+        // is about a member. Wired anyway, and wired REALLY: an unreachable lambda
+        // that does nothing is the one that gets connected to a menu later.
+        openMember = { p, m -> store.openProject(p.id); store.openProjectMember(m.name) },
+        message = { p, m -> messaging = p to m },
+        endMember = { _, m ->
+            scope.launch {
+                store.client.killSession(m.name)
+                store.openProjectMember(null)
+                store.refreshProjectMembers()
+                store.refreshSessions()
+            }
+        },
+    )
 
     Column(Modifier.fillMaxSize()) {
         ProjectsListView(
@@ -156,6 +185,46 @@ fun ProjectsList(store: AppStore) {
                 store.openProjectMember(member.name)
             },
             onCreate = { creating = true },
+            // The additive slot `ProjectsListView` describes: the ITEMS are this
+            // shell's, because the desktop has `ContextMenuItem`s and the phone a
+            // `DropdownMenu`, and a shared list has no business knowing either.
+            rowTrailing = { project -> MenuButton({ projectMenu(project, verbs) }, "Project actions") },
+        )
+    }
+
+    renaming?.let { target ->
+        ProjectRenameDialog(
+            target = target,
+            taken = projects.filter { it.id != target.id }.map { it.name },
+            onDismiss = { renaming = null },
+            onConfirm = { name ->
+                renaming = null
+                scope.launch { store.saveProject(target.id, target.rev, name = name) }
+            },
+        )
+    }
+
+    deleting?.let { target ->
+        DeleteProjectDialog(
+            project = target,
+            onDismiss = { deleting = null },
+            onConfirm = { end ->
+                deleting = null
+                scope.launch { store.deleteProject(target.id, end) }
+            },
+        )
+    }
+
+    messaging?.let { (project, target) ->
+        MessageMemberDialog(
+            member = target,
+            onDismiss = { messaging = null },
+            onSend = { text ->
+                messaging = null
+                scope.launch {
+                    store.messageProject(project.id, from = ProjectRules.LEAD_ROLE, to = target.role, text = text)
+                }
+            },
         )
     }
 

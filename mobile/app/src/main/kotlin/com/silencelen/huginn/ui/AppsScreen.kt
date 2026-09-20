@@ -180,6 +180,18 @@ private fun AppEditDialog(
     // The clipping itself, and the missing scroll affordance, are `AppFormFields`
     // in `:ui` and are left to the shared batch.
     val fixText = AppRules.fixTextOf(form.name, form.unit, form.addresses, form.fix)
+    // ⚠ REMOVE ASKS FIRST (P-13, decision 60). It deleted the row on the tap with
+    // no dialog and no undo, while Kill session and Archive both confirm by name.
+    var confirmRemove by remember(form.name) { mutableStateOf(false) }
+    if (confirmRemove && onDelete != null) {
+        RemoveConfirmDialog(
+            verb = "Remove app",
+            name = form.name.ifBlank { form.url },
+            body = REMOVE_APP_BODY,
+            onDismiss = { confirmRemove = false },
+            onConfirm = { confirmRemove = false; onDelete() },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -200,7 +212,7 @@ private fun AppEditDialog(
                     TextButton(onClick = { onCopyFix(fixText) }) { Text("Copy fix") }
                 }
                 if (onDelete != null) {
-                    TextButton(onClick = onDelete) { Text("Remove") }
+                    TextButton(onClick = { confirmRemove = true }) { Text("Remove") }
                 } else {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
                 }

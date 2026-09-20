@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteGuard
+import com.silencelen.huginn.data.DaemonChallenge
+import com.silencelen.huginn.ui.REMOVE_ROUTE_BODY
+import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.data.RouteHealth
 
 /**
@@ -761,6 +764,11 @@ private fun RouteForm(
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var url by remember(initialUrl) { mutableStateOf(initialUrl) }
+    // ⚠ REMOVE ASKS FIRST (P-13/D-18, decision 60). It used to unpin the address
+    // on the tap, with no dialog and no undo, while Kill session and Archive both
+    // confirm by name — and P-02 is exactly why that matters. One dialog here
+    // covers both shells: the form is shared.
+    var confirmRemove by remember(initialUrl) { mutableStateOf(false) }
     // ⚠ THE FORM ASKS, THEN CLOSES — never the other way round. Confirm used to
     // run two unconditional statements, and since every route action returns
     // Unit into a fire-and-forget coroutine the form was gone before the outcome
@@ -810,11 +818,22 @@ private fun RouteForm(
             ) { Text(confirmLabel) }
             TextButton(onClick = onCancel) { Text("Cancel") }
             if (onRemove != null) {
-                TextButton(onClick = onRemove) {
+                TextButton(onClick = { confirmRemove = true }) {
                     Text("Remove", color = MaterialTheme.colorScheme.error)
                 }
             }
         }
+    }
+    if (confirmRemove && onRemove != null) {
+        RemoveConfirmDialog(
+            verb = "Remove route",
+            // The name the owner gave it, falling back to the address — never an
+            // empty headline.
+            name = name.ifBlank { url },
+            body = REMOVE_ROUTE_BODY,
+            onDismiss = { confirmRemove = false },
+            onConfirm = { confirmRemove = false; onRemove() },
+        )
     }
 }
 
@@ -853,11 +872,18 @@ internal fun middleElide(text: String, max: Int = ROUTE_URL_MAX): String {
     return text.take(max - 1 - keepEnd) + "…" + text.takeLast(keepEnd)
 }
 
-/** "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness. */
+/**
+ * "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness.
+ *
+ * ⚠ AND THE THIRD WITNESS (decision 58). A route where something huginn-shaped
+ * answers but cannot produce the token proof is not "could not be reached" — that
+ * sentence sends somebody to debug a network that is fine — and it is not reached
+ * either. It says what it is, and that is also the sentence an impostor earns.
+ */
 internal fun routeAddressLine(url: String, health: RouteHealth?, nowMs: Long): String =
     listOfNotNull(
         middleElide(url).takeIf { it.isNotBlank() },
-        reachedWords(health, nowMs),
+        if (health?.unproven == true) DaemonChallenge.NOT_PROVEN else reachedWords(health, nowMs),
     ).joinToString(" · ")
 
 /** "last reached 4m ago", from either witness — and nothing at all before both. */
