@@ -1613,6 +1613,10 @@ fun HuginnApp(
                 onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
                 onOpenMember = { live -> dest = Dest.SessionView(live.name) },
                 onExpand = { id -> vm.fetchProjectMembers(id) },
+                // ⚠ D-8. Winding a cluster down lived only behind the dashboard's
+                // top-bar menu — two taps in, and inside the project. The row gets
+                // the same door; the dialog is the one this screen already raises.
+                onEndProject = { row -> endProjectTarget = row.id },
                 creating = projectBusy,
                 refusal = projectRefusal,
                 onDismissSheet = { vm.clearProjectRefusal() },
