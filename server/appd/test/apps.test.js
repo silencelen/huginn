@@ -848,15 +848,14 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
 });
 
 test('the 422 sentence names what actually happened (L4)', () => {
-  const rec = appsLib.buildRecord({ id: 'w', name: 'W', url: 'http://127.0.0.1:18899/' }, 100);
   const refused = appsLib.reachRefusal({
     addresses: [{ addr: '192.168.2.117', ok: false, error: 'connection refused' }],
-  }, rec);
+  });
   assert.match(refused, /fix the bind first/);
 
   const silent = appsLib.reachRefusal({
     addresses: [{ addr: '127.0.0.1', ok: false, error: 'timed out' }],
-  }, rec);
+  });
   assert.ok(!/fix the bind first/.test(silent), silent);
   assert.match(silent, /127\.0\.0\.1/);
   assert.match(silent, /timed out/);
