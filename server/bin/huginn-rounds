@@ -12,6 +12,17 @@
 # property rather than teaching a laptop a new credential.
 set -u
 
+# --help, before the token check, exit 0 - the one convention the renderers
+# share; see huginn-archive.
+case "${1:-}" in
+  -h|--help)
+    echo "usage: huginn-rounds"
+    echo "  What this host does on a schedule, when each last ran, and what it found."
+    exit 0 ;;
+  '') ;;
+  *) echo "usage: huginn-rounds" >&2; exit 1 ;;
+esac
+
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-rounds: no appd token at $TOKEN_FILE" >&2; exit 1; }
 

@@ -368,12 +368,26 @@ def render(d):
     return "\n".join(out)
 
 
+USAGE = """usage: huginn-headroom [--json]
+
+  Usage left per account, what huginn moved or is holding, and why.
+  --json prints what the daemon said, unparsed, instead of rendering it.
+"""
+
+
 def main():
     args = sys.argv[1:]
+    # --help is a QUESTION, NOT AN ERROR, and it used to be both: `--help`
+    # printed "usage: huginn-headroom [--json]" on stderr and exited 1, which is
+    # how a person asking for help learns they have made a second mistake. One
+    # convention across the renderers: stdout, exit 0.
+    if "-h" in args or "--help" in args:
+        sys.stdout.write(USAGE)
+        return
     want_json = "--json" in args
     for a in args:
         if a not in ("--json",):
-            sys.stderr.write("usage: huginn-headroom [--json]\n")
+            sys.stderr.write(USAGE)
             sys.exit(1)
 
     body = fetch()
