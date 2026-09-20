@@ -169,6 +169,46 @@ class AppRulesTest {
         )
     }
 
+    /**
+     * ⚠⚠ A JUST-ADDED APP READ "not checked yet · reachable from your devices"
+     * (P-32/D-32) — two opposite tenses about two different questions, in one
+     * line, on the row a person is looking at the second they add an app.
+     *
+     * Both clauses were true. The one a reader believes is the first, so the
+     * PROVEN half leads and the pending half says what is pending.
+     */
+    @Test
+    fun `a freshly added app leads with what was proven, not with what has not run`() {
+        val added = app(up = null, probedAgo = null, reachable = AppReachability(ok = true, checkedAt = nowSec))
+        val line = AppRules.rowWords(added, nowMs)
+        assertEquals("reachable from your devices · waiting for the first check", line)
+        assertTrue(
+            line.indexOf(AppRules.DEVICE_REACHABLE) < line.indexOf(AppRules.FIRST_CHECK_PENDING),
+            "the fact that was established leads: $line",
+        )
+        assertFalse(line.contains(AppRules.DEVICE_UNCHECKED), "nothing was checked is no longer true: $line")
+
+        // The retrofit half of the same state: still one tense, still leading
+        // with the answer somebody can act on.
+        assertEquals(
+            "needs retrofit · waiting for the first check",
+            AppRules.rowWords(
+                app(up = null, probedAgo = null, reachable = AppReachability(ok = false, checkedAt = nowSec)),
+                nowMs,
+            ),
+        )
+    }
+
+    @Test
+    fun `an unknown verdict that HAS been probed keeps the ordinary line`() {
+        // "no verdict yet" is a different fact from "has not run yet" — the probe
+        // neither answered nor failed — and it is not what this narrowing is for.
+        assertEquals(
+            "no verdict yet · checked 2h ago · reachable from your devices",
+            AppRules.rowWords(app(up = null), nowMs),
+        )
+    }
+
     // ------------------------------------------------- the failing row's fix
 
     private val failing = app(
