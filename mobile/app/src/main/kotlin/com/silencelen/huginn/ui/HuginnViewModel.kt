@@ -1802,7 +1802,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         resolveRoute(silent = true)
                     }
                 }
-            runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+            runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
             // Silent on failure like the two above: a daemon too old to know about
             // Rounds 404s here, and that must leave the rest of the screen working
@@ -1843,7 +1843,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             var tick = 0
             while (isActive) {
-                runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+                runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
                 // ⚠ THE TWO LISTS MOVE TOGETHER AND MUST BE REFRESHED TOGETHER. A
                 // graceful archive leaves the session on screen for as long as its
                 // turn runs and then moves it — so a Sessions poll that did not
@@ -1863,11 +1863,46 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         sessionsPollJob = null
     }
 
+    /**
+     * Every path that replaces the sessions list goes through here.
+     *
+     * ⚠⚠ P-19. A CANCELLED AUTO-END IS INVISIBLE ON THE WIRE. `lib/softend.js`
+     * abandons the auto-end when the session asks a question and the daemon just
+     * deletes the pending record — so all `/v1/sessions` reports is `softEnding`
+     * going false, which is also what a wrap-up that WORKED looks like. The
+     * difference is whether the session is still there and asking; `WrapUpWatch`
+     * owns that rule and is asserted in :core. It needs the previous reading,
+     * which is why every writer funnels through one function.
+     */
+    private fun landSessions(rows: List<com.silencelen.huginn.data.Session>) {
+        val cancelled = WrapUpWatch.cancelled(windingDown, rows)
+        windingDown = WrapUpWatch.winding(rows)
+        _sessions.value = rows
+        if (cancelled.isEmpty()) return
+        _wrapUpNotices.value = _wrapUpNotices.value + cancelled.associateWith { WrapUpWatch.NOTICE }
+    }
+
+    /** Which sessions were winding down at the last reading. See [landSessions]. */
+    private var windingDown: Set<String> = emptySet()
+
+    private val _wrapUpNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * "Wrap-up held — it asked a question" per session (P-19). Empty almost
+     * always; cleared by the reader, and by a fresh wrap-up on that session.
+     */
+    val wrapUpNotices: StateFlow<Map<String, String>> = _wrapUpNotices.asStateFlow()
+
+    fun dismissWrapUpNotice(name: String) {
+        if (name !in _wrapUpNotices.value) return
+        _wrapUpNotices.value = _wrapUpNotices.value - name
+    }
+
     fun refreshSessions() {
         viewModelScope.launch {
             awaitReady()
             runCatching { client.sessions(preview = true) }
-                .onSuccess { _sessions.value = it }
+                .onSuccess { landSessions(it) }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -2924,6 +2959,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * open — so drafts are deliberately NOT cleared. Reports what was sent.
      */
     fun softEndSession(name: String) {
+        // A fresh wrap-up supersedes the last one's verdict: the notice is about
+        // the attempt that has just been replaced.
+        dismissWrapUpNotice(name)
         viewModelScope.launch {
             runCatching { client.softEndSession(name) }
                 .onSuccess { r ->
