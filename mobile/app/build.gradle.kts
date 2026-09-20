@@ -183,7 +183,11 @@ dependencies {
     // MockWebServer is gone with SseTest: the client is exercised through Ktor's
     // MockEngine now, which is multiplatform, which is what let that suite move.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // From the catalog, not a literal: this line and the `coroutines` version
+    // there drifted apart once already (Dependabot had to patch both), and a
+    // test runtime on a different coroutines build from the code under test is
+    // exactly the mismatch that makes a scheduler bug unreproducible.
+    testImplementation(libs.coroutines.test)
     // ...and here for the same reason, in the one place it cannot move to :core:
     // the ARGUMENTS this module's own poll calls the client with are behaviour
     // (`?all=1` is what the stream picker's `…` pill can reach), and a recorded
