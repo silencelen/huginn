@@ -136,6 +136,7 @@ import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.handleHistoryKey
 import androidx.compose.runtime.CompositionLocalProvider
 import com.silencelen.huginn.ui.LocalImageSession
+import com.silencelen.huginn.ui.EdgeFadeRow
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
@@ -421,7 +422,7 @@ fun SessionView(store: AppStore, name: String) {
         val suggestions by cue.suggestions.collectAsState()
         LaunchedEffect(page?.nextOffset, working) { cue.onTurnBoundary(page?.nextOffset, working) }
         if (onConversation && screen?.prompt == null && Suggest.visible(suggestions, working, draft)) {
-            SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
+            SuggestionChips(suggestions, onPick = setDraft)
         }
 
         // THE QUESTION IS A LINE NOW, not a card. (Owner decision 23, 2026-09-15.)
@@ -615,45 +616,18 @@ private fun SessionHeader(
     }
 }
 
-/**
- * The wash over the trailing edge of a strip that scrolls sideways.
- *
- * The suggestion chips have always scrolled; what they did not do is END
- * anywhere. With the pages panel open the row is cut by the column's edge
- * mid-word, and a sliced glyph reads as a rendering fault rather than as "there
- * is more to the right" — this strip is optional chrome, so it must never be the
- * thing on the screen that looks broken. A short gradient into the background
- * says what the hard clip was trying to, costs no height, and takes nothing out
- * of the scroll: it is drawn over the content, not laid out beside it.
- */
-@Composable
-fun rememberEdgeFade(width: Dp = 30.dp): Modifier {
-    val bg = MaterialTheme.colorScheme.background
-    return remember(bg, width) {
-        Modifier.drawWithContent {
-            drawContent()
-            val w = width.toPx()
-            drawRect(
-                // WEIGHTED TOWARDS THE EDGE rather than linear. A linear wash over
-                // 30dp dims a chip that legitimately ENDS near the edge as much as
-                // it dissolves one that is being cut, and the first of those is the
-                // common case. This leaves the first half almost untouched and does
-                // its work in the last few pixels, where the sliced glyph is.
-                brush = Brush.horizontalGradient(
-                    colorStops = arrayOf(
-                        0f to Color.Transparent,
-                        0.55f to bg.copy(alpha = 0.18f),
-                        1f to bg,
-                    ),
-                    startX = size.width - w,
-                    endX = size.width,
-                ),
-                topLeft = Offset(size.width - w, 0f),
-                size = Size(w, size.height),
-            )
-        }
-    }
-}
+// THE DESKTOP'S OWN EDGE FADE IS GONE, and what replaced it is shared.
+//
+// `rememberEdgeFade` washed the trailing edge of the suggestion strip with the
+// window BACKGROUND colour, unconditionally and on one side. Three things were
+// wrong with it once the same complaint arrived from the phone (P-27/D-17):
+// the ground under that strip is a half-alpha surface rather than `background`,
+// so the wash was a tint; it faded a row whose chips all FIT, which is the very
+// appearance it existed to prevent; and it existed on one shell, so the phone's
+// identical rows had nothing. [com.silencelen.huginn.ui.EdgeFade] masks the
+// content with `BlendMode.DstIn` instead — correct over any ground, on both
+// edges, and only when there is something past them — and both shells' chip
+// rows and key pads now draw through it.
 
 /**
  * The widths the header gives things up at.
@@ -1216,10 +1190,11 @@ private fun ScreenTab(controller: SessionController) {
  */
 @Composable
 private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // ⚠ THE KEY PAD RUNS PAST THE RIGHT EDGE (D-17/P-27). It scrolls — with
+    // shift+scroll, which nobody tries on a row that merely looks clipped — and
+    // `PgUp` was sliced in half with nothing to say why. See [EdgeFade].
+    EdgeFadeRow(
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (live) {
