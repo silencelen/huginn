@@ -5,10 +5,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
@@ -19,12 +22,14 @@ import com.silencelen.huginn.desktop.ui.settings.DevicesPage
 import com.silencelen.huginn.desktop.ui.settings.HostPage
 import com.silencelen.huginn.desktop.ui.settings.NotifyPage
 import com.silencelen.huginn.desktop.ui.settings.PrivacyPage
+import com.silencelen.huginn.desktop.ui.settings.LocalSettingsReveal
 import com.silencelen.huginn.desktop.ui.settings.SettingsFacts
 import com.silencelen.huginn.desktop.ui.settings.SettingsPaneState
 import com.silencelen.huginn.desktop.ui.settings.SettingsSummaries
 import com.silencelen.huginn.desktop.ui.settings.UpdatesPage
 import com.silencelen.huginn.desktop.ui.settings.UsagePage
 import com.silencelen.huginn.desktop.ui.settings.desktopProbe
+import com.silencelen.huginn.desktop.ui.settings.rememberSettingsReveal
 import com.silencelen.huginn.settings.SettingsCatalog
 import com.silencelen.huginn.settings.Surface as SettingsSurface
 import com.silencelen.huginn.ui.settings.SettingsCategoryPage
@@ -87,19 +92,31 @@ fun SettingsView(store: AppStore, state: SettingsPaneState) {
     val category = landing?.let { SettingsCatalog.category(it) } ?: return
 
     val scroll = rememberScrollState()
-    Box(Modifier.fillMaxSize()) {
-        SettingsCategoryPage(title = category.title, blurb = category.blurb, scroll = scroll) {
-            val mark = state.markFor(category.id)
-            when (category.id) {
-                "host" -> HostPage(store, mark)
-                "usage" -> UsagePage(store, mark)
-                "chats" -> ChatsPage(store, mark)
-                "notify" -> NotifyPage(store, mark)
-                "devices" -> DevicesPage(store, mark)
-                "privacy" -> PrivacyPage(store, mark)
-                "appearance" -> AppearancePage(store, mark)
-                "updates" -> UpdatesPage(store, mark)
-                "about" -> AboutPage(store, mark)
+    // ⚠ D-23. THE MARK IS HOISTED so the reveal can be keyed on it. A search hit
+    // already decides which row matched and already tells this page to mark it;
+    // what nothing did was move the pane to it. See [SettingsReveal].
+    val mark = state.markFor(category.id)
+    val reveal = rememberSettingsReveal(mark, scroll)
+    Box(
+        Modifier.fillMaxSize()
+            // The scrolling pane's own top, which is the other half of the sum:
+            // the row reports where it landed, this says where "the top of the
+            // page" is, and the difference is how far to scroll.
+            .onGloballyPositioned { reveal.anchorPane(it.positionInRoot().y) },
+    ) {
+        CompositionLocalProvider(LocalSettingsReveal provides reveal) {
+            SettingsCategoryPage(title = category.title, blurb = category.blurb, scroll = scroll) {
+                when (category.id) {
+                    "host" -> HostPage(store, mark)
+                    "usage" -> UsagePage(store, mark)
+                    "chats" -> ChatsPage(store, mark)
+                    "notify" -> NotifyPage(store, mark)
+                    "devices" -> DevicesPage(store, mark)
+                    "privacy" -> PrivacyPage(store, mark)
+                    "appearance" -> AppearancePage(store, mark)
+                    "updates" -> UpdatesPage(store, mark)
+                    "about" -> AboutPage(store, mark)
+                }
             }
         }
         // The pane whose content most often runs off the bottom with nothing

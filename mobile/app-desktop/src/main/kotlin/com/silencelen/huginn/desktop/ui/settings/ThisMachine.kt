@@ -44,10 +44,55 @@ import kotlinx.coroutines.launch
  * own three or four controls — not a settings ROW. Rewriting them as rows is a
  * different change with a different risk, and the redesign explicitly re-hosts
  * them rather than reworking them.
+ *
+ * ⚠ …IN SETTINGS. THE SETUP FLOW HOSTS THE SAME TWO BODIES AND ALREADY HAS A
+ * HEADING (D-13). `SetupScaffold` draws the step's number, its title and a
+ * subtitle saying what the step will do, and these sections then drew their own
+ * title and a blurb that said the same thing four words differently — steps 4
+ * and 5 both, one under the other, measured on the real flow. `SetupFlowView`
+ * already documents the identical fix for the autostart row ("the row already
+ * carries the per-OS sentence as its own summary, so nothing is added around
+ * it"); this is that rule applied to the two bodies big enough to have brought
+ * their own heading with them. The intro is SUPPRESSED rather than reworded,
+ * because there is no second sentence worth having: one heading per heading.
  */
 
+/** The heading and blurb each section draws when it is NOT inside the setup flow. */
+internal const val DEVICE_SECTION_TITLE = "Let huginn run work on this computer"
+
+internal const val DEVICE_SECTION_BLURB =
+    "Lets huginn run work here, in this machine's own context. Nothing listens " +
+        "on a port: this app asks huginn for work and posts the results back, so " +
+        "it works the same on a laptop away from home."
+
+internal const val LOCAL_SERVE_SECTION_TITLE = "Serve local AI from this computer"
+
+internal const val LOCAL_SERVE_SECTION_BLURB =
+    "Runs small AI models here and offers them in huginn's chat model menus. " +
+        "Everything serves on this machine only (127.0.0.1), key-gated, and can " +
+        "only be set up or stopped from this machine — never remotely."
+
+/**
+ * The steps whose bodies must be hosted WITHOUT their own intro, because the
+ * scaffold above them already says it (D-13).
+ *
+ * Here rather than in `SetupFlowView` so the gate that checks the call sites and
+ * the sections that own the words read one list. `SetupIntroTest` asserts both
+ * halves: that these blurbs really do repeat their step's subtitle, and that the
+ * flow really does pass `intro = false`.
+ */
+internal val SETUP_OWNS_THE_INTRO: Map<com.silencelen.huginn.settings.SetupStep, String> = mapOf(
+    com.silencelen.huginn.settings.SetupStep.DEVICE to DEVICE_SECTION_BLURB,
+    com.silencelen.huginn.settings.SetupStep.LOCAL_AI to LOCAL_SERVE_SECTION_BLURB,
+)
+
+/**
+ * @param intro draw the section's own heading and blurb. FALSE inside the setup
+ *   flow (D-13): the step already carries a title and a subtitle saying this, and
+ *   the two were the same sentence four words apart. See [SETUP_OWNS_THE_INTRO].
+ */
 @Composable
-internal fun DeviceSection(store: AppStore) {
+internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
     val settings = store.settings
     val enabled by settings.deviceEnabled.collectAsState()
     val scopeWire by settings.deviceScope.collectAsState()
@@ -55,14 +100,10 @@ internal fun DeviceSection(store: AppStore) {
     val actWhileLocked by settings.deviceActWhileLocked.collectAsState()
     val status by store.deviceRunner.status.collectAsState()
 
-    FormHeader("Let huginn run work on this computer")
-
-    Muted(
-        "Lets huginn run work here, in this machine's own context. Nothing listens " +
-            "on a port: this app asks huginn for work and posts the results back, so " +
-            "it works the same on a laptop away from home.",
-        maxLines = 4,
-    )
+    if (intro) {
+        FormHeader(DEVICE_SECTION_TITLE)
+        Muted(DEVICE_SECTION_BLURB, maxLines = 4)
+    }
 
     // ⚠ THE SAME ROW EVERY OTHER TOGGLE IN THIS PRODUCT IS. It was a bare
     // `Row { Switch, Text }` — switch on the LEFT — while steps 6 and 7 of the
@@ -281,8 +322,9 @@ private object LocalServeFlow {
 /** The shell's own platform, asked once — the manager reports its own. */
 private fun isWindowsHost() = System.getProperty("os.name")?.startsWith("Windows") == true
 
+/** @param intro see [DeviceSection]. False inside the setup flow (D-13). */
 @Composable
-internal fun LocalServeSection(store: AppStore) {
+internal fun LocalServeSection(store: AppStore, intro: Boolean = true) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<LocalServe.Status?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -312,13 +354,10 @@ internal fun LocalServeSection(store: AppStore) {
     // the truth changed; re-ask the manager rather than trusting the last log line.
     LaunchedEffect(busy) { if (!busy) refresh() }
 
-    FormHeader("Serve local AI from this computer")
-    Muted(
-        "Runs small AI models here and offers them in huginn's chat model menus. " +
-            "Everything serves on this machine only (127.0.0.1), key-gated, and can " +
-            "only be set up or stopped from this machine — never remotely.",
-        maxLines = 4,
-    )
+    if (intro) {
+        FormHeader(LOCAL_SERVE_SECTION_TITLE)
+        Muted(LOCAL_SERVE_SECTION_BLURB, maxLines = 4)
+    }
 
     val s = status
     val engineUp = s?.setup == true && s.engine.reachable && s.engine.models.isNotEmpty()
