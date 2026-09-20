@@ -33,6 +33,7 @@ Set any of these in a drop-in `[Service]` block (`Environment=KEY=value`):
 | `HUGINN_APPD_DATA` | `/var/lib/huginn-appd` | data root (uploads, chats, desktop channels) |
 | `HUGINN_APPD_TOKEN_FILE` | `/etc/huginn-appd/token` | bearer token file |
 | `HUGINN_APPD_WORKDIR` | `$HOME` | cwd for spawned `claude` chats |
+| `HUGINN_APPD_PROJECTS_DIR` | `$HOME/projects` | where a project with no directory of its own is made (`<dir>/<slug>`); trust it in Claude Code once and every project under it is covered |
 | `HUGINN_APPD_SOFT_END_PHRASE` | "Finish outstanding items, commit your work, and prepare to end the session." | the wrap-up a soft end types into the pane |
 | `HUGINN_APPD_SOFT_END_AUTO` | on (`0` disables) | after a soft end, end the session automatically once it settles; `0` = phrase only, end it yourself |
 | `HUGINN_APPD_UPLOAD_KEEP_DAYS` | `7` | retention for NON-image uploads; images are never pruned (they back chat-history thumbnails) |

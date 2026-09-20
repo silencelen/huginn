@@ -9,6 +9,32 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.7.0 — 2026-09-20
+
+The first evening a project was run from the phone and the desktop together, and the two
+things it showed.
+
+- **`GET /v1/sessions` rows say which project they belong to.** Each row carries `project` —
+  `{id, name, slug, role, lead}` for a lead or a member, `null` for a session outside every
+  project. The join is the daemon's (the store, by tmux name; an archived project claims
+  nothing), so a client can keep project sessions off its Sessions page without reading every
+  project's detail first — which is what app 3.8 and desktop 1.8 do. The widgetshub lead sat in
+  the desktop's Sessions list between two hand-made sessions and read as a third, unrelated one
+  that had failed to do something.
+- **The lead is told to say where the owner approves.** The manifest contract now asks for one or
+  two plain sentences before the block — the proposal is ready, and nothing starts until it is
+  approved from Projects (Spawn) or `huginn projects spawn <slug>` — because the clients draw the
+  block itself as a card and nobody reads it as prose. The first lead ended its turn with the
+  JSON and the owner was left to guess what came next.
+- **A project with no directory gets its own.** `POST /v1/projects` without `cwd` makes
+  `<projects dir>/<slug>` (default `~/projects`; `HUGINN_APPD_PROJECTS_DIR`) and starts the lead
+  there, and `GET /v1/projects` reports the directory as `dir` so a client can say the path before
+  the project exists. The first project ever run defaulted to the daemon's working directory —
+  the owner's ops repo — and its lead made a nested repo there. The trust check now reads up the
+  tree the way Claude Code does (a subdirectory of a trusted directory opens with no dialog,
+  checked on 2.1.258), so the projects directory is trusted once and every project under it is
+  covered; the daemon still never writes `~/.claude.json`.
+
 ## 3.6.2 — 2026-09-20
 
 - **`GET /v1/files/image?session=` now holds the session name to the grammar** every

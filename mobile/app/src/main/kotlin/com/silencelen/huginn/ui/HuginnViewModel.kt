@@ -2278,6 +2278,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val _projectsAvailable = MutableStateFlow<Boolean?>(null)
     val projectsAvailable: StateFlow<Boolean?> = _projectsAvailable.asStateFlow()
+    /** Where the daemon makes a project's folder when none is named; null on an older daemon. */
+    private val _projectsDir = MutableStateFlow<String?>(null)
+    val projectsDir: StateFlow<String?> = _projectsDir.asStateFlow()
 
     /**
      * Each project's live members, by project id.
@@ -2353,6 +2356,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 if (list == null) { _projectsAvailable.value = false; return@onSuccess }
                 _projectsAvailable.value = true
                 _projects.value = ProjectRules.orderedProjects(list.projects)
+                _projectsDir.value = list.dir
                 // Membership for projects that are GONE goes with them: a map that
                 // kept them would group a session under a heading the tree no
                 // longer draws.

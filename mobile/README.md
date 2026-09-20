@@ -222,7 +222,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | POST | `/v1/accounts/<slug>/activate` | make a saved login the active one |
 | DELETE | `/v1/accounts/<slug>` | forget a saved login |
 | GET | `/v1/status` | uptime, load, disk, Claude version, MemPalace reachability |
-| GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews |
+| GET | `/v1/sessions` | tmux sessions + hook state; `?preview=1` adds titles and activity previews. Each row carries `project` — `{id, name, slug, role, lead}` when the session is a project's lead or member, else `null` (appd 3.7.0); clients keep those rows off the Sessions page |
 | POST | `/v1/sessions` | `{name}`; must START with a letter, digit or underscore and may then also contain `-` and `.` (a `.` is refused by its own check), max 50 chars, canonically lowercase. Reserved names (`plan`, `ask`, `compacting`, …) are refused — they collide with the state directory's own sidecars |
 | DELETE | `/v1/sessions/<name>` | kill-session |
 | POST | `/v1/sessions/<name>/rename` | `{name}`; moves the state file with it |
@@ -280,7 +280,7 @@ root SSH key: if a device carrying it is lost, rotate the file, restart the unit
 | GET | `/v1/archive/<id>` · PATCH · DELETE | one archived row: view / retitle / forget it |
 | GET | `/v1/archive/<id>/transcript` | the archived conversation, the same structured events as a live session; 404 for an unknown id |
 | POST | `/v1/archive/<id>/revive` | start that conversation again (`claude --resume`) → `{ok, name, resumed}`; 409 when it is already running, naming the session |
-| GET | `/v1/projects` · POST | clusters of sessions working one brief. POST takes `{name, kind, brief, cwd}` — `kind` is one of `software`, `infra`, `hardware`, `docs`, `research`, `other`, and an untrusted `cwd` is refused `409 {reason:"untrusted-cwd"}` rather than pre-trusted |
+| GET | `/v1/projects` · POST | clusters of sessions working one brief. POST takes `{name, kind, brief, cwd?}` — `kind` is one of `software`, `infra`, `hardware`, `docs`, `research`, `other`; `cwd` left out makes `<dir>/<slug>` under the projects directory the GET reports as `dir` (appd 3.7.0), and a named `cwd` must exist. An untrusted directory is refused `409 {reason:"untrusted-cwd"}` rather than pre-trusted; trust is read up the tree, as Claude Code reads it |
 | GET | `/v1/projects/<id>` · DELETE | one project. `DELETE ?end=graceful` (or `{end:"graceful"\|"now"}`) also winds the sessions down and answers `{ended:[], refused:[{name, claudeName, why}]}`; with no `end=` it deletes the record and ends nothing |
 | GET | `/v1/projects/<id>/dashboard` | live roll-up: `totals` (turns, tokens, `estCost.byModel`, compactions), `rate`, and a per-member list with `state`, `needsYou`, `pendingSends`, `headroom` |
 | POST | `/v1/projects/<id>/spawn` | `{approve:true, manifestRev}` — spawning is the owner's decision, so `approve:false` is a 400 and a stale `manifestRev` a 409 carrying the project to re-draw from |
