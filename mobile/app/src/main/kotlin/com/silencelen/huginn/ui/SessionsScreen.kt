@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -473,11 +474,20 @@ private fun SessionRow(
 
             if (s.preview.isNotEmpty()) {
                 Spacer(Modifier.height(3.dp))
-                s.preview.takeLast(2).forEach { line ->
+                // ⚠ P-14. `❯ run sleep 10 in the background then say doneB` on a
+                // row nobody had typed into: Claude Code's dim inline SUGGESTION,
+                // drawn here in the same weight as output and reading as a
+                // pending prompt. The dimness is gone by the time a preview line
+                // exists (the list's capture has no `-e`), so `PanePreview` uses
+                // the same structural tell `pane.js` does. Kept, and drawn as the
+                // composer rather than as something the session did.
+                PanePreview.rows(s.preview.takeLast(2)).forEach { row ->
                     Text(
-                        line,
+                        row.text,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (row.hint) MaterialTheme.colorScheme.outline
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = if (row.hint) FontStyle.Italic else null,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )

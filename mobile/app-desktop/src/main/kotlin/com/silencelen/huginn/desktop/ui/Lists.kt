@@ -41,6 +41,7 @@ import androidx.compose.ui.input.pointer.isCtrlPressed
 import androidx.compose.ui.input.pointer.isShiftPressed
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.ui.ChatListScroll
@@ -48,6 +49,7 @@ import com.silencelen.huginn.ui.ChatRules
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.HostBadge
 import com.silencelen.huginn.ui.OrderLock
+import com.silencelen.huginn.ui.PanePreview
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.desktop.ui.common.ChatVerbs
@@ -420,8 +422,26 @@ private fun SessionRow(
                     ContextBadge(session.contextPercent, Modifier.padding(end = Space.unit))
                 }
             }
-            session.preview.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let {
-                Muted(it, Modifier.weight(1f), maxLines = 1)
+            // ⚠ P-14. `❯ run sleep 10 …` on a row nobody had typed into: Claude
+            // Code's dim inline SUGGESTION, drawn in the same ink as output and
+            // reading as a pending prompt. The dimness is gone by the time a
+            // preview line exists (the list's capture takes no `-e`), so
+            // `PanePreview` uses the same structural tell `pane.js` does. Kept
+            // and drawn as the composer rather than as something the session did.
+            session.preview.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { line ->
+                if (PanePreview.isComposerLine(line)) {
+                    Text(
+                        line,
+                        style = DeskType.rowMeta,
+                        color = MaterialTheme.colorScheme.outline,
+                        fontStyle = FontStyle.Italic,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Muted(line, Modifier.weight(1f), maxLines = 1)
+                }
             }
         }
     }
