@@ -249,4 +249,29 @@ class SettingsCatalogTest {
             "account switching must live in usage and nowhere else",
         )
     }
+
+    /**
+     * ⚠⚠ P-20. THE TOGGLE WAS DESCRIBED TWO CONTRADICTORY WAYS, four taps apart:
+     * the Usage page said "Nothing is spent" and a settings search for "keep"
+     * said "Spends a fraction of a cent", about the same switch. The first was
+     * the OFF copy read as the feature's description. Given the owner's standing
+     * rule on spending, one of those is a promise this product must not make.
+     */
+    @Test
+    fun `keep-awake is described once, and the description says what it costs`() {
+        val row = SettingsCatalog.items.first { it.id == "usage.keep-awake" }
+        assertEquals(
+            KeepAwakeCopy.WHAT,
+            row.summary,
+            "the catalog row and the page must be the same sentence, not two",
+        )
+        assertTrue("fraction of a cent" in KeepAwakeCopy.WHAT, KeepAwakeCopy.WHAT)
+        // The off-state copy talks about the SWITCH. "Nothing is spent" as a bare
+        // opening is what read as a claim about the feature.
+        assertTrue(KeepAwakeCopy.OFF.startsWith("Off"), KeepAwakeCopy.OFF)
+        assertTrue(
+            "nothing is spent" !in KeepAwakeCopy.OFF.lowercase(),
+            "the sentence that was read as the feature's description is gone: ${KeepAwakeCopy.OFF}",
+        )
+    }
 }

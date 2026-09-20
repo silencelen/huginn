@@ -16,6 +16,7 @@ import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.ARCHIVE_TRANSCRIPT_GONE
 import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.ModelLabels
+import com.silencelen.huginn.ui.WrapUpWatch
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
@@ -1723,9 +1724,45 @@ class AppStore(
         // preview=1: the list rows show what each session is doing, which is the
         // only thing that makes the list worth reading at a glance.
         runCatching { client.sessions(preview = true) }
-            .onSuccess { _sessions.value = it; _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
+            .onSuccess { landSessions(it); _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
             .onFailure { note(Faults.SESSIONS, it) }
     }
+
+    /**
+     * The sessions list, with the one thing the wire does not say read out of it.
+     *
+     * ⚠⚠ P-19. `lib/softend.js` abandons an auto-end when the session asks a
+     * question, and the daemon reports that by DELETING the pending record — so
+     * all `/v1/sessions` says is `softEnding` going false, which is also what a
+     * wrap-up that worked looks like. The difference is whether the session is
+     * still in the list and asking something. `WrapUpWatch` owns the rule and is
+     * asserted in :core; it needs the previous reading, so the list has one
+     * writer.
+     */
+    private fun landSessions(rows: List<Session>) {
+        val cancelled = WrapUpWatch.cancelled(windingDown, rows)
+        windingDown = WrapUpWatch.winding(rows)
+        _sessions.value = rows
+        if (cancelled.isNotEmpty()) {
+            _wrapUpNotices.value = _wrapUpNotices.value + cancelled.associateWith { WrapUpWatch.NOTICE }
+        }
+    }
+
+    /** Which sessions were winding down at the last reading. See [landSessions]. */
+    private var windingDown: Set<String> = emptySet()
+
+    private val _wrapUpNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** "Wrap-up held — it asked a question", per session. Empty almost always. */
+    val wrapUpNotices: StateFlow<Map<String, String>> = _wrapUpNotices.asStateFlow()
+
+    fun dismissWrapUpNotice(name: String) {
+        if (name !in _wrapUpNotices.value) return
+        _wrapUpNotices.value = _wrapUpNotices.value - name
+    }
+
+    /** A fresh wrap-up supersedes the last one's verdict. */
+    fun notingSoftEnd(name: String) = dismissWrapUpNotice(name)
 
     /**
      * The archived list, and the flag that says whether this daemon has them.
