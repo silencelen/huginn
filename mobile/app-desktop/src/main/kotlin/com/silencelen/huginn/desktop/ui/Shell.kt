@@ -111,6 +111,7 @@ import com.silencelen.huginn.desktop.ui.setup.SetupOverlay
 import com.silencelen.huginn.settings.SetupStep
 import com.silencelen.huginn.desktop.ui.common.connectionTip
 import com.silencelen.huginn.desktop.ui.common.railCountTip
+import com.silencelen.huginn.ui.SessionNameRules
 import com.silencelen.huginn.ui.SessionUsageFill
 import com.silencelen.huginn.ui.UsageFill
 import com.silencelen.huginn.ui.UsageFillLine
@@ -1784,6 +1785,14 @@ internal fun viewKey(v: View): String =
  */
 internal val SESSION_NAME = Regex("^[a-z0-9_][a-z0-9_-]{0,49}$")
 
-/** The one sentence both name fields explain themselves with. */
-internal const val SESSION_NAME_HELP =
-    "Letters, digits, _ and - ; starts with a letter or digit."
+/**
+ * The one sentence both name fields explain themselves with — and both SHELLS.
+ *
+ * ⚠ IT USED TO BE THE DESKTOP'S OWN WORDING ("Letters, digits, _ and - ; starts
+ * with a letter or digit."), which was a third account of one daemon rule: it
+ * named the characters as symbols rather than as words and said nothing about
+ * the 50-character limit `NAME_RE` really does enforce. The phone moved onto
+ * [SessionNameRules.HINT] in the round-three pass for the same reason — a hint
+ * that does not match the host is one people work around and then stop reading.
+ */
+internal const val SESSION_NAME_HELP = SessionNameRules.HINT
