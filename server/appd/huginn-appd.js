@@ -747,6 +747,102 @@ function clearSessionState(name) {
   sessionBorn.delete(name);
 }
 
+/**
+ * How long a state file outlives the session that wrote it.
+ *
+ * A week, not a day: a conversation can be revived from the archive and a state
+ * file is where its transcript mapping lives, so the cost of being early is
+ * losing a thing somebody meant to come back to, while the cost of being late is
+ * a few hundred bytes in a tmpfs.
+ */
+const STATE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** And how often the sweep runs after the one at startup. */
+const STATE_SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Take the state of sessions that are gone, and nothing else.
+ *
+ * ⚠ THE LEAK THIS CLOSES (r2 L9). `clearSessionState` runs on create and on end,
+ * THROUGH THIS DAEMON — so a session killed at a terminal, or by a reboot, or by
+ * `tmux kill-server`, leaves its state file behind with nothing that will ever
+ * come back for it. The live host had 40-odd on 2026-09-19, the oldest dead since
+ * July, beside a 0-byte `.tmp` from an interrupted hook write and BOTH spellings
+ * of the sidecar directories — `ask`, `plan`, `compacting` sitting next to
+ * `.ask`, `.plan`, `.compacting`, which is exactly the namespace the leading dot
+ * was introduced to empty (#2/#3).
+ *
+ * ⚠⚠ AND IT IS TIMID ON PURPOSE, IN TWO WAYS.
+ *
+ *   1. A tmux read that FAILS sweeps nothing. `liveSessionIds` returns null for a
+ *      failure to observe and an empty map for "there is genuinely no server",
+ *      and those two must not be confused here: reading a hiccup as "no session
+ *      is live" would delete the state of every session on the host — its state
+ *      word, its claudeSessionId, its transcript path, its conversation tab —
+ *      the first time a fork hit EAGAIN at startup. Same guard listSessions and
+ *      the registry reconcile carry, for the same reason (#14).
+ *   2. A file is taken only when its session is GONE *and* the file has not been
+ *      touched for [STATE_KEEP_MS]. Either alone is not enough.
+ *
+ * The exception is a `*.tmp`: the hook writes one and renames it in a single
+ * millisecond-scale step, so one that has survived the keep window is a corpse
+ * whoever owns it — and it is never the file a session reads, which is the
+ * undotted name beside it.
+ *
+ * An EMPTY legacy sidecar directory is removed too. The daemon has written the
+ * dotted spelling since 3.3 and only still reads the old one because /run
+ * survives a deploy; once the last pre-3.3 sidecar is gone the directory is
+ * nothing but the collision surface. A pre-3.3 hook would recreate it, which is
+ * the correct outcome if one is still installed.
+ */
+async function sweepStateDir(why = 'daily') {
+  const live = await liveSessionIds();
+  if (!live) {
+    log(`state sweep (${why}): tmux is not answering — nothing swept`);
+    return null;
+  }
+  const now = Date.now();
+  const stale = (p) => {
+    try { return now - fs.statSync(p).mtimeMs > STATE_KEEP_MS; } catch { return false; }
+  };
+  const drop = (p) => { try { fs.unlinkSync(p); return true; } catch { return false; } };
+  const took = { states: 0, sidecars: 0, partials: 0, dirs: 0 };
+
+  let entries = [];
+  try { entries = fs.readdirSync(STATE_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    const p = path.join(STATE_DIR, ent.name);
+    if (!stale(p)) continue;
+    if (ent.name.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
+    if (live.has(ent.name)) continue;
+    if (drop(p)) took.states += 1;
+  }
+
+  for (const kind of ALL_SIDECAR_DIRS) {
+    const dir = path.join(STATE_DIR, kind);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      if (!stale(p)) continue;
+      if (n.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
+      if (live.has(n)) continue;
+      if (drop(p)) took.sidecars += 1;
+    }
+    if (!LEGACY_SIDECAR_DIRS.includes(kind)) continue;
+    try { if (fs.readdirSync(dir).length === 0) { fs.rmdirSync(dir); took.dirs += 1; } } catch { /* in use */ }
+  }
+
+  // Said every time, including the nothing-to-do pass: a sweep that deletes
+  // files and leaves no trace is a sweep nobody can check after the fact, and
+  // this one is the only thing on the host that removes a state file without a
+  // person asking.
+  log(`state sweep (${why}): ${took.states} state file(s), ${took.sidecars} sidecar(s), `
+    + `${took.partials} interrupted write(s), ${took.dirs} legacy dir(s); ${live.size} session(s) live`);
+  return took;
+}
+
 // One ps snapshot serves every caller inside its window; the sessions list and
 // several transcript polls land inside the same second, and each fresh ps is a
 // process spawn.
@@ -13257,6 +13353,14 @@ resolveBind().then(async (bind) => {
   // Before listen, like the sweep above, so the session list is whole by the time a
   // client can ask for it.
   await restoreSessionsAfterReboot().catch((e) => log(`session restore failed: ${e.message}`));
+  // ⚠ AFTER THE RESTORE, NEVER BEFORE IT. A session this daemon is about to
+  // bring back is not live yet, and the sweep's whole safety argument is that it
+  // only takes what tmux says is gone. Daily after that — the leak is measured in
+  // files per week, so anything faster is just more chances to be wrong.
+  await sweepStateDir('startup').catch((e) => log(`state sweep failed: ${e.message}`));
+  setInterval(() => {
+    sweepStateDir('daily').catch((e) => log(`state sweep failed: ${e.message}`));
+  }, STATE_SWEEP_EVERY_MS).unref();
   // Keep the durable registry in step with live tmux: learn ids the hook writes
   // late, pick up sessions started outside the daemon, drop the ones that ended. The
   // early tick catches a just-restored session's fresh id; the interval carries it.
