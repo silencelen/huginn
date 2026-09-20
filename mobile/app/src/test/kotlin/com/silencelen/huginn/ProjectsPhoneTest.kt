@@ -4,16 +4,11 @@ import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ProjectDashboard
-import com.silencelen.huginn.data.ProjectLead
 import com.silencelen.huginn.data.ProjectList
-import com.silencelen.huginn.data.ProjectLive
-import com.silencelen.huginn.data.ProjectRow
-import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SpawnResult
 import com.silencelen.huginn.ui.DashboardCursor
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.appEntries
-import com.silencelen.huginn.ui.groupSessions
 import com.silencelen.huginn.ui.projectEntries
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -23,7 +18,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,77 +36,7 @@ class ProjectsPhoneTest {
     private fun fixture(name: String): String =
         javaClass.classLoader!!.getResourceAsStream(name)!!.bufferedReader().readText()
 
-    private fun session(name: String) = Session(name = name)
 
-    private fun live(role: String, name: String, lead: Boolean = false) =
-        ProjectLive(role = role, name = name, claudeName = "x/$role", lead = lead, present = true, alive = true)
-
-    // ------------------------------------------------------------- grouping
-
-    /**
-     * ⚠⚠ THE JOIN KEY IS THE TMUX NAME AND IT COMES OFF `live[]`.
-     *
-     * Every session on this host is addressed by its tmux name (`<slug>-<role>`);
-     * a project's PEER name is `<slug>/<role>` and a slash is not a tmux name
-     * character, so a grouping that matched peer names would group nothing. And a
-     * grouping that matched the slug PREFIX would be worse than nothing: a
-     * session somebody called `statusflap-notes` by hand would silently join a
-     * cluster it is not in, under a heading claiming the daemon put it there.
-     */
-    @Test
-    fun `a project's members group under its heading, and the rest come after`() {
-        val p = ProjectRow(
-            id = "p1", name = "Status page flap", slug = "statusflap", status = "active",
-            memberCount = 2, alive = 2, lead = ProjectLead(name = "statusflap-lead"),
-        )
-        val members = mapOf("p1" to listOf(live("lead", "statusflap-lead", lead = true), live("db", "statusflap-db")))
-        val sessions = listOf(
-            session("jtyper"),
-            session("statusflap-db"),
-            session("statusflap-lead"),
-            // The trap: the slug is a prefix of this name and it is NOT a member.
-            session("statusflap-notes"),
-        )
-
-        val groups = groupSessions(listOf(p), members, sessions)
-
-        assertEquals(2, groups.size)
-        assertEquals("p1", groups[0].project?.id)
-        assertEquals(listOf("statusflap-db", "statusflap-lead"), groups[0].sessions.map { it.name })
-        assertNull("the unaffiliated block is last and has no project", groups[1].project)
-        assertEquals(listOf("jtyper", "statusflap-notes"), groups[1].sessions.map { it.name })
-    }
-
-    /**
-     * A project whose detail has not been fetched still gathers its LEAD, because
-     * the list row carries that one name. Anything more would be a guess.
-     */
-    @Test
-    fun `an unfetched project still claims the lead it is certain to own`() {
-        val p = ProjectRow(id = "p1", name = "LoRa", slug = "lora", status = "drafting",
-            lead = ProjectLead(name = "lora-lead"))
-        val groups = groupSessions(listOf(p), emptyMap(), listOf(session("lora-lead"), session("jtyper")))
-        assertEquals(listOf("lora-lead"), groups[0].sessions.map { it.name })
-        assertEquals(listOf("jtyper"), groups[1].sessions.map { it.name })
-    }
-
-    /** A heading over nothing reads as a bug, so a project with no session here draws none. */
-    @Test
-    fun `a project with no live session gets no heading`() {
-        val p = ProjectRow(id = "p1", name = "Auvik lab", slug = "auvik", status = "archived")
-        val groups = groupSessions(listOf(p), emptyMap(), listOf(session("jtyper")))
-        assertEquals(1, groups.size)
-        assertNull(groups[0].project)
-    }
-
-    /** No projects at all is the list exactly as it has always been drawn. */
-    @Test
-    fun `no projects means one ungrouped block`() {
-        val groups = groupSessions(emptyList(), emptyMap(), listOf(session("a"), session("b")))
-        assertEquals(1, groups.size)
-        assertNull(groups[0].project)
-        assertEquals(2, groups[0].sessions.size)
-    }
 
     // ------------------------------------------------------ the feature probe
 
@@ -128,14 +52,14 @@ class ProjectsPhoneTest {
     @Test
     fun `a daemon without projects or apps offers no entry anywhere`() {
         val off = projectEntries(false)
-        assertFalse(off.sessionsIcon); assertFalse(off.settingsRow); assertFalse(off.grouping)
+        assertFalse(off.sessionsIcon); assertFalse(off.settingsRow); assertFalse(off.hiding)
         assertFalse("nothing at all", off.any)
 
         val unknown = projectEntries(null)
         assertFalse("the probe has not answered — show nothing", unknown.any)
 
         val on = projectEntries(true)
-        assertTrue(on.sessionsIcon && on.settingsRow && on.grouping)
+        assertTrue(on.sessionsIcon && on.settingsRow && on.hiding)
 
         assertEquals(appEntries(false), appEntries(null))
         assertFalse(

@@ -1,5 +1,25 @@
 # Huginn Desktop changelog
 
+## 1.8.0
+
+The first project run from this window, and what the sessions list and the transcript got wrong
+about it. Both fixes are the shared code, so the phone has them too.
+
+- **Project sessions are not on the Sessions page.** A lead or a member lives on its project's
+  dashboard and nowhere else; the list, its rail badge and the count in the status line show
+  only the sessions outside every project, plus one line under the rows — *"3 sessions are in
+  projects"* — that opens Projects. The widgetshub lead sat in this list between two hand-made
+  sessions and read as a third, unrelated one that had failed to do something. The command
+  palette still knows every session. Rows carry the daemon's own join (appd 3.7.0), and the
+  names off the project tree cover a daemon older than that.
+- **A lead's proposal is a card in the transcript, not a paragraph of JSON.** The fence that
+  opens it carries the project's tag after the language word, and the markdown reader only knew
+  one-word fences, so the whole block was drawn as prose. It reads as a card now — the summary,
+  the roles, where to approve it — with the block itself a click away.
+- **A new project gets its own folder.** Leave the Directory field empty and the daemon makes
+  `<projects dir>/<name>` for it (appd 3.7.0); the field says the path it will use as you type the
+  name, instead of the host's working directory — which is where the first project landed.
+
 ## 1.7.1
 
 The shared half of the round-three review — the same code both clients draw from.

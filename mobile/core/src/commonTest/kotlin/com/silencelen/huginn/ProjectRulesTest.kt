@@ -9,6 +9,8 @@ import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMember
 import com.silencelen.huginn.data.ProjectRow
+import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.data.SessionProject
 import com.silencelen.huginn.data.SpawnFailure
 import com.silencelen.huginn.data.SpawnResult
 import com.silencelen.huginn.ui.ProjectRules
@@ -795,5 +797,100 @@ class ProjectRulesTest {
             "Project removed · ended 1",
             ProjectRules.deletedWords(ProjectDeleted(ok = true, ended = listOf("a"), mode = "now")),
         )
+    }
+
+    // ------------------------------------------------- off the Sessions page
+
+    private fun sess(name: String, project: SessionProject? = null) = Session(name = name, project = project)
+    private fun liveRow(role: String, name: String, lead: Boolean = false) =
+        ProjectLive(role = role, name = name, claudeName = "x/$role", lead = lead, present = true, alive = true)
+
+    /**
+     * ⚠⚠ A PROJECT SESSION IS NEVER ON THE SESSIONS PAGE. The daemon's own join
+     * on the row is the first word — whatever the project rows say, and even
+     * when they say nothing, because a fresh spawn shows up in the session list
+     * before the tree has been polled.
+     */
+    @Test
+    fun `the daemon's own tag takes a session off the list, whatever the rows say`() {
+        val tagged = sess("lora-fw", SessionProject(id = "p9", name = "LoRa", slug = "lora", role = "fw"))
+        val split = ProjectRules.splitByProject(listOf(sess("jtyper"), tagged), emptyList(), emptyMap())
+        assertEquals(listOf("jtyper"), split.outside.map { it.name })
+        assertEquals(listOf("lora-fw"), split.inProjects.map { it.name })
+    }
+
+    /**
+     * Without the tag (a daemon older than 3.7.0), the names are the join — the
+     * lead off the row, the members off the fetched live[] — and the trap in
+     * the middle is a slug PREFIX, which is not membership.
+     */
+    @Test
+    fun `without a tag, the lead off the row and the members off live are what count`() {
+        val p = ProjectRow(
+            id = "p1", name = "Status page flap", slug = "statusflap", status = "active",
+            lead = ProjectLead(name = "statusflap-lead"),
+        )
+        val members = mapOf("p1" to listOf(liveRow("lead", "statusflap-lead", lead = true), liveRow("db", "statusflap-db")))
+        val sessions = listOf(sess("jtyper"), sess("statusflap-db"), sess("statusflap-lead"), sess("statusflap-notes"))
+        val split = ProjectRules.splitByProject(sessions, listOf(p), members)
+        assertEquals(listOf("jtyper", "statusflap-notes"), split.outside.map { it.name }, "the prefix is not membership")
+        assertEquals(listOf("statusflap-db", "statusflap-lead"), split.inProjects.map { it.name })
+    }
+
+    @Test
+    fun `an unfetched project still claims the lead it is certain to own`() {
+        val p = ProjectRow(id = "p1", name = "LoRa", slug = "lora", status = "drafting", lead = ProjectLead(name = "lora-lead"))
+        val split = ProjectRules.splitByProject(listOf(sess("lora-lead"), sess("jtyper")), listOf(p), emptyMap())
+        assertEquals(listOf("jtyper"), split.outside.map { it.name })
+        assertEquals(listOf("lora-lead"), split.inProjects.map { it.name })
+    }
+
+    /** History claims nothing: a session reusing an archived project's name is somebody's new session. */
+    @Test
+    fun `an archived project takes nothing off the list`() {
+        val p = ProjectRow(id = "p1", name = "Auvik lab", slug = "auvik", status = "archived", lead = ProjectLead(name = "auvik-lead"))
+        val members = mapOf("p1" to listOf(liveRow("lead", "auvik-lead", lead = true)))
+        val split = ProjectRules.splitByProject(listOf(sess("auvik-lead")), listOf(p), members)
+        assertEquals(listOf("auvik-lead"), split.outside.map { it.name })
+        assertTrue(split.inProjects.isEmpty())
+    }
+
+    @Test
+    fun `the line under the list counts what it hid, and says nothing for nothing`() {
+        assertNull(ProjectRules.hiddenWords(0))
+        assertEquals("1 session is in a project", ProjectRules.hiddenWords(1))
+        assertEquals("3 sessions are in projects", ProjectRules.hiddenWords(3))
+    }
+
+    // ------------------------------------------- the proposal in a transcript
+
+    @Test
+    fun `a proposal block is read to its summary and its roles`() {
+        val body = """{"type":"software","scope":"Build it.","summary":"WidgetsHub: one devstore app",
+            "sessions":[{"role":"core","firstPrompt":"x"},{"role":"widgets","firstPrompt":"y"},{"role":"release","firstPrompt":"z"}]}"""
+        val p = ProjectRules.proposalPreview(body)!!
+        assertEquals("WidgetsHub: one devstore app", p.summary)
+        assertEquals(listOf("core", "widgets", "release"), p.roles)
+        assertEquals("3 sessions: core, widgets, release", ProjectRules.proposalWords(p))
+    }
+
+    @Test
+    fun `a block that is not a JSON object is nobody's proposal, and is left to the code card`() {
+        assertNull(ProjectRules.proposalPreview("not json at all"))
+        assertNull(ProjectRules.proposalPreview("[1,2,3]"))
+        val bare = ProjectRules.proposalPreview("{}")!!
+        assertNull(bare.summary)
+        assertEquals("no sessions in this proposal", ProjectRules.proposalWords(bare))
+    }
+
+    // ------------------------------------------------- the project's own folder
+
+    @Test
+    fun `the Directory field says where an unnamed directory will be made`() {
+        val slug = ProjectRules.slugFor("Widgets Hub")
+        assertEquals("/root/projects/$slug (made for it)", ProjectRules.newFolderWords("/root/projects/", "Widgets Hub"))
+        assertEquals("/root/projects/<name> (made for it)", ProjectRules.newFolderWords("/root/projects", ""))
+        assertEquals("a new folder named after the project", ProjectRules.newFolderWords(null, "Widgets Hub"))
+        assertEquals("a new folder named after the project", ProjectRules.newFolderWords("  ", "Widgets Hub"))
     }
 }

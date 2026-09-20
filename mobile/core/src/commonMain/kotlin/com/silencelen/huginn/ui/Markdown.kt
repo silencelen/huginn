@@ -31,7 +31,12 @@ sealed interface MdBlock {
     data class Paragraph(val text: AnnotatedString) : MdBlock
     data class Heading(val text: AnnotatedString, val level: Int) : MdBlock
     data class Bullet(val text: AnnotatedString, val ordinal: String?) : MdBlock
-    data class Code(val code: String, val lang: String?) : MdBlock
+    /**
+     * [lang] is the first word after the fence; [info] is the rest of the line,
+     * when there is one — a lead's proposal opens "```huginn-project <tag>" and
+     * the tag is what the daemon keys the block on.
+     */
+    data class Code(val code: String, val lang: String?, val info: String? = null) : MdBlock
     data class Quote(val text: AnnotatedString) : MdBlock
     /**
      * `![alt](src)` standing alone on a line. `src` is whatever was written —
@@ -80,15 +85,17 @@ object Markdown {
             when {
                 fence != null -> {
                     flushPara()
+                    val open = fence.groupValues[1]
                     val lang = fence.groupValues[2].takeIf { it.isNotBlank() }
+                    val info = fence.groupValues[3].trim().takeIf { it.isNotEmpty() }
                     val body = StringBuilder()
                     i++
-                    while (i < lines.size && FENCE.matchEntire(lines[i].trim()) == null) {
+                    while (i < lines.size && !closes(lines[i].trim(), open)) {
                         body.append(lines[i]).append('\n')
                         i++
                     }
                     i++ // closing fence (or end of input, which we accept)
-                    out.add(MdBlock.Code(body.toString().trimEnd('\n'), lang))
+                    out.add(MdBlock.Code(body.toString().trimEnd('\n'), lang, info))
                     continue
                 }
                 line.isBlank() -> { flushPara(); i++ }
@@ -146,7 +153,21 @@ object Markdown {
         return out
     }
 
-    private val FENCE = Regex("^(`{3,}|~{3,})\\s*([A-Za-z0-9+#._-]*)\\s*$")
+    /**
+     * An opening fence: the bar, a language word, and whatever else the line
+     * says. ⚠ THE REST OF THE LINE IS ALLOWED. This grammar knew one word, so
+     * "```huginn-project 34f88e7484" — a lead's proposal, tagged the way the
+     * daemon requires — was not a fence at all and the whole block landed in
+     * the transcript as a paragraph of JSON, which the owner read as a call the
+     * lead had made and that had failed.
+     */
+    private val FENCE = Regex("^(`{3,}|~{3,})\\s*([A-Za-z0-9+#._-]*)(?:\\s+(\\S.*?))?\\s*$")
+    /** A closing fence carries no words (CommonMark): the same bar, at least as long. */
+    private val CLOSE = Regex("^(`{3,}|~{3,})\\s*$")
+    private fun closes(line: String, open: String): Boolean {
+        val bar = CLOSE.matchEntire(line)?.groupValues?.get(1) ?: return false
+        return bar[0] == open[0] && bar.length >= open.length
+    }
     private val HEADING = Regex("^(#{1,6})\\s+(.*)$")
     private val BULLET = Regex("^(\\s{0,3})([-*+]|\\d{1,2}[.)])\\s+(.*)$")
     private val QUOTE = Regex("^>\\s?(.*)$")

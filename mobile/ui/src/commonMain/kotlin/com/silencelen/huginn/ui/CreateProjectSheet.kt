@@ -58,8 +58,15 @@ fun CreateProjectSheet(
     modifier: Modifier = Modifier,
     /** Slugs already in use. Two different display names can land on one. */
     takenSlugs: List<String> = emptyList(),
-    /** Pre-filled directory: the shell's own default (the daemon's WORKDIR). */
+    /** Pre-filled directory. Null leaves the field empty, and empty means the
+     *  daemon makes the project its own folder — see [projectsDir]. */
     defaultCwd: String? = null,
+    /**
+     * Where the daemon makes a project's folder when none is named (`GET
+     * /v1/projects` → `dir`), so the empty field can say the path it will use.
+     * Null on an older daemon, and the field then says only what happens.
+     */
+    projectsDir: String? = null,
     /** In flight — the button is held so a double tap cannot make two projects. */
     busy: Boolean = false,
     /** The daemon's last refusal, drawn UNDER the fields, exactly as it was written. */
@@ -139,7 +146,7 @@ fun CreateProjectSheet(
                     onValueChange = { cwd = it },
                     singleLine = true,
                     label = { Text("Directory") },
-                    placeholder = { Text("the host's own working directory") },
+                    placeholder = { Text(ProjectRules.newFolderWords(projectsDir, name)) },
                     isError = cwdProblem != null,
                     modifier = Modifier.fillMaxWidth(),
                 )

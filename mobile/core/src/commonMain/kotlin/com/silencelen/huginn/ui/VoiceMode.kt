@@ -160,7 +160,10 @@ object VoiceLoop {
  */
 object Speakable {
 
-    private val FENCE = Regex("```[a-zA-Z0-9_-]*\\n[\\s\\S]*?```")
+    // The whole first line: a fence may carry more than a language word (a
+    // lead's proposal carries the project's tag), and that block is the last
+    // thing anyone wants read aloud.
+    private val FENCE = Regex("```[^\\n]*\\n[\\s\\S]*?```")
     private val INLINE_CODE = Regex("`([^`]{1,80})`")
     private val LINK = Regex("\\[([^\\]]+)\\]\\([^)]+\\)")
     private val HEADING = Regex("(?m)^#{1,6}\\s+")

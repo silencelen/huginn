@@ -100,6 +100,23 @@ data class QuickActions(
     val quote: String = "",
 )
 
+/**
+ * The project a session belongs to, as the DAEMON joins it (appd 3.7.0).
+ *
+ * Null on a session outside every project, and on every row from an older
+ * daemon — which is why the client keeps a second, name-based answer beside it
+ * (`ProjectRules.splitByProject`). Five fields: enough to keep the row off the
+ * Sessions page and to say where it went, not a copy of the record.
+ */
+@Serializable
+data class SessionProject(
+    val id: String = "",
+    val name: String = "",
+    val slug: String = "",
+    val role: String = "",
+    val lead: Boolean = false,
+)
+
 @Serializable
 data class Session(
     val name: String,
@@ -159,6 +176,7 @@ data class Session(
      * it had no queue, so nothing was ever waiting.
      */
     val pendingSends: Int = 0,
+    val project: SessionProject? = null,
 )
 
 @Serializable
@@ -2740,6 +2758,12 @@ data class ProjectList(
     val projects: List<ProjectRow> = emptyList(),
     /** How many projects one host keeps. On the wire so a client can say what it is. */
     val max: Int = 0,
+    /**
+     * Where a project with no directory of its own is made — `<dir>/<slug>` —
+     * so a create sheet can say the path before the project exists. Null on a
+     * daemon older than 3.7.0, which used its working directory instead.
+     */
+    val dir: String? = null,
 )
 
 /**
