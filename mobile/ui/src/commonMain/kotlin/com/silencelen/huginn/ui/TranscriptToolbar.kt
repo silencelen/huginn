@@ -190,24 +190,25 @@ class NativeSelection {
      * verb, and which is why this is called once, at the press, and never while
      * merely drawing.
      *
-     * @param read the clipboard as it is now.
-     * @param write puts text back on the clipboard. Given the ORIGINAL contents
-     *   after a verb (nothing was copied, so nothing should have been), or the
-     *   cleaned selection for Copy itself.
+     * ⚠ THE PREVIOUS CLIPBOARD IS NEVER READ, AND SO NEVER PUT BACK. Reading a
+     * clip another app wrote is the one thing Android 12+ announces on screen
+     * ("Huginn pasted from your clipboard"), once per verb, for a paste that
+     * never happened. So a verb leaves the selection on the clipboard — exactly
+     * what a long-press Copy would have left there — instead of restoring what
+     * was under it. The only clip this reads is the one the toolkit just wrote.
+     *
+     * @param read the clipboard right after the toolkit's copy.
+     * @param write puts text on the clipboard: the cleaned selection, when
+     *   [keepOnClipboard] and the marks changed it.
      */
     fun read(read: () -> String?, write: (String) -> Unit, keepOnClipboard: Boolean): String? {
         val take = copy ?: return null
-        val before = read()
         take()
         val raw = read()
         // The marks `TableGrid` draws into its cells (D-5) become markdown rows
         // here, so a table copied out of a conversation pastes as a table.
         val text = raw?.let { QuickActionRules.copyText(it) }
-        if (keepOnClipboard) {
-            if (text != null && text != raw) write(text)
-        } else if (before != null) {
-            write(before)
-        }
+        if (keepOnClipboard && text != null && text != raw) write(text)
         return text?.takeIf { it.isNotBlank() }
     }
 }
