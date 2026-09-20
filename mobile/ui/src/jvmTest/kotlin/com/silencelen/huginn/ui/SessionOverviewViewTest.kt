@@ -77,4 +77,58 @@ class SessionOverviewViewTest {
         assertEquals("Saved", metaSaveWords(SessionMetaSaver.State.SAVED))
         assertEquals("Not saved", metaSaveWords(SessionMetaSaver.State.FAILED))
     }
+
+    // ------------------------------------------------- P-28 / P-29 the card
+
+    private fun source(): String {
+        val f = generateSequence(java.io.File("").absoluteFile) { it.parentFile }
+            .firstOrNull { java.io.File(it, "settings.gradle.kts").isFile }
+            ?.let { java.io.File(it, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/SessionOverviewView.kt") }
+        assertTrue(f != null && f.isFile, "SessionOverviewView.kt not found from ${java.io.File("").absolutePath}")
+        val text = f!!.readText()
+        // A grep that matches nothing exits 0. Assert the floor before the finding.
+        assertTrue(text.length > 10_000, "SessionOverviewView.kt read as ${text.length} chars — wrong file")
+        return text
+    }
+
+    /**
+     * ⚠⚠ A MINUTE OF SESSION IS NOT A PACE (P-28). The card read "At this pace,
+     * about 186.5M tokens more" off a 54-second sample. The RULE lives in
+     * [OverviewFormat.pace] and is tested there; what this gates is that the card
+     * actually hands it a sample, and that the "an estimate" hedge is drawn under
+     * a projection rather than under the measuring line.
+     */
+    @Test
+    fun `the pace card hands the sample in and hedges only a projection`() {
+        val body = source().substringAfter("internal fun ProjectionsCard(").substringBefore("// ------")
+        assertTrue(body.length > 500, "ProjectionsCard read as ${body.length} chars — wrong slice")
+        assertTrue("OverviewFormat.pace(rate, plan, nowMs, sampleMs)" in body, "the card extrapolates off no sample")
+        val hedge = body.indexOf("an estimate, from the current rate")
+        val guard = body.indexOf("if (pace.projected)")
+        assertTrue(hedge > 0 && guard > 0, "the gate lost its subject: hedge=$hedge guard=$guard")
+        assertTrue(guard < hedge, "the hedge is drawn under the measuring line, where there is nothing to hedge")
+        assertTrue("totals.wallMs" in source(), "the sample must be the session's own wall time")
+    }
+
+    /**
+     * ⚠ A TABLE IS NOT A SENTENCE (P-29). A turn whose reply opens with a
+     * markdown table was labelled `| Host | Role |` — twice on the review's
+     * screen. The rule is [BlockLabel]; this gates that the map and the sheet it
+     * opens both spell the label through it, because two spellings of one label
+     * is the pipes coming back on the second screen.
+     */
+    @Test
+    fun `the map and its sheet draw the same, de-piped label`() {
+        val text = source()
+        assertEquals(
+            0,
+            Regex("""\bnode\.label\.ifEmpty""").findAll(text).count(),
+            "a raw node label is drawn somewhere again",
+        )
+        assertEquals(
+            2,
+            Regex("""BlockLabel\.words\(node\.label\)""").findAll(text).count(),
+            "the row and the detail sheet each spell the label once, through BlockLabel",
+        )
+    }
 }
