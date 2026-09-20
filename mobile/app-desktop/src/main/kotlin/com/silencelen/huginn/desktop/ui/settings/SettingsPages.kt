@@ -137,6 +137,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         nowMs = System.currentTimeMillis(),
         summary = "The addresses that reach huginn, tried in this order.",
         highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
+        modifier = revealMark("host.route"),
         finding = resolving,
         note = routeNote,
         suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
@@ -150,6 +151,7 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         secret = true,
         summary = "The bearer this app sends with every request.",
         highlighted = SettingsRowStyle.isHighlighted("host.token", mark),
+        modifier = revealMark("host.token"),
         trailing = {
             Button(onClick = { scope.launch { settings.setToken(token); message = "token saved" } }) {
                 Text("Save token")
@@ -229,6 +231,7 @@ fun ColumnScope.UsagePage(store: AppStore, mark: String?) {
         onOpen = { store.openView(View.STATUS) },
         summary = "What the plan is and how much of it is spent.",
         highlighted = SettingsRowStyle.isHighlighted("usage.plan", mark),
+        modifier = revealMark("usage.plan"),
         trailingText = "Status",
     )
 
@@ -250,7 +253,13 @@ fun ColumnScope.UsagePage(store: AppStore, mark: String?) {
         models = models,
         busy = busy,
         note = note,
-        modifier = Modifier.padding(top = 8.dp),
+        // ⚠ D-23, THE SECTION RATHER THAN THE ROW. Seventeen catalog rows are
+        // drawn in here and its signature has nowhere to put "and mark this one",
+        // so a hit on any of them — `usage.keep-awake` is the one the review
+        // searched for — reveals the FORM. That is section-accurate rather than
+        // row-accurate and says so; making it exact means giving the shared
+        // section a mark, which is the phone's screen too.
+        modifier = revealSection { it != "usage.plan" }.padding(top = 8.dp),
         onSave = { edited ->
             scope.launch {
                 busy = true
@@ -362,7 +371,7 @@ fun ColumnScope.ChatsPage(store: AppStore, mark: String?) {
         summary = status?.softEndPhrase?.takeIf { it.isNotBlank() }
             ?: "What huginn types into a session that is winding down. Set on the host.",
         highlighted = SettingsRowStyle.isHighlighted("chats.soft-end", mark),
-        modifier = Modifier.padding(top = 10.dp),
+        modifier = revealMark("chats.soft-end").padding(top = 10.dp),
     )
 }
 
@@ -387,10 +396,12 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
         title = "Claim the notification route",
         checked = notifyEnabled,
         onCheckedChange = { scope.launch { settings.setNotifyEnabled(it) } },
-        summary = if (!notifyEnabled) "off — huginn falls back to Telegram"
-        else if (present) "claiming: this window has been attended recently"
-        else "not claiming: window hidden or unattended, so Telegram stays live",
+        // ⚠ D-31. TOLD THE SAME FACT AS THE ROW UNDER IT. "claiming: this window
+        // has been attended recently" sat directly above "How notifications reach
+        // this computer — none". See [Notifiers.claimWords].
+        summary = Notifiers.claimWords(notifyEnabled, present, AppLog.notifierName),
         highlighted = SettingsRowStyle.isHighlighted("notify.claim-route", mark),
+        modifier = revealMark("notify.claim-route"),
     )
     // ⚠ THE FACT THIS PAGE WAS PROMISED AND DID NOT CARRY. The notification setup
     // step's failure text says "Notifications in Settings shows which path this
@@ -404,6 +415,7 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
         value = Notifiers.pathWords(AppLog.notifierName),
         summary = Notifiers.pathSummary(AppLog.notifierName),
         highlighted = SettingsRowStyle.isHighlighted(Notifiers.PATH_ROW_ID, mark),
+        modifier = revealMark(Notifiers.PATH_ROW_ID),
     )
 }
 
@@ -420,6 +432,7 @@ fun ColumnScope.DevicesPage(store: AppStore, mark: String?) {
         onOpen = { store.openView(View.DEVICES) },
         summary = "Every machine enrolled with huginn, and what each may do.",
         highlighted = SettingsRowStyle.isHighlighted("devices.fleet", mark),
+        modifier = revealMark("devices.fleet"),
         trailingText = devices.takeIf { it.isNotEmpty() }?.let { SettingsSummaries.of("devices", SettingsFacts(devices = it)) },
     )
 
@@ -453,6 +466,7 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
             "request. It is root-equivalent on the daemon, which is why the address it travels to " +
             "is on an allowlist.",
         highlighted = SettingsRowStyle.isHighlighted("privacy.token", mark),
+        modifier = revealMark("privacy.token"),
     )
 
     SettingsActionRow(
@@ -465,6 +479,7 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
         summary = "Unenrols this machine from huginn and forgets the token here. Your chats " +
             "and sessions stay on huginn.",
         highlighted = SettingsRowStyle.isHighlighted("privacy.remove-this-computer", mark),
+        modifier = revealMark("privacy.remove-this-computer"),
     )
     outcome?.let {
         Text(
@@ -560,6 +575,16 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
             else -> "Closing the window quits huginn, and the watch stream stops with it."
         },
         highlighted = SettingsRowStyle.isHighlighted("appearance.close-to-tray", mark),
+        modifier = revealMark("appearance.close-to-tray"),
+        // ⚠ D-21. THE COPY FOLLOWED THE MACHINE AND THE SWITCH DID NOT. The row
+        // said "there is no system tray on this computer" and left a live, ON
+        // toggle under it — a control whose only possible effect is to persist a
+        // preference that `Main.kt` will ignore for the life of this install. A
+        // setting that cannot do anything is read as a setting that is broken, so
+        // it greys out and the summary above says why. The VALUE is untouched: a
+        // laptop that gains a tray (a different desktop session, a Windows
+        // install) gets back exactly the answer its owner last gave.
+        enabled = isTraySupported,
     )
     SettingsNavRow(
         id = "appearance.shortcuts",
@@ -567,6 +592,7 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         onOpen = { store.openCheatsheet() },
         summary = "Every chord this window answers to.",
         highlighted = SettingsRowStyle.isHighlighted("appearance.shortcuts", mark),
+        modifier = revealMark("appearance.shortcuts"),
         trailingText = "F1",
     )
     // Beside close-to-tray on purpose: the two of them are the whole answer to
@@ -660,7 +686,7 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         },
         summary = note ?: "Everything about this client's state, without the token.",
         highlighted = SettingsRowStyle.isHighlighted("updates.copy-diagnostics", mark),
-        modifier = Modifier.padding(top = 12.dp),
+        modifier = revealMark("updates.copy-diagnostics").padding(top = 12.dp),
     )
     // ⚠ A PATH IS IDENTIFIED BY ITS END. This row ellipsised a long log path at
     // 320dp and offered nothing else — no wrap, no copy, no way to widen it —
@@ -673,6 +699,7 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         value = AppLog.path ?: "memory only",
         summary = if (AppLog.path == null) "The log file could not be opened, so it is kept in memory." else null,
         highlighted = SettingsRowStyle.isHighlighted("updates.log-path", mark),
+        modifier = revealMark("updates.log-path"),
         maxLines = 4,
         onCopy = AppLog.path?.let { path -> { clipboard.setText(AnnotatedString(path)) } },
     )
@@ -682,6 +709,7 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         value = if (DesktopSettings.isPackaged()) "packaged build" else "running from source",
         summary = store.settings.path,
         highlighted = SettingsRowStyle.isHighlighted("updates.install-path", mark),
+        modifier = revealMark("updates.install-path"),
     )
     SettingsReadOnlyRow(
         id = "updates.client-id",
@@ -689,6 +717,7 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         value = store.settings.clientIdNow(),
         summary = "What the daemon lists this client's check-ins by.",
         highlighted = SettingsRowStyle.isHighlighted("updates.client-id", mark),
+        modifier = revealMark("updates.client-id"),
     )
     // What the launch-time CLI sync did, when it did anything: the CLI on this
     // machine rides along with the app instead of aging in place.
@@ -698,6 +727,16 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
             title = "CLI sync",
             value = it,
             highlighted = SettingsRowStyle.isHighlighted("updates.cli-sync", mark),
+            modifier = revealMark("updates.cli-sync"),
+            // ⚠ D-30. IT ENDED IN "huginn-l…" AND THAT WAS THE WHOLE ROW. This
+            // value names the files that were replaced on the reader's own
+            // machine, and at the default two lines the list was cut mid-name
+            // with no tooltip, no expand and nothing to copy — a report that
+            // cannot be read is not a report. Four lines, the same allowance the
+            // log path above it gets for the same reason, and the value goes to
+            // the clipboard whole whatever it wraps to.
+            maxLines = 4,
+            onCopy = { clipboard.setText(AnnotatedString(it)) },
         )
     }
 }
@@ -715,6 +754,7 @@ fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
         value = store.updater.installedVersion,
         summary = "This app.",
         highlighted = SettingsRowStyle.isHighlighted("about.version", mark),
+        modifier = revealMark("about.version"),
     )
     SettingsReadOnlyRow(
         id = "about.host-version",
@@ -722,6 +762,7 @@ fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
         value = status?.appdVersion ?: "not answering",
         summary = "The huginn daemon this client is talking to.",
         highlighted = SettingsRowStyle.isHighlighted("about.host-version", mark),
+        modifier = revealMark("about.host-version"),
     )
     SettingsReadOnlyRow(
         id = "about.repo",
@@ -732,11 +773,13 @@ fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
         // typo must not be able to move it.
         summary = "Where this build and its updates come from. Not editable, by design.",
         highlighted = SettingsRowStyle.isHighlighted("about.repo", mark),
+        modifier = revealMark("about.repo"),
     )
     SettingsReadOnlyRow(
         id = "about.what-this-is",
         title = "What huginn is",
         summary = "A front end for Claude Code sessions running on your own machine.",
         highlighted = SettingsRowStyle.isHighlighted("about.what-this-is", mark),
+        modifier = revealMark("about.what-this-is"),
     )
 }

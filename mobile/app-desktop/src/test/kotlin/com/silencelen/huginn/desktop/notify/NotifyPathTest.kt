@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.notify
 import com.silencelen.huginn.settings.SettingsCatalog
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -102,5 +103,73 @@ class NotifyTestRefusalTest {
     @Test
     fun `a live backend is asked rather than refused`() {
         assertEquals(null, Notifiers.testRefusal(Anywhere()))
+    }
+}
+
+/**
+ * ⚠ D-31. TWO ADJACENT SENTENCES THAT CONTRADICTED EACH OTHER.
+ *
+ * Settings → Notifications read "Claim the notification route — claiming: this
+ * window has been attended recently" directly above "How notifications reach
+ * this computer — **none** — nothing on this computer can show a notification".
+ * Both were true of their own state and neither was true of the machine: the
+ * claim described PRESENCE and the row described the BACKEND, and nothing on the
+ * page said those were different questions.
+ *
+ * The daemon claim was already gated by `Notifier.canDeliver` — this is that same
+ * gate said out loud, in the row that was claiming.
+ */
+class NotifyClaimWordsTest {
+
+    @Test
+    fun `an attended window with nowhere to post does not claim to be claiming`() {
+        val said = Notifiers.claimWords(enabled = true, present = true, name = null)
+        assertFalse(said.startsWith("claiming:"), "this is the sentence that contradicted the row below: $said")
+        assertTrue(
+            said.contains("no way to show a notification"),
+            "it has to agree with the path row under it: $said",
+        )
+        assertTrue(said.contains("Telegram"), "and where attention goes instead: $said")
+        // ⚠ AND IT IS NOT THAT ROW'S SENTENCE VERBATIM. Two identical paragraphs
+        // stacked is the other way to make a page unreadable: this row says the
+        // consequence for the control it is attached to, the row below says why.
+        assertTrue(
+            said != Notifiers.pathSummary(null),
+            "the claim row must not be a copy of the path row",
+        )
+    }
+
+    @Test
+    fun `an attended window with a real backend still says it is claiming`() {
+        assertEquals(
+            "claiming: this window has been attended recently",
+            Notifiers.claimWords(enabled = true, present = true, name = "libnotify"),
+        )
+    }
+
+    @Test
+    fun `unattended is unattended, and says which way attention goes`() {
+        val said = Notifiers.claimWords(enabled = true, present = false, name = "libnotify")
+        assertTrue(said.startsWith("not claiming"), said)
+        assertTrue(said.contains("Telegram"), said)
+    }
+
+    /**
+     * The reader's own choice outranks the machine's: "off" is a thing they did
+     * and stays the first thing the row says about it.
+     */
+    @Test
+    fun `turned off reads as turned off whatever the machine can do`() {
+        val off = "off — huginn falls back to Telegram"
+        assertEquals(off, Notifiers.claimWords(enabled = false, present = true, name = "libnotify"))
+        assertEquals(off, Notifiers.claimWords(enabled = false, present = false, name = null))
+    }
+
+    @Test
+    fun `a blank backend name is no backend, the same answer pathWords gives`() {
+        assertEquals(
+            Notifiers.claimWords(enabled = true, present = true, name = null),
+            Notifiers.claimWords(enabled = true, present = true, name = "  "),
+        )
     }
 }
