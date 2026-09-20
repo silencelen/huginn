@@ -8,7 +8,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -47,8 +46,11 @@ import kotlin.math.roundToInt
 class SettingsReveal internal constructor(
     /** The row a search hit is arriving at, or null when this is an ordinary open. */
     private val mark: String?,
-    private val scroll: ScrollState,
-    private val scope: CoroutineScope,
+    /** Where the pane is scrolled to now, and how far it can go. */
+    private val here: () -> Int,
+    private val extent: () -> Int,
+    /** Take the pane there. A launch into the composition's scope, in the real thing. */
+    private val goTo: (Int) -> Unit,
 ) {
 
     private var paneTop: Float? = null
@@ -68,22 +70,38 @@ class SettingsReveal internal constructor(
     /**
      * The marked row has been laid out at [topInRoot] — go there.
      *
-     * Short of the top by [MARGIN_DP] so the row does not arrive flush against
-     * the pane's edge reading as the first thing on a page rather than as the
-     * thing that was found. Clamped, because a match near the end of a short page
-     * cannot be scrolled to the top and must not leave the pane blank trying.
+     * @return whether this call moved the pane. False for the second and every
+     *   later layout pass of one arrival, and false before the pane has said
+     *   where its own top is.
      */
-    fun target(topInRoot: Float) {
-        val top = paneTop ?: return
-        if (done) return
+    fun target(topInRoot: Float): Boolean {
+        val top = paneTop ?: return false
+        if (done) return false
         done = true
-        val want = (scroll.value + (topInRoot - top) - MARGIN_DP).roundToInt()
-        scope.launch { scroll.animateScrollTo(want.coerceIn(0, scroll.maxValue)) }
+        goTo(scrollTarget(here(), top, topInRoot, extent()))
+        return true
     }
 
-    private companion object {
+    companion object {
+
         /** Breathing room above the row that was found. One settings row's height. */
-        const val MARGIN_DP = 44f
+        const val MARGIN_DP: Float = 44f
+
+        /**
+         * Where the pane has to be scrolled to for a row at [rowTop] to be near
+         * the top of it — all four numbers in the units they arrive in.
+         *
+         * Pure, because it is the whole of the decision and the only part that
+         * can be wrong arithmetically: the row and the pane report root
+         * coordinates, which move as the pane scrolls, so the offset is a
+         * DIFFERENCE added to where the pane already is. Clamped, because a
+         * match near the end of a short page cannot be scrolled to the top and
+         * must not leave the pane blank trying.
+         */
+        fun scrollTarget(current: Int, paneTop: Float, rowTop: Float, max: Int): Int =
+            (current + (rowTop - paneTop) - MARGIN_DP)
+                .roundToInt()
+                .coerceIn(0, max.coerceAtLeast(0))
     }
 }
 
@@ -97,7 +115,17 @@ class SettingsReveal internal constructor(
 @Composable
 fun rememberSettingsReveal(mark: String?, scroll: ScrollState): SettingsReveal {
     val scope = rememberCoroutineScope()
-    return remember(mark, scroll) { SettingsReveal(mark, scroll, scope) }
+    return remember(mark, scroll) {
+        SettingsReveal(
+            mark = mark,
+            here = { scroll.value },
+            extent = { scroll.maxValue },
+            // ANIMATED, not snapped: a pane that teleports leaves the reader with
+            // no idea whether they are above or below where they were, and the
+            // row they were sent to is then just a row.
+            goTo = { scope.launch { scroll.animateScrollTo(it) } },
+        )
+    }
 }
 
 /**
