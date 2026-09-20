@@ -84,7 +84,9 @@ Restoring it needs the terminal's **title stack** (`CSI 22 t` / `CSI 23 t`): the
 
 A **project** is a cluster of sessions with roles and a lead that sizes the work. The lead is a
 real Claude session: you give it a brief, it proposes the members — roles, first prompts,
-directories — and *you* approve the proposal. Nothing is spawned without that approval.
+directories — and *you* approve the proposal: from the project's page in the app (**Spawn**),
+from the proposal notification, or with `huginn projects spawn`. Nothing is spawned without that
+approval, and the lead says so in its own words when the proposal is ready.
 
 | Command | What it does |
 |---|---|
@@ -99,9 +101,14 @@ directories — and *you* approve the proposal. Nothing is spawned without that 
   sizes the project from. `-` reads it from stdin, so a brief in a file can be piped in.
 - `--kind` is one of `software`, `infra`, `hardware`, `docs`, `research`, `other` (default
   `other`). It labels the cluster; nothing branches on it.
-- `--cwd` must be a directory Claude Code has already been **trusted** in — the folder-trust
+- `--cwd` is optional. **Left out, the project gets its own folder**: `<projects dir>/<slug>`,
+  made on creation (default `~/projects` on the daemon's host; `HUGINN_APPD_PROJECTS_DIR` moves
+  it, and `GET /v1/projects` reports it as `dir`). A directory you name must already exist.
+  Either way it must be a directory Claude Code has been **trusted** in — the folder-trust
   dialog blocks session registration entirely, so a lead launched into an untrusted directory
-  could never be messaged. The daemon refuses with the fix in its own words.
+  could never be messaged. Trust is inherited from a parent, so trusting the projects directory
+  once (open it with `claude`, accept the question) covers every project made under it. The
+  daemon refuses with the fix in its own words.
 - **`spawn` takes no member list.** The plan is the lead's, and the approval carries the
   *revision* it was given, so a proposal the lead has revised since you read it comes back "the
   proposal has changed" instead of spawning sessions you never saw. To change the plan, talk to
@@ -112,6 +119,11 @@ directories — and *you* approve the proposal. Nothing is spawned without that 
   `--now` ends them outright, `--keep-sessions` deletes only the record and prints the names of
   the sessions it left running. A member sitting on a dialog cannot be handed the phrase — it is
   named, and the exit status is non-zero.
+- **Project sessions live in Projects, not in Sessions.** On the phone and the desktop the
+  Sessions page lists only the sessions outside every project and says, in one line under the
+  list, how many are inside; a lead or a member is reached from its project's dashboard. The
+  daemon marks every session-list row with its `project` (appd 3.7.0), so the two pages cannot
+  disagree about who belongs where. `huginn projects show <project>` names them for the terminal.
 - Exit codes: **1** a refusal, or a spawn/end that only partly succeeded; **2** the daemon is not
   answering; **3** the daemon is too old to have Projects.
 

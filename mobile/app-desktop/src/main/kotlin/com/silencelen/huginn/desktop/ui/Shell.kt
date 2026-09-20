@@ -76,6 +76,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.ProjectRow
+import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.data.DraftBook
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Round
@@ -187,6 +188,15 @@ fun Shell(store: AppStore) {
     // answered hides the door, because an icon that appears and then vanishes
     // moves every icon under it while somebody is reaching for one.
     val projectsAvailable by store.projectsAvailable.collectAsState()
+    val projectMembers by store.projectMembers.collectAsState()
+    // ⚠ PROJECT SESSIONS ARE NOT ON THE SESSIONS PAGE (owner rule, 2026-09-19).
+    // They live in Projects; the list, its rail badge and its count line show
+    // only the rest, plus one line saying how many are inside — see
+    // ProjectRules.splitByProject. The palette still knows every session.
+    val sessionSplit = remember(sessions, projects, projectMembers) {
+        ProjectRules.splitByProject(sessions, projects, projectMembers)
+    }
+    val listedSessions = sessionSplit.outside
     val appsAvailable by store.appsAvailable.collectAsState()
     val loaded by store.listsLoaded.collectAsState()
     // Its OWN flag. The sessions list used to be told "loaded" by the chats fetch
@@ -361,8 +371,8 @@ fun Shell(store: AppStore) {
                         current = view,
                         chats = chats.size,
                         chatsRunning = chats.count { it.running },
-                        sessions = sessions.size,
-                        sessionsWaiting = sessions.count { it.state == "attention" },
+                        sessions = listedSessions.size,
+                        sessionsWaiting = listedSessions.count { it.state == "attention" },
                         rounds = rounds.size,
                         roundsWanting = rounds.count { it.lastRun?.status == "action" },
                         roundsRunning = rounds.count { it.running },
@@ -517,7 +527,9 @@ fun Shell(store: AppStore) {
                                     View.PROJECTS -> ProjectsList(store)
                                     View.SETTINGS -> SettingsNavPane(store, settingsPane)
                                     View.SESSIONS -> SessionsList(
-                                        sessions = sessions,
+                                        sessions = listedSessions,
+                                        inProjects = sessionSplit.inProjects.size,
+                                        onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
                                         loaded = sessionsLoaded,
                                         activeName = sessionName,
                                         selection = sessionSel,
@@ -670,7 +682,7 @@ fun Shell(store: AppStore) {
                     watchConnected = watchConnected,
                     notifyEnabled = notifyEnabled,
                     chats = chats,
-                    sessions = sessions,
+                    sessions = listedSessions,
                     rounds = rounds,
                     devices = devices,
                     pads = pads,
