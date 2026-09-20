@@ -216,7 +216,7 @@ private fun ArchivedSessionRow(
                 // a control and a trap — the same rule `canRevive` follows, and
                 // the warning above this row already says why it matters.
                 if (onView != null && ArchiveRules.canView(row)) RowAction("View", onView)
-                if (row.resumeCommand != null) RowAction("Copy resume command", onCopyResume)
+                if (row.resumeCommand != null) RowAction(ARCHIVE_COPY_RESUME, onCopyResume)
             }
         }
         Box {
@@ -252,6 +252,22 @@ private fun RowAction(label: String, onClick: () -> Unit) {
         )
     }
 }
+
+/**
+ * ⚠ D-25. "Copy resume co…" — A TRUNCATED LABEL, NOT A TRUNCATED VALUE.
+ *
+ * It said "Copy resume command", which at the 320 dp default list width was cut
+ * mid-word beside "Revive" and "View". [RowAction] is single-line by design — the
+ * comment at its call site records what the long form did when it was allowed to
+ * wrap, four lines of button in a row of three — so the fix is a label that fits
+ * rather than lines to fit it in.
+ *
+ * "resume" is the half that had to survive: it is the verb of the
+ * `claude --resume` command this copies, which [ARCHIVE_EMPTY] names in full one
+ * screen above. "Copy command" would have fitted too and would have dropped the
+ * only word saying which command.
+ */
+const val ARCHIVE_COPY_RESUME: String = "Copy resume"
 
 /** What a section with nothing in it says, so an empty list is not a broken one. */
 const val ARCHIVE_EMPTY: String =

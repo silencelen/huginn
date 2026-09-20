@@ -167,8 +167,43 @@ class SetupControllerTest {
         // ⚠ NOT A PASS. Turning serving on is a human's click on the consent
         // card, and a step that went green on "it could" would claim a machine
         // is serving models it has not downloaded.
-        assertEquals(StepStatus.Pending, c.state.value.statusOf(SetupStep.LOCAL_AI))
-        assertEquals("can serve, 4200 MB", c.note.value)
+        //
+        // ⚠⚠ AND NOT Pending EITHER (D-15). It was, and the probe's answer went
+        // to a NOTE — which is not part of the step's state, so the rail row
+        // read "not checked yet" beside a printed verdict, the tally counted
+        // nothing, and the button still offered the check that had just run.
+        // `StepStatus.Checked` is the state the flow was missing.
+        assertEquals(StepStatus.Checked("can serve, 4200 MB"), c.state.value.statusOf(SetupStep.LOCAL_AI))
+        assertEquals("can serve, 4200 MB", c.note.value, "and it is still said under the control")
+    }
+
+    @Test
+    fun `a checked step moves on rather than running its check again`() {
+        // The primary button reads "Next" over a Checked step, so pressing it
+        // must advance. It used to re-enter `run`, which re-probed and put the
+        // reader back exactly where they were.
+        val c = controller(probes = FakeProbes(localAiResult = LocalAiOutcome.Offered("can serve, 4200 MB")))
+        c.rerun(at = SetupStep.LOCAL_AI)
+        c.primary()
+        c.primary()
+        assertEquals(SetupStep.NOTIFY, c.state.value.current, "it re-ran the probe instead of moving on")
+        // …and the answer it already has is kept behind it, un-rewritten.
+        assertEquals(StepStatus.Checked("can serve, 4200 MB"), c.state.value.statusOf(SetupStep.LOCAL_AI))
+        assertTrue(
+            SetupFlow.summary(c.state.value).contains("1 waiting on you"),
+            SetupFlow.summary(c.state.value),
+        )
+    }
+
+    @Test
+    fun `declining after the check records the decline, not the check`() {
+        // The other half of the choice. "Skip for now" is an ANSWER and must
+        // overwrite the machine's half-answer with the person's whole one.
+        val c = controller(probes = FakeProbes(localAiResult = LocalAiOutcome.Offered("can serve, 4200 MB")))
+        c.rerun(at = SetupStep.LOCAL_AI)
+        c.primary()
+        c.skip()
+        assertEquals(StepStatus.Skipped(), c.state.value.statusOf(SetupStep.LOCAL_AI))
     }
 
     @Test
