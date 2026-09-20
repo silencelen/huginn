@@ -17,8 +17,9 @@ TOKEN_FILE=/etc/huginn-appd/token
 # ---- leaked test daemons ----------------------------------------------------
 # A huginn-appd.js running from anywhere but $DEST is a TEST daemon some earlier
 # run left behind. Every route suite binds a port out of a pid-derived range, and
-# a leaked daemon holding one answers /v1/ping happily (ping needs no token) and
-# rejects the suite's own token — so the file that collides with it fails
+# a leaked daemon holding one refuses the suite's own token — /v1/ping is
+# authenticated like every other route, so the suite's start loop never sees its
+# 200 and then every call 401s, and the file that collides with it fails
 # wholesale with `401 unauthorized`. Twenty-five routes-headroom tests went that
 # way on 2026-09-15, and it reads like a code bug for as long as it takes someone
 # to think of running `ss`. Named and REFUSED, never killed: this script does not
