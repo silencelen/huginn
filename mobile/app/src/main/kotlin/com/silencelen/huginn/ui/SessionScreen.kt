@@ -166,6 +166,15 @@ fun SessionScreen(
      */
     draftNotice: String? = null,
     onDismissDraftNotice: () -> Unit = {},
+    /**
+     * ⚠ P-19. "Wrap-up held — it asked a question." The daemon abandons an
+     * auto-end when the session asks something and reports it only by dropping
+     * `softEnding`, which is also what a wrap-up that WORKED looks like — so a
+     * person who tapped Wrap up and put the phone down believed the session had
+     * ended. `WrapUpWatch` tells the two apart.
+     */
+    wrapUpNotice: String? = null,
+    onDismissWrapUpNotice: () -> Unit = {},
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -262,6 +271,8 @@ fun SessionScreen(
                     queueNote = queueNote,
                     draftNotice = draftNotice,
                     onDismissDraftNotice = onDismissDraftNotice,
+                    wrapUpNotice = wrapUpNotice,
+                    onDismissWrapUpNotice = onDismissWrapUpNotice,
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -356,6 +367,8 @@ private fun SessionConversation(
     queueNote: String? = null,
     draftNotice: String? = null,
     onDismissDraftNotice: () -> Unit = {},
+    wrapUpNotice: String? = null,
+    onDismissWrapUpNotice: () -> Unit = {},
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -711,6 +724,32 @@ private fun SessionConversation(
             // the keyboard and navigation inset, so anything after it is laid out
             // under the keyboard. In the error ink, because the thing that
             // happened is that two people's sentences were submitted as one.
+            // ⚠ P-19, in the same slot and for the same reason: a fact about this
+            // session the reader has to be told, above the input row because the
+            // row owns the keyboard inset.
+            wrapUpNotice?.let {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismissWrapUpNotice, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Dismiss the notice",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
             draftNotice?.let {
                 Row(
                     Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
