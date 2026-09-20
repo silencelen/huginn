@@ -10,6 +10,7 @@ import com.silencelen.huginn.ui.OverviewFormat
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -24,6 +25,9 @@ import kotlin.test.assertTrue
 class OverviewFormatTest {
 
     private val now = 1_756_000_000_000L
+
+    /** A sample long enough that the pace card is allowed to extrapolate at all. */
+    private val HOUR = 60 * 60 * 1000L
     private fun iso(offsetMs: Long): String {
         // Hand-built so the test does not depend on a date library the common
         // source set does not have. 2025-08-24T02:26:40Z plus the offset.
@@ -99,7 +103,9 @@ class OverviewFormatTest {
     @Test
     fun `the sentence hedges, names the window, and carries no money`() {
         val p = plan(PlanLimit(kind = "weekly_all", group = "weekly", label = "Current week, all models", resetsAt = iso(7_200_000)))
-        val line = OverviewFormat.paceLine(GraphRate(tokensPerMin10 = 1_000), p, now)!!
+        val pace = OverviewFormat.pace(GraphRate(tokensPerMin10 = 1_000), p, now, HOUR)!!
+        assertTrue(pace.projected, "an hour of session is a sample, not a guess")
+        val line = pace.line
         assertTrue(line.startsWith("At this pace,"), line)
         assertTrue(line.contains("120.0k tokens"), line)
         assertTrue(line.contains("Current week, all models"), line)
@@ -112,8 +118,47 @@ class OverviewFormatTest {
         // A session that paused for a coffee has no 10-minute rate. Falling back
         // beats printing nothing on a screen somebody opened to see the pace.
         val p = plan(PlanLimit(kind = "weekly_all", group = "weekly", label = "Current week", resetsAt = iso(3_600_000)))
-        val line = OverviewFormat.paceLine(GraphRate(tokensPerMin10 = 0, tokensPerMin60 = 600), p, now)
+        val line = OverviewFormat.pace(GraphRate(tokensPerMin10 = 0, tokensPerMin60 = 600), p, now, HOUR)?.line
         assertTrue(line!!.contains("36.0k tokens"), line)
+    }
+
+    /**
+     * ⚠⚠ A MINUTE OF SESSION IS NOT A PACE (P-28).
+     *
+     * The walk's card read "At this pace, about 186.5M tokens more" off a
+     * 54-second, one-turn sample — and the two burn figures beside it were
+     * identical, which is what a session younger than the shorter window always
+     * produces. The arithmetic was right and the claim was not.
+     */
+    @Test
+    fun `a sample shorter than five minutes measures rather than projects`() {
+        val p = plan(PlanLimit(kind = "weekly_all", group = "weekly", label = "Current week", resetsAt = iso(7_200_000)))
+        val rate = GraphRate(tokensPerMin10 = 69_700, tokensPerMin60 = 69_700)
+
+        val thin = OverviewFormat.pace(rate, p, now, 54_000)!!
+        assertEquals(OverviewFormat.MEASURING, thin.line)
+        assertFalse(thin.projected, "the hedge belongs under a projection, and there is none")
+        assertTrue(!thin.line.contains("tokens more"), "no figure travels off a minute: ${thin.line}")
+
+        // The boundary, both sides of it.
+        assertEquals(
+            OverviewFormat.MEASURING,
+            OverviewFormat.pace(rate, p, now, OverviewFormat.MIN_SAMPLE_MS - 1)!!.line,
+        )
+        assertTrue(
+            OverviewFormat.pace(rate, p, now, OverviewFormat.MIN_SAMPLE_MS)!!.projected,
+            "five minutes is the floor, not something to clear",
+        )
+    }
+
+    @Test
+    fun `a thin sample with nothing to count down to still says nothing`() {
+        // Silence beats "measuring a pace" against a limit this daemon never sent.
+        assertNull(OverviewFormat.pace(GraphRate(tokensPerMin10 = 1_000), null, now, 1_000))
+        assertNull(
+            OverviewFormat.pace(GraphRate(), plan(PlanLimit(kind = "weekly_all", resetsAt = iso(7_200_000))), now, 1_000),
+            "an idle session has no pace to measure",
+        )
     }
 
     @Test
