@@ -130,10 +130,49 @@ class ArchivedSessionsViewTest {
         )
     }
 
+    // ------------------------------------------------------- the row's verbs
+
+    /**
+     * ⚠ D-25. A TRUNCATED BUTTON LABEL, NOT A TRUNCATED VALUE.
+     *
+     * The third action rendered as "Copy resume co…" at the default 320 dp list
+     * width. [RowAction] is single-line on purpose — the header above it records
+     * what "Copy resume command" wrapped to four lines did to the row — so the
+     * only honest fix is a label that fits beside the other two.
+     *
+     * The word that had to survive is "resume": it is the verb in the
+     * `claude --resume` command this copies, which [ARCHIVE_EMPTY] names in full
+     * one screen above.
+     */
+    @Test
+    fun `the copy verb fits beside the other two`() {
+        assertEquals("Copy resume", ARCHIVE_COPY_RESUME)
+        assertTrue(
+            ARCHIVE_COPY_RESUME.length <= 12,
+            "'Revive', 'View' and this share one 320dp row: $ARCHIVE_COPY_RESUME",
+        )
+        assertTrue(
+            ARCHIVE_COPY_RESUME.contains("resume", ignoreCase = true),
+            "the action's meaning is the resume command: $ARCHIVE_COPY_RESUME",
+        )
+        assertTrue(
+            source().contains("RowAction(ARCHIVE_COPY_RESUME, onCopyResume)"),
+            "the row spells its own label again, so this constant guards nothing",
+        )
+    }
+
     @Test
     fun `the row asks for the plain form rather than drawing the markdown`() {
         // A source gate, because the drawing itself has no test harness in this
         // module. THE CALL is the rule: `Text(row.lastMessage)` is the defect.
+        assertTrue(
+            source().contains("Markdown.plainInline(it)"),
+            "the summary is drawn as raw markdown again",
+        )
+    }
+
+    /** The composable's own source — the only harness these two gates have. */
+    private fun source(): String {
         val root = generateSequence(File("").absoluteFile) { it.parentFile }
             .firstOrNull { File(it, "settings.gradle.kts").isFile }
             ?: error("cannot find the gradle root from ${File("").absolutePath}")
@@ -141,9 +180,6 @@ class ArchivedSessionsViewTest {
         assertTrue(f.isFile, "ArchivedSessionsView.kt not found at ${f.absolutePath}")
         val text = f.readText()
         assertTrue(text.length > 3_000, "read as ${text.length} chars — wrong file")
-        assertTrue(
-            text.contains("Markdown.plainInline(it)"),
-            "the summary is drawn as raw markdown again",
-        )
+        return text
     }
 }
