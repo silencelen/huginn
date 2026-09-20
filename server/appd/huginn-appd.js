@@ -1002,9 +1002,11 @@ function restoreArchivedTranscript(id, cwd) {
   if (!fs.existsSync(copy)) return { restored: false, reason: 'no transcript was kept for this archive' };
   const existing = findTranscriptFile(id);
   if (existing) return { restored: false, reason: 'Claude Code still has its own copy' };
-  const slug = String(cwd || WORKDIR).replace(/\//g, '-');
-  const dir = path.join(os.homedir(), '.claude', 'projects', slug);
-  const dst = path.join(dir, `${id}.jsonl`);
+  // ⚠ UNDER CLAUDE_DIR, NOT os.homedir(). See archiveLib.transcriptTarget: this
+  // wrote into the owner's real ~/.claude/projects/ even with
+  // HUGINN_APPD_CLAUDE_DIR set, so any archive test contaminated the live
+  // transcript store with a fixture conversation.
+  const { dir, file: dst } = archiveLib.transcriptTarget(CLAUDE_DIR, cwd || WORKDIR, id);
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.copyFileSync(copy, `${dst}.tmp`);
@@ -3915,7 +3917,11 @@ function handleClaudeEvent(meta, run_, ev) {
  */
 function findTranscriptFile(sessionId) {
   if (!/^[0-9a-f-]{36}$/.test(sessionId)) return null;
-  const root = path.join(os.homedir(), '.claude', 'projects');
+  // CLAUDE_DIR, for the same reason as restoreArchivedTranscript: pointed at a
+  // scratch directory, this looked in the REAL one — so the revive path's "does
+  // Claude Code still have its own copy?" guard was asking about the operator's
+  // store while writing into it.
+  const root = archiveLib.projectsRoot(CLAUDE_DIR);
   const slug = WORKDIR.replace(/\//g, '-');
   const first = path.join(root, slug, `${sessionId}.jsonl`);
   if (fs.existsSync(first)) return first;

@@ -10,6 +10,85 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-09-19
+
+The round-2 review's LOW findings on the CLI: help that was four different
+things, a tab title that was overwritten rather than restored, a refusal that
+described the name it had just refused as valid, and colour in a pipe.
+
+### Fixed
+- **`huginn <verb> --help` is one convention** — that verb's usage, exit 0,
+  answered by the client with no ssh. It was four: `projects` and `llm` printed
+  their full help over the wire, `headroom` printed a one-line usage on stderr
+  and exited **1**, and `archive` answered `invalid session name '--help'`. A
+  person types `--help` when something has already surprised them; two of those
+  made it look like a second mistake. The entries are extracted from the help
+  text itself, so there is no second copy to drift, and the host-side renderers
+  (`huginn-archive`, `huginn-devices`, `huginn-headroom`, `huginn-rounds`,
+  `huginn-status`) answer `--help` on stdout at exit 0 too, before they read the
+  token.
+- **The terminal tab title is put back, not overwritten.** The bash client set
+  it to `$HOSTNAME` on the way out — a string that was probably never in that
+  tab — while the README ("Restored when you leave") and USAGE both promised
+  restoration. It now pushes the title onto the terminal's own title stack
+  (`CSI 22 t`) before renaming and pops it (`CSI 23 t`) on the way out, and
+  writes nothing at all when stdout is not a terminal. A terminal without the
+  stack ignores both and keeps the session name.
+- **`huginn status` honours `NO_COLOR` and a missing TTY.** `huginn status |
+  cat`, a redirect and `$(huginn status)` all came back carrying `^[[36m`, and
+  `NO_COLOR=1` — the variable that exists to say "do not" — was never read.
+  Every sibling renderer is plain text already.
+- **The invalid-name refusal says which rule was broken.** `huginn kill -box`
+  and a 51-character name both got "use lowercase letters, digits, _ and -; no
+  dots, spaces or *" — a sentence describing a name that is, by that text,
+  valid. The dot, the first character and the 50-character cap are each named
+  now, in the daemon's own order (`nameProblem`), in both clients.
+- **`huginn llm --help` no longer prints a line of its own source** (`set -u`):
+  the help was a line RANGE over the file header, and the header grew past it.
+- **Completion:** `huginn projects <TAB>` completed to nothing in both clients —
+  for the one verb whose whole grammar is arguments; the PowerShell completer
+  had no `device` branch at all; `local` was missing `persist` (shipped 1.1.0);
+  and no alias (`ls`, `st`, `mv`, `round`, `project`, `ccusage`, `unarchive`)
+  was offered by either.
+- **`huginn device on` / `local on` no longer dead-end when `$SSH_CONNECTION` is
+  empty** — a shell running on the host itself, or an sshd wrapper that does not
+  export it. The host is asked for an address it holds, loopback is used when
+  the host *is* this machine, an explicit `--url` wins outright, and the refusal
+  names `--url`. The PowerShell twin also stopped throwing outright when that
+  probe returned fewer than three fields.
+- **`install.sh` wires `~/.zshrc` and `~/.profile`, and `uninstall` knows all
+  three.** A zsh login shell (every recent macOS) got an installed-but-invisible
+  client, and then a leftover source line pointing at a deleted file. `~/.zshrc`
+  is written when it exists or zsh is the login shell; `~/.profile` only when it
+  already exists, and with a shell-guarded line, because `/bin/sh` cannot source
+  a bash script.
+- **huginn.ps1: the last refusal that was not one.** `_Huginn-FetchFile`'s
+  failure path printed on the host stream and returned normally, so `huginn
+  device update` with no `gh` and no mirror left `$?` True and `$LASTEXITCODE`
+  0; the `local` caller tested that return value and then `return`ed, which is
+  also a success. Both are terminating refusals now (the M3 remainder from
+  1.5.0).
+- **A revive restores into the `CLAUDE_DIR` the daemon was given** (daemon-side,
+  `server/appd`). `restoreArchivedTranscript` and `findTranscriptFile` resolved
+  `~/.claude/projects` from the process's home and ignored
+  `HUGINN_APPD_CLAUDE_DIR`, so a private daemon — the CLI gate, the route
+  suites, a review's own scratch daemon — wrote its fixture transcript into the
+  **owner's real** transcript store, and the "does Claude Code still have its
+  own copy?" guard asked about that store as well.
+
+### Changed
+- `huginn help` in both clients lists what actually ships: `device
+  update|serve`, `--act-while-locked` (the whole of 1.4.0), `--url`, `local
+  persist|doctor|update|unit`, `--json` on `projects` and `headroom`, and
+  `llm`'s flags. The PowerShell help was also missing five whole verbs —
+  `rounds`, `devices`, `device`, `local`, `llm` — that have shipped for
+  versions.
+- `docs/USAGE.md` and the README say what the tab title actually does, that
+  `huginn status` drops colour for a pipe or `NO_COLOR`, that every verb takes
+  `--help`, and that the CLI has **no route book on purpose** — it is an ssh
+  front end with exactly one route, which is why a device enrolled from here and
+  one enrolled from an app can hold different addresses for the same daemon.
+
 ## [1.5.0] - 2026-09-19
 
 The round-2 review's CLI findings: both Projects write verbs could never succeed, and a refusal
