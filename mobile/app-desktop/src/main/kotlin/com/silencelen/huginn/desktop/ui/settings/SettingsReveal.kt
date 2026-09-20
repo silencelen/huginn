@@ -108,14 +108,16 @@ class SettingsReveal internal constructor(
 /**
  * The one reveal for this pane, forgotten and rebuilt on every arrival.
  *
- * Keyed on the mark so the [SettingsReveal.done] latch belongs to ONE arrival:
- * searching twice for two rows in the same drawer is two journeys, and a latch
- * shared between them would strand the second.
+ * Keyed on the mark AND on the arrival count so the [SettingsReveal.done] latch
+ * belongs to ONE journey. The mark alone is not enough: searching for a row,
+ * scrolling away and searching for the SAME row again is a second journey with
+ * an identical mark, and it would have found a reveal that had already spent
+ * itself. `SettingsPaneState.arrival` is what tells the two apart.
  */
 @Composable
-fun rememberSettingsReveal(mark: String?, scroll: ScrollState): SettingsReveal {
+fun rememberSettingsReveal(mark: String?, arrival: Int, scroll: ScrollState): SettingsReveal {
     val scope = rememberCoroutineScope()
-    return remember(mark, scroll) {
+    return remember(mark, arrival, scroll) {
         SettingsReveal(
             mark = mark,
             here = { scroll.value },
