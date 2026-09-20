@@ -419,7 +419,8 @@ fun ChatView(
         if (Suggest.visible(suggestions, busy, draft)) {
             // The strip ends in a wash rather than a hard cut: same reason as the
             // session pane's, and the pages panel narrows this column too.
-            SuggestionChips(suggestions, onPick = setDraft, modifier = rememberEdgeFade())
+            // The affordance is inside SuggestionChips now — see EdgeFade.
+            SuggestionChips(suggestions, onPick = setDraft)
         }
 
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
