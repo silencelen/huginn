@@ -224,13 +224,18 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
-  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? A daemon leaked by an earlier
-  // run answers /v1/ping happily (ping needs no token) and rejects ours, which
-  // surfaces as a dozen 401s that read like a code bug and are not one.
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The port formula gives few
+  // slots, and one leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one and refuses OUR token. /v1/ping is
+  // authenticated like every other route, so the start loop above never sees
+  // its 200 and spins its whole cap, and then every call below 401s: a wall of
+  // `401 unauthorized` that reads like a code bug and is not one. So ask an
+  // AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>`, then kill it.
   const own = await api('/v1/rounds');
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
-      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+      + `test run — it refuses our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
@@ -527,6 +532,14 @@ test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', as
   assert.equal(status, 200, JSON.stringify(body));
   assert.equal(body.queued, 0, 'a key is never queued — an interrupt at the next turn boundary is nothing');
   assert.equal(tmuxCalls('Escape').length, before + 1, 'and it went to the pane NOW');
+  // ⚠ AND THE ANSWER SAYS IT WENT (r2 L7). `delivered` was the initialised
+  // `false` leaking out of a branch raw keys never enter: the key was in the
+  // pane before this response was written, and the body said it was not. Both
+  // clients seed their send-queue note from this object (SendQueue.seed), so an
+  // Escape read back as "not sent yet" — on the one send that cannot wait, ever.
+  assert.equal(body.delivered, true, 'a raw key is delivered synchronously, and the answer must say so');
+  assert.equal(body.position, 0);
+  assert.equal(body.blockedBy, null, 'nothing held it: raw keys have no gate');
 
   // BTab and the arrows too: navigating a selector is the whole point. (A DIGIT
   // is not a named key — a dialog is answered by number through /answer, which
@@ -534,6 +547,7 @@ test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', as
   for (const k of ['BTab', 'Down', 'Up', 'Tab']) {
     const r = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ keys: [k] }) });
     assert.equal(r.status, 200, `${k}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.delivered, true, `${k} went to the pane, so the answer says delivered`);
   }
 });
 

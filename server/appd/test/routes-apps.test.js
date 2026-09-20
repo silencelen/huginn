@@ -193,13 +193,18 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
-  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? One leaked by an earlier run
-  // answers /v1/ping happily — ping needs no token — and rejects ours, which
-  // surfaces as a wall of 401s that reads like a code bug and is not one.
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The port formula gives few
+  // slots, and one leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one and refuses OUR token. /v1/ping is
+  // authenticated like every other route, so the start loop above never sees
+  // its 200 and spins its whole cap, and then every call below 401s: a wall of
+  // `401 unauthorized` that reads like a code bug and is not one. So ask an
+  // AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>`, then kill it.
   const own = await api('/v1/apps');
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
-      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+      + `test run — it refuses our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
@@ -444,17 +449,17 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
 
   // ⚠ THE LINES SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES, literally.
   //
-  // ⚠⚠ AND THE HEIMDALL HALF IS A COMMENT, NOT A RULE. The one address failing
-  // here is LOOPBACK, which never crosses the veth chain — 117.fw has no say
-  // over it and the rebind above is the entire remedy. The old code put
-  // `-source 127.0.0.1` here, a rule that could never match, which is the defect
-  // 3.5.2 removes in both its forms (that one, and naming the arrival address).
+  // ⚠⚠ AND THERE IS NO HEIMDALL HALF. The one address failing here is LOOPBACK,
+  // which never crosses the veth chain — 117.fw has no say over it and the
+  // rebind above is the entire remedy. The old code put `-source 127.0.0.1`
+  // here, a rule that could never match, which is the defect 3.5.2 removed;
+  // 3.6.1 removed the header that was still standing over the sentence saying
+  // there was nothing to add (r2 L3).
   assert.deepEqual([
     '# on huginn — 127.0.0.1 does not reach this app',
     'systemctl edit stale.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
     'systemctl restart stale.service',
     `ss -ltn | grep :${DEAD_PORT}`,
-    '# on heimdall — /etc/pve/firewall/117.fw',
     '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
   ], r.body.reachable.fix);
   assert.ok(!r.body.reachable.fix.some((l) => l.startsWith('IN ACCEPT')),
@@ -500,6 +505,19 @@ test('an app that answers everywhere can be added, and it is in the list afterwa
   assert.ok(rowOf(await list(), 'board-view'));
 });
 
+test('an unknown kind is a 400 on the wire, before any probe runs (L2)', async () => {
+  // ⚠ AND BEFORE THE NETWORK. The shape rules come first precisely so a body
+  // that cannot be a row never costs a probe — this one names an address that
+  // WOULD pass, so a 400 here also proves the order.
+  const r = await api('/v1/apps', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Hologram', url: `http://127.0.0.1:${okPort}/holo`, kind: 'hologram' }),
+  });
+  assert.equal(400, r.status, JSON.stringify(r.body));
+  assert.match(r.body.error, /kind is one of/, r.body.error);
+  assert.equal(null, rowOf(await list(), 'hologram'), 'and nothing was written');
+});
+
 test('an app that does not answer at every known address is REFUSED with 422 and the lines that would fix it', async () => {
   // ⚠ DECISION 54. The shape is fine and the world is not: `hangPort` accepts
   // the connection and says nothing, so the address this daemon's clients
@@ -515,8 +533,17 @@ test('an app that does not answer at every known address is REFUSED with 422 and
   assert.equal(false, r.body.reachable.ok, 'the refusal carries the measurement, not just a sentence');
   assert.deepEqual(['127.0.0.1'], r.body.reachable.addresses.map((a) => a.addr));
   assert.equal('timed out', r.body.reachable.addresses[0].error);
-  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl edit wedged.service')),
+  // ⚠ AND THE REMEDY IS NOT A REBIND (r2 L4). This stub ACCEPTED the connection
+  // — that is what makes it a timeout rather than a refusal — so the unit is
+  // provably bound at this address and `bind 0.0.0.0` would send the reader to
+  // an `ss -ltn` line that already says what they were told to make it say.
+  assert.ok(!r.body.reachable.fix.some((l) => /bind 0\.0\.0\.0/.test(l)),
+    `a bind line for a timeout: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.some((l) => /not refused \(timed out\)/.test(l)),
     `the remedy travels with the refusal: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl status wedged.service')),
+    'and it points at the unit that is wedged, not at its bind');
+  assert.ok(!/fix the bind first/.test(r.body.error), r.body.error);
   assert.equal(null, rowOf(await list(), 'never-answers'), 'and NOTHING was stored');
 });
 
