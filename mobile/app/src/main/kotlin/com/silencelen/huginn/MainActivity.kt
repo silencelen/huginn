@@ -27,7 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
@@ -35,6 +34,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.MonitorHeart
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -117,6 +117,7 @@ import com.silencelen.huginn.ui.ScratchpadEditorView
 import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.LocalAttachmentImages
+import com.silencelen.huginn.ui.LocalWrapUpPhrase
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.ui.OverviewDensity
@@ -272,9 +273,15 @@ class MainActivity : FragmentActivity() {
                             }
                         }
                     }
+                    // The host's wrap-up wording, so a phrase the DAEMON typed
+                    // into the pane is drawn as a system row rather than as
+                    // something the reader wrote (P-34). Null against a daemon
+                    // that does not publish one, which is the old behaviour.
+                    val wrapUpPhrase = vm.status.collectAsState().value?.softEndPhrase
                     CompositionLocalProvider(
                         LocalAttachmentImages provides vm.attachmentImages,
                         LocalUriHandler provides linkHandler,
+                        LocalWrapUpPhrase provides wrapUpPhrase,
                     ) {
                         HuginnApp(
                             target = openTarget.value,
@@ -633,6 +640,12 @@ fun HuginnApp(
     DisposableEffect(dest) {
         Foreground.chat = (dest as? Dest.Chat)?.id
         Foreground.session = (dest as? Dest.SessionView)?.name
+        // ⚠ AND REMEMBERED ACROSS A COLD START (P-35). `dest` is
+        // rememberSaveable, which holds across a fold and a rotate and loses to
+        // a force-stop, a low-memory kill and a reboot — most of the ways a
+        // phone closes an app. Written on every move, including the move BACK to
+        // the list, which stores "" so a reader who left on purpose stays left.
+        vm.rememberOpenSession((dest as? Dest.SessionView)?.name)
         // Read = dismissed. Opening the thing a notification pointed at is the
         // strongest possible form of having seen it; leaving the notification up
         // afterwards would just be a chore handed back to the reader.
@@ -645,6 +658,36 @@ fun HuginnApp(
         onDispose { Foreground.chat = null; Foreground.session = null }
     }
 
+
+    // ⚠⚠ THE SESSION THE READER LEFT OPEN, REOPENED ON A COLD START (P-35).
+    //
+    // Three guards, and each of them is a way this could be worse than not
+    // doing it at all:
+    //
+    //  * ONCE PER PROCESS (`restored`, saveable). A fold recomposes this whole
+    //    tree; re-running the restore would yank a reader who has since
+    //    navigated somewhere back into the session.
+    //  * ONLY FROM THE UNTOUCHED START (`dest is Dest.Sessions`, no `target`).
+    //    A notification tap, a share, a widget chat and the reader's own first
+    //    tap all land before the sessions list does, and a restore that
+    //    overrode any of them would be this feature fighting the person.
+    //  * ONLY IF IT IS STILL THERE. "Still there" is a question only the first
+    //    list fetch can answer — opening a pane addressing a session the daemon
+    //    no longer has is a flash of a broken screen on every launch. This is
+    //    the desktop's `restoreLanding` rule, which has held since it shipped.
+    var restored by rememberSaveable { mutableStateOf(false) }
+    val lastOpen by vm.lastOpenSession.collectAsState()
+    val sessionsForRestore by vm.sessions.collectAsState()
+    LaunchedEffect(restored, lastOpen, sessionsForRestore, target) {
+        if (restored) return@LaunchedEffect
+        val name = lastOpen ?: return@LaunchedEffect      // null = the store has not been read yet
+        if (sessionsForRestore.isEmpty()) return@LaunchedEffect
+        restored = true
+        if (name.isBlank() || target != null || dest !is Dest.Sessions) return@LaunchedEffect
+        if (sessionsForRestore.none { it.name == name }) return@LaunchedEffect
+        tab = 1
+        dest = Dest.SessionView(name)
+    }
 
     // Navigation asked for by a notification tap, applied here rather than in the
     // initial state so that a tap arriving at an app that is ALREADY open moves it
@@ -2340,11 +2383,23 @@ fun HuginnApp(
  */
 @Composable
 private fun StatusIcon(fill: com.silencelen.huginn.ui.UsageFill?) {
-    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-        Icon(Icons.Filled.MonitorHeart, contentDescription = null)
+    // ⚠⚠ THE METER MUST NOT COST HEIGHT (P-26). Stacked in a Column it added
+    // 2dp of bar and 2dp of gap, and a `NavigationBarItem` sizes itself around
+    // its icon slot — so the Status LABEL sat 5 px below the other three, on a
+    // bar whose four labels are read as one line. Drawn INSIDE the 24dp icon
+    // box instead, over the glyph's own bottom padding, the item is the same
+    // height as its neighbours whether or not there is a window to report.
+    Box(Modifier.size(24.dp), contentAlignment = androidx.compose.ui.Alignment.Center) {
+        // ⚠ AND OUTLINED, LIKE THE OTHER THREE. Chats, Sessions and Rounds all
+        // resolve to outline glyphs; a solid heart-monitor among them read as
+        // the selected one at all times, which is the one thing a bar icon must
+        // not say when it is not.
+        Icon(Icons.Outlined.MonitorHeart, contentDescription = null)
         fill?.let {
-            Spacer(Modifier.height(2.dp))
-            com.silencelen.huginn.ui.UsageFillLine(it, Modifier.width(24.dp))
+            com.silencelen.huginn.ui.UsageFillLine(
+                it,
+                Modifier.align(androidx.compose.ui.Alignment.BottomCenter).width(18.dp),
+            )
         }
     }
 }
