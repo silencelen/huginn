@@ -1,5 +1,5 @@
 [versions]
-agp = "9.1.1"
+agp = "9.3.1"
 # FCM: the only push transport Google delivers into Doze.
 google-services = "4.4.2"
 firebase-bom = "33.7.0"
