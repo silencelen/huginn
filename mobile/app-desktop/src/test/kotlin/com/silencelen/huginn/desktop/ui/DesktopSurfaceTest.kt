@@ -1034,10 +1034,17 @@ class DesktopSurfaceTest {
 
     @Test
     fun `the name help does not advertise the one character tmux eats`() {
-        // The sentence ends in a full stop, so the character is looked for the
-        // way the sentence LISTS one: " . " between the other two it offers.
+        // ⚠ IT IS THE SHARED SENTENCE NOW (`SessionNameRules.HINT`, the phone's
+        // too), which names the characters as WORDS rather than as symbols — so
+        // the dot is looked for both ways and the dash is looked for the way the
+        // sentence actually says it. The rule itself has not moved: a dotted
+        // name is rewritten by tmux and must never be offered.
         assertFalse(" . " in SESSION_NAME_HELP, "help still offers a dot: $SESSION_NAME_HELP")
-        assertTrue(" - " in SESSION_NAME_HELP, "a dash is legal and the help should say so")
+        assertFalse("dot" in SESSION_NAME_HELP.lowercase(), "help still offers a dot: $SESSION_NAME_HELP")
+        assertTrue(
+            "dash" in SESSION_NAME_HELP.lowercase(),
+            "a dash is legal and the help should say so: $SESSION_NAME_HELP",
+        )
     }
 
     // ------------------------------------------------------------- fixtures
