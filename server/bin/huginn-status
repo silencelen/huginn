@@ -7,7 +7,33 @@
 # postgres-mcp container — so a read-only status check took ~18 s and created a
 # container on another host every time it ran. It now probes the one thing it
 # reports, directly over ssh, and finishes in well under a second.
-C=$(printf '\033[36m'); G=$(printf '\033[32m'); R=$(printf '\033[31m'); Y=$(printf '\033[33m'); Z=$(printf '\033[0m')
+# --help, like every other renderer beside this one - `huginn status --help` is
+# answered in the client, but this file is also run by hand over ssh.
+case "${1:-}" in
+  -h|--help)
+    echo "usage: huginn-status"
+    echo "  This host's health: uptime, load, claude, auth, sessions, memory node, disk."
+    echo "  Colour when stdout is a terminal and NO_COLOR is unset."
+    exit 0 ;;
+  '') ;;
+  *) echo "usage: huginn-status" >&2; exit 1 ;;
+esac
+
+# ⚠ COLOUR IS FOR A TERMINAL, AND ONLY WHEN IT IS WANTED. These were set
+# unconditionally, so `huginn status | cat`, `huginn status > report.txt` and a
+# script's `$(huginn status)` all came back carrying ^[[36m - and NO_COLOR=1,
+# which exists precisely to say "do not", was never read. Every other renderer
+# here (devices, rounds, headroom, archive, projects) is plain text, so this was
+# also the only one a caller had to strip.
+#
+# The two rules are the informal standard: no colour when stdout is not a TTY,
+# and no colour when NO_COLOR is set to anything at all (no-color.org - the
+# VALUE is not consulted, only whether it is set and non-empty).
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C=$(printf '\033[36m'); G=$(printf '\033[32m'); R=$(printf '\033[31m'); Y=$(printf '\033[33m'); Z=$(printf '\033[0m')
+else
+  C=''; G=''; R=''; Y=''; Z=''
+fi
 # Optional companion memory node ("Muninn"): set HUGINN_MEMPALACE_HOST
 # (user@host) and optionally HUGINN_MEMPALACE_MARKER (a rebuild-in-progress
 # marker file on that host) in the login environment to enable the probe.
