@@ -330,6 +330,13 @@ EOF
   # The FULL run's count, never the retry's: a floor met by one file re-run on
   # its own would be no floor at all.
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
+  # After a successful single-file retry every '# fail' in the full run belonged
+  # to that file and has just been proved passing: credit them back, from the
+  # full run's own numbers, never the retry's. Without this a flake in any file
+  # bigger than the floor's margin refused a green tree (build.sh, 2026-09-19).
+  if [ -n "${RETRY_FILE:-}" ]; then
+    NODE_COUNT=$((NODE_COUNT + $(grep -oE '^# fail [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)))
+  fi
   rm -f "$NODE_LOG"
   [ "${NODE_COUNT:-0}" -ge "$APPD_MIN" ] \
     || { echo "REFUSING: server tests reported $NODE_COUNT passes, expected >= $APPD_MIN" >&2; exit 1; }
