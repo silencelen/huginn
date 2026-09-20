@@ -529,6 +529,40 @@ test('a name taken in the meantime makes the revive land on <name>2', async () =
   assert.ok(liveNames().includes(`${name}2`));
 });
 
+test('a revive under a NEW name is judged by the one name rule this daemon has (L10)', async () => {
+  // ⚠ THE LAST COPY OF A RULE THAT CHANGED IN 1.3.0. This route answered every
+  // bad name with "invalid session name (letters, digits, underscore)" — the
+  // pre-dash sentence, which does not mention the `-` that has been legal for
+  // seven releases and does not mention the `.` that is refused for a reason of
+  // its own (tmux rewrites it to `_` and exits 0, so the name you ask for is not
+  // the name you get, #103). `nameProblem` is the one function that knows which
+  // rule was broken, and the create route has used it since it was written.
+  const { name, id } = mkArchivable('named');
+  await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
+
+  const dotted = await api(`/v1/archive/${id}/revive`,
+    { method: 'POST', body: JSON.stringify({ name: `${PFX}-has.dot` }) });
+  assert.equal(400, dotted.status, JSON.stringify(dotted.body));
+  assert.match(dotted.body.error, /tmux rewrites it/, dotted.body.error);
+
+  const spaced = await api(`/v1/archive/${id}/revive`,
+    { method: 'POST', body: JSON.stringify({ name: `${PFX} spaced` }) });
+  assert.equal(400, spaced.status, JSON.stringify(spaced.body));
+  assert.match(spaced.body.error, /dash/, `the dash has been legal since 1.3.0: ${spaced.body.error}`);
+
+  const reserved = await api(`/v1/archive/${id}/revive`,
+    { method: 'POST', body: JSON.stringify({ name: 'plan' }) });
+  assert.equal(400, reserved.status, JSON.stringify(reserved.body));
+  assert.match(reserved.body.error, /reserved/, reserved.body.error);
+
+  // And a dashed name — the thing the old sentence said was illegal — works.
+  const ok = await api(`/v1/archive/${id}/revive`,
+    { method: 'POST', body: JSON.stringify({ name: `${PFX}-re-vived` }) });
+  assert.equal(201, ok.status, JSON.stringify(ok.body));
+  madeSessions.add(ok.body.name);
+  assert.equal(`${PFX}-re-vived`, ok.body.name);
+});
+
 test('a row revived under a DIFFERENT name still reads as live', async () => {
   // ⚠ THE ROW IS MATCHED ON BOTH NAMES. A revive onto a taken name lands on
   // `<name>2` and stamps revivedAs; matched on tmuxName alone the row reports a
