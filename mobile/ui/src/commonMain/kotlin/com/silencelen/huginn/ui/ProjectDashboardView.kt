@@ -394,7 +394,14 @@ fun dashboardPace(dashboard: ProjectDashboard): String? {
     if (rate.tokensPerMin10 <= 0 && rate.tokensPerMin60 <= 0) {
         return if (rate.activeRecently) "active, too little to measure a rate" else null
     }
-    val bits = mutableListOf("${rate.tokensPerMin10} tokens/min over 10m", "${rate.tokensPerMin60} over 60m")
+    // ⚠ THE APP'S NUMBER WORDS, NOT THE RAW LONG (P-33). "41383 tokens/min over
+    // 10m · 41383 over 60m" sat two cards away from "561.6k" — one screen, two
+    // number systems, and the unformatted one is the harder to read of the two.
+    // [OverviewFormat.burnWords] is what the session's own Pace card uses.
+    val bits = mutableListOf(
+        "${OverviewFormat.burnWords(rate.tokensPerMin10)} over 10m",
+        "${OverviewFormat.burnWords(rate.tokensPerMin60)} over 60m",
+    )
     if (!rate.activeRecently) bits += "nothing recent"
     return bits.joinToString(" · ")
 }
@@ -439,7 +446,7 @@ fun memberDetailLines(member: ProjectDashboardMember): List<String> {
     }
     if (member.turns > 0 || member.tokens.input > 0 || member.tokens.output > 0) {
         val work = mutableListOf("${member.turns} turns")
-        work += "${member.tokens.input + member.tokens.output} tokens"
+        work += PlanFormat.compactTokens(member.tokens.input + member.tokens.output)
         member.estCostUsd?.let { work += OverviewFormat.usd(it) }
         lines += "work  " + work.joinToString(" · ")
     }
