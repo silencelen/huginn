@@ -10573,10 +10573,29 @@ const server = http.createServer(async (req, res) => {
       if (to !== from) {
         const owner = projectOfSession(from);
         if (owner) {
+          // ⚠⚠ AND THE LEAD GETS ITS OWN SENTENCE (r2 L6). "Drop it from the
+          // project first" was said to the lead too, and
+          // `DELETE …/members/lead` answers the lead with its own 409 — "the
+          // lead is the project — delete the project instead". So the only
+          // instruction here pointed at a door this daemon holds shut, and the
+          // reader learned that by being refused a second time. A refusal that
+          // names a fix has to name one that works, and for the lead that is
+          // deleting the project (which leaves the session running) or, if it
+          // was only the label they wanted to change, renaming the project.
+          if (owner.member.role === projectsLib.LEAD_ROLE) {
+            return sendErr(res, 409,
+              `'${from}' is the LEAD session of the project "${owner.project.name}" — its name is the `
+              + 'namespace every member is registered under, and the lead cannot be dropped from its '
+              + `own project. Delete the project first (DELETE /v1/projects/${owner.project.id}, which `
+              + 'leaves the session running), then rename it. To change the project\'s own display name '
+              + `instead, PATCH /v1/projects/${owner.project.id} with {rev, name} — that never moves a `
+              + 'session name.');
+          }
           return sendErr(res, 409,
             `'${from}' is the ${owner.member.role} session of the project "${owner.project.name}" — `
             + 'its name is what the project and the peer registry know it by. Drop it from the '
-            + 'project first (DELETE /v1/projects/<id>/members/<role>), then rename it');
+            + `project first (DELETE /v1/projects/${owner.project.id}/members/${owner.member.role}), `
+            + 'then rename it');
         }
       }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);

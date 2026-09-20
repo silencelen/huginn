@@ -339,6 +339,39 @@ test('RENAMING a project member is refused, with the project named in the error'
   assert.ok(liveNames().includes(to));
 });
 
+test('the LEAD\'s rename 409 names a fix that works (L6)', async () => {
+  // ⚠⚠ THE TWO-HOP DEAD END. The member sentence — "drop it from the project
+  // first (DELETE /v1/projects/<id>/members/<role>)" — was said to the lead too,
+  // and that route answers the lead with its own 409: "the lead is the project —
+  // delete the project instead". So the only instruction the daemon gave pointed
+  // at a door the daemon holds shut, and a reader following it learns that by
+  // being refused twice. A refusal that names a fix has to name one that works.
+  const name = startPane('leadpane');
+  const id = seedProject('lrn');
+  const rec = stored(id);
+  rec.lead.name = name;
+  fs.writeFileSync(path.join(dataDir, 'projects', `${id}.json`), JSON.stringify(rec));
+
+  const to = `${PFX}-leadmoved`;
+  const r = await api(`/v1/sessions/${name}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+  assert.equal(409, r.status, JSON.stringify(r.body));
+  assert.match(r.body.error, /"Seeded lrn"/, 'the project is still named');
+  assert.ok(!/members\/lead/.test(r.body.error),
+    `it must not point at the route that refuses the lead: ${r.body.error}`);
+  assert.match(r.body.error, new RegExp(`DELETE /v1/projects/${id}\\b`),
+    `the fix is deleting the PROJECT, and the id is in the sentence: ${r.body.error}`);
+  assert.ok(liveNames().includes(name), 'and nothing moved');
+  assert.equal(false, liveNames().includes(to));
+
+  // The fix in the sentence is a fix: delete the project (the session keeps
+  // running), and the rename goes through.
+  assert.equal(200, (await api(`/v1/projects/${id}`, { method: 'DELETE' })).status);
+  assert.ok(liveNames().includes(name), 'deleting the project left the session alone');
+  const after = await api(`/v1/sessions/${name}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+  assert.equal(200, after.status, JSON.stringify(after.body));
+  madeSessions.add(to);
+});
+
 test('a session in no project renames exactly as it always did', async () => {
   // The guard must cost nothing to everything else on this host.
   const name = startPane('free');
