@@ -106,11 +106,18 @@ jobs:
       # android for the phone), :app is the phone, :app-desktop is the desktop.
       #
       # --no-daemon is the house rule for every gradle call on a build host.
+      #
+      # --rerun-tasks --no-build-cache, because the extractor only records
+      # compilation that actually EXECUTES. With `cache: gradle` above, the second
+      # run of an unchanged tree found every compile task up to date, compiled
+      # nothing, and `database finalize` refused with "this run didn't build any of
+      # it" (run 35486182909, 2026-09-20) — the same FROM-CACHE lie the release
+      # gates guard against. Recompiling four modules costs about a minute.
       - name: Build the Kotlin sources for the extractor
         if: matrix.language == 'java-kotlin'
         working-directory: mobile
         run: |
-          ./gradlew --no-daemon \
+          ./gradlew --no-daemon --rerun-tasks --no-build-cache \
             :core:compileKotlinJvm :core:compileDebugKotlinAndroid \
             :ui:compileKotlinJvm :ui:compileDebugKotlinAndroid \
             :app:compileDebugKotlin \
