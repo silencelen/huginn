@@ -221,6 +221,18 @@ test('a gate bound to a different sentinel directory is called out at startup (#
   // and /v1/headroom cheerfully reports the sentinel armed. One line at startup
   // is all this side can do; the repair is a re-run of deploy.sh.
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-gatedir-'));
+  // ⚠⚠ EVERY PATH IN THIS TEST IS SCRATCH, AND THAT IS NOT TIDINESS. Both halves
+  // used to name the REAL /var/lib/huginn-appd/headroom — the installed gate's
+  // compiled-in default — and the second spawn set no HUGINN_APPD_DATA at all,
+  // so DATA_DIR fell through to /var/lib/huginn-appd: the live daemon's own
+  // store. On this host that meant a test writing into production state; on a
+  // hosted runner, where /var/lib is root-owned and node is not root, it meant
+  // `EACCES: mkdir '/var/lib/huginn-appd/chats'` at module load, the daemon
+  // never reaching "listening on", and THIS TEST — and only this test — failing
+  // in GitHub Actions while passing locally. What is under test is whether the
+  // daemon NOTICES a gate bound somewhere it does not arm, which is a comparison
+  // between two paths; neither of them has to be a real one.
+  const gateDir = path.join(scratch, 'installed-gate', 'headroom');
   const settings = path.join(scratch, 'settings.json');
   fs.writeFileSync(settings, JSON.stringify({
     hooks: {
@@ -228,7 +240,7 @@ test('a gate bound to a different sentinel directory is called out at startup (#
         matcher: '*',
         hooks: [{
           type: 'command',
-          command: 'env HUGINN_HEADROOM_DIR=/var/lib/huginn-appd/headroom /opt/huginn-appd/hooks/huginn-headroom-gate',
+          command: `env HUGINN_HEADROOM_DIR=${gateDir} /opt/huginn-appd/hooks/huginn-headroom-gate`,
           timeout: 1800,
         }],
       }],
@@ -244,10 +256,13 @@ test('a gate bound to a different sentinel directory is called out at startup (#
         ...process.env,
         HUGINN_APPD_PORT: String(SPARE_PORT),
         HUGINN_APPD_BIND: '127.0.0.1',
+        HUGINN_APPD_DATA: path.join(scratch, 'data'),
         HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'),
         HUGINN_APPD_STATE_DIR: path.join(scratch, 'state'),
+        HUGINN_APPD_CLAUDE_DIR: path.join(scratch, 'claude'),
         HUGINN_APPD_WORKDIR: scratch,
         HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
+        HUGINN_APPD_TELEGRAM_SCRIPT: '',
         HUGINN_CLAUDE_SETTINGS: settings,
         ...env,
       },
@@ -264,12 +279,16 @@ test('a gate bound to a different sentinel directory is called out at startup (#
     return text;
   };
 
-  const moved = await spawnWith({ HUGINN_APPD_DATA: path.join(scratch, 'data') });
+  // The daemon arms sentinels in <dataDir>/headroom; the installed gate watches
+  // `gateDir`. Two different directories, which is the whole finding.
+  const moved = await spawnWith({});
   assert.match(moved, /pause button is wired to nothing/,
     `the mismatch must be said out loud. Log: ${moved.slice(0, 600)}`);
+  assert.ok(moved.includes(gateDir), `and it names where the gate IS watching. Log: ${moved.slice(0, 600)}`);
+  assert.match(moved, /listening on/, 'precondition: this daemon came up');
 
   // …and when they agree, it says nothing at all.
-  const matched = await spawnWith({ HUGINN_HEADROOM_DIR: '/var/lib/huginn-appd/headroom' });
+  const matched = await spawnWith({ HUGINN_HEADROOM_DIR: gateDir });
   assert.doesNotMatch(matched, /pause button is wired to nothing/);
   assert.match(matched, /listening on/, 'precondition: this daemon came up');
 
