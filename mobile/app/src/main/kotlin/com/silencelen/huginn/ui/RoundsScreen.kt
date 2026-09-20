@@ -103,7 +103,9 @@ fun RoundsScreen(
         // with curl, so the feature was real and unreachable.
         ExtendedFloatingActionButton(
             onClick = onNewRound,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            // The token, not a copy of the number the clearance is derived
+            // from — see [LIST_FAB_CLEARANCE].
+            modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
             icon = { Icon(Icons.Filled.Add, contentDescription = null) },
             text = { Text("New round") },
         )

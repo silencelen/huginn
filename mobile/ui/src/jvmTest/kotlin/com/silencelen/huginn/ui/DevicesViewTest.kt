@@ -322,4 +322,34 @@ class DevicesViewTest {
         assertFalse(g.isThisMachine("prestige"), "someone else's box is not this device")
         assertFalse(g.isThisMachine(null), "a phone (never enrolled) marks nothing")
     }
+
+    /**
+     * ⚠⚠ THE DOT BELONGS TO THE TITLE, NOT TO THE CARD (P-36).
+     *
+     * Centred against the whole column it landed ON the name for a machine with
+     * one capability line and FLOATED between two lines for a machine with
+     * several — `brokkr` and `huginn` marked one way, DATATREEX, PRESTIGE and
+     * RAGNAR another, in a list read top to bottom for exactly that mark.
+     *
+     * A source grep because the failure is an alignment: there is no
+     * compose-ui-test in this module (the [MarkdownTableTest] precedent).
+     */
+    @Test
+    fun theStateDotSitsOnTheTitleWhateverTheCardGoesOnToSay() {
+        val f = generateSequence(java.io.File("").absoluteFile) { it.parentFile }
+            .firstOrNull { java.io.File(it, "settings.gradle.kts").isFile }
+            ?.let { java.io.File(it, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/DevicesView.kt") }
+        assertTrue(f != null && f.isFile, "DevicesView.kt not found from ${java.io.File("").absolutePath}")
+        val text = f!!.readText()
+        assertTrue(text.length > 5_000, "DevicesView.kt read as ${text.length} chars — wrong file")
+        val card = text.substringAfter("private fun MachineCard(").substringBefore("private fun ")
+        assertTrue(card.length > 500, "MachineCard read as ${card.length} chars — wrong slice")
+        val row = card.substringAfter("Column(Modifier.padding(start = 14.dp").substringBefore("Column(Modifier.padding(start = 10.dp")
+        assertTrue(row.length in 1..1_500, "the title row read as ${row.length} chars — wrong slice")
+        assertTrue(
+            "Row(verticalAlignment = Alignment.Top)" in row,
+            "the dot is centred against the card again, so it moves with the number of lines",
+        )
+        assertTrue("MACHINE_TITLE_LINE" in row, "the dot has no line box to be centred inside")
+    }
 }
