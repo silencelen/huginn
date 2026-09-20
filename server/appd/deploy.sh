@@ -88,6 +88,14 @@ fi
 # The FULL run's count, never the retry's: a floor met by one file re-run alone
 # would be no floor at all.
 PASSED="$(grep -oE '^# pass [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)"
+# ...except that after a successful single-file retry every '# fail' in the full
+# run belonged to that file and has just been proved passing, so it is credited
+# back — from the full run's own numbers, never the retry's. Without this a
+# flake in any file bigger than the floor's margin refused a green tree
+# (build.sh had the same gap; 1733 vs a floor of 1740 on 2026-09-19).
+if [ -n "${RETRY:-}" ]; then
+  PASSED=$((PASSED + $(grep -oE '^# fail [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)))
+fi
 rm -f "$TEST_LOG"
 . "$(cd "$SRC/../.." && pwd)/scripts/test-floors.env"
 [ "${PASSED:-0}" -ge "$APPD_MIN" ] || { echo "[deploy] REFUSING: appd tests ran $PASSED, expected >= $APPD_MIN" >&2; exit 1; }
