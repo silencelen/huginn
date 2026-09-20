@@ -238,13 +238,18 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
-  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? One leaked by an earlier run
-  // answers /v1/ping happily — ping needs no token — and rejects ours, which
-  // reads like a wall of code bugs and is not one.
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The port formula gives few
+  // slots, and one leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one and refuses OUR token. /v1/ping is
+  // authenticated like every other route, so the start loop above never sees
+  // its 200 and spins its whole cap, and then every call below 401s: a wall of
+  // `401 unauthorized` that reads like a code bug and is not one. So ask an
+  // AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>`, then kill it.
   const own = await api('/v1/sessions');
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
-      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+      + `test run — it refuses our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
@@ -354,6 +359,49 @@ test('the name, the kind, the brief and the slug are all refused before anything
   assert.match(nameTaken.body.error, /already exists/);
 
   assert.equal(1, (await api('/v1/projects')).body.projects.length, 'and none of them made a project');
+});
+
+test('a create refusal names the field the caller actually left out (L5)', async () => {
+  const bad = async (body) => (await api('/v1/projects', { method: 'POST', body: JSON.stringify(body) }));
+
+  // ⚠ THE ORDER A PERSON FILLS THE FORM IS NOT THE ORDER OF THE `if`s. Kind is
+  // the one field nobody can leave blank — CreateProjectSheet preselects a chip
+  // and `huginn projects new` defaults it to `other` — so a body that arrives
+  // without one is a caller who has not finished it, and the fields they can
+  // genuinely have missed are the ones they TYPE. The kind check ran first
+  // anyway, so `{name}` was answered "kind is one of software, infra, …": a
+  // sentence about a field the caller never touched, while the brief they
+  // actually forgot went unmentioned. Two 400s to learn one thing.
+  const noBrief = await bad({ name: 'Order A' });
+  assert.equal(400, noBrief.status);
+  assert.match(noBrief.body.error, /needs a brief/, noBrief.body.error);
+
+  // Same for the directory, which is the field after it.
+  const badCwd = await bad({ name: 'Order B', brief: 'size this', cwd: 'relative/path' });
+  assert.equal(400, badCwd.status);
+  assert.match(badCwd.body.error, /absolute path/, badCwd.body.error);
+
+  // And an untrusted directory still reaches its own 409 with the fix in it,
+  // rather than being masked by a kind nobody supplied.
+  const untrusted = await bad({ name: 'Order C', brief: 'size this', cwd: path.join(tmp, 'untrusted') });
+  assert.equal(409, untrusted.status, JSON.stringify(untrusted.body));
+  assert.equal('untrusted-cwd', untrusted.body.reason);
+
+  // With everything a person types in place, the missing kind is finally what is
+  // wrong — and the sentence says it is MISSING, not that it is wrong.
+  const noKind = await bad({ name: 'Order D', brief: 'size this', cwd });
+  assert.equal(400, noKind.status);
+  assert.match(noKind.body.error, /needs a kind/, noKind.body.error);
+  assert.match(noKind.body.error, /software, infra, hardware, docs, research, other/);
+
+  // A kind the caller DID type and got wrong is still answered first, in its own
+  // place in the form, and the sentence quotes what they sent.
+  const wrongKind = await bad({ name: 'Order E', kind: 'nope' });
+  assert.equal(400, wrongKind.status);
+  assert.match(wrongKind.body.error, /'nope' is not a project kind/, wrongKind.body.error);
+
+  const names = (await api('/v1/projects')).body.projects.map((x) => x.name);
+  assert.deepEqual([], names.filter((n) => n.startsWith('Order ')), 'and none of them made a project');
 });
 
 // -------------------------------------------------------------- the proposal
