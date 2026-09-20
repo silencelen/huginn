@@ -93,7 +93,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.6.2';
+const VERSION = '3.7.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -183,6 +183,20 @@ const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || '/run/huginn-claude-state
 const TMUX_SOCKET = process.env.HUGINN_APPD_TMUX_SOCKET || '';
 const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
 const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
+/**
+ * Where a project goes when the owner names no directory: `<PROJECTS_HOME>/<slug>`,
+ * made on creation.
+ *
+ * ⚠ NOT WORKDIR. The first project ever run defaulted to the daemon's own working
+ * directory — the owner's ops repo — and its lead made a nested repo there, the
+ * one thing that tree's rules forbid (owner, 2026-09-19). A project is its own
+ * place. The directory has to be trusted in Claude Code ONCE: the folder-trust
+ * dialog is inherited from a parent, so trusting this directory covers every
+ * project made under it — `cwdIsTrusted` reads up the tree for exactly that
+ * reason, and still never writes `~/.claude.json`.
+ */
+const PROJECTS_HOME = (process.env.HUGINN_APPD_PROJECTS_DIR
+  || path.join(process.env.HOME || '/root', 'projects')).replace(/\/+$/, '') || '/';
 // Optional companion memory node ("Muninn") — feeds the /v1/status mempalace
 // field. Empty/default on a generic host (the probe reports 'unconfigured');
 // a deployment that has one sets these via a systemd drop-in.
@@ -1338,6 +1352,17 @@ async function listSessions({ preview = false } = {}) {
   // in the map has ended. Pruning matters because a NEW session of a pruned name
   // must be born-stamped afresh rather than inheriting its predecessor's stamp.
   for (const name of [...sessionBorn.keys()]) if (!seen.has(name)) sessionBorn.delete(name);
+
+  // Which project, if any, each session belongs to — joined HERE, where the
+  // store lives, so a client does not have to read every project's detail to
+  // know what to keep off its Sessions page (a project session is never on it:
+  // owner rule, 2026-09-19). Null is the answer for a session outside every
+  // project, and for every row from a daemon older than 3.7.0.
+  const membership = projectsLib.membershipIndex(listProjects());
+  for (const r of rows) {
+    const hit = membership.get(r.name);
+    r.project = hit ? projectsLib.sessionProjectTag(hit.project, hit.member) : null;
+  }
 
   // An ARCHIVED conversation is not a session any more. Normally this removes
   // nothing — an archive goes through hardEndSession, so tmux has already
@@ -5923,13 +5948,21 @@ function unlinkPersonas(id) {
  */
 function cwdIsTrusted(dir) {
   const want = String(dir || '').replace(/\/+$/, '') || '/';
-  if (want === String(WORKDIR).replace(/\/+$/, '')) return true;
+  if (want === (String(WORKDIR).replace(/\/+$/, '') || '/')) return true;
   let cfg;
   try { cfg = JSON.parse(fs.readFileSync(CLAUDE_CONFIG_PATH, 'utf8')); } catch { return false; }
   const projects = cfg && cfg.projects;
   if (!projects || typeof projects !== 'object') return false;
-  const entry = projects[want] || projects[`${want}/`];
-  return !!(entry && entry.hasTrustDialogAccepted === true);
+  // Up the tree, the way Claude Code itself reads it: a subdirectory of a
+  // trusted directory opens with no dialog (checked on 2.1.258), so trusting
+  // the projects directory once covers every project made under it. WORKDIR's
+  // own pass above does not travel: it is a courtesy to the directory chats
+  // have always opened in, not a fact about its children.
+  for (let at = want; ; at = path.dirname(at)) {
+    const entry = projects[at] || projects[`${at}/`];
+    if (entry && entry.hasTrustDialogAccepted === true) return true;
+    if (at === path.dirname(at)) return false;
+  }
 }
 
 /**
@@ -12101,7 +12134,9 @@ const server = http.createServer(async (req, res) => {
         rows.push(projectsLib.projectRow(project,
           projectsLib.joinMembers(project, sessions || [], readNativeRegistry())));
       }
-      return sendJson(res, 200, { projects: rows, max: projectsLib.MAX_PROJECTS });
+      // `dir` is where a project with no directory of its own will be made, so a
+      // client can show the path before the project exists.
+      return sendJson(res, 200, { projects: rows, max: projectsLib.MAX_PROJECTS, dir: PROJECTS_HOME });
     }
 
     if (req.method === 'POST' && p === '/v1/projects') {
@@ -12148,10 +12183,16 @@ const server = http.createServer(async (req, res) => {
       const badBrief = projectsLib.briefProblem(body.brief);
       if (badBrief) return sendErr(res, 400, badBrief);
 
-      const cwd = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim().replace(/\/+$/, '') : WORKDIR;
+      // A directory the owner NAMED must exist; one they did not name is the
+      // project's own, `<PROJECTS_HOME>/<slug>`, made below once nothing else
+      // refuses — see PROJECTS_HOME for why it is not WORKDIR.
+      const given = typeof body.cwd === 'string' && body.cwd.trim() ? body.cwd.trim().replace(/\/+$/, '') : '';
+      const cwd = given || path.join(PROJECTS_HOME, slug);
       if (!cwd.startsWith('/')) return sendErr(res, 400, 'cwd must be an absolute path');
-      try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not a directory'); } catch {
-        return sendErr(res, 400, `${cwd} is not a directory on this host`);
+      if (given) {
+        try { if (!fs.statSync(cwd).isDirectory()) throw new Error('not a directory'); } catch {
+          return sendErr(res, 400, `${cwd} is not a directory on this host`);
+        }
       }
       // ⚠ TRUST IS CHECKED, NEVER GRANTED. The folder-trust dialog blocks Claude
       // Code's session registration entirely and preselects "No, exit", so a lead
@@ -12160,8 +12201,11 @@ const server = http.createServer(async (req, res) => {
       // ~/.claude.json, a 115 KB file every live `claude` rewrites continuously.
       // Refused with the fix instead (decision 50). See [cwdIsTrusted].
       if (!cwdIsTrusted(cwd)) {
+        // For a directory this daemon would make, the fix is one level up: trust
+        // the projects directory once and every project after it is covered.
+        const where = given ? cwd : PROJECTS_HOME;
         return sendJson(res, 409, {
-          error: `${cwd} has not been trusted in Claude Code yet — open it once with `
+          error: `${where} has not been trusted in Claude Code yet — open it once with `
             + '`claude` there and accept the folder-trust question, then create the project',
           reason: 'untrusted-cwd',
         });
@@ -12177,6 +12221,13 @@ const server = http.createServer(async (req, res) => {
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
       if (await sessionExists(leadTmux)) {
         return sendJson(res, 409, { error: `a tmux session called '${leadTmux}' already exists`, reason: 'name-taken' });
+      }
+      if (!given) {
+        // Its own place, made now — after every refusal above, so a request that
+        // is turned away leaves nothing on disk.
+        try { fs.mkdirSync(cwd, { recursive: true, mode: 0o755 }); } catch (e) {
+          return sendErr(res, 500, `could not make ${cwd}: ${e.message}`);
+        }
       }
 
       const now = Math.floor(Date.now() / 1000);

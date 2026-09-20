@@ -533,3 +533,41 @@ test('a project row says what the tree draws, with every field present', () => {
     assert.ok(k in row, `${k} is on the row, so a row that decoded is a row that renders`);
   }
 });
+
+// ------------------------------------------------- the session-list join
+
+test('membershipIndex claims every live member name once, and nothing from an archived project', () => {
+  const stick = { id: 'p1', name: 'Stick', slug: 'stick', status: 'active',
+    lead: { role: 'lead', name: 'stick-lead', claudeName: 'stick/lead' },
+    members: [{ role: 'fw', name: 'stick-fw', claudeName: 'stick/fw' }] };
+  const old = { id: 'p0', name: 'Auvik', slug: 'auvik', status: 'archived',
+    lead: { role: 'lead', name: 'auvik-lead', claudeName: 'auvik/lead' }, members: [] };
+  // A stale record naming a session the newer project also names: the first
+  // (newest) claim wins, which is the only answer when two records disagree.
+  const clash = { id: 'p2', name: 'Older', slug: 'older', status: 'paused',
+    lead: { role: 'lead', name: 'older-lead', claudeName: 'older/lead' },
+    members: [{ role: 'x', name: 'stick-fw', claudeName: 'older/x' }] };
+  const idx = projects.membershipIndex([stick, old, clash]);
+  assert.deepEqual(['stick-lead', 'stick-fw', 'older-lead'], [...idx.keys()]);
+  assert.equal(stick, idx.get('stick-fw').project);
+  assert.equal('fw', idx.get('stick-fw').member.role);
+  assert.equal(undefined, idx.get('auvik-lead'), 'history claims nothing');
+  assert.equal(0, projects.membershipIndex([]).size);
+  assert.equal(0, projects.membershipIndex(null).size);
+});
+
+test('sessionProjectTag is the five fields a list row carries, and lead is a fact of the role', () => {
+  const p = { id: 'p1', name: 'Stick', slug: 'stick', status: 'active', brief: 'not on the wire' };
+  assert.deepEqual({ id: 'p1', name: 'Stick', slug: 'stick', role: 'lead', lead: true },
+    projects.sessionProjectTag(p, { role: 'lead', name: 'stick-lead' }));
+  assert.deepEqual({ id: 'p1', name: 'Stick', slug: 'stick', role: 'fw', lead: false },
+    projects.sessionProjectTag(p, { role: 'fw', name: 'stick-fw' }));
+});
+
+test('the lead is told where the owner approves, in words, before the block', () => {
+  const text = projects.leadPersona({ name: 'Stick', kind: 'software', slug: 'stick', manifest: { tag: TAG } });
+  assert.match(text, /Before the block, tell the owner/);
+  assert.match(text, /open\nProjects, this project, and press Spawn/);
+  assert.match(text, /huginn projects spawn stick/);
+  assert.match(projects.MANIFEST_CONTRACT, /huginn projects spawn <slug>/);
+});

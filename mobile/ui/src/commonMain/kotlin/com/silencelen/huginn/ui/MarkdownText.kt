@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -147,7 +149,8 @@ fun MarkdownText(
                 }
                 is MdBlock.Table -> TableGrid(b)
                 is MdBlock.Image -> PathImage(b.src, b.alt, viewer)
-                is MdBlock.Code -> CodeCard(b, onCopy)
+                is MdBlock.Code ->
+                    if (b.lang == ProjectRules.PROPOSAL_LANG) ProposalCard(b, onCopy) else CodeCard(b, onCopy)
                 MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
@@ -405,6 +408,65 @@ val LocalLinkPeek = staticCompositionLocalOf<LinkPeek> {
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        }
+    }
+}
+
+/**
+ * A lead's `huginn-project` block, drawn as what it is.
+ *
+ * ⚠ THE BLOCK IS NOT PROSE AND WAS BEING READ AS PROSE. The fence carries the
+ * project's tag after the language word — "```huginn-project 34f88e7484" — and
+ * the parser only knew one-word fences, so the whole proposal landed in the
+ * transcript as a paragraph of JSON. The owner read it as a call the lead had
+ * made and that had failed. It is a card now: the summary, the roles, and the
+ * one sentence the block cannot say for itself — where to approve it. The JSON
+ * is a tap away for whoever wants the plan in full, and a block that does not
+ * parse is shown in full, because that one IS the lead's mistake to see.
+ */
+@Composable
+private fun ProposalCard(b: MdBlock.Code, onCopy: ((String) -> Unit)?) {
+    val preview = remember(b.code) { ProjectRules.proposalPreview(b.code) }
+    if (preview == null) {
+        CodeCard(b, onCopy)
+        return
+    }
+    var open by remember(b.code) { mutableStateOf(false) }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 6.dp)) {
+            Text(
+                "Project proposal",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            preview.summary?.let {
+                Spacer(Modifier.height(2.dp))
+                Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                ProjectRules.proposalWords(preview),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                ProjectRules.PROPOSAL_WHERE,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            TextButton(
+                onClick = { open = !open },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+            ) {
+                Text(if (open) "Hide the block" else "Show the block", style = MaterialTheme.typography.labelSmall)
+            }
+            if (open) CodeCard(b, onCopy)
         }
     }
 }

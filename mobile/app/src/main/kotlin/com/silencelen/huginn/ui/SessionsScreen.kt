@@ -49,9 +49,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import com.silencelen.huginn.data.ArchivedSession
-import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.theme.verbInk
 
@@ -98,17 +96,9 @@ fun SessionsScreen(
      * the shape every optional row action here already takes.
      */
     onViewArchive: ((ArchivedSession) -> Unit)? = null,
-    /**
-     * The sessions, grouped by the project that owns them.
-     *
-     * EMPTY means no grouping at all — either the daemon has no projects route or
-     * nothing is grouped yet — and the list then draws exactly as it always has.
-     * Non-empty, it REPLACES the flat list: the groups already contain every
-     * session, with the unaffiliated ones last, so rendering both would draw each
-     * session twice.
-     */
-    groups: List<SessionGroup> = emptyList(),
-    onOpenProject: (ProjectRow) -> Unit = {},
+    // How many project sessions this list does NOT draw — see
+    // ProjectRules.splitByProject; they are on the Projects page and nowhere else.
+    inProjects: Int = 0,
     /** The way to the whole tree. Null hides it — see projectEntries. */
     onOpenProjects: (() -> Unit)? = null,
 ) {
@@ -140,12 +130,8 @@ fun SessionsScreen(
     // rule lives and where it is asserted.
     var shownOrder by remember { mutableStateOf<List<String>>(emptyList()) }
     val ordered = OrderLock.order(shownOrder, sessions, frozen) { it.name }
-    val orderedGroups = if (groups.isEmpty()) groups else groups.map { g ->
-        g.copy(sessions = OrderLock.order(shownOrder, g.sessions, frozen) { it.name })
-    }
     if (!frozen) {
-        val drawn = if (groups.isEmpty()) OrderLock.keysOf(ordered) { it.name }
-        else orderedGroups.flatMap { g -> OrderLock.keysOf(g.sessions) { it.name } }
+        val drawn = OrderLock.keysOf(ordered) { it.name }
         if (drawn != shownOrder) shownOrder = drawn
     }
 
@@ -165,6 +151,7 @@ fun SessionsScreen(
                 verticalArrangement = Arrangement.Center,
             ) {
                 EmptyState("No sessions", "Create one and it opens Claude Code on the host, same as cc.")
+                if (inProjects > 0) InProjectsLine(inProjects, onOpenProjects)
                 if (archiveAvailable == true) {
                     ArchivedSessionsSection(
                         rows = archives,
@@ -202,29 +189,15 @@ fun SessionsScreen(
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
-                if (groups.isEmpty()) {
-                    // ⚠ `animateItem` IS THE OTHER HALF OF P-02. When the list
-                    // DOES re-sort — which it must, the moment nothing is open —
-                    // a row that teleports is a row nobody can follow. Moving it
-                    // is what lets a reader see that the thing they were aiming
-                    // at went somewhere, instead of discovering it by pressing.
-                    items(ordered, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
-                } else {
-                    for (g in orderedGroups) {
-                        val p = g.project
-                        if (p != null) {
-                            item(key = "project:${p.id}") {
-                                ProjectHeader(p, onOpen = { onOpenProject(p) }, onSeeAll = onOpenProjects)
-                            }
-                        } else if (groups.size > 1) {
-                            // Only when there is something above it: a lone
-                            // heading over every session on the host would be
-                            // naming a category nothing is outside of.
-                            item(key = "ungrouped") { SectionLabel(SESSIONS_UNGROUPED) }
-                        }
-                        items(g.sessions, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
-                    }
-                }
+                // ⚠ `animateItem` IS THE OTHER HALF OF P-02. When the list
+                // DOES re-sort — which it must, the moment nothing is open —
+                // a row that teleports is a row nobody can follow. Moving it
+                // is what lets a reader see that the thing they were aiming
+                // at went somewhere, instead of discovering it by pressing.
+                items(ordered, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
+                // The project sessions are not in this list, and this is the one
+                // line that says so — see InProjectsLine.
+                if (inProjects > 0) item(key = "in-projects") { InProjectsLine(inProjects, onOpenProjects) }
                 // At the BOTTOM of the live list, collapsed, rather than a fifth
                 // bottom tab. An archive is a footnote to the sessions list —
                 // somewhere you look once a week — and the tab bar already holds
@@ -604,49 +577,35 @@ private fun SessionRow(
 
 
 /**
- * The heading over one project's sessions.
+ * The one line under the list that says where the project sessions are.
  *
- * ⚠ THE COUNTS ARE THE DAEMON'S, not a tally of the rows underneath. The rollup
- * was summed across three registries this client cannot read, and a heading that
- * counted the sessions it happened to be drawing would disagree with the Projects
- * tree about the same cluster — which is the one thing a heading must never do.
- * A member whose tmux session is gone is in the count and not in the list, and
- * that difference is exactly what the reader needs to see.
+ * ⚠ A PROJECT SESSION IS NEVER ON THIS PAGE (owner rule, 2026-09-19): it is on
+ * its project's dashboard and nowhere else, because a copy of it here read as
+ * a second, unrelated session — the widgetshub lead sat between two hand-made
+ * ones and looked like a session that had failed to do something. This line
+ * is the list's only admission that they exist: a count, and the way there,
+ * so a reader who watched a cluster spawn is not left looking for rows that
+ * will never appear.
  */
 @Composable
-private fun ProjectHeader(project: ProjectRow, onOpen: () -> Unit, onSeeAll: (() -> Unit)?) {
+private fun InProjectsLine(count: Int, onOpenProjects: (() -> Unit)?) {
+    val words = ProjectRules.hiddenWords(count) ?: return
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(start = 16.dp, end = 4.dp, top = 14.dp, bottom = 4.dp),
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                ProjectRules.label(project).uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                groupWords(project),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        // The whole tree, when the shell has somewhere to put it. On the heading
-        // rather than beside every project, because "all of them" is one place.
-        onSeeAll?.let {
+        Text(
+            words,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        onOpenProjects?.let {
             TextButton(onClick = it, contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
-                Text("All", style = MaterialTheme.typography.labelMedium)
+                Text("Projects", style = MaterialTheme.typography.labelMedium)
             }
         }
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
