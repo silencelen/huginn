@@ -590,6 +590,36 @@ function canonName(raw) {
 }
 
 /**
+ * A session name that arrived somewhere OTHER than a route path, held to the
+ * same grammar every route path holds:
+ * `/v1/sessions/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})`. Returns the name, or null.
+ *
+ * ⚠ NOT canonName, and the difference is not cosmetic. canonName lowercases,
+ * which is right where a name is being CHOSEN (create, rename) and wrong where
+ * one is being LOOKED UP: tmux keeps the case it was given and sessionExists
+ * proves existence by comparing the echo, so lowercasing `dev-Phonefarm` turns
+ * a live session into "no such session". Dots are allowed here and banned at
+ * creation for the same reason the route regexes allow them — a session made at
+ * the keyboard before the rule existed still has to be addressable.
+ *
+ * ⚠ AND THE NAME IS ALSO A FILENAME. readSessionState does
+ * path.join(STATE_DIR, name), so this regex is what keeps a lookup inside the
+ * state directory — the same job NAME_RE's "no slashes, first character
+ * alphanumeric" comment describes, applied to the one door that was not using
+ * it. `GET /v1/files/image?session=` took the query string with nothing but a
+ * .trim(), and the cwd it read back became a SERVING ROOT for that route: a
+ * live session named `a/b` — tmux keeps a slash verbatim, it is only the dot it
+ * rewrites — resolved a state file a directory below STATE_DIR and made
+ * whatever that file named servable. Proven in routes-files-image.test.js,
+ * which serves the file without this check and 403s with it.
+ */
+const ROUTE_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/;
+function routeName(raw) {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  return ROUTE_NAME_RE.test(s) ? s : null;
+}
+
+/**
  * What tmux ACTUALLY called a session it has just created or renamed.
  *
  * ⚠ THE TRAP THIS REPLACED, twice over. Both readbacks asked tmux about the
@@ -11318,7 +11348,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/v1/files/image') {
       const roots = [UPLOADS_DIR, SCRATCHPAD_RENDER_DIR, CLAUDE_SCRATCH_DIR];
       let cwd = null;
-      const sessName = String(u.searchParams.get('session') || '').trim();
+      // Shaped before it is used, exactly as a /v1/sessions/<name> path is —
+      // see routeName. A name outside the grammar is simply not a session, so
+      // it contributes no root, which is the same answer an unknown one gets.
+      const sessName = routeName(u.searchParams.get('session'));
       if (sessName && await sessionExists(sessName)) {
         const st = readSessionState(sessName);
         if (st && st.cwd) { cwd = st.cwd; roots.push(st.cwd); }
