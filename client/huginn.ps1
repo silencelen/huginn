@@ -33,6 +33,36 @@ function _Huginn-ValidName {
   if (-not $Name) { return $false }
   return ($Name.ToLower() -match '^[a-z0-9_][a-z0-9_-]{0,49}$')
 }
+# WHY A NAME WAS REFUSED, as the daemon would say it (nameProblem, server/appd/
+# huginn-appd.js), or '' when the shape is fine.
+#
+# ⚠ TWO OF THE THREE RULES WERE NEVER MENTIONED. Every refusal in this file said
+# "use lowercase letters, digits, _ and -; no dots, spaces or *" - so `huginn
+# kill -box` and a 51-character name were both told a sentence that describes a
+# name which is, by that text, perfectly valid, and the refusal read as a bug in
+# the client. The rule is ^[a-z0-9_][a-z0-9_-]{0,49}$: at most 50 characters, and
+# '-' may not lead.
+function _Huginn-NameProblem {
+  param([string]$Name)
+  if (-not $Name)          { return 'a session needs a name' }
+  if ($Name.Contains('.')) { return 'a "." is rewritten to "_" by tmux, so the name you asked for would not be the name you got' }
+  if ($Name -notmatch '^[A-Za-z0-9_]') { return "it starts with '$($Name.Substring(0,1))' - a name starts with a letter, digit or _" }
+  if ($Name.Length -gt 50) { return "it is $($Name.Length) characters long - a name is at most 50" }
+  return ''
+}
+# ONE refusal for a bad name, in both clients' words. Terminating, like every
+# other refusal here - see _Huginn-Fail.
+function _Huginn-BadName {
+  param([string]$Name, [string]$Noun = 'session name', [string]$Tail = '')
+  $lines = @("huginn: invalid $Noun '$Name'")
+  $why = _Huginn-NameProblem $Name
+  if ($why) { $lines += "        $why" }
+  $lines += "        (letters, digits, _ and -, starting with a letter, digit or _, up to 50"
+  $lines += "         characters; no dots, spaces or *. Case-insensitive.)"
+  if ($Tail) { $lines += "        $Tail" }
+  _Huginn-Fail ($lines -join "`n")
+}
+
 # Session names are case-INSENSITIVE: lowercase before touching tmux so 'Test' and
 # 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
 # here for every tmux-facing path AND again server-side in cc as the backstop.
@@ -211,8 +241,16 @@ function _Huginn-FetchFile {
     return $true
   }
   Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-  Write-Host ("{0}: could not fetch {1} ({2})" -f $Label, (Split-Path -Leaf $RepoPath), ($why -join '; '))
-  return $false
+  # ⚠ AND A FETCH THAT FAILED IS A FAILURE. This was the last Write-Host-and-
+  # return-normally path in the file (the rest went in 1.5.0): `huginn device
+  # update` with no gh and no mirror printed "could not fetch huginn-device" on
+  # the HOST stream and left $? True and $LASTEXITCODE 0, so a Windows script or
+  # a `&&` chain read "the runner was not installed" as "the runner is
+  # installed". The caller in `local` even tested the return value - and then
+  # `return`ed, which is also a success. One terminating refusal, same as every
+  # other one here; the sentence is unchanged, and now lands where 2>$null and
+  # $err can reach it.
+  _Huginn-Fail ("{0}: could not fetch {1} ({2})" -f $Label, (Split-Path -Leaf $RepoPath), ($why -join '; '))
 }
 
 # The daemon URL this machine should be enrolled with, worked out from the ssh
@@ -232,14 +270,47 @@ function _Huginn-FetchFile {
 # so a bracketed v6 url is a persisted ECONNREFUSED. On a v6 ssh path the host is
 # asked for an IPv4 it actually holds, and the bracketed literal is kept only as
 # the last answer - correct syntax, and an honest failure.
+#
+# ⚠ AND AN EMPTY $SSH_CONNECTION IS NOT A DEAD END ANY MORE. It used to be
+# `if (-not $a) { return $null }`, which the caller turned into "could not work
+# out how to reach huginn's daemon" with nothing to do about it - and the index
+# above threw outright when the probe came back with fewer than three fields.
+# It is empty in two ordinary situations: a shell running ON the host itself,
+# and an sshd whose ForceCommand/Match wrapper does not pass the variable on.
+# Both can be answered - ask the host for an address it actually holds, and use
+# loopback when the host IS this machine - and only when nothing can be learned
+# at all is it a refusal, with `--url` named.
+#
+# NOTE ON ROUTES: the apps pin a ROUTE BOOK (several addresses per daemon, tried
+# in order, with a witness). This client deliberately has none - it is an ssh
+# front end, so it has exactly one route, the alias - and the address below is
+# only ever handed to the local RUNNER, which is the piece that dials the daemon
+# directly.
 function _Huginn-SrvUrl {
   param([string]$H)
-  $a = (((ssh -T $H 'echo $SSH_CONNECTION') -join ' ') -split '\s+' | Where-Object { $_ })[2]
-  if (-not $a) { return $null }
-  if ($a -notmatch ':') { return "http://${a}:8787" }
+  $conn = @(((ssh -T $H 'echo $SSH_CONNECTION') -join ' ') -split '\s+' | Where-Object { $_ })
+  $a = if ($conn.Count -ge 3) { [string]$conn[2] } else { '' }
+  if (-not $a) {
+    # Nothing to learn from the link. Is the host this very machine? (No
+    # /etc/machine-id on Windows, where the answer is always no.)
+    $there = ((ssh -T $H 'cat /etc/machine-id 2>/dev/null') -join '').Trim()
+    $here = ''
+    try { if (Test-Path '/etc/machine-id') { $here = (Get-Content '/etc/machine-id' -Raw).Trim() } } catch {}
+    if ($there -and $here -and ($there -ceq $here)) { return 'http://127.0.0.1:8787' }
+  } elseif ($a -notmatch ':') { return "http://${a}:8787" }
   $v4 = ((ssh -T $H "ip -4 -o addr show scope global 2>/dev/null | awk '{print `$4}' | cut -d/ -f1 | head -1") -join '').Trim()
   if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "http://${v4}:8787" }
+  if (-not $a) { return $null }
   return "http://[$a]:8787"
+}
+
+# Did the caller already say where the daemon is? `huginn device on --url ...`
+# (and --url=...) is the out when neither the ssh link nor the host can answer,
+# and deriving one on top of it would put two --url flags on the runner's argv.
+function _Huginn-HasUrl {
+  param([object[]]$Rest)
+  foreach ($a in @($Rest)) { if (([string]$a) -eq '--url' -or ([string]$a).StartsWith('--url=')) { return $true } }
+  return $false
 }
 
 # --- desktop download links ---
@@ -555,29 +626,16 @@ function _Huginn-Uninstall {
   Write-Host "The 'huginn' command is still loaded in this session. Open a new PowerShell, or: Remove-Item Function:huginn" -ForegroundColor Yellow
 }
 
-function huginn {
-  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
-  # ⚠ THE NUMBER IS RESET AT THE DOOR. A refusal sets $LASTEXITCODE = 1 (see
-  # _Huginn-Fail) and nothing ever cleared it, so the NEXT verb - a perfectly
-  # successful one - still left a 1 behind for a script to read as its own
-  # failure. Native commands this function runs (ssh, scp, node) overwrite it
-  # with their own code, which is exactly what a caller wants.
-  $global:LASTEXITCODE = 0
-  if ($args.Count -eq 0) {
-    _Huginn-Attach -H $H
-  } elseif ($args[0] -in '?','help','/help','-h','--help') {
-    # Banner in a SINGLE-quoted here-string: the art must reach the terminal
-    # verbatim, and in an expandable one PowerShell would treat its punctuation
-    # as escapes. The body below stays expandable for $script:HUGINN_REPO.
-    Write-Host @'
-
-        _
-       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
-       //\
-    =~/_/
-'@
-    Write-Host @"
-
+# --- help -----------------------------------------------------------------
+# The ONE list of verbs, and the ONE place each one is described. `huginn help`
+# prints it whole; `huginn <verb> --help` prints the entry (and its continuation
+# lines) for that verb alone - see _Huginn-VerbHelp, which reads this rather than
+# carrying a second copy that would drift from it.
+#
+# Expandable here-string, for $script:HUGINN_REPO and the pinned mirror name;
+# every literal $ is backtick-escaped.
+function _Huginn-HelpBody {
+  return @"
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
   huginn solo [name]          attach + detach all OTHER clients (resume solo / full screen)
@@ -587,14 +645,10 @@ function huginn {
   huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
                               (if auto-end is on) end it once it goes idle
                               (--force: send it into a pane with no Claude state)
-  huginn kill <name>          hard end: stop the session now
-  huginn archive <name>       end it for good and keep the way back: the title,
-                              the cwd, a copy of the transcript and the exact
-                              'claude --resume' command   [--now to skip wrap-up]
-  huginn archive              what has been archived, and how to bring it back
-  huginn revive <id|name>     bring an archived session back to life
-  huginn headroom             usage left per account, what huginn moved or is holding, and why
-  huginn projects             clusters of sessions with roles, and who is waiting
+  huginn rounds               what this host does on a schedule, and what it found
+  huginn headroom [--json]    usage left per account, what huginn moved or is holding, and why
+  huginn devices              machines that can run a chat in their own context
+  huginn projects [--json]    clusters of sessions with roles, and who is waiting
   huginn projects show <name> a project's members, one line each
   huginn projects new <name>  start one (launches its lead session)
                               --brief "<the lead's whole first message>"|-
@@ -603,6 +657,31 @@ function huginn {
   huginn projects msg <project> <from> <to> <text>
   huginn projects end <project>           end it AND wind its sessions down
                               [--now: end them outright | --keep-sessions: leave them running]
+  huginn device [status]      what THIS machine offers huginn, and what huginn sees
+  huginn device on            offer this machine  [--scope look|work|own] [--root DIR]
+                              [--url URL: the daemon's address, when ssh cannot say]
+                              [--act-while-locked | --no-act-while-locked: whether a
+                              lock screen withdraws 'act' on this machine (default: it does)]
+  huginn device off           stop offering it
+  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device serve         the runner itself - this is what a service starts
+  huginn device unit          print a service unit that keeps the runner up [--system]
+  huginn llm "prompt"         one question to the local tier (a serving machine answers, not Claude)
+                              [--model ROW] [--timeout S]; 'huginn llm -' reads stdin
+  huginn local [status]       what THIS machine serves as local AI, if anything
+  huginn local on             serve local models from this machine (optional, ~5 GB)
+  huginn local plan           what 'on' would install here, without installing anything
+  huginn local persist        make an existing install survive logout (system services)
+  huginn local doctor         exits nonzero when this install is not doing what it says
+  huginn local update         re-fetch the manager and the pinned runtime
+  huginn local unit           print the service definitions this tier installs [--system]
+  huginn local off            stop serving  [--purge-models] [--purge]
+  huginn kill <name>          hard end: stop the session now
+  huginn archive <name>       end it for good and keep the way back: the title,
+                              the cwd, a copy of the transcript and the exact
+                              'claude --resume' command   [--now to skip wrap-up]
+  huginn archive              what has been archived, and how to bring it back
+  huginn revive <id|name>     bring an archived session back to life
   huginn -p "question"        one-shot headless query: reasoning + memory + web, and
                               nothing that can change anything (Bash/Edit/Write are DENIED)
   huginn -y "task"            one-shot that may use tools (bash/files/web + memory)
@@ -622,6 +701,8 @@ function huginn {
   huginn version              show client version
   huginn help | ? | /help     this help
 
+  Any verb takes --help for its own usage, answered here without touching the host:
+  'huginn archive --help', 'huginn device --help'.
   Session names are lowercase letters, digits, '_' and '-' (no dots, spaces or *),
   up to 50 characters, and must start with a letter, digit or '_'. Case-insensitive
   ('Test' and 'test' are the same session).
@@ -630,11 +711,90 @@ function huginn {
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
   Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during the
   wait to stop. Disable with `$env:HUGINN_NO_RECONNECT = '1'.
-  The terminal tab is named after the session (<name>); `$env:HUGINN_NO_TITLE='1' off.
+  The terminal tab is named after the session (<name>) and the title that was
+  there before is put back when you leave; `$env:HUGINN_NO_TITLE='1' off.
   A state icon leads the tab title while Claude runs: working / needs-you / waiting
   (set host-side by the claude hooks; needs the server's title hook installed).
-
 "@
+}
+
+# `huginn <verb> --help` - ONE convention, and it used to be four. `projects`
+# and `llm` printed their full help and exited 0; `headroom` printed a one-line
+# usage and exited 1; `archive` answered "invalid session name '--help'". A
+# person types --help when something has already surprised them, and two of
+# those made it look like a second mistake.
+#
+# ANSWERED HERE, NEVER OVER SSH: help that needs the network is help you cannot
+# read on a train, and it is not an error, so nothing is thrown and
+# $LASTEXITCODE stays 0.
+#
+# $true when the verb had an entry; $false when it had none, so the caller can
+# fall through to its normal dispatch.
+function _Huginn-VerbHelp {
+  param([string]$Verb)
+  # Aliases resolve to the spelling the help list uses, so `huginn st --help`
+  # and `huginn status --help` are the same answer.
+  $v = switch ($Verb) {
+    'ls'        { 'list' }
+    'st'        { 'status' }
+    'mv'        { 'rename' }
+    'round'     { 'rounds' }
+    'project'   { 'projects' }
+    'unarchive' { 'revive' }
+    'cost'      { 'usage' }
+    'ccusage'   { 'usage' }
+    'enrol'     { 'device' }
+    'enroll'    { 'device' }
+    default     { $Verb }
+  }
+  $keep = $false
+  $hit  = @()
+  foreach ($line in ((_Huginn-HelpBody) -split "`n")) {
+    $l = $line.TrimEnd()
+    if     ($l -match '^\s*$')        { $keep = $false }
+    elseif ($l -match '^  huginn(\s|$)') { $keep = (($l -split '\s+')[2] -ceq $v) }
+    elseif ($l -match '^  \S')         { $keep = $false }
+    if ($keep) { $hit += $l }
+  }
+  if (-not $hit.Count) { return $false }
+  Write-Host ($hit -join "`n")
+  Write-Host ""
+  Write-Host "  (huginn help for everything else)"
+  return $true
+}
+
+function huginn {
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  # ⚠ THE NUMBER IS RESET AT THE DOOR. A refusal sets $LASTEXITCODE = 1 (see
+  # _Huginn-Fail) and nothing ever cleared it, so the NEXT verb - a perfectly
+  # successful one - still left a 1 behind for a script to read as its own
+  # failure. Native commands this function runs (ssh, scp, node) overwrite it
+  # with their own code, which is exactly what a caller wants.
+  $global:LASTEXITCODE = 0
+  # --help on a VERB, before anything is dispatched or sent: one convention for
+  # all of them, answered locally, no throw and no exit code. See
+  # _Huginn-VerbHelp. A verb with no entry is told so rather than falling
+  # through to the attach path, which would ssh to the host and open a session
+  # named after the typo while the person is standing there asking to be told
+  # something.
+  if ($args.Count -ge 2 -and ($args[1] -in '-h','--help')) {
+    if (_Huginn-VerbHelp ([string]$args[0])) { return }
+    _Huginn-Fail "huginn: no help for '$($args[0])' - run 'huginn help' for the list of verbs"
+  }
+  if ($args.Count -eq 0) {
+    _Huginn-Attach -H $H
+  } elseif ($args[0] -in '?','help','/help','-h','--help') {
+    # Banner in a SINGLE-quoted here-string: the art must reach the terminal
+    # verbatim, and in an expandable one PowerShell would treat its punctuation
+    # as escapes. The body (see _Huginn-HelpBody) stays expandable.
+    Write-Host @'
+
+        _
+       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
+       //\
+    =~/_/
+'@
+    Write-Host (_Huginn-HelpBody)
   } elseif ($args[0] -eq 'version' -or $args[0] -eq '--version' -or $args[0] -eq '-v') {
     Write-Host "huginn-cli $script:HUGINN_VERSION  (host: $H)"
   } elseif ($args[0] -eq 'update') {
@@ -784,9 +944,18 @@ function huginn {
         }
         # See _Huginn-SrvUrl: the address this machine just reached the host at,
         # bracketed when it is an IPv6 literal.
-        $srv = _Huginn-SrvUrl $H
-        if ($srv) { node $runner on --url $srv @rest }
-        else { _Huginn-Fail "huginn device: could not work out how to reach $H's daemon" }
+        # An explicit --url wins outright - it is the answer to this question,
+        # not an extra opinion.
+        if (_Huginn-HasUrl $rest) { node $runner on @rest }
+        else {
+          $srv = _Huginn-SrvUrl $H
+          if ($srv) { node $runner on --url $srv @rest }
+          else {
+            _Huginn-Fail ("huginn device: could not work out how to reach $H's daemon`n" +
+                          "               (no ssh address to go on, and $H named no global IPv4)`n" +
+                          "               say it yourself: huginn device on --url http://<host>:8787")
+          }
+        }
       }
     } elseif (Test-Path $runner) {
       node $runner $sub @rest
@@ -832,9 +1001,12 @@ function huginn {
         $dest = Join-Path $HOME ".huginn/$f"
         if ($sub -eq 'update' -or -not (Test-Path $dest)) {
           $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-          if (-not (_Huginn-FetchFile -RepoPath "client/$f" `
-                      -MirrorPath "/usr/local/share/huginn-cli/$f" `
-                      -Dest $dest -Label 'huginn local' -UpdateHost $uh)) { return }
+          # Throws when it could not fetch (see _Huginn-FetchFile) - there is
+          # nothing left to test, and a `return` here used to turn that into a
+          # success.
+          _Huginn-FetchFile -RepoPath "client/$f" `
+            -MirrorPath "/usr/local/share/huginn-cli/$f" `
+            -Dest $dest -Label 'huginn local' -UpdateHost $uh | Out-Null
         }
       }
       if ($sub -eq 'plan') { node $mgr plan @rest; return }
@@ -853,9 +1025,14 @@ function huginn {
           else { _Huginn-Fail "huginn local: could not read the appd token from $H" }
         }
       }
-      $srv = _Huginn-SrvUrl $H
-      if (-not $srv) { _Huginn-Fail "huginn local: could not work out how to reach $H's daemon" }
       $env:HUGINN_LOCAL_DIR = $dir
+      if (_Huginn-HasUrl $rest) { node $mgr on @rest; return }
+      $srv = _Huginn-SrvUrl $H
+      if (-not $srv) {
+        _Huginn-Fail ("huginn local: could not work out how to reach $H's daemon`n" +
+                      "              (no ssh address to go on, and $H named no global IPv4)`n" +
+                      "              say it yourself: huginn local on --url http://<host>:8787")
+      }
       node $mgr on --url $srv @rest
     } elseif (Test-Path $mgr) {
       node $mgr $sub @rest
@@ -940,17 +1117,17 @@ function huginn {
     }
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
-    if (-not (_Huginn-ValidName $name)) { _Huginn-Fail "huginn: invalid session name '$name' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
+    if (-not (_Huginn-ValidName $name)) { _Huginn-BadName $name }
     _Huginn-Attach -H $H -Session $name -Solo
   } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
     if ($args.Count -lt 3) { _Huginn-Fail "usage: huginn rename <old> <new>" }
-    if (-not (_Huginn-ValidName $args[2])) { _Huginn-Fail "huginn: invalid new name '$($args[2])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
-    if (-not (_Huginn-ValidName $args[1])) { _Huginn-Fail "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
+    if (-not (_Huginn-ValidName $args[2])) { _Huginn-BadName ([string]$args[2]) 'new name' }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
     $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
     ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn kill <name>" }
-    if (-not (_Huginn-ValidName $args[1])) { _Huginn-Fail "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
     $kn = _Huginn-CanonName $args[1]
     # Prefer the daemon's DELETE: it also removes the orphaned /run state file and
     # releases the pane lease, which a bare tmux kill-session leaves behind (Claude's
@@ -976,7 +1153,7 @@ function huginn {
     }
   } elseif ($args[0] -eq 'end') {
     if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn end <name> [--force]" }
-    if (-not (_Huginn-ValidName $args[1])) { _Huginn-Fail "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
     $en = _Huginn-CanonName $args[1]
     # --force is the answer to one specific refusal, and it used to be UNREACHABLE:
     # neither client sent a request body and `end` parsed no flags, so the daemon's
@@ -1022,7 +1199,7 @@ function huginn {
     # and that sentence is the most useful thing this verb ever says, while
     # _Huginn-Appd uses curl -sf and throws a 4xx body away.
     if ($args.Count -lt 2) { ssh -T $H huginn-archive; return }
-    if (-not (_Huginn-ValidName $args[1])) { _Huginn-Fail "huginn: invalid session name '$($args[1])' (use lowercase letters, digits, _ and -; no dots, spaces or *)" }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
     $an = _Huginn-CanonName $args[1]
     # Single-quote marshalled like the headroom/llm branches: what follows the
     # host name is parsed by a shell on the far side, so an argument typed here
@@ -1074,7 +1251,7 @@ fi
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($remoteScript -replace "`r`n", "`n")))
     ssh -T $H "echo $b64 | base64 -d | bash -s"
   } else {
-    if (-not (_Huginn-ValidName $args[0])) { _Huginn-Fail "huginn: invalid session name '$($args[0])' (use lowercase letters, digits, _ and -; no dots, spaces or *). Did you mean a subcommand? Try 'huginn help'." }
+    if (-not (_Huginn-ValidName $args[0])) { _Huginn-BadName ([string]$args[0]) 'session name' "Did you mean a subcommand? Try 'huginn help'." }
     _Huginn-Attach -H $H -Session $args[0]
   }
 }
@@ -1096,7 +1273,15 @@ function _Huginn-Sessions {
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
-  $cmds = 'list', 'status', 'rounds', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'solo', 'rename', 'kill', 'end', 'archive', 'revive', '-p', '-y', 'usage', 'cost', 'desktop', 'update', 'uninstall', 'version', 'help'
+  # ⚠ EVERY VERB THAT TAKES SUB-VERBS HAS TO BE BELOW, and two were missing
+  # outright: `huginn projects <TAB>` completed to NOTHING in both clients - for
+  # the one verb whose whole grammar is arguments - and this completer had no
+  # `device` branch at all while the bash one did, so the PowerShell client
+  # could not complete the verb it shares its own name with. `local` was also a
+  # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
+  # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
+  # neither.
+  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'project', 'solo', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
@@ -1112,7 +1297,17 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   } elseif ($prev -eq 'desktop') {
     $candidates = 'windows', 'linux', 'both'
   } elseif ($prev -eq 'local') {
-    $candidates = 'status', 'on', 'plan', 'off', 'unit', 'update', 'doctor'
+    $candidates = 'status', 'on', 'plan', 'persist', 'off', 'unit', 'update', 'doctor', '--help'
+  } elseif ($prev -eq 'device') {
+    $candidates = 'status', 'on', 'off', 'unit', 'update', 'serve', '--help'
+  } elseif ($prev -in 'projects', 'project') {
+    $candidates = 'list', 'show', 'new', 'spawn', 'msg', 'end', '--json', '--help'
+  } elseif ($prev -eq 'headroom') {
+    $candidates = '--json', '--help'
+  } elseif ($prev -eq '--scope') {
+    $candidates = 'look', 'work', 'own'
+  } elseif ($prev -eq '--kind') {
+    $candidates = 'software', 'infra', 'hardware', 'docs', 'research', 'other'
   } elseif ($prev -eq 'uninstall') {
     $candidates = '--all', '--yes'
   } else {

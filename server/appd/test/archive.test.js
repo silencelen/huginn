@@ -229,3 +229,31 @@ test('nothing said at all is an empty string, not the word undefined', () => {
   assert.equal('', archive.lastMessageOf([]));
   assert.equal('', archive.lastMessageOf(null));
 });
+
+// ------------------------------------------------- where a revive puts it back
+
+test('the restored transcript goes under the config dir this daemon was TOLD to use', () => {
+  // ⚠ THE BUG THIS PINS: the revive path built this out of `os.homedir()`, so a
+  // daemon started with HUGINN_APPD_CLAUDE_DIR pointing at a scratch directory —
+  // every route suite, and the CLI's own gate — restored its fixture transcript
+  // into the OWNER'S real ~/.claude/projects/, where Claude Code would then
+  // happily resume it. Found in a review run, by the log line naming the real
+  // path.
+  const t = archive.transcriptTarget('/scratch/claude', '/root/netplan', ID);
+  assert.equal('/scratch/claude/projects/-root-netplan', t.dir);
+  assert.equal(`/scratch/claude/projects/-root-netplan/${ID}.jsonl`, t.file);
+  assert.equal('/scratch/claude/projects', archive.projectsRoot('/scratch/claude'));
+  // And with the knob unset the answer is the real store, unchanged.
+  assert.equal(`/root/.claude/projects/-root-netplan/${ID}.jsonl`,
+    archive.transcriptTarget('/root/.claude', '/root/netplan', ID).file);
+});
+
+test('the slug is Claude Code\'s own: every slash in the cwd becomes a dash', () => {
+  // Not a basename and not an escape — the directory name Claude Code itself
+  // writes. A slug that disagrees is a transcript restored where nothing looks.
+  assert.equal('/c/projects/-tmp-a-b-c',
+    archive.transcriptTarget('/c', '/tmp/a/b/c', ID).dir);
+  // A missing cwd must not become the string "null" in a path. (The daemon
+  // passes `cwd || WORKDIR`, so this is the belt on the braces.)
+  assert.equal('/c/projects', archive.transcriptTarget('/c', null, ID).dir);
+});

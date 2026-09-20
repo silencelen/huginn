@@ -12,8 +12,18 @@
 // SAFETY: no real claude, no live daemon, and NOT THE OPERATOR'S TMUX. Sessions
 // are named `arch-<pid>-*` on a private tmux socket, run `cat >/dev/null` so
 // nothing typed into a pane could execute, and are killed in after(). HOME is
-// redirected into the scratch dir, so the revive path writes its restored
-// transcript into a temporary ~/.claude/projects and never near the real one.
+// redirected into the scratch dir AND HUGINN_APPD_CLAUDE_DIR points somewhere
+// else again, so the revive path writes its restored transcript into a
+// temporary store and never near the real one.
+//
+// ⚠ AND THE TWO ARE DELIBERATELY DIFFERENT DIRECTORIES. This suite used to
+// redirect HOME only, which hid the defect it should have caught: the revive
+// path built ~/.claude/projects out of `os.homedir()` and ignored
+// HUGINN_APPD_CLAUDE_DIR entirely, so a daemon isolated by that knob — the CLI
+// gate, every other route suite — restored fixture transcripts into the
+// OPERATOR'S real store. With the two split, the restore assertions below read
+// CLAUDE_DIR and would fail the moment anybody resolves that path from the
+// process's home again.
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -44,7 +54,7 @@ const TMUX_SOCK = `huginn-test-${process.pid}`;
 // promotion, pinned by routes-session-state.test.js).
 const ASK_INPUT = require('./fixtures/prompts/ask-simple-80.input.json');
 
-let tmp, stateDir, dataDir, home, token, daemon;
+let tmp, stateDir, dataDir, home, claudeDir, token, daemon;
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -186,9 +196,13 @@ before(async () => {
   stateDir = path.join(tmp, 'state');
   dataDir = path.join(tmp, 'data');
   home = path.join(tmp, 'home');
+  // NOT under `home`: see the header note. A transcript that landed in
+  // `home/.claude` would be the bug, and these tests have to be able to say so.
+  claudeDir = path.join(tmp, 'claude');
   fs.mkdirSync(stateDir);
   fs.mkdirSync(dataDir);
   fs.mkdirSync(home);
+  fs.mkdirSync(claudeDir);
   token = crypto.randomBytes(32).toString('hex');
   fs.writeFileSync(path.join(tmp, 'token'), token, { mode: 0o600 });
 
@@ -206,9 +220,12 @@ before(async () => {
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
-      // ⚠ THE REVIVE PATH WRITES INTO ~/.claude/projects. Redirected here so a
-      // test can never put a fixture transcript into the operator's own store.
+      // ⚠ THE REVIVE PATH WRITES INTO <CLAUDE_DIR>/projects. Both knobs are
+      // redirected, at different paths, so a test can never put a fixture
+      // transcript into the operator's own store — and so that resolving it
+      // from the process's home is a FAILURE here rather than a silent escape.
       HOME: home,
+      HUGINN_APPD_CLAUDE_DIR: claudeDir,
       HUGINN_APPD_PORT: String(PORT),
       HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: dataDir,
@@ -553,10 +570,10 @@ test('a revive restores the kept transcript when Claude Code has swept its own',
   // and the revive reports success.
   const { name, id, transcript } = mkArchivable('sweep');
   await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
-  // Claude Code's copy is under HOME; the fixture's is not. Put one where the
-  // daemon looks, then delete it — exactly what the sweep does.
+  // Claude Code's copy is under CLAUDE_DIR; the fixture's is not. Put one where
+  // the daemon looks, then delete it — exactly what the sweep does.
   const slug = tmp.replace(/\//g, '-');
-  const claudeCopy = path.join(home, '.claude', 'projects', slug, `${id}.jsonl`);
+  const claudeCopy = path.join(claudeDir, 'projects', slug, `${id}.jsonl`);
   fs.mkdirSync(path.dirname(claudeCopy), { recursive: true });
   fs.copyFileSync(transcript, claudeCopy);
   fs.rmSync(claudeCopy);
@@ -568,6 +585,12 @@ test('a revive restores the kept transcript when Claude Code has swept its own',
   assert.equal(true, r.body.resumed, 'and only then can the resume actually resume');
   assert.ok(fs.existsSync(claudeCopy), 'put back where Claude Code looks for it');
   assert.equal(fs.readFileSync(transcript, 'utf8'), fs.readFileSync(claudeCopy, 'utf8'));
+  // ⚠ AND NOWHERE ELSE. The whole point of HUGINN_APPD_CLAUDE_DIR is that a
+  // daemon under test cannot reach the real store; resolving this path from the
+  // process's home put fixture transcripts into the operator's own
+  // ~/.claude/projects, which is how this was found.
+  assert.equal(false, fs.existsSync(path.join(home, '.claude')),
+    'the revive wrote under HOME instead of the CLAUDE_DIR it was given');
 });
 
 test('a revive NEVER overwrites the transcript Claude Code already has', async () => {
@@ -576,7 +599,7 @@ test('a revive NEVER overwrites the transcript Claude Code already has', async (
   const { name, id, transcript } = mkArchivable('nooverwrite');
   await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
   const slug = tmp.replace(/\//g, '-');
-  const claudeCopy = path.join(home, '.claude', 'projects', slug, `${id}.jsonl`);
+  const claudeCopy = path.join(claudeDir, 'projects', slug, `${id}.jsonl`);
   fs.mkdirSync(path.dirname(claudeCopy), { recursive: true });
   const newer = fs.readFileSync(transcript, 'utf8')
     + JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'SAID AFTER THE ARCHIVE' }] } }) + '\n';

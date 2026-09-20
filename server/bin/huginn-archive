@@ -17,6 +17,23 @@
 # call is made here, where the body can be read and repeated verbatim.
 set -u
 
+# --help, before the token check: asking what a command does must work on a
+# machine that has no token, and it is not an error. One convention across all
+# the renderers - this one used to answer `huginn archive --help` with
+# "'--help' is not a session name" at exit 1.
+case "${1:-}" in
+  -h|--help)
+    echo "usage: huginn-archive [<session> [--now]] | revive <id|name>"
+    echo
+    echo "  huginn-archive                    what has been archived, and how to bring it back"
+    echo "  huginn-archive <session>          end it for good and keep the way back (the title,"
+    echo "                                    the cwd, the last thing said, a copy of the"
+    echo "                                    transcript and the exact 'claude --resume')"
+    echo "  huginn-archive <session> --now    the same, without waiting for a wrap-up"
+    echo "  huginn-archive revive <id|name>   bring one back and resume into it"
+    exit 0 ;;
+esac
+
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-archive: no appd token at $TOKEN_FILE" >&2; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"

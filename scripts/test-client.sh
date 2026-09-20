@@ -484,10 +484,28 @@ else
   grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$FJ" \
     && ok "ps1: a 200 that is not JavaScript also falls through to the mirror" \
     || bad "ps1: device update on a junk body said: $FJ / log: $(cat "$FETCH_LOG")"
-  FB=$(fetch_run 'huginn device update' errbody fail)
-  grep -q 'gh exited 1' <<<"$FB" && grep -qE 'scp from [^ ]+ exited' <<<"$FB" \
+  # ⚠ READ THROUGH try/catch, NOT OFF THE ERROR RENDERER. Since the fetch
+  # refusal became a terminating error (it used to print and return SUCCESS),
+  # the sentence arrives inside PowerShell's error view - which wraps it at the
+  # console width, prefixes continuation lines with '|', and threads ANSI colour
+  # THROUGH THE MIDDLE of it, so 'scp from huginn exited 1' came back as
+  # "scp from<esc>[0m ... <esc>[31;1mhuginn exited 1". None of that is ours to
+  # fix and none of it is what a caller reads: a script catches the error, or
+  # looks at the exit code.
+  FB=$(fetch_run 'try { huginn device update } catch { Write-Host "REFUSED: $_" }; Write-Host "RC=$LASTEXITCODE"' errbody fail)
+  grep -q 'REFUSED:' <<<"$FB" && grep -q 'gh exited 1' <<<"$FB" && grep -qE 'scp from [^ ]+ exited' <<<"$FB" \
     && ok "ps1: when both fail, the message names which source failed and how" \
     || bad "ps1: both-failed message was: $FB"
+  # AND IT IS A FAILURE. The whole of M3: a refusal that leaves $LASTEXITCODE 0
+  # is read by a script, a CI step or a && chain as a success - here, as "the
+  # runner was installed" when nothing was fetched at all.
+  grep -q 'RC=1' <<<"$FB" \
+    && ok "ps1: and a fetch that fetched nothing sets \$LASTEXITCODE" \
+    || bad "ps1: device update with no source left: $(grep -o 'RC=[0-9]*' <<<"$FB")"
+  FBU=$(fetch_run 'huginn device update' errbody fail >/dev/null 2>&1; echo "exit=$?")
+  grep -q 'exit=1' <<<"$FBU" \
+    && ok "ps1: and uncaught, the whole pwsh invocation fails" \
+    || bad "ps1: an uncaught fetch refusal left pwsh at $FBU"
   FL=$(fetch_run 'huginn local plan' errbody ok)
   grep -q '^scp ' "$FETCH_LOG" \
     && ok "ps1: the local-tier fetch has the same ordering" \
@@ -589,6 +607,126 @@ grep -q 'fd00::1' <<<"$UE" && grep -qi 'bracket' <<<"$UE" \
 [ ! -e "$UD/device.json" ] \
   && ok "and it does not persist a url it has just refused" \
   || bad "huginn-device saved an unusable url: $(cat "$UD/device.json")"
+
+echo "[5f/8] --help is one answer, and colour is for a terminal"
+# ⚠ WHY: `--help` used to behave FOUR ways across the daemon-backed verbs -
+# `projects` and `llm` printed their full help over ssh and exited 0, `headroom`
+# printed a one-line usage on stderr and exited 1, and `archive` answered
+# "invalid session name '--help'". A person types --help when something has
+# already surprised them, and two of those made it look like a second mistake.
+# The rule now: that verb's usage, exit 0, ANSWERED LOCALLY - a help that needs
+# the network is a help you cannot read on a train.
+HT=$(mktemp -d); STUB_DIRS+=("$HT")
+cat > "$HT/ssh" <<'HSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+exit 0
+HSTUB
+chmod +x "$HT/ssh"
+help_sh () {   # $1 = the huginn command; prints stdout, leaves ssh's argv in $HT/log
+  export SSH_LOG="$HT/log"; : > "$SSH_LOG"
+  ( export PATH="$HT:$PATH"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) 2>&1
+}
+for v in archive headroom llm projects device local status revive; do
+  OUT=$(help_sh "huginn $v --help"); RC=$?
+  SENT=$(cat "$HT/log")
+  if [ "$RC" -eq 0 ] && grep -q "huginn $v" <<<"$OUT" && [ -z "$SENT" ]; then
+    ok "sh: $v --help answers locally, exit 0"
+  else
+    bad "sh: $v --help exited $RC, sent '$SENT', said: $(head -1 <<<"$OUT")"
+  fi
+done
+# A typo is still a typo: it must not attach to a session named after it.
+OUT=$(help_sh 'huginn nosuchverb --help'); RC=$?
+[ "$RC" -ne 0 ] && [ -z "$(cat "$HT/log")" ] \
+  && ok "sh: --help on something that is not a verb says so, without an ssh" \
+  || bad "sh: 'nosuchverb --help' exited $RC and sent: $(cat "$HT/log")"
+if command -v pwsh >/dev/null 2>&1; then
+  help_ps () {
+    export SSH_LOG="$HT/log"; : > "$SSH_LOG"
+    PATH="$HT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+  }
+  for v in archive headroom llm projects device local status revive; do
+    OUT=$(help_ps "huginn $v --help; Write-Host \"RC=\$LASTEXITCODE\"")
+    SENT=$(cat "$HT/log")
+    if grep -q 'RC=0' <<<"$OUT" && grep -q "huginn $v" <<<"$OUT" && [ -z "$SENT" ]; then
+      ok "ps1: $v --help answers locally, exit 0"
+    else
+      bad "ps1: $v --help sent '$SENT', said: $(head -2 <<<"$OUT")"
+    fi
+  done
+fi
+# ⚠ AND THE HOST-SIDE RENDERERS ANSWER IT TOO, before they read the token: a
+# person on the host typing `huginn-archive --help` got "'--help' is not a
+# session name" at exit 1, and huginn-headroom put its usage on stderr.
+for r in huginn-archive huginn-devices huginn-rounds huginn-status; do
+  RO=$(server/bin/$r --help 2>/dev/null); RRC=$?
+  [ "$RRC" -eq 0 ] && grep -q "$r" <<<"$RO" \
+    && ok "$r --help: stdout, exit 0" || bad "$r --help exited $RRC: $RO"
+done
+RO=$(server/bin/huginn-headroom --help 2>/dev/null); RRC=$?
+[ "$RRC" -eq 0 ] && grep -q 'huginn-headroom' <<<"$RO" \
+  && ok "huginn-headroom --help: stdout, exit 0" || bad "huginn-headroom --help exited $RRC: $RO"
+# ⚠ AND NO LINE OF ITS OWN SOURCE IN IT. The llm help was a line RANGE over the
+# file header (`sed -n '2,20p'`), and the header grew, so the help ended with
+# `set -u`.
+LO=$(server/bin/huginn-llm --help 2>/dev/null)
+grep -qE '^(set -u|API=|TOKEN_FILE=)' <<<"$LO" \
+  && bad "huginn-llm --help leaks its own source: $(grep -nE '^(set -u|API=|TOKEN_FILE=)' <<<"$LO")" \
+  || ok "huginn-llm --help prints the header and nothing below it"
+
+# ⚠ COLOUR IS FOR A TERMINAL. huginn-status set its ANSI colours
+# unconditionally, so `huginn status | cat`, a redirect and $(huginn status) all
+# carried ^[[36m - and NO_COLOR, whose whole purpose is this, was never read.
+# BOTH halves are asserted: plain in a pipe, and STILL COLOURED on a real tty,
+# because "no colour anywhere" would pass the first check and be a different bug.
+if ! command -v script >/dev/null 2>&1; then
+  skip "huginn-status colour checks (no util-linux script for a pty)"
+else
+  SC_PIPE=$(server/bin/huginn-status 2>/dev/null | cat)
+  grep -q $'\033\[' <<<"$SC_PIPE" \
+    && bad "huginn-status emits ANSI with no tty" \
+    || ok "huginn-status is plain text when stdout is not a terminal"
+  SC_TTY=$(script -qec "$PWD/server/bin/huginn-status" /dev/null 2>/dev/null)
+  grep -q $'\033\[' <<<"$SC_TTY" \
+    && ok "huginn-status still colours a real terminal" \
+    || bad "huginn-status has no colour anywhere - the guard is wrong, not the colour"
+  SC_NC=$(NO_COLOR=1 script -qec "$PWD/server/bin/huginn-status" /dev/null 2>/dev/null)
+  grep -q $'\033\[' <<<"$SC_NC" \
+    && bad "huginn-status ignores NO_COLOR on a terminal" \
+    || ok "huginn-status honours NO_COLOR even on a terminal"
+fi
+
+echo "[5g/8] the terminal tab title is PUT BACK, not overwritten"
+# ⚠ WHY: the attach ended with `printf '\033]0;%s\007' "${HOSTNAME:-shell}"` -
+# it set the title to the HOSTNAME, a string that was very probably never in
+# that tab, while the README ("Restored when you leave") and USAGE both promise
+# restoration. There is no portable way to ASK a terminal for its title (the
+# reply lands on stdin and races the shell), so the terminal is told to remember
+# it: CSI 22 t pushes, CSI 23 t pops.
+if ! command -v script >/dev/null 2>&1; then
+  skip "tab-title checks (no util-linux script for a pty)"
+else
+  TT=$(mktemp -d); STUB_DIRS+=("$TT")
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$TT/ssh"; chmod +x "$TT/ssh"
+  TTOUT=$(script -qec "env PATH='$TT:$PATH' bash -c '. $PWD/client/huginn.sh; huginn tabtest'" /dev/null 2>/dev/null | cat -v)
+  grep -q '\^\[\[22;0t' <<<"$TTOUT" && grep -q '\^\[\]0;tabtest' <<<"$TTOUT" \
+    && ok "sh: the old title is pushed, then the tab is named after the session" \
+    || bad "sh: attach wrote: $(tr -d '\r' <<<"$TTOUT" | head -2)"
+  grep -q '\^\[\[23;0t' <<<"$TTOUT" \
+    && ok "sh: and popped back on the way out" \
+    || bad "sh: no title pop on leaving: $(tr -d '\r' <<<"$TTOUT" | head -2)"
+  grep -q "\\^\\[\\]0;$(hostname)" <<<"$TTOUT" \
+    && bad "sh: the tab was set to the HOSTNAME on the way out again" \
+    || ok "sh: and the hostname is not written into somebody's tab"
+  # Piped, nothing at all: those escapes in a captured variable are rubbish.
+  TTPIPE=$( ( export PATH="$TT:$PATH"; . "$PWD/client/huginn.sh" >/dev/null 2>&1; huginn tabtest ) 2>&1 | cat -v)
+  grep -q '\^\[\]0;' <<<"$TTPIPE" \
+    && bad "sh: title escapes went into a pipe" \
+    || ok "sh: and nothing is written when stdout is not a terminal"
+fi
 
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
 # The whole point of the verb is that it works on a machine that cannot ssh here
