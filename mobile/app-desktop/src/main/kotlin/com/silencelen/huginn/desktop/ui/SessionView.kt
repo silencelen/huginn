@@ -270,6 +270,7 @@ fun SessionView(store: AppStore, name: String) {
     val padsAvailable by store.padsAvailable.collectAsState()
     val padPanel by store.padPanel.collectAsState()
     val padRefs by store.padRefs.collectAsState()
+    val wrapUpNotices by store.wrapUpNotices.collectAsState()
     val padRefKey = ScratchpadRules.sessionRefKey(name)
 
     // Which session's folder the host may search when an answer names an image by
@@ -479,6 +480,8 @@ fun SessionView(store: AppStore, name: String) {
             onPadRefRestore = { id ->
                 if (store.padRefs.value[padRefKey] == null) store.setPadRef(padRefKey, id)
             },
+            wrapUpNotice = wrapUpNotices[name],
+            onDismissWrapUpNotice = { store.dismissWrapUpNotice(name) },
         )
     }
     if (showPanel) ScratchpadSidePanel(store, PadTarget.Session(name))
@@ -1284,6 +1287,13 @@ private fun Composer(
     onSent2: () -> Unit = {},
     /** A refused send hands the reference back — unless a newer one was set. */
     onPadRefRestore: (String) -> Unit = {},
+    /**
+     * ⚠ P-19. "Wrap-up held — it asked a question." Passed in rather than read
+     * off a store here: this composable takes a controller and a client, not the
+     * whole app.
+     */
+    wrapUpNotice: String? = null,
+    onDismissWrapUpNotice: () -> Unit = {},
 ) {
     val attachments = rememberAttachmentController(client, scope, controller.name)
     val pending by attachments.items.collectAsState()
@@ -1405,6 +1415,7 @@ private fun Composer(
         // that feeds it starts on a queued send and stops when the queue drains —
         // see [SessionController.noteSend].
         val queueState by controller.sendQueue.collectAsState()
+        val draftNotice by controller.draftNotice.collectAsState()
 
         // The shape is [ComposerFrame], shared with the chat composer — including
         // the cap-before-fill that used to live on the line below, which is now one
@@ -1532,6 +1543,51 @@ private fun Composer(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
+        }
+        // ⚠⚠ D-7 / DECISION 59. The draft hold has a ceiling, and when it is
+        // reached the message goes in ON TOP of text somebody was still typing —
+        // both submitted as one prompt. Until now this client's whole account of
+        // that was the queued line disappearing. It stays until dismissed or the
+        // next send, because a reader who put the laptop down must still find it.
+        // ⚠ P-19. The daemon abandons an auto-end when the session asks a question
+        // and reports it only by dropping `softEnding` — which is also what a
+        // wrap-up that WORKED looks like. Somebody who pressed Wrap up and walked
+        // away believed the session had ended.
+        wrapUpNotice?.let { note ->
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    note,
+                    style = DeskType.rowMeta,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onDismissWrapUpNotice) {
+                    Text("Dismiss", style = DeskType.rowMeta)
+                }
+            }
+        }
+        draftNotice?.let { note ->
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    note,
+                    style = DeskType.rowMeta,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = { controller.dismissDraftNotice() }) {
+                    Text("Dismiss", style = DeskType.rowMeta)
+                }
+            }
         }
     }
 }

@@ -15,6 +15,8 @@ import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.RoundDraft
 import com.silencelen.huginn.ui.ARCHIVE_TRANSCRIPT_GONE
 import com.silencelen.huginn.ui.ArchiveRules
+import com.silencelen.huginn.ui.ModelLabels
+import com.silencelen.huginn.ui.WrapUpWatch
 import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
@@ -1512,8 +1514,12 @@ class AppStore(
      * report through their own channel, like every other create here.
      */
     suspend fun startLocalChat() {
-        val local = client.models().firstOrNull { it.family == "local" && it.available }
-            ?: throw IllegalStateException("no machine is serving local models right now")
+        // ⚠ NOT MERELY THE FIRST LOCAL ROW (P-21). The serving catalog carries
+        // `nomic-embed` beside the chat models, and an embedder answers a vector
+        // — "the first available" would open a chat that cannot work.
+        val local = client.models().firstOrNull {
+            it.family == "local" && it.available && !ModelLabels.isEmbedding(it)
+        } ?: throw IllegalStateException("no machine is serving local models right now")
         val made = client.createChat("ask", model = local.id)
         openChat(made.id)
         openView(View.CHATS)
@@ -1718,9 +1724,45 @@ class AppStore(
         // preview=1: the list rows show what each session is doing, which is the
         // only thing that makes the list worth reading at a glance.
         runCatching { client.sessions(preview = true) }
-            .onSuccess { _sessions.value = it; _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
+            .onSuccess { landSessions(it); _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
             .onFailure { note(Faults.SESSIONS, it) }
     }
+
+    /**
+     * The sessions list, with the one thing the wire does not say read out of it.
+     *
+     * ⚠⚠ P-19. `lib/softend.js` abandons an auto-end when the session asks a
+     * question, and the daemon reports that by DELETING the pending record — so
+     * all `/v1/sessions` says is `softEnding` going false, which is also what a
+     * wrap-up that worked looks like. The difference is whether the session is
+     * still in the list and asking something. `WrapUpWatch` owns the rule and is
+     * asserted in :core; it needs the previous reading, so the list has one
+     * writer.
+     */
+    private fun landSessions(rows: List<Session>) {
+        val cancelled = WrapUpWatch.cancelled(windingDown, rows)
+        windingDown = WrapUpWatch.winding(rows)
+        _sessions.value = rows
+        if (cancelled.isNotEmpty()) {
+            _wrapUpNotices.value = _wrapUpNotices.value + cancelled.associateWith { WrapUpWatch.NOTICE }
+        }
+    }
+
+    /** Which sessions were winding down at the last reading. See [landSessions]. */
+    private var windingDown: Set<String> = emptySet()
+
+    private val _wrapUpNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** "Wrap-up held — it asked a question", per session. Empty almost always. */
+    val wrapUpNotices: StateFlow<Map<String, String>> = _wrapUpNotices.asStateFlow()
+
+    fun dismissWrapUpNotice(name: String) {
+        if (name !in _wrapUpNotices.value) return
+        _wrapUpNotices.value = _wrapUpNotices.value - name
+    }
+
+    /** A fresh wrap-up supersedes the last one's verdict. */
+    fun notingSoftEnd(name: String) = dismissWrapUpNotice(name)
 
     /**
      * The archived list, and the flag that says whether this daemon has them.
@@ -1963,12 +2005,12 @@ class AppStore(
      */
     private suspend fun resolveRoute(force: Boolean = false) {
         _resolvingRoute.value = true
-        val outcome = RouteResolver.resolve(
+        val outcome = RouteResolver.resolveProving(
             book = _routeBook.value,
             health = _routeHealth.value,
             now = System.currentTimeMillis(),
             force = force,
-        ) { client.probe(it.url) }
+        ) { client.probeProof(it.url) }
         _resolvingRoute.value = false
         saveHealth(outcome.health)
         // Cleared on EVERY resolution before it is set again: an offer describes

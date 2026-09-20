@@ -24,6 +24,39 @@ The phone's half of the round-two review.
 - **"Wrap up" lines up with the other verbs** in a session's menu, and the refusal you get when an
   app is not reachable from your devices carries **Copy fix** beside the dialog's own buttons, so
   the lines can be copied without discovering a scroll.
+- **huginn now proves an address is huginn before trusting it with your token.** The app asks the
+  address a question only the real daemon can answer and moves there only if it answers correctly;
+  an address that merely *looks* right is shown as "answers, cannot prove it is huginn" and is
+  never adopted on its own. A host running a daemon older than 3.6 reads the same way, and you can
+  still connect to it deliberately.
+- **The session list stops moving under your finger.** While a row's menu or a confirm dialog is
+  open the order is frozen, so "Kill session" on one row can no longer raise "Wrap up" on another;
+  when the list does re-sort the rows move rather than teleport, and every confirm dialog now puts
+  the session's **name** in the largest text on screen.
+- **The New chat picker scrolls**, so every machine and every local model can actually be chosen —
+  three of them, including the largest model in the fleet, were off the bottom edge. Reachable
+  machines come first, a machine that is not answering greys out its models too, and an embedding
+  model is no longer offered as something to have a conversation with.
+- **The selection bar's ✕ really cancels.** It used to leave the highlight, the drag handles and
+  Android's own Copy popup on screen. Its verbs now act on the words you highlighted rather than on
+  the whole message, and copying or quoting a **table** keeps its rows and columns instead of
+  running every cell together.
+- **A message that went in on top of text somebody was still typing says so**, quoting what it
+  landed in — until now the "Queued" line simply disappeared and the two messages arrived merged.
+- **A wrap-up that turned into a question says so** instead of looking exactly like one that
+  finished: the session is still running and waiting for an answer.
+- **Removing an app or a route asks first**, naming it, the way Kill and Archive already did.
+- **A proposal's brief can be opened in full** before you approve it, rather than being cut at six
+  lines with Spawn directly underneath.
+- **An archived conversation gets the live one's margins** — text no longer runs off both edges —
+  and says "Archived · read-only" at the top.
+- **A message relayed through a project reads as a relay**, naming the project and the member it
+  came from, instead of appearing as something you typed yourself.
+- **A project row has its own menu**, so a cluster can be ended without going into it first.
+- **The keep-awake setting is described one way.** It said "Nothing is spent" on one page and
+  "Spends a fraction of a cent" on another, about the same switch.
+- **The dim suggestion Claude Code offers back from history** is no longer drawn on a session's row
+  as though it were a message waiting to send.
 
 ## 3.6.1 — 2026-09-19
 

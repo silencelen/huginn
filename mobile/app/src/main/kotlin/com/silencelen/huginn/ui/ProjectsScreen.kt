@@ -3,12 +3,20 @@ package com.silencelen.huginn.ui
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -19,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.theme.verbInk
 
 /**
  * The phone's Projects list: the shared tree, a create sheet, and the fetches the
@@ -45,6 +54,15 @@ fun ProjectsScreen(
     refusal: String? = null,
     onDismissSheet: () -> Unit = {},
     defaultCwd: String? = null,
+    /**
+     * ⚠ D-8, THE PHONE'S HALF. Winding a cluster down lived ONLY behind the
+     * dashboard's top-bar menu, which is two taps away and inside the project —
+     * and the desktop's equivalent was a right-click on a title with no
+     * affordance at all. The row gets the same door both lists now have. Null
+     * hides the control, which is what a shell with nowhere to put the dialog
+     * gets.
+     */
+    onEndProject: ((ProjectRow) -> Unit)? = null,
 ) {
     // Survives a fold, like every other screen state here: unfolding the phone
     // must not collapse a cluster somebody had just opened.
@@ -77,6 +95,12 @@ fun ProjectsScreen(
             // …and the same clearance, so the last project is not parked behind
             // "New project" with no scroll position that would move it.
             modifier = Modifier.fillMaxSize().padding(bottom = LIST_FAB_CLEARANCE),
+            // The additive slot `ProjectsListView` describes: the ITEMS are this
+            // shell's, because a phone menu is a `DropdownMenu` and the desktop's
+            // is a `ContextMenuItem` list.
+            rowTrailing = onEndProject?.let { end ->
+                { project -> ProjectRowMenu(onOpen = { onOpenProject(project) }, onEnd = { end(project) }) }
+            },
         )
 
         ExtendedFloatingActionButton(
@@ -188,3 +212,39 @@ fun groupWords(project: ProjectRow): String = ProjectRules.rollupWords(project)
 
 /** What the unaffiliated block is called, when there is a project above it. */
 const val SESSIONS_UNGROUPED: String = "NOT IN A PROJECT"
+
+/**
+ * The project row's own menu (D-8).
+ *
+ * Two items, and they are the two verbs this client actually has: opening the
+ * cluster, and winding it down. Rename / Pause / Archive are the desktop's,
+ * because the phone has no view-model path to `PATCH /v1/projects/:id` yet —
+ * an item that can only fail teaches people the whole menu is decoration.
+ */
+@Composable
+private fun ProjectRowMenu(onOpen: () -> Unit, onEnd: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.Filled.MoreVert, contentDescription = "Project actions")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Open") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
+                onClick = { open = false; onOpen() },
+            )
+            DropdownMenuItem(
+                text = { Text("End\u2026", color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                    )
+                },
+                onClick = { open = false; onEnd() },
+            )
+        }
+    }
+}

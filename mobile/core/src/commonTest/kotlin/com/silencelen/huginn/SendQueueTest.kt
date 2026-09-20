@@ -1,5 +1,6 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.IntoDraft
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.TypingState
 import com.silencelen.huginn.ui.SendQueue
@@ -212,5 +213,96 @@ class SendQueueTest {
     @Test
     fun `the next poll clears the duplicate line`() {
         assertNull(SendQueue.note(TypingState(queued = 0)))
+    }
+
+    // ------------------------------- the message that went into somebody's draft
+
+    /**
+     * ⚠⚠ D-7 / DECISION 59. The draft hold has a ceiling (60 s after the last
+     * live-view keystroke) and when it is reached the message goes in on top of
+     * text a person was still typing — `draft in progress` + `say OK2` left as
+     * `draft in progresssay OK2` and BOTH clients said nothing at all: the queued
+     * line simply disappeared and a merged user bubble arrived. The ceiling
+     * stays; the silence does not.
+     */
+    @Test
+    fun `a delivery that went into a draft is said out loud, with the text it landed in`() {
+        val note = SendQueue.draftNotice(IntoDraft(at = 1_700_000_000, waitedMs = 28_000, composer = "draft in progress"))
+        assertNotNull(note)
+        assertTrue(note!!.startsWith(SendQueue.DRAFT_NOTICE_LEAD), note)
+        assertTrue(note.contains("draft in progress"), "it SHOWS what it landed in: $note")
+        assertTrue(note.contains("check the session"), note)
+    }
+
+    /** Nothing went into a draft, which is the case almost every time. */
+    @Test
+    fun `no draft means no notice`() {
+        assertNull(SendQueue.draftNotice(null))
+        assertNull(SendQueue.draftNotice(IntoDraft(at = 0, composer = "stale")), "at 0 is 'never happened'")
+    }
+
+    /**
+     * The daemon reported the merge but not what it merged into — a draft that
+     * was whitespace, or a capture that raced the paste. The FACT is the merge,
+     * so the notice still fires; it just has nothing to quote.
+     */
+    @Test
+    fun `a merge with nothing to quote still reports the merge`() {
+        assertEquals(
+            SendQueue.DRAFT_NOTICE_BARE,
+            SendQueue.draftNotice(IntoDraft(at = 1_700_000_000, composer = "   ")),
+        )
+    }
+
+    /** It never reads as a failure — the message DID arrive, on top of something. */
+    @Test
+    fun `the draft sentence never invites a retype`() {
+        val words = SendQueue.DRAFT_NOTICE_BARE.lowercase() + " " + SendQueue.DRAFT_NOTICE_LEAD.lowercase()
+        assertFalse("not sent" in words, words)
+        assertFalse("failed" in words, words)
+        assertFalse("rejected" in words, words)
+        assertTrue("was sent" in words, words)
+    }
+
+    /**
+     * ⚠ WHEN TO READ IT. `intoDraft` outlives the queue on purpose — the daemon
+     * reaps the queue struct the instant it empties — so it is present while a
+     * LATER message is still waiting, and a notice raised then would describe a
+     * delivery whose result the reader has not seen. Read it once the queue is
+     * empty and nothing is in flight.
+     */
+    @Test
+    fun `the notice waits for the queue to drain`() {
+        val into = IntoDraft(at = 1_700_000_000, composer = "half a sentence")
+        assertFalse(SendQueue.draftNoticeReady(TypingState(queued = 2, intoDraft = into)))
+        assertFalse(SendQueue.draftNoticeReady(TypingState(queued = 0, delivering = true, intoDraft = into)))
+        assertTrue(SendQueue.draftNoticeReady(TypingState(queued = 0, intoDraft = into)))
+        assertFalse(SendQueue.draftNoticeReady(TypingState(queued = 0)), "and there is usually nothing to say")
+        assertFalse(SendQueue.draftNoticeReady(null))
+    }
+
+    /**
+     * The other half of the wire: a SYNCHRONOUS delivery reports it on the send's
+     * own answer, so the sender is told without waiting for a poll.
+     */
+    @Test
+    fun `a send's own answer can carry the draft it landed in`() {
+        val answer = SendKeysResult(
+            ok = true, delivered = true, queued = 0,
+            intoDraft = IntoDraft(at = 1_700_000_000, waitedMs = 0, composer = "typing this"),
+        )
+        assertTrue(answer.landed, "it was delivered — the notice is not a queue state")
+        assertNull(SendQueue.seed(answer), "so it seeds no queued line")
+        val note = SendQueue.draftNotice(answer.intoDraft)
+        assertNotNull(note)
+        assertTrue(note!!.contains("typing this"), note)
+    }
+
+    /** An older daemon never sends the field, and nothing about the old path moves. */
+    @Test
+    fun `without intoDraft the old answers behave exactly as before`() {
+        assertNull(SendKeysResult(ok = true, delivered = true).intoDraft)
+        assertNull(SendQueue.draftNotice(SendKeysResult(ok = true, delivered = true).intoDraft))
+        assertNull(TypingState(queued = 0).intoDraft)
     }
 }

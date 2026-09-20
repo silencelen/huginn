@@ -1107,12 +1107,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun resolveRoute(silent: Boolean = false, force: Boolean = false) {
         viewModelScope.launch {
             _resolvingRoute.value = true
-            val outcome = RouteResolver.resolve(
+            val outcome = RouteResolver.resolveProving(
                 book = _routeBook.value,
                 health = _routeHealth.value,
                 now = System.currentTimeMillis(),
                 force = force,
-            ) { client.probe(it.url) }
+            ) { client.probeProof(it.url) }
             _resolvingRoute.value = false
             saveHealth(outcome.health)
             // Cleared on EVERY resolution before it is set again: an offer is a
@@ -1802,7 +1802,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         resolveRoute(silent = true)
                     }
                 }
-            runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+            runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
             // Silent on failure like the two above: a daemon too old to know about
             // Rounds 404s here, and that must leave the rest of the screen working
@@ -1843,7 +1843,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             var tick = 0
             while (isActive) {
-                runCatching { client.sessions(preview = true) }.onSuccess { _sessions.value = it }
+                runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
                 // ⚠ THE TWO LISTS MOVE TOGETHER AND MUST BE REFRESHED TOGETHER. A
                 // graceful archive leaves the session on screen for as long as its
                 // turn runs and then moves it — so a Sessions poll that did not
@@ -1863,11 +1863,46 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         sessionsPollJob = null
     }
 
+    /**
+     * Every path that replaces the sessions list goes through here.
+     *
+     * ⚠⚠ P-19. A CANCELLED AUTO-END IS INVISIBLE ON THE WIRE. `lib/softend.js`
+     * abandons the auto-end when the session asks a question and the daemon just
+     * deletes the pending record — so all `/v1/sessions` reports is `softEnding`
+     * going false, which is also what a wrap-up that WORKED looks like. The
+     * difference is whether the session is still there and asking; `WrapUpWatch`
+     * owns that rule and is asserted in :core. It needs the previous reading,
+     * which is why every writer funnels through one function.
+     */
+    private fun landSessions(rows: List<com.silencelen.huginn.data.Session>) {
+        val cancelled = WrapUpWatch.cancelled(windingDown, rows)
+        windingDown = WrapUpWatch.winding(rows)
+        _sessions.value = rows
+        if (cancelled.isEmpty()) return
+        _wrapUpNotices.value = _wrapUpNotices.value + cancelled.associateWith { WrapUpWatch.NOTICE }
+    }
+
+    /** Which sessions were winding down at the last reading. See [landSessions]. */
+    private var windingDown: Set<String> = emptySet()
+
+    private val _wrapUpNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * "Wrap-up held — it asked a question" per session (P-19). Empty almost
+     * always; cleared by the reader, and by a fresh wrap-up on that session.
+     */
+    val wrapUpNotices: StateFlow<Map<String, String>> = _wrapUpNotices.asStateFlow()
+
+    fun dismissWrapUpNotice(name: String) {
+        if (name !in _wrapUpNotices.value) return
+        _wrapUpNotices.value = _wrapUpNotices.value - name
+    }
+
     fun refreshSessions() {
         viewModelScope.launch {
             awaitReady()
             runCatching { client.sessions(preview = true) }
-                .onSuccess { _sessions.value = it }
+                .onSuccess { landSessions(it) }
                 .onFailure { _toast.value = errText(it) }
         }
     }
@@ -2924,6 +2959,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * open — so drafts are deliberately NOT cleared. Reports what was sent.
      */
     fun softEndSession(name: String) {
+        // A fresh wrap-up supersedes the last one's verdict: the notice is about
+        // the attempt that has just been replaced.
+        dismissWrapUpNotice(name)
         viewModelScope.launch {
             runCatching { client.softEndSession(name) }
                 .onSuccess { r ->
@@ -3629,6 +3667,46 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** The composer's one-line status for a session, or null. */
     fun queueNote(name: String): String? = SendQueue.note(_typing.value[name])
 
+    private val _draftNotices = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /**
+     * ⚠⚠ D-7 / DECISION 59, per session. "Your message was sent into text someone
+     * was still typing" — absent almost always.
+     *
+     * The draft hold has a ceiling (60 s after the last live-view keystroke) and
+     * when it is reached the queued message is pasted in front of the draft and
+     * both are submitted as one prompt. Every client's account of that used to be
+     * the queued line quietly disappearing. The daemon reports it now — on the
+     * send's own answer when the delivery was synchronous, on `/typing`
+     * otherwise — and this is where the reader is told.
+     *
+     * Cleared by [dismissDraftNotice] or by the next send into that session.
+     */
+    val draftNotices: StateFlow<Map<String, String>> = _draftNotices.asStateFlow()
+
+    fun draftNotice(name: String): String? = _draftNotices.value[name]
+
+    fun dismissDraftNotice(name: String) {
+        if (name !in _draftNotices.value) return
+        _draftNotices.value = _draftNotices.value - name
+    }
+
+    /**
+     * The merge instants already reported, so the SAME one is not raised again on
+     * every poll — the daemon keeps `intoDraft` for an hour on purpose, so that a
+     * phone which was asleep still sees it, which means it is read repeatedly by
+     * design.
+     */
+    private val draftNoticeAt = mutableMapOf<String, Long>()
+
+    private fun noteIntoDraft(name: String, into: com.silencelen.huginn.data.IntoDraft?) {
+        val at = into?.at ?: return
+        if (at <= 0 || draftNoticeAt[name] == at) return
+        val words = SendQueue.draftNotice(into) ?: return
+        draftNoticeAt[name] = at
+        _draftNotices.value = _draftNotices.value + (name to words)
+    }
+
     private fun setTyping(name: String, state: com.silencelen.huginn.data.TypingState?) {
         _typing.value = _typing.value.toMutableMap().apply {
             if (state == null) remove(name) else put(name, state)
@@ -3636,7 +3714,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun noteSend(name: String, result: com.silencelen.huginn.data.SendKeysResult) {
+        // A new send supersedes the last notice: what the reader needs is where
+        // THIS message went, not a standing strip about the previous one.
+        dismissDraftNotice(name)
         setTyping(name, SendQueue.seed(result))
+        // ⚠ NOT GATED ON `landed`. A delivery that went into somebody's draft IS
+        // delivered — on top of something — so the synchronous case, which is the
+        // one the sender is standing there watching, has nothing queued at all.
+        noteIntoDraft(name, result.intoDraft)
     }
 
     private var typingJob: Job? = null
@@ -3661,6 +3746,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                             // error is the absence of a queue, not a queue of zero,
                             // and keeping the row would leave "(0 waiting)" under a
                             // composer that is working perfectly.
+                            // ⚠ BEFORE THE STATE IS DROPPED. A drained queue is
+                            // cleared below, and `intoDraft` rides on exactly that
+                            // answer — reading it after would read it off nothing.
+                            if (SendQueue.draftNoticeReady(st)) noteIntoDraft(name, st.intoDraft)
                             setTyping(name, st.takeIf { SendQueue.note(it) != null })
                         }
                 }

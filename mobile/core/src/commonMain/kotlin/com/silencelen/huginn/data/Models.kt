@@ -489,6 +489,40 @@ data class TranscriptEvent(
      * so the preview cannot be parsed back into an addressable name.
      */
     val peer: ProjectPeer? = null,
+    /**
+     * The PROJECT a relayed message came through (appd 3.6.0, M1).
+     *
+     * ⚠⚠ THE OTHER RELAY, AND THE ONE THAT DREW AS THE READER'S OWN BUBBLE. The
+     * Projects screen's "send to member" button does NOT travel Claude Code's
+     * native peer channel — the daemon pastes a frame into the pane — so the
+     * record it leaves is a plain `user` one with no `origin`, and `peerNote`,
+     * which keys on `origin.kind === 'peer'`, had nothing to recognise. The
+     * member's transcript drew the owner's relay as the member's OWN words,
+     * safety paragraph and all. The daemon now recognises the frame by its
+     * header and re-kinds it `system`; this carries the project the header names.
+     *
+     * Null on every other row, including a native peer message. On a transcript
+     * written before the project clause existed the row still arrives — as a
+     * system note — with [RelayProject.id] and [RelayProject.name] null and
+     * [RelayProject.from] set, which is the same category and less detail.
+     */
+    val project: RelayProject? = null,
+)
+
+/**
+ * Which project relayed a message, and who sent it.
+ *
+ * @param id the project's id, null on a transcript written before the header
+ *   carried one.
+ * @param name the project's name, null for the same reason.
+ * @param from the sender's peer name — always present, because the header cannot
+ *   match without it.
+ */
+@Serializable
+data class RelayProject(
+    val id: String? = null,
+    val name: String? = null,
+    val from: String = "",
 )
 
 @Serializable
@@ -1512,10 +1546,43 @@ data class SendKeysResult(
      * False from every older daemon, which is the old behaviour exactly.
      */
     val duplicate: Boolean = false,
+    /**
+     * This send was delivered SYNCHRONOUSLY and went into a composer that was
+     * holding somebody's unsent text (appd 3.6.0). Null in every other case,
+     * including on an older daemon.
+     *
+     * ⚠ D-7. The draft hold is a hold with a ceiling — sixty seconds after the
+     * last live-view keystroke (decision 57) — and when the ceiling is reached
+     * the message goes in anyway, in front of text a person was still typing, and
+     * both are submitted as one prompt. The desktop walker watched
+     * `draft in progress` and `say OK2` become `draft in progresssay OK2`, and
+     * the client said NOTHING: the queued line simply disappeared. Decision 59 is
+     * that the ceiling stays and the silence does not.
+     */
+    val intoDraft: IntoDraft? = null,
 ) {
     /** Nothing is waiting on this send — it landed, or there is no queue to wait in. */
     val landed: Boolean get() = delivered || queued <= 0
 }
+
+/**
+ * A delivery that went into somebody's draft anyway (appd 3.6.0, decision 59).
+ *
+ * ⚠ `at` IS EPOCH **SECONDS**, like every other timestamp outside `/v1/headroom`
+ * — the units trap M3 is about. The client has nothing to compute from it, which
+ * is why nothing here converts.
+ *
+ * @param waitedMs how long the message had been held when it went in.
+ * @param composer the first 120 characters of the draft it landed in, already
+ *   whitespace-collapsed by the daemon, so a notice can SHOW what it landed on
+ *   rather than asserting it abstractly.
+ */
+@Serializable
+data class IntoDraft(
+    val at: Long = 0,
+    val waitedMs: Long = 0,
+    val composer: String = "",
+)
 
 /** What the daemon is holding for one session, and why. */
 @Serializable
@@ -1523,9 +1590,27 @@ data class TypingState(
     val queued: Int = 0,
     val delivering: Boolean = false,
     val lastError: String? = null,
-    /** `turn` | `modal` | null — what the queue is waiting on. */
+    /** `turn` | `modal` | `starting` | `attention` | `draft` | `trust` | null. */
     val blockedBy: String? = null,
     val serverTime: Long = 0,
+    /**
+     * How long the HEAD of the queue has been waiting (appd 3.6.0). Zero when
+     * nothing is queued, and never negative however the clock moves.
+     */
+    val waitedMs: Long = 0,
+    /**
+     * The most recent delivery to this session that went into somebody's draft,
+     * or null (appd 3.6.0, decision 59).
+     *
+     * ⚠ IT OUTLIVES THE QUEUE, WHICH IS THE POINT. The daemon reaps the queue
+     * struct the instant it empties — the same instant this notice becomes the
+     * only thing left worth reading — so it is kept in its own map, cleared by
+     * the next ordinary delivery or after an hour. **Read it once
+     * `queued == 0 && !delivering`.**
+     */
+    val intoDraft: IntoDraft? = null,
+    /** The same instant as [serverTime], in SECONDS on every route (appd 3.6.0). */
+    val serverTimeSec: Long = 0,
 )
 
 /**

@@ -81,6 +81,20 @@ fun ProjectsListView(
      * swallows the gesture instead of throwing.
      */
     scroll: Boolean = false,
+    /**
+     * ⚠⚠ D-8. THE VERBS WERE UNREACHABLE WITHOUT GUESSING. Open / Rename / Pause
+     * / Archive / Delete existed ONLY behind a secondary click on the project
+     * TITLE in the detail header: no chevron, no ⋮, no hover mark, and a
+     * right-click on the ROW in this list offered nothing at all. The verbs
+     * themselves are good — the three-way delete dialog is the best destructive
+     * dialog in the product — and they were simply undiscoverable.
+     *
+     * An ADDITIVE slot rather than a menu built in here: the items are the
+     * shell's (the desktop has `ContextMenuItem`s and a `MenuButton`, the phone a
+     * `DropdownMenu`), and a shared list has no business knowing either. Null
+     * draws nothing, which is exactly what every existing caller gets.
+     */
+    rowTrailing: (@Composable (ProjectRow) -> Unit)? = null,
 ) {
     val ordered = remember(projects) { ProjectRules.orderedProjects(projects) }
     val scrollState = rememberScrollState()
@@ -136,6 +150,7 @@ fun ProjectsListView(
                 onToggle = { onToggle(project.id) },
                 onOpen = { onOpenProject(project) },
                 onOpenMember = { onOpenMember(project, it) },
+                trailing = rowTrailing?.let { slot -> { slot(project) } },
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
@@ -151,6 +166,8 @@ private fun ProjectRowItem(
     onToggle: () -> Unit,
     onOpen: () -> Unit,
     onOpenMember: (ProjectLive) -> Unit,
+    /** The shell's own control at the end of the row — see [ProjectsListView]. */
+    trailing: (@Composable () -> Unit)? = null,
 ) {
     val ordered = remember(members) { ProjectRules.ordered(members.orEmpty()) }
     Column(Modifier.fillMaxWidth()) {
@@ -190,6 +207,9 @@ private fun ProjectRowItem(
                 // a small dot, no accent rail, no badge count.
                 MemberDot("attention")
             }
+            // The way into the verbs, at the end of the row where every other
+            // list in this product puts one (D-8).
+            trailing?.invoke()
         }
         // ⚠⚠ HEIGHT ONLY. The column is fillMaxWidth, so the width it is measured
         // at arrived fixed from the pane and animateContentSize can only move the

@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Mic
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.Screen
@@ -153,6 +155,26 @@ fun SessionScreen(
      * otherwise; [com.silencelen.huginn.ui.SendQueue] writes it.
      */
     queueNote: String? = null,
+    /**
+     * ⚠⚠ D-7 / DECISION 59. "Your message was sent into text someone was still
+     * typing: …" — null almost always.
+     *
+     * The daemon's draft hold has a ceiling, and past it the queued message is
+     * pasted in front of somebody's unsent text and both are submitted as one
+     * prompt. The client's whole account of that used to be the queued line
+     * disappearing. Stays until [onDismissDraftNotice] or the next send.
+     */
+    draftNotice: String? = null,
+    onDismissDraftNotice: () -> Unit = {},
+    /**
+     * ⚠ P-19. "Wrap-up held — it asked a question." The daemon abandons an
+     * auto-end when the session asks something and reports it only by dropping
+     * `softEnding`, which is also what a wrap-up that WORKED looks like — so a
+     * person who tapped Wrap up and put the phone down believed the session had
+     * ended. `WrapUpWatch` tells the two apart.
+     */
+    wrapUpNotice: String? = null,
+    onDismissWrapUpNotice: () -> Unit = {},
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -247,6 +269,10 @@ fun SessionScreen(
                     quickActions = quickActions,
                     onSelectionAction = onSelectionAction,
                     queueNote = queueNote,
+                    draftNotice = draftNotice,
+                    onDismissDraftNotice = onDismissDraftNotice,
+                    wrapUpNotice = wrapUpNotice,
+                    onDismissWrapUpNotice = onDismissWrapUpNotice,
                     spinner = screen?.spinner,
                     statusLines = screen?.statusLines ?: emptyList(),
                     transientLine = screen?.transientLine,
@@ -339,6 +365,10 @@ private fun SessionConversation(
     quickActions: com.silencelen.huginn.data.QuickActions? = null,
     onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
     queueNote: String? = null,
+    draftNotice: String? = null,
+    onDismissDraftNotice: () -> Unit = {},
+    wrapUpNotice: String? = null,
+    onDismissWrapUpNotice: () -> Unit = {},
     onInterrupt: () -> Unit,
     working: Boolean,
     onCopy: (String) -> Unit,
@@ -366,6 +396,18 @@ private fun SessionConversation(
     androidx.activity.compose.BackHandler(enabled = selection.active) {
         selection = SelectionMode.NONE
     }
+
+    // ⚠ P-06 / P-07. What the PLATFORM has selected, recorded by the gated
+    // toolbar as it changes — the only handle an Android client has on a
+    // `SelectionContainer`'s text, since the registrar and manager are internal.
+    // See `NativeSelection`, which also explains why reading it costs a clipboard
+    // round trip.
+    val nativeSelection = remember { NativeSelection() }
+    val selectionReset = rememberSelectionReset()
+    val textToolbarGate = rememberGatedTextToolbar(selection.active, nativeSelection)
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val clipRead: () -> String? = { clipboard.getText()?.text }
+    val clipWrite: (String) -> Unit = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(it)) }
 
     // WHICH STREAM this body is showing. The main page goes on ticking
     // underneath either way: reading an agent is looking more closely at a
@@ -449,9 +491,17 @@ private fun SessionConversation(
               // Transcript only: the composer below is a text field and keeps its
               // own toolbar, which is the only one it has.
               androidx.compose.runtime.CompositionLocalProvider(
-                  androidx.compose.ui.platform.LocalTextToolbar provides
-                      rememberGatedTextToolbar(selection.active),
+                  androidx.compose.ui.platform.LocalTextToolbar provides textToolbarGate,
               ) {
+              // ⚠⚠ THE ONLY WAY TO DROP A SELECTION (P-06). `SelectionContainer`'s
+              // public overload takes a modifier and its content and nothing
+              // else; the one that carries the selection and an
+              // `onSelectionChange` is internal, and so is the registrar. Keying
+              // the container disposes its manager and composes a fresh one,
+              // which is a selection that no longer exists. The list state is
+              // hoisted outside, so the scroll survives, and this only fires on a
+              // deliberate dismissal.
+              androidx.compose.runtime.key(selectionReset.value) {
               androidx.compose.foundation.text.selection.SelectionContainer {
                 androidx.compose.runtime.CompositionLocalProvider(
                     // Which session's folder the host may search when an answer
@@ -509,6 +559,7 @@ private fun SessionConversation(
                 }
               }
                 }
+              }
               }
               }
             }
@@ -607,12 +658,33 @@ private fun SessionConversation(
         SelectionActionBar(
             mode = selection,
             actions = quickActions,
+            // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
+            // one word and handed the bar the WHOLE row, so `pong-` lit and
+            // `> pong-one` staged; on a paragraph, one word lit and the whole
+            // block quoted. When the platform is holding a selection its text
+            // wins; with none — the plain long-press — the row is still the scope.
             onAct = { action, text ->
-                onSelectionAction(action, text)
+                onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
                 selection = SelectionMode.NONE
+                selectionReset.bump()
             },
-            onCopy = { onCopy(it); selection = SelectionMode.NONE },
-            onDismiss = { selection = SelectionMode.NONE },
+            onCopy = {
+                onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
+                selection = SelectionMode.NONE
+                selectionReset.bump()
+            },
+            // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
+            // take the app's bar down and leave the word highlighted, both amber
+            // handles on screen and Android's own Copy / Select all popup floating
+            // over the conversation; only tapping empty space cleared it.
+            // `cancelled()` takes down the popup, and the bump re-keys the
+            // SelectionContainer, which is the only way a caller can drop a
+            // selection Compose keeps in an internal manager.
+            onDismiss = {
+                selection = SelectionMode.NONE
+                textToolbarGate.cancelled()
+                selectionReset.bump()
+            },
         )
 
         Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
@@ -646,6 +718,60 @@ private fun SessionConversation(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp),
                 )
+            }
+            // ⚠⚠ THE MESSAGE THAT WENT IN ON TOP OF SOMEBODY'S DRAFT (D-7). Above
+            // the input row for the same reason the queue line is: the row owns
+            // the keyboard and navigation inset, so anything after it is laid out
+            // under the keyboard. In the error ink, because the thing that
+            // happened is that two people's sentences were submitted as one.
+            // ⚠ P-19, in the same slot and for the same reason: a fact about this
+            // session the reader has to be told, above the input row because the
+            // row owns the keyboard inset.
+            wrapUpNotice?.let {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismissWrapUpNotice, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Dismiss the notice",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            draftNotice?.let {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(onClick = onDismissDraftNotice, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "Dismiss the notice",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
             }
             Row(
                 Modifier
