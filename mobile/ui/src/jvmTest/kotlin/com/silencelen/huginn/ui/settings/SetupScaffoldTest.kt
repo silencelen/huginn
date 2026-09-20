@@ -58,7 +58,7 @@ class SetupScaffoldTest {
                 SetupScaffoldRules.canSkip(SetupState(current = step)),
                 "$step must be declinable — the owner's rule is that every step is skippable",
             )
-            assertTrue(SetupScaffoldRules.skipLabel(step).isNotBlank())
+            assertTrue(SetupScaffoldRules.SKIP.isNotBlank())
         }
         // Once it is answered there is nothing left to decline, so the button
         // goes rather than sitting there greyed.
@@ -178,7 +178,10 @@ class SetupFinishTest {
 
     @Test
     fun `a finished flow offers a way out rather than a way on`() {
-        assertEquals("Close", SetupScaffoldRules.primaryLabel(everythingAnswered()))
+        // ⚠ THE SAME WORDS AS THE FOOTER'S HATCH (D-14). It read "Close" beside a
+        // "Close setup" 8 dp away, both doing the one thing; the footer's copy
+        // now stands down here and the verb is spelled once.
+        assertEquals(SetupScaffoldRules.CLOSE, SetupScaffoldRules.primaryLabel(everythingAnswered()))
     }
 
     @Test
@@ -201,5 +204,147 @@ class SetupFinishTest {
             SetupScaffoldRules.FINISHED_TITLE.contains("complete", ignoreCase = true),
             "'setup complete' over two failures is the sentence this product does not write",
         )
+    }
+}
+
+/**
+ * ⚠ D-14, D-15, D-16. THE THREE THINGS THE FIRST-RUN FRAME SAID BADLY.
+ *
+ * All three are the same class of defect as the ones above: nothing throws, and
+ * the only place any of them was ever visible is a walk through the real flow.
+ *
+ * **D-14 — two verbs for one action, twice.** The finish bar carried "Close
+ * setup" AND "Close", both of which closed setup, 8 dp apart; and the decline
+ * button said "Skip for now" on the first two steps and "Not now" on the next
+ * three. A reader has to learn a verb once. Two words for one action is the same
+ * defect as the add-route form's two Cancels (D-12) — the fix there was to have
+ * one control, and it is the fix here.
+ *
+ * **D-15 — the missing state, as the screen draws it.** See [StepStatus.Checked]
+ * in `:core`. This half is the rail line, the dot's tone and the primary button:
+ * a step whose probe has run must not read "not checked yet", must not be drawn
+ * in the proven tone, and must not still offer the probe that already ran.
+ *
+ * **D-16 — the reason, cut.** The rail drew every state line at `maxLines = 1`
+ * inside `widthIn(max = 320.dp)`, so the notification step's failure read
+ * "nothing on this computer can show a notification: …" and stopped. The reason
+ * is the whole value of a [StepStatus.Failed] — the flow's argument for itself is
+ * that it repeats what the far end said — and there was no tooltip, no expand and
+ * no way to read it short of navigating back to the step.
+ *
+ * NOTE kotlin.test's argument order is (expected, actual, message).
+ */
+class SetupRoundThreeTest {
+
+    private fun root(): java.io.File =
+        generateSequence(java.io.File("").absoluteFile) { it.parentFile }
+            .firstOrNull { java.io.File(it, "settings.gradle.kts").isFile }
+            ?: error("cannot find the gradle root from ${java.io.File("").absolutePath}")
+
+    private fun scaffoldSource(): String {
+        val f = java.io.File(
+            root(),
+            "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/settings/SetupScaffold.kt",
+        )
+        assertTrue(f.isFile, "not scanned: ${f.absolutePath}")
+        val text = f.readText()
+        assertTrue(text.length > 5_000, "read as ${text.length} chars — wrong file")
+        return text
+    }
+
+    // ------------------------------------------------------------ D-14
+
+    @Test
+    fun `there is one way to leave, and it is called the same thing everywhere`() {
+        val done = SetupState(finished = true)
+        assertEquals(SetupScaffoldRules.CLOSE, SetupScaffoldRules.primaryLabel(done))
+        // …and the footer's own escape hatch stands down once the primary IS it,
+        // so the bar never carries two controls that do one thing.
+        assertFalse(SetupScaffoldRules.showsCloseButton(done), "two closes, 8dp apart")
+        assertTrue(
+            SetupScaffoldRules.showsCloseButton(SetupState()),
+            "a flow you cannot leave is one people force-quit rather than finish",
+        )
+    }
+
+    @Test
+    fun `the decline verb is one verb, on every step`() {
+        // It said "Skip for now" on the address and the token and "Not now" on
+        // claude, this computer and local AI. The word the flow RECORDS is
+        // "skipped" — the rail says it and the tally counts it — so that is the
+        // word the button says.
+        assertEquals("Skip for now", SetupScaffoldRules.SKIP)
+        assertTrue(
+            SetupScaffoldRules.stateWords(StepStatus.Skipped()).contains("skip", ignoreCase = true),
+            "the button and the record must use one word",
+        )
+    }
+
+    // ------------------------------------------------------------ D-15
+
+    @Test
+    fun `a step whose probe has run never reads as unchecked`() {
+        val checked = StepStatus.Checked("This machine can serve (class C), 2548 MB to download.")
+        val words = SetupScaffoldRules.stateWords(checked)
+        assertNotEquals(
+            SetupScaffoldRules.stateWords(StepStatus.Pending),
+            words,
+            "the probe ran and printed its answer — the row cannot say 'not checked yet'",
+        )
+        assertTrue(words.contains("2548 MB"), "the answer itself is kept: $words")
+        assertTrue(
+            words.contains("waiting on you", ignoreCase = true),
+            "…and it says whose move it is: $words",
+        )
+        // A check with nothing to show still says which state it is in.
+        assertTrue(SetupScaffoldRules.stateWords(StepStatus.Checked("")).isNotBlank())
+    }
+
+    @Test
+    fun `waiting on a person is toned as neither proven nor broken nor declined`() {
+        val tone = SetupScaffoldRules.toneOf(StepStatus.Checked("can serve"))
+        assertEquals(SetupTone.WAITING_ON_YOU, tone)
+        for (other in listOf(
+            SetupScaffoldRules.toneOf(StepStatus.Passed("ok")),
+            SetupScaffoldRules.toneOf(StepStatus.Failed("no")),
+            SetupScaffoldRules.toneOf(StepStatus.Skipped()),
+            SetupScaffoldRules.toneOf(StepStatus.Pending),
+        )) {
+            assertNotEquals(other, tone, "a step waiting on a person has its own mark")
+        }
+    }
+
+    @Test
+    fun `the button stops offering the probe that already ran`() {
+        val s = SetupFlow.checked(SetupState(current = SetupStep.LOCAL_AI), "can serve, 2548 MB")
+        assertNotEquals(
+            SetupScaffoldRules.verb(SetupStep.LOCAL_AI),
+            SetupScaffoldRules.primaryLabel(s),
+            "pressing it again ran the same check and changed nothing on screen",
+        )
+        assertEquals("Next", SetupScaffoldRules.primaryLabel(s))
+        // And the decline is still offered: the choice is the reader's, and one
+        // of the two answers is "no".
+        assertTrue(SetupScaffoldRules.canSkip(s), "saying no is still an answer they can give")
+    }
+
+    // ------------------------------------------------------------ D-16
+
+    @Test
+    fun `the rail lets a reason use more than one line`() {
+        // A SOURCE GATE: there is no compose-ui-test in these modules and the
+        // failure is a measured ellipsis. The subject is the state line in
+        // SetupRail — `maxLines = 1` there is what cut "nothing on this computer
+        // can show a notification: …" off at its colon.
+        val text = scaffoldSource()
+        val at = text.indexOf("private fun SetupRail(")
+        assertTrue(at > 0, "SetupRail has moved — this gate lost its subject")
+        val rail = text.substring(at)
+        assertTrue(
+            "maxLines = SetupScaffoldRules.RAIL_REASON_LINES" in rail,
+            "the rail's reason is being ellipsised away again",
+        )
+        assertTrue(SetupScaffoldRules.RAIL_REASON_LINES >= 3, "one clause is not a reason")
+        assertTrue("maxLines = 1" !in rail, "a one-line reason is a reason that was not given")
     }
 }

@@ -337,3 +337,137 @@ class SetupFlowTest {
         assertEquals("7 of 7 set up", SetupFlow.summary(clean))
     }
 }
+
+/**
+ * ⚠ D-15. THE PROBE RAN, PRINTED ITS ANSWER, AND THE ROW SAID "NOT CHECKED YET".
+ *
+ * Pressing "Check what this computer can serve" on step 5 runs a real check
+ * against the local-AI manager and prints its verdict — *"This machine can serve
+ * (class C), 2548 MB to download."* — and every other thing on the screen carried
+ * on as though nothing had happened: the rail row read "not checked yet", the
+ * tally read "4 of 7", and the primary button still offered the same probe.
+ *
+ * The flow had nowhere to put the answer. [StepStatus.Passed] would claim this
+ * machine serves models it has not downloaded, and [StepStatus.Skipped] would
+ * record a decision nobody made — so the controller wrote the plan to a NOTE,
+ * which is not part of the step's state, and left the step [StepStatus.Pending].
+ *
+ * [StepStatus.Checked] is the missing fifth state: the machine has answered and
+ * the choice is still the reader's. It is deliberately NOT [resolved] — a step
+ * waiting on a person has not been answered, whatever the machine now knows.
+ *
+ * NOTE kotlin.test's argument order is (expected, actual, message).
+ */
+class SetupCheckedTest {
+
+    private val plan = "This machine can serve (class C), 2548 MB to download."
+
+    private fun fresh() = SetupState()
+
+    private fun atLocalAi(): SetupState = SetupState(current = SetupStep.LOCAL_AI)
+
+    @Test
+    fun `a checked step is neither a pass nor a decline`() {
+        val s = SetupFlow.checked(atLocalAi(), plan)
+        val status = s.statusOf(SetupStep.LOCAL_AI)
+        assertEquals(StepStatus.Checked(plan), status)
+        assertFalse(status is StepStatus.Passed, "it would claim the machine serves")
+        assertFalse(status is StepStatus.Skipped, "it would record a choice nobody made")
+        assertFalse(status is StepStatus.Failed, "the check worked — it is the answer that is open")
+    }
+
+    @Test
+    fun `waiting on a person is not an answer, so the step is not resolved`() {
+        val s = SetupFlow.checked(atLocalAi(), plan)
+        assertFalse(s.statusOf(SetupStep.LOCAL_AI).resolved, "nobody has chosen yet")
+        assertFalse(SetupFlow.canAdvance(s), "the machine cannot answer this one for them")
+        assertFalse(SetupFlow.allResolved(s))
+        // …and the other four are unchanged in that regard.
+        assertTrue(StepStatus.Passed("ok").resolved)
+        assertTrue(StepStatus.Failed("no").resolved)
+        assertTrue(StepStatus.Skipped().resolved)
+        assertFalse(StepStatus.Pending.resolved)
+    }
+
+    /** Everything up to and including the enrolment proven, standing on step 5. */
+    private fun atOpenChoice(): SetupState {
+        var s = fresh()
+        s = SetupFlow.pass(s, "appd 3.1.0"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "token accepted"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "claude 2.1.4"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "enrolled"); s = SetupFlow.next(s)
+        assertEquals(SetupStep.LOCAL_AI, s.current)
+        return SetupFlow.checked(s, plan)
+    }
+
+    @Test
+    fun `the step is still there to answer when the flow is walked again`() {
+        // A resolved step is stepped over by `next`. A checked one must not be:
+        // the reader's choice is the only thing that finishes it.
+        var s = atOpenChoice()
+        s = SetupFlow.back(s)
+        assertEquals(SetupStep.DEVICE, s.current)
+        s = SetupFlow.next(s)
+        assertEquals(SetupStep.LOCAL_AI, s.current, "a checked step is not walked past")
+    }
+
+    @Test
+    fun `re-checking the address does not relabel the open choice as skipped`() {
+        // ⚠ THE GATE CLOSING UNDER A CHECKED STEP. `next` skips a GATED step it
+        // cannot offer, with "huginn has to answer first" — right for a step
+        // nobody has reached, and a lie about one whose probe has already run.
+        // Reachable: pass the address, check local AI, go back and press "Try
+        // again" on the address. The reader's open choice must not come back as
+        // a decline they never made.
+        var s = atOpenChoice()
+        s = s.copy(current = SetupStep.ROUTE)
+        s = SetupFlow.retry(s)
+        assertFalse(SetupFlow.gateSatisfied(s), "the gate really is open again")
+        s = SetupFlow.next(s)
+        assertEquals(StepStatus.Checked(plan), s.statusOf(SetupStep.LOCAL_AI))
+        assertEquals(SetupStep.LOCAL_AI, s.current)
+    }
+
+    @Test
+    fun `the tally says a step is waiting on you`() {
+        // ⚠ THE COUNT WAS THE OTHER HALF OF THE LIE. "4 of 7 set up" over a
+        // machine that had just been checked reads as a flow that lost the
+        // answer — and the reader has no way to tell that from a probe that
+        // never ran.
+        var s = fresh()
+        s = SetupFlow.pass(s, "appd 3.1.0"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "token accepted"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "claude 2.1.4"); s = SetupFlow.next(s)
+        s = SetupFlow.pass(s, "enrolled"); s = SetupFlow.next(s)
+        assertEquals(SetupStep.LOCAL_AI, s.current)
+        s = SetupFlow.checked(s, plan)
+        assertEquals("4 of 7 set up · 1 waiting on you", SetupFlow.summary(s))
+    }
+
+    @Test
+    fun `a checked step survives the round trip through the settings file`() {
+        // This window hides to the tray rather than quitting, so "halfway
+        // through" lasts days — and a checked step that came back as Pending
+        // would ask the reader to run the probe they already ran.
+        val s = SetupFlow.checked(atLocalAi(), plan)
+        val back = assertNotNull(SetupFlow.decode(SetupFlow.encode(s)))
+        assertEquals(StepStatus.Checked(plan), back.statusOf(SetupStep.LOCAL_AI))
+        assertEquals(SetupStep.LOCAL_AI, back.current)
+    }
+
+    @Test
+    fun `an older build reads it as unanswered rather than as a pass`() {
+        // The forward half of `decode`'s tolerance rule. A build that predates
+        // this state drops the row and asks again, which is the old behaviour —
+        // what it must never do is round it up to "set up".
+        val encoded = SetupFlow.encode(SetupFlow.checked(atLocalAi(), plan))
+        assertTrue(encoded.contains("\"checked\""), "the stored word: $encoded")
+        assertFalse(encoded.contains("\"passed\""), "it must not be written as a pass: $encoded")
+    }
+
+    @Test
+    fun `a retry takes it back to unattempted`() {
+        val s = SetupFlow.retry(SetupFlow.checked(atLocalAi(), plan))
+        assertEquals(StepStatus.Pending, s.statusOf(SetupStep.LOCAL_AI))
+    }
+}
