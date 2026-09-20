@@ -367,12 +367,34 @@ test('the command install-hooks writes carries the sentinel dir to the gate', as
   // touch (see the SAFETY note at the top).
   fs.writeFileSync(path.join(dir, 'STOP'), '{"reason":"session 71%","since":1789459000}\n');
   const elsewhere = scratch();
+  const t0 = Date.now();
   const stray = spawn('sh', ['-c', commandFor(GATE, elsewhere)], { env, stdio: ['pipe', 'pipe', 'pipe'] });
   stray.stdin.end(JSON.stringify(SUBAGENT_PAYLOAD));
   assert.equal(await new Promise((r) => stray.on('exit', r)), 0);
+  const strayMs = Date.now() - t0;
   assert.deepEqual(heldNames(elsewhere), []);
   assert.deepEqual(events(elsewhere), ['start', 'release']);
-  assert.match(logLines(elsewhere).at(-1) || '', / waited=0$/, 'it never waited for the armed sentinel');
+  // WHERE IT LOOKED, not how long it took: a stray that had honoured the armed
+  // sentinel would have read, held on and logged into `dir`, so the bound dir's
+  // log still ending at the first gate's release is the binding itself. This is
+  // the assertion with no clock in it, and it is checked first for that reason.
+  assert.deepEqual(events(dir), ['start', 'release'], 'the stray wrote nothing into the bound dir');
+  assert.deepEqual(heldNames(dir), [], 'and held nothing there');
+  // ⚠ THE SAME TRAP AS THE NO-SENTINEL CASE ABOVE, and this one failed for real
+  // on a hosted runner (CI 35485179585: `waited=1`). `waited=` is whole seconds
+  // of wall time — `date +%s` minus START — so a run that merely CROSSES a
+  // second boundary reports 1 having waited on nothing at all, and the gate is
+  // ~30 fork+execs, which is long enough to straddle a tick on a box running
+  // sixty test files at once. Pinning the literal 0 was a timing assertion
+  // wearing a string's clothes; it is the runner that failed it, not the gate.
+  // The id, type and event stay pinned exactly, and the wait is bounded by this
+  // run's OWN wall time — a gate that had waited would have sat for a POLL (2 s)
+  // or to its deadline (30 s), orders outside that bound.
+  const strayLine = logLines(elsewhere).at(-1) || '';
+  assert.match(strayLine, /event=release id=a799b9ac6c215d25e type=workflow-subagent waited=\d+$/);
+  const strayWaited = Number((strayLine.match(/waited=(\d+)/) || [])[1]);
+  assert.ok(strayWaited <= Math.ceil(strayMs / 1000),
+    `the stray says it waited ${strayWaited}s while its whole run took ${strayMs}ms — it waited on something`);
 });
 
 test('the deployed copy has to be executable to be a hook at all', () => {
