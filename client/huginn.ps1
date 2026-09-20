@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 1.5.0
+# Version: 1.5.1
 
-$script:HUGINN_VERSION = '1.5.0'
+$script:HUGINN_VERSION = '1.5.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -242,7 +242,7 @@ function _Huginn-FetchFile {
   }
   Remove-Item -Force -ErrorAction SilentlyContinue $tmp
   # ⚠ AND A FETCH THAT FAILED IS A FAILURE. This was the last Write-Host-and-
-  # return-normally path in the file (the rest went in 1.5.0): `huginn device
+  # return-normally path in the file (the rest went in 1.5.1): `huginn device
   # update` with no gh and no mirror printed "could not fetch huginn-device" on
   # the HOST stream and left $? True and $LASTEXITCODE 0, so a Windows script or
   # a `&&` chain read "the runner was not installed" as "the runner is
