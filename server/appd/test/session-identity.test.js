@@ -120,6 +120,13 @@ before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-ident-'));
   stateDir = path.join(tmp, 'state');
   fs.mkdirSync(stateDir);
+  // ⚠ THE PRE-3.3 SPELLING, ON PURPOSE. These two tests prove that clearing a
+  // name clears BOTH spellings of its sidecars — /run survives a deploy, so a
+  // session whose last hook event ran under an older hook has its question
+  // sitting in the undotted directory. They are (re)created at the point of use
+  // rather than here: the daemon's startup sweep removes an EMPTY legacy
+  // directory (3.6.1, r2 L9), which is exactly what a pre-3.3 hook would then
+  // mkdir again.
   fs.mkdirSync(path.join(stateDir, 'ask'));
   fs.mkdirSync(path.join(stateDir, 'plan'));
   // A real file on disk, so a served state cannot 409 for the OTHER reason
@@ -217,12 +224,18 @@ test('state written in the same second as the birth is served', async () => {
   assert.equal(body.claudeSessionId, 'same-second-id');
 });
 
+/** A sidecar in the PRE-3.3 directory, which is the one an older hook writes. */
+function writeLegacySidecar(kind, name) {
+  fs.mkdirSync(path.join(stateDir, kind), { recursive: true });
+  fs.writeFileSync(path.join(stateDir, kind, name), '{"v":1}');
+}
+
 test('creating a session clears what the last holder of the name left behind', async () => {
   const name = `${PFX}-fresh`;
   madeSessions.add(name);
   writeState(name, Math.floor(Date.now() / 1000) - 3600, 'dead-session-id');
-  fs.writeFileSync(path.join(stateDir, 'ask', name), '{"v":1}');
-  fs.writeFileSync(path.join(stateDir, 'plan', name), '{"v":1}');
+  writeLegacySidecar('ask', name);
+  writeLegacySidecar('plan', name);
 
   const { status } = await api('/v1/sessions', { method: 'POST', body: JSON.stringify({ name }) });
   assert.equal(status, 201);
@@ -235,8 +248,8 @@ test('creating a session clears what the last holder of the name left behind', a
 test('DELETE clears the prompt sidecars, not just the state file', async () => {
   const name = mkSession('sidecars');
   writeState(name, bornAt(name) + 1);
-  fs.writeFileSync(path.join(stateDir, 'ask', name), '{"v":1}');
-  fs.writeFileSync(path.join(stateDir, 'plan', name), '{"v":1}');
+  writeLegacySidecar('ask', name);
+  writeLegacySidecar('plan', name);
 
   const { status } = await api(`/v1/sessions/${name}`, { method: 'DELETE' });
   assert.equal(status, 200);
