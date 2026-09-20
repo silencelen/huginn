@@ -37,10 +37,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -152,7 +155,15 @@ fun SessionsScreen(
             // archived has an empty session list and is not an empty host, and
             // "No sessions" with no way to reach what was put away is the one
             // screen this feature could make worse.
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+            // ⚠ THE EMPTY BRANCH CLEARS THE FAB TOO (P-37). The live list has
+            // carried [LIST_FAB_CLEARANCE] since the FAB was written down; this
+            // column did not, so on a host whose sessions have ALL been archived
+            // the archive rows — the only thing on the screen — sat under "New
+            // session".
+            Column(
+                Modifier.fillMaxSize().padding(bottom = LIST_FAB_CLEARANCE),
+                verticalArrangement = Arrangement.Center,
+            ) {
                 EmptyState("No sessions", "Create one and it opens Claude Code on the host, same as cc.")
                 if (archiveAvailable == true) {
                     ArchivedSessionsSection(
@@ -252,6 +263,18 @@ fun SessionsScreen(
     }
 
     if (showNew) {
+        // ⚠ THE NAME FIELD TAKES FOCUS (P-25). The dialog opened with no
+        // keyboard and nothing selected: one tap, every time, on a dialog whose
+        // only content is one field. A `FocusRequester` inside a dialog has to
+        // wait for the window to exist, which is what the LaunchedEffect is for.
+        val nameFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { runCatching { nameFocus.requestFocus() } }
+        // ⚠ THE RULE IS THE DAEMON'S, NOT A GUESS (P-24). "Letters, digits and
+        // underscore" forbade the DASH the host has always allowed — which is
+        // what every session in this fleet is named with. Asked of the field as
+        // it is typed, so a refusal arrives here rather than as a 400 after the
+        // dialog has closed.
+        val problem = SessionNameRules.nameProblem(newName).takeIf { newName.isNotBlank() }
         AlertDialog(
             onDismissRequest = { showNew = false },
             title = { Text("New session") },
@@ -262,17 +285,23 @@ fun SessionsScreen(
                         onValueChange = { newName = it },
                         singleLine = true,
                         label = { Text("Name") },
+                        isError = problem != null,
+                        modifier = Modifier.focusRequester(nameFocus),
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Letters, digits and underscore. Opens Claude Code on the host.",
+                        problem ?: "${SessionNameRules.HINT} Opens Claude Code on the host.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (problem != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showNew = false; onCreate(newName) }, enabled = newName.isNotBlank()) {
+                TextButton(
+                    onClick = { showNew = false; onCreate(newName) },
+                    enabled = newName.isNotBlank() && problem == null,
+                ) {
                     Text("Create")
                 }
             },
