@@ -134,8 +134,13 @@ object Notifiers {
      */
     fun claimWords(enabled: Boolean, present: Boolean, name: String?): String = when {
         !enabled -> "off — huginn falls back to Telegram"
+        // NOT `NOWHERE_TO_POST` verbatim: the row directly below this one already
+        // carries the reason in full, and two identical sentences stacked is the
+        // other way to make a page unreadable. This says the CONSEQUENCE for the
+        // control it is attached to; that row says why.
         pathWords(name) == "none" ->
-            "claiming nothing: $NOWHERE_TO_POST, so Telegram stays live whatever this is set to"
+            "claiming nothing — there is no way to show a notification on this computer, " +
+                "so Telegram stays live whatever this is set to"
         present -> "claiming: this window has been attended recently"
         else -> "not claiming: window hidden or unattended, so Telegram stays live"
     }

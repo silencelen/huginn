@@ -76,6 +76,25 @@ class DeskLowFindingsTest {
     }
 
     /**
+     * ⚠ AND THE THIRD CONVERSATION IN THE APP. `ArchivedTranscriptView` owns its
+     * own `LazyColumn` in `:ui`, so the shell cannot reach the rows — the cap
+     * goes on the whole view, at the one place the shell hosts it. Forgetting
+     * this leaves exactly the bug D-24 describes, on the one screen nobody
+     * re-checks.
+     */
+    @Test
+    fun `the archived conversation is capped where the shell hosts it`() {
+        val call = source("ui", "Shell.kt")
+            .substringAfter("ArchivedTranscriptView(")
+            .substringBefore("\n                                }")
+        assertTrue(call.contains("widthIn(max = Frame.transcript)"), call)
+        assertTrue(
+            call.indexOf("widthIn") < call.indexOf("fillMaxWidth"),
+            "cap before fill, or the cap is swallowed",
+        )
+    }
+
+    /**
      * The cap has to be able to hold the widest thing in the column. A
      * conversation measure narrower than the user bubble's own ceiling would cut
      * the bubble instead of the prose, which is the same bug facing the other

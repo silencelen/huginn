@@ -96,7 +96,7 @@ fun SettingsView(store: AppStore, state: SettingsPaneState) {
     // already decides which row matched and already tells this page to mark it;
     // what nothing did was move the pane to it. See [SettingsReveal].
     val mark = state.markFor(category.id)
-    val reveal = rememberSettingsReveal(mark, scroll)
+    val reveal = rememberSettingsReveal(mark, state.arrival, scroll)
     Box(
         Modifier.fillMaxSize()
             // The scrolling pane's own top, which is the other half of the sum:

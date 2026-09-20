@@ -125,8 +125,18 @@ class NotifyClaimWordsTest {
     fun `an attended window with nowhere to post does not claim to be claiming`() {
         val said = Notifiers.claimWords(enabled = true, present = true, name = null)
         assertFalse(said.startsWith("claiming:"), "this is the sentence that contradicted the row below: $said")
-        assertTrue(said.contains("tray") && said.contains("libnotify"), said)
+        assertTrue(
+            said.contains("no way to show a notification"),
+            "it has to agree with the path row under it: $said",
+        )
         assertTrue(said.contains("Telegram"), "and where attention goes instead: $said")
+        // ⚠ AND IT IS NOT THAT ROW'S SENTENCE VERBATIM. Two identical paragraphs
+        // stacked is the other way to make a page unreadable: this row says the
+        // consequence for the control it is attached to, the row below says why.
+        assertTrue(
+            said != Notifiers.pathSummary(null),
+            "the claim row must not be a copy of the path row",
+        )
     }
 
     @Test
