@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## 3.8.0 — unreleased
+## 3.8.0 — 2026-09-20
 
 The first project run from the phone and the desktop together, and what the sessions list and
 the transcript got wrong about it.
