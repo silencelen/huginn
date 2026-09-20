@@ -148,6 +148,20 @@ object NoRowTimeTooltip : RowTimeTooltip {
 val LocalRowTime = staticCompositionLocalOf<RowTimeTooltip> { NoRowTimeTooltip }
 
 /**
+ * The host's wrap-up phrase — `/v1/status`'s `softEndPhrase` — or null.
+ *
+ * ⚠⚠ THE ONE THING THAT TELLS A DAEMON'S INSTRUCTION FROM THE READER'S (P-34/
+ * D-28). See [com.silencelen.huginn.ui.TranscriptVoice] for why the match has to
+ * be textual and why the text has to come from the host rather than from a
+ * literal in here.
+ *
+ * NULL IS THE DEFAULT AND IT IS THE OLD BEHAVIOUR EXACTLY: a shell that has not
+ * wired it, or a daemon too old to send one, draws the phrase as a user bubble
+ * as it always did. Nothing is guessed in the absence of the host's own wording.
+ */
+val LocalWrapUpPhrase = staticCompositionLocalOf<String?> { null }
+
+/**
  * The text a long-press on this row selects — the WHOLE row, not a word.
  *
  * A long press on a phone is a blunt instrument: it lands wherever the thumb did,
@@ -218,8 +232,20 @@ fun TranscriptEventItem(
             // 3.6.0 re-kinds it `system`; the check here is the backstop for a
             // transcript, a cache or a daemon that does not, because a row that
             // names a project came from somewhere else by definition.
+            // ⚠⚠ AND A WRAP-UP IS NEVER THE READER'S WORDS EITHER (P-34/D-28).
+            // `/v1/sessions/:name/soft-end` TYPES the phrase into the pane, so
+            // the record carries nothing structural — no origin, no isMeta — and
+            // both shells drew the daemon's instruction as a right-aligned user
+            // bubble. On an archived transcript that bubble is the only account
+            // of how the session ended. Same class as the relay above and the
+            // skill body before it. See [TranscriptVoice].
             "user" -> if (ev.project != null) ProjectRelayNote(ev) else {
-                reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
+                val phrase = LocalWrapUpPhrase.current
+                if (TranscriptVoice.isWrapUp(ev, phrase)) {
+                    SystemNote(TranscriptVoice.wrapUpNote(phrase.orEmpty()))
+                } else {
+                    reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
+                }
             }
             // A usage limit arrives AS an assistant record — Claude Code writes its
             // own error into the transcript the same way it writes an answer — so

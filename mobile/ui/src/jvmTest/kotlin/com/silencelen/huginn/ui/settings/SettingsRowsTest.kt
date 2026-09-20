@@ -269,4 +269,114 @@ class SettingsRowsTest {
         actions.useCandidate("yggdrasil")
         assertEquals("yggdrasil", used)
     }
+
+    // ---------------------------------------------- P-30 why the dot is red
+
+    /**
+     * ⚠⚠ A RED DOT WITH NOTHING BESIDE IT IS A COLOUR, NOT A FACT (P-30).
+     *
+     * The working route said "reached just now"; Tailscale and a newly added pin
+     * showed a red dot and NO text at all. The dot was the only thing that had
+     * noticed, and a reader who has not learnt this app's dot vocabulary has no
+     * way into the row.
+     */
+    @Test
+    fun `a route that failed says when, beside the dot that says that it did`() {
+        val failed = com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 120_000)
+        assertEquals(
+            "http://100.64.0.1:8787 · did not answer 2m ago",
+            routeAddressLine("http://100.64.0.1:8787", failed, now),
+        )
+        assertEquals("did not answer just now", failedWords(com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 5_000), now))
+        assertEquals("did not answer 3h ago", failedWords(com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 3 * 3_600_000), now))
+        assertEquals("did not answer 2d ago", failedWords(com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 2 * 86_400_000L), now))
+    }
+
+    @Test
+    fun `a route that failed and then worked is not accused of the old failure`() {
+        // Otherwise the row argues with its own dot: green, "reached just now",
+        // "did not answer an hour ago".
+        val recovered = com.silencelen.huginn.data.RouteHealth(
+            lastFailAt = now - 3_600_000,
+            lastOkAt = now - 10_000,
+        )
+        assertNull(failedWords(recovered, now))
+        assertEquals(
+            "http://100.64.0.1:8787 · reached just now",
+            routeAddressLine("http://100.64.0.1:8787", recovered, now),
+        )
+        // Ordinary traffic is a witness too — see RouteHealth.lastSeenAt.
+        assertNull(
+            failedWords(
+                com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 600_000, lastSeenAt = now - 1_000),
+                now,
+            ),
+        )
+    }
+
+    @Test
+    fun `an unproven route keeps its own sentence and does not get this one too`() {
+        // DaemonChallenge.NOT_PROVEN is the more specific of the two and stamps
+        // lastFailAt alongside itself; both would say the same thing twice.
+        val unproven = com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 5_000, lastUnprovenAt = now - 5_000)
+        assertNull(failedWords(unproven, now))
+        assertTrue(
+            !routeAddressLine("http://100.64.0.1:8787", unproven, now).contains("did not answer"),
+            "one sentence per fact",
+        )
+    }
+
+    @Test
+    fun `an untried route accuses nothing`() {
+        assertNull(failedWords(null, now))
+        assertNull(failedWords(com.silencelen.huginn.data.RouteHealth(), now))
+        assertNull(failedWords(com.silencelen.huginn.data.RouteHealth(lastFailAt = now - 5_000), 0))
+    }
+
+    // ------------------------------------------------- P-31 one Cancel only
+
+    /**
+     * ⚠⚠ TWO CANCELS, 190 PX APART (P-31/D-12). "Add a route" turned itself into
+     * a Cancel and the form it opened rendered its own — two identical verbs for
+     * one action, in both the setup flow and Settings.
+     */
+    @Test
+    fun `the add-route opener is not a second Cancel`() {
+        val src = source()
+        val list = src.substringAfter("fun SettingsRouteListRow(").substringBefore("fun routeCandidateOffer(")
+        assertTrue(list.length > 1_000, "SettingsRouteListRow read as ${list.length} chars — wrong slice")
+        assertTrue(
+            !list.contains("""if (adding) "Cancel""""),
+            "the opener is a Cancel again — the form below it already has one",
+        )
+        assertEquals(
+            1,
+            Regex("""Text\("Cancel"\)""").findAll(src).count(),
+            "exactly one Cancel in this file, and it belongs to the form",
+        )
+    }
+
+    private fun source(): String {
+        val f = generateSequence(java.io.File("").absoluteFile) { it.parentFile }
+            .firstOrNull { java.io.File(it, "settings.gradle.kts").isFile }
+            ?.let { java.io.File(it, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/settings/SettingsRows.kt") }
+        assertTrue(f != null && f.isFile, "SettingsRows.kt not found from ${java.io.File("").absolutePath}")
+        val text = f!!.readText()
+        // A grep that matches nothing exits 0. Assert the floor before the finding.
+        assertTrue(text.length > 10_000, "SettingsRows.kt read as ${text.length} chars — wrong file")
+        return text
+    }
+
+    /**
+     * ⚠ A NAME THAT TRUNCATES IS THE ONE STRING IN THE ROW THE OWNER CHOSE
+     * (P-30). `rv-route-test` rendered as "rv-route-te…" with a third of the row
+     * empty: four controls take their intrinsic widths out of this row first.
+     */
+    @Test
+    fun `a route name is allowed a second line`() {
+        val body = source().substringAfter("private fun RouteRow(").substringBefore("private fun RouteForm(")
+        val name = body.substringAfter("route.name,").substringBefore("route.kind.label")
+        assertTrue(name.length in 1..1_200, "the name Text read as ${name.length} chars — wrong slice")
+        assertTrue("maxLines = 2" in name, "the name is back to one line and an ellipsis")
+    }
 }

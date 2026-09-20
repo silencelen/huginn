@@ -160,7 +160,7 @@ fun SessionOverviewView(
         }
         if (totals != null) {
             item { StatsHeader(totals, rate, nowMs) }
-            item { ProjectionsCard(rate, plan, nowMs) }
+            item { ProjectionsCard(rate, plan, nowMs, totals.wallMs) }
         }
         item {
             NotesCard(goals, notes, saveState, onGoals, onNotes, note, onDismissNote)
@@ -318,6 +318,8 @@ internal fun ProjectionsCard(
     rate: com.silencelen.huginn.data.GraphRate?,
     plan: Plan?,
     nowMs: Long,
+    /** How long this session has been running — see [OverviewFormat.MIN_SAMPLE_MS]. */
+    sampleMs: Long,
 ) {
     if (rate == null) return
     Surface(
@@ -340,18 +342,23 @@ internal fun ProjectionsCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            OverviewFormat.paceLine(rate, plan, nowMs)?.let { line ->
+            OverviewFormat.pace(rate, plan, nowMs, sampleMs)?.let { pace ->
                 Spacer(Modifier.height(6.dp))
-                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(pace.line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 // The hedge is a separate line rather than more words in the
                 // sentence: a straight line drawn through ten minutes is not a
                 // forecast, and the sentence is long enough already.
-                Text(
-                    "an estimate, from the current rate",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
+                //
+                // ⚠ AND ONLY UNDER A PROJECTION (P-28). Under the measuring line
+                // it would be hedging a number that is not on the card.
+                if (pace.projected) {
+                    Text(
+                        "an estimate, from the current rate",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
             }
             plan?.limits.orEmpty().filter { it.resetsAt != null }.take(3).forEach { limit ->
                 PlanFormat.resetLabel(limit.resetsAt, nowMs)?.let { words ->
@@ -581,7 +588,9 @@ private fun MapRow(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    node.label.ifEmpty { node.kind },
+                    // ⚠ BlockLabel, NOT the raw label (P-29). A turn whose reply
+                    // opens with a markdown table was labelled `| Host | Role |`.
+                    BlockLabel.words(node.label).ifEmpty { node.kind },
                     style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.bodySmall,
                     fontWeight = if (node.kind == "user") FontWeight.SemiBold else FontWeight.Normal,
                     color = if (compact) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
@@ -682,7 +691,9 @@ private val SHEET_MAX = 420.dp
 private fun NodeDetail(node: GraphNode, agents: List<GraphAgent>, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            node.label.ifEmpty { node.kind },
+            // The sheet's heading is the row's heading — one spelling of one
+            // label, or the sheet re-introduces the pipes the row stopped drawing.
+            BlockLabel.words(node.label).ifEmpty { node.kind },
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
