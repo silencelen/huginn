@@ -449,17 +449,17 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
 
   // ⚠ THE LINES SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES, literally.
   //
-  // ⚠⚠ AND THE HEIMDALL HALF IS A COMMENT, NOT A RULE. The one address failing
-  // here is LOOPBACK, which never crosses the veth chain — 117.fw has no say
-  // over it and the rebind above is the entire remedy. The old code put
-  // `-source 127.0.0.1` here, a rule that could never match, which is the defect
-  // 3.5.2 removes in both its forms (that one, and naming the arrival address).
+  // ⚠⚠ AND THERE IS NO HEIMDALL HALF. The one address failing here is LOOPBACK,
+  // which never crosses the veth chain — 117.fw has no say over it and the
+  // rebind above is the entire remedy. The old code put `-source 127.0.0.1`
+  // here, a rule that could never match, which is the defect 3.5.2 removed;
+  // 3.6.1 removed the header that was still standing over the sentence saying
+  // there was nothing to add (r2 L3).
   assert.deepEqual([
     '# on huginn — 127.0.0.1 does not reach this app',
     'systemctl edit stale.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
     'systemctl restart stale.service',
     `ss -ltn | grep :${DEAD_PORT}`,
-    '# on heimdall — /etc/pve/firewall/117.fw',
     '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
   ], r.body.reachable.fix);
   assert.ok(!r.body.reachable.fix.some((l) => l.startsWith('IN ACCEPT')),
@@ -533,8 +533,17 @@ test('an app that does not answer at every known address is REFUSED with 422 and
   assert.equal(false, r.body.reachable.ok, 'the refusal carries the measurement, not just a sentence');
   assert.deepEqual(['127.0.0.1'], r.body.reachable.addresses.map((a) => a.addr));
   assert.equal('timed out', r.body.reachable.addresses[0].error);
-  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl edit wedged.service')),
+  // ⚠ AND THE REMEDY IS NOT A REBIND (r2 L4). This stub ACCEPTED the connection
+  // — that is what makes it a timeout rather than a refusal — so the unit is
+  // provably bound at this address and `bind 0.0.0.0` would send the reader to
+  // an `ss -ltn` line that already says what they were told to make it say.
+  assert.ok(!r.body.reachable.fix.some((l) => /bind 0\.0\.0\.0/.test(l)),
+    `a bind line for a timeout: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.some((l) => /not refused \(timed out\)/.test(l)),
     `the remedy travels with the refusal: ${JSON.stringify(r.body.reachable.fix)}`);
+  assert.ok(r.body.reachable.fix.some((l) => l.startsWith('systemctl status wedged.service')),
+    'and it points at the unit that is wedged, not at its bind');
+  assert.ok(!/fix the bind first/.test(r.body.error), r.body.error);
   assert.equal(null, rowOf(await list(), 'never-answers'), 'and NOTHING was stored');
 });
 

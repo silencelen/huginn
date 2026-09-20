@@ -218,19 +218,22 @@ test('a row bound to one of this host’s addresses is UNREACHABLE, with the lin
   assert.equal(false, byAddr['127.0.0.2'].ok);
   assert.equal('connection refused', byAddr['127.0.0.2'].error, 'and it says why');
 
-  // ⚠⚠ AND THE FIREWALL HALF IS A COMMENT. 127.0.0.2 is LOOPBACK: it never
-  // crosses the veth chain, so 117.fw has no say over it and the rebind above is
-  // the entire remedy. The old code put `-source 127.0.0.2` here — an arrival
+  // ⚠⚠ AND THERE IS NO FIREWALL HALF. 127.0.0.2 is LOOPBACK: it never crosses
+  // the veth chain, so 117.fw has no say over it and the rebind above is the
+  // entire remedy. The old code put `-source 127.0.0.2` here — an arrival
   // address, one of THIS host's own, in a rule that could never match anything —
-  // which is the defect 3.5.2 removes in both its forms.
+  // which is the defect 3.5.2 removed. 3.6.1 removed the other half: the header
+  // naming another machine's root-owned file stood over a single line saying
+  // there was nothing to put in it (r2 L3).
   assert.deepEqual([
     '# on huginn — 127.0.0.2 does not reach this app',
     'systemctl edit onebound.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
     'systemctl restart onebound.service',
     `ss -ltn | grep :${onePort}`,
-    '# on heimdall — /etc/pve/firewall/117.fw',
     '# 127.0.0.2 passes on its own once the unit binds 0.0.0.0',
   ], r.body.reachable.fix, 'the exact lines, for THIS row, against THIS address');
+  assert.ok(!r.body.reachable.fix.some((l) => l.includes('117.fw')),
+    'and no header over an empty section');
   assert.ok(!r.body.reachable.fix.some((l) => l.startsWith('IN ACCEPT')),
     'an arrival address is never a -source, and a loopback one wants no rule at all');
 });
