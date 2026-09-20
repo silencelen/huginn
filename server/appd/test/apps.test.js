@@ -150,9 +150,49 @@ test('a record has every field a client reads, with a definite value', () => {
   assert.equal(1789460000, rec.addedAt);
 });
 
-test('an unknown kind is coerced, not refused, so a newer client can still write a row', () => {
+test('a STORED unknown kind is coerced, so a row written by a newer daemon still renders', () => {
+  // ⚠ THE READ SIDE ONLY. cleanKind is what buildRecord applies to a row coming
+  // off disk, and a row that decoded is a row that renders (the archive rule) —
+  // a sixth kind from a future daemon must degrade to a chip with the wrong
+  // label, never to a list that will not draw. The WRITE side refuses it; see
+  // the next test.
   assert.equal('other', appsLib.cleanKind('hologram'));
   assert.equal('lab', appsLib.cleanKind('LAB'));
+  assert.equal('other', appsLib.buildRecord({ id: 'x', name: 'X', url: 'http://h:1/', kind: 'hologram' }, 1).kind);
+});
+
+test('a kind the caller TYPED and got wrong is a 400, the same as a project kind (L2)', () => {
+  // `/v1/apps` publishes `kinds` on the list body precisely so the picker is not
+  // a second copy of this vocabulary (AppRules.kindChoices takes the daemon's
+  // list, not its own mirror) — and then the write path silently rewrote
+  // whatever it was handed to `other`. A caller that asked for something this
+  // daemon does not have got a 201 and a row with the wrong chip, with nothing
+  // anywhere to say the value had been discarded. `POST /v1/projects` has
+  // answered 400 for the same mistake since the day it shipped.
+  const bad = appsLib.add([], { name: 'X', url: 'http://huginn:8088/', kind: 'hologram' }, 100);
+  assert.equal(false, bad.ok);
+  assert.equal(400, bad.status);
+  assert.match(bad.error, /kind is one of dashboard, tool, docs, lab, other/);
+
+  // ABSENT is still fine and still means `other`: `{name, url}` is a legal body
+  // and every field on a row has a definite value.
+  const none = appsLib.add([], { name: 'X', url: 'http://huginn:8088/' }, 100);
+  assert.equal(true, none.ok);
+  assert.equal('other', none.app.kind);
+
+  // Case and whitespace are still forgiven — the chip vocabulary is lowercase,
+  // and a picker that sends `LAB` meant `lab`.
+  const shouty = appsLib.add([], { name: 'Y', url: 'http://huginn:8089/', kind: '  LAB ' }, 100);
+  assert.equal(true, shouty.ok);
+  assert.equal('lab', shouty.app.kind);
+
+  // And an EDIT gets the same answer, or the refusal would only be a door people
+  // walk around.
+  const list = BASE_LIST();
+  const edit = appsLib.patch(list, list[0].id, { version: list[0].version, kind: 'hologram' });
+  assert.equal(false, edit.ok);
+  assert.equal(400, edit.status);
+  assert.match(edit.error, /kind is one of/);
 });
 
 test('a name is one line with no control characters in it', () => {
