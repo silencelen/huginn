@@ -9454,12 +9454,12 @@ const server = http.createServer(async (req, res) => {
   //
   // AFTER the auth check, deliberately: a port scanner must not be able to teach
   // this daemon a new address that every app then has to answer on. (⚠ The
-  // comment here used to say "/v1/ping is unauthenticated", which it is not and
-  // never was — `authorized()` runs above with no exemption, and the 401 it
-  // answers, carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants.
-  // The one genuinely unauthenticated route is `/v1/challenge`, and it returns
-  // before this line for exactly the reason this line exists.) In memory,
-  // flushed lazily — see noteClientAddress.
+  // comment here used to call the ping route token-free. It never was:
+  // `authorized()` runs above with no exemption, and the 401 it answers,
+  // carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants. The one
+  // route answered without a token is `/v1/challenge`, and it returns before
+  // this line for exactly the reason this line exists.) In memory, flushed
+  // lazily — see noteClientAddress.
   try {
     appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
       .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
@@ -9475,10 +9475,12 @@ const server = http.createServer(async (req, res) => {
       // tell without being told. Additive: the Ping model's fields are all
       // nullable-with-defaults, so an older client ignores it.
       //
-      // ⚠ PING IS UNAUTHENTICATED, so this echoes ONLY the address the caller
-      // already dialled — it is the local end of their own socket. A LIST of the
-      // daemon's other addresses would be a disclosure and belongs on
-      // token-gated /v1/status, which already carries the hostname.
+      // ⚠ ONLY THE ADDRESS THE CALLER ALREADY DIALLED — the local end of their
+      // own socket. A LIST of the daemon's other addresses would be a disclosure
+      // even behind the token, and belongs on /v1/status, which already carries
+      // the hostname. (Ping IS authenticated; `authorized()` runs above it with
+      // no exemption. The unauthenticated route is /v1/challenge, which returns
+      // before that check — see the block above.)
       const via = { addr: req.socket.localAddress || null, port: req.socket.localPort || null };
       return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via });
     }
