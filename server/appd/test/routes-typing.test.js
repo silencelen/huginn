@@ -532,6 +532,14 @@ test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', as
   assert.equal(status, 200, JSON.stringify(body));
   assert.equal(body.queued, 0, 'a key is never queued — an interrupt at the next turn boundary is nothing');
   assert.equal(tmuxCalls('Escape').length, before + 1, 'and it went to the pane NOW');
+  // ⚠ AND THE ANSWER SAYS IT WENT (r2 L7). `delivered` was the initialised
+  // `false` leaking out of a branch raw keys never enter: the key was in the
+  // pane before this response was written, and the body said it was not. Both
+  // clients seed their send-queue note from this object (SendQueue.seed), so an
+  // Escape read back as "not sent yet" — on the one send that cannot wait, ever.
+  assert.equal(body.delivered, true, 'a raw key is delivered synchronously, and the answer must say so');
+  assert.equal(body.position, 0);
+  assert.equal(body.blockedBy, null, 'nothing held it: raw keys have no gate');
 
   // BTab and the arrows too: navigating a selector is the whole point. (A DIGIT
   // is not a named key — a dialog is answered by number through /answer, which
@@ -539,6 +547,7 @@ test('a RAW KEY send into a dialog LANDS: those are the keys that answer it', as
   for (const k of ['BTab', 'Down', 'Up', 'Tab']) {
     const r = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ keys: [k] }) });
     assert.equal(r.status, 200, `${k}: ${JSON.stringify(r.body)}`);
+    assert.equal(r.body.delivered, true, `${k} went to the pane, so the answer says delivered`);
   }
 });
 
