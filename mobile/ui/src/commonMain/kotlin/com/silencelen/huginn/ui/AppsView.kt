@@ -447,14 +447,35 @@ fun appsStatusWords(apps: List<App>): String {
     return parts.joinToString(" · ")
 }
 
-/** The liveness mark. UNKNOWN draws a hole, not a grey dot that reads as "down". */
+/**
+ * The liveness mark. UNKNOWN draws a hole, not a grey dot that reads as "down".
+ *
+ * ⚠⚠ AMBER IS FOR ATTENTION, AND "UP" IS NOT ATTENTION (P-32). Every app at
+ * `HTTP 200 · reachable` carried a rune-gold dot, because `primary` is this
+ * app's one accent and it is what a running session, a live lane and a selected
+ * settings row are drawn in. Four healthy rows in the colour of "look at this"
+ * is a page that reads as four warnings — and then the row that genuinely wants
+ * a person ("up, but not from where you are") had nothing left to say it with.
+ *
+ * So the accent now belongs to the row that needs somebody, and a page where
+ * everything answers is a quiet page. The calm mark is `onSurfaceVariant` — the
+ * same muted ink the row's own status line is drawn in, visible enough to be
+ * told apart from the UNKNOWN hole, which `outline` (the [SettledDot] tone) is
+ * not at 8 dp against this background.
+ *
+ * ⚠ AND NOT `tertiary`, which is what the retrofit case used to draw. The theme
+ * defines neither tertiary nor its container, so that dot was Material's own
+ * baseline pink in a warm rune-gold palette — [PaletteTest]'s rule ("a role the
+ * theme never chose is not a colour anyone picked"), caught one role short.
+ */
 @Composable
 private fun ReachDot(app: App) {
     val colour = when {
         AppRules.reach(app) == AppRules.Reach.DOWN -> MaterialTheme.colorScheme.error
         // ⚠ UP BUT NOT WHERE YOU ARE IS NOT UP, to the person holding the phone.
-        AppRules.deviceReach(app) == AppRules.DeviceReach.RETROFIT -> MaterialTheme.colorScheme.tertiary
-        AppRules.reach(app) == AppRules.Reach.UP -> MaterialTheme.colorScheme.primary
+        // This is the one row on the page that wants the accent.
+        AppRules.deviceReach(app) == AppRules.DeviceReach.RETROFIT -> MaterialTheme.colorScheme.primary
+        AppRules.reach(app) == AppRules.Reach.UP -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> null
     }
     if (colour == null) {
