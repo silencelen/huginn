@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## 3.7.1
+## 3.7.1 — 2026-09-20
 
 The phone's round-three review: the small things, and the two that were quietly wrong.
 
