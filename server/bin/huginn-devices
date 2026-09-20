@@ -5,6 +5,17 @@
 # clients thin, and the bearer token never leaves this machine.
 set -u
 
+# --help, before the token check, exit 0 - the one convention the renderers
+# share; see huginn-archive.
+case "${1:-}" in
+  -h|--help)
+    echo "usage: huginn-devices"
+    echo "  The machines enrolled with this host: what each offers, and when it was last seen."
+    exit 0 ;;
+  '') ;;
+  *) echo "usage: huginn-devices" >&2; exit 1 ;;
+esac
+
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-devices: no appd token at $TOKEN_FILE" >&2; exit 1; }
 

@@ -30,12 +30,44 @@ cp "$HERE/huginn.sh" "$HOME/.huginn/huginn.sh"
 # on` has nothing to fetch. It is inert until this machine is actually enrolled —
 # most devices are clients and never offer themselves.
 [ -f "$HERE/huginn-device" ] && install -m 0755 "$HERE/huginn-device" "$HOME/.huginn/huginn-device"
-RC="$HOME/.bashrc"; touch "$RC"
-grep -q '.huginn/huginn.sh' "$RC" || echo '[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh' >> "$RC"
+# ⚠ NOT JUST ~/.bashrc. This wired that one file and nothing else, so on a
+# machine whose login shell is zsh - every recent macOS, and plenty of Linux -
+# the client installed perfectly and then did not exist: no `huginn` command in
+# any shell the person actually opens, with an installer that had just said
+# "Installed". `huginn uninstall` knew the same one file, so the leftover line
+# in ~/.zshrc outlived the client it sourced.
+#
+# WHICH FILES: ~/.bashrc always (this installer runs under bash, and Termux's
+# login shell is bash). ~/.zshrc when it exists, or when zsh is the login shell -
+# creating one otherwise would add a file to a machine that has no zsh. ~/.profile
+# only when it ALREADY exists: creating it can change which file a login shell
+# reads, and that is not an installer's decision to make.
+#
+# ⚠ AND ~/.profile GETS A DIFFERENT LINE. It is read by /bin/sh logins too, and
+# huginn.sh is bash/zsh source (`[[ ]]`, `${1,,}`, `mapfile`) - sourcing it from
+# dash would spray syntax errors over every login. So that copy is guarded on the
+# shell, and uses `.` rather than the non-POSIX `source`. Both spellings are
+# known to `huginn uninstall`.
+RCLINE='[ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh'
+PROFILELINE='[ -n "${BASH_VERSION-}${ZSH_VERSION-}" ] && [ -f ~/.huginn/huginn.sh ] && . ~/.huginn/huginn.sh'
+WIRED=""
+wire_rc() {   # $1 = the file, $2 = the line to append
+  touch "$1" || return 0
+  grep -q '\.huginn/huginn\.sh' "$1" || printf '%s\n' "$2" >> "$1"
+  WIRED="$WIRED $1"
+}
+wire_rc "$HOME/.bashrc" "$RCLINE"
+# `if`, not `[ ... ] && ...`: this script runs under `set -e`, and a trailing
+# test that is simply FALSE is not a failure worth aborting an install over.
+ZSH_WANTED=""
+case "${SHELL:-}" in */zsh) ZSH_WANTED=1 ;; esac
+if [ -f "$HOME/.zshrc" ] || [ -n "$ZSH_WANTED" ]; then wire_rc "$HOME/.zshrc" "$RCLINE"; fi
+if [ -f "$HOME/.profile" ]; then wire_rc "$HOME/.profile" "$PROFILELINE"; fi
 # shellcheck disable=SC1090
 source "$HOME/.huginn/huginn.sh"
 echo
-echo "Installed. Authorize the key above on the host, then:  huginn help  |  huginn status"
+echo "Installed, and sourced from:$WIRED"
+echo "Authorize the key above on the host, then:  huginn help  |  huginn status"
 echo "This machine may also be able to serve local AI models to huginn (optional, ~5 GB):  huginn local on"
 # The base client is bash+ssh and needs no node; only the optional features do.
 # Said HERE because the native claude build ships without node, so its absence

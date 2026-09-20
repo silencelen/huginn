@@ -19,6 +19,8 @@
 // the caps, the name a revive lands under. The daemon owns fs, tmux and the
 // routes, the same split lib/session-registry.js and lib/scratchpads.js use.
 
+const path = require('node:path');
+
 const { UUID_RE } = require('./session-registry');
 
 /**
@@ -245,8 +247,39 @@ function lastMessageOf(events) {
   return '';
 }
 
+/**
+ * Where Claude Code keeps one conversation, under the config directory THIS
+ * daemon was told to use.
+ *
+ * ⚠ THE CONFIG DIRECTORY, NOT `os.homedir()`. The revive path built this out of
+ * the process's home every time, so a daemon started with
+ * HUGINN_APPD_CLAUDE_DIR pointing at a scratch directory — which is the whole
+ * of what that knob is for, and what every route suite and the CLI's own gate
+ * run under — restored its fixture transcript into the OWNER'S REAL
+ * ~/.claude/projects/. It logged the real path while it did it (found that way,
+ * in a review run: "archive: restored the kept transcript … to
+ * /root/.claude/projects/…"), and the file then sat in the live store as a
+ * conversation Claude Code would happily resume. The knob's own comment says
+ * every other reader "builds a path from it and is isolated by construction";
+ * this is the function that makes that true for the two readers that were not.
+ *
+ * The slug is Claude Code's own: the absolute cwd with every '/' replaced by a
+ * '-'. Returned as both halves because the caller has to mkdir one and write
+ * the other.
+ */
+function transcriptTarget(claudeDir, cwd, id) {
+  const dir = path.join(String(claudeDir || ''), 'projects', String(cwd || '').replace(/\//g, '-'));
+  return { dir, file: path.join(dir, `${id}.jsonl`) };
+}
+
+/** The directory those live under, for a reader that scans rather than guesses. */
+function projectsRoot(claudeDir) {
+  return path.join(String(claudeDir || ''), 'projects');
+}
+
 module.exports = {
   MAX_ARCHIVES, TRANSCRIPT_CAP_BYTES, MAX_PREVIEW,
   oneLine, shellQuote, resumeCommand, buildRecord, archiveRow,
   sortArchives, evictions, reviveName, transcriptWindow, lastMessageOf,
+  transcriptTarget, projectsRoot,
 };
