@@ -765,6 +765,7 @@ fun HuginnApp(
     // projectEntries and appEntries exist to keep in one place.
     val projects by vm.projects.collectAsState()
     val projectsAvailable by vm.projectsAvailable.collectAsState()
+    val projectsDir by vm.projectsDir.collectAsState()
     val projectMembers by vm.projectMembers.collectAsState()
     val projectDetail by vm.projectDetail.collectAsState()
     val projectDashboard by vm.projectDashboard.collectAsState()
@@ -1394,24 +1395,23 @@ fun HuginnApp(
             }
             val archives by vm.archives.collectAsState()
             val archiveAvailable by vm.archiveAvailable.collectAsState()
-            // The tree's own poll rides this screen: the headings over the list
-            // are drawn from the same rows the Projects list draws, so they must
-            // not be a snapshot taken whenever the app last started.
-            if (projectDoors.grouping) {
+            // The tree's own poll rides this screen: which sessions to keep OFF
+            // the list is decided from the same rows the Projects list draws, so
+            // they must not be a snapshot taken whenever the app last started.
+            if (projectDoors.hiding) {
                 LifecycleStartEffect(Unit) {
                     vm.startProjectsPolling()
                     onStopOrDispose { vm.stopProjectsPolling() }
                 }
             }
+            // ⚠ PROJECT SESSIONS ARE NOT ON THIS PAGE (owner rule, 2026-09-19):
+            // they live in Projects. With no projects on the daemon the split is a
+            // no-op and the list is exactly as it has always been drawn.
+            val split = com.silencelen.huginn.ui.ProjectRules.splitByProject(sessions, projects, projectMembers)
             SessionsScreen(
-                sessions = sessions,
+                sessions = split.outside,
+                inProjects = split.inProjects.size,
                 twoPane = twoPane,
-                // Empty when the daemon has no projects, which draws the list
-                // exactly as it has always been drawn — see projectEntries.
-                groups = if (projectDoors.grouping)
-                    com.silencelen.huginn.ui.groupSessions(projects, projectMembers, sessions)
-                else emptyList(),
-                onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
                 onOpenProjects = if (projectDoors.sessionsIcon) ({
                     vm.refreshProjects(); dest = Dest.Projects
                 }) else null,
@@ -1670,6 +1670,7 @@ fun HuginnApp(
                 // directory is typed, and a client that guessed one would be
                 // proposing a folder it has never seen.
                 defaultCwd = null,
+                projectsDir = projectsDir,
                 onCreate = { name, kind, brief, cwd ->
                     // Straight into the lead it just launched: creating a project
                     // and then being left on a list of projects is the moment the
