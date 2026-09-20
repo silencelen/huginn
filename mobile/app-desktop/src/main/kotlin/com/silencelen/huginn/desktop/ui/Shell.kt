@@ -776,7 +776,10 @@ fun Shell(store: AppStore) {
                             // even stay (a wrap-up question cancels the auto-end) — so
                             // drafts and history are deliberately NOT cleared here.
                             is ConfirmTarget.SoftEndSessions -> act {
-                                target.names.forEach { store.client.softEndSession(it) }
+                                target.names.forEach {
+                                    store.notingSoftEnd(it)
+                                    store.client.softEndSession(it)
+                                }
                                 store.refreshSessions()
                             }
                             // Drafts and history ARE cleared, unlike a wrap-up:

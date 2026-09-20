@@ -335,8 +335,7 @@ object SettingsCatalog {
             SettingsItem(
                 id = "usage.keep-awake",
                 title = "Keep a window rotating",
-                summary = "Spends a fraction of a cent starting a 5-hour window when none is running, "
-                    + "so a session never begins on a cold one.",
+                summary = KeepAwakeCopy.WHAT,
                 keywords = listOf("keep awake", "keepawake", "window", "5-hour", "session", "rotating", "ping", "cost", "spend", "idle"),
                 availability = headroomOn,
             ),
@@ -853,4 +852,36 @@ object SettingsCatalog {
      */
     fun visibleCategories(probe: SettingsProbe, surface: Surface): List<SettingsCategory> =
         categories.filter { it.surface.matches(surface) && itemsOf(it.id, probe, surface).isNotEmpty() }
+}
+
+/**
+ * ⚠⚠ P-20. THE ONE TRUTHFUL DESCRIPTION OF WHAT KEEP-AWAKE COSTS.
+ *
+ * It was described two contradictory ways, four taps apart. The Usage page said
+ * *"Keep a window rotating — **Nothing is spent.** A session that starts after an
+ * idle spell begins a fresh 5-hour window and gets all of it"*; a settings search
+ * for "keep" said *"Keep a window rotating — **Spends a fraction of a cent**
+ * starting a 5-hour window when none is running."* Both were drawn from the same
+ * toggle; the first was the copy for the OFF state, read as the description of
+ * the feature. Given the owner's standing rule on spending, one of those is a
+ * promise this product must not make.
+ *
+ * So there is one sentence, here, used by the catalog row and by the page — and
+ * the off-state copy no longer opens with a claim that reads as the feature's.
+ */
+object KeepAwakeCopy {
+
+    /** What it DOES and what it costs. The row, the search hit, and the on-state. */
+    const val WHAT: String =
+        "Sends one tiny request when no 5-hour window is running, at most once per window — " +
+            "a fraction of a cent, and a sliver of the weekly pool."
+
+    /**
+     * What turning it OFF means. It still says nothing is spent, because that is
+     * true of the off state — but it says it about the SWITCH rather than about
+     * the feature, which is the whole of P-20.
+     */
+    const val OFF: String =
+        "Off — huginn sends nothing. A session that starts after an idle spell begins a fresh " +
+            "5-hour window and gets all of it."
 }
