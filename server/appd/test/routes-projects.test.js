@@ -45,6 +45,7 @@ const BOOT_MS = 900;
 const BANNER_MS = 400;
 
 let tmp, stateDir, dataDir, home, claudeDir, token, daemon, daemonLog, binDir, cwd;
+let projectsHome = null;   // where a project with no directory of its own is made
 const madeSessions = new Set();
 
 function sh(cmd, args) {
@@ -172,6 +173,7 @@ before(async () => {
   home = path.join(tmp, 'home');
   claudeDir = path.join(tmp, 'claude');
   cwd = path.join(tmp, 'trusted');
+  projectsHome = path.join(tmp, 'projects');
   for (const d of [stateDir, dataDir, home, claudeDir, cwd, path.join(tmp, 'untrusted')]) {
     fs.mkdirSync(d, { recursive: true });
   }
@@ -183,7 +185,12 @@ before(async () => {
   // and one is not, which is the whole of the check under test.
   fs.writeFileSync(path.join(tmp, 'claude.json'), JSON.stringify({
     oauthAccount: { emailAddress: 'nobody@example.invalid' },
-    projects: { [cwd]: { hasTrustDialogAccepted: true, allowedTools: [] } },
+    projects: {
+      [cwd]: { hasTrustDialogAccepted: true, allowedTools: [] },
+      // The projects directory, trusted ONCE: Claude Code inherits trust from a
+      // parent, so this covers every folder the daemon makes under it.
+      [projectsHome]: { hasTrustDialogAccepted: true, allowedTools: [] },
+    },
   }, null, 2));
 
   // ⚠ `claude` IS SHADOWED. The project launcher runs `claude --name <slug>/<role>
@@ -228,6 +235,7 @@ before(async () => {
       HUGINN_APPD_CLAUDE_DIR: claudeDir,
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_WORKDIR: tmp,
+      HUGINN_APPD_PROJECTS_DIR: projectsHome,
       HG_FAKE_CLAUDE_BOOT_MS: String(BOOT_MS),
       HG_FAKE_CLAUDE_BANNER_MS: String(BANNER_MS),
     },
@@ -402,6 +410,64 @@ test('a create refusal names the field the caller actually left out (L5)', async
 
   const names = (await api('/v1/projects')).body.projects.map((x) => x.name);
   assert.deepEqual([], names.filter((n) => n.startsWith('Order ')), 'and none of them made a project');
+});
+
+/**
+ * The session list says which project a session belongs to — joined by the
+ * daemon, not guessed by a client from a name. A project session is never on a
+ * client's Sessions page (owner rule, 2026-09-19); this field is what keeps it
+ * off, and a session outside every project answers null so a hand-made session
+ * and an older client's parse both read the same.
+ */
+test('the session list carries the project each session belongs to', async () => {
+  const { status, body } = await api('/v1/sessions');
+  assert.equal(200, status);
+  const lead = body.sessions.find((s) => s.name === 'stick-lead');
+  assert.ok(lead, 'the lead is listed');
+  assert.deepEqual({ id: stick.id, name: 'Stick', slug: 'stick', role: 'lead', lead: true }, lead.project);
+  for (const s of body.sessions) {
+    if (s.name === 'stick-lead') continue;
+    assert.equal(null, s.project, `${s.name} belongs to no project`);
+  }
+});
+
+/**
+ * With no directory named, the project gets ITS OWN: `<projects dir>/<slug>`,
+ * made on creation. The first project ever run landed in the daemon's working
+ * directory — the owner's ops repo — and its lead made a nested repo there. The
+ * list says where that directory is, so a client can show the path before the
+ * project exists.
+ */
+test('with no directory given, the project gets its own folder under the projects directory', async () => {
+  const r = await api('/v1/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Ownplace', kind: 'docs', brief: 'Where does this go?' }),
+  });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  madeSessions.add(r.body.lead.name);
+  const want = path.join(projectsHome, 'ownplace');
+  assert.equal(want, r.body.cwd);
+  assert.ok(fs.statSync(want).isDirectory(), 'made on creation');
+  assert.equal(projectsHome, (await api('/v1/projects')).body.dir, 'the list says where projects land');
+  assert.equal(200, (await api(`/v1/projects/${r.body.id}`, { method: 'DELETE', body: JSON.stringify({ end: 'now' }) })).status);
+});
+
+/**
+ * Trust is read the way Claude Code reads it: a subdirectory of a trusted
+ * directory opens with no dialog (checked on 2.1.258), so it is accepted here
+ * too — which is what makes "trust the projects directory once" enough.
+ */
+test('a subdirectory of a trusted directory is trusted, as Claude Code reads it', async () => {
+  const sub = path.join(cwd, 'deeper');
+  fs.mkdirSync(sub, { recursive: true });
+  const r = await api('/v1/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Deeper', kind: 'docs', brief: 'Under a trusted parent.', cwd: sub }),
+  });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  madeSessions.add(r.body.lead.name);
+  assert.equal(sub, r.body.cwd);
+  assert.equal(200, (await api(`/v1/projects/${r.body.id}`, { method: 'DELETE', body: JSON.stringify({ end: 'now' }) })).status);
 });
 
 // -------------------------------------------------------------- the proposal

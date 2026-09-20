@@ -386,4 +386,29 @@ class TailRevisionTest {
             Markdown.plainInline("Before it.\n| a | b |\n| c | d |\nAfter it."),
         )
     }
+
+    /**
+     * ⚠ AN INFO STRING MAY CARRY MORE THAN THE LANGUAGE. A lead's proposal opens
+     * "```huginn-project 34f88e7484" — the project's tag after the word — and a
+     * fence grammar that knew one word rendered the whole proposal as a
+     * paragraph of JSON, which the owner read as a failed call.
+     */
+    @Test
+    fun `a fence whose info string has a second word is still a fence`() {
+        val b = Markdown.parse("Ready.\n\n```huginn-project 34f88e7484\n{\"type\":\"software\"}\n```\n")
+        assertEquals(2, b.size)
+        val code = b[1] as MdBlock.Code
+        assertEquals("huginn-project", code.lang)
+        assertEquals("34f88e7484", code.info)
+        assertEquals("{\"type\":\"software\"}", code.code)
+        assertEquals(null, (Markdown.parse("```bash\nls\n```").first() as MdBlock.Code).info)
+    }
+
+    /** A closing fence carries no words (CommonMark), so a fence line with a language inside a block is content. */
+    @Test
+    fun `a closing fence is bare, so a nested opening fence stays inside the block`() {
+        val b = Markdown.parse("````markdown\n```bash\nls\n```\n````\n")
+        assertEquals(1, b.size)
+        assertEquals("```bash\nls\n```", (b[0] as MdBlock.Code).code)
+    }
 }

@@ -775,6 +775,9 @@ class AppStore(
      */
     private val _projectsAvailable = MutableStateFlow<Boolean?>(null)
     val projectsAvailable: StateFlow<Boolean?> = _projectsAvailable.asStateFlow()
+    /** Where the daemon makes a project's folder when none is named; null on an older daemon. */
+    private val _projectsDir = MutableStateFlow<String?>(null)
+    val projectsDir: StateFlow<String?> = _projectsDir.asStateFlow()
 
     /**
      * The live members of the projects this window has actually asked for, by
@@ -869,6 +872,7 @@ class AppStore(
                     return@onSuccess
                 }
                 _projectsAvailable.value = true
+                _projectsDir.value = list.dir
                 _projects.value = list.projects
                 // A project that is gone takes its membership with it: a stale
                 // entry would keep a deleted cluster's rows under a disclosure
