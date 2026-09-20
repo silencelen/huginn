@@ -14,16 +14,14 @@
 
 package com.silencelen.huginn.ui
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.AssistChip
@@ -72,18 +70,18 @@ fun SessionControls(
     onAutoResume: (Boolean) -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                // END PADDING INSIDE THE SCROLL, and larger than the start's: the
-                // last chip is "resumes on reset", the widest thing in the row and
-                // the one the walk found sitting flush against the right edge
-                // looking cut off. The row does scroll — but a chip that ends
-                // exactly at the bezel reads as clipped, not as scrollable.
-                .padding(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
+        EdgeFadeRow(
+            // END PADDING INSIDE THE SCROLL, and larger than the start's: the
+            // last chip is "resumes on reset", the widest thing in the row and
+            // the one the walk found sitting flush against the right edge
+            // looking cut off.
+            //
+            // ⚠ AND THE PADDING WAS NOT ENOUGH (P-27). The row does scroll, and
+            // a chip that ends near the bezel still reads as clipped rather than
+            // as scrollable. The edge fade is the part that says so. See
+            // [EdgeFade].
+            contentPadding = PaddingValues(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             // Status readouts lead so they stay visible if the controls scroll:
             // the "Compacting…" marker and the "context used" meter (both render
@@ -154,13 +152,9 @@ fun ChatOptionsBar(
     onEscalate: (() -> Unit)? = null,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+        EdgeFadeRow(
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             val localNow = ModelLabels.isLocal(model, models)
             PickerChip(
