@@ -188,7 +188,11 @@ cat /etc/huginn-appd/token    # paste into the app's Settings
 ```
 
 `huginn-appd` listens on port **8787** and requires `Authorization: Bearer <token>`
-on every route — 32 random bytes in `/etc/huginn-appd/token` (0600). The code binds
+on every route but one — 32 random bytes in `/etc/huginn-appd/token` (0600). The
+exception is `GET /v1/challenge`, which exists so a client can prove an address is
+really this daemon BEFORE it hands the token over; it returns above the auth check
+and nothing else does. `/v1/ping` is **not** an exception and never was: its 401,
+carrying `X-Huginn-Appd`, is what a route probe reads. The code binds
 `tailscale ip -4` by default; **the author's deployment binds `0.0.0.0`**, via a systemd
 drop-in (`/etc/systemd/system/huginn-appd.service.d/override.conf`) so that
 `deploy.sh` rewriting the unit cannot silently revert it. That is deliberate there —

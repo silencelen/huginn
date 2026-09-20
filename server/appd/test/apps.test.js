@@ -150,9 +150,49 @@ test('a record has every field a client reads, with a definite value', () => {
   assert.equal(1789460000, rec.addedAt);
 });
 
-test('an unknown kind is coerced, not refused, so a newer client can still write a row', () => {
+test('a STORED unknown kind is coerced, so a row written by a newer daemon still renders', () => {
+  // ⚠ THE READ SIDE ONLY. cleanKind is what buildRecord applies to a row coming
+  // off disk, and a row that decoded is a row that renders (the archive rule) —
+  // a sixth kind from a future daemon must degrade to a chip with the wrong
+  // label, never to a list that will not draw. The WRITE side refuses it; see
+  // the next test.
   assert.equal('other', appsLib.cleanKind('hologram'));
   assert.equal('lab', appsLib.cleanKind('LAB'));
+  assert.equal('other', appsLib.buildRecord({ id: 'x', name: 'X', url: 'http://h:1/', kind: 'hologram' }, 1).kind);
+});
+
+test('a kind the caller TYPED and got wrong is a 400, the same as a project kind (L2)', () => {
+  // `/v1/apps` publishes `kinds` on the list body precisely so the picker is not
+  // a second copy of this vocabulary (AppRules.kindChoices takes the daemon's
+  // list, not its own mirror) — and then the write path silently rewrote
+  // whatever it was handed to `other`. A caller that asked for something this
+  // daemon does not have got a 201 and a row with the wrong chip, with nothing
+  // anywhere to say the value had been discarded. `POST /v1/projects` has
+  // answered 400 for the same mistake since the day it shipped.
+  const bad = appsLib.add([], { name: 'X', url: 'http://huginn:8088/', kind: 'hologram' }, 100);
+  assert.equal(false, bad.ok);
+  assert.equal(400, bad.status);
+  assert.match(bad.error, /kind is one of dashboard, tool, docs, lab, other/);
+
+  // ABSENT is still fine and still means `other`: `{name, url}` is a legal body
+  // and every field on a row has a definite value.
+  const none = appsLib.add([], { name: 'X', url: 'http://huginn:8088/' }, 100);
+  assert.equal(true, none.ok);
+  assert.equal('other', none.app.kind);
+
+  // Case and whitespace are still forgiven — the chip vocabulary is lowercase,
+  // and a picker that sends `LAB` meant `lab`.
+  const shouty = appsLib.add([], { name: 'Y', url: 'http://huginn:8089/', kind: '  LAB ' }, 100);
+  assert.equal(true, shouty.ok);
+  assert.equal('lab', shouty.app.kind);
+
+  // And an EDIT gets the same answer, or the refusal would only be a door people
+  // walk around.
+  const list = BASE_LIST();
+  const edit = appsLib.patch(list, list[0].id, { version: list[0].version, kind: 'hologram' });
+  assert.equal(false, edit.ok);
+  assert.equal(400, edit.status);
+  assert.match(edit.error, /kind is one of/);
 });
 
 test('a name is one line with no control characters in it', () => {
@@ -726,10 +766,99 @@ test('a failing LOOPBACK address asks for no firewall line at all, and says why'
 
   // And on its own, the heimdall half is a single line saying there is nothing
   // to do there — not an empty section a reader has to interpret.
-  const alone = appsLib.fixLines(rec, [{ addr: '127.0.0.1', ok: false }], { '127.0.0.1': ['127.0.0.1'] });
-  assert.deepEqual(['# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'],
-    alone.slice(alone.indexOf('# on heimdall — /etc/pve/firewall/117.fw') + 1));
+  const alone = appsLib.fixLines(rec, [{ addr: '127.0.0.1', ok: false, error: 'connection refused' }],
+    { '127.0.0.1': ['127.0.0.1'] });
+  assert.ok(alone.includes('# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'));
   assert.ok(!alone.some((l) => l.startsWith('IN ACCEPT')), 'nothing for a firewall to accept');
+});
+
+test('no heimdall header when there is nothing to put in the file (L3)', () => {
+  // ⚠ A HEADER IS A PROMISE THAT SOMETHING FOLLOWS IT. On a daemon whose only
+  // client address is loopback — which is every fresh install, and every daemon
+  // reached only over an ssh tunnel — every failing address answers to step 1
+  // alone, so the block named /etc/pve/firewall/117.fw and then had nothing to
+  // put in it. Correct content, and still a reader sent to another machine to
+  // open a root-owned file for no reason.
+  const rec = appsLib.buildRecord({
+    id: 'dead', name: 'Dead', url: 'http://127.0.0.1:18899/', unit: 'rv-dead.service',
+  }, 100);
+  const fix = appsLib.fixLines(rec, [
+    { addr: '127.0.0.1', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'] });
+  assert.deepEqual([
+    '# on huginn — 127.0.0.1 does not reach this app',
+    'systemctl edit rv-dead.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1',
+    'systemctl restart rv-dead.service',
+    'ss -ltn | grep :18899',
+    '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
+  ], fix);
+  assert.ok(!fix.some((l) => l.includes('/etc/pve/firewall/117.fw')),
+    'the file is not named when there is no line to add to it');
+
+  // The header comes straight back the moment one line belongs in the file.
+  const mixed = appsLib.fixLines(rec, [
+    { addr: '127.0.0.1', ok: false, error: 'connection refused' },
+    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
+  assert.ok(mixed.includes('# on heimdall — /etc/pve/firewall/117.fw'));
+  assert.ok(mixed.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 18899 -log nolog'));
+});
+
+test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', () => {
+  // ⚠⚠ "timed out" AND "connection refused" ARE OPPOSITE FACTS AND GOT ONE FIX.
+  // A refusal means nothing is listening there, which is what `bind 0.0.0.0`
+  // repairs. A timeout means the SYN was not refused — the app took the
+  // connection and never wrote a byte, or something is dropping the packets —
+  // and `ss -ltn` will show it listening, so a reader who follows the rebind
+  // line finds a unit already bound the way they were just told to bind it and
+  // has learned nothing. The review bench reproduced it with a stub that accepts
+  // and says nothing.
+  const rec = appsLib.buildRecord({
+    id: 'wedged', name: 'Wedged', url: 'http://127.0.0.1:18899/', unit: 'rv-wedged.service',
+  }, 100);
+  const fix = appsLib.fixLines(rec, [
+    { addr: '127.0.0.1', ok: false, error: 'timed out' },
+  ], { '127.0.0.1': ['127.0.0.1'] });
+  assert.ok(!fix.some((l) => /bind 0\.0\.0\.0/.test(l)), `a bind line for a timeout:\n${fix.join('\n')}`);
+  assert.ok(!fix.some((l) => l.startsWith('systemctl edit')), 'nothing to edit — the bind is fine');
+  assert.ok(fix.some((l) => /timed out/.test(l)), 'the words the probe used are the words the block uses');
+  assert.ok(fix.some((l) => l.includes('systemctl status rv-wedged.service')));
+  assert.ok(fix.some((l) => l.includes('journalctl -u rv-wedged.service')));
+
+  // A row with BOTH kinds of failure gets both halves, each naming its own
+  // addresses — one block, two different problems, never merged.
+  const both = appsLib.fixLines(rec, [
+    { addr: '127.0.0.1', ok: false, error: 'timed out' },
+    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
+  assert.ok(both.includes('# on huginn — 192.168.2.117 does not reach this app'),
+    `the refused address keeps the bind story:\n${both.join('\n')}`);
+  assert.ok(both.some((l) => /^# on huginn — 127\.0\.0\.1 /.test(l) && /timed out/.test(l)),
+    'and the timed-out one gets its own sentence');
+  assert.ok(both.some((l) => l.startsWith('systemctl edit rv-wedged.service')));
+  assert.ok(both.some((l) => l.startsWith('systemctl status rv-wedged.service')));
+
+  // No unit on the row: still no bind advice, still something to do.
+  const noUnit = appsLib.fixLines(
+    appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://127.0.0.1:9100/' }, 100),
+    [{ addr: '127.0.0.1', ok: false, error: 'timed out' }], { '127.0.0.1': ['127.0.0.1'] },
+  );
+  assert.ok(!noUnit.some((l) => /bind 0\.0\.0\.0/.test(l)), noUnit.join('\n'));
+  assert.ok(noUnit.some((l) => l.includes('name it on the row')), 'it still asks for the unit');
+});
+
+test('the 422 sentence names what actually happened (L4)', () => {
+  const refused = appsLib.reachRefusal({
+    addresses: [{ addr: '192.168.2.117', ok: false, error: 'connection refused' }],
+  });
+  assert.match(refused, /fix the bind first/);
+
+  const silent = appsLib.reachRefusal({
+    addresses: [{ addr: '127.0.0.1', ok: false, error: 'timed out' }],
+  });
+  assert.ok(!/fix the bind first/.test(silent), silent);
+  assert.match(silent, /127\.0\.0\.1/);
+  assert.match(silent, /timed out/);
 });
 
 test('the store records WHICH clients arrived on which address, folded, capped and expiring', () => {

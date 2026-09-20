@@ -320,6 +320,27 @@ async function refreshWithStore(store, slug, deps = {}) {
   // which moves `nextAt` anyway.
   if (!canRefresh) return record('not_refreshable', { nextAt: now() + NOT_REFRESHABLE_RETRY_MS });
 
+  /**
+   * ⚠ THE ACTIVE GUARD COMES FIRST, ABOVE EVERY VERDICT (M6). It used to sit
+   * below the three checks under it, and every one of them is a state a profile
+   * can be in when the owner switches TO it — so the live journal carried
+   * `refresh <uuid>: known_dead_refresh_token` against the account the arbiter
+   * had just switched to, which reads as "the login huginn is using cannot be
+   * renewed". That is a DR problem, and it was not one: the `deadAt` marker had
+   * been written months earlier while the profile was INACTIVE, and this
+   * function never intended to touch the account anyway.
+   *
+   * A profile this daemon has decided not to refresh has no verdict to give
+   * about how refreshable it is, and saying one is the whole defect. The marker
+   * stays on the record — it is what the row's label is made of — and the row
+   * keeps reporting it.
+   *
+   * Still the cheap disk-only look, so the common case never takes the lock; it
+   * is re-checked inside the lock below, because the owner can switch while we
+   * queue for it.
+   */
+  if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
+
   const r0 = refreshOf(rec);
   if (r0 && r0.deadAt) return record('known_dead_refresh_token');
   if (typeof o.refreshTokenExpiresAt === 'number' && o.refreshTokenExpiresAt <= now()) {
@@ -328,8 +349,6 @@ async function refreshWithStore(store, slug, deps = {}) {
   if (typeof o.expiresAt === 'number' && o.expiresAt - SKEW_MS > now()) {
     return record('not_needed', { nextAt: nextRefreshAt(rec, now()) });
   }
-  // Cheap first look, so the common case never even takes the lock.
-  if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
 
   const lock = await acquire();
   if (!lock || !lock.ok) return record((lock && lock.status) || 'lock_error');
@@ -399,10 +418,26 @@ async function refreshWithStore(store, slug, deps = {}) {
   }
 }
 
+/**
+ * The journal's half of a status word.
+ *
+ * The status words are a WIRE contract — clients branch on them — so they stay
+ * exactly as they are. But the journal is the only place this subsystem speaks
+ * to a person, and the commonest line on a two-account host said
+ * `active_skipped`, which looks like something failed to happen. It is a
+ * decision, and the reason for it is the thing a reader needs.
+ */
+function statusLine(status) {
+  if (status === 'active_skipped') {
+    return 'active profile — skipped, Claude Code refreshes it live';
+  }
+  return String(status);
+}
+
 module.exports = {
   TOKEN_URL, CLIENT_ID, SCOPES, STATUSES,
   SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, NOT_REFRESHABLE_RETRY_MS,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
   deadSince, refreshTokenWarnDue, projectScopes, oauthOf, refreshOf, printOf,
-  refreshWithStore,
+  refreshWithStore, statusLine,
 };

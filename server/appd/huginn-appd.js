@@ -534,7 +534,9 @@ function effortDecision(v) {
   return { error: `unknown effort ${JSON.stringify(s.slice(0, 20))}: one of low, medium, high, xhigh, max` };
 }
 
-// Session names: the cc contract — letters/digits/underscore, canonically lowercase.
+// Session names: the cc contract — letters, digits, underscore and dash,
+// canonically lowercase. (Not "letters/digits/underscore": the dash has been
+// legal since 1.3.0, and mobile/README.md's API table says so.)
 /**
  * The session names this daemon will route to.
  *
@@ -745,6 +747,102 @@ function clearSessionState(name) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
   }
   sessionBorn.delete(name);
+}
+
+/**
+ * How long a state file outlives the session that wrote it.
+ *
+ * A week, not a day: a conversation can be revived from the archive and a state
+ * file is where its transcript mapping lives, so the cost of being early is
+ * losing a thing somebody meant to come back to, while the cost of being late is
+ * a few hundred bytes in a tmpfs.
+ */
+const STATE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** And how often the sweep runs after the one at startup. */
+const STATE_SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Take the state of sessions that are gone, and nothing else.
+ *
+ * ⚠ THE LEAK THIS CLOSES (r2 L9). `clearSessionState` runs on create and on end,
+ * THROUGH THIS DAEMON — so a session killed at a terminal, or by a reboot, or by
+ * `tmux kill-server`, leaves its state file behind with nothing that will ever
+ * come back for it. The live host had 40-odd on 2026-09-19, the oldest dead since
+ * July, beside a 0-byte `.tmp` from an interrupted hook write and BOTH spellings
+ * of the sidecar directories — `ask`, `plan`, `compacting` sitting next to
+ * `.ask`, `.plan`, `.compacting`, which is exactly the namespace the leading dot
+ * was introduced to empty (#2/#3).
+ *
+ * ⚠⚠ AND IT IS TIMID ON PURPOSE, IN TWO WAYS.
+ *
+ *   1. A tmux read that FAILS sweeps nothing. `liveSessionIds` returns null for a
+ *      failure to observe and an empty map for "there is genuinely no server",
+ *      and those two must not be confused here: reading a hiccup as "no session
+ *      is live" would delete the state of every session on the host — its state
+ *      word, its claudeSessionId, its transcript path, its conversation tab —
+ *      the first time a fork hit EAGAIN at startup. Same guard listSessions and
+ *      the registry reconcile carry, for the same reason (#14).
+ *   2. A file is taken only when its session is GONE *and* the file has not been
+ *      touched for [STATE_KEEP_MS]. Either alone is not enough.
+ *
+ * The exception is a `*.tmp`: the hook writes one and renames it in a single
+ * millisecond-scale step, so one that has survived the keep window is a corpse
+ * whoever owns it — and it is never the file a session reads, which is the
+ * undotted name beside it.
+ *
+ * An EMPTY legacy sidecar directory is removed too. The daemon has written the
+ * dotted spelling since 3.3 and only still reads the old one because /run
+ * survives a deploy; once the last pre-3.3 sidecar is gone the directory is
+ * nothing but the collision surface. A pre-3.3 hook would recreate it, which is
+ * the correct outcome if one is still installed.
+ */
+async function sweepStateDir(why = 'daily') {
+  const live = await liveSessionIds();
+  if (!live) {
+    log(`state sweep (${why}): tmux is not answering — nothing swept`);
+    return null;
+  }
+  const now = Date.now();
+  const stale = (p) => {
+    try { return now - fs.statSync(p).mtimeMs > STATE_KEEP_MS; } catch { return false; }
+  };
+  const drop = (p) => { try { fs.unlinkSync(p); return true; } catch { return false; } };
+  const took = { states: 0, sidecars: 0, partials: 0, dirs: 0 };
+
+  let entries = [];
+  try { entries = fs.readdirSync(STATE_DIR, { withFileTypes: true }); } catch { return null; }
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    const p = path.join(STATE_DIR, ent.name);
+    if (!stale(p)) continue;
+    if (ent.name.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
+    if (live.has(ent.name)) continue;
+    if (drop(p)) took.states += 1;
+  }
+
+  for (const kind of ALL_SIDECAR_DIRS) {
+    const dir = path.join(STATE_DIR, kind);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      const p = path.join(dir, n);
+      if (!stale(p)) continue;
+      if (n.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
+      if (live.has(n)) continue;
+      if (drop(p)) took.sidecars += 1;
+    }
+    if (!LEGACY_SIDECAR_DIRS.includes(kind)) continue;
+    try { if (fs.readdirSync(dir).length === 0) { fs.rmdirSync(dir); took.dirs += 1; } } catch { /* in use */ }
+  }
+
+  // Said every time, including the nothing-to-do pass: a sweep that deletes
+  // files and leaves no trace is a sweep nobody can check after the fact, and
+  // this one is the only thing on the host that removes a state file without a
+  // person asking.
+  log(`state sweep (${why}): ${took.states} state file(s), ${took.sidecars} sidecar(s), `
+    + `${took.partials} interrupted write(s), ${took.dirs} legacy dir(s); ${live.size} session(s) live`);
+  return took;
 }
 
 // One ps snapshot serves every caller inside its window; the sessions list and
@@ -5392,7 +5490,7 @@ async function refreshProfile(slug) {
       post: postRefreshToken,
       lock: () => oauthlock.acquire(CLAUDE_DIR),
     });
-    log(`refresh ${slug}: ${status}`);
+    log(`refresh ${slug}: ${oauthRefresh.statusLine(status)}`);
     return status;
   } finally {
     refreshInFlight.delete(slug);
@@ -9460,12 +9558,12 @@ const server = http.createServer(async (req, res) => {
   //
   // AFTER the auth check, deliberately: a port scanner must not be able to teach
   // this daemon a new address that every app then has to answer on. (⚠ The
-  // comment here used to say "/v1/ping is unauthenticated", which it is not and
-  // never was — `authorized()` runs above with no exemption, and the 401 it
-  // answers, carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants.
-  // The one genuinely unauthenticated route is `/v1/challenge`, and it returns
-  // before this line for exactly the reason this line exists.) In memory,
-  // flushed lazily — see noteClientAddress.
+  // comment here used to call the ping route token-free. It never was:
+  // `authorized()` runs above with no exemption, and the 401 it answers,
+  // carrying `X-Huginn-Appd`, IS the fingerprint the client probe wants. The one
+  // route answered without a token is `/v1/challenge`, and it returns before
+  // this line for exactly the reason this line exists.) In memory, flushed
+  // lazily — see noteClientAddress.
   try {
     appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
       .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
@@ -9481,10 +9579,12 @@ const server = http.createServer(async (req, res) => {
       // tell without being told. Additive: the Ping model's fields are all
       // nullable-with-defaults, so an older client ignores it.
       //
-      // ⚠ PING IS UNAUTHENTICATED, so this echoes ONLY the address the caller
-      // already dialled — it is the local end of their own socket. A LIST of the
-      // daemon's other addresses would be a disclosure and belongs on
-      // token-gated /v1/status, which already carries the hostname.
+      // ⚠ ONLY THE ADDRESS THE CALLER ALREADY DIALLED — the local end of their
+      // own socket. A LIST of the daemon's other addresses would be a disclosure
+      // even behind the token, and belongs on /v1/status, which already carries
+      // the hostname. (Ping IS authenticated; `authorized()` runs above it with
+      // no exemption. The unauthenticated route is /v1/challenge, which returns
+      // before that check — see the block above.)
       const via = { addr: req.socket.localAddress || null, port: req.socket.localPort || null };
       return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via });
     }
@@ -10577,10 +10677,29 @@ const server = http.createServer(async (req, res) => {
       if (to !== from) {
         const owner = projectOfSession(from);
         if (owner) {
+          // ⚠⚠ AND THE LEAD GETS ITS OWN SENTENCE (r2 L6). "Drop it from the
+          // project first" was said to the lead too, and
+          // `DELETE …/members/lead` answers the lead with its own 409 — "the
+          // lead is the project — delete the project instead". So the only
+          // instruction here pointed at a door this daemon holds shut, and the
+          // reader learned that by being refused a second time. A refusal that
+          // names a fix has to name one that works, and for the lead that is
+          // deleting the project (which leaves the session running) or, if it
+          // was only the label they wanted to change, renaming the project.
+          if (owner.member.role === projectsLib.LEAD_ROLE) {
+            return sendErr(res, 409,
+              `'${from}' is the LEAD session of the project "${owner.project.name}" — its name is the `
+              + 'namespace every member is registered under, and the lead cannot be dropped from its '
+              + `own project. Delete the project first (DELETE /v1/projects/${owner.project.id}, which `
+              + 'leaves the session running), then rename it. To change the project\'s own display name '
+              + `instead, PATCH /v1/projects/${owner.project.id} with {rev, name} — that never moves a `
+              + 'session name.');
+          }
           return sendErr(res, 409,
             `'${from}' is the ${owner.member.role} session of the project "${owner.project.name}" — `
             + 'its name is what the project and the peer registry know it by. Drop it from the '
-            + 'project first (DELETE /v1/projects/<id>/members/<role>), then rename it');
+            + `project first (DELETE /v1/projects/${owner.project.id}/members/${owner.member.role}), `
+            + 'then rename it');
         }
       }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
@@ -10853,6 +10972,22 @@ const server = http.createServer(async (req, res) => {
         const r = await run('tmux', ['send-keys', '-t', `=${name}:`, k]);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim()}`);
       }
+      /**
+       * ⚠ A KEY-ONLY SEND IS DELIVERED, AND THE ANSWER HAS TO SAY SO (r2 L7).
+       *
+       * Raw keys never go through the queue — they are a person at a keyboard
+       * and cannot wait — so they are in the pane by the time this line runs,
+       * and `delivered` was still the `false` it was initialised to two hundred
+       * lines up: the value belongs to the TEXT branch, which a `{keys:[...]}`
+       * body never enters. Both clients seed their send-queue note from this
+       * object (SendQueue.seed), so an Escape or a BTab read back as "not sent
+       * yet" on the one send that can never be waiting for anything.
+       *
+       * Only when there was no text. A body carrying both is a message with
+       * keystrokes attached, and `delivered` there is the MESSAGE's fate, which
+       * is what the note is about.
+       */
+      if (typedKeys.length === 0 && rawKeys.length > 0) delivered = true;
       return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy, intoDraft });
     }
 
@@ -11825,8 +11960,16 @@ const server = http.createServer(async (req, res) => {
 
       let asked = null;
       if (typeof body.name === 'string' && body.name.trim()) {
+        // ⚠ `nameProblem`, NOT A SENTENCE OF ITS OWN (r2 L10). This route kept
+        // the pre-1.3.0 wording — "letters, digits, underscore" — which has not
+        // described the rule since the dash became legal, and which says nothing
+        // about the dot (refused for its own reason: tmux rewrites it to `_` and
+        // exits 0, so the name you ask for is not the name you get) or about the
+        // reserved names. One function knows which rule was broken; the create
+        // route has asked it since it was written.
+        const bad = nameProblem(body.name);
+        if (bad) return sendErr(res, 400, bad);
         asked = canonName(body.name);
-        if (!asked) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       }
       const want = archiveLib.reviveName(asked || rec.tmuxName || 'session', new Set(liveIds.keys()));
       const cwd = rec.cwd || WORKDIR;
@@ -11945,8 +12088,30 @@ const server = http.createServer(async (req, res) => {
       // client branches on; the sentence beside it stays the thing a person
       // reads, because it is also the instruction.
       if (badSlug) return sendJson(res, 409, { error: badSlug, reason: 'slug-taken' });
-      const kind = projectsLib.KINDS.includes(body.kind) ? body.kind : null;
-      if (!kind) return sendErr(res, 400, `kind is one of ${projectsLib.KINDS.join(', ')}`);
+      /**
+       * ⚠ A KIND THE CALLER TYPED IS CHECKED HERE; A MISSING ONE IS CHECKED LAST
+       * (r2 L5). Two different mistakes, and running them together answered the
+       * wrong question.
+       *
+       * The form's order is Name, Kind, Brief, Directory — but Kind is the one
+       * field nobody can leave blank. CreateProjectSheet draws it as chips with
+       * the first one already selected, and `huginn projects new` defaults it to
+       * `other`. So a body that arrives WITHOUT a kind is not somebody who
+       * mis-filled the chips; it is a caller who has not finished the body, and
+       * the fields they can genuinely have missed are the ones they type. Saying
+       * "kind is one of …" to that caller is a sentence about a field they never
+       * touched while the brief they actually forgot goes unmentioned — two 400s
+       * to learn one thing, and the untrusted-cwd 409 (whose sentence IS the
+       * fix) unreachable until they guess.
+       *
+       * A kind that is PRESENT and wrong is a value somebody chose, so it is
+       * answered in its own place in the form, quoting what they sent.
+       */
+      const kindGiven = body.kind !== undefined && body.kind !== null && body.kind !== '';
+      if (kindGiven && !projectsLib.KINDS.includes(body.kind)) {
+        return sendErr(res, 400, `'${String(body.kind).slice(0, 40)}' is not a project kind — `
+          + `kind is one of ${projectsLib.KINDS.join(', ')}`);
+      }
       const badBrief = projectsLib.briefProblem(body.brief);
       if (badBrief) return sendErr(res, 400, badBrief);
 
@@ -11968,6 +12133,13 @@ const server = http.createServer(async (req, res) => {
           reason: 'untrusted-cwd',
         });
       }
+
+      // Everything a person TYPES is in place; now the field the form always
+      // fills for them. See the ⚠ above for why it is last and not third.
+      if (!kindGiven) {
+        return sendErr(res, 400, `a project needs a kind — one of ${projectsLib.KINDS.join(', ')}`);
+      }
+      const kind = body.kind;
 
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
       if (await sessionExists(leadTmux)) {
@@ -13197,6 +13369,14 @@ resolveBind().then(async (bind) => {
   // Before listen, like the sweep above, so the session list is whole by the time a
   // client can ask for it.
   await restoreSessionsAfterReboot().catch((e) => log(`session restore failed: ${e.message}`));
+  // ⚠ AFTER THE RESTORE, NEVER BEFORE IT. A session this daemon is about to
+  // bring back is not live yet, and the sweep's whole safety argument is that it
+  // only takes what tmux says is gone. Daily after that — the leak is measured in
+  // files per week, so anything faster is just more chances to be wrong.
+  await sweepStateDir('startup').catch((e) => log(`state sweep failed: ${e.message}`));
+  setInterval(() => {
+    sweepStateDir('daily').catch((e) => log(`state sweep failed: ${e.message}`));
+  }, STATE_SWEEP_EVERY_MS).unref();
   // Keep the durable registry in step with live tmux: learn ids the hook writes
   // late, pick up sessions started outside the daemon, drop the ones that ended. The
   // early tick catches a just-restored session's fresh id; the interval carries it.

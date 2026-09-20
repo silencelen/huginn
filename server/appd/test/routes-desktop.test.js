@@ -112,14 +112,18 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
-  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? A daemon leaked by an earlier
-  // run sits on one of the few slots this formula gives, answers /v1/ping
-  // happily because ping needs no token, and rejects OURS — which surfaces as
-  // 401s that read like a code bug and are not one.
+  // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The port formula gives few
+  // slots, and one leaked by an earlier run — a test process killed before
+  // after() could fire — sits on one and refuses OUR token. /v1/ping is
+  // authenticated like every other route, so the start loop above never sees
+  // its 200 and spins its whole cap, and then every call below 401s: a wall of
+  // `401 unauthorized` that reads like a code bug and is not one. So ask an
+  // AUTHENTICATED question before trusting the port, and say plainly what is
+  // wrong: `ss -ltnp | grep <port>`, then kill it.
   const own = await api('/v1/rounds');
   if (own.status === 401) {
     throw new Error(`port ${PORT} is held by another huginn-appd, probably one leaked by an earlier `
-      + `test run — it answers ping but not our token. Find it with: ss -ltnp | grep ${PORT}`);
+      + `test run — it refuses our token. Find it with: ss -ltnp | grep ${PORT}`);
   }
 });
 
@@ -138,8 +142,9 @@ test('ping says which listener answered, and only that one', async () => {
   assert.equal(r.body.via.port, PORT, 'the port the caller dialled');
   assert.ok(/127\.0\.0\.1$/.test(r.body.via.addr), `dialled loopback, got ${r.body.via.addr}`);
 
-  // ⚠ AND NOTHING ELSE. Ping needs no token, so a list of the daemon's other
-  // addresses here would be a disclosure to anyone who can reach the port.
+  // ⚠ AND NOTHING ELSE. A list of the daemon's other addresses here would be a
+  // disclosure to every client that holds the token, and the set of addresses
+  // this host answers on belongs on /v1/status.
   const keys = Object.keys(r.body.via).sort();
   assert.deepEqual(keys, ['addr', 'port'], `via grew fields: ${keys}`);
 });

@@ -24,7 +24,7 @@ const oauthlock = require('../lib/oauthlock');
 const {
   TOKEN_URL, CLIENT_ID, SCOPES,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
-  refreshWithStore, refreshTokenWarnDue, deadSince,
+  refreshWithStore, refreshTokenWarnDue, deadSince, statusLine,
 } = require('../lib/oauth-refresh');
 
 const UUID_A = '79c777a4-d96e-4de2-b95e-bd1f1e758236';
@@ -237,6 +237,38 @@ test('the ACTIVE account is never posted to the token endpoint', async () => {
     'rotating the live pair leaves the CLI with a stale refresh token, and the CLI answers '
     + 'the invalid_grant that follows by blanking its own credentials');
   assert.equal(store.readProfile(slug).credentials.claudeAiOauth.refreshToken, 'rt-LIVE');
+});
+
+test('the ACTIVE account is skipped even when it was once marked dead (M6)', async () => {
+  // ⚠ THE LINE THAT READ LIKE A BROKEN SWITCH-BACK. `refresh
+  // 55ccf945-…: known_dead_refresh_token` sat in the live journal against the
+  // account the arbiter had just switched TO, which reads as "the login huginn
+  // is using cannot be renewed" — a DR problem — and is not one. The `deadAt`
+  // marker was written months earlier, WHILE the profile was inactive; the
+  // active guard came after it, so an account that had ever been marked dead
+  // reported that word for ever once it went live. The marker is still on the
+  // record (it is what the row's label is made of); it just is not this
+  // function's verdict about an account it never intends to touch.
+  const { store, credPath, root } = newStore();
+  const live = creds('rt-LIVE', { expiresAt: Date.now() - HOUR });
+  fs.writeFileSync(credPath, JSON.stringify(live));
+  const slug = store.save('live@example.com', live, { accountUuid: UUID_A });
+  store.recordRefresh(slug, { deadAt: Date.now() - 30 * 24 * HOUR, lastStatus: 'known_dead_refresh_token' });
+
+  const post = fakePost(okReply());
+  assert.equal(await refreshWithStore(store, slug, deps(root, post)), 'active_skipped');
+  assert.equal(post.calls.length, 0, 'and still nothing is posted for the live login');
+  assert.ok(store.readProfile(slug).refresh.deadAt, 'the marker itself is not erased');
+});
+
+test('a status word that is not a sentence gets one, so the journal can be read (M6)', () => {
+  // The journal is the only place this subsystem speaks, and `active_skipped` —
+  // the commonest line on a two-account host — is a word that means "we did not
+  // do anything, on purpose", which is not what it looks like.
+  assert.match(statusLine('active_skipped'), /active profile/);
+  assert.match(statusLine('active_skipped'), /Claude Code refreshes it live/);
+  assert.equal(statusLine('refreshed'), 'refreshed', 'the ones that are already plain are left alone');
+  assert.equal(statusLine('known_dead_refresh_token'), 'known_dead_refresh_token');
 });
 
 test('the active guard is re-checked INSIDE the lock, not only before it', async () => {
