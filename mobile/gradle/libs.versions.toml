@@ -16,7 +16,7 @@ compose-bom = "2024.12.01"
 compose-multiplatform = "1.7.3"
 activity-compose = "1.13.0"
 lifecycle = "2.11.0"
-coroutines = "1.9.0"
+coroutines = "1.11.0"
 kotlinx-serialization = "1.7.3"
 # The HTTP layer, and it lives in :core so both clients share one. 3.0.x needs
 # no Kotlin bump (same reasoning as compose-multiplatform above), and its OkHttp
