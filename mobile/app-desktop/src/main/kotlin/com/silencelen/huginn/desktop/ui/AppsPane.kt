@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,6 +35,8 @@ import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.ui.AppFormFields
 import com.silencelen.huginn.ui.AppRules
+import com.silencelen.huginn.ui.REMOVE_APP_BODY
+import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.ui.AppsView
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -205,6 +208,19 @@ private fun AppEditorDialog(
     onConfirm: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
+    // ⚠ REMOVE ASKS FIRST (D-18, decision 60). It deleted the row on the click
+    // with no dialog and no undo, while Kill and Archive both confirm by name.
+    var confirmRemove by remember(form.name) { mutableStateOf(false) }
+    val fixText = AppRules.fixTextOf(form.name, form.unit, form.addresses, form.fix)
+    if (confirmRemove && onDelete != null) {
+        RemoveConfirmDialog(
+            verb = "Remove app",
+            name = form.name.ifBlank { form.url },
+            body = REMOVE_APP_BODY,
+            onDismiss = { confirmRemove = false },
+            onConfirm = { confirmRemove = false; onDelete() },
+        )
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, style = MaterialTheme.typography.titleSmall) },
@@ -221,10 +237,21 @@ private fun AppEditorDialog(
             TextButton(enabled = form.sendable, onClick = onConfirm) { Text(confirm) }
         },
         dismissButton = {
-            if (onDelete != null) {
-                TextButton(onClick = onDelete) { Text("Remove") }
-            } else {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+            Row {
+                // ⚠ THE FIX LINES ARE COPYABLE FROM THE CHROME (P-23/D-19), not
+                // only from the bottom of a panel that has to be scrolled to.
+                // These are shell lines somebody is expected to run on ANOTHER
+                // machine; the panel keeps its own Copy for a reader who is
+                // already down there, and this one is for everyone else. Same
+                // placement the phone chose, so the two dialogs agree.
+                if (fixText.isNotBlank()) {
+                    TextButton(onClick = { onCopyFix(fixText) }) { Text("Copy fix") }
+                }
+                if (onDelete != null) {
+                    TextButton(onClick = { confirmRemove = true }) { Text("Remove") }
+                } else {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                }
             }
         },
     )

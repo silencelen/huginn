@@ -1,11 +1,17 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.DaemonChallenge
+import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteFailures
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteHealthSnapshot
 import com.silencelen.huginn.data.RouteResolver
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -307,5 +313,147 @@ class RouteResolverTest {
         assertTrue(!f.fail())
         assertTrue(!f.fail())
         assertTrue(f.fail())
+    }
+
+    // ------------------------------------------------- the challenge (D-1)
+
+    /**
+     * ⚠⚠ THE WHOLE POINT OF DECISION 58, ASSERTED END TO END.
+     *
+     * The review bench: two routes in the book, the real daemon and a thirty-line
+     * Python server that answers every request with `401` +
+     * `X-Huginn-Appd: 9.9.9`. The resolver adopted the fake and the client then
+     * sent it the real bearer 129 times in about two minutes.
+     *
+     * This drives the REAL `HuginnClient.probe` through the resolver, against a
+     * mock engine that IS that fake — right status, right header, right JSON
+     * error shape, and a 404 on the challenge it cannot answer. The fake sits
+     * FIRST in the owner's order, so a resolver that trusted the fingerprint
+     * would choose it. Nothing about the assertion depends on how the probe is
+     * spelled; if a later change lets a header decide again, this fails.
+     */
+    @Test
+    fun `a forged X-Huginn-Appd header never wins the route`() = runTest {
+        val token = "s".repeat(64)
+        val fake = "http://10.0.0.9:8787"
+        val real = "http://10.0.0.1:8787"
+        val asked = mutableListOf<String>()
+        val client = HuginnClient(
+            baseUrlProvider = { real },
+            tokenProvider = { token },
+            engine = MockEngine { request ->
+                val url = request.url
+                val host = "http://${url.host}:${url.port}"
+                asked += "$host${url.encodedPath}"
+                when {
+                    // The fake: huginn's fingerprint on every path, and a 404 on
+                    // the one route it cannot fake.
+                    host == fake && url.encodedPath == "/v1/challenge" ->
+                        respond("""{"error":"not found"}""", HttpStatusCode.NotFound,
+                            headersOf(HuginnClient.APPD_HEADER, "9.9.9"))
+                    host == fake ->
+                        respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized,
+                            headersOf(HuginnClient.APPD_HEADER, "9.9.9"))
+                    url.encodedPath == "/v1/challenge" -> {
+                        val nonce = url.parameters["nonce"] ?: ""
+                        respond(
+                            """{"proof":"${DaemonChallenge.proof(token, nonce)}","version":"3.6.0"}""",
+                            HttpStatusCode.OK,
+                            headersOf(HuginnClient.APPD_HEADER, "3.6.0"),
+                        )
+                    }
+                    else -> respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized,
+                        headersOf(HuginnClient.APPD_HEADER, "3.6.0"))
+                }
+            },
+        )
+
+        val out = RouteResolver.resolve(book(fake, real, active = 1), stale("r1"), NOW) {
+            client.probe(it.url)
+        }
+        assertTrue(
+            out.choice is RouteResolver.Choice.Stay.Here,
+            "the impostor is first in the order and must still not take the connection: ${out.choice}",
+        )
+        assertEquals(real, (out.choice as RouteResolver.Choice.Stay).route.url)
+        assertEquals(false, out.health["r0"]?.reachable, "and it is recorded as a route that did not answer")
+        assertTrue(asked.any { it == "$fake/v1/challenge" }, "the impostor WAS challenged: $asked")
+    }
+
+    /**
+     * The other half: a daemon that proves itself IS adopted. Without this the
+     * test above passes just as well for a client that stopped probing at all.
+     */
+    @Test
+    fun `a route that answers the challenge is adopted`() = runTest {
+        val token = "t".repeat(64)
+        val dead = "http://10.0.0.8:8787"
+        val real = "http://10.0.0.1:8787"
+        val client = HuginnClient(
+            baseUrlProvider = { dead },
+            tokenProvider = { token },
+            engine = MockEngine { request ->
+                val url = request.url
+                if (url.host == "10.0.0.8") throw kotlinx.io.IOException("connection refused")
+                if (url.encodedPath == "/v1/challenge") {
+                    respond(
+                        """{"proof":"${DaemonChallenge.proof(token, url.parameters["nonce"] ?: "")}","version":"3.6.0"}""",
+                        HttpStatusCode.OK,
+                    )
+                } else {
+                    respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized)
+                }
+            },
+        )
+        val out = RouteResolver.resolve(book(dead, real, active = 0), stale("r0"), NOW) {
+            client.probe(it.url)
+        }
+        assertEquals(real, (out.choice as RouteResolver.Choice.Switched).route.url)
+    }
+
+    /**
+     * ⚠ A PROOF FOR SOMEBODY ELSE'S NONCE IS NOT A PROOF. The fake replays a
+     * recording of one real exchange at every challenge it is asked; the client
+     * mints a fresh nonce per probe, so the replay answers a question nobody
+     * asked.
+     */
+    @Test
+    fun `a replayed proof is refused`() = runTest {
+        val token = "u".repeat(64)
+        val recorded = DaemonChallenge.proof(token, "deadbeefdeadbeef")
+        val fake = "http://10.0.0.9:8787"
+        val client = HuginnClient(
+            baseUrlProvider = { fake },
+            tokenProvider = { token },
+            engine = MockEngine {
+                respond("""{"proof":"$recorded","version":"3.6.0"}""", HttpStatusCode.OK)
+            },
+        )
+        assertTrue(!client.probe(fake))
+    }
+
+    /**
+     * ⚠ AN OLDER DAEMON IS A DIFFERENT SENTENCE, NOT A DIFFERENT DECISION. The
+     * sweep records "something is there that cannot prove itself" so the settings
+     * row can say so — and the route is STILL not adopted, because from here an
+     * old daemon and an impostor are the same bytes.
+     */
+    @Test
+    fun `an unproven route is recorded as unproven and still not adopted`() = runTest {
+        val out = RouteResolver.resolveProving(book(a, b, active = 1), stale("r1"), NOW) {
+            if (it.url == a) RouteResolver.RouteProof.ANSWERED else RouteResolver.RouteProof.PROVEN
+        }
+        assertTrue(out.choice is RouteResolver.Choice.Stay.Here, "b proved itself and keeps the connection")
+        assertEquals(true, out.health["r0"]?.unproven, "and a's row says why, rather than 'unreachable'")
+        assertEquals(false, out.health["r0"]?.reachable, "but nothing that CHOOSES sees it as reachable")
+        assertEquals(false, out.health["r1"]?.unproven)
+    }
+
+    @Test
+    fun `nothing there is not the same as something unproven`() = runTest {
+        val out = RouteResolver.resolveProving(book(a, b, active = 1), stale("r1"), NOW) {
+            if (it.url == a) RouteResolver.RouteProof.NONE else RouteResolver.RouteProof.PROVEN
+        }
+        assertEquals(false, out.health["r0"]?.unproven, "a dead port earns no sentence about proofs")
     }
 }

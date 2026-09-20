@@ -756,6 +756,8 @@ fun HuginnApp(
     // session is queued and delivered at the next turn boundary; without this the
     // composer emptied and nothing anywhere said where the message went.
     val typing by vm.typing.collectAsState()
+    val draftNotices by vm.draftNotices.collectAsState()
+    val wrapUpNotices by vm.wrapUpNotices.collectAsState()
     // The 5-hour session window, under the Status icon. A DIFFERENT NUMBER from the
     // pill above it — the pill is the worst window anywhere, this is the one that
     // decides whether the next hour of work finishes — and null draws nothing.
@@ -1087,7 +1089,7 @@ fun HuginnApp(
     killTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { killTarget = null },
-            title = { Text("Kill $name?") },
+            title = { com.silencelen.huginn.ui.ConfirmTitle(EndVerbs.HARD, name) },
             text = { Text("Ends the tmux session and whatever Claude is doing in it.") },
             confirmButton = {
                 TextButton(onClick = {
@@ -1102,7 +1104,7 @@ fun HuginnApp(
     softEndTarget?.let { name ->
         AlertDialog(
             onDismissRequest = { softEndTarget = null },
-            title = { Text("${EndVerbs.SOFT} $name?") },
+            title = { com.silencelen.huginn.ui.ConfirmTitle(EndVerbs.SOFT, name) },
             text = {
                 Text(
                     "Sends Claude the wrap-up instruction (finish, commit, prepare to end). " +
@@ -1518,6 +1520,10 @@ fun HuginnApp(
                     )
                 },
                 queueNote = com.silencelen.huginn.ui.SendQueue.note(typing[name]),
+                draftNotice = draftNotices[name],
+                onDismissDraftNotice = { vm.dismissDraftNotice(name) },
+                wrapUpNotice = wrapUpNotices[name],
+                onDismissWrapUpNotice = { vm.dismissWrapUpNotice(name) },
                 onForceResize = { vm.forceFit() },
                 onInterrupt = { vm.interruptSession(name) },
                 working = sessionWorking,
@@ -1610,6 +1616,10 @@ fun HuginnApp(
                 onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
                 onOpenMember = { live -> dest = Dest.SessionView(live.name) },
                 onExpand = { id -> vm.fetchProjectMembers(id) },
+                // ⚠ D-8. Winding a cluster down lived only behind the dashboard's
+                // top-bar menu — two taps in, and inside the project. The row gets
+                // the same door; the dialog is the one this screen already raises.
+                onEndProject = { row -> endProjectTarget = row.id },
                 creating = projectBusy,
                 refusal = projectRefusal,
                 onDismissSheet = { vm.clearProjectRefusal() },
