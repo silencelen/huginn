@@ -138,7 +138,10 @@ fun ChatsScreen(
 
         ExtendedFloatingActionButton(
             onClick = { showNew = true },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
+            // ⚠ THE TOKEN, NOT A THIRD COPY OF THE NUMBER (P-37). The list's
+            // bottom clearance is DERIVED from this inset; a hand-written 16 here
+            // is the shape the clearance bug had in the first place.
+            modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
             icon = { Icon(Icons.Filled.Add, contentDescription = null) },
             text = { Text("New chat") },
         )

@@ -156,6 +156,29 @@ interface HuginnSettings {
     val sentHistory: Flow<Map<String, List<String>>> get() = kotlinx.coroutines.flow.flowOf(emptyMap())
     suspend fun setSentHistory(value: Map<String, List<String>>) {}
 
+    /**
+     * The session that was open when this client was last looked at, so a COLD
+     * START comes back to it.
+     *
+     * ⚠⚠ A COLD START LOST THE READER'S PLACE (P-35). Backgrounding and
+     * resuming restored the open session, and a fold or a rotate did too — those
+     * are `rememberSaveable`, which lives and dies with the process. A
+     * force-stop, a low-memory kill or a reboot put the reader back on the list,
+     * which on a phone is most of the ways an app is closed. The DESKTOP has had
+     * this since it shipped (`DesktopSettings.lastSessionName` +
+     * `AppStore.restoreLanding`); this is the phone's half of the same idea.
+     *
+     * ⚠ EMPTY MEANS NOTHING TO RESTORE, and so does a name whose session has
+     * since ended — "still there" is a question only the first list fetch can
+     * answer, so the restore waits for it rather than opening a pane addressing
+     * something the daemon does not have.
+     *
+     * DEFAULT members, like [sentHistory] above: a platform that has not opted
+     * in compiles unchanged and simply opens where it always did.
+     */
+    val lastOpenSession: Flow<String> get() = kotlinx.coroutines.flow.flowOf("")
+    suspend fun setLastOpenSession(value: String) {}
+
     // ------------------------------------------------------- diagnostics
 
     val lastContactAt: Flow<Long>

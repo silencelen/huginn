@@ -135,6 +135,23 @@ object AppRules {
     }
 
     /**
+     * What a row says about a check that has not run, once the OTHER question has
+     * already been answered.
+     *
+     * ⚠⚠ "not checked yet · reachable from your devices" IS TWO OPPOSITE TENSES
+     * IN ONE LINE (P-32/D-32), and it is what every freshly added app read. Both
+     * halves were true — the add-time probe proved the addresses, the periodic
+     * liveness probe had not run yet — but a reader cannot hold "nothing has been
+     * checked" and "we checked, it is reachable" at once, and the one they
+     * believe is the first.
+     *
+     * So the proven half LEADS and the pending half says what is pending rather
+     * than claiming nothing happened. [DEVICE_UNCHECKED] keeps its own wording
+     * for the case it was written for: a row where genuinely nothing is known.
+     */
+    const val FIRST_CHECK_PENDING: String = "waiting for the first check"
+
+    /**
      * The row's whole status line: the verdict, what the probe measured, and the
      * device answer.
      *
@@ -143,6 +160,20 @@ object AppRules {
      * drawn together that reads like a stutter rather than like one fact.
      */
     fun rowWords(app: App, nowMs: Long, retrofitApplied: Boolean = false): String {
+        // ⚠ THE JUST-ADDED ROW, and it is its own sentence rather than a reorder
+        // of the general one — see [FIRST_CHECK_PENDING]. Narrow on purpose: an
+        // unknown verdict that HAS been probed ("no verdict yet") is a different
+        // fact and keeps the ordinary line.
+        if (reach(app) == Reach.UNKNOWN &&
+            app.lastProbeAt <= 0 &&
+            deviceReach(app) != DeviceReach.UNCHECKED
+        ) {
+            return listOfNotNull(
+                deviceWords(app.reachable.ok),
+                probeDetail(app),
+                FIRST_CHECK_PENDING,
+            ).joinToString(" · ")
+        }
         val verdict = reachabilityWords(app.up, app.lastProbeAt, nowMs, retrofitApplied)
         val device = deviceWords(app.reachable.ok).takeIf { it !in verdict }
         return listOfNotNull(verdict, probeDetail(app), device).joinToString(" · ")

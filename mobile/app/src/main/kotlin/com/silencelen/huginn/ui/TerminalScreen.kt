@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -450,13 +451,12 @@ private fun KeyRow(
 ) {
     val hScroll = rememberScrollState()
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(hScroll)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+        // ⚠ THE KEY PAD RUNS PAST THE RIGHT EDGE (P-27/D-17) — `PgUp` was sliced
+        // in half on both shells, and nothing said the row drags. See [EdgeFade].
+        EdgeFadeRow(
+            state = hScroll,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
             onToggleLive?.let { toggle ->
                 // First, because it changes what the whole keyboard means.

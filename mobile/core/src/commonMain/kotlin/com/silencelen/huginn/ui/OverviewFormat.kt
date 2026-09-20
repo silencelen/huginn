@@ -85,17 +85,72 @@ object OverviewFormat {
         return (minutes * perMin).roundToLong()
     }
 
-    /** The whole projection sentence, hedge included, or null when there is none. */
-    fun paceLine(rate: GraphRate, plan: Plan?, nowMs: Long): String? {
+    /**
+     * How much of a session has to have happened before a straight line drawn
+     * through it means anything.
+     *
+     * ⚠⚠ THE SAMPLE IS THE HALF THAT WAS MISSING. The projection is exact
+     * arithmetic on a rate, and the rate is honest — but a 54-second session's
+     * first turn, divided into the two days left on a weekly window, produced
+     * **"about 186.5M tokens more"**: a nine-figure claim with one turn behind
+     * it, drawn beside two burn figures ("69.7k/min over 10m", "69.7k/min over
+     * 1h") that were IDENTICAL precisely because the session was younger than
+     * the shorter of the two windows. The hedge underneath it ("an estimate,
+     * from the current rate") is about the METHOD; nothing on the card was about
+     * the sample.
+     *
+     * Five minutes rather than ten: the shorter burn window is ten minutes, so
+     * waiting for a full one would leave the card silent through most of what a
+     * person watches, and half a window is already several turns of evidence.
+     */
+    const val MIN_SAMPLE_MS: Long = 5 * 60 * 1000L
+
+    /**
+     * What the card says while the sample is still too thin to extrapolate.
+     *
+     * It reports what the card is DOING rather than apologising for a number it
+     * is not showing — the projection arrives on its own a few minutes later, and
+     * a reader who saw this line is not left wondering whether the card broke.
+     */
+    const val MEASURING: String = "Measuring the pace — a projection needs a few minutes of it"
+
+    /** The pace card's sentence, and whether it is a projection at all. */
+    data class Pace(
+        val line: String,
+        /**
+         * False for [MEASURING]. The renderer's "an estimate, from the current
+         * rate" hedge belongs under a projection and nowhere else: under the
+         * measuring line it would be hedging a number that is not there.
+         */
+        val projected: Boolean,
+    )
+
+    /**
+     * The whole projection sentence, hedge included, or null when there is none.
+     *
+     * @param sampleMs how long this session has been running — [GraphTotals.wallMs].
+     *   REQUIRED rather than defaulted, because a default is exactly how the
+     *   unguarded version of this sentence would come back: every call site has
+     *   the totals beside the rate, and one that does not should have to say so.
+     */
+    fun pace(rate: GraphRate, plan: Plan?, nowMs: Long, sampleMs: Long): Pace? {
         val window = weeklyWindow(plan) ?: return null
         val perMin = if (rate.tokensPerMin10 > 0) rate.tokensPerMin10 else rate.tokensPerMin60
-        val projected = projectedTokens(perMin, nowMs, window.resetsAt) ?: return null
+        if (perMin <= 0) return null
         val countdown = PlanFormat.resetLabel(window.resetsAt, nowMs) ?: return null
+        // ⚠ AFTER the window and the countdown, before the arithmetic: a session
+        // with nothing to count down to says nothing at all, rather than saying
+        // it is measuring a pace against a limit that is not there.
+        if (sampleMs < MIN_SAMPLE_MS) return Pace(MEASURING, projected = false)
+        val projected = projectedTokens(perMin, nowMs, window.resetsAt) ?: return null
         // The label is left capitalised: it is the plan row's own name ("Current
         // week (Fable)"), and lowercasing it turns the model into a word.
         val inWords = countdown.removePrefix("resets in ")
-        return "At this pace, about ${PlanFormat.compactTokens(projected)} more " +
-            "before ${window.label} resets in $inWords"
+        return Pace(
+            "At this pace, about ${PlanFormat.compactTokens(projected)} more " +
+                "before ${window.label} resets in $inWords",
+            projected = true,
+        )
     }
 
     /** "12.4k tokens/min" — written tokens, the ones a person is watching. */

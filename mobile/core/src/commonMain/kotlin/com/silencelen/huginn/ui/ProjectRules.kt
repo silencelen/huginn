@@ -408,10 +408,24 @@ object ProjectRules {
         val busy: Int,
         /** Members that need a person: native `waiting`, or a promoted `attention`. */
         val waiting: Int,
+        /**
+         * Whether a lead has registered.
+         *
+         * ⚠ IT IS NOT A MEMBER and it is not counted as one — see the counts
+         * above — but it IS a row in the MEMBERS list, which is why the header
+         * has to know about it. See [rollupWords].
+         */
+        val lead: Boolean = false,
     )
 
     fun rollup(row: ProjectRow): Rollup =
-        Rollup(members = row.memberCount, alive = row.alive, busy = row.busy, waiting = row.waiting)
+        Rollup(
+            members = row.memberCount,
+            alive = row.alive,
+            busy = row.busy,
+            waiting = row.waiting,
+            lead = row.lead != null,
+        )
 
     /**
      * The same counts off a live member list, for a surface holding rows rather
@@ -426,6 +440,7 @@ object ProjectRules {
             alive = rows.count { it.alive },
             busy = rows.count { stateWord(it) == "running" },
             waiting = rows.count { needsYou(it) },
+            lead = members.any { it.lead },
         )
     }
 
@@ -442,7 +457,16 @@ object ProjectRules {
      * easy to get subtly wrong.
      */
     fun rollupWords(r: Rollup): String {
-        if (r.members == 0) return "no members yet"
+        // ⚠⚠ "NO MEMBERS YET" OVER A MEMBERS LIST THAT SHOWS THE LEAD (P-33/D-20).
+        // The counts deliberately drop the lead — an idle cluster whose lead is
+        // thinking must not read as one session busy — but the MEMBERS list below
+        // the header does not, so the header was contradicting the list directly
+        // underneath it on every project between "created" and "spawned", which
+        // is the whole window in which somebody is watching it.
+        //
+        // The count is unchanged; only the sentence over zero of them is, and it
+        // is the one state where the lead is the entire cluster.
+        if (r.members == 0) return if (r.lead) LEAD_ONLY else "no members yet"
         val parts = mutableListOf<String>()
         parts += if (r.alive > 0) "${r.busy} of ${r.alive} working" else "none running"
         if (r.waiting > 0) parts += "${r.waiting} need${if (r.waiting == 1) "s" else ""} you"
@@ -450,6 +474,9 @@ object ProjectRules {
         if (down > 0 && r.alive > 0) parts += "$down not running"
         return parts.joinToString(" · ")
     }
+
+    /** A project whose lead has registered and whose cluster has not been spawned. */
+    const val LEAD_ONLY: String = "just the lead so far"
 
     fun rollupWords(row: ProjectRow): String = rollupWords(rollup(row))
 

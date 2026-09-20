@@ -1,5 +1,30 @@
 # Huginn Desktop changelog
 
+## 1.7.1
+
+The shared half of the round-three review — the same code both clients draw from.
+
+- **Chip rows say that they scroll.** The suggestion chips and the Screen tab's key pad ran past the
+  right edge with the last chip cut mid-word and `PgUp` sliced in half; they scroll with
+  shift+scroll, which is not something anybody tries on a row that merely looks clipped. Each row
+  now fades at whichever edge has content past it, and a row whose contents fit does not fade at
+  all. The desktop's own trailing-edge wash is gone: it was painted with the window background over
+  a surface that is not the window background, it was drawn whether or not anything was cut, and it
+  only ever covered the suggestion strip.
+- **The wrap-up phrase is attributed to huginn.** *"Finish outstanding items, commit your work…"* is
+  typed into the pane by the host, and it was drawn as a right-aligned bubble as though you had
+  written it — the same class of attribution as a skill body or a peer's message, both of which were
+  fixed earlier.
+- **A freshly added app stops contradicting itself.** The row read *"not checked yet · reachable
+  from your devices"*; it now leads with what was proven and says the liveness check is still to
+  come. An app that is simply up is drawn calmly rather than in the accent colour.
+- **A new project stops saying "no members yet"** over a MEMBERS list that shows its lead, and the
+  cluster's pace and a member's token count are written the way the rest of the app writes numbers.
+- **A turn whose answer is a table is labelled as one**, instead of with the raw markdown header row.
+- **One Cancel on the add-route form** — it had two, in the setup flow and in Settings.
+- **A route that failed says when**, beside the red dot that was previously the only thing that had
+  noticed, and a long route name wraps rather than truncating.
+
 ## 1.7.0
 
 Round two of the release walk, from the desktop's side.

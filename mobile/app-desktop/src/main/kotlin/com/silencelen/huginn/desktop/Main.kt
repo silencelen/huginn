@@ -58,6 +58,7 @@ import com.silencelen.huginn.desktop.ui.common.rememberLinkUriHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.desktop.ui.common.DesktopRowTime
 import com.silencelen.huginn.ui.LocalRowTime
+import com.silencelen.huginn.ui.LocalWrapUpPhrase
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.TranscriptMetrics
 import com.silencelen.huginn.ui.theme.HuginnTheme
@@ -728,6 +729,11 @@ fun main(args: Array<String>) {
                     // Hover a message, see when it was written. The phone leaves
                     // this at its no-op default and reveals times on long-press.
                     LocalRowTime provides DesktopRowTime,
+                    // The host's wrap-up wording, so a phrase the DAEMON typed
+                    // into the pane is drawn as a system row rather than as
+                    // something the reader wrote (D-28). Null against a daemon
+                    // that does not publish one, which is the old behaviour.
+                    LocalWrapUpPhrase provides store.status.collectAsState().value?.softEndPhrase,
                 ) {
                     Shell(store)
 

@@ -1,13 +1,10 @@
 package com.silencelen.huginn.ui
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -50,11 +47,11 @@ fun SuggestionChips(
 ) {
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val cap = suggestionChipMaxWidth(maxWidth)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp, vertical = 2.dp),
+        // ⚠ AND THE ROW SAYS IT SCROLLS (P-27/D-17). The cap above makes the next
+        // chip PEEK, which was the only hint there was — and a peeking chip that
+        // ends at the bezel still reads as a clipped one. See [EdgeFade].
+        EdgeFadeRow(
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             suggestions.forEach { text ->

@@ -1,5 +1,50 @@
 # Huginn changelog
 
+## 3.7.1
+
+The phone's round-three review: the small things, and the two that were quietly wrong.
+
+- **Chip rows say that they scroll.** The model chips, the suggestions above the composer and the
+  Screen tab's key pad all ran off the right edge with a chip or a key sliced in half — they have
+  always dragged sideways, but a control cut by the screen edge reads as a rendering fault rather
+  than as "there is more this way". Each row now fades at whichever edge has something past it, and
+  nothing fades on a row whose contents fit.
+- **A freshly added app stops contradicting itself.** The row read *"not checked yet · reachable
+  from your devices"* — two opposite tenses about two different questions. It now leads with what
+  was actually proven and says the liveness check is still to come. An app that is simply up is
+  drawn in a calm mark instead of the amber one, which is kept for the row that needs somebody: up
+  on the host, but not reachable from where you are.
+- **The wrap-up phrase is attributed to huginn.** *"Finish outstanding items, commit your work…"* is
+  typed into the pane by the host, and both clients drew it as a message you had written — which on
+  an archived conversation was the only account of how that session ended. It is a system row now.
+- **A new project stops saying "no members yet" over a list with its lead in it.** It says it is
+  just the lead so far, and the cluster's pace and a member's token count are written the way every
+  other number in the app is ("1.8k/min", "59.0k tokens") rather than as raw digits.
+- **A turn whose answer is a table is labelled as one.** The Overview map labelled it with the raw
+  markdown header — `| Host | Role |` — instead of saying what it was.
+- **The Pace card measures before it projects.** A fifty-four-second session was enough to produce
+  "about 186.5M tokens more"; it now says it is measuring until there are a few minutes behind the
+  number.
+- **Routes explain themselves.** A red dot carries the reason beside it ("did not answer 2m ago"), a
+  long route name wraps instead of being cut mid-word, and **Find live route** reports what it found
+  on the list you pressed it from — it used to answer with a message raised behind the Settings
+  screen, so the button looked inert.
+- **One Cancel on the add-route form.** It had two, 190 px apart.
+- **The New session dialog opens with the cursor in the field** and quotes the host's actual naming
+  rule — it forbade the dash that every session on this fleet is named with, and said nothing about
+  the dot that really is refused. A name the host would reject is now refused in the dialog.
+- **The Status tab lines up with the other three.** Its label sat five pixels low because the
+  headroom meter added height under the icon, and its glyph was the solid one among three outlines,
+  which read as permanently selected.
+- **A cold start comes back to the session you had open.** Backgrounding and resuming always did;
+  a force-stop, a low-memory kill or a reboot put you back on the list. It only reopens a session
+  that is still running, and only if you have not already gone somewhere.
+- **The Devices status dot is in the same place on every card** — it used to sit on the title for a
+  machine with one line and float between the lines for a machine with several.
+- **Nothing on a list sits under its button.** The last remaining cases: a host whose sessions have
+  all been archived, where the archive rows were the only thing on screen and were underneath "New
+  session".
+
 ## 3.7.0 — 2026-09-19
 
 The phone's half of the round-two review.

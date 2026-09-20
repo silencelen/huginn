@@ -164,6 +164,40 @@ class AppsViewTest {
         assertTrue("AppRules.reachNote" in text, "the daemon's sentence is never drawn")
     }
 
+    /**
+     * ⚠⚠ AMBER IS FOR ATTENTION, AND "UP" IS NOT ATTENTION (P-32).
+     *
+     * Four apps at `HTTP 200 · reachable` all carried a rune-gold dot, because
+     * `primary` is this app's one accent — the colour of a running session, a
+     * live lane, a selected settings row. Four healthy rows in the colour of
+     * "look at this" is a page that reads as four warnings, and the row that
+     * genuinely wants somebody ("up, but not from where you are") had nothing
+     * left to say it with.
+     */
+    @Test
+    fun `a healthy app is drawn calmly and the accent is kept for the row that needs somebody`() {
+        val dot = read("ui/src/commonMain/kotlin/com/silencelen/huginn/ui/AppsView.kt")
+            .substringAfter("private fun ReachDot(")
+            .substringBefore("internal fun RowVerb(")
+        assertTrue(dot.length in 1..2_000, "ReachDot read as ${dot.length} chars — wrong slice")
+
+        val up = dot.indexOf("Reach.UP ->")
+        val retrofit = dot.indexOf("DeviceReach.RETROFIT ->")
+        assertTrue(up > 0 && retrofit > 0, "the gate lost its subject: up=$up retrofit=$retrofit")
+        assertTrue(
+            dot.substring(up).startsWith("Reach.UP -> MaterialTheme.colorScheme.onSurfaceVariant"),
+            "an app that simply answers is not asking for attention",
+        )
+        assertTrue(
+            dot.substring(retrofit).startsWith("DeviceReach.RETROFIT -> MaterialTheme.colorScheme.primary"),
+            "the accent belongs to the row a person has to do something about",
+        )
+        // ⚠ AND NOT `tertiary`, which the retrofit dot used to draw: the theme
+        // defines neither it nor its container, so it was Material's baseline
+        // pink in a warm rune-gold palette. PaletteTest's rule, one role short.
+        assertFalse("colorScheme.tertiary" in dot, "a colour nobody in this product picked")
+    }
+
     @Test
     fun `an address with no reason still reads as a failure`() {
         // Belt and braces with AppRulesTest: this is the string the disclosure
