@@ -534,7 +534,9 @@ function effortDecision(v) {
   return { error: `unknown effort ${JSON.stringify(s.slice(0, 20))}: one of low, medium, high, xhigh, max` };
 }
 
-// Session names: the cc contract — letters/digits/underscore, canonically lowercase.
+// Session names: the cc contract — letters, digits, underscore and dash,
+// canonically lowercase. (Not "letters/digits/underscore": the dash has been
+// legal since 1.3.0, and mobile/README.md's API table says so.)
 /**
  * The session names this daemon will route to.
  *
@@ -11952,8 +11954,16 @@ const server = http.createServer(async (req, res) => {
 
       let asked = null;
       if (typeof body.name === 'string' && body.name.trim()) {
+        // ⚠ `nameProblem`, NOT A SENTENCE OF ITS OWN (r2 L10). This route kept
+        // the pre-1.3.0 wording — "letters, digits, underscore" — which has not
+        // described the rule since the dash became legal, and which says nothing
+        // about the dot (refused for its own reason: tmux rewrites it to `_` and
+        // exits 0, so the name you ask for is not the name you get) or about the
+        // reserved names. One function knows which rule was broken; the create
+        // route has asked it since it was written.
+        const bad = nameProblem(body.name);
+        if (bad) return sendErr(res, 400, bad);
         asked = canonName(body.name);
-        if (!asked) return sendErr(res, 400, 'invalid session name (letters, digits, underscore)');
       }
       const want = archiveLib.reviveName(asked || rec.tmuxName || 'session', new Set(liveIds.keys()));
       const cwd = rec.cwd || WORKDIR;
