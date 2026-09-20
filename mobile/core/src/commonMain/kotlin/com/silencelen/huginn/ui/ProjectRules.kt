@@ -3,10 +3,18 @@ package com.silencelen.huginn.ui
 import com.silencelen.huginn.data.ManifestSession
 import com.silencelen.huginn.data.Project
 import com.silencelen.huginn.data.ProjectDeleted
+import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectManifest
 import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
+import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SpawnResult
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 
 /**
  * What a project row says, what order its members are in, and which of them the
@@ -178,6 +186,21 @@ object ProjectRules {
 
     private val SLUG_RE = Regex("""^[a-z0-9][a-z0-9-]{0,23}$""")
 
+    /**
+     * What the Directory field promises when it is left empty: the folder the
+     * daemon will MAKE for this project, named after it, under the host's
+     * projects directory — said with the real path once the daemon has said
+     * where that is (`GET /v1/projects` → `dir`, appd 3.7.0), and as you type
+     * the name, so the first project no longer lands in the host's working
+     * directory unannounced.
+     */
+    fun newFolderWords(projectsDir: String?, name: String): String {
+        val dir = projectsDir?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+            ?: return "a new folder named after the project"
+        val slug = slugFor(name).takeIf { it.isNotEmpty() } ?: "<name>"
+        return "$dir/$slug (made for it)"
+    }
+
     /** Why this working directory cannot be used, or null. */
     fun cwdProblem(raw: String): String? {
         val cwd = raw.trim()
@@ -257,6 +280,87 @@ object ProjectRules {
     fun adoptable(sessions: List<String>, members: List<ProjectMemberState>): List<String> {
         val taken = members.map { it.name }.toSet()
         return sessions.filter { it.isNotBlank() && it !in taken }
+    }
+
+    /** The Sessions page's rows, and the rows it does not draw. */
+    data class SessionSplit(val outside: List<Session>, val inProjects: List<Session>)
+
+    /**
+     * The sessions list with the project sessions taken out of it.
+     *
+     * ⚠⚠ A PROJECT SESSION IS NEVER ON THE SESSIONS PAGE (owner rule, 2026-09-19).
+     * It lives in Projects — the tree, the dashboard, its member view — and a
+     * copy of it in the main list read as a second, unrelated session: the
+     * widgetshub lead sat in Sessions between two hand-made ones and looked like
+     * a session that had failed to do something.
+     *
+     * The daemon's own join is the first word: a row that carries
+     * [Session.project] belongs to that project, full stop (appd 3.7.0). The
+     * names off the project rows and the fetched `live[]` are the second, for a
+     * daemon older than that and for the seconds between a spawn and the next
+     * list poll. Both are keyed on the TMUX name — a peer name has a slash a
+     * tmux name cannot, and a slug PREFIX would swallow a hand-made
+     * `statusflap-notes`. An archived project claims nothing: it is history,
+     * and a session that reuses one of its names is somebody's new session.
+     */
+    fun splitByProject(
+        sessions: List<Session>,
+        projects: List<ProjectRow>,
+        members: Map<String, List<ProjectLive>>,
+    ): SessionSplit {
+        val claimed = HashSet<String>()
+        for (p in projects) {
+            if (statusWord(p.status) == "archived") continue
+            p.lead?.name?.takeIf { it.isNotBlank() }?.let { claimed += it }
+            members[p.id].orEmpty().forEach { m -> m.name.takeIf { it.isNotBlank() }?.let { claimed += it } }
+        }
+        val (inside, outside) = sessions.partition { it.project != null || it.name in claimed }
+        return SessionSplit(outside = outside, inProjects = inside)
+    }
+
+    /**
+     * The one line under the Sessions list that says where the rest went, or
+     * null when nothing is hidden — a list with nothing to admit says nothing.
+     */
+    fun hiddenWords(count: Int): String? = when {
+        count <= 0 -> null
+        count == 1 -> "1 session is in a project"
+        else -> "$count sessions are in projects"
+    }
+
+    // ------------------------------------------------ the proposal, as read
+
+    /** The language word on the fence a lead's proposal block opens with. */
+    const val PROPOSAL_LANG: String = "huginn-project"
+
+    /** Where the owner approves it — said on the card, because the block cannot. */
+    const val PROPOSAL_WHERE: String = "Approve it from Projects — nothing starts until you do."
+
+    /** What a proposal block says, read off its JSON: the summary line and the roles. */
+    data class ProposalPreview(val summary: String?, val roles: List<String>)
+
+    /**
+     * Read a `huginn-project` block the way the daemon does — leniently, and to
+     * two facts — so a transcript can draw it as the card it is instead of as a
+     * paragraph of JSON. Null when the body is not a JSON object at all; that
+     * is the lead's mistake to see in full, and the caller falls back to the
+     * raw code card.
+     */
+    fun proposalPreview(body: String): ProposalPreview? {
+        val obj = runCatching { Json.parseToJsonElement(body.trim()).jsonObject }.getOrNull() ?: return null
+        val summary = (obj["summary"] as? JsonPrimitive)?.contentOrNull
+            ?.let { normalized(it) }?.takeIf { it.isNotEmpty() }?.let { clip(it) }
+        val roles = (obj["sessions"] as? JsonArray).orEmpty().mapNotNull { s ->
+            ((s as? JsonObject)?.get("role") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        }
+        return ProposalPreview(summary, roles)
+    }
+
+    /** "3 sessions: core, widgets, release" — the manifest card's own line, off the block. */
+    fun proposalWords(preview: ProposalPreview): String = when (preview.roles.size) {
+        0 -> "no sessions in this proposal"
+        1 -> "1 session: ${preview.roles[0]}"
+        else -> "${preview.roles.size} sessions: ${preview.roles.joinToString(", ")}"
     }
 
     /**

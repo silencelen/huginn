@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 3.8.0 — unreleased
+
+The first project run from the phone and the desktop together, and what the sessions list and
+the transcript got wrong about it.
+
+- **Project sessions are not on the Sessions page.** A lead or a member lives on its project's
+  dashboard and nowhere else; the list shows the sessions outside every project and one line
+  under them — *"3 sessions are in projects"* — that opens Projects. The 3.5 headings put a copy
+  of each member in the main list, where the widgetshub lead read as a second, unrelated session
+  that had failed to do something. Rows carry the daemon's own join (appd 3.7.0), and the names
+  off the project tree cover a daemon older than that.
+- **A lead's proposal is a card in the transcript, not a paragraph of JSON.** The fence that
+  opens it carries the project's tag after the language word, and the markdown reader only knew
+  one-word fences, so the whole block was drawn as prose. It reads as a card now — the summary,
+  the roles, where to approve it — with the block itself a tap away. A closing fence is a bare
+  fence, as CommonMark says, so a fence line with a language inside a block is content rather
+  than the end of it. Shared with the desktop.
+- **A new project gets its own folder.** Leave the Directory field empty and the daemon makes
+  `<projects dir>/<name>` for it (appd 3.7.0); the field says the path it will use as you type the
+  name, instead of the host's working directory — which is where the first project landed.
+
 ## 3.7.1 — 2026-09-20
 
 The phone's round-three review: the small things, and the two that were quietly wrong.

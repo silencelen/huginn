@@ -133,6 +133,7 @@ fun ProjectsList(store: AppStore) {
     val refusal by store.projectRefusal.collectAsState()
     val scope = rememberCoroutineScope()
     var creating by remember { mutableStateOf(false) }
+    val projectsDir by store.projectsDir.collectAsState()
     // ⚠⚠ D-8. THE VERBS HAD NO DOOR ON THIS LIST. Open / Rename / Pause /
     // Archive / Delete existed only behind a secondary click on the project TITLE
     // in the DETAIL header — no chevron, no ⋮, no hover mark — and a right-click
@@ -236,6 +237,7 @@ fun ProjectsList(store: AppStore) {
                 CreateProjectSheet(
                     taken = projects.map { it.name },
                     takenSlugs = projects.map { it.slug },
+                    projectsDir = projectsDir,
                     onDismiss = { creating = false; store.clearProjectRefusal() },
                     onCreate = { name, kind, brief, cwd ->
                         scope.launch {
