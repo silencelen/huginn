@@ -2,7 +2,7 @@
 // What a session's tokens WOULD have cost, at Anthropic's published list prices.
 //
 // The rates below are USD per MILLION tokens — Anthropic first-party list
-// prices, cached 2026-08-27. They are a static table on purpose: nothing here
+// prices, cached 2026-09-22. They are a static table on purpose: nothing here
 // asks the network what anything costs, so a transcript prices the same way on a
 // box with no route out, and the number somebody reads today is one they can
 // reproduce tomorrow. The cost of that choice is that the table goes stale
@@ -53,11 +53,11 @@ const FAMILIES = [
 ];
 
 /** A whole rate card from the two published numbers. The ONE derivation. */
-function rateCard(input, output) {
+function rateCard(input, output, cacheRead = CACHE_READ) {
   return {
     input,
     output,
-    cacheRead: input * CACHE_READ,
+    cacheRead: input * cacheRead,
     cacheWrite5m: input * CACHE_WRITE_5M,
     cacheWrite1h: input * CACHE_WRITE_1H,
   };
@@ -65,6 +65,44 @@ function rateCard(input, output) {
 
 /** family -> the whole rate card, cache rates included. */
 const RATES = Object.fromEntries(FAMILIES.map((f) => [f.family, rateCard(f.input, f.output)]));
+
+/**
+ * Models whose published card is NOT their family's.
+ *
+ * Until 2026-09 a family was one price, and the cache-read discount was one
+ * number. Neither holds any more: Claude Opus 5.5 (2026-09-22) is $4/$20 against
+ * the opus card's $5/$25, and reads cache at 5 % of input rather than 10 %; Claude
+ * Fable 5.1 / Mythos 5.1 keep the fable card's $10/$50 but read cache at 2.5 %.
+ * On a long session cache reads outnumber everything else by an order of
+ * magnitude, so the family card overstated Fable 5.1 — the model most sessions
+ * run — by most of the bill.
+ *
+ * A card sits BETWEEN an era and the family card (`priceTokens`): an era is a
+ * moment's exception for one model, a card is that model's standing rate. Each
+ * card derives its writes exactly as a family does; only the read discount is
+ * its own number, because that is the number Anthropic now publishes per model.
+ *
+ * ⚠ `match` IS ANCHORED LIKE AN ERA'S, and for the same reason: the family's
+ * loose substring is safe because families are disjoint, but a card lives beside
+ * siblings on the family card — `claude-opus-5` must not read as Opus 5.5, and
+ * `claude-fable-5` reads cache at the family's 10 %. So the id must END at the
+ * model, or at one of the suffixes that really reach a transcript: a date
+ * (`-20260922`, Vertex's `@20260922`) and Claude Code's `[1m]` context marker.
+ */
+const MODEL_CARDS = [
+  { card: 'opus-5-5', match: /opus-5-5(?:[-@]\d{8})?(?:\[1m\])?$/, input: 4.00, output: 20.00, cacheRead: 0.05 },
+  { card: 'fable-5-1', match: /(?:fable|mythos)-5-1(?:[-@]\d{8})?(?:\[1m\])?$/, input: 10.00, output: 50.00, cacheRead: 0.025 },
+];
+
+/** card id -> its rate card, derived exactly as a family's is (plus its own read discount). */
+const CARD_RATES = Object.fromEntries(MODEL_CARDS.map((c) => [c.card, rateCard(c.input, c.output, c.cacheRead)]));
+
+/** The per-model card an id prices at, or null when its family card applies. */
+function cardFor(modelId) {
+  const id = String(modelId == null ? '' : modelId).toLowerCase();
+  for (const c of MODEL_CARDS) if (c.match.test(id)) return CARD_RATES[c.card];
+  return null;
+}
 
 /**
  * Windows in which ONE model billed at something other than its family's card.
@@ -150,7 +188,7 @@ function bucketKey(model, ts) {
     // so it gets the lower of the two candidates — read off the cards rather
     // than assumed, because an era is not necessarily a discount.
     const era = ERA_RATES[e.era];
-    const base = RATES[family];
+    const base = cardFor(id) || RATES[family];
     return era.input <= base.input && era.output <= base.output ? raw + KEY_SEP + e.era : raw;
   }
   return raw;
@@ -232,10 +270,11 @@ function priceTokens(byModel) {
       continue;
     }
     // The card that was in force for THESE tokens: the era's if the key named
-    // one, else the family's standing rate. An era id this file no longer
-    // carries falls back to the family card rather than throwing — a stale
-    // bucket key should cost the estimate its precision, not the whole number.
-    const r = (era && ERA_RATES[era]) || RATES[family];
+    // one, else the model's own card if it has one, else the family's standing
+    // rate. An era id this file no longer carries falls back the same way rather
+    // than throwing — a stale bucket key should cost the estimate its precision,
+    // not the whole number.
+    const r = (era && ERA_RATES[era]) || cardFor(model) || RATES[family];
     const dollars = (input * r.input
       + output * r.output
       + cacheRead * r.cacheRead
@@ -259,7 +298,7 @@ function priceTokens(byModel) {
 }
 
 module.exports = {
-  matchFamily, priceTokens, bucketKey,
-  RATES, ERA_RATES, RATE_ERAS,
+  matchFamily, priceTokens, bucketKey, cardFor,
+  RATES, ERA_RATES, RATE_ERAS, MODEL_CARDS, CARD_RATES,
   CACHE_READ, CACHE_WRITE_5M, CACHE_WRITE_1H,
 };
