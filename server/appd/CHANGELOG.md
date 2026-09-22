@@ -9,6 +9,22 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.7.1 — 2026-09-22
+
+Claude Opus 5.5 shipped today and the picker offered it as soon as the CLI knew the name —
+model discovery reads the installed binary, so nothing in the daemon had to learn it. The price
+table did.
+
+- **Per-model rate cards in the cost estimate.** `lib/pricing.js` priced every model at its
+  family's card, and the current models no longer fit one: Opus 5.5 is $4/$20 per MTok with
+  cache reads at 5 % of input (the opus card says $5/$25 at 10 % — a quarter high on fresh
+  tokens and double on the reads that dominate a long session), and Fable 5.1 / Mythos 5.1
+  read cache at 2.5 % (the fable card charged 10 %, four times the published rate, on the model
+  most sessions run). A card matches the id exactly — plus the `[1m]`, dated and Bedrock forms
+  that reach a transcript — and sits between an era and the family card; a sibling with no card
+  of its own (Opus 5, Opus 4.8, Fable 5) is unchanged. `matchFamily` still answers with the
+  family, so the headroom ladder and the picker read nothing new. Rates cached 2026-09-22.
+
 ## 3.7.0 — 2026-09-20
 
 The first evening a project was run from the phone and the desktop together, and the two

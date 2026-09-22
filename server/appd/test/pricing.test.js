@@ -16,7 +16,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { matchFamily, priceTokens, bucketKey, RATES, ERA_RATES } = require('../lib/pricing');
+const { matchFamily, priceTokens, bucketKey, cardFor, RATES, ERA_RATES, CARD_RATES } = require('../lib/pricing');
 
 /** One model's counted tokens, with everything the accumulator would have set. */
 function tokens(t = {}) {
@@ -35,7 +35,7 @@ const MILLION = 1_000_000;
 // ---------------------------------------------------------------- the rates
 
 test('each family prices a million tokens at its published list rate', () => {
-  // USD per million, Anthropic first-party list prices as of 2026-08-27.
+  // USD per million, Anthropic first-party list prices as of 2026-09-22.
   const expected = [
     ['claude-fable-5', 10, 50],
     ['claude-opus-5', 5, 25],
@@ -268,5 +268,63 @@ test('a session that ran two models is priced per model, biggest spender first',
     { model: 'claude-opus-5', usd: 25 },
     { model: 'claude-haiku-4-5', usd: 5 },
   ], 'sorted by spend, so a client with room for one line names the model it ran on');
+  assert.equal(res.unpricedTokens, 0);
+});
+
+// ---------------------------------------------------------- per-model cards
+
+test('Opus 5.5 prices at its own card, not the opus family\'s', () => {
+  // Shipped 2026-09-22 at $4/$20 against the family's $5/$25 — a quarter high on
+  // fresh tokens, and DOUBLE on cache reads, which on a long session are most of
+  // the bill: this model reads cache at 5 % of input where the family reads 10 %.
+  const m = 'claude-opus-5-5';
+  assert.equal(priceTokens({ [m]: tokens({ input: MILLION }) }).usd, 4);
+  assert.equal(priceTokens({ [m]: tokens({ output: MILLION }) }).usd, 20);
+  assert.equal(priceTokens({ [m]: tokens({ cacheRead: MILLION }) }).usd, 0.2, '5 % read, not 10 %');
+  assert.equal(priceTokens({ [m]: tokens({ cacheCreation5m: MILLION }) }).usd, 5, 'writes derive as a family\'s do');
+  assert.equal(priceTokens({ [m]: tokens({ cacheCreation1h: MILLION }) }).usd, 8);
+  // The forms that actually reach a transcript all find the card.
+  for (const id of ['claude-opus-5-5[1m]', 'anthropic.claude-opus-5-5', 'claude-opus-5-5-20260922', 'claude-opus-5-5@20260922', 'CLAUDE-OPUS-5-5']) {
+    assert.equal(priceTokens({ [id]: tokens({ output: MILLION }) }).usd, 20, id);
+  }
+  // ⚠ THE FAILURE THIS EXISTS FOR: the siblings on the family card are untouched.
+  assert.equal(priceTokens({ 'claude-opus-5': tokens({ output: MILLION }) }).usd, 25, 'Opus 5 is not Opus 5.5');
+  assert.equal(priceTokens({ 'claude-opus-5': tokens({ cacheRead: MILLION }) }).usd, 0.5);
+  assert.equal(priceTokens({ 'claude-opus-4-8': tokens({ input: MILLION }) }).usd, 5);
+  assert.equal(cardFor('claude-opus-5'), null, 'no card, the family card applies');
+  assert.equal(cardFor('claude-opus-5-5-fast'), null, 'a variant this file has not been taught falls through');
+});
+
+test('Fable 5.1 and Mythos 5.1 read cache at 2.5 %; Fable 5 stays on the family card', () => {
+  // The model most sessions run. Its fresh tokens ARE the family card ($10/$50),
+  // so the only thing the card changes is the read discount — and that was four
+  // times the published rate, on the token kind that dominates every session.
+  for (const m of ['claude-fable-5-1', 'claude-mythos-5-1', 'claude-fable-5-1[1m]']) {
+    assert.equal(priceTokens({ [m]: tokens({ input: MILLION }) }).usd, 10, m);
+    assert.equal(priceTokens({ [m]: tokens({ output: MILLION }) }).usd, 50, m);
+    assert.equal(priceTokens({ [m]: tokens({ cacheRead: MILLION }) }).usd, 0.25, `${m} reads at 2.5 %`);
+    assert.equal(priceTokens({ [m]: tokens({ cacheCreation5m: MILLION }) }).usd, 12.5, m);
+  }
+  assert.equal(priceTokens({ 'claude-fable-5': tokens({ cacheRead: MILLION }) }).usd, 1, 'Fable 5 is not Fable 5.1');
+  assert.equal(priceTokens({ 'claude-fable-5-mythos-5': tokens({ cacheRead: MILLION }) }).usd, 1, 'nor is the Mythos 5 variant');
+});
+
+test('a card derives its writes from its input rate like a family does; only the read is its own', () => {
+  for (const [card, r] of Object.entries(CARD_RATES)) {
+    assert.equal(r.cacheWrite5m, r.input * 1.25, `${card} 5m write`);
+    assert.equal(r.cacheWrite1h, r.input * 2, `${card} 1h write`);
+    assert.ok(r.cacheRead < r.input * 0.1, `${card} read discount is deeper than the family's tenth`);
+  }
+});
+
+test('a card changes the dollars and nothing a client reads: family, row, key', () => {
+  // The ladder and the picker ask `matchFamily`; the overview renders one row per
+  // model name. A card must move neither.
+  assert.equal(matchFamily('claude-opus-5-5'), 'opus');
+  assert.equal(matchFamily('claude-fable-5-1'), 'fable');
+  assert.equal(bucketKey('claude-opus-5-5', IN_WINDOW), 'claude-opus-5-5', 'no era rides an opus key');
+  const res = priceTokens({ 'claude-opus-5-5': tokens({ output: MILLION }), 'claude-opus-5': tokens({ output: MILLION }) });
+  assert.deepEqual(res.byModel, [{ model: 'claude-opus-5', usd: 25 }, { model: 'claude-opus-5-5', usd: 20 }]);
+  assert.equal(res.usd, 45);
   assert.equal(res.unpricedTokens, 0);
 });
