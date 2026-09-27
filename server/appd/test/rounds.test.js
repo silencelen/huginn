@@ -230,6 +230,38 @@ test('a goal is stated FIRST, as a completion test', () => {
   assert.ok(p.indexOf('GOAL') < p.indexOf('Review the week.'), 'before the task, not after it');
 });
 
+test('the wrap-up turn repeats the tag and forbids more tools', () => {
+  // The cap used to be a SIGTERM. Now the conversation is resumed once with this
+  // text, so it has to carry the two things a hurried model gets wrong: the tag
+  // (a block without it is discarded) and the instruction to stop looking.
+  const p = R.wrapUpPrompt({ tag: 'abc123', elapsedSec: 930, budgetSec: 900, graceSec: 180 });
+  assert.match(p, /^TIME IS UP/);
+  assert.match(p, /THIS RUN'S TAG: abc123/);
+  assert.match(p, /```huginn-report abc123/);
+  assert.match(p, /Do not run any more tools/);
+  assert.match(p, /16 min of its 15 min budget/);
+  assert.match(p, /Within 3 min/);
+  const untagged = R.wrapUpPrompt({ elapsedSec: 60, budgetSec: 60, graceSec: 5 });
+  assert.ok(!untagged.includes('TAG'), 'a legacy run with no tag is not told to copy one');
+  assert.match(untagged, /```huginn-report\n/);
+});
+
+test('the contract admits the one follow-up a run can get', () => {
+  // "there is no second message coming" was true until the wrap-up existed; a
+  // contract that still said so would have the run treat the wrap-up as noise.
+  assert.match(R.REPORT_CONTRACT, /TIME IS UP/);
+  assert.match(R.promptFor({ prompt: 'x' }), /TIME IS UP/);
+});
+
+test('spanWords reads as a person would say it', () => {
+  assert.equal(R.spanWords(45), '45 s');
+  assert.equal(R.spanWords(900), '15 min');
+  assert.equal(R.spanWords(929), '15 min');
+  assert.equal(R.spanWords(7500), '2 h 5 min');
+  assert.equal(R.spanWords(7200), '2 h');
+  assert.equal(R.spanWords(-3), '0 s');
+});
+
 test('a Round with no goal gets no goal line', () => {
   // Reporting on something is a legitimate Round with no finish line to cross.
   assert.ok(!R.promptFor({ prompt: 'Just look.' }).includes('GOAL'));
