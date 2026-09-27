@@ -271,8 +271,10 @@ items   ONLY things needing a decision or an action, each with a concrete next s
 headline stands alone: it is what arrives as a notification, with no context around it.
 
 This run gets ONE turn. It ends when you stop, and the conversation is then closed
-and kept for review — there is no second message coming, so finish the job or say
-plainly in the report what stopped you.
+and kept for review. The only message that can ever follow begins TIME IS UP: it
+means the run passed its time budget and asks for the report from what you already
+have. Otherwise nothing is coming, so finish the job or say plainly in the report
+what stopped you.
 
 Write the block LAST and do not discuss it. A missing or malformed block is
 reported as "unknown" with a truncated quote of whatever you said last.`;
@@ -301,6 +303,49 @@ function promptFor(round, tag = null) {
   const head = goal ? `GOAL — this run is done when: ${goal}\n\n` : '';
   const contract = tag ? reportContract(tag) : REPORT_CONTRACT;
   return `${head}${String(round.prompt || '').trim()}\n${contract}`;
+}
+
+/** Whole seconds as words a prompt or a transcript line can carry: 45 s · 15 min · 2 h 5 min. */
+function spanWords(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  if (s < 60) return `${s} s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  if (h === 0) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+/**
+ * The one follow-up a run can receive: it passed its time budget.
+ *
+ * The daemon used to SIGTERM a run at the cap and file "run failed: cancelled".
+ * Both Sunday Rounds died that way on 2026-09-27 with the evidence already in
+ * hand and the last check in flight — fifteen and twenty minutes of work reported
+ * as nothing, and the phone woken to say so. The turn is resumed on the SAME
+ * conversation (`--resume`), so everything the run read is still in front of it;
+ * this text only has to stop the investigation and ask for the block. The tag
+ * line is repeated because the contract discards a block without it, and a model
+ * told to hurry is a model that skips back to check.
+ */
+function wrapUpPrompt({ tag = null, elapsedSec = 0, budgetSec = 0, graceSec = 0 } = {}) {
+  const fence = tag ? `\`\`\`huginn-report ${tag}` : '```huginn-report';
+  const tagLine = tag ? `THIS RUN'S TAG: ${tag}\n\n` : '';
+  return `TIME IS UP. This run has used ${spanWords(elapsedSec)} of its ${spanWords(budgetSec)} budget.
+This is the only follow-up a Round ever receives, and it is the last one.
+
+Stop investigating. Do not run any more tools and do not start new checks.
+Within ${spanWords(graceSec)}, write the huginn-report block from what you have ALREADY
+gathered — partial evidence reported honestly beats a report that never arrives.
+If parts of the goal were not reached, set goalMet to false and name what was not
+covered as an item, with the next step someone would take.
+
+${tagLine}${fence}
+{"status":"attention","headline":"one line, under 90 characters, what you found",
+ "goalMet":false,
+ "items":[{"title":"short label","detail":"what is wrong or what was not checked","suggest":"the next step"}]}
+\`\`\`
+
+Write the block LAST and nothing after it.`;
 }
 
 /** Items beyond this are dropped; [oneReport] records how many there really were. */
@@ -678,7 +723,7 @@ module.exports = {
   KINDS, MISSED_GRACE_MS, STATUSES, REPORT_CONTRACT, reportDisplay,
   partsIn, offsetMs, epochForWallClock,
   nextFireAt, validateSchedule, describeSchedule, clockWords,
-  promptFor, parseReport, fallbackReport, errorReport, effectiveStatus,
+  promptFor, wrapUpPrompt, spanWords, parseReport, fallbackReport, errorReport, effectiveStatus,
   shouldNotify, dueDecision,
   isAcknowledged, canAcknowledge,
   reportBlocks, fenceOpensAt, stripFences, oneLine, safeText,
