@@ -93,7 +93,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.7.1';
+const VERSION = '3.8.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4216,7 +4216,19 @@ function settleRun(run_, { exitCode = null, failureText = null } = {}) {
         log(`round run ${chatId} held open for a usage-limit re-run`);
         return;
       }
-      try { finishRoundRun(fresh, run_.cancelled ? 'cancelled' : null); }
+      // ⚠ THE CAP IS NOT THE END (3.8.0). roundsTick marks the run `cap` before it
+      // cancels, and the ending it wants is a REPORT, not a record of the kill:
+      // the conversation is resumed once with the wrap-up turn and this chat's
+      // run is not over until THAT settles. Both Sunday Rounds had filed "run
+      // failed: cancelled" over fifteen and twenty minutes of gathered evidence.
+      // Only a LOCAL run with a session to resume qualifies; a device run cannot
+      // be interrupted from here (cancelRun says why), and a run whose wrap-up
+      // already happened, or already overran, is finished — filed below.
+      if (run_.cancelled && run_.roundTimedOut === 'cap' && !run_.remote
+          && fresh.claudeSessionId && !fresh.roundWrapUpAt && startRoundWrapUp(fresh)) {
+        return;
+      }
+      try { finishRoundRun(loadMeta(chatId) || fresh, roundRunFailure(loadMeta(chatId) || fresh, run_)); }
       catch (e) { log(`round run ${chatId} could not be recorded: ${e.message}`); }
       // ⚠ RE-READ. finishRoundRun just wrote the seal, the verdict and endedAt;
       // `fresh` is the snapshot from BEFORE that. Saving it back erased all of
@@ -4565,6 +4577,13 @@ const MAX_ROUND_GOAL = 500;
  * otherwise hold one of three pool slots until long after its report was any use.
  */
 const DEFAULT_ROUND_TIMEOUT_S = 15 * 60;
+// The cap is not the end. A run that passes `timeoutSec` is cancelled and its
+// conversation resumed ONCE with roundsLib.wrapUpPrompt, which gets this long to
+// write the report block from what was already gathered (startRoundWrapUp).
+// Overrunning the grace is the end. The env overrides exist for the test suite,
+// where a 30 s tick and a 3 min grace would make the cap untestable.
+const ROUND_WRAPUP_GRACE_MS = Math.max(1, Number(process.env.HUGINN_APPD_ROUND_WRAPUP_S) || 180) * 1000;
+const ROUNDS_TICK_MS = Math.max(250, Number(process.env.HUGINN_APPD_ROUNDS_TICK_MS) || 30_000);
 
 function roundPath(id) { return path.join(ROUNDS_DIR, `${id}.json`); }
 
@@ -4884,6 +4903,59 @@ function fireRound(round, { manual = false } = {}) {
 }
 
 /**
+ * The run passed its cap: resume the conversation once and ask for the report.
+ *
+ * Runs through `startRunAnywhere` with the chat's own meta, so the wrap-up turn
+ * is the ORIGINAL launch — same mode, model, persona, tools and `--resume` —
+ * with different text on stdin, not a second spawn path. `roundWrapUpAt` is
+ * written BEFORE the spawn, because it is what stops roundsTick cancelling the
+ * wrap-up for having passed the cap it inherited, and what gives the wrap-up
+ * its own, shorter clock. A refused start clears the mark again so the record
+ * that follows does not claim a wrap-up that never ran.
+ */
+function startRoundWrapUp(meta) {
+  const round = loadRound(meta.roundId);
+  if (!round) return false;                // deleted mid-run; the chat stands alone
+  const ts = Math.floor(Date.now() / 1000);
+  const budget = clampRoundTimeout(round.timeoutSec);
+  const elapsed = meta.roundStartedAt ? ts - meta.roundStartedAt : budget;
+  const grace = Math.round(ROUND_WRAPUP_GRACE_MS / 1000);
+  updateMeta(meta.id, (m) => { m.roundWrapUpAt = ts; });
+  appendMsg(meta.id, {
+    type: 'system',
+    text: `time is up after ${roundsLib.spanWords(elapsed)} (budget ${roundsLib.spanWords(budget)}) — `
+      + `asking for the report from what was gathered, ${roundsLib.spanWords(grace)} to answer`,
+    ts,
+  });
+  const fresh = loadMeta(meta.id) || meta;
+  const text = roundsLib.wrapUpPrompt({
+    tag: fresh.reportTag || null, elapsedSec: elapsed, budgetSec: budget, graceSec: grace,
+  });
+  const started = startRunAnywhere(fresh, text);
+  if (!started || started.error) {
+    const why = started ? started.error : 'unknown';
+    updateMeta(meta.id, (m) => { delete m.roundWrapUpAt; });
+    appendMsg(meta.id, { type: 'error', text: `could not start the wrap-up turn: ${why}`, ts });
+    log(`round ${round.id}: wrap-up for run ${meta.id} refused (${why})`);
+    return false;
+  }
+  log(`round ${round.id}: run ${meta.id} passed ${budget}s — wrap-up turn started (resume=${fresh.claudeSessionId})`);
+  return true;
+}
+
+/** Why a cancelled Round run ended, in the words the row and the notification carry. */
+function roundRunFailure(meta, run_) {
+  if (!run_.cancelled) return null;
+  if (!run_.roundTimedOut) return 'cancelled';           // the owner's Stop button
+  const round = loadRound(meta.roundId) || {};
+  const base = `ran out of time (${roundsLib.spanWords(clampRoundTimeout(round.timeoutSec))} budget)`;
+  if (meta.roundWrapUpAt) return `${base}; the wrap-up turn produced no report either`;
+  if (run_.remote) return `${base}; a run on a device gets no wrap-up turn`;
+  if (!meta.claudeSessionId) return `${base}; no session to resume for a wrap-up`;
+  return base;
+}
+
+/**
  * A Round's run has ended: read what it said, record it, decide whether that is
  * worth interrupting somebody for.
  *
@@ -5156,8 +5228,21 @@ async function roundsTick() {
       const active = activeRuns.get(round.currentChatId);
       const meta = active ? loadMeta(round.currentChatId) : null;
       const capMs = clampRoundTimeout(round.timeoutSec) * 1000;
-      if (active && meta && meta.roundStartedAt && now - meta.roundStartedAt * 1000 > capMs) {
-        log(`round ${round.id}: run ${round.currentChatId} passed ${capMs / 1000}s, cancelling`);
+      if (active && meta && meta.roundWrapUpAt) {
+        // The wrap-up turn runs on its own, short clock — not the cap it inherited,
+        // which it has by definition already passed. Overrunning the grace is the end.
+        if (now - meta.roundWrapUpAt * 1000 > ROUND_WRAPUP_GRACE_MS) {
+          log(`round ${round.id}: wrap-up for run ${round.currentChatId} passed ${ROUND_WRAPUP_GRACE_MS / 1000}s, cancelling`);
+          active.roundTimedOut = 'wrap-up';
+          cancelRun(active);
+          continue;
+        }
+      } else if (active && meta && meta.roundStartedAt && now - meta.roundStartedAt * 1000 > capMs) {
+        // Marked before the cancel: settleRun reads the mark and resumes the
+        // conversation once for its report (startRoundWrapUp) instead of filing
+        // "cancelled" over everything the run had found.
+        log(`round ${round.id}: run ${round.currentChatId} passed ${capMs / 1000}s, asking it to report`);
+        active.roundTimedOut = 'cap';
         cancelRun(active);
         continue;
       }
@@ -5187,7 +5272,7 @@ async function roundsTick() {
    }
   }
 }
-setInterval(() => { roundsTick().catch((e) => log('rounds: tick failed', e.message)); }, 30_000).unref();
+setInterval(() => { roundsTick().catch((e) => log('rounds: tick failed', e.message)); }, ROUNDS_TICK_MS).unref();
 
 /**
  * Starts a run wherever the chat says it belongs.

@@ -92,6 +92,16 @@ process.stdin.on('end', () => {
   // ⚠ And no backticks in this comment: it lives inside the template literal
   // that carries this stub, so one of them ends the program. The header above
   // says the same thing about the stub body; it is just as true of the notes.
+  // A run that never finishes on its own: init with a REAL session id (the daemon
+  // stores nothing that is not a uuid, and the wrap-up needs one to resume), then
+  // hang until the daemon's cancel. HANG in the prompt hangs the first turn; the
+  // marker file hangs every turn, wrap-up included.
+  if (inp.includes('HANG') || (process.env.STUB_HANG_FILE && require('fs').existsSync(process.env.STUB_HANG_FILE))) {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: require('crypto').randomUUID() }));
+    process.on('SIGTERM', () => process.exit(143));
+    setInterval(() => {}, 1000);
+    return;
+  }
   const TAG = (inp.match(/THIS RUN'S TAG: ([A-Za-z0-9_-]{1,64})/) || [])[1] || '';
   const FENCE = F + 'huginn-report' + (TAG ? ' ' + TAG : '');
   let text;
@@ -184,6 +194,11 @@ before(async () => {
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
       HUGINN_APPD_WORKDIR: tmp,
+      // The cap tests below: a tick every half second and a two-second wrap-up
+      // grace, against a cap that cannot go under 60 s (they backdate the run).
+      HUGINN_APPD_ROUNDS_TICK_MS: '500',
+      HUGINN_APPD_ROUND_WRAPUP_S: '2',
+      STUB_HANG_FILE: path.join(tmp, 'hang-every-turn'),
     },
     stdio: 'ignore',
   });
@@ -591,6 +606,60 @@ test('deleting a Round leaves the reports it already produced', async () => {
   assert.equal((await api(`/v1/rounds/${r.id}`)).status, 404);
   assert.equal((await api(`/v1/chats/${fired.body.chatId}`)).status, 200,
     'the run it already produced is not destroyed with the schedule');
+});
+
+// ------------------------------------------------------------ the time cap
+
+/** Fires a hanging run and backdates it past its cap; returns the chat id. */
+async function fireOverCap(round) {
+  const fired = await api(`/v1/rounds/${round.id}/run`, { method: 'POST' });
+  assert.equal(fired.status, 202, JSON.stringify(fired.body));
+  const chatId = fired.body.chatId;
+  await wait(400); // the stub has announced its session and is hanging
+  const metaPath = path.join(tmp, 'data', 'chats', chatId, 'meta.json');
+  const m = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+  assert.ok(m.claudeSessionId, 'the stub announced a session to resume');
+  m.roundStartedAt -= 120; // a 60 s cap, passed a minute ago
+  fs.writeFileSync(metaPath, JSON.stringify(m));
+  return chatId;
+}
+
+test('a run that passes its cap is asked for its report, not killed', async () => {
+  // Before 3.8.0 this filed "run failed: cancelled" — over everything the run had
+  // found. Now the cancel is followed by ONE resumed turn asking for the block.
+  const r = await mkRound({ title: 'slow', prompt: 'Dig deep. HANG', timeoutSec: 60 });
+  const chatId = await fireOverCap(r);
+  const done = await waitForRun(r.id, 12_000);
+  assert.equal(done.lastRun.headline, 'stub report for ok', 'the wrap-up turn\'s report was filed');
+  assert.equal(done.lastRun.malformed, false);
+  assert.equal(done.runs.length, 1, 'one scheduled job, one record');
+  assert.ok(done.lastRun.durationSec >= 120, 'the duration covers the whole run, wrap-up included');
+  assert.equal(done.currentChatId, null, 'the run is over');
+  // The chat's own store, not the transcript route: for a local chat with a
+  // session id that route reads Claude's transcript file, which the stub never
+  // writes. What is asserted is what the daemon RECORDED.
+  const events = fs.readFileSync(path.join(tmp, 'data', 'chats', chatId, 'messages.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.ok(events.some((e) => e.type === 'system' && /time is up after/.test(e.text || '')),
+    'the chat says why a second turn happened');
+  assert.ok(events.some((e) => e.type === 'user' && /^TIME IS UP/.test(e.text || '')),
+    'and carries the turn itself');
+});
+
+test('a wrap-up that overruns its grace is filed as out of time, once', async () => {
+  fs.writeFileSync(path.join(tmp, 'hang-every-turn'), '');
+  try {
+    const r = await mkRound({ title: 'slower', prompt: 'HANG', timeoutSec: 60 });
+    await fireOverCap(r);
+    const done = await waitForRun(r.id, 12_000);
+    assert.match(done.lastRun.headline, /ran out of time \(1 min budget\)/);
+    assert.match(done.lastRun.headline, /wrap-up turn produced no report/);
+    assert.equal(done.lastRun.status, 'action');
+    assert.equal(done.runs.length, 1, 'the wrap-up is part of the same run, not a second one');
+    assert.equal(done.currentChatId, null);
+  } finally {
+    fs.rmSync(path.join(tmp, 'hang-every-turn'), { force: true });
+  }
 });
 
 test('an unknown round id is a 404, not a crash', async () => {

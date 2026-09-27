@@ -9,6 +9,30 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.8.0 — 2026-09-27
+
+Both Sunday Rounds came back this morning as `run failed: cancelled`. Neither had crashed:
+the media pipeline check passed its 900 s cap and the Telegram health check its 1200 s cap
+while the last checks were in flight, and `roundsTick` answered the cap with SIGTERM — so
+fifteen and twenty minutes of gathered evidence were filed as nothing, and the phone was
+woken to say so.
+
+- **The cap asks before it kills.** A run that passes `timeoutSec` is still cancelled, but the
+  daemon now resumes the same conversation once (`--resume`, so everything the run read is
+  still in front of it) with a wrap-up turn — `lib/rounds.js` `wrapUpPrompt`: TIME IS UP, no
+  more tools, write the huginn-report block from what you already have, say what was not
+  covered. The wrap-up has a 3 min grace of its own; only overrunning that ends the run, and
+  then the record says so: `ran out of time (15 min budget); the wrap-up turn produced no
+  report either`, rather than a bare `cancelled` that reads like a Stop button. A report the
+  wrap-up writes beats the cancel it followed, and the run is filed ONCE, with a duration that
+  covers both turns. Device runs get no wrap-up (the daemon cannot interrupt a far machine)
+  and say so in their record.
+- **The contract admits the follow-up.** It promised "there is no second message coming";
+  a run holding that promise would treat the wrap-up as noise. It now names the one message
+  that can follow and what it means.
+- Test knobs `HUGINN_APPD_ROUNDS_TICK_MS` and `HUGINN_APPD_ROUND_WRAPUP_S`, so the cap is
+  testable at all: the tick was a fixed 30 s and the floor on a cap is 60 s.
+
 ## 3.7.1 — 2026-09-22
 
 Claude Opus 5.5 shipped today and the picker offered it as soon as the CLI knew the name —
