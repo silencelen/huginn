@@ -413,6 +413,23 @@ test("a run's chat is dated in the Round's own zone, not UTC", async () => {
   await waitForRun(west.id);
 });
 
+test('an ack body that is not an object, or an acknowledged that is not a boolean, is a 400', async () => {
+  // 2026-10-02: a body of `null` answered 500 (TypeError reading .acknowledged),
+  // and {"acknowledged":"false"} — a string — MARKED the report read.
+  const r = await mkRound({ title: 'ack-bodies', prompt: 'Check. EMIT_STATUS:action' });
+  await api(`/v1/rounds/${r.id}/run`, { method: 'POST' });
+  await waitForRun(r.id);
+  for (const body of ['null', '7', '[]', JSON.stringify({ acknowledged: 'false' }), JSON.stringify({ acknowledged: 1 })]) {
+    const res = await api(`/v1/rounds/${r.id}/ack`, { method: 'POST', body });
+    assert.equal(res.status, 400, `${body}: ${JSON.stringify(res.body)}`);
+  }
+  const fresh = (await api(`/v1/rounds/${r.id}`)).body;
+  assert.ok(!fresh.lastRun.acknowledgedAt, 'none of them marked it read');
+  const empty = await api(`/v1/rounds/${r.id}/ack`, { method: 'POST' });
+  assert.equal(empty.status, 200, 'an empty body still acknowledges, as older clients send it');
+  assert.ok(empty.body.lastRun.acknowledgedAt > 0);
+});
+
 test('a report can be marked read, and a new run arrives unread', async () => {
   // ⚠ THE GAP: a report saying `action` is true the moment it is written and
   // stays true forever, because nothing could ever say otherwise. The row held a
