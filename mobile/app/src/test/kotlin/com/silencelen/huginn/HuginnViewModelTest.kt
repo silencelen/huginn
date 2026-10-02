@@ -896,6 +896,40 @@ class AskAttemptTest {
         assertEquals(emptyList<String>(), host.deleted)
     }
 
+    /**
+     * 2026-10-02: the sheet runs submit under withTimeout(25 s). When the budget
+     * ran out mid-send the TimeoutCancellationException took the transport
+     * branch, the suspending discard threw at once inside the cancelled scope
+     * (runCatching swallowed it), and chatId was still forgotten. chat-1 was
+     * neither deleted nor reused, and the retry minted chat-2 and queued the same
+     * question again: two runs of one question, the outcome this class exists to
+     * prevent. A timeout is the send that may have LANDED, so the chat is kept.
+     */
+    @Test
+    fun `a send cut off by the sheet's timeout keeps its chat for the retry`() = runTest {
+        val host = Host()
+        val attempt = AskAttempt()
+        val first = runCatching {
+            kotlinx.coroutines.withTimeout(200) {
+                attempt.submit(
+                    create = { host.create() },
+                    queue = { id -> host.queued += id to "q"; kotlinx.coroutines.delay(5_000) },
+                    discard = { id -> kotlinx.coroutines.yield(); host.deleted += id },
+                )
+            }
+        }
+        assertTrue(first.exceptionOrNull() is kotlinx.coroutines.TimeoutCancellationException)
+
+        val second = attempt.submit(
+            create = { host.create() },
+            queue = { id -> host.queued += id to "q" },
+            discard = { id -> host.deleted += id },
+        )
+        assertEquals("the retry re-sends into the chat it already has", "chat-1", second)
+        assertEquals("one question, one chat", 1, host.created)
+        assertEquals(emptyList<String>(), host.deleted)
+    }
+
     @Test
     fun `a send that never reached the host takes its fresh chat back`() = runTest {
         val host = Host()
