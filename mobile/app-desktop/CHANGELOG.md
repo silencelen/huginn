@@ -22,6 +22,10 @@ Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
   wrapped one letter per line. The row now fits itself to the pane: words when there is room,
   one icon each (word in the tooltip) when there is less, and a single `+` with a menu below
   that. The shortcuts and the palette are unchanged.
+- **Apps are checked where your devices actually go.** The required addresses are loopback, the
+  routes this desk has pinned — reported to huginn once per launch — and an app's own new *Also
+  check from* field (appd 3.9). Addresses devices merely arrived on are probed, shown as *not
+  required*, and never make a row red or refuse an add.
 
 ## 1.8.0
 

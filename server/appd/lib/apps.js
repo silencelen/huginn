@@ -175,6 +175,22 @@ const MAX_CLIENT_ADDRS = 16;
 const MAX_CLIENT_REMOTES = 16;
 
 /**
+ * The addresses every app is REQUIRED to answer on (owner decision, 2026-10-01):
+ * loopback, plus the routes this host's clients have PINNED and reported
+ * (`PUT /v1/apps/routes`, once per client launch), plus whatever a row lists for
+ * itself. The addresses clients merely ARRIVED on — the whole set until now —
+ * are ADVISORY: probed and shown, never a refusal, never a red row on their own.
+ *
+ * A reported route lives a month, not a week: it is a fact about a device's
+ * settings, which change rarely, where an arrival is a fact about traffic.
+ */
+const LOOPBACK_ADDR = '127.0.0.1';
+const REPORTED_ADDR_TTL_SEC = 30 * 24 * 3600;
+const MAX_REPORTED_ADDRS = 32;
+/** How many extra addresses one row may list for itself. */
+const MAX_APP_ADDRS = 8;
+
+/**
  * How often the address set is written back to the store.
  *
  * The set lives in MEMORY and is flushed lazily: a NEW address is written at
@@ -457,6 +473,30 @@ function cleanUnit(raw) {
  * label. A unit name ends up in a command line a person runs as root, so a value
  * that is not a unit name is not something to quietly coerce to something else.
  */
+/**
+ * A row's extra addresses: an array or a space/comma-separated string, each one
+ * normalised by the same rule an arrival is, de-duplicated, capped.
+ */
+function cleanAddrs(raw) {
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\s,]+/) : [];
+  return [...new Set(list.map(normalizeAddr).filter(Boolean))].slice(0, MAX_APP_ADDRS);
+}
+
+/** Why `addresses` cannot be stored, or null. Absent is fine; nonsense is a 400. */
+function addrsProblem(raw) {
+  if (raw === undefined || raw === null) return null;
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\s,]+/).filter(Boolean) : null;
+  if (!list) return 'addresses must be a list of addresses';
+  if (list.length > MAX_APP_ADDRS) return `that is the ${MAX_APP_ADDRS}-address limit for one app`;
+  for (const a of list) {
+    if (typeof a !== 'string' || !normalizeAddr(a)) {
+      return `'${String(a).slice(0, 40)}' is not an address huginn can check from `
+        + '(loopback, or an IP on the LAN, the tailnet or the mesh)';
+    }
+  }
+  return null;
+}
+
 function unitProblem(raw) {
   if (raw == null || raw === '') return null;
   if (typeof raw !== 'string') return 'a unit name must be text';
@@ -531,6 +571,8 @@ function buildRecord(input = {}, now = Math.floor(Date.now() / 1000)) {
     // was missing or empty. '' means "huginn does not know which unit serves
     // this" and [fixLines] says so in words.
     unit: cleanUnit(input.unit),
+    // The row's own "also check from" list (3.9). Always an array, never absent.
+    addresses: cleanAddrs(input.addresses),
     addedAt: Number(input.addedAt) > 0 ? Number(input.addedAt) : now,
     version: Number(input.version) > 0 ? Number(input.version) : 1,
   };
@@ -720,6 +762,8 @@ function add(list, input = {}, now = Math.floor(Date.now() / 1000)) {
   if (badUnit) return { ok: false, status: 400, error: badUnit };
   const badKind = kindProblem(input.kind);
   if (badKind) return { ok: false, status: 400, error: badKind };
+  const badAddrs = addrsProblem(input.addresses);
+  if (badAddrs) return { ok: false, status: 400, error: badAddrs };
 
   const id = input.id ? String(input.id) : idFor(input.name);
   // Grammar is a 400 — what was typed cannot be an id at all. A COLLISION is a
@@ -780,6 +824,11 @@ function patch(list, id, changes = {}) {
     const bad = kindProblem(changes.kind);
     if (bad) return { ok: false, status: 400, error: bad };
     next.kind = cleanKind(changes.kind);
+  }
+  if (changes.addresses !== undefined) {
+    const bad = addrsProblem(changes.addresses);
+    if (bad) return { ok: false, status: 400, error: bad };
+    next.addresses = cleanAddrs(changes.addresses);
   }
   next.version = rec.version + 1;
 
@@ -1360,12 +1409,12 @@ async function reachOne(rawUrl, addr, opts = {}) {
 async function reachabilityProbe(rec, addrs = [], opts = {}) {
   const nowMs = opts.nowMs || (() => Date.now());
   const checkedAt = Math.floor(nowMs() / 1000);
-  const list = [...new Set((addrs || []).map(normalizeAddr).filter(Boolean))];
+  const set = splitAddressSet(addrs);
   const url = rec && typeof rec.url === 'string' ? rec.url : '';
   if (!url || urlProblem(url)) {
     return { ok: false, checkedAt, addresses: [], fix: [], note: 'that address is not one huginn probes' };
   }
-  if (!list.length) {
+  if (!set.required.length && !set.advisory.length) {
     return {
       ok: null,
       checkedAt,
@@ -1374,14 +1423,46 @@ async function reachabilityProbe(rec, addrs = [], opts = {}) {
       note: 'huginn has not seen a client arrive on any address yet, so there was nothing to check this against',
     };
   }
-  const addresses = await Promise.all(list.map((a) => reachOne(url, a, opts)));
-  const ok = addresses.every((a) => a.ok === true);
-  // ⚠ THE PROBE ASKS THE ARRIVAL ADDRESSES; THE FIX NAMES THE CLIENTS. Two
-  // different sets doing two different jobs — probing a client's address would
-  // be asking whether the PHONE serves this app. `opts.remotes` is the map the
-  // store keeps; absent, every failing address falls to the comment branch,
-  // which is the honest answer for a caller that has no client to name.
-  return { ok, checkedAt, addresses, fix: ok ? [] : fixLines(rec, addresses, opts.remotes || {}), note: '' };
+  const plan = [
+    ...set.required.map((addr) => ({ addr, required: true })),
+    ...set.advisory.map((addr) => ({ addr, required: false })),
+  ];
+  const addresses = await Promise.all(plan.map((p) => reachOne(url, p.addr, opts).then((r) => ({ ...r, required: p.required }))));
+  const required = addresses.filter((a) => a.required);
+  const advisoryDown = addresses.filter((a) => !a.required && a.ok === false);
+  // ⚠ THE VERDICT IS THE REQUIRED SET'S ALONE (2026-10-01). An advisory address
+  // that does not answer is said in `note` and listed with `required:false`;
+  // it never makes `ok` false and never earns a fix line — a device that
+  // happened to arrive on an address once is not a promise the app must keep.
+  const ok = required.length ? required.every((a) => a.ok === true) : null;
+  let note = '';
+  if (advisoryDown.length) {
+    note = `also not answering at ${advisoryDown.map((a) => a.addr).join(', ')} — devices have arrived there, but it is not required`;
+  } else if (!required.length) {
+    note = 'nothing is required of this app yet; only addresses devices happened to arrive on were tried';
+  }
+  // ⚠ THE PROBE ASKS THE ADDRESSES; THE FIX NAMES THE CLIENTS. Two different
+  // sets doing two different jobs — probing a client's address would be asking
+  // whether the PHONE serves this app. `opts.remotes` is the map the store
+  // keeps; absent, every failing address falls to the comment branch, which is
+  // the honest answer for a caller that has no client to name.
+  return { ok, checkedAt, addresses, fix: ok === false ? fixLines(rec, required, opts.remotes || {}) : [], note };
+}
+
+/**
+ * What a caller handed the probe: a plain list (every address required — the
+ * shape every caller used until 3.9, kept so the pure tests still read) or
+ * `{required, advisory}`, de-duplicated with required winning a tie.
+ */
+function splitAddressSet(addrs) {
+  if (Array.isArray(addrs)) return { required: uniqAddrs(addrs), advisory: [] };
+  const required = uniqAddrs(addrs && addrs.required);
+  const advisory = uniqAddrs(addrs && addrs.advisory).filter((a) => !required.includes(a));
+  return { required, advisory };
+}
+
+function uniqAddrs(list) {
+  return [...new Set((list || []).map(normalizeAddr).filter(Boolean))];
 }
 
 /**
@@ -1820,6 +1901,14 @@ function addrEntry(raw) {
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, remotes };
 }
 
+/** One reported route with the clients that reported it, cleaned, or null. */
+function reportedEntry(raw) {
+  const addr = normalizeAddr(raw && raw.addr);
+  if (!addr) return null;
+  const by = Array.isArray(raw.by) ? raw.by.map((b) => String(b || '').trim().slice(0, 64)).filter(Boolean) : [];
+  return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, by: [...new Set(by)] };
+}
+
 function readEnvelope(dir, fs = nodeFs) {
   try {
     const raw = JSON.parse(fs.readFileSync(storePath(dir), 'utf8'));
@@ -1833,6 +1922,9 @@ function readEnvelope(dir, fs = nodeFs) {
       // this is a default and not a migration.
       clientAddresses: Array.isArray(raw.clientAddresses)
         ? raw.clientAddresses.map(addrEntry).filter(Boolean) : [],
+      // Added in 3.9: the routes clients reported. Same default-not-migration rule.
+      reportedAddresses: Array.isArray(raw.reportedAddresses)
+        ? raw.reportedAddresses.map(reportedEntry).filter(Boolean) : [],
     };
   } catch {
     return null;
@@ -1894,6 +1986,7 @@ function createStore(opts = {}) {
    * did, and so an arrival with no client is still an arrival.
    */
   const remotes = new Map();
+  const reported = new Map();   // addr -> { lastSeenAt, by: Set<clientId> }
   let addrsLoaded = false;
   let addrsFlushedAt = 0;
   let lastSweepStartedMs = 0;
@@ -1913,6 +2006,63 @@ function createStore(opts = {}) {
       for (const [addr] of byAge.slice(0, addrs.size - MAX_CLIENT_ADDRS)) addrs.delete(addr);
     }
     pruneRemotes(cutoff);
+    pruneReported();
+  }
+
+  function pruneReported() {
+    const cutoff = stamp() - REPORTED_ADDR_TTL_SEC;
+    for (const [addr, v] of reported) if (v.lastSeenAt < cutoff) reported.delete(addr);
+    if (reported.size > MAX_REPORTED_ADDRS) {
+      const byAge = [...reported.entries()].sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+      for (const [addr] of byAge.slice(0, reported.size - MAX_REPORTED_ADDRS)) reported.delete(addr);
+    }
+  }
+
+  // ------------------------------------------------------- reported routes
+
+  function reportedEntries() {
+    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    pruneReported();
+    return [...reported.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([addr, v]) => ({ addr, lastSeenAt: v.lastSeenAt, by: [...v.by].sort() }));
+  }
+
+  /**
+   * A client says which routes it has pinned (`PUT /v1/apps/routes`). Every
+   * host it names becomes REQUIRED of every app — that is the whole point: an
+   * address the phone will dial is one the app has to be at. Idempotent, and a
+   * fresh one is flushed at once for the same reason a fresh arrival is.
+   */
+  function noteReportedRoutes(rawAddrs, by) {
+    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    const who = String(by || '').trim().slice(0, 64) || 'a client';
+    const fresh = [];
+    for (const addr of uniqAddrs(rawAddrs).slice(0, MAX_REPORTED_ADDRS)) {
+      const cur = reported.get(addr) || { lastSeenAt: 0, by: new Set() };
+      if (!reported.has(addr)) fresh.push(addr);
+      cur.lastSeenAt = stamp();
+      cur.by.add(who);
+      reported.set(addr, cur);
+    }
+    for (const addr of fresh) log(`apps: ${who} reports a route to huginn via ${addr} — every app now has to answer there too`);
+    if (fresh.length || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
+    return fresh;
+  }
+
+  /** Loopback plus every reported route: what every app is REQUIRED to answer on. */
+  function requiredAddresses() {
+    return [...new Set([LOOPBACK_ADDR, ...reportedEntries().map((e) => e.addr)])];
+  }
+
+  /**
+   * The probe plan for ONE row: required = the host-wide required set plus the
+   * row's own extras; advisory = the arrival set (and this host's own address)
+   * minus anything already required.
+   */
+  function addressSet(rec) {
+    const required = [...new Set([...requiredAddresses(), ...cleanAddrs(rec && rec.addresses)])];
+    const advisory = addresses().filter((a) => !required.includes(a));
+    return { required, advisory };
   }
 
   /**
@@ -1985,6 +2135,12 @@ function createStore(opts = {}) {
       for (const r of e.remotes) if (!seen.has(r.addr) || seen.get(r.addr) < r.lastSeenAt) seen.set(r.addr, r.lastSeenAt);
       remotes.set(e.addr, seen);
     }
+    for (const e of (env && env.reportedAddresses) || []) {
+      const cur = reported.get(e.addr) || { lastSeenAt: 0, by: new Set() };
+      if (cur.lastSeenAt < e.lastSeenAt) cur.lastSeenAt = e.lastSeenAt;
+      for (const b of e.by || []) cur.by.add(b);
+      reported.set(e.addr, cur);
+    }
     pruneAddrs();
   }
 
@@ -2053,7 +2209,7 @@ function createStore(opts = {}) {
     const env = readEnvelope(dir, fs);
     if (!env) return;
     addrsFlushedAt = stamp();
-    try { writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries() }, fs); } catch { /* next time */ }
+    try { writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs); } catch { /* next time */ }
   }
 
   /**
@@ -2109,7 +2265,7 @@ function createStore(opts = {}) {
 
   function save(consoles) {
     const env = readEnvelope(dir, fs) || { schema: SCHEMA, seeded: true, consoles: [] };
-    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles, clientAddresses: addrEntries() }, fs);
+    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
   }
 
   /** The marker the owner touches. The daemon reads it and never writes it. */
@@ -2189,7 +2345,7 @@ function createStore(opts = {}) {
   async function observe(rec) {
     const [probe, reach] = await Promise.all([
       probeApp(rec, { fetch: doFetch, timeoutMs, nowMs }),
-      reachabilityProbe(rec, addresses(), { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() }),
+      reachabilityProbe(rec, addressSet(rec), { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() }),
     ]);
     if (probe.up === true) await refreshIcon(rec);
     return { probe, reach };
@@ -2295,6 +2451,10 @@ function createStore(opts = {}) {
     noteClientAddress,
     addresses,
     clientRemotes,
+    noteReportedRoutes,
+    reportedRoutes: reportedEntries,
+    requiredAddresses,
+    addressSet,
     icon(id) { return iconOf(dir, id, fs); },
 
     /**
@@ -2308,7 +2468,7 @@ function createStore(opts = {}) {
     async add(input) {
       const r = add(load().consoles, input, stamp());
       if (!r.ok) return r;
-      const reach = await reachabilityProbe(r.app, addresses(),
+      const reach = await reachabilityProbe(r.app, addressSet(r.app),
         { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() });
       if (reach.ok === false) return { ok: false, status: 422, error: reachRefusal(reach), reachable: reach };
       save(r.apps);
@@ -2373,6 +2533,7 @@ module.exports = {
   MAX_APPS, MAX_NAME, MAX_NOTES, ID_RE, KINDS, DEFAULT_KIND, UNIT_RE,
   PROBE_TIMEOUT_MS, PROBE_CONCURRENCY, PROBE_FRESH_MS, PROBE_INTERVAL_MS,
   CLIENT_ADDR_TTL_SEC, MAX_CLIENT_ADDRS, MAX_CLIENT_REMOTES, CLIENT_ADDR_FLUSH_SEC,
+  LOOPBACK_ADDR, REPORTED_ADDR_TTL_SEC, MAX_REPORTED_ADDRS, MAX_APP_ADDRS, cleanAddrs, addrsProblem, splitAddressSet,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
   REBIND_MARKER_NAME, STORE_NAME, SCHEMA, FIREWALL_FILE, UNIT_BIND_NOTES,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,

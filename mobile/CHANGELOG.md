@@ -14,6 +14,12 @@ Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
   and the list could not be put away. The seam between them now carries the desktop's notch: tap
   it and the detail takes the whole screen, tap it again and the list is back. Remembered across
   launches; a phone-width screen never shows the seam and never reads the setting.
+- **Apps are checked where your devices actually go.** An app used to have to answer on every
+  address any device had merely arrived from in the last week — a stale one kept new apps
+  unaddable for days. Now (appd 3.9) what is required is loopback, the routes this phone has
+  pinned — reported to huginn once per launch, nothing to set up — and whatever an app's own new
+  *Also check from* field lists. Addresses devices arrived on are still probed and shown, marked
+  *not required*, and never make a row red or refuse an add.
 
 ## 3.8.0 — 2026-09-20
 
