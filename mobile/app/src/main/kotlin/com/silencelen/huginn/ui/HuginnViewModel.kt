@@ -84,6 +84,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.silencelen.huginn.ui.AppRules
+import com.silencelen.huginn.ui.OverviewCadence
+import kotlinx.coroutines.flow.collectLatest
 
 // `mergeTranscript` moved to :core in phase 3c — same package, so every call site
 // here is unchanged. The desktop client needs the identical row-identity rule, and
@@ -2032,60 +2034,78 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     })
 
     private var overviewJob: Job? = null
+    /** Which session [_overview] and [_sessionGraph] describe. */
+    private var overviewFor: String? = null
+    /** Whether the Overview TAB is on screen. Drives the cadence, not the loop's life. */
+    private val overviewOnTab = MutableStateFlow(false)
 
     /**
-     * Live only while the Overview tab is on screen, and only for the session it
-     * is showing.
-     *
-     * The map is a whole-transcript walk on the host — thirty megabytes in the
-     * worst case — so it is polled ONLY here and never from the sessions list. The
-     * cursor is what makes the poll cheap: an unchanged session answers with two
-     * numbers and nothing else.
+     * Runs for as long as the SESSION is open and the app is started — not only
+     * while its Overview tab is up (owner, 10-01; see [OverviewCadence]). Behind
+     * the other tabs it keeps the map current with the cheap cursor poll; arriving
+     * on the tab refreshes at once and polls faster. What is already here for this
+     * session is never blanked to do it.
      */
     fun startOverviewPolling(name: String) {
         overviewJob?.cancel()
-        _overview.value = null
-        _sessionGraph.value = null
-        _overviewNote.value = null
+        if (!OverviewCadence.keepCache(overviewFor, name)) {
+            _overview.value = null
+            _sessionGraph.value = null
+            _overviewNote.value = null
+            overviewFor = name
+        }
         // Opened before the fetch so typing works the instant the tab is up; the
         // server's copy arrives underneath it through refresh(), which never
         // overwrites a field somebody is already in. Only on the first visit,
-        // though: re-opening on every return to the tab would reset the editors
-        // to the last meta the POLL returned, which after a save from this client
-        // is the text as it read before it was typed.
+        // though: re-opening on every return would reset the editors to the last
+        // meta the POLL returned, which after a save from this client is the text
+        // as it read before it was typed.
         if (metaSaver.session.value != name) metaSaver.open(name, SessionMeta())
         overviewJob = viewModelScope.launch {
             awaitReady()
-            // The header first: it is the cheapest thing on this wire and the
-            // first thing somebody arriving actually reads.
-            // The generation is captured BEFORE each fetch: what comes back was
-            // read server-side at that moment, and a save of ours can land in
-            // between — after which the poll is a photograph of the text as it
-            // read before it was typed. See SessionMetaSaver's invariant 1.
-            var at = metaSaver.generation()
-            runCatching { client.sessionOverview(name) }
-                .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta, at) }
-                .onFailure { _overviewNote.value = noteFor(it) }
-            while (isActive) {
-                at = metaSaver.generation()
-                runCatching { client.sessionGraph(name, _sessionGraph.value?.cursor) }
-                    .onSuccess { g ->
-                        if (!g.unchanged) {
-                            _sessionGraph.value = g
-                            metaSaver.refresh(name, g.meta, at)
-                        }
-                        _overviewNote.value = null
+            // collectLatest: a change of tab cancels the wait in progress, so
+            // arriving on Overview is a refresh NOW, not at the end of 30 s.
+            overviewOnTab.collectLatest { onTab ->
+                var first = true
+                while (isActive) {
+                    // The generation is captured BEFORE each fetch: what comes back
+                    // was read server-side at that moment, and a save of ours can
+                    // land in between. See SessionMetaSaver's invariant 1.
+                    var at = metaSaver.generation()
+                    // The header on the session's first pass and on each ARRIVAL at
+                    // the tab; after that the cursor poll is enough.
+                    if (first && OverviewCadence.fetchHeader(onTab, _overview.value != null)) {
+                        runCatching { client.sessionOverview(name) }
+                            .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta, at) }
+                            .onFailure { _overviewNote.value = noteFor(it) }
+                        at = metaSaver.generation()
                     }
-                    .onFailure { _overviewNote.value = noteFor(it) }
-                delay(5_000)
+                    first = false
+                    runCatching { client.sessionGraph(name, _sessionGraph.value?.cursor) }
+                        .onSuccess { g ->
+                            if (!g.unchanged) {
+                                _sessionGraph.value = g
+                                metaSaver.refresh(name, g.meta, at)
+                            }
+                            _overviewNote.value = null
+                        }
+                        .onFailure { _overviewNote.value = noteFor(it) }
+                    delay(OverviewCadence.intervalMs(onTab))
+                }
             }
         }
+    }
+
+    /** The Overview tab came on screen ([shown]) or went away. */
+    fun overviewTabShown(shown: Boolean) {
+        overviewOnTab.value = shown
+        // The tab is gone; the sentence that was still in the air is not.
+        if (!shown) metaSaver.flush()
     }
 
     fun stopOverviewPolling() {
         overviewJob?.cancel()
         overviewJob = null
-        // The tab is gone; the sentence that was still in the air is not.
         metaSaver.flush()
     }
 
