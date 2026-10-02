@@ -341,7 +341,17 @@ class HuginnClient(
                 contentType(jsonMedia)
                 setBody(json.encodeToString(JsonObject.serializer(), body))
             }
-            else -> setBody(body)
+            // A stream (uploads) or any other content that already knows its own
+            // type. Nothing else is accepted: there is no ContentNegotiation
+            // plugin on this client, so a bare Map or data class would reach
+            // Ktor with no serializer and no Content-Type and fail at send time
+            // with a message that names neither the call nor the fix. Fail here,
+            // and say what to pass instead.
+            is OutgoingContent -> setBody(body)
+            else -> error(
+                "HuginnClient: unsupported request body ${body::class.simpleName} for $path; " +
+                    "pass a JsonObject (buildJsonObject / jsonBody) or an OutgoingContent",
+            )
         }
     }
 
@@ -1475,7 +1485,11 @@ class HuginnClient(
      * somebody saw it, and never edits what it said.
      */
     suspend fun ackRound(id: String, acknowledged: Boolean = true): Round =
-        decode(post("/v1/rounds/$id/ack", body = mapOf("acknowledged" to acknowledged)))
+        // ⚠ A JsonObject, never a Map. This was the one call that passed a Kotlin
+        // Map, and [build] has no serializer for one: Ktor refused it before it
+        // left the device ("Fail to prepare request body … Content-Type: null"),
+        // so Mark done had never once reached the daemon (found 2026-10-01).
+        decode(post("/v1/rounds/$id/ack", body = buildJsonObject { put("acknowledged", JsonPrimitive(acknowledged)) }))
 
     // ---- scratchpads: the user's own pages, quoted into a message on request
 

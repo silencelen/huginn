@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
+
+- **Mark done works.** The button on a Round's report failed on the spot with a Ktor message
+  about a body it could not prepare, and the dot came back on the next refresh. The acknowledge
+  call was the one request in the shared client built from a plain map rather than a JSON object,
+  so it left with no serializer and no content type and never reached the daemon — since the
+  feature shipped in desktop 0.8.13. It is JSON now, the request builder refuses any body it
+  cannot type, and a test pins both. Shared with the phone.
+
 ## 1.8.0
 
 The first project run from this window, and what the sessions list and the transcript got wrong
