@@ -612,6 +612,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { settings.setAppLock(on) }
     }
 
+    /**
+     * The wide layout's list pane, hidden (Z Fold inner screen and the like) —
+     * the desktop's "Hide list" notch, carried over (owner, 2026-10-01). Flipped
+     * in memory first, like the lock, so the notch answers the tap before
+     * DataStore does.
+     */
+    private val _listCollapsed = MutableStateFlow(false)
+    val listCollapsed: StateFlow<Boolean> = _listCollapsed.asStateFlow()
+
+    fun toggleListCollapsed() {
+        val next = !_listCollapsed.value
+        _listCollapsed.value = next
+        viewModelScope.launch { settings.setListCollapsed(next) }
+    }
+
     /** Whether the host can push, and whether THIS phone has registered to receive it. */
     private val _push = MutableStateFlow<PushStatus?>(null)
     val push: StateFlow<PushStatus?> = _push.asStateFlow()
@@ -1057,6 +1072,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _lastOpenSession.value = settings.lastOpenSession.first()
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
+            _listCollapsed.value = settings.listCollapsed.first()
             _routeBook.value = settings.routeBook.first()
             // ⚠ BEFORE THE FIRST resolveRoute BELOW. With an empty map every cold
             // start skips the hysteresis and takes the first address that answers

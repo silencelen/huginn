@@ -10,6 +10,10 @@ Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
   left with no serializer and no content type and never reached the daemon — since the feature
   shipped in 2.77.0. It is JSON now, the request builder refuses any body it cannot type, and a
   test pins both. Shared with the desktop.
+- **Hide the list on a wide screen.** Unfolded, the Chats and Sessions pages are list-plus-detail,
+  and the list could not be put away. The seam between them now carries the desktop's notch: tap
+  it and the detail takes the whole screen, tap it again and the list is back. Remembered across
+  launches; a phone-width screen never shows the seam and never reads the setting.
 
 ## 3.8.0 — 2026-09-20
 
