@@ -105,6 +105,36 @@ class HuginnClientTest {
         assertEquals("http://appd.test/v1/ping", seen.single().url.toString())
     }
 
+    // ------------------------------------------------------------ rounds
+
+    /**
+     * ⚠ THE BODY MUST BE JSON, AND SAY SO. Added 2026-10-01: ackRound was the one
+     * call in this client that passed a Kotlin Map rather than a JsonObject, so
+     * the builder fell through to a raw setBody with no Content-Type and no
+     * serializer, and Ktor refused the request before it left the device —
+     * "Fail to prepare request body for sending … Content-Type: null". Mark done
+     * had never worked, on either client, since the feature shipped in 2.77.0,
+     * and the optimistic row hid it until the toast came back.
+     */
+    @Test
+    fun `ackRound posts a JSON body with the content type the daemon needs`() = runTest {
+        val r = ok("""{"id":"r1","title":"cap"}""").ackRound("r1", acknowledged = true)
+        assertEquals("r1", r.id)
+        val req = seen.single()
+        assertEquals("http://appd.test/v1/rounds/r1/ack", req.url.toString())
+        assertEquals("POST", req.method.value)
+        val body = req.body as TextContent
+        assertEquals("application", body.contentType.contentType)
+        assertEquals("json", body.contentType.contentSubtype)
+        assertEquals("""{"acknowledged":true}""", body.text)
+    }
+
+    @Test
+    fun `ackRound with false is Undo, and rides the same JSON body`() = runTest {
+        ok("""{"id":"r1"}""").ackRound("r1", acknowledged = false)
+        assertEquals("""{"acknowledged":false}""", (seen.single().body as TextContent).text)
+    }
+
     // ------------------------------------------------- soft end + uploads
 
     @Test
