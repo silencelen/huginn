@@ -3142,6 +3142,12 @@ data class AppAddress(
     val ok: Boolean = false,
     /** Why it did not answer. Absent on one that did. */
     val error: String? = null,
+    /**
+     * Whether this address counts (appd 3.9). `false` is an ADVISORY address — one
+     * a device merely arrived on — probed and shown but never the reason a row is
+     * red or an add refused. Null from an older daemon, where every address counted.
+     */
+    val required: Boolean? = null,
 )
 
 /**
@@ -3216,6 +3222,12 @@ data class App(
      * anyway, because the pre-rename body omits the key entirely.
      */
     val unit: String? = null,
+    /**
+     * The row's own "also check from" list (appd 3.9): addresses this app is
+     * REQUIRED to answer at besides loopback and the routes devices reported.
+     * Empty on an older daemon, which is the same as none.
+     */
+    val addresses: List<String> = emptyList(),
     /** Epoch SECONDS. */
     val addedAt: Long = 0,
     /** The revision a PATCH quotes back, so two clients cannot silently overwrite. */
@@ -3284,8 +3296,22 @@ data class AppList(
     /** The daemon's closed vocabulary for `kind`, so an editor can offer it. */
     val kinds: List<String> = emptyList(),
     val retrofitApplied: Boolean = false,
-    /** The addresses this host's clients arrive on — what a row is probed against. */
+    /** The addresses this host's clients arrive on — advisory since appd 3.9. */
     val clientAddresses: List<String> = emptyList(),
+    /** What every app is REQUIRED to answer on: loopback plus the routes devices reported (appd 3.9). */
+    val requiredAddresses: List<String> = emptyList(),
+    /** The routes devices reported, with who reported each (appd 3.9). */
+    val reportedRoutes: List<ReportedRoute> = emptyList(),
+)
+
+/** One route a device reported as pinned (`PUT /v1/apps/routes`). */
+@Serializable
+data class ReportedRoute(
+    val addr: String = "",
+    /** Epoch SECONDS. */
+    val lastSeenAt: Long = 0,
+    /** The client ids that reported it. */
+    val by: List<String> = emptyList(),
 )
 
 /**
@@ -3355,6 +3381,8 @@ data class AppForm(
     val kind: String? = null,
     val notes: String = "",
     val unit: String = "",
+    /** The row's own "also check from" addresses, as typed: space or comma separated. */
+    val alsoCheck: String = "",
     /** The daemon's sentence, when it refused. */
     val refusal: String? = null,
     /** Its fix lines, verbatim. */

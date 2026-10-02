@@ -12808,7 +12808,25 @@ const server = http.createServer(async (req, res) => {
           // with an empty list is a real state and is on the wire as one.
           // NOT on the alias: /v1/consoles answers the frozen 3.4 body.
           clientRemotes: apps.clientRemotes(),
+          // 3.9 (owner decision 2026-10-01): what every app is REQUIRED to answer
+          // on — loopback + the routes clients reported — and the routes
+          // themselves with who reported them. `clientAddresses` above is the
+          // arrival set, advisory now; an old client reading only it loses
+          // nothing it had.
+          requiredAddresses: apps.requiredAddresses(),
+          reportedRoutes: apps.reportedRoutes(),
         });
+      }
+
+      // A client's pinned routes, reported once per launch. Every host it names
+      // joins loopback in the required set; the arrival set is advisory. The
+      // body is the client's own RouteBook hosts; nothing here is enumerated.
+      if (req.method === 'PUT' && ap === '/v1/apps/routes') {
+        const body = await readJsonBody(req, 8 * 1024);
+        const by = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
+        const hosts = Array.isArray(body && body.addrs) ? body.addrs : [];
+        const fresh = apps.noteReportedRoutes(hosts, by);
+        return sendJson(res, 200, { fresh, reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses() });
       }
 
       // ⚠ THE PREREQUISITE (decision 54). The add is REFUSED — 422, with the
