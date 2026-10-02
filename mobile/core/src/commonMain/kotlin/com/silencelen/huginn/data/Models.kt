@@ -3304,6 +3304,15 @@ data class AppList(
     val reportedRoutes: List<ReportedRoute> = emptyList(),
 )
 
+/**
+ * What `PUT /v1/apps/routes` answered. [supported] false is an appd older than
+ * 3.9 (a 404); [refused] names hosts the daemon would not check (a 400, 3.9.1).
+ */
+data class RouteReportAnswer(
+    val supported: Boolean,
+    val refused: List<String> = emptyList(),
+)
+
 /** One route a device reported as pinned (`PUT /v1/apps/routes`). */
 @Serializable
 data class ReportedRoute(

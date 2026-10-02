@@ -6,6 +6,7 @@ import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.RouteKind
 import com.silencelen.huginn.data.RouteBook
+import com.silencelen.huginn.data.RouteHealth
 import io.ktor.http.Url
 
 /**
@@ -193,7 +194,11 @@ object AppRules {
     fun failing(app: App): Boolean =
         app.reachable.ok == false ||
             app.reachable.fix.any { it.isNotBlank() } ||
-            app.reachable.addresses.any { !it.ok }
+            // ⚠ AN ADVISORY MISS IS NOT A FAILURE (2026-10-02). A row read
+            // "reachable from your devices" with a "Why" toggle beside it, because
+            // an address the daemon marks `required:false` still counted here. Null
+            // is a pre-3.9 daemon, where every address counted, and still does.
+            app.reachable.addresses.any { !it.ok && it.required != false }
 
     /**
      * The daemon's own sentence about the check, or null.
@@ -228,16 +233,158 @@ object AppRules {
         return "${address.addr} — $why$tag"
     }
 
-    /** The "Also check from" field, as a list: space or comma separated, trimmed, de-duplicated. */
-    fun splitAddresses(text: String): List<String> =
-        text.split(',', ' ', '\n', '\t').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    /** How many addresses one row may list for itself — the daemon's `MAX_APP_ADDRS`, mirrored. */
+    const val MAX_APP_ADDRS: Int = 8
 
     /**
-     * The hosts a device's pinned routes point at — what [HuginnClient.reportRoutes]
-     * sends. Hosts only: the app's own port is what the daemon probes.
+     * The "Also check from" field, as a list: split, trimmed, de-duplicated.
+     *
+     * ⚠ THE DAEMON'S SEPARATORS AND THE DAEMON'S IDEA OF "THE SAME" (2026-10-02).
+     * This split on four ASCII characters, so a no-break space pasted from a web
+     * page or a chat left two addresses glued into one, refused with a 400 that
+     * looked like nonsense on screen. Any whitespace now separates, as JS `\s`
+     * does in `lib/apps.js`. And "FD00::1 fd00::1 [fd00::1]" was three entries here
+     * and one there, so the 8-address limit disagreed; duplicates are judged by
+     * [addressKey], the first spelling kept.
      */
-    fun routeHosts(book: RouteBook): List<String> =
-        book.routes.mapNotNull { r -> runCatching { Url(r.url).host }.getOrNull()?.takeIf { it.isNotBlank() } }.distinct()
+    fun splitAddresses(text: String): List<String> {
+        val out = mutableListOf<String>()
+        val sb = StringBuilder()
+        fun flush() {
+            val t = sb.toString().trim()
+            if (t.isNotEmpty()) out += t
+            sb.clear()
+        }
+        for (c in text) if (c == ',' || c.isWhitespace()) flush() else sb.append(c)
+        flush()
+        return out.distinctBy { addressKey(it) }
+    }
+
+    /**
+     * One key per address however it was spelled: case folded, brackets, zone
+     * and the `::ffff:` prefix dropped, an IPv6 literal written out in full. A
+     * mirror of the daemon's canonical form for de-duplicating, not a validator.
+     */
+    fun addressKey(raw: String): String {
+        var a = raw.trim().substringBefore('%').lowercase()
+        if (a.startsWith("[") && a.endsWith("]")) a = a.substring(1, a.length - 1)
+        if (a.startsWith("::ffff:") && '.' in a) a = a.removePrefix("::ffff:")
+        if (':' !in a) return a
+        val halves = a.split("::")
+        if (halves.size > 2) return a
+        val head = halves[0].split(':').filter { it.isNotEmpty() }
+        val tail = if (halves.size == 2) halves[1].split(':').filter { it.isNotEmpty() } else emptyList()
+        val zeros = if (halves.size == 2) 8 - head.size - tail.size else 0
+        if (zeros < 0) return a
+        val groups = head + List(zeros) { "0" } + tail
+        return groups.joinToString(":") { g -> g.toIntOrNull(16)?.toString(16) ?: g }
+    }
+
+    /**
+     * Why the daemon would refuse [host] as an address — for a row's "Also check
+     * from" and for a reported route alike — or null.
+     *
+     * The daemon's rule, mirrored: a BARE host (no port, path, query, fragment or
+     * user — 2026-10-02, `127.0.0.3#` used to be stored and probed on port 80),
+     * in a class [urlProblem] allows. So `*.ts.net` and single-label names pass and
+     * `huginn.jnet.ad` does not.
+     */
+    fun addressProblem(host: String): String? {
+        val h = host.trim()
+        if (h.isEmpty()) return "an address needs a host"
+        if (h.any { it == '/' || it == '?' || it == '#' || it == '@' || it == '\\' || it.isWhitespace() }) {
+            return "an address is a bare host, with no port, path or user"
+        }
+        val inner = if (h.startsWith("[") && h.endsWith("]")) h.substring(1, h.length - 1) else h
+        if (inner.isEmpty() || '[' in inner || ']' in inner) return "an address is a bare host, with no port, path or user"
+        // One colon is host:port; a v6 literal has at least two.
+        if (inner.count { it == ':' } == 1) return "an address is a bare host, with no port, path or user"
+        val authority = if (':' in inner) "[$inner]" else inner
+        return urlProblem("http://$authority/")
+    }
+
+    /**
+     * The hosts of the routes this device USES — what [HuginnClient.reportRoutes]
+     * sends. Hosts only: the app's own port is what the daemon probes.
+     *
+     * ⚠⚠ NOT EVERY PIN (2026-10-02). The migration appends both built-ins to every
+     * upgraded book as `byHand = false` seeds, so an install that only ever talked
+     * on the LAN reported huginn's old Tailscale literal too — an address gone from
+     * the host since 09-30 — and the daemon required every app to answer there:
+     * every add a 422. The rule, each half for a reason:
+     * - a route a PERSON put in the book ([PinnedRoute.byHand]) — they chose it, so
+     *   they mean to dial it, even before it has answered once;
+     * - the ACTIVE route — the device is dialling it now;
+     * - any route that has WORKED from this device ([RouteHealth.lastWorkedAt]).
+     * A seed nobody chose and the device has never reached is none of these.
+     *
+     * Lower-case, IPv6 without brackets: the daemon's spelling.
+     */
+    fun routeHosts(book: RouteBook, health: Map<String, RouteHealth>): List<String> =
+        book.routes
+            .filter { r -> r.byHand || r.id == book.activeId || (health[r.id]?.lastWorkedAt ?: 0L) > 0L }
+            .mapNotNull { r ->
+                runCatching { Url(r.url).host }.getOrNull()
+                    ?.trim()?.removePrefix("[")?.removeSuffix("]")?.lowercase()
+                    ?.takeIf { it.isNotBlank() }
+            }
+            .distinct()
+
+    /** What a device reports: [hosts] the daemon will take, and the [refused] ones it would 400. */
+    data class RouteReport(val hosts: List<String>, val refused: List<String>)
+
+    /**
+     * [routeHosts], split by [addressProblem] BEFORE the round trip.
+     *
+     * ⚠ A REFUSED HOST IS HELD BACK AND NAMED, NOT SENT TO BE DROPPED (2026-10-02).
+     * The daemon refuses the whole report naming any host it will not check (it
+     * used to drop it from a 200 that nobody read); sending one would cost this
+     * device every other route too. [routeNotice] says which were held back.
+     */
+    fun routeReport(book: RouteBook, health: Map<String, RouteHealth>): RouteReport {
+        val all = routeHosts(book, health)
+        val refused = all.filter { addressProblem(it) != null }
+        return RouteReport(hosts = all.filter { it !in refused }, refused = refused)
+    }
+
+    /**
+     * The Apps page's line about routes the daemon does not check, or null.
+     *
+     * Without it a device pinned only to `huginn.jnet.ad` reads every row as
+     * "reachable from your devices" while the address it actually dials was never
+     * asked.
+     */
+    fun routeNotice(refused: List<String>): String? {
+        val hosts = refused.filter { it.isNotBlank() }.distinct()
+        if (hosts.isEmpty()) return null
+        return "Not checked from ${hosts.joinToString(", ")}: huginn only checks apps from loopback, " +
+            "private LAN, tailnet and mesh addresses and names with no dot, so this device's route there " +
+            "is not one every app has to answer on"
+    }
+
+    /** The page's bottom note: the retrofit line and the route notice, whichever there are. */
+    fun pageNote(list: AppList, routeNotice: String?): String? =
+        listOfNotNull(retrofitNote(list), routeNotice?.takeIf { it.isNotBlank() })
+            .joinToString("\n").takeIf { it.isNotEmpty() }
+
+    /**
+     * Whether this daemon keeps a row's own addresses (appd 3.9+). Its list
+     * always carries `requiredAddresses` — loopback at least — and an older one
+     * has no such key, which decodes as empty.
+     */
+    fun supportsRowAddresses(list: AppList): Boolean = list.requiredAddresses.isNotEmpty()
+
+    /**
+     * Whether a saved row came back WITHOUT the addresses that were sent.
+     *
+     * ⚠ appd 3.8 ignores the key and still answers 201/200 (2026-10-02), so a form
+     * that trusted the status told the person a list was saved when it was thrown
+     * away. The row that comes back is the evidence; [ADDRESSES_DROPPED] says it.
+     */
+    fun addressesDropped(sent: List<String>, row: App): Boolean = sent.isNotEmpty() && row.addresses.isEmpty()
+
+    const val ADDRESSES_DROPPED: String =
+        "Saved, but without “Also check from”: this huginn's daemon is older than 3.9 and does not keep it."
 
     /**
      * Every fix line, VERBATIM and in order.

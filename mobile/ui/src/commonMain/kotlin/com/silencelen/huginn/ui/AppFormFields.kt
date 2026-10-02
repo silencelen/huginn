@@ -119,7 +119,12 @@ fun AppFormFields(
             singleLine = true,
             label = { Text("Also check from (optional)") },
             supportingText = {
-                Text("Addresses this app must also answer at, besides loopback and your devices' routes. Space or comma separated.")
+                // The daemon's own limit and shape, said where it is typed (2026-10-02:
+                // the two sides used to count and split differently).
+                Text(
+                    "Addresses this app must also answer at, besides loopback and your devices' routes. " +
+                        "Up to ${AppRules.MAX_APP_ADDRS} bare hosts, no port, separated by spaces or commas.",
+                )
             },
             modifier = Modifier.fillMaxWidth(),
         )

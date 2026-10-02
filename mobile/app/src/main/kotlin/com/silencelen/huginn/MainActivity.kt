@@ -779,6 +779,7 @@ fun HuginnApp(
     val projectRefusal by vm.projectRefusal.collectAsState()
     val projectBusy by vm.projectBusy.collectAsState()
     val appList by vm.apps.collectAsState()
+    val appsRouteNotice by vm.appsRouteNotice.collectAsState()
     val appsAvailable by vm.appsAvailable.collectAsState()
     val appAdd by vm.appAdd.collectAsState()
     val projectDoors = com.silencelen.huginn.ui.projectEntries(projectsAvailable)
@@ -1781,7 +1782,7 @@ fun HuginnApp(
                 apps = appList.apps,
                 kinds = com.silencelen.huginn.ui.AppRules.kindChoices(appList),
                 retrofitApplied = appList.retrofitApplied,
-                note = com.silencelen.huginn.ui.AppRules.retrofitNote(appList),
+                note = com.silencelen.huginn.ui.AppRules.pageNote(appList, appsRouteNotice),
                 nowMs = nowMs,
                 onOpen = { a -> openApp(context, a, vm) },
                 onProbe = { a -> vm.probeApp(a.id) },

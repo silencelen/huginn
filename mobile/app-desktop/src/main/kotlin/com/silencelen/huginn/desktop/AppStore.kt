@@ -1154,6 +1154,15 @@ class AppStore(
      * the prerequisite failed and handing over the lines that would clear it; the
      * dialog draws them under the fields it still holds.
      */
+    /**
+     * The "Also check from" list to send, or null to leave the key out: null when
+     * it is empty and this daemon does not keep the field (appd < 3.9), where `[]`
+     * bumped the row's version for nothing. A non-empty list is always sent, so a
+     * daemon that drops it is caught doing so (2026-10-02).
+     */
+    private fun sentAddresses(form: AppForm): List<String>? =
+        AppRules.splitAddresses(form.alsoCheck).takeIf { it.isNotEmpty() || AppRules.supportsRowAddresses(_apps.value) }
+
     suspend fun addApp(form: AppForm) {
         runCatching {
             client.createApp(
@@ -1162,11 +1171,14 @@ class AppStore(
                 kind = form.kind?.trim()?.ifBlank { null },
                 notes = form.notes.trim().ifBlank { null },
                 unit = form.unit.trim().ifBlank { null },
-                addresses = AppRules.splitAddresses(form.alsoCheck),
+                addresses = sentAddresses(form),
             )
         }
             .onSuccess { answer ->
                 _appAdd.value = answer
+                answer.app?.let { row ->
+                    if (AppRules.addressesDropped(sentAddresses(form).orEmpty(), row)) faults.fail(Faults.ACTION, AppRules.ADDRESSES_DROPPED)
+                }
                 if (answer.ok) refreshApps()
             }
             .onFailure { note(Faults.ACTION, it) }
@@ -1190,10 +1202,13 @@ class AppStore(
                 kind = form.kind?.trim()?.ifBlank { null },
                 notes = form.notes.trim(),
                 unit = form.unit.trim(),
-                addresses = AppRules.splitAddresses(form.alsoCheck),
+                addresses = sentAddresses(form),
             )
         }
             .onSuccess { saved ->
+                if (!saved.conflict && AppRules.addressesDropped(sentAddresses(form).orEmpty(), saved.app)) {
+                    faults.fail(Faults.ACTION, AppRules.ADDRESSES_DROPPED)
+                }
                 _apps.value = _apps.value.let { l ->
                     l.copy(apps = l.apps.map { if (it.id == saved.app.id) saved.app else it })
                 }
@@ -1321,15 +1336,41 @@ class AppStore(
      * route "fresh" seconds after its last success.
      */
     /**
-     * Tell the daemon which routes this desk has pinned — once per launch, the
-     * first time a route answers. They become addresses every app is REQUIRED to
-     * be at (appd 3.9). An older daemon 404s; that is the end of it until next launch.
+     * Tell the daemon which routes this desk USES — when a route answers, and again
+     * whenever that set changes. They become addresses every app is REQUIRED to be
+     * at (appd 3.9). An older daemon 404s; that is the end of it until next launch.
+     *
+     * ⚠ WHENEVER IT CHANGES, NOT ONCE (2026-10-02). A report replaces this desk's
+     * earlier one on appd 3.9.1, so a route deleted from the book has to reach the
+     * daemon or it stays required of every app. Only the routes this desk uses go
+     * up ([AppRules.routeHosts]); a host the daemon would refuse is held back and
+     * said on the Apps page ([appsRouteNotice]) instead of vanishing.
      */
-    private var routesReported = false
+    private val routesLock = Any()
+    private var routesReportedAs: List<String>? = null
+    private var routesUnsupported = false
+    private var routesReporting = false
+    private val _appsRouteNotice = MutableStateFlow<String?>(null)
+    val appsRouteNotice: StateFlow<String?> = _appsRouteNotice.asStateFlow()
     private fun reportRoutesOnce() {
-        if (routesReported) return
-        routesReported = true
-        scope.launch { runCatching { client.reportRoutes(AppRules.routeHosts(_routeBook.value)) } }
+        val report = AppRules.routeReport(_routeBook.value, _routeHealth.value)
+        synchronized(routesLock) {
+            if (routesUnsupported || routesReporting || report.hosts == routesReportedAs) return
+            routesReporting = true
+        }
+        scope.launch {
+            try {
+                runCatching { client.reportRoutes(report.hosts) }
+                    .onSuccess { answer ->
+                        synchronized(routesLock) {
+                            if (!answer.supported) routesUnsupported = true else routesReportedAs = report.hosts
+                        }
+                        _appsRouteNotice.value = AppRules.routeNotice(report.refused + answer.refused)
+                    }
+            } finally {
+                synchronized(routesLock) { routesReporting = false }
+            }
+        }
     }
 
     private fun noteRouteReached(fromUrl: String? = null, status: Int = 200) {

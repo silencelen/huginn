@@ -1,5 +1,24 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+- **Apps: a route you remove stops being required.** The desktop now reports the routes it uses
+  whenever that list changes, not once per launch, and appd 3.9.1 treats each report as the
+  desk's whole list, so deleting a dead route clears it on the daemon. Only routes you added,
+  the one in use, and ones that have actually worked are reported; the old Tailscale address an
+  upgrade added to the book, which no longer exists, no longer makes every app add fail.
+- **Apps: a route the host does not check is named.** A route like `huginn.jnet.ad`, which the
+  Apps check does not use (it checks only loopback, private LAN, tailnet and mesh addresses and
+  names with no dot), is held back and said in a line at the bottom of the Apps page instead of
+  vanishing silently.
+- **Apps: "Also check from" splits like the host does.** A no-break space or other pasted
+  whitespace separates two addresses, and the same address in two spellings counts once, so the
+  8-address limit agrees with the host. Against an older host that does not keep the field, the
+  app now says the addresses were not saved instead of pretending they were.
+- **Apps: an advisory miss is not a failing row.** An address a device merely arrived on that
+  does not answer no longer puts a "Why" beside "reachable from your devices"; the row offers
+  "Details" with the host's note.
+
 ## 1.9.0
 
 Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
