@@ -29,6 +29,27 @@
   starting point and throwing it away. It now takes the server's copy on arrival, and keeps asking
   for it until it has arrived. Shared with the desktop, where it happened on every first visit.
 
+- **A Round two days away no longer says "tomorrow".** On a Friday morning the Sunday Rounds read
+  "tomorrow", while a run that really was tomorrow read "in 22h". The countdown measures hours,
+  not calendar days, so it no longer uses a calendar word: a run 24 to 48 hours out reads "in 1 day".
+- **The Rounds verdict stays readable at large text sizes.** At font scale 1.3 and 2.0, "Needs you
+  · 4 days ago · 7 items" was cut down to "Needs…" beside Pause, Run now and Edit. When the line
+  and the buttons do not fit side by side, the verdict now gets its own line above them.
+- **A Sessions card keeps its age at large text sizes.** At font scale 2.0 the "now" beside a
+  session disappeared or became an 8 pixel sliver, and "ctx 48%" broke over three lines. The
+  session name now shortens with an ellipsis instead, and the age and context stay on one line.
+- **The Sessions tab no longer redraws constantly while a session works.** The breathing dot was
+  a smooth animation that redrew the whole tab about 100 times a second for as long as anything
+  was working. It now breathes in small steps, a few redraws a second, which is easier on the
+  battery and looks the same at a glance.
+- **Odd session names can no longer reach the wrong request.** Names went into request addresses
+  as typed, so a name containing "?" could turn "release the pane size" into "end the session".
+  Every name and id is now encoded as one piece of the address, and a session link from another
+  app with a name huginn could never have is ignored.
+- **Retrying an Ask after a timeout no longer asks twice.** When the Ask widget gave up after 25
+  seconds, the chat it had just started was neither removed nor reused, so pressing Send again
+  started a second chat and ran the same question twice. The retry now goes into the first chat.
+
 ## 3.9.0 — 2026-10-01
 
 Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.

@@ -45,6 +45,20 @@
   part of that width, so at the default list width two selected chats clipped the third
   button to "+ L". The header now measures what fits beside the label.
 
+- **A Round two days away no longer says "tomorrow".** The countdown measures hours, not calendar
+  days, so a Sunday Round seen on a Friday morning read "tomorrow". A run 24 to 48 hours out now
+  reads "in 1 day". Shared with the phone.
+- **The Rounds verdict gets its own line when it would not fit.** When the verdict and the Pause,
+  Run now and Edit buttons do not fit side by side, the verdict moves above them instead of being
+  cut short.
+- **Working dots no longer redraw every frame.** The breathing dot beside working sessions and
+  agents was a smooth animation that redrew at the display's full rate. It now breathes in small
+  steps, a few redraws a second.
+- **Odd session names can no longer reach the wrong request.** The shared client put names into
+  request addresses as typed, so a name containing "?" could turn one request into another (for
+  example "release the pane size" into "end the session"). Every name and id is now encoded as one
+  piece of the address.
+
 ## 1.9.0
 
 Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
