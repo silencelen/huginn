@@ -2146,16 +2146,40 @@ class HuginnClient(
     }
 
     /**
-     * Tell the daemon which routes this device has pinned (appd 3.9). Every host
-     * becomes an address every app is REQUIRED to answer on; the daemon keeps them
-     * a month and says who reported each. Once per launch is enough. An older
-     * daemon answers 404, which the caller swallows: there is nothing to report to.
+     * Tell the daemon which routes this device uses (appd 3.9). Every host the
+     * daemon's address rule accepts becomes an address every app is REQUIRED to
+     * answer on; the daemon keeps them a month and says who reported each.
+     *
+     * ⚠ THE REPORT IS THIS DEVICE'S WHOLE SET (appd 3.9.1, 2026-10-02): what it
+     * named before and does not name now is withdrawn, so a caller sends the full
+     * list every time it changes, never a delta. Pass [AppRules.routeReport]'s
+     * hosts, which already holds back what the daemon would refuse.
+     *
+     * The ANSWER is returned, not thrown away: a 400 names the hosts the daemon
+     * refused (`refused`), and a 404 is an older daemon with nothing to report to
+     * (`supported = false`) — both are answers a caller has something to say about.
      */
-    suspend fun reportRoutes(hosts: List<String>) {
-        call("/v1/apps/routes", HttpMethod.Put, body = buildJsonObject {
-            put("addrs", JsonArray(hosts.map { JsonPrimitive(it) }))
-        })
+    suspend fun reportRoutes(hosts: List<String>): RouteReportAnswer {
+        val body = buildJsonObject { put("addrs", JsonArray(hosts.map { JsonPrimitive(it) })) }
+        val resp = http.request { build("/v1/apps/routes", HttpMethod.Put, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        return when {
+            resp.status.value == 404 -> RouteReportAnswer(supported = false)
+            resp.status.value == 400 -> {
+                val r = runCatching { decode<RouteRefusal>(text) }.getOrNull()
+                if (r == null || r.refused.isEmpty()) throw errorFrom(400, text)
+                RouteReportAnswer(supported = true, refused = r.refused.map { it.addr })
+            }
+            !resp.status.isSuccess() -> throw errorFrom(resp.status.value, text)
+            else -> RouteReportAnswer(supported = true)
+        }
     }
+
+    @Serializable
+    private data class RouteRefusal(val error: String = "", val refused: List<RefusedRoute> = emptyList())
+
+    @Serializable
+    private data class RefusedRoute(val addr: String = "", val why: String = "")
 
     /** Remove an app from the registry. A second delete is a 404, not a second success. */
     suspend fun deleteApp(id: String) {
