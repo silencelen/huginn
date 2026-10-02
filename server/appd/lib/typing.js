@@ -58,15 +58,21 @@ const QUEUE_MAX_WAIT_MS = 10 * 60 * 1000;
  *   t+2.1 s    the whole TUI is painted in one write — banner + composer box
  *   t+3.2 s    the placeholder clears and the status line names the session
  *
- * 20 s is that 2-3 s with a very wide margin for a loaded host, an MCP-heavy
+ * 60 s is that 2-3 s with a very wide margin for a loaded host, an MCP-heavy
  * cwd or a cold node. It is a CEILING, not a delay: the gate opens the moment
  * the composer appears, which is the normal case a couple of seconds in. When
  * it does expire the send goes out anyway — a person's message is delivered or
  * it is an error, never quietly binned, and a `claude` that never drew a
  * composer has fallen through to the shell, which is the same pane appd would
- * have typed into before any of this existed.
+ * have typed into before any of this existed (and is refused as one).
+ *
+ * ⚠ IT WAS 20 s, AND 20 s LOST MESSAGES. `typing: mcserver: no composer 22s
+ * after launch` (2026-09-17) and `typing: rounds: no composer 21s after launch`
+ * (2026-09-27): twelve sessions and a gradle build on the box, the hold ended,
+ * the first message went into a pane that painted a few seconds later, and it
+ * sat in the box unsent. A minute is still a ceiling nobody normally reaches.
  */
-const STARTUP_GRACE_MS = 20 * 1000;
+const STARTUP_GRACE_MS = 60 * 1000;
 
 /**
  * Does this text fit in ONE `send-keys -l` command line for this target?
@@ -569,18 +575,57 @@ function squashPane(s) { return stripAnsi(String(s || '')).replace(/\s+/g, ''); 
 /**
  * What a COLLAPSED paste looks like in the composer — and it is most of them.
  *
- * Anything with a newline in it renders as `[Pasted text #1 +40 lines]` and the
- * text itself is never on screen at all (measured: a 40-line paste shows the
- * marker 60 ms after paste-buffer and nothing else, forever). A rule that looked
- * only for the text would time out on every multi-line message there is, which
- * is most of what a person sends from a phone. Matched against the squashed
+ * A long multi-line paste renders as `[Pasted text #1 +29 lines]` and the text
+ * itself is never on screen at all (measured: a 40-line paste shows the marker
+ * 60 ms after paste-buffer and nothing else, forever). A rule that looked only
+ * for the text would time out on every multi-line message there is, which is
+ * most of what a person sends from a phone. Matched against the squashed
  * spelling, hence no spaces; `#N` is the paste index and is optional because it
  * is not in every build.
+ *
+ * ⚠ AND THE SUFFIX IS OPTIONAL TOO (2026-10-01). Measured on 2.1.280: a ONE-LINE
+ * paste of ~850 characters or more — a brief typed as a single paragraph on the
+ * phone, which is how the owner writes them — collapses to `[Pasted text #1]`
+ * with no line count at all, while a short three-line paste is not collapsed at
+ * all. A pattern that demanded `+N lines` called every long paragraph "never
+ * appeared", the recovery found the box non-empty and chose 'leave', and the
+ * message sat there unsent (`workxhuginn`, 2026-09-28: `❯ [Pasted text #1]` in
+ * the journal line itself). `\w+` rather than `lines?` so a future `+N chars`
+ * reads the same way.
  */
-const PASTED_MARKER_RE = /\[Pastedtext(?:#\d+)?\+\d+lines?\]/i;
+const PASTED_MARKER_RE = /\[Pastedtext(?:#\d+)?(?:\+\d+\w+)?\]/i;
 
 /** The needle: enough of the message to be unmistakable, short enough to fit a row. */
 function pasteProbe(text) { return squashPane(text).slice(0, 32); }
+
+/**
+ * BOTH ends of the message, because the composer may be showing either.
+ *
+ * ⚠ THE BOX SCROLLS (2026-10-01). On the 23-25 row panes the live sessions
+ * actually have, Claude Code's input box caps at about seven rows and then
+ * scrolls to keep the cursor — the END of the paste — in view, so the caret row
+ * shows the middle of a 700-character brief and its first 32 characters are
+ * nowhere on screen. The head probe alone read that as "never appeared"; the
+ * recovery saw a non-empty box and chose 'leave'; no Enter was pressed. Three
+ * of the five journal lines in five days (`jnetad`, `tailscale`,
+ * `btc15minxledger`) show the tail of the owner's own message in the box.
+ *
+ * The tail is as unmistakable as the head for the same reason, and a message
+ * short enough for the two to overlap yields one probe, not two.
+ */
+function pasteProbes(text) {
+  const squashed = squashPane(text);
+  const head = squashed.slice(0, 32);
+  if (!head) return [];
+  const tail = squashed.slice(-32);
+  return tail === head ? [head] : [head, tail];
+}
+
+/** Is any spelling of this message — head, tail, or the collapsed marker — in the region? */
+function probeSeen(region, text) {
+  const probes = pasteProbes(text);
+  return probes.some((p) => region.includes(p)) || PASTED_MARKER_RE.test(region);
+}
 
 /**
  * Where a settle check looks: the composer if there is one, else the bottom of
@@ -602,10 +647,8 @@ function settleRegion(lines) {
  * Has the paste visibly LANDED — i.e. is there now an application holding it?
  */
 function pasteLanded(lines, text) {
-  const probe = pasteProbe(text);
-  if (!probe) return true;                       // nothing was sent; nothing to wait for
-  const region = settleRegion(lines);
-  return region.includes(probe) || PASTED_MARKER_RE.test(region);
+  if (!pasteProbe(text)) return true;            // nothing was sent; nothing to wait for
+  return probeSeen(settleRegion(lines), text);
 }
 
 /**
@@ -619,10 +662,8 @@ function pasteLanded(lines, text) {
  */
 function pasteIndistinguishable(beforeLines, text) {
   if (beforeLines == null) return false;
-  const probe = pasteProbe(text);
-  if (!probe) return true;
-  const region = settleRegion(beforeLines);
-  return region.includes(probe) || PASTED_MARKER_RE.test(region);
+  if (!pasteProbe(text)) return true;
+  return probeSeen(settleRegion(beforeLines), text);
 }
 
 /**
@@ -636,10 +677,8 @@ function pasteIndistinguishable(beforeLines, text) {
 function composerCleared(lines, text) {
   const c = composerText(lines);
   if (c === null) return null;
-  const probe = pasteProbe(text);
-  if (!probe) return true;
-  const squashed = squashPane(c);
-  return !(squashed.includes(probe) || PASTED_MARKER_RE.test(squashed));
+  if (!pasteProbe(text)) return true;
+  return !probeSeen(squashPane(c), text);
 }
 
 /**
@@ -766,8 +805,7 @@ function composerHoldsDraft(composerHolds, text, ours = null) {
   const squashed = squashPane(composerHolds);
   if (!squashed) return false;
   if (COMPOSER_PLACEHOLDER_RE.test(squashed)) return false;
-  const probe = pasteProbe(text);
-  if (probe && (squashed.includes(probe) || PASTED_MARKER_RE.test(squashed))) return false;
+  if (pasteProbe(text) && probeSeen(squashed, text)) return false;
   // ⚠ AND OUR OWN LEFTOVERS ARE NOT A DRAFT. A pane can strand a piece of the
   // LAST thing appd pasted into it: the recovery's 'leave' branch deliberately
   // presses no Enter, and a frame whose final line carries no newline sits in
@@ -962,6 +1000,13 @@ function pasteLeftAloneLogLine(name, waitedMs, lines) {
  */
 function startingUp({ launching = false, composer = false, ageMs = null,
   graceMs = STARTUP_GRACE_MS } = {}) {
+  // ⚠ NOT `|| shell`. The MARK outranks the shell heuristic on purpose: while
+  // `claude` boots, plain console text scrolls past and a line of it can end in
+  // a prompt character, which is all `shellPrompt` looks for — the unmarked
+  // rule has nothing better, this one does. Tried 2026-10-01 and caught by
+  // `routes-session-start` ("the MARK holds it even though the pane looks like
+  // a shell") and the projects suite's `shellish` role; a dead launch is held
+  // for the whole grace and then refused as a shell, which is the right order.
   if (!launching || composer) return false;
   // ⚠ `ageMs == null`, NOT `Number.isFinite(Number(ageMs))`. `Number(null)` is 0
   // and 0 is a perfectly good age, so the coercing spelling reads "I have no
@@ -1321,7 +1366,7 @@ module.exports = {
   SESSION_TEXT_MAX, SENDKEYS_BUDGET, CHUNK_SIZE, TYPING_POLL_MS,
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
-  composerText, pasteProbe, pasteLanded, pasteIndistinguishable, composerCleared,
+  composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
   composerEmpty, recoveryDecision, stripGhost,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
