@@ -23,6 +23,13 @@ Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
 - **Only the Status page hangs from the left, and it gets more room.** On a wide screen Rounds,
   Devices, Apps and Settings had picked up Status's left-snap; they are centred again. Status stays left and
   stops at 1200 dp instead of 840. Settings is shared with the desktop.
+- **A session's Overview is ready before you open it.** The Overview tab used to fetch only while
+  it was on screen, and the phone threw away what it had on every visit and asked the host for the
+  whole map again — an empty pane, a full walk of the transcript, and a list rebuilt from the top.
+  Now the map loads when the session opens, stays current every 30 s behind the other tabs (a
+  two-number answer when nothing changed), refreshes the moment you arrive on the tab and every
+  5 s while you are there, and keeps its scroll position. Nothing polls while the app is in the
+  background. Shared with the desktop.
 
 ## 3.8.0 — 2026-09-20
 
