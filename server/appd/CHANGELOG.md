@@ -9,6 +9,31 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## Unreleased
+
+The owner's second report of a first message that "sits in the Screen tab's box unsent"
+(the first was 3.0.7 / 3.1.x). Measured against claude 2.1.280 on the pane sizes the live
+sessions actually have, with the daemon's own paste path and no Enter: it is a function of
+message LENGTH, which is why it did not always happen.
+
+- **A long one-paragraph paste is seen to land.** Two shapes the settle check could not read.
+  A brief of ~850 characters or more collapses to `❯ [Pasted text #1]` — no `+N lines` on a
+  single-line paste — and the marker pattern demanded the suffix. A shorter brief that wraps
+  past the box's ~7 rows scrolls the box, so the caret row shows the middle of the text and the
+  first 32 characters the probe looked for are off screen. Both read as "pasted text never
+  appeared"; the recovery then found a non-empty box, chose 'leave' and pressed no Enter.
+  Four of the five such journal lines in five days (`jnetad`, `workxhuginn`, `tailscale`,
+  `btc15minxledger`) are these. The suffix is optional now, and the probe is both ends of the
+  message — the box may be showing either. `lib/typing.js` `pasteProbes` / `probeSeen`;
+  the four readers (`pasteLanded`, `pasteIndistinguishable`, `composerCleared`,
+  `composerHoldsDraft`) share it. Fixtures are the real captures.
+- **The startup hold is a minute.** `no composer 21s after launch` (`rounds`, 2026-09-27)
+  joined the `22s` line from September: on a loaded box the 20 s grace expired, the first
+  message went into a pane that painted a few seconds later, and it sat there unsent. The
+  ceiling is 60 s — still a ceiling; the hold ends the instant the composer appears, and a
+  launch that died to the shell is refused as one when it expires. `HUGINN_APPD_STARTUP_GRACE_MS`
+  still overrides.
+
 ## 3.8.0 — 2026-09-27
 
 Both Sunday Rounds came back this morning as `run failed: cancelled`. Neither had crashed:
