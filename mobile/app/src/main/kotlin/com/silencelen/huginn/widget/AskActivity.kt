@@ -46,6 +46,7 @@ import com.silencelen.huginn.data.lockEnabledOrLocked
 import com.silencelen.huginn.notify.AppLock
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.theme.HuginnTheme
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -299,6 +300,9 @@ private fun AskSheet(
  * opposite case: the host has the chat and said no to the message, so the chat
  * is kept and the retry re-sends into it.
  *
+ * A send cut off by the sheet's own timeout (a cancellation) is not a transport
+ * failure either: it may well have landed, so the chat is kept as for a refusal.
+ *
  * Residual, and it needs a daemon-side idempotency key to close properly: a
  * send that LANDED and whose answer was lost still looks like a failure here,
  * and the retry then queues a second turn into the same chat rather than
@@ -320,7 +324,14 @@ internal class AskAttempt {
         try {
             queue(id)
         } catch (e: Throwable) {
-            if (fresh && e !is HuginnClient.HuginnException) {
+            // ⚠ NOT ON A TIMEOUT. 2026-10-02: the sheet's 25 s withTimeout fired
+            // mid-send, the TimeoutCancellationException took this branch, the
+            // suspending discard threw at once inside the cancelled scope (and
+            // runCatching hid it), and the chat was forgotten anyway: neither
+            // deleted nor reused, so the retry minted a second chat and asked the
+            // same question twice. A cut-off send is the one that may have
+            // LANDED, so the chat is kept and the retry re-sends into it.
+            if (fresh && e !is HuginnClient.HuginnException && e !is CancellationException) {
                 runCatching { discard(id) }
                 chatId = null
             }
