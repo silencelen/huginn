@@ -94,6 +94,14 @@ Fixes to the Apps address model from the 2026-10-02 breaker round.
   refuses an `acknowledged` that is not true or false; the string "false" used to mark the
   report read.
 
+- **A route report with one bad host still applies the good ones.** An all-or-nothing refusal was
+  tried first in this round and caught in review: 3.9.0 phones and desktops send every pinned host
+  unfiltered and never read the reply, so one name like `huginn.jnet.ad` would have cost such a
+  device every route it has. The valid hosts are applied and the refused ones are named in the 200.
+- **The four built-in apps are judged as this host's apps wherever their address points.** The live
+  rows still carry the retired Tailscale address `100.97.198.90`; the new "app on another host"
+  rule would otherwise have checked them as some other machine's pages once that address aged out.
+
 ## 3.9.0 — 2026-10-01
 
 The owner's second report of a first message that "sits in the Screen tab's box unsent"

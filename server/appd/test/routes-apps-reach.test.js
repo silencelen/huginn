@@ -210,13 +210,15 @@ test('the daemon checks against the addresses clients arrive on, plus its own', 
 });
 
 test('a REPORTED route is required of every app, says who reported it, and rides the list', async () => {
-  // ⚠ 2026-10-02: a host the rule refuses is a 400 NAMING it, and the report
-  // changes nothing — 3.9.0 answered 200 with the host silently missing.
+  // ⚠ 2026-10-02: a host the rule refuses is NAMED in the 200, and the valid
+  // rest still applies — 3.9.0 answered 200 with the host silently missing, and
+  // an all-or-nothing 400 would have cost an unfiltering 3.9.0 client every route.
   const refused = await api('/v1/apps/routes', {
     method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8', 'huginn.jnet.ad'] }),
   });
-  assert.equal(400, refused.status, JSON.stringify(refused.body));
+  assert.equal(200, refused.status, JSON.stringify(refused.body));
   assert.deepEqual(['8.8.8.8', 'huginn.jnet.ad'], refused.body.refused.map((r) => r.addr));
+  assert.ok(refused.body.requiredAddresses.includes('127.0.0.2'), 'the valid host was applied');
   const again = await api('/v1/apps/routes', {
     method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2'] }),
   });

@@ -203,19 +203,20 @@ test('one client cannot push out another client\'s routes; the cap is per client
   }
 });
 
-test('a route the host rule refuses is refused LOUDLY, naming it; nothing is half-applied', () => {
+test('a route the host rule refuses is NAMED, and the valid rest of the report still applies', () => {
   // 2026-10-02: 'huginn.jnet.ad' vanished from a 200 with no word to anybody.
+  // And the rest must still apply: a 3.9.0 client sends every pin unfiltered and
+  // never reads the body, so an all-or-nothing refusal cost it every route.
   const dir = tmpDir('refuse');
   try {
     const store = mkStore(dir);
     store.list();
     store.noteReportedRoutes(['127.0.0.2'], 'fold');
     const r = store.noteReportedRoutes(['127.0.0.3', 'huginn.jnet.ad', '8.8.8.8'], 'fold');
-    assert.equal(false, r.ok);
-    assert.equal(400, r.status);
+    assert.equal(true, r.ok);
     assert.deepEqual(['huginn.jnet.ad', '8.8.8.8'], r.refused.map((x) => x.addr));
     assert.ok(r.refused.every((x) => typeof x.why === 'string' && x.why));
-    assert.deepEqual(['127.0.0.1', '127.0.0.2'], store.requiredAddresses(), 'the previous report stands');
+    assert.deepEqual(['127.0.0.1', '127.0.0.3'], store.requiredAddresses(), 'the valid host replaced the old set');
     assert.equal(true, store.noteReportedRoutes(['huginn.tail1234.ts.net'], 'fold').ok, 'a ts.net name is a route');
     // The reporter id is cleaned of anything that is not printable ASCII.
     store.noteReportedRoutes(['127.0.0.4'], 'a\tb<script>');
@@ -334,4 +335,23 @@ test('a verdict with nothing but loopback required says so instead of vouching f
   assert.equal(true, r.ok);
   assert.match(r.note, /only loopback is required/);
   assert.match(r.note, /also not answering at 127\.0\.0\.2/);
+});
+
+test('a seed row is this host\'s app wherever its URL points; a lookalike on another port is not', () => {
+  // 2026-10-02: the live seeds carry the retired tailnet IP 100.97.198.90.
+  assert.equal(true, appsLib.isSeedRow({ id: 'armap', url: 'http://100.97.198.90:8088/' }));
+  assert.equal(false, appsLib.isSeedRow({ id: 'armap', url: 'http://192.168.7.50:9999/' }));
+  assert.equal(false, appsLib.isSeedRow({ id: 'other', url: 'http://100.97.198.90:8088/' }));
+  const dir = tmpDir('seedlocal');
+  try {
+    const store = mkStore(dir);
+    store.list();
+    const plan = store.addressSet({ id: 'jtyper', url: 'http://100.97.198.90:8091/', addresses: [] });
+    assert.equal(undefined, plan.remote, 'judged as this host, by loopback and reported routes');
+    assert.ok(plan.required.includes('127.0.0.1'));
+    const far = store.addressSet({ id: 'x', url: 'http://100.97.198.90:8091/', addresses: [] });
+    assert.equal('100.97.198.90', far.remote, 'the same URL on a non-seed row is somebody else\'s');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
