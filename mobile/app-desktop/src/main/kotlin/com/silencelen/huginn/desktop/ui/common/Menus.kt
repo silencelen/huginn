@@ -68,6 +68,7 @@ import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.ui.theme.verbInk
+import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * Right-click menus.
@@ -286,13 +287,14 @@ fun MenuButton(
     items: () -> List<ContextMenuItem>,
     description: String,
     modifier: Modifier = Modifier,
+    icon: ImageVector = Icons.Filled.MoreVert,
 ) {
     var open by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
     Box(modifier) {
         IconButton(onClick = { open = true }, modifier = Modifier.size(MENU_BUTTON_DP)) {
             Icon(
-                Icons.Filled.MoreVert,
+                icon,
                 contentDescription = description,
                 modifier = Modifier.size(MENU_GLYPH_DP),
                 tint = scheme.onSurfaceVariant,
