@@ -1275,7 +1275,7 @@ test('reported routes: required of every app, remembered for a month, written do
     assert.equal('', appsLib.normalizeAddr('8.8.8.8'), 'precondition');
     // ⚠ 2026-10-02: and it is REFUSED, by name — no longer a 200 that dropped it.
     const refused = store.noteReportedRoutes(['8.8.8.8', ''], 'x');
-    assert.equal(400, refused.status, 'an address the URL rule refuses is not a route');
+    assert.equal(true, refused.ok, 'refused hosts are named, the report itself is not failed (3.9.0 clients never read the body)');
     assert.deepEqual(['8.8.8.8', ''], refused.refused.map((e) => e.addr));
     assert.deepEqual(['127.0.0.1'], store.requiredAddresses());
   } finally {
