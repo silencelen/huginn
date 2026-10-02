@@ -26,6 +26,10 @@ Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
   routes this desk has pinned — reported to huginn once per launch — and an app's own new *Also
   check from* field (appd 3.9). Addresses devices merely arrived on are probed, shown as *not
   required*, and never make a row red or refuse an add.
+- **Only the Status page hangs from the left, and it gets more room.** The left-snap made for
+  Status on wide monitors had spread through the shared reading pane to Devices, Rounds and Apps,
+  and been copied onto Settings and both transcripts. Those are centred again at their usual
+  measure; Status stays left and now stops at 1200 dp instead of 840.
 
 ## 1.8.0
 
