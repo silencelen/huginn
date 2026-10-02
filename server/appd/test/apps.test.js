@@ -139,7 +139,7 @@ test('control characters, spaces and backslashes never reach a stored address', 
 test('a record has every field a client reads, with a definite value', () => {
   const rec = appsLib.buildRecord({ id: 'armap', name: 'Architecture map', url: 'http://huginn:8088/' }, 1789460000);
   assert.deepEqual(
-    ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addedAt', 'version'],
+    ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addresses', 'addedAt', 'version'],
     Object.keys(rec),
     'the record contract — a row that decoded is a row that renders',
   );
@@ -1055,7 +1055,7 @@ test('every known address is asked, and one that does not answer makes the app u
 
     const pass = await within(9000, appsLib.reachabilityProbe(rec, ['127.0.0.1']), 'the passing probe');
     assert.equal(true, pass.ok);
-    assert.deepEqual([{ addr: '127.0.0.1', ok: true }], pass.addresses);
+    assert.deepEqual([{ addr: '127.0.0.1', ok: true, required: true }], pass.addresses, 'a plain list is every address required');
     assert.deepEqual([], pass.fix, 'a row that passes carries no remedy');
 
     // 192.0.2.1 is TEST-NET-1 and is refused by the URL rule, so the second
@@ -1181,9 +1181,11 @@ test('this host’s own address is in the set even before anybody connects', () 
   }
 });
 
-test('adding an app is REFUSED when it does not answer everywhere, and nothing is stored', async () => {
-  // ⚠ DECISION 54, THE WHOLE POINT. A row that would have to be marked "needs
-  // retrofit" the moment it landed is a row nobody should be able to create.
+test('adding an app is REFUSED when it does not answer on a REQUIRED address, and nothing is stored', async () => {
+  // ⚠ THE RULE CHANGED 2026-10-01 (owner decision). An address a client merely
+  // ARRIVED on is advisory: it is probed and said, and it refuses nothing. What
+  // refuses an add is loopback, a route a client REPORTED (its pinned RouteBook),
+  // or an address the row lists for itself.
   const server = http.createServer((req, res) => { res.writeHead(200); res.end('ok'); });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-add422-'));
@@ -1193,6 +1195,20 @@ test('adding an app is REFUSED when it does not answer everywhere, and nothing i
     store.noteClientAddress('127.0.0.1');
     store.noteClientAddress('127.0.0.2');
 
+    // Arrivals only: the add goes through, and the row SAYS where it is not answering.
+    const advisory = await within(9000, store.add({
+      name: 'Half bound', url: `http://127.0.0.1:${server.address().port}/`, unit: 'half.service',
+    }), 'the advisory add');
+    assert.equal(true, advisory.ok, 'an arrival-only miss is advisory, not a refusal');
+    assert.equal(true, advisory.reachable.ok);
+    assert.deepEqual([{ addr: '127.0.0.2', required: false }],
+      advisory.reachable.addresses.filter((a) => !a.ok).map((a) => ({ addr: a.addr, required: a.required })));
+    assert.match(advisory.reachable.note, /also not answering at 127\.0\.0\.2/);
+    assert.deepEqual([], advisory.reachable.fix, 'no remedy for an address nobody requires');
+    store.remove('half-bound');
+
+    // A REPORTED route is required: the same add is now a 422, with the remedy.
+    assert.deepEqual(['127.0.0.2'], store.noteReportedRoutes(['127.0.0.2'], 'phone-1'), 'fresh, and said so');
     const r = await within(9000, store.add({
       name: 'Half bound', url: `http://127.0.0.1:${server.address().port}/`, unit: 'half.service',
     }), 'the refused add');
@@ -1200,10 +1216,21 @@ test('adding an app is REFUSED when it does not answer everywhere, and nothing i
     assert.equal(422, r.status, '422: the shape was fine, the world is not');
     assert.equal(false, r.reachable.ok);
     assert.deepEqual(['127.0.0.2'], r.reachable.addresses.filter((a) => !a.ok).map((a) => a.addr));
+    assert.equal(true, r.reachable.addresses.find((a) => a.addr === '127.0.0.2').required);
     assert.ok(r.reachable.fix.some((l) => l.startsWith('systemctl edit half.service')), 'the remedy travels with the refusal');
     assert.equal(null, appsLib.findApp(store.list(), 'half-bound'), 'and NOTHING was stored');
 
-    // The same add, once the addresses it has to answer on are only the ones it does.
+    // A row's OWN extra address is required of that row alone.
+    const own = appsLib.createStore({
+      dir: fs.mkdtempSync(path.join(os.tmpdir(), 'apps-addown-')), icons: false, hostAddr: '', timeoutMs: 700,
+    });
+    own.stop();
+    const ownR = await within(9000, own.add({
+      name: 'Listed', url: `http://127.0.0.1:${server.address().port}/`, addresses: ['127.0.0.3'],
+    }), 'the own-address add');
+    assert.equal(422, ownR.status, `a listed address that does not answer refuses: ${JSON.stringify(ownR)}`);
+    assert.deepEqual(['127.0.0.3'], ownR.reachable.addresses.filter((a) => !a.ok).map((a) => a.addr));
+
     const ok = await within(9000, appsLib.createStore({
       dir: fs.mkdtempSync(path.join(os.tmpdir(), 'apps-add201-')), icons: false, hostAddr: '127.0.0.1', timeoutMs: 700,
     }).add({ name: 'Half bound', url: `http://127.0.0.1:${server.address().port}/` }), 'the allowed add');
@@ -1215,18 +1242,84 @@ test('adding an app is REFUSED when it does not answer everywhere, and nothing i
   }
 });
 
-test('a fresh daemon that has never been connected to allows the add, and says what it could not check', async () => {
+test('reported routes: required of every app, remembered for a month, written down, and capped', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-reported-'));
+  try {
+    let clock = 1_800_000_000_000;
+    const lines = [];
+    const store = appsLib.createStore({
+      dir, icons: false, hostAddr: '', nowMs: () => clock, log: (l) => lines.push(l),
+      fetch: async () => { throw new Error('no probing'); },
+    });
+    store.stop();
+    store.list();   // the seed writes, so the flush has a file to land in
+    assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'loopback is required of everything, always');
+
+    assert.deepEqual(['192.168.2.117'], store.noteReportedRoutes(['192.168.2.117', ' 192.168.2.117 '], 'fold'));
+    assert.deepEqual([], store.noteReportedRoutes(['192.168.2.117'], 'desk'), 'the second report of an address is not news');
+    assert.deepEqual(['127.0.0.1', '192.168.2.117'], store.requiredAddresses());
+    assert.deepEqual([{ addr: '192.168.2.117', lastSeenAt: Math.floor(clock / 1000), by: ['desk', 'fold'] }], store.reportedRoutes());
+    assert.ok(lines.some((l) => /fold reports a route to huginn via 192\.168\.2\.117/.test(l)), lines.join(' | '));
+
+    const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
+    assert.deepEqual(['192.168.2.117'], onDisk.reportedAddresses.map((e) => e.addr), 'a reported route survives a restart');
+
+    // The arrival set is the ADVISORY half of a row's plan; a row's own list is required.
+    store.noteClientAddress('100.97.198.90');
+    const plan = store.addressSet({ addresses: ['192.168.2.117', '10.42.0.1'] });
+    assert.deepEqual(['127.0.0.1', '192.168.2.117', '10.42.0.1'], plan.required);
+    assert.deepEqual(['100.97.198.90'], plan.advisory);
+
+    clock += (appsLib.REPORTED_ADDR_TTL_SEC + 1) * 1000;
+    assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'a month unreported is gone');
+    assert.equal('', appsLib.normalizeAddr('8.8.8.8'), 'precondition');
+    assert.deepEqual([], store.noteReportedRoutes(['8.8.8.8', ''], 'x'), 'an address the URL rule refuses is not a route');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a row\'s own addresses are cleaned, capped and refused when nonsense', () => {
+  assert.deepEqual(['127.0.0.1', '192.168.2.117'], appsLib.cleanAddrs(['127.0.0.1', ' 192.168.2.117', '127.0.0.1', '']));
+  assert.deepEqual(['192.168.2.117', 'fd7a::1'], appsLib.cleanAddrs('192.168.2.117, [fd7a::1]'), 'a typed string splits on commas and spaces');
+  assert.equal(null, appsLib.addrsProblem(undefined), 'absent is fine');
+  assert.equal(null, appsLib.addrsProblem([]));
+  assert.match(appsLib.addrsProblem(['8.8.8.8']), /not an address huginn can check from/);
+  assert.match(appsLib.addrsProblem({ a: 1 }), /must be a list/);
+  assert.match(appsLib.addrsProblem(Array.from({ length: appsLib.MAX_APP_ADDRS + 1 }, (_, i) => `10.0.0.${i + 1}`)), /limit/);
+  const bad = appsLib.add([], { name: 'X', url: 'http://huginn:8088/', addresses: ['8.8.8.8'] }, 100);
+  assert.equal(400, bad.status, 'typed nonsense is a 400 like any other field');
+  const rec = appsLib.add([], { name: 'X', url: 'http://huginn:8088/', addresses: '10.42.0.1' }, 100).app;
+  assert.deepEqual(['10.42.0.1'], rec.addresses);
+  const p = appsLib.patch([rec], rec.id, { version: 1, addresses: [] });
+  assert.equal(true, p.ok);
+  assert.deepEqual([], p.app.addresses, 'and they can be taken away again');
+  assert.deepEqual({ required: ['127.0.0.1'], advisory: ['10.0.0.9'] },
+    appsLib.splitAddressSet({ required: ['127.0.0.1'], advisory: ['127.0.0.1', '10.0.0.9'] }), 'required wins a tie');
+});
+
+test('a fresh daemon that has never been connected to still requires loopback, and nothing else', async () => {
+  // Until 3.9 a fresh daemon had NOTHING to check against and allowed every
+  // add with a null verdict. Loopback is required of everything now, so the
+  // check always has a subject — and only that one.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-addnull-'));
   try {
+    const dialled = [];
     const store = appsLib.createStore({
-      dir, icons: false, hostAddr: '', fetch: async () => { throw new Error('nothing should be fetched'); },
+      dir, icons: false, hostAddr: '', fetch: async (url) => { dialled.push(String(url)); return new Response('ok', { status: 200 }); },
     });
     store.stop();
     const r = await store.add({ name: 'Anything', url: 'http://127.0.0.1:9/' });
-    assert.equal(true, r.ok, 'a check with nothing to check against is not a refusal');
-    assert.equal(null, r.reachable.ok);
-    assert.match(r.reachable.note, /nothing to check this against/);
+    assert.equal(true, r.ok, JSON.stringify(r));
+    assert.equal(true, r.reachable.ok);
+    assert.deepEqual([{ addr: '127.0.0.1', ok: true, required: true }], r.reachable.addresses);
+    assert.equal('', r.reachable.note);
     assert.ok(appsLib.findApp(store.list(), 'anything'), 'and it is in the list');
+    // The pure probe with an EMPTY plan still answers null, which is the shape a
+    // caller with no set of its own gets.
+    const none = await appsLib.reachabilityProbe(r.app, [], { fetch: async () => { throw new Error('no'); } });
+    assert.equal(null, none.ok);
+    assert.match(none.note, /nothing to check this against/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1683,7 +1776,7 @@ test('an observation is never written to disk, because it stops being true', asy
     const raw = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
     for (const c of raw.consoles) {
       assert.deepEqual(
-        ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addedAt', 'version'],
+        ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addresses', 'addedAt', 'version'],
         Object.keys(c),
         `${c.id} is stored as a record and nothing else`,
       );

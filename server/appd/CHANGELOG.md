@@ -33,6 +33,17 @@ message LENGTH, which is why it did not always happen.
   ceiling is 60 s — still a ceiling; the hold ends the instant the composer appears, and a
   launch that died to the shell is refused as one when it expires. `HUGINN_APPD_STARTUP_GRACE_MS`
   still overrides.
+- **Apps: required addresses are loopback + reported routes + the row's own list; arrivals are
+  advisory** (owner decision 2026-10-01). `PUT /v1/apps/routes {addrs}` is how a client reports
+  the hosts of its pinned routes (kept 30 days, with who reported each, `reportedAddresses` in the
+  envelope); `GET /v1/apps` adds `requiredAddresses` and `reportedRoutes`; a row carries
+  `addresses` (its own extras, ≤8, `addresses` on POST/PATCH, 400 on nonsense). The probe plans
+  `{required, advisory}` per row: `reachable.ok` and the fix lines come from the required set
+  alone, every address on the wire says `required`, and an advisory miss is one sentence in
+  `note`. `clientAddresses` is unchanged on the wire (the arrival set) so an old client loses
+  nothing. The arrival set no longer refuses an add — the 422 is for loopback, a reported route
+  or a listed address that does not answer; a row that stops answering is marked, never deleted,
+  as before.
 
 ## 3.8.0 — 2026-09-27
 

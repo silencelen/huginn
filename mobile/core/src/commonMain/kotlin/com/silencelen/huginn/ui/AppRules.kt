@@ -5,6 +5,8 @@ import com.silencelen.huginn.data.AppAddress
 import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.RouteKind
+import com.silencelen.huginn.data.RouteBook
+import io.ktor.http.Url
 
 /**
  * Whether an app is answering, whether the device in your hand can reach it, and
@@ -220,8 +222,22 @@ object AppRules {
     fun addressWords(address: AppAddress): String {
         val why = if (address.ok) "answered"
         else address.error?.trim()?.takeIf { it.isNotEmpty() } ?: "no answer"
-        return "${address.addr} — $why"
+        // An ADVISORY address says so, because a reader of a red row needs to know
+        // which lines are the reason and which are merely news (appd 3.9).
+        val tag = if (address.required == false) " · not required" else ""
+        return "${address.addr} — $why$tag"
     }
+
+    /** The "Also check from" field, as a list: space or comma separated, trimmed, de-duplicated. */
+    fun splitAddresses(text: String): List<String> =
+        text.split(',', ' ', '\n', '\t').map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
+    /**
+     * The hosts a device's pinned routes point at — what [HuginnClient.reportRoutes]
+     * sends. Hosts only: the app's own port is what the daemon probes.
+     */
+    fun routeHosts(book: RouteBook): List<String> =
+        book.routes.mapNotNull { r -> runCatching { Url(r.url).host }.getOrNull()?.takeIf { it.isNotBlank() } }.distinct()
 
     /**
      * Every fix line, VERBATIM and in order.

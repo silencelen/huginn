@@ -110,6 +110,20 @@ fun AppFormFields(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(6.dp))
+        // The row's own required addresses (appd 3.9). Loopback and the routes
+        // your devices pinned are required of every app without being typed
+        // anywhere; this is for the address only THIS app has to be at.
+        OutlinedTextField(
+            value = form.alsoCheck,
+            onValueChange = { edit(form.copy(alsoCheck = it)) },
+            singleLine = true,
+            label = { Text("Also check from (optional)") },
+            supportingText = {
+                Text("Addresses this app must also answer at, besides loopback and your devices' routes. Space or comma separated.")
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(6.dp))
         OutlinedTextField(
             value = form.notes,
             onValueChange = { edit(form.copy(notes = it)) },

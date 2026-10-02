@@ -78,6 +78,11 @@ async function list() {
 function rowOf(body, id) { return (body.apps || []).find((a) => a.id === id) || null; }
 
 /** The address set as it is on disk, which is the thing that survives a restart. */
+function storedReported() {
+  const raw = JSON.parse(fs.readFileSync(appsLib.storePath(dataDir), 'utf8'));
+  return (raw.reportedAddresses || []).map((e) => e.addr).sort();
+}
+
 function storedAddrs() {
   const raw = JSON.parse(fs.readFileSync(path.join(dataDir, appsLib.STORE_NAME), 'utf8'));
   return (raw.clientAddresses || []).map((e) => e.addr).sort();
@@ -154,6 +159,14 @@ before(async () => {
     try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
     await wait(100);
   }
+  // ⚠ 3.9: an ARRIVAL is advisory now (owner decision 2026-10-01). What makes
+  // 127.0.0.2 required of every row here — the premise the tests below keep —
+  // is a client REPORTING it as a pinned route, which is what a phone does
+  // once per launch.
+  const reported = await api('/v1/apps/routes', {
+    method: 'PUT', headers: { 'x-huginn-client': 'suite-phone' }, body: JSON.stringify({ addrs: ['127.0.0.2'] }),
+  });
+  if (reported.status !== 200) throw new Error(`could not report the route: ${reported.status} ${JSON.stringify(reported.body)}`);
   // ⚠ IS THE DAEMON ON THIS PORT ACTUALLY OURS? The port formula gives few
   // slots, and one leaked by an earlier run — a test process killed before
   // after() could fire — sits on one and refuses OUR token. /v1/ping is
@@ -194,6 +207,20 @@ test('the daemon checks against the addresses clients arrive on, plus its own', 
     `who the daemon has seen on 127.0.0.2: ${JSON.stringify(body.clientRemotes)}`);
   assert.deepEqual(['127.0.0.1'], body.clientRemotes['127.0.0.1'], 'and this suite, on the address it dials');
   assert.ok(!('10.9.9.9' in body.clientRemotes), 'the expired arrival took 192.168.2.44 with it');
+});
+
+test('a REPORTED route is required of every app, says who reported it, and rides the list', async () => {
+  const again = await api('/v1/apps/routes', {
+    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8'] }),
+  });
+  assert.equal(200, again.status, JSON.stringify(again.body));
+  assert.deepEqual([], again.body.fresh, 'a second report of the same address is not news, and a public one is not a route');
+  assert.deepEqual(['127.0.0.1', '127.0.0.2'], again.body.requiredAddresses, 'loopback, always, plus what was reported');
+  const body = await list();
+  assert.deepEqual(['127.0.0.1', '127.0.0.2'], body.requiredAddresses);
+  assert.deepEqual([{ addr: '127.0.0.2', by: ['suite-desk', 'suite-phone'] }],
+    body.reportedRoutes.map((r) => ({ addr: r.addr, by: r.by })), JSON.stringify(body.reportedRoutes));
+  assert.ok(storedReported().includes('127.0.0.2'), `and it is on disk: ${JSON.stringify(storedReported())}`);
 });
 
 test('an address a client actually arrives on is written down and survives a restart', async () => {

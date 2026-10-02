@@ -64,6 +64,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.silencelen.huginn.ui.AppRules
 
 /** Which of the destinations the window is showing. */
 enum class View {
@@ -1161,6 +1162,7 @@ class AppStore(
                 kind = form.kind?.trim()?.ifBlank { null },
                 notes = form.notes.trim().ifBlank { null },
                 unit = form.unit.trim().ifBlank { null },
+                addresses = AppRules.splitAddresses(form.alsoCheck),
             )
         }
             .onSuccess { answer ->
@@ -1188,6 +1190,7 @@ class AppStore(
                 kind = form.kind?.trim()?.ifBlank { null },
                 notes = form.notes.trim(),
                 unit = form.unit.trim(),
+                addresses = AppRules.splitAddresses(form.alsoCheck),
             )
         }
             .onSuccess { saved ->
@@ -1317,8 +1320,21 @@ class AppStore(
      * the three-failures re-probe still sweeps rather than finding the dead
      * route "fresh" seconds after its last success.
      */
+    /**
+     * Tell the daemon which routes this desk has pinned — once per launch, the
+     * first time a route answers. They become addresses every app is REQUIRED to
+     * be at (appd 3.9). An older daemon 404s; that is the end of it until next launch.
+     */
+    private var routesReported = false
+    private fun reportRoutesOnce() {
+        if (routesReported) return
+        routesReported = true
+        scope.launch { runCatching { client.reportRoutes(AppRules.routeHosts(_routeBook.value)) } }
+    }
+
     private fun noteRouteReached(fromUrl: String? = null, status: Int = 200) {
         val active = _routeBook.value.active ?: return
+        reportRoutesOnce()
         val now = System.currentTimeMillis()
         // Called with no URL by the two status polls, which already know the call
         // succeeded on the active route; called with one from the HTTP layer,

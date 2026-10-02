@@ -2069,6 +2069,8 @@ class HuginnClient(
         kind: String? = null,
         notes: String? = null,
         unit: String? = null,
+        /** The row's own required addresses (appd 3.9). Null leaves the field out. */
+        addresses: List<String>? = null,
     ): AppCreate {
         val body = buildJsonObject {
             put("name", JsonPrimitive(name))
@@ -2076,6 +2078,7 @@ class HuginnClient(
             kind?.let { put("kind", JsonPrimitive(it)) }
             notes?.let { put("notes", JsonPrimitive(it)) }
             unit?.let { put("unit", JsonPrimitive(it)) }
+            addresses?.let { put("addresses", JsonArray(it.map { a -> JsonPrimitive(a) })) }
         }
         val resp = http.request { build("/v1/apps", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
@@ -2117,6 +2120,8 @@ class HuginnClient(
         kind: String? = null,
         notes: String? = null,
         unit: String? = null,
+        /** The row's own required addresses (appd 3.9). Null leaves them as they are. */
+        addresses: List<String>? = null,
     ): AppSave {
         val body = buildJsonObject {
             put("version", JsonPrimitive(version))
@@ -2125,6 +2130,7 @@ class HuginnClient(
             kind?.let { put("kind", JsonPrimitive(it)) }
             notes?.let { put("notes", JsonPrimitive(it)) }
             unit?.let { put("unit", JsonPrimitive(it)) }
+            addresses?.let { put("addresses", JsonArray(it.map { a -> JsonPrimitive(a) })) }
         }
         val resp = http.request { build("/v1/apps/$id", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
@@ -2137,6 +2143,18 @@ class HuginnClient(
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         return AppSave(decode(text), conflict = false, refusal = null)
+    }
+
+    /**
+     * Tell the daemon which routes this device has pinned (appd 3.9). Every host
+     * becomes an address every app is REQUIRED to answer on; the daemon keeps them
+     * a month and says who reported each. Once per launch is enough. An older
+     * daemon answers 404, which the caller swallows: there is nothing to report to.
+     */
+    suspend fun reportRoutes(hosts: List<String>) {
+        call("/v1/apps/routes", HttpMethod.Put, body = buildJsonObject {
+            put("addrs", JsonArray(hosts.map { JsonPrimitive(it) }))
+        })
     }
 
     /** Remove an app from the registry. A second delete is a 404, not a second success. */

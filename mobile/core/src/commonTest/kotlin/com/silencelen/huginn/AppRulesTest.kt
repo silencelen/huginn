@@ -291,6 +291,22 @@ class AppRulesTest {
             "100.97.198.90:8091 — answered",
             AppRules.addressWords(AppAddress("100.97.198.90:8091", ok = true)),
         )
+        assertEquals(
+            "100.97.198.90:8091 — timed out · not required",
+            AppRules.addressWords(AppAddress("100.97.198.90:8091", ok = false, error = "timed out", required = false)),
+            "an advisory miss says it is not the reason for anything",
+        )
+        assertEquals(
+            "127.0.0.1:8091 — answered",
+            AppRules.addressWords(AppAddress("127.0.0.1:8091", ok = true, required = true)),
+            "a required address needs no badge; required is the ordinary case",
+        )
+    }
+
+    @Test
+    fun `the Also-check field splits on spaces and commas and drops repeats`() {
+        assertEquals(listOf("10.42.0.1", "192.168.2.117"), AppRules.splitAddresses(" 10.42.0.1, 192.168.2.117  10.42.0.1 "))
+        assertEquals(emptyList(), AppRules.splitAddresses("  "))
     }
 
     /**

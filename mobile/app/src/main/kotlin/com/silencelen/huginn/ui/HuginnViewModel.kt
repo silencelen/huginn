@@ -83,6 +83,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.silencelen.huginn.ui.AppRules
 
 // `mergeTranscript` moved to :core in phase 3c — same package, so every call site
 // here is unchanged. The desktop client needs the identical row-identity rule, and
@@ -1382,6 +1383,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.ping() }
                 .onSuccess {
                     _connected.value = it.ok
+                    reportRoutesOnce()
                     // Both numbers, labelled: they version independently, and a bare
                     // "appd 2.33.0" reads as this app's version to anyone who has
                     // not internalised that phone and host are separate lines.
@@ -1834,6 +1836,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.status() }
                 .onSuccess {
                     _status.value = it; _statusError.value = null; _connected.value = true
+                    reportRoutesOnce()
                     routeFailures.ok()
                     // ⚠ ORDINARY TRAFFIC IS A WITNESS AND NOTHING ELSE WAS ONE.
                     // Only `RouteResolver.resolve()` ever wrote the health map, so
@@ -2711,6 +2714,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * open on that answer. Everything else — a bad address, a name already taken
      * — is a refusal of the request and says so once, in a toast.
      */
+    /**
+     * Tell the daemon which routes this phone has pinned — once per launch, after
+     * the first answer. They become addresses every app is REQUIRED to be at
+     * (appd 3.9). An older daemon 404s; that is the end of it until next launch.
+     */
+    private var routesReported = false
+    private fun reportRoutesOnce() {
+        if (routesReported) return
+        routesReported = true
+        viewModelScope.launch {
+            runCatching { client.reportRoutes(AppRules.routeHosts(_routeBook.value)) }
+        }
+    }
+
     fun addApp(form: AppForm) {
         viewModelScope.launch {
             awaitReady()
@@ -2721,6 +2738,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     kind = form.kind?.trim()?.ifBlank { null },
                     notes = form.notes.trim().ifBlank { null },
                     unit = form.unit.trim().ifBlank { null },
+                    addresses = AppRules.splitAddresses(form.alsoCheck),
                 )
             }
                 .onSuccess { answer ->
@@ -2749,6 +2767,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     kind = form.kind?.trim()?.ifBlank { null },
                     notes = form.notes.trim(),
                     unit = form.unit.trim(),
+                    addresses = AppRules.splitAddresses(form.alsoCheck),
                 )
             }
                 .onSuccess { saved ->
