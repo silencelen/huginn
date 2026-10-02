@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ModelChoice
+import androidx.compose.foundation.layout.height
 
 /**
  * Model / effort / permission-mode controls for a live session.
@@ -240,9 +241,13 @@ private fun PickerChip(
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { (value, text) ->
+                // Tighter than Material's 48 dp row, not tight (owner, 10-01: the
+                // model/effort/mode lists were "loose"). 40 dp still takes a thumb.
                 DropdownMenuItem(
                     text = { Text(text) },
                     onClick = { open = false; onPick(value) },
+                    modifier = Modifier.height(40.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
                 )
             }
         }

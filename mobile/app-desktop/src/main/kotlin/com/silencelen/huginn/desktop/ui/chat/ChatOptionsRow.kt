@@ -25,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.ModelLabels
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 
 /**
  * Model, effort and mode for a chat.
@@ -131,9 +133,13 @@ private fun PickerChip(
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { (value, text) ->
+                // Tighter than Material's 48 dp row, not tight (owner, 10-01: the
+                // model/effort/mode lists were "loose"). A mouse needs no thumb target.
                 DropdownMenuItem(
                     text = { Text(text, style = MaterialTheme.typography.bodySmall) },
                     onClick = { open = false; onPick(value) },
+                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
                 )
             }
         }
