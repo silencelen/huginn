@@ -223,6 +223,44 @@ class SessionMetaSaverTest {
         assertEquals("land the walker", saver.goals.value, "a poll older than the save typed over it")
     }
 
+    /**
+     * 2026-10-02 (3.9.0, desktop every first Overview visit): the callers open the
+     * editor and read [SessionMetaSaver.generation] in the same breath, before the
+     * lane has run open(). open() then stamped a NEWER mark, the header fetched
+     * right after was judged older than the empty placeholder and dropped, the
+     * editors stayed blank, and the first keystroke PATCHed " +more" over the
+     * server's goals.
+     */
+    @Test
+    fun `a header fetched after open is adopted even before the lane has run open`() =
+        runTest(StandardTestDispatcher()) {
+            val rec = Recorder()
+            val saver = saver(rec)
+            saver.open("A", SessionMeta())
+            val at = saver.generation() // same breath, exactly as both callers do
+            advanceUntilIdle()
+            saver.refresh("A", SessionMeta(goals = "SERVER GOALS", notes = "SERVER NOTES"), at)
+            advanceUntilIdle()
+            assertEquals("SERVER GOALS", saver.goals.value)
+            assertEquals("SERVER NOTES", saver.notes.value)
+            saver.setGoals(saver.goals.value + " +more")
+            advanceUntilIdle()
+            assertEquals<List<Triple<String, String?, String?>>>(listOf(Triple("A", "SERVER GOALS +more", null)), rec.calls)
+        }
+
+    /** The other half of the same invariant: a poll captured BEFORE open still loses to it. */
+    @Test
+    fun `a poll captured before open is still dropped`() = runTest(StandardTestDispatcher()) {
+        val rec = Recorder()
+        val saver = saver(rec)
+        val at = saver.generation()
+        saver.open("A", SessionMeta(goals = "fresh copy"))
+        advanceUntilIdle()
+        saver.refresh("A", SessionMeta(goals = "stale poll"), at)
+        advanceUntilIdle()
+        assertEquals("fresh copy", saver.goals.value)
+    }
+
     @Test
     fun `a poll issued after the save still lands`() = runTest(StandardTestDispatcher()) {
         // The generation must not become a permanent refusal: the whole point of

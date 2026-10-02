@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
 
@@ -154,8 +155,23 @@ class SessionMetaSaver(
      * by tapping another one — and dropping it would be losing work silently. Text
      * this client is still HOLDING for the session being opened outranks the copy
      * handed in: the hold is newer by construction.
+     *
+     * The generation this copy is stamped with is taken HERE, on the caller's
+     * thread, before the lane runs: any [generation] read after open() returns is
+     * then at least as new as the copy, so the header the caller fetches next is
+     * adopted. 2026-10-02: the tick used to happen later, on the lane, and both
+     * callers read the generation in the same breath as open() — so the stamp
+     * outranked the fetch, the server's goals and notes were dropped as "older
+     * than a local change", the editors stayed blank on every first desktop
+     * Overview visit, and the first keystroke PATCHed the typed text over the
+     * saved goals. A poll captured BEFORE open() still loses to it, as before.
      */
-    fun open(name: String, meta: SessionMeta) = onLane {
+    fun open(name: String, meta: SessionMeta) {
+        val stamp = tick()
+        openOnLane(name, meta, stamp)
+    }
+
+    private fun openOnLane(name: String, meta: SessionMeta, stamp: Long) = onLane {
         val h = held(name)
         // Read BEFORE landing: land() consumes the holds to issue them, and what
         // this session is still holding is a question about the moment it was
@@ -171,8 +187,10 @@ class SessionMetaSaver(
             h.line = State.IDLE
             h.note = null
         }
-        h.goals.mark = tick()
-        h.notes.mark = h.goals.mark
+        // maxOf: the stamp was taken before this ran, and a keystroke that reached
+        // the lane in between (re-opening the session already open) is newer.
+        h.goals.mark = maxOf(h.goals.mark, stamp)
+        h.notes.mark = maxOf(h.notes.mark, stamp)
         _state.value = h.line
         _note.value = h.note
     }
@@ -273,11 +291,11 @@ class SessionMetaSaver(
 
     private fun held(name: String): Held = sessions.getOrPut(name) { Held() }
 
-    private fun tick(): Long {
-        val next = _gen.value + 1
-        _gen.value = next
-        return next
-    }
+    /**
+     * Atomic, because [open] ticks from the caller's thread while the lane ticks
+     * from its own: a read-then-write pair could hand both the same number.
+     */
+    private fun tick(): Long = _gen.updateAndGet { it + 1 }
 
     /**
      * Issues everything owed, one write per session, on the single chain — every

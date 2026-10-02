@@ -389,6 +389,17 @@ class SessionController(
     }
 
     /**
+     * The editors were opened and the server's goals and notes have not been
+     * delivered to them yet. While true the graph poll goes WITHOUT its cursor,
+     * because a cursored poll of an idle session answers "unchanged" and carries
+     * no meta. 2026-10-02: since the loop runs from session open, the cursor is
+     * already stored when somebody first clicks Overview, so an arrival header
+     * that failed (or was dropped) left the editors blank until the transcript
+     * next grew, and the first keystroke saved over the real goals.
+     */
+    @Volatile private var metaOwed = false
+
+    /**
      * The map, polled ONLY while its tab is the one being looked at.
      *
      * Same shape as [screenSupervisor] and for a sharper reason: reading this
@@ -415,7 +426,10 @@ class SessionController(
                 // Only on the first visit. Re-opening on every tab flip would
                 // reset the editors to the last meta the POLL returned, which
                 // after a save from this client is the text before it was typed.
-                if (onTab && meta.session.value != name) meta.open(name, SessionMeta())
+                if (onTab && meta.session.value != name) {
+                    meta.open(name, SessionMeta())
+                    metaOwed = true
+                }
                 var first = true
                 while (scope.isActive) {
                     // The generation is captured BEFORE each fetch: what comes
@@ -424,14 +438,17 @@ class SessionController(
                     var at = meta.generation()
                     if (first && OverviewCadence.fetchHeader(onTab, _overview.value != null)) {
                         runCatching { client.sessionOverview(name) }
-                            .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta, at) }
+                            .onSuccess {
+                                _overview.value = it; _overviewNote.value = null
+                                meta.refresh(name, it.meta, at); metaOwed = false
+                            }
                             .onFailure { _overviewNote.value = overviewNoteFor(it) }
                         at = meta.generation()
                     }
                     first = false
-                    runCatching { client.sessionGraph(name, _graph.value?.cursor) }
+                    runCatching { client.sessionGraph(name, if (metaOwed) null else _graph.value?.cursor) }
                         .onSuccess { g ->
-                            if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta, at) }
+                            if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta, at); metaOwed = false }
                             _overviewNote.value = null
                         }
                         .onFailure { _overviewNote.value = overviewNoteFor(it) }

@@ -23,6 +23,12 @@
   does not answer no longer puts a "Why" beside "reachable from your devices"; the row offers
   "Details" with the host's note.
 
+- **Overview keeps your saved goals and notes.** The goals and notes editors could open blank
+  even though the session had goals saved, and typing into them then replaced the saved text with
+  only what you had just typed. The editor was judging the server's copy older than its own empty
+  starting point and throwing it away. It now takes the server's copy on arrival, and keeps asking
+  for it until it has arrived. Shared with the desktop, where it happened on every first visit.
+
 ## 3.9.0 — 2026-10-01
 
 Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.

@@ -2040,6 +2040,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val overviewOnTab = MutableStateFlow(false)
 
     /**
+     * The editors were opened and the server's goals and notes have not reached
+     * them yet; while true the graph poll goes WITHOUT its cursor, since a
+     * cursored poll of an idle session answers "unchanged" with no meta.
+     * 2026-10-02: with a kept cache (same session) a failed header left the
+     * editors blank until the transcript grew, and a keystroke then saved over
+     * the real goals.
+     */
+    @Volatile private var metaOwed = false
+
+    /**
      * Runs for as long as the SESSION is open and the app is started — not only
      * while its Overview tab is up (owner, 10-01; see [OverviewCadence]). Behind
      * the other tabs it keeps the map current with the cheap cursor poll; arriving
@@ -2060,7 +2070,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // though: re-opening on every return would reset the editors to the last
         // meta the POLL returned, which after a save from this client is the text
         // as it read before it was typed.
-        if (metaSaver.session.value != name) metaSaver.open(name, SessionMeta())
+        if (metaSaver.session.value != name) {
+            metaSaver.open(name, SessionMeta())
+            metaOwed = true
+        }
         overviewJob = viewModelScope.launch {
             awaitReady()
             // collectLatest: a change of tab cancels the wait in progress, so
@@ -2076,16 +2089,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     // the tab; after that the cursor poll is enough.
                     if (first && OverviewCadence.fetchHeader(onTab, _overview.value != null)) {
                         runCatching { client.sessionOverview(name) }
-                            .onSuccess { _overview.value = it; _overviewNote.value = null; metaSaver.refresh(name, it.meta, at) }
+                            .onSuccess {
+                                _overview.value = it; _overviewNote.value = null
+                                metaSaver.refresh(name, it.meta, at); metaOwed = false
+                            }
                             .onFailure { _overviewNote.value = noteFor(it) }
                         at = metaSaver.generation()
                     }
                     first = false
-                    runCatching { client.sessionGraph(name, _sessionGraph.value?.cursor) }
+                    runCatching { client.sessionGraph(name, if (metaOwed) null else _sessionGraph.value?.cursor) }
                         .onSuccess { g ->
                             if (!g.unchanged) {
                                 _sessionGraph.value = g
                                 metaSaver.refresh(name, g.meta, at)
+                                metaOwed = false
                             }
                             _overviewNote.value = null
                         }
