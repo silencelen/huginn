@@ -815,6 +815,21 @@ _huginn_attach() {
   return "$rc"
 }
 
+# `huginn attach <name>`: attach to a session BY NAME, never by verb.
+#
+# ⚠ WHY IT EXISTS (desktop breaker, 2026-10-02): `huginn <word>` reads the word
+# as a verb first and a session only when it is not one, and the daemon makes
+# sessions called update, solo, list, uninstall. The desktop's "Open in
+# terminal" ran `huginn 'update'` for a session named update - replacing this
+# very file - and `huginn 'solo'` threw every other device off main. This is
+# the form that cannot dispatch. The desktop checks for THIS FUNCTION'S NAME
+# (`type _huginn_attach_named`) to know a CLI has `attach`, so it is not to be
+# renamed.
+_huginn_attach_named() {   # $1 = host  $2 = the session name
+  _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
+  _huginn_attach "$1" "$2"
+}
+
 # --- help -----------------------------------------------------------------
 # The ONE list of verbs, and the ONE place each one is described. `huginn help`
 # prints it whole; `huginn <verb> --help` prints the entry (and its continuation
@@ -825,6 +840,7 @@ _huginn_help_body() {
 
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
+  huginn attach <name>        that session even when its name is a verb (update, solo...)
   huginn solo [name]          attach + detach all OTHER clients (resume solo / full screen)
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
@@ -1154,6 +1170,11 @@ EOF
         *)
           ssh -tt "$H" "ccusage ${*:-daily}" ;;
       esac ;;
+    attach)
+      # By name, never by verb - see _huginn_attach_named. No default: a bare
+      # `attach` is a mistake, not a request for main.
+      [ $# -eq 2 ] || { echo "usage: huginn attach <name>" >&2; return 1; }
+      _huginn_attach_named "$H" "$2" ;;
     solo)
       local s="${2:-main}"
       _huginn_valid_name "$s" || { _huginn_bad_name "$s"; return 1; }
@@ -1317,13 +1338,13 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="list ls status st rounds round headroom devices device local llm projects project solo rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
+  cmds="list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
   else
     case "$prev" in
-      kill|end|archive|solo|rename|mv)   # these take an existing session name
+      kill|end|archive|solo|attach|rename|mv)   # these take an existing session name
         mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
