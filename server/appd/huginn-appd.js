@@ -1972,7 +1972,7 @@ async function waitForPasteToLand(name, text, before) {
  * would bury the line that matters. `null` from `composerCleared` means this
  * pane has no composer to speak about, which is the same non-answer.
  */
-async function confirmSubmitted(name, text) {
+async function confirmSubmitted(name, text, boundMs = typing.SUBMIT_CONFIRM_MS) {
   const started = Date.now();
   let lines = null;
   for (;;) {
@@ -1982,7 +1982,7 @@ async function confirmSubmitted(name, text) {
       const cleared = typing.composerCleared(got, text);
       if (cleared !== false) return { ok: true, waitedMs: Date.now() - started, lines: got };
     }
-    if (Date.now() - started >= typing.SUBMIT_CONFIRM_MS) {
+    if (Date.now() - started >= boundMs) {
       return { ok: false, waitedMs: Date.now() - started, lines };
     }
     await sleep(typing.SUBMIT_CONFIRM_POLL_MS);
@@ -2017,20 +2017,42 @@ async function confirmSubmitted(name, text) {
  * In memory, pruned on write, and it never holds more than the sessions pasted
  * into within the last hold window.
  */
-const lastPasted = new Map();   // session name -> { text, at }
+const lastPasted = new Map();   // session name -> { text, at, submitted }
 
 function rememberPaste(name, text) {
   const now = Date.now();
   for (const [k, v] of lastPasted) {
     if (now - v.at > typing.DRAFT_HOLD_MAX_MS) lastPasted.delete(k);
   }
-  lastPasted.set(name, { text: String(text || ''), at: now });
+  // `submitted` is unknown (undefined) until the delivery says how it ended.
+  lastPasted.set(name, { text: String(text || ''), at: now, submitted: undefined });
 }
 
-/** What appd last put in this pane's box, or null if it has never typed here. */
+/**
+ * How the paste written down above ENDED: true (the box let go of it), false
+ * (left in the box — 'leave', or a submit that stalled), null (nothing could tell).
+ *
+ * ⚠ TWO READERS NEEDED THIS AND NEITHER HAD IT (2026-10-02).
+ *   - The leftovers exemption is for a paste that is STILL IN THE BOX. Kept for
+ *     a message that was submitted cleanly, it read the person's next few
+ *     keystrokes — `nightly back`, a substring of the message they had just
+ *     sent — as our leftovers, and the next send was submitted welded to them.
+ *   - The 3.5.1 "same message delivered seconds ago" rule swallowed the retry of
+ *     a message that had never been sent: the first copy was left in the box,
+ *     the person pressed Send again, and the answer was `duplicate:true`.
+ */
+function notePasteOutcome(name, text, submitted) {
+  const v = lastPasted.get(name);
+  if (v && v.text === String(text || '')) v.submitted = submitted;
+}
+
+/**
+ * What appd last put in this pane's box AND may still be sitting there, or null.
+ * A paste confirmed submitted has left the box, so it explains nothing in it.
+ */
 function lastPastedText(name) {
   const v = lastPasted.get(name);
-  return v ? v.text : null;
+  return v && v.submitted !== true ? v.text : null;
 }
 
 /**
@@ -2042,6 +2064,9 @@ function lastPastedText(name) {
  */
 async function pasteOnce(name, text, { remember = false } = {}) {
   const target = `=${name}:`;
+  // Every paste path — a message, its re-paste, a live-view text op — goes
+  // through here, so this is where a marker the text carries is taken out.
+  text = typing.pasteSafe(text);
   const buf = typing.bufferName();
   const lb = await runStdin('tmux', ['load-buffer', '-b', buf, '-'], text);
   if (lb.err) {
@@ -2095,6 +2120,19 @@ async function recoverLostPaste(name, text, settle, before) {
     log(typing.pasteLeftAloneLogLine(name, settle.waitedMs, fresh));
     return { landed: false, enter: false, recovered: false };
   }
+  // ⚠ THE BOX WAS UP BEFORE THE PASTE, SO THE BYTES ARE QUEUED, NOT LOST
+  // (2026-10-02). A re-paste here is the second copy of the message: the TUI
+  // drains both and the Enter submits them run together. Wait one more bound
+  // for the first copy to paint, then press Enter behind it either way — the
+  // pty keeps order, so the Enter cannot overtake the paste.
+  if (what === 'stalled') {
+    log(`typing: ${name}: pasted text not visible after ${settle.waitedMs}ms, but the composer `
+      + 'was already up before the paste; the pane is behind its input, so waiting for it '
+      + `rather than re-pasting | pane: ${typing.paneTail(fresh)}`);
+    const late = await waitForPasteToLand(name, text, fresh);
+    if (!late.landed) log(typing.pasteLostLogLine(name, settle.waitedMs + late.waitedMs, late.lines));
+    return { landed: late.landed, enter: true, recovered: false, waitedMs: late.waitedMs };
+  }
   log(typing.pasteResentLogLine(name, settle.waitedMs, fresh));
   const again = await pasteOnce(name, text, { remember: true });
   if (!again.ok) {
@@ -2108,8 +2146,26 @@ async function recoverLostPaste(name, text, settle, before) {
   return { landed: second.landed, enter: true, recovered: true };
 }
 
-async function sendTextToPane(name, text, { submit = true } = {}) {
+async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {}) {
   const target = `=${name}:`;
+  // The spelling that is actually pasted, so the settle and confirm checks below
+  // compare against the bytes the pane received (2026-10-02, see pasteSafe).
+  text = typing.pasteSafe(text);
+  // ⚠ THE BOX ALREADY HOLDS EXACTLY THIS MESSAGE (2026-10-02). The 'leave'
+  // recovery strands a message on purpose, and the person presses Send again.
+  // A second paste behind the first is the message twice in one prompt; the
+  // copy that is there only lacks its Enter. `boxHolds` is the gate's ghost-free
+  // read of the composer, so a dim suggestion of the same words never gets here.
+  if (submit && typing.boxHoldsExactly(boxHolds, text)) {
+    log(`typing: ${name}: the message is already sitting in the composer; pressing Enter `
+      + 'instead of pasting a second copy');
+    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    const conf = await confirmSubmitted(name, text);
+    if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
+    notePasteOutcome(name, text, conf.ok);
+    return { ok: true, how: 'enter', settled: true, settleMs: 0, submitted: conf.ok, recovered: false };
+  }
   // Read BEFORE the load, not after: the only use of this capture is to tell a
   // pane that already showed this text from one that has just received it, and
   // after the paste there is no telling.
@@ -2126,13 +2182,16 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
     let landed = settle.landed;
     let recovered = false;
     let press = true;
+    let paintMs = settle.waitedMs;
     if (!settle.landed) {
       const r = await recoverLostPaste(name, text, settle, before);
       landed = r.landed;
       recovered = r.recovered;
       press = r.enter;
+      paintMs += r.waitedMs || 0;
     }
     if (!press) {
+      notePasteOutcome(name, text, false);
       return { ok: true, how: 'paste', settled: false, settleMs: settle.waitedMs, submitted: false, recovered };
     }
     await sleep(PASTE_BEAT_MS);
@@ -2140,10 +2199,15 @@ async function sendTextToPane(name, text, { submit = true } = {}) {
     if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
     let submitted = null;
     if (landed) {
-      const conf = await confirmSubmitted(name, text);
+      // A pane that took N ms to paint the paste takes about as long to act on
+      // the Enter; the confirm window grows with it (2026-10-02), or a TUI
+      // seconds behind its input reads as "still holds the message" and a
+      // message that went is reported as left unsent.
+      const conf = await confirmSubmitted(name, text, typing.SUBMIT_CONFIRM_MS + paintMs);
       submitted = conf.ok;
       if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
     }
+    notePasteOutcome(name, text, submitted);
     return { ok: true, how: 'paste', settled: landed, settleMs: settle.waitedMs, submitted, recovered };
   }
   log(`typing: load-buffer failed for ${name} (${(first.stderr || '').trim().slice(0, 120)}); falling back to send-keys`);
@@ -2400,10 +2464,19 @@ function pendingSendCount(name) {
   return q ? q.entries.length : 0;
 }
 
-/** What is still WAITING for this session — what the duplicate guard compares against. */
+/**
+ * What is still WAITING for this session — what the duplicate guard compares against.
+ *
+ * ⚠ AND THE ENTRY BEING DELIVERED RIGHT NOW (2026-10-02). The pump shifts the
+ * head out of `entries` and then spends several awaited tmux round trips before
+ * the paste is written down in `lastPasted`. A second identical POST in that
+ * window (15-40 ms here, longer on a loaded host) was in neither place, passed
+ * both duplicate checks, and the message was submitted twice.
+ */
 function pendingEntries(name) {
   const q = sendQueues.get(name);
-  return q ? q.entries : [];
+  if (!q) return [];
+  return q.inFlight ? [q.inFlight, ...q.entries] : q.entries;
 }
 
 /** The last 64 KB of a session's jsonl transcript, plus its size, or null. */
@@ -2783,6 +2856,7 @@ async function pumpQueue(name) {
       q.entries.shift();
       q.blockedBy = null;
       q.delivering = true;
+      q.inFlight = entry;   // still visible to the duplicate guard (pendingEntries)
       let r;
       try {
         // A JOB rather than a message: the ladder's `/model` picker script is
@@ -2800,10 +2874,10 @@ async function pumpQueue(name) {
           log(`typing: ${name}: refusing to submit into a shell prompt — claude is not running here`);
           r = { ok: false, code: 409, message: refusal };
         } else if (typeof entry.run === 'function') r = await entry.run();
-        else r = await sendTextToPane(name, entry.text, { submit: entry.submit });
+        else r = await sendTextToPane(name, entry.text, { submit: entry.submit, boxHolds: gate.composerHolds });
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
-      } finally { q.delivering = false; }
+      } finally { q.delivering = false; q.inFlight = null; }
       // The stamp the NEXT entry's boundary test starts from (see queueFor).
       // Only on success: a paste that never reached the pane started no turn,
       // and moving the window for it would hold the entry behind it for a
@@ -2819,13 +2893,30 @@ async function pumpQueue(name) {
         if (draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
         else clearIntoDraft(name);
       }
+      // ⚠ TYPED IS NOT DELIVERED (2026-10-02). `submitted: false` is the pane
+      // saying the message is still in the box — the recovery's 'leave', or a
+      // submit that never let go — and this used to settle as delivered:true, so
+      // every client said "sent" about a message nobody had sent. `delivered`
+      // stays a boolean (older clients read it as one); `submitted` rides beside
+      // it with the pane's own answer: true, false, or null for a pane that
+      // cannot say (a shell, a capture that failed).
+      const unsent = !!r.ok && r.submitted === false;
       if (!r.ok) {
         q.lastError = r.message;
         log(`typing: ${name}: delivery failed: ${r.message}`);
+      } else if (unsent) {
+        q.lastError = 'the message was typed into the session but not sent: something else was in '
+          + 'the box, or it would not let go. Check the Screen tab.';
+        log(`typing: ${name}: ${q.lastError}`);
       } else if (q.entries.length === 0) {
         q.lastError = null;
       }
-      entry.settle({ delivered: !!r.ok, result: r });
+      entry.settle({
+        delivered: !!r.ok && !unsent,
+        submitted: r.ok && typeof entry.run !== 'function' && entry.submit !== false
+          ? (r.submitted === undefined ? null : r.submitted) : null,
+        result: r,
+      });
     }
     q.blockedBy = null;
   } finally {
@@ -2911,6 +3002,7 @@ function enqueueSend(name, text, opts = {}) {
       // Settled during that pass: delivered, dropped, or failed.
       return done.then((v) => ({
         id: entry.id, position: 0, delivered: !!v.delivered, dropped: v.dropped || null,
+        submitted: v.submitted === undefined ? null : v.submitted,
         result: v.result || null, queued: q.entries.length, blockedBy: q.entries.length ? (q.blockedBy || null) : null,
       }));
     }
@@ -8609,8 +8701,12 @@ async function resumeSession(rec, s, settings, ctx) {
     automated: true, origin: 'headroom', kind: 'resume',
     onSettle: (v) => settleResume(rec, s.name, v),
   });
-  if (out.dropped) {
-    // settleResume has already written the reason and left it eligible.
+  // settleResume has already written the reason and left it eligible — for a
+  // drop, and (2026-10-02) for a send that SETTLED undelivered: a failure, or a
+  // phrase typed into the box and left there, which is no longer `delivered`.
+  // Neither is waiting in any queue, so stamping it "queued" would park the
+  // stall behind a send that no longer exists.
+  if (out.dropped || (out.result && !out.delivered)) {
     return null;
   }
   if (!out.delivered) {
@@ -11044,6 +11140,14 @@ const server = http.createServer(async (req, res) => {
        * told in the answer to their own request rather than on the next poll.
        */
       let intoDraft = null;
+      /**
+       * Whether the pane let go of the message, for a send settled HERE: true,
+       * false (typed into the box and left there — `delivered` is false then
+       * too), or null (nothing could tell, or not settled yet). 2026-10-02; an
+       * older client ignores it and reads `delivered` as it always did.
+       */
+      let submitted = null;
+      let unsentError = null;
       if (typedKeys.length > 0) {
         /**
          * Through the QUEUE, not straight at the pane.
@@ -11086,8 +11190,11 @@ const server = http.createServer(async (req, res) => {
         // 12 s and 4 s later, the app re-sending a composer that had emptied and
         // said nothing — went in too. A `yes` twice is an ordinary thing to mean,
         // so only a message long enough to be one specific message counts.
+        // ⚠ 2026-10-02: and only a copy that WENT. One left in the box
+        // (`submitted === false`) is the very message this press is asking for,
+        // and answering it `duplicate:true` stranded it with nothing to say so.
         const recent = wantsEnter && !dup ? lastPasted.get(name) : null;
-        if (recent && recent.text === typedKeys && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
+        if (recent && recent.submitted !== false && recent.text === typing.pasteSafe(typedKeys) && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
             && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
           log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
             + 'not sending it a second time');
@@ -11115,6 +11222,8 @@ const server = http.createServer(async (req, res) => {
         position = out.position;
         queued = out.queued;
         blockedBy = out.blockedBy;
+        submitted = out.submitted === undefined ? null : out.submitted;
+        if (out.submitted === false) unsentError = (sendQueues.get(name) || {}).lastError || null;
         if (delivered) intoDraft = typing.intoDraftView(intoDraftFor(name));
       }
       for (const k of rawKeys) {
@@ -11137,7 +11246,10 @@ const server = http.createServer(async (req, res) => {
        * is what the note is about.
        */
       if (typedKeys.length === 0 && rawKeys.length > 0) delivered = true;
-      return sendJson(res, 200, { ok: true, queued, position, delivered, blockedBy, intoDraft });
+      return sendJson(res, 200, {
+        ok: true, queued, position, delivered, blockedBy, intoDraft, submitted,
+        ...(unsentError ? { lastError: unsentError } : {}),
+      });
     }
 
     /**

@@ -331,16 +331,30 @@ const DIALOG_LOOKBACK = 20;
  * way `detectPrompt` is too strict to admit.
  */
 function dialogWhy(arr, plain, last) {
-  const region = plain.slice(Math.max(0, last - DIALOG_LOOKBACK), last + 1);
+  // ⚠ NOTHING ABOVE OR INSIDE A LIVE COMPOSER BOX IS A DIALOG (2026-10-02).
+  // Claude Code draws a selector INSTEAD of the composer, never above one, so a
+  // box drawn at the bottom means every numbered run and every footer phrase
+  // over it is conversation: the person's own echoed `❯ 1. fix the backup job`
+  // / `  2. then rerun the audit`, Claude's prose saying "press esc to cancel",
+  // or a numbered draft still sitting in the box. Nets 2 and 3 read all of them
+  // as a live selector, and since a modal hold has no ceiling every later send
+  // — the Screen tab's typing included — waited until enough output scrolled
+  // the history out of the lookback, which after a short reply is never. Net 1
+  // (the structural detector) and the trust check still read the whole pane.
+  const box = composerBox(plain, last);
+  const regionFrom = box && box.bottom >= 0 ? box.bottom + 1 : Math.max(0, last - DIALOG_LOOKBACK);
+  const region = plain.slice(regionFrom, last + 1);
   // Trust first: it is a modal too, but it is the one with a destructive
   // default, and a caller that logs `why` should be able to say so. Scanned
   // over the whole pane for the same reason as everything else here.
   if (plain.slice(0, last + 1).some((l) => TRUST_RE.test(l))) return 'trust';
   // 1 — the sibling detector, whole pane, structural.
   if (detectPrompt(arr)) return 'modal';
-  // 2 — a live selector's footer near the bottom, with a numbered row above it.
+  // 2 — a live selector's footer near the bottom, with a numbered row ABOVE it.
+  // (2026-10-02: "above", not "anywhere on the pane" — a footer phrase with a
+  // numbered line somewhere below it is not drawn the way a selector draws.)
   const footer = region.findIndex((l) => DIALOG_FOOTER_RE.test(l));
-  if (footer >= 0 && plain.slice(0, last + 1).some((l) => OPTION_ROW_RE.test(l))) return 'modal';
+  if (footer >= 0 && plain.slice(0, regionFrom + footer).some((l) => OPTION_ROW_RE.test(l))) return 'modal';
   // 3 — a cursored row backed by a second option row, in the bottom region.
   if (region.some((l) => SELECTOR_ROW_RE.test(l))
     && region.filter((l) => OPTION_ROW_RE.test(l)).length >= 2) return 'modal';
@@ -543,7 +557,47 @@ function stripGhost(line) {
  * booting — which is a different answer from "the composer is empty" and the
  * callers below rely on the difference.
  */
+//
+// ⚠ A RULE IS A ROW THAT STARTS AT COLUMN 0 (2026-10-02). This used to be
+// tested on the TRIMMED row, and the trim is what removed the only thing that
+// tells the box's own rule from a line of the message: Claude Code draws its
+// rules from column 0 and every continuation row of the composer indented by
+// two. A short message with a markdown rule or a setext underline in it —
+// `## Plan` / `---` / `step one…`, `Status` / `======` / `all green` — was cut
+// at the `---`, neither probe was found in what was left, the recovery called
+// the box "somebody's draft" and chose 'leave', and the message sat in the box
+// unsent while the POST answered delivered:true.
 const RULE_RE = /^[─━—–_=-]{3,}$/;
+const CARET_ROW_RE = /^\s*❯/;
+
+/**
+ * Where the live composer BOX is: its top rule, its caret row, its closing rule.
+ *
+ * ⚠ FOUND BY ITS STRUCTURE, NOT BY THE LAST CARET GLYPH (2026-10-02). The box
+ * is a column-0 rule with the caret row directly under it — every real capture
+ * in test/fixtures/prompts draws it that way, and neither an echoed message
+ * (a blank row above it) nor a dialog's cursored row (a title or blank above
+ * it) does. The bottom-most caret was the old rule, and a message with a line
+ * of its own that starts with `❯` — a terminal snippet pasted in, drawn as the
+ * continuation row `  ❯ hello world` — moved "the composer" down onto that row.
+ * The probes were never found in what it read, the recovery chose 'leave', and
+ * the person's retry was then swallowed as a duplicate of a message that had
+ * never been sent.
+ *
+ * Null when no such box is drawn in the bottom region; callers fall back to
+ * what they did before, so a pane shaped some other way reads as it always did.
+ */
+function composerBox(plain, last) {
+  const from = Math.max(1, last - DIALOG_LOOKBACK);
+  for (let i = last; i >= from; i--) {
+    if (!CARET_ROW_RE.test(plain[i]) || !RULE_RE.test(plain[i - 1])) continue;
+    let bottom = -1;
+    for (let j = i + 1; j <= last; j++) { if (RULE_RE.test(plain[j])) { bottom = j; break; } }
+    return { top: i - 1, caret: i, bottom };
+  }
+  return null;
+}
+
 function composerText(lines, { dropGhost = false } = {}) {
   const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
   const plain = arr.map((l) => stripAnsi(dropGhost ? stripGhost(l) : String(l)).replace(/\s+$/, ''));
@@ -551,12 +605,15 @@ function composerText(lines, { dropGhost = false } = {}) {
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return null;
   const from = Math.max(0, last - DIALOG_LOOKBACK);
-  let caret = -1;
-  for (let i = last; i >= from; i--) { if (/^\s*❯/.test(plain[i])) { caret = i; break; } }
+  const box = composerBox(plain, last);
+  let caret = box ? box.caret : -1;
+  if (caret < 0) {
+    for (let i = last; i >= from; i--) { if (CARET_ROW_RE.test(plain[i])) { caret = i; break; } }
+  }
   if (caret < 0) return null;
   const out = [plain[caret].replace(/^\s*❯\s?/, '')];
   for (let i = caret + 1; i <= last; i++) {
-    if (RULE_RE.test(plain[i].trim())) break;
+    if (RULE_RE.test(plain[i])) break;   // column 0 only — see RULE_RE
     out.push(plain[i]);
   }
   return out.join('\n');
@@ -800,12 +857,98 @@ function composerEmpty(lines) {
  * the rest, so comparing the full text would read every long resend as a stranger's
  * draft and hold it for ten minutes.
  */
+/**
+ * Does THIS text explain everything in the box?
+ *
+ * ⚠ FROM THE BOX TO THE MESSAGE, NEVER THE OTHER WAY ROUND (2026-10-02). The
+ * old test asked whether the message's probe appeared somewhere in the box, and
+ * a message of 32 characters or fewer IS its own probe — so `ok` was "already
+ * in" a draft reading `look at the token cost`, `yes` in `yesterday`, `no` in
+ * `not`. The draft guard called the person's sentence ours, the hold collapsed
+ * from the 60 s keys window to the 5 s quiet, and the reply was pasted onto the
+ * end of their draft and submitted with it (`look at the token cost xok`), with
+ * no intoDraft notice because nothing thought it had been a draft.
+ *
+ * So the box is ours only when the message accounts for ALL of it: the whole
+ * message (a resend), or a contiguous piece at least a probe long (a long paste
+ * scrolled in the box, SCROLLED_PANE). A short draft that merely occurs inside
+ * a longer message is still a person's.
+ */
+function boxExplainedBy(squashed, text) {
+  const msg = squashPane(text);
+  if (!msg || !squashed) return false;
+  if (squashed === msg) return true;
+  return squashed.length >= 32 && msg.includes(squashed);
+}
+
+/**
+ * Could this text have been drawn as a collapsed `[Pasted text …]` marker?
+ *
+ * Measured on 2.1.280 (PASTED_MARKER_RE): a one-line paste of ~850 characters
+ * collapses, a short three-line paste does not. Generous on both counts, because
+ * this is only ever asked about appd's OWN last paste.
+ */
+function wouldCollapse(text) {
+  const s = String(text || '');
+  return s.length >= 800 || s.split('\n').length > 3;
+}
+const PASTED_MARKER_ALL_RE = new RegExp(PASTED_MARKER_RE.source, 'gi');
+
+/**
+ * The paste-safe spelling of a message: no bracketed-paste markers inside it.
+ *
+ * ⚠ THE TEXT COULD END THE PASTE ITSELF (2026-10-02). tmux wraps the buffer in
+ * ESC[200~ … ESC[201~ and passes markers already INSIDE it through untouched
+ * (verified byte for byte on tmux 3.6b), so a message carrying ESC[201~ closed
+ * the paste early and everything after it reached the TUI as typed keys — a CR
+ * there is an Enter. `first part ESC[201~ CR second part` submitted `first part`
+ * on its own and left `second part` in the box, and the POST said delivered.
+ * Any automated or scratchpad-derived text can carry an escape like that.
+ *
+ * Removed until none is left, because taking one out can splice another one
+ * together. Nothing else is touched: inside a bracketed paste every other byte
+ * is literal, which is the reason the paste is bracketed at all.
+ */
+const PASTE_MARKER_RE = /\u001b\[20[01]~/g;
+function pasteSafe(text) {
+  let s = String(text == null ? '' : text);
+  for (;;) {
+    const next = s.replace(PASTE_MARKER_RE, '');
+    if (next === s) return s;
+    s = next;
+  }
+}
+
+/**
+ * Is the box holding exactly this message already — so the send is an Enter?
+ *
+ * The 'leave' recovery strands a message in the box on purpose, and the person's
+ * natural move is to press Send again. Pasting a second copy behind the first
+ * and pressing Enter submits the message twice, run together (2026-10-02). The
+ * caller passes the GHOST-FREE composer (`gate.composerHolds`): a dim
+ * suggestion of the same words is an empty box, and an Enter there sends nothing.
+ */
+function boxHoldsExactly(composerHolds, text) {
+  if (composerHolds == null) return false;
+  const squashed = squashPane(composerHolds);
+  return !!squashed && squashed === squashPane(text);
+}
+
 function composerHoldsDraft(composerHolds, text, ours = null) {
   if (composerHolds === null || composerHolds === undefined) return null;
   const squashed = squashPane(composerHolds);
   if (!squashed) return false;
   if (COMPOSER_PLACEHOLDER_RE.test(squashed)) return false;
-  if (pasteProbe(text) && probeSeen(squashed, text)) return false;
+  if (boxExplainedBy(squashed, text)) return false;
+  // ⚠ A `[Pasted text …]` MARKER IS OURS ONLY IF OUR LAST PASTE MADE IT
+  // (2026-10-02). The marker says nothing about WHOSE paste collapsed: the
+  // person's own long Screen-tab paste draws the same one. Read as ours
+  // whatever it stood for, `[Pasted text #1 +40 lines] summarise this x` was
+  // released after the 5 s quiet and the next message was submitted welded to
+  // it. So: a box holding nothing but marker(s), and only when appd's own
+  // remembered paste was long enough to be drawn that way.
+  if (PASTED_MARKER_RE.test(squashed) && !squashed.replace(PASTED_MARKER_ALL_RE, '')
+      && ours && wouldCollapse(ours)) return false;
   // ⚠ AND OUR OWN LEFTOVERS ARE NOT A DRAFT. A pane can strand a piece of the
   // LAST thing appd pasted into it: the recovery's 'leave' branch deliberately
   // presses no Enter, and a frame whose final line carries no newline sits in
@@ -906,6 +1049,9 @@ function draftOverdueLogLine(name, waitedMs, holds) {
  *             out. Press Enter; re-pasting would put the message in twice.
  *   'leave'   a composer holding something that is not ours. Nothing is typed
  *             and nothing is pressed.
+ *   'stalled' a composer, empty, that was ALREADY DRAWN before the paste: the
+ *             TUI is behind its input, not deaf to it. Press Enter behind the
+ *             queued bytes; never re-paste (2026-10-02, see below).
  *
  * ⚠ 'landed' IS THE ANSWER THE TIMEOUT COULD NOT GIVE. `pasteLanded` is read
  * once more on a FRESH capture here, so "absent" and "present, late" stop being
@@ -918,7 +1064,17 @@ function recoveryDecision(lines, opts = {}) {
   const { text = null, before = null } = opts;
   const empty = composerEmpty(lines);
   if (empty === null) return 'blind';
-  if (empty) return 'resend';
+  // ⚠ AN EMPTY BOX IS PROOF OF LOSS ONLY IF THERE WAS NO BOX TO PASTE INTO
+  // (2026-10-02). The lost band is bytes pasted BEFORE the TUI attached, and
+  // `before` shows that: no composer yet. When `before` already showed a drawn
+  // composer, a running TUI was reading the pty, and a running TUI does not
+  // discard input — it is merely late (an event loop stalled on a loaded host).
+  // The empty box at 3 s is a stale frame, the first paste is still queued, and
+  // a re-paste lands behind it: measured with a TUI 3.6 s behind its stdin,
+  // `summarise the overnight backup reportsummarise the overnight backup report`
+  // was submitted as one prompt. 'stalled' presses Enter behind the queued
+  // bytes and never pastes again.
+  if (empty) return composerText(before) !== null ? 'stalled' : 'resend';
   if (text != null && pasteLanded(lines, text)
       && composerHoldsDraft(composerText(before), text) !== true) return 'landed';
   return 'leave';
@@ -1367,7 +1523,7 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision, stripGhost,
+  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
