@@ -577,16 +577,34 @@ private fun SessionHeader(
                     // session, and the one thing this window cannot do with it is
                     // be a terminal. `TerminalLaunch` opens one through the CLI; when
                     // it cannot, the line to type lands on the clipboard instead.
+                    //
+                    // ⚠ A NAME THE CLI CANNOT OPEN IS NOT OFFERED AS AN OPEN
+                    // (desktop breaker, 2026-10-02): `Foo`, `a.b` or a 51-character
+                    // name (made outside appd) used to open a window that refused
+                    // it or opened a DIFFERENT session, and the menu said nothing.
+                    // The menu now names what it will do — copy the raw tmux line —
+                    // and the tooltip says why.
                     val clipboard = LocalClipboardManager.current
+                    val offer = remember(name) { TerminalLaunch.offer(name) }
                     RowMenu(items = {
-                        listOf(HuginnMenuItem(TerminalLaunch.label()) {
-                            TerminalLaunch.open(name)?.let { why ->
-                                System.err.println("huginn: $why")
-                                clipboard.setText(AnnotatedString(TerminalLaunch.shellLine(name)))
-                            }
-                        })
+                        when {
+                            offer.opens -> listOf(HuginnMenuItem(offer.label) {
+                                TerminalLaunch.open(name)?.let { why ->
+                                    System.err.println("huginn: $why")
+                                    clipboard.setText(AnnotatedString(TerminalLaunch.shellLine(name)))
+                                }
+                            })
+                            offer.copy != null -> listOf(HuginnMenuItem(offer.label) {
+                                clipboard.setText(AnnotatedString(offer.copy))
+                            })
+                            else -> emptyList()
+                        }
                     }) {
-                        Tip("Right-click: ${TerminalLaunch.label().lowercase()}") {
+                        Tip(
+                            if (offer.opens) "Right-click: ${offer.label.lowercase()}"
+                            else "The huginn CLI cannot open this name: ${offer.why}" +
+                                (if (offer.copy != null) ". Right-click to copy the tmux command." else "."),
+                        ) {
                             Muted(name, Modifier.padding(start = 10.dp).widthIn(max = NAME_MAX))
                         }
                     }
