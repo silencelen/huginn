@@ -132,6 +132,10 @@ import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
 import com.silencelen.huginn.ui.theme.verbInk
 import com.silencelen.huginn.widget.FleetWidget
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 
 class MainActivity : FragmentActivity() {
 
@@ -731,6 +735,8 @@ fun HuginnApp(
     }
 
     val chats by vm.chats.collectAsState()
+    // The wide layout's list pane, hidden by the notch on the seam (below).
+    val listShut by vm.listCollapsed.collectAsState()
     // Hoisted here rather than inside the sessions pane: the read-only archive
     // destination is drawn in the DETAIL half, which on a folded phone composes
     // without the list beside it.
@@ -2257,20 +2263,20 @@ fun HuginnApp(
                     } else {
                         when (val d = dest) {
                             is Dest.Chats, is Dest.Chat -> Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(292.dp).fillMaxSize()) { chatsPane(true) }
-                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                if (!listShut) Box(Modifier.width(292.dp).fillMaxSize()) { chatsPane(true) }
+                                ListSeam(listShut) { vm.toggleListCollapsed() }
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.Chat
                                     if (open != null) chatDetail(open.id)
                                     else Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                                        EmptyState("No chat open", "Pick one on the left, or start a new one.")
+                                        EmptyState("No chat open", noChatOpenHint(listShut))
                                     }
                                 }
                             }
                             is Dest.Sessions, is Dest.SessionView, is Dest.ArchiveTranscript ->
                                 Row(Modifier.fillMaxSize()) {
-                                Box(Modifier.width(292.dp).fillMaxSize()) { sessionsPane(true) }
-                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                if (!listShut) Box(Modifier.width(292.dp).fillMaxSize()) { sessionsPane(true) }
+                                ListSeam(listShut) { vm.toggleListCollapsed() }
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.SessionView
                                     val archive = dest as? Dest.ArchiveTranscript
@@ -2280,7 +2286,7 @@ fun HuginnApp(
                                     // beside it — exactly as a live session does.
                                     else if (archive != null) archiveTranscriptPane(archive.id)
                                     else Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                                        EmptyState("No session open", "Pick one on the left.")
+                                        EmptyState("No session open", noSessionOpenHint(listShut))
                                     }
                                 }
                             }
@@ -2429,3 +2435,55 @@ private fun openApp(
         )
     }.onFailure { vm.copy(app.url, "the address") }
 }
+
+/**
+ * The seam between the list and the detail on a wide screen, carrying the
+ * notch that hides the list — the desktop's `SeamNotch`, brought to the Z Fold
+ * (owner, 2026-10-01: "the same minimize left page tab feature we offer on
+ * desktop"). The list is a fixed 292dp here and there is no splitter, so the
+ * seam is a toggle and nothing else; the notch sits at the top, where the desktop
+ * keeps it, and the chevron points the way the list would go. Only ever drawn
+ * when the layout is wide — a phone has no seam, so the saved flag is dormant
+ * there, exactly as a compact desktop window leaves its own flag alone.
+ */
+@Composable
+private fun ListSeam(collapsed: Boolean, onToggle: () -> Unit) {
+    val what = if (collapsed) "Show list" else "Hide list"
+    Box(Modifier.fillMaxHeight().width(SEAM_WIDTH)) {
+        VerticalDivider(
+            Modifier.align(androidx.compose.ui.Alignment.Center),
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
+        // The notch: a piece of frame, raised just enough to be a thing. The
+        // IconButton's own touch target reaches past the strip, which is what a
+        // thumb needs and what a mouse never did.
+        IconButton(
+            onClick = onToggle,
+            modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter).padding(top = 8.dp).size(SEAM_WIDTH),
+        ) {
+            Box(
+                Modifier.size(width = 14.dp, height = 28.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(3.dp)),
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                Icon(
+                    if (collapsed) Icons.Outlined.ChevronRight else Icons.Outlined.ChevronLeft,
+                    contentDescription = what,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private val SEAM_WIDTH = 24.dp
+
+/** The empty detail pane's hint, worded for where the list is. */
+private fun noChatOpenHint(listShut: Boolean) =
+    if (listShut) "The list is hidden — the notch at the top left brings it back. Or start a new one."
+    else "Pick one on the left, or start a new one."
+
+private fun noSessionOpenHint(listShut: Boolean) =
+    if (listShut) "The list is hidden — the notch at the top left brings it back."
+    else "Pick one on the left."
