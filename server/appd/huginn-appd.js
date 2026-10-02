@@ -2212,9 +2212,10 @@ const launchingAt = new Map();  // session name -> ms epoch when appd ran `claud
  * The grace, with an override.
  *
  * `HUGINN_APPD_STARTUP_GRACE_MS` exists for two readers. A host slow enough that
- * `claude` needs longer than twenty seconds to paint wants it BIGGER — the
- * measured production line `no composer 22s after launch` is exactly that host,
- * and the send that followed it 82 ms later is exactly the loss. And the delivery
+ * `claude` needs longer than a minute to paint wants it BIGGER — the measured
+ * production lines `no composer 22s after launch` and `no composer 21s after
+ * launch` are why the default is no longer twenty seconds, and the send that
+ * followed the first of them 82 ms later is exactly the loss. And the delivery
  * tests want it ZERO, because their whole subject is what happens when a send
  * reaches a composer-less pane ANYWAY, which is the state a grace of zero puts
  * every pane in permanently. Nonsense (a negative, a word) falls back rather than

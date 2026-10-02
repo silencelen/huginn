@@ -798,6 +798,74 @@ test('tmux WRAPPING a long message does not hide it from the settle check', () =
   assert.equal(t.pasteLanded(wrapped, text), true);
 });
 
+/**
+ * ⚠ THE OWNER'S "FIRST MESSAGE SITS UNSENT", SECOND REPORT (2026-10-01). Measured
+ * against claude 2.1.280 on the pane sizes the live sessions actually have
+ * (80×24, 107×25): a one-paragraph brief of ~850 characters or more collapses to
+ * `❯ [Pasted text #1]` — NO `+N lines` suffix on a single-line paste — and a
+ * shorter one that wraps past the box's ~7 rows SCROLLS, so the caret row shows
+ * the middle of the text and the first 32 characters are off screen. Either way
+ * the settle check said "never appeared", the recovery found a non-empty box and
+ * chose 'leave', and no Enter was ever pressed: the message sat in the box until
+ * the owner opened the Screen tab and sent it by hand. Four of the five "never
+ * appeared" lines in the journal over five days (jnetad 09-27, workxhuginn
+ * 09-28, tailscale 09-30, btc15minxledger 10-02) are exactly these two shapes.
+ * It "did not always happen" because it is a function of message LENGTH.
+ */
+// ⚠ Non-repeating, like a real brief: a text that repeats its opening sentence
+// carries its own head probe further down and hides the scrolled case.
+const BRIEF_SENTENCE = (i) => `sentence ${i} of the brief says what the owner would type from the phone, `;
+const brief = (n) => { let s = ''; for (let i = 1; s.length < n; i++) s += BRIEF_SENTENCE(i); return s.slice(0, n); };
+
+// capture-pane of an 80×24 pane 1.5 s after a 700-character paste: the box scrolled.
+const SCROLLED_PANE = [
+  '                                                              ● high · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯ sentence 4 of the brief says what the owner would type from the phone,',
+  '  sentence 5 of the brief says what the owner would type from the phone,',
+  '  sentence 6 of the brief says what the owner would type from the phone,',
+  '  sentence 7 of the brief says what the owner would type from the phone,',
+  '  sentence 8 of the brief says what the owner would type from the phone,',
+  '  sentence 9 of the brief says what the owner would type from the phone,',
+  '  sentence 10 of the brief says what the owner would type from',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [probe] Fable 5.1 · main ~5 · ⚠ 8 sessions in this tree',
+  '  ⏵⏵ auto mode on (shift+tab to cycle)',
+];
+// The same pane after an 850-character paste: collapsed, and no line count.
+const COLLAPSED_ONE_LINE_PANE = [
+  '                                                              ● high · /effort',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '❯ [Pasted text #1]',
+  '────────────────────────────────────────────────────────────────────────────────',
+  '  [probe] Fable 5.1 · main ~5 · ⚠ 8 sessions in this tree',
+  '  paste again to expand',
+];
+
+test('a SCROLLED composer — the first 32 characters off screen — still counts as landed', () => {
+  const text = brief(700);
+  assert.equal(t.pasteLanded(SCROLLED_PANE, text), true);
+  assert.equal(t.composerCleared(SCROLLED_PANE, text), false, 'and it is still in the box');
+  assert.equal(t.composerHoldsDraft(t.composerText(SCROLLED_PANE), text), false, 'ours, not a draft');
+  assert.equal(t.recoveryDecision(SCROLLED_PANE, { text, before: [] }), 'landed',
+    "present, late and alone: the Enter is owed, never 'leave'");
+});
+
+test('a one-line paste collapses WITHOUT a line count, and that marker counts too', () => {
+  const text = brief(850);
+  assert.equal(t.pasteLanded(COLLAPSED_ONE_LINE_PANE, text), true);
+  assert.equal(t.composerCleared(COLLAPSED_ONE_LINE_PANE, text), false);
+  assert.equal(t.composerHoldsDraft(t.composerText(COLLAPSED_ONE_LINE_PANE), text), false);
+  assert.equal(t.pasteIndistinguishable(COLLAPSED_ONE_LINE_PANE, text), true,
+    'a leftover marker reads the same whichever spelling the TUI gave it');
+});
+
+test("a stranger's draft is still a draft when our message is long", () => {
+  const draft = ['──────────', '❯ was think ask again, side note:', '──────────'];
+  assert.equal(t.pasteLanded(draft, brief(700)), false);
+  assert.equal(t.composerHoldsDraft(t.composerText(draft), brief(700)), true);
+});
+
 test('a pane that ALREADY showed the text cannot be waited on, and says so', () => {
   // A resend of the same message is indistinguishable from one that has just
   // landed. The caller treats that as landed immediately — exactly what the
@@ -1163,6 +1231,21 @@ test('startingUnmarked holds a fresh composer-less pane that was told to run cla
     'the grace is a ceiling here too');
   assert.equal(t.startingUnmarked({}), false, 'no birth time is not a birth time of zero');
   assert.equal(t.startingUnmarked({ ...cc, ageMs: null }), false);
+});
+
+test('the MARK outranks a pane that merely looks like a shell', () => {
+  // Boot text can end in a prompt character; the marked rule holds regardless
+  // (the routes suites pin the same thing end to end with a `shellish` banner).
+  assert.equal(t.startingUp({ launching: true, composer: false, shell: true, ageMs: 10 }), true);
+});
+
+test('the grace is a minute: twenty seconds lost first messages on a loaded host', () => {
+  // `typing: rounds: no composer 21s after launch; sending into the pane as it
+  // is` (2026-09-27) and `mcserver … 22s` (2026-09-17) — twelve sessions and a
+  // gradle build on the box, and the paste went into a pane that painted a few
+  // seconds later. The ceiling is a ceiling: the hold still ends the instant the
+  // composer (or a shell prompt) appears.
+  assert.equal(t.STARTUP_GRACE_MS, 60_000);
 });
 
 test('both startup rules take the grace as an argument, so a slow host can widen it', () => {
