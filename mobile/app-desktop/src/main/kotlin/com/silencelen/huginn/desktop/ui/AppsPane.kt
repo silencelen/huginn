@@ -67,6 +67,7 @@ import kotlinx.coroutines.launch
 fun AppsPane(store: AppStore) {
     val list by store.apps.collectAsState()
     val addAnswer by store.appAdd.collectAsState()
+    val routeNotice by store.appsRouteNotice.collectAsState()
     val scope = rememberCoroutineScope()
     var editing by remember { mutableStateOf<App?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -133,7 +134,7 @@ fun AppsPane(store: AppStore) {
                         if (AppRules.openable(a) && !openInBrowser(a.url)) copy(a.url)
                     },
                     retrofitApplied = list.retrofitApplied,
-                    note = AppRules.retrofitNote(list),
+                    note = AppRules.pageNote(list, routeNotice),
                     onProbe = { a -> scope.launch { store.probeApp(a.id) } },
                     onEdit = { editing = it },
                     onCopyFix = { copy(it) },

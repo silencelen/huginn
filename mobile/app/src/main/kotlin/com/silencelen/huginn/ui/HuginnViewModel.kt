@@ -2735,18 +2735,48 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * — is a refusal of the request and says so once, in a toast.
      */
     /**
-     * Tell the daemon which routes this phone has pinned — once per launch, after
-     * the first answer. They become addresses every app is REQUIRED to be at
-     * (appd 3.9). An older daemon 404s; that is the end of it until next launch.
+     * Tell the daemon which routes this phone USES — after an answer, and again
+     * whenever that set changes. They become addresses every app is REQUIRED to
+     * be at (appd 3.9). An older daemon 404s; that is the end of it until next
+     * launch.
+     *
+     * ⚠ WHENEVER IT CHANGES, NOT ONCE (2026-10-02). A report replaces this phone's
+     * earlier one on appd 3.9.1, so deleting a dead route from the book has to
+     * reach the daemon or it stays required of every app. Called on every status
+     * answer; it costs a comparison when nothing moved. Only the routes this phone
+     * uses go up — see [AppRules.routeHosts] — and a host the daemon would refuse
+     * is held back and said on the Apps page ([appsRouteNotice]) instead.
      */
-    private var routesReported = false
+    private var routesReportedAs: List<String>? = null
+    private var routesUnsupported = false
+    private var routesReporting = false
+    private val _appsRouteNotice = MutableStateFlow<String?>(null)
+    val appsRouteNotice: StateFlow<String?> = _appsRouteNotice.asStateFlow()
     private fun reportRoutesOnce() {
-        if (routesReported) return
-        routesReported = true
+        if (routesUnsupported || routesReporting) return
+        val report = AppRules.routeReport(_routeBook.value, _routeHealth.value)
+        if (report.hosts == routesReportedAs) return
+        routesReporting = true
         viewModelScope.launch {
-            runCatching { client.reportRoutes(AppRules.routeHosts(_routeBook.value)) }
+            runCatching { client.reportRoutes(report.hosts) }
+                .onSuccess { answer ->
+                    if (!answer.supported) routesUnsupported = true
+                    else routesReportedAs = report.hosts
+                    _appsRouteNotice.value = AppRules.routeNotice(report.refused + answer.refused)
+                }
+            routesReporting = false
         }
     }
+
+    /**
+     * The "Also check from" list to send, or null to leave the key out.
+     *
+     * Null when it is empty and this daemon does not keep the field (appd < 3.9):
+     * sending `[]` there bumped the row's version for nothing. A non-empty list is
+     * always sent, so a daemon that drops it can be caught doing so (2026-10-02).
+     */
+    private fun sentAddresses(form: AppForm): List<String>? =
+        AppRules.splitAddresses(form.alsoCheck).takeIf { it.isNotEmpty() || AppRules.supportsRowAddresses(_apps.value) }
 
     fun addApp(form: AppForm) {
         viewModelScope.launch {
@@ -2758,11 +2788,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     kind = form.kind?.trim()?.ifBlank { null },
                     notes = form.notes.trim().ifBlank { null },
                     unit = form.unit.trim().ifBlank { null },
-                    addresses = AppRules.splitAddresses(form.alsoCheck),
+                    addresses = sentAddresses(form),
                 )
             }
                 .onSuccess { answer ->
                     _appAdd.value = answer
+                    answer.app?.let { row -> if (AppRules.addressesDropped(sentAddresses(form).orEmpty(), row)) _toast.value = AppRules.ADDRESSES_DROPPED }
                     if (answer.ok) refreshApps()
                 }
                 .onFailure { _toast.value = errText(it) }
@@ -2787,12 +2818,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     kind = form.kind?.trim()?.ifBlank { null },
                     notes = form.notes.trim(),
                     unit = form.unit.trim(),
-                    addresses = AppRules.splitAddresses(form.alsoCheck),
+                    addresses = sentAddresses(form),
                 )
             }
                 .onSuccess { saved ->
                     if (saved.conflict) {
                         _toast.value = saved.refusal ?: "That app changed on the host — showing the current one."
+                    } else if (AppRules.addressesDropped(sentAddresses(form).orEmpty(), saved.app)) {
+                        _toast.value = AppRules.ADDRESSES_DROPPED
                     }
                     refreshApps()
                 }
