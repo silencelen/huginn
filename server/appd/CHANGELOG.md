@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## Unreleased
+## 3.9.0 — 2026-10-01
 
 The owner's second report of a first message that "sits in the Screen tab's box unsent"
 (the first was 3.0.7 / 3.1.x). Measured against claude 2.1.280 on the pane sizes the live

@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 1.9.0
 
 Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
 

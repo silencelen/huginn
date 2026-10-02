@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## Unreleased
+## 3.9.0 — 2026-10-01
 
 Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
 
