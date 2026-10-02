@@ -26,6 +26,25 @@
   background nothing sent it again until the session moved. It now shows the saved text on
   arrival, and keeps asking for it until it has arrived. Shared with the phone.
 
+- **Open in PowerShell attaches, even to a session named like a command.** A session called
+  `update`, `solo`, `list` or `uninstall` used to run that command instead: `update` replaced the
+  installed CLI and `solo` disconnected every other device from main. The window now uses the
+  CLI's new `huginn attach <name>`. With an older CLI that does not have it yet, a session with
+  such a name gets a message asking you to run `huginn update` instead of running the command.
+- **Open in PowerShell follows the same name rule as huginn.** Sessions starting with `_` open
+  now. Before, they were refused with a message blaming shell characters. Names the CLI cannot
+  open (a dot, more than 50 characters, or capitals the CLI would fold into a different
+  session) no longer open a window that fails or lands somewhere else. The menu offers to copy
+  the raw tmux command instead, and the tooltip says why.
+- **A missing CLI is reported.** If `~/.huginn` has no huginn CLI, the menu now puts the
+  command on the clipboard instead of opening a window that only says "huginn is not
+  recognized". On Linux the window loads the CLI itself, so a `~/.bash_profile` that hides
+  `~/.profile` no longer leaves it with "command not found".
+- **"+ Local" is no longer clipped while chats are selected.** The chat list chose between
+  words, icons and the single `+` from the pane width alone. The "12 selected" label takes
+  part of that width, so at the default list width two selected chats clipped the third
+  button to "+ L". The header now measures what fits beside the label.
+
 ## 1.9.0
 
 Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.

@@ -80,6 +80,13 @@ dependencies {
     // be driven against a real HuginnClient rather than a hand-written double
     // that would agree with whatever this module believed the routes were.
     testImplementation(libs.ktor.client.mock)
+    // Compose's own test harness, for the few checks that are about what a
+    // reader SEES: a label drawn clipped is invisible to every pure-function
+    // test. Added 2026-10-02 for the chat header's "+ Local" clipping at the
+    // default list width with a selection live (see NewChatHeaderFitTest).
+    // Test-only; the same 1.7.3 the app builds against.
+    @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+    testImplementation(compose.uiTest)
 }
 
 // Headless verification (`xvfb-run ./gradlew :app-desktop:run`) needs BOTH of

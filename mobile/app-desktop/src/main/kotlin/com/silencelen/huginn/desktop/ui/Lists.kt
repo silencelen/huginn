@@ -43,6 +43,9 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.ui.ChatListScroll
 import com.silencelen.huginn.ui.ChatRules
@@ -78,7 +81,6 @@ import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
 import com.silencelen.huginn.ui.TimeWords
 import java.awt.Cursor
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
@@ -87,7 +89,6 @@ import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.unit.Dp
 import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
 import com.silencelen.huginn.desktop.ui.common.MenuButton
 
@@ -142,15 +143,12 @@ fun ChatsList(
 ) {
     Column(Modifier.fillMaxSize()) {
         // The header's width is the LIST PANE's, and the pane goes down to 220 dp.
-        // Three worded buttons need ~200 dp on their own, so below that the verbs
-        // become icons, and below what three icons need, one `+` with a menu.
-        // Measured here rather than guessed from the window: the pane has a
-        // splitter of its own.
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val width = maxWidth
-            ListHeader("Chats", chats.size, selection.size) {
-                NewChatVerbs(width, onNew, onNewLocal)
-            }
+        // Three worded buttons need ~200 dp on their own, so when they do not fit
+        // the verbs become icons, and below what three icons need, one `+` with a
+        // menu. "Fit" is measured against what the header's LEFT side leaves —
+        // see NewChatVerbs for why the pane width alone was the wrong number.
+        ListHeader("Chats", chats.size, selection.size) {
+            NewChatVerbs(onNew, onNewLocal)
         }
         // Loading and empty are DIFFERENT SENTENCES. `loaded` is false only until
         // the first fetch settles, and a cold start that says "No chats yet" is a
@@ -721,27 +719,41 @@ private class NewChatVerb(val word: String, val icon: ImageVector, val run: () -
  * letter per line. Nothing in the old row said "one line"; now the words say so,
  * and the tiers mean they never need to.
  *
- *   ≥ [NEW_CHAT_WORDS_AT]   the words, as before
- *   ≥ [NEW_CHAT_ICONS_AT]   one icon each, the word in the tooltip
- *   below                   a single `+` whose menu holds all three
+ * Three tiers, most-wanted first; the FIRST ONE THAT FITS is drawn:
+ *
+ *   the words, as before
+ *   one icon each, the word in the tooltip
+ *   a single `+` whose menu holds all three
+ *
+ * ⚠ "FITS" IS MEASURED, NOT A PANE-WIDTH THRESHOLD (desktop breaker,
+ * 2026-10-02). The first version picked the tier from the pane width (words at
+ * ≥ 320 dp), but [ListHeader]'s left side is not a constant: while a
+ * multi-selection is live it grows an "N selected" label, and the header's Row
+ * hands these verbs only what that side leaves. At 320 dp — the splitter's
+ * default — two selected chats clipped the third button to "+ L" and twelve to
+ * a bare "+". So each tier is measured at its natural width and compared with
+ * the room this slot is actually given; no number here can drift from the
+ * label, the font or the count again.
  *
  * The keyboard shortcuts and the palette (`Shortcut.NEW_*`) do not go through
  * here and are unchanged.
  */
 @Composable
-private fun NewChatVerbs(width: Dp, onNew: (String) -> Unit, onNewLocal: (() -> Unit)?) {
+private fun NewChatVerbs(onNew: (String) -> Unit, onNewLocal: (() -> Unit)?) {
     val verbs = listOfNotNull(
         NewChatVerb("Ask", Icons.Outlined.Chat) { onNew("ask") },
         NewChatVerb("Act", Icons.Filled.Bolt) { onNew("act") },
         onNewLocal?.let { NewChatVerb("Local", Icons.Outlined.Computer, it) },
     )
-    when {
-        width >= NEW_CHAT_WORDS_AT -> verbs.forEach { v ->
+    val words: @Composable () -> Unit = {
+        verbs.forEach { v ->
             TextButton(onClick = v.run) {
                 Text("+ ${v.word}", style = DeskType.rail, maxLines = 1, softWrap = false)
             }
         }
-        width >= NEW_CHAT_ICONS_AT -> verbs.forEach { v ->
+    }
+    val icons: @Composable () -> Unit = {
+        verbs.forEach { v ->
             Tip(newChatTip(v.word)) {
                 IconButton(onClick = v.run, modifier = Modifier.size(NEW_CHAT_ICON_BUTTON_DP)) {
                     Icon(
@@ -753,11 +765,32 @@ private fun NewChatVerbs(width: Dp, onNew: (String) -> Unit, onNewLocal: (() -> 
                 }
             }
         }
-        else -> MenuButton(
+    }
+    val menu: @Composable () -> Unit = {
+        MenuButton(
             items = { verbs.map { v -> HuginnMenuItem("+ ${v.word}", onClick = v.run) } },
             description = "New chat",
             icon = Icons.Filled.Add,
         )
+    }
+    val tiers = listOf(words, icons, menu)
+    SubcomposeLayout { constraints ->
+        // Keep a sliver between the title side and the verbs, so "fits" never
+        // means "touching".
+        val room = constraints.maxWidth - NEW_CHAT_GAP.roundToPx()
+        // Unbounded width: a tier is asked how wide it WANTS to be, never told
+        // to squeeze — squeezing is the bug.
+        val natural = Constraints(maxHeight = constraints.maxHeight)
+        var chosen: Placeable? = null
+        for ((i, tier) in tiers.withIndex()) {
+            // One Row per tier, so a tier is exactly one measurable.
+            val p = subcompose(i) { Row(verticalAlignment = Alignment.CenterVertically) { tier() } }
+                .first().measure(natural)
+            chosen = p
+            if (p.width <= room) break
+        }
+        val p = chosen!!
+        layout(p.width, p.height) { p.place(0, 0) }
     }
 }
 
@@ -766,8 +799,7 @@ private fun newChatTip(word: String) = when (word) {
     else -> "New ${word.lowercase()} chat"
 }
 
-private val NEW_CHAT_WORDS_AT = 320.dp
-private val NEW_CHAT_ICONS_AT = 250.dp
+private val NEW_CHAT_GAP = 4.dp
 private val NEW_CHAT_ICON_BUTTON_DP = 28.dp
 private val NEW_CHAT_GLYPH_DP = 16.dp
 
