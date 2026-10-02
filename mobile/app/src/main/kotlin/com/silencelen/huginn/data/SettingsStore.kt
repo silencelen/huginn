@@ -199,6 +199,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val HEADROOM_STALLED = stringSetPreferencesKey("headroom_stalled")
         private val HEADROOM_LADDERED = stringPreferencesKey("headroom_laddered")
         private val APP_LOCK = booleanPreferencesKey("app_lock")
+        private val LIST_COLLAPSED = booleanPreferencesKey("list_collapsed")
         private val PUSH_TOKEN = stringPreferencesKey("push_token")
         private val PUSH_TOKEN_AT = longPreferencesKey("push_token_at")
         private val LAST_PUSH_AT = longPreferencesKey("last_push_at")
@@ -380,6 +381,17 @@ class SettingsStore(private val context: Context) : HuginnSettings {
 
     suspend fun setAppLock(value: Boolean) {
         context.dataStore.edit { it[APP_LOCK] = value }
+    }
+
+    /**
+     * The wide layout's list pane is hidden. Only READ on a wide screen — a phone
+     * never draws the pane, so the flag is simply dormant there, exactly as the
+     * desktop keeps its saved flag untouched while a compact window overrides it.
+     */
+    val listCollapsed: Flow<Boolean> = prefs.map { it[LIST_COLLAPSED] ?: false }
+
+    suspend fun setListCollapsed(value: Boolean) {
+        context.dataStore.edit { it[LIST_COLLAPSED] = value }
     }
 
     /** Delivery health, so "is this working?" is answerable without guessing. */
