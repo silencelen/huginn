@@ -164,7 +164,12 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun readTarget(intent: Intent?) {
+        // ⚠ ANY APP CAN SET THIS: the activity is exported. 2026-10-02 a crafted
+        // `VICTIM?x=` opened a session view whose lease release went out as a
+        // kill of VICTIM. The client encodes every segment now; a name the
+        // daemon could never route is also never navigated to.
         val session = intent?.getStringExtra(SessionWatchWorker.EXTRA_SESSION)
+            ?.takeIf { com.silencelen.huginn.ui.SessionNameRules.isAddressable(it) }
         val chat = intent?.getStringExtra(SessionWatchWorker.EXTRA_CHAT)
         val project = intent?.getStringExtra(SessionWatchWorker.EXTRA_PROJECT)
         val newChat = intent?.getBooleanExtra(FleetWidget.EXTRA_NEW_CHAT, false) == true

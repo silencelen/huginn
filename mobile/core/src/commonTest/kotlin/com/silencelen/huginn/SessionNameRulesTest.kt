@@ -71,4 +71,20 @@ class SessionNameRulesTest {
         assertTrue(SessionNameRules.nameProblem("a".repeat(SessionNameRules.MAX + 1)) != null)
         assertEquals(50, SessionNameRules.MAX)
     }
+
+    /**
+     * 2026-10-02: MainActivity is exported and turned ANY intent's `session`
+     * extra into a session view, so another app could hand it `VICTIM?x=` and
+     * the pane-size release became a kill of VICTIM. The client now encodes
+     * every segment; this is the gate in front of it, the daemon's own ROUTE
+     * matcher (dots still addressable, as an old session may carry one).
+     */
+    @Test
+    fun `only a name the daemon could route is ever navigated to`() {
+        assertTrue(SessionNameRules.isAddressable("rv-phone-1"))
+        assertTrue(SessionNameRules.isAddressable("old.dotted"))
+        for (bad in listOf("VICTIM?x=", "../../v1/account?", "a/b", "a#b", "", ".", "..", "-lead", "x".repeat(51))) {
+            assertTrue(!SessionNameRules.isAddressable(bad), "'$bad' passed")
+        }
+    }
 }
