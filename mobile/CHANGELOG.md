@@ -1,5 +1,12 @@
 # Huginn changelog
 
+## Unreleased
+
+- **No crash when push is not ready.** 3.9.0 closed itself seven times in a row on the first
+  launches after updating: Play services answers "not available" for a minute after an app update,
+  and the push-token callback read the failed answer as if it had succeeded. A token that is not
+  ready now waits for the next start, which is what was always meant to happen.
+
 ## 3.9.0 — 2026-10-01
 
 Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.

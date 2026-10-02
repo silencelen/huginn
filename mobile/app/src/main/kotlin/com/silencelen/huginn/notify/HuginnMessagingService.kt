@@ -290,11 +290,27 @@ class HuginnMessagingService : FirebaseMessagingService() {
         fun syncToken(context: Context) {
             runCatching {
                 FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-                    val token = task.result
-                    if (!task.isSuccessful || token.isNullOrBlank()) return@addOnCompleteListener
+                    val token = usableToken(task.isSuccessful) { task.result } ?: return@addOnCompleteListener
                     CoroutineScope(Dispatchers.IO).launch { register(context, token) }
                 }
             }
+        }
+
+        /**
+         * The token from a finished `getToken()` task, or null.
+         *
+         * ⚠ THE CRASH THIS EXISTS FOR (3.9.0 on the Fold, 2026-10-02): the callback
+         * read `task.result` BEFORE asking `isSuccessful`, and `getResult()` on a
+         * failed task THROWS. Play services answers `SERVICE_NOT_AVAILABLE` for a
+         * minute or so after an app update, so the first launches after installing
+         * 3.9.0 died on the main thread, seven times in sixteen seconds. The
+         * `runCatching` around `addOnCompleteListener` never covered it — the
+         * callback runs later, on the main looper, outside it. A failed token is
+         * not a reason to stop the app: the next start or [onNewToken] asks again.
+         */
+        internal fun usableToken(successful: Boolean, result: () -> String?): String? {
+            if (!successful) return null
+            return runCatching(result).getOrNull()?.takeIf { it.isNotBlank() }
         }
 
         /**
