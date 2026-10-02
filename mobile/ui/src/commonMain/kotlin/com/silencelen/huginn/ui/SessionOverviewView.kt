@@ -59,6 +59,8 @@ import com.silencelen.huginn.data.SessionOverview
 import com.silencelen.huginn.ui.theme.LocalSyntaxColors
 import com.silencelen.huginn.ui.work.PulseDot
 import com.silencelen.huginn.ui.work.SettledDot
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 
 /**
  * A place to rest during a long run.
@@ -147,6 +149,12 @@ fun SessionOverviewView(
     unavailable: String? = null,
     note: String? = null,
     onDismissNote: () -> Unit = {},
+    /**
+     * Hoisted by the shells so leaving the tab and coming back does not put the
+     * reader back at the top of a list that was rebuilt from nothing (owner,
+     * 10-01). Defaulted, so a caller that does not care still compiles.
+     */
+    listState: LazyListState = rememberLazyListState(),
 ) {
     var open by remember { mutableStateOf<GraphNode?>(null) }
     val totals = graph?.totals ?: overview?.totals
@@ -154,7 +162,7 @@ fun SessionOverviewView(
     val layout = remember(graph) { graph?.let { GraphLayout.layout(it) } ?: GraphLayout.Result() }
     val agentsById = remember(graph) { graph?.agents.orEmpty().associateBy { it.id } }
 
-    LazyColumn(modifier.fillMaxSize()) {
+    LazyColumn(modifier.fillMaxSize(), state = listState) {
         if (unavailable != null) {
             item { Quiet(unavailable, Modifier.padding(horizontal = 14.dp, vertical = 18.dp)) }
         }

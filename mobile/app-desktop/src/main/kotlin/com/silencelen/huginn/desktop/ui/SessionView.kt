@@ -690,7 +690,8 @@ private fun OverviewTab(controller: SessionController, store: AppStore) {
     val notes by store.metaSaver.notes.collectAsState()
     val saveState by store.metaSaver.state.collectAsState()
     val saveNote by store.metaSaver.note.collectAsState()
-    var density by remember { mutableStateOf(OverviewDensity.COMPACT) }
+    // Held on the controller, so leaving the tab and coming back keeps both.
+    val density by controller.overviewDensity.collectAsState()
     // The countdowns are live, so the clock has to move on its own; the map's own
     // numbers are refreshed by the poll.
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -712,10 +713,11 @@ private fun OverviewTab(controller: SessionController, store: AppStore) {
         density = density,
         onGoals = { store.metaSaver.setGoals(it) },
         onNotes = { store.metaSaver.setNotes(it) },
-        onDensity = { density = it },
+        onDensity = { controller.setOverviewDensity(it) },
         unavailable = if (overview == null && graph == null) note else null,
         note = saveNote,
         onDismissNote = { store.metaSaver.clearNote() },
+        listState = controller.overviewList,
     )
 }
 

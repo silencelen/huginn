@@ -30,6 +30,10 @@ Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
   Status on wide monitors had spread through the shared reading pane to Devices, Rounds and Apps,
   and been copied onto Settings and both transcripts. Those are centred again at their usual
   measure; Status stays left and now stops at 1200 dp instead of 840.
+- **A session's Overview is ready before you open it.** The map loads when the session opens,
+  stays current every 30 s behind the other tabs, refreshes the moment you arrive on the Overview
+  tab and every 5 s while you are there, and keeps its scroll position and density between visits.
+  Nothing polls while the window is hidden.
 
 ## 1.8.0
 

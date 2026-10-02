@@ -136,6 +136,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.runtime.key
 
 class MainActivity : FragmentActivity() {
 
@@ -1450,6 +1451,8 @@ fun HuginnApp(
             )
         }
         val sessionDetail: @Composable (String) -> Unit = { name ->
+            // Outlives the Overview tab, so coming back to it keeps the place.
+            val overviewList = key(name) { androidx.compose.foundation.lazy.rememberLazyListState() }
             // Tied to the lifecycle, not just to composition: a DisposableEffect
             // does not dispose when the app is merely backgrounded, so polling
             // would keep running — and keep renewing the server-side pane-size
@@ -1466,7 +1469,12 @@ fun HuginnApp(
                 // actually asks the daemon while something is waiting — see
                 // startTypingPolling.
                 vm.startTypingPolling(name)
+                // The Overview's map, from the moment the session opens — slow
+                // behind the other tabs, fast on its own (OverviewCadence). So the
+                // first visit to the tab finds it already drawn.
+                vm.startOverviewPolling(name)
                 onStopOrDispose {
+                    vm.stopOverviewPolling()
                     vm.stopScreenPolling(); vm.clearSuggestions(); vm.refreshSessions()
                     vm.stopTypingPolling()
                     // Every stream handle goes with the session: an offset into
@@ -1594,10 +1602,13 @@ fun HuginnApp(
                     // from behind the conversation. Lifecycle-gated like every
                     // other poll here — a DisposableEffect alone keeps running
                     // while the phone is in a pocket.
+                    // The tab only sets the PACE now: the loop belongs to the session
+                    // (started above, with the transcript) and arriving here is an
+                    // immediate refresh of what it already has (owner, 10-01).
                     LifecycleStartEffect(name) {
                         vm.refreshPlan()
-                        vm.startOverviewPolling(name)
-                        onStopOrDispose { vm.stopOverviewPolling() }
+                        vm.overviewTabShown(true)
+                        onStopOrDispose { vm.overviewTabShown(false) }
                     }
                     SessionOverviewView(
                         // ⚠ THE LAST CARD USED TO SIT UNDER THE SYSTEM BAR. The
@@ -1613,6 +1624,7 @@ fun HuginnApp(
                         notes = metaNotes,
                         saveState = metaSaveState,
                         density = overviewDensity,
+                        listState = overviewList,
                         onGoals = { vm.metaSaver.setGoals(it) },
                         onNotes = { vm.metaSaver.setNotes(it) },
                         onDensity = { overviewDensity = it },

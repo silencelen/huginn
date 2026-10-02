@@ -44,6 +44,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.OverviewCadence
 
 /** Which face of one session is on screen. All stay alive; only one is selected. */
 enum class SessionTab { CONVERSATION, SCREEN, OVERVIEW }
@@ -400,37 +401,53 @@ class SessionController(
      * cursor, which answers "unchanged" in two numbers while nothing is moving.
      */
     private suspend fun overviewSupervisor() {
-        combine(presence.visible, _tab) { visible, tab -> visible && tab == SessionTab.OVERVIEW }
-            .collectLatest { watching ->
-                if (!watching) {
-                    // Leaving the tab is when the sentence still in the air has to land.
-                    meta.flush()
-                    return@collectLatest
-                }
+        // ⚠ THE SESSION OWNS THIS LOOP, NOT THE TAB (owner, 10-01). It used to run
+        // only while Overview was showing, so every visit started from a stale map
+        // and a header fetch. Now: from the moment the session opens, slow behind
+        // the other tabs and fast on its own, with an immediate refresh on arrival
+        // (OverviewCadence). Window presence still stops it entirely.
+        combine(presence.visible, _tab) { visible, tab -> visible to (tab == SessionTab.OVERVIEW) }
+            .collectLatest { (visible, onTab) ->
+                // Leaving the tab — or the window — is when the sentence still in
+                // the air has to land.
+                if (!onTab) meta.flush()
+                if (!visible) return@collectLatest
                 // Only on the first visit. Re-opening on every tab flip would
                 // reset the editors to the last meta the POLL returned, which
                 // after a save from this client is the text before it was typed.
-                if (meta.session.value != name) meta.open(name, SessionMeta())
-                // The generation is captured BEFORE each fetch: what comes back
-                // was read server-side at that moment, and a save of ours can land
-                // in between — after which the poll is a photograph of the text as
-                // it read before it was typed. See SessionMetaSaver's invariant 1.
-                var at = meta.generation()
-                runCatching { client.sessionOverview(name) }
-                    .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta, at) }
-                    .onFailure { _overviewNote.value = overviewNoteFor(it) }
+                if (onTab && meta.session.value != name) meta.open(name, SessionMeta())
+                var first = true
                 while (scope.isActive) {
-                    at = meta.generation()
+                    // The generation is captured BEFORE each fetch: what comes
+                    // back was read server-side at that moment, and a save of ours
+                    // can land in between. See SessionMetaSaver's invariant 1.
+                    var at = meta.generation()
+                    if (first && OverviewCadence.fetchHeader(onTab, _overview.value != null)) {
+                        runCatching { client.sessionOverview(name) }
+                            .onSuccess { _overview.value = it; _overviewNote.value = null; meta.refresh(name, it.meta, at) }
+                            .onFailure { _overviewNote.value = overviewNoteFor(it) }
+                        at = meta.generation()
+                    }
+                    first = false
                     runCatching { client.sessionGraph(name, _graph.value?.cursor) }
                         .onSuccess { g ->
                             if (!g.unchanged) { _graph.value = g; meta.refresh(name, g.meta, at) }
                             _overviewNote.value = null
                         }
                         .onFailure { _overviewNote.value = overviewNoteFor(it) }
-                    delay(OVERVIEW_POLL_MS)
+                    delay(OverviewCadence.intervalMs(onTab))
                 }
             }
     }
+
+    /**
+     * The Overview's own view state, held here so a tab switch does not rebuild
+     * it from nothing: where the list was scrolled to, and the density chosen.
+     */
+    val overviewList = androidx.compose.foundation.lazy.LazyListState()
+    private val _overviewDensity = MutableStateFlow(com.silencelen.huginn.ui.OverviewDensity.COMPACT)
+    val overviewDensity: StateFlow<com.silencelen.huginn.ui.OverviewDensity> = _overviewDensity.asStateFlow()
+    fun setOverviewDensity(d: com.silencelen.huginn.ui.OverviewDensity) { _overviewDensity.value = d }
 
     /** A daemon that predates the route says nothing; everything else says why. */
     private fun overviewNoteFor(t: Throwable): String? =
@@ -1140,7 +1157,8 @@ class SessionController(
         const val HISTORY_LINES: Int = 2_000
 
         /** How often the map asks whether anything happened. Its cursor makes that cheap. */
-        const val OVERVIEW_POLL_MS: Long = 5_000
+        /** The Overview tab's pace. Behind it, [OverviewCadence.BACKGROUND_MS]. */
+        const val OVERVIEW_POLL_MS: Long = OverviewCadence.FOREGROUND_MS
 
         /**
          * How often the agent LIST is re-read. Slower than the transcript tail: a
