@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.height
 
 /**
  * Model, effort and permission mode for a live session.
@@ -66,7 +68,13 @@ fun ControlPicker(
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEach { (value, text) ->
-                DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onPick(value) })
+                // The same 32 dp row as the chat's pickers (owner, 10-01).
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = { open = false; onPick(value) },
+                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                )
             }
         }
     }
