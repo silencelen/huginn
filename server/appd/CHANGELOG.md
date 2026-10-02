@@ -47,6 +47,53 @@ reproduced end to end against a stand-in that handles bracketed paste the way Cl
   message that was left in the box now submits that copy rather than pasting a second one
   behind it.
 
+Fixes to the Apps address model from the 2026-10-02 breaker round.
+
+- **Removing a route withdraws it.** A device's route report now replaces that device's own
+  earlier report (keyed by `X-Huginn-Client`), so a route you unpin stops being required on
+  the next report, and an empty report clears that device. Before, a report could only add:
+  a dead or unpinned route stayed required of every app for 30 days, which turned every row
+  red and made every add a 422, with no way to remove it. A route another device still
+  reports stays.
+- **A route the daemon will not check is refused by name.** `PUT /v1/apps/routes` answers 400
+  with `refused: [{addr, why}]` for a host outside the app-URL host rule (for example
+  `huginn.jnet.ad`) and changes nothing. Before, the host was dropped from a 200 without a
+  word. Dotted names the rule allows (`*.ts.net`, `*.localhost`) are accepted.
+- **One device cannot push out another's routes.** The cap is now 8 routes per device (the
+  phone's own pin limit; a report over it is a 400) and 16 devices, rather than one pool of
+  32 that a single client could fill.
+- **Addresses are bare hosts, written one way.** An address with a path, query, fragment,
+  user or port (`127.0.0.3#`, `10.0.0.1/x`) is refused instead of being spliced into the
+  probe URL, where it dialled port 80 with a path the caller chose. IPv6 spellings, case and
+  international names are canonicalised, so one address is one entry. The 8-address limit for
+  a row is counted after that, the way the row is stored.
+- **Two adds at once both stay.** An add re-reads the list after its reachability probe before
+  saving. Before, overlapping adds lost all but the last, and a delete made during an add came
+  back.
+- **An unreadable `consoles.json` is kept, never re-seeded.** A store that does not parse (a
+  hand edit with a trailing comma, say) used to be treated as missing and overwritten with the
+  four seeds. Now it is left exactly as it is, a copy is set aside as
+  `consoles.json.unreadable-<time>`, the journal says so, and the Apps routes answer 503 with
+  that sentence until the file reads again. Nothing is written over it meanwhile.
+- **A rollback to appd 3.8 no longer erases routes and "Also check from" lists.** Both now also
+  live in `apps-addresses.json` beside `consoles.json`, which 3.8 never touches; 3.8 rewrites
+  `consoles.json` from its own record shape and dropped them for good. Fields this version
+  does not know now survive its own rewrites of the store too. Routes reported before the
+  store first existed are written down as well, so a restart no longer forgets them.
+- **An app on another host is checked at its own address.** The probe used to swap this host's
+  loopback into every row's URL, so an app on another machine passed when an unrelated local
+  service answered on the same port, and was refused with "fix the bind first" when nothing
+  local did. A row whose host is not this host is now required to answer at its own URL (plus
+  any addresses it lists), gets no rebind lines, and its note says huginn checks it only there.
+- **"Reachable" says when only loopback was checked.** When no device has reported a route,
+  the note says loopback is all that was required, rather than letting the row vouch for your
+  devices. This corrects 3.9.0's "an old client loses nothing": a phone still on app 3.8 never
+  reports its route, so an add is no longer refused on the address that phone arrived on.
+- **A JSON `null` body is a 400.** `POST`/`PATCH /v1/apps`, `PUT /v1/apps/routes` and
+  `POST /v1/rounds/:id/ack` answered 500 for a body that was not an object. The ack also
+  refuses an `acknowledged` that is not true or false; the string "false" used to mark the
+  report read.
+
 ## 3.9.0 — 2026-10-01
 
 The owner's second report of a first message that "sits in the Screen tab's box unsent"

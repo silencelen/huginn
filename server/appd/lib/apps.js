@@ -49,6 +49,7 @@
 // without a daemon.
 
 const nodeFs = require('node:fs');
+const nodeOs = require('node:os');
 const path = require('node:path');
 
 // ------------------------------------------------------------------- limits
@@ -186,7 +187,21 @@ const MAX_CLIENT_REMOTES = 16;
  */
 const LOOPBACK_ADDR = '127.0.0.1';
 const REPORTED_ADDR_TTL_SEC = 30 * 24 * 3600;
-const MAX_REPORTED_ADDRS = 32;
+/**
+ * ⚠ THE CAP IS PER CLIENT, NOT ONE POOL (2026-10-02). 3.9.0 kept one host-wide
+ * pool of 32 and evicted oldest-first, so a single client reporting 32
+ * addresses — all stamped "now" — pushed the phone's real route out of the
+ * required set without a word. Eight is the RouteBook's own pin cap
+ * (RouteBook.MAX_PINS): a client cannot honestly have more routes than that. A
+ * report over it is a 400, not a truncation, so the client knows.
+ */
+const MAX_ROUTES_PER_CLIENT = 8;
+/**
+ * How many distinct clients' reports are kept. Past it the client that has not
+ * reported for longest goes — a WHOLE client, never a slice of somebody else's
+ * routes. Sixteen is the arrival set's cap, for the same reason.
+ */
+const MAX_REPORTERS = 16;
 /** How many extra addresses one row may list for itself. */
 const MAX_APP_ADDRS = 8;
 
@@ -260,6 +275,20 @@ const REBIND_MARKER_NAME = 'consoles-rebind-applied';
 
 /** The store file, under DATA_DIR. */
 const STORE_NAME = 'consoles.json';
+
+/**
+ * The ADDRESS sidecar, beside the store: the routes clients reported and every
+ * row's own "Also check from" list.
+ *
+ * ⚠⚠ A SEPARATE FILE BECAUSE A ROLLBACK ERASED THEM (2026-10-02). appd 3.8
+ * rebuilds consoles.json from ITS OWN record shape on the first authenticated
+ * request (even /v1/ping) and writes it back, so both 3.9 additions — a row's
+ * `addresses` and the envelope's `reportedAddresses` — were gone for good after
+ * a 3.9 → 3.8 → 3.9 round trip, with no log line. 3.8 never opens this file.
+ * The two fields are STILL written into consoles.json too, so a rollback to
+ * 3.9.0 reads what it always read; this file is the authority when both exist.
+ */
+const SIDECAR_NAME = 'apps-addresses.json';
 
 /** The envelope's shape version. NOT the per-app `version`; see [buildRecord]. */
 const SCHEMA = 1;
@@ -478,24 +507,58 @@ function cleanUnit(raw) {
  * normalised by the same rule an arrival is, de-duplicated, capped.
  */
 function cleanAddrs(raw) {
-  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\s,]+/) : [];
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(ADDR_SEPARATORS) : [];
   return [...new Set(list.map(normalizeAddr).filter(Boolean))].slice(0, MAX_APP_ADDRS);
 }
+
+/**
+ * What separates two typed addresses: a comma, or ANY whitespace — JS `\s` is
+ * Unicode-aware, so a no-break space pasted from a web page splits like a space.
+ * The clients' AppRules.splitAddresses uses the same set (2026-10-02: the phone
+ * split on four ASCII characters only and sent "10.0.0.1<NBSP>10.0.0.2" as ONE
+ * address, which came back as a confusing 400).
+ */
+const ADDR_SEPARATORS = /[\s,]+/;
+
+/** The sentence a refused address gets, for a row and for a reported route alike. */
+const REFUSED_ADDR = 'is not an address huginn can check from — loopback, a private LAN address, '
+  + 'the tailnet (100.64.0.0/10 or *.ts.net), a mesh ULA (fc00::/7) or a name with no dot in it; '
+  + 'a bare host, with no port, path or user';
 
 /** Why `addresses` cannot be stored, or null. Absent is fine; nonsense is a 400. */
 function addrsProblem(raw) {
   if (raw === undefined || raw === null) return null;
-  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[\s,]+/).filter(Boolean) : null;
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(ADDR_SEPARATORS).filter(Boolean) : null;
   if (!list) return 'addresses must be a list of addresses';
-  if (list.length > MAX_APP_ADDRS) return `that is the ${MAX_APP_ADDRS}-address limit for one app`;
+  // A raw-length cap still, so a huge array is refused before anything parses
+  // it — but generous, because duplicates are not addresses.
+  if (list.length > MAX_APP_ADDRS * 4) return `that is the ${MAX_APP_ADDRS}-address limit for one app`;
   for (const a of list) {
-    if (typeof a !== 'string' || !normalizeAddr(a)) {
-      return `'${String(a).slice(0, 40)}' is not an address huginn can check from `
-        + '(loopback, or an IP on the LAN, the tailnet or the mesh)';
-    }
+    if (typeof a !== 'string' || !normalizeAddr(a)) return `'${String(a).slice(0, 40)}' ${REFUSED_ADDR}`;
+  }
+  // ⚠ COUNTED AFTER NORMALISING (2026-10-02). The limit used to be checked on the
+  // RAW list, so "FD00::1 fd00::1" counted twice here and once in the store, and
+  // eight distinct addresses typed in nine spellings were refused with "the
+  // 8-address limit". The validator and the store now count the same set.
+  if (new Set(list.map(normalizeAddr)).size > MAX_APP_ADDRS) {
+    return `that is the ${MAX_APP_ADDRS}-address limit for one app`;
   }
   return null;
 }
+
+/**
+ * Whether a request body is a JSON object.
+ *
+ * ⚠ `null` IS NOT `{}` (2026-10-02). A default parameter replaces only
+ * `undefined`, so a body of literally `null` reached `input.name` and answered
+ * 500 "something went wrong on the host" with a TypeError in the journal. Any
+ * body that is not an object — null, a number, a string, an array — is the
+ * caller's mistake and a 400.
+ */
+function isBodyObject(raw) {
+  return !!raw && typeof raw === 'object' && !Array.isArray(raw);
+}
+const REFUSED_BODY = 'the body must be a JSON object';
 
 function unitProblem(raw) {
   if (raw == null || raw === '') return null;
@@ -749,6 +812,7 @@ function findApp(list, id) {
 
 function add(list, input = {}, now = Math.floor(Date.now() / 1000)) {
   const current = list || [];
+  if (!isBodyObject(input)) return { ok: false, status: 400, error: REFUSED_BODY };
   if (current.length >= MAX_APPS) {
     return { ok: false, status: 400, error: `that is the ${MAX_APPS}-app limit — remove one first` };
   }
@@ -787,6 +851,7 @@ function patch(list, id, changes = {}) {
   const current = list || [];
   const rec = findApp(current, id);
   if (!rec) return { ok: false, status: 404, error: 'no such app' };
+  if (!isBodyObject(changes)) return { ok: false, status: 400, error: REFUSED_BODY };
 
   const asked = Number(changes.version);
   if (!Number.isFinite(asked)) return { ok: false, status: 400, error: 'version is required' };
@@ -1332,11 +1397,39 @@ function firewallSources(known) {
  */
 function normalizeAddr(raw) {
   let a = typeof raw === 'string' ? raw.trim() : '';
-  if (!a) return '';
-  a = a.split('%')[0].replace(/^\[/, '').replace(/\]$/, '');
-  if (/^::ffff:/i.test(a)) a = a.slice(7);
-  a = a.toLowerCase();
-  return seedableHost(a) ? a : '';
+  if (!a || a.length > 253) return '';
+  a = a.split('%')[0];
+  // ⚠ A BARE HOST, NOTHING ELSE (2026-10-02). This used to accept anything the
+  // URL parser could find a hostname in, and then splice the RAW string into
+  // the probe URL: '127.0.0.3#' was stored, and `http://127.0.0.3#:8088/` dials
+  // port 80 with the real port in the fragment — a decoy on :80 made the row
+  // pass; '127.0.0.3/admin/reboot?x#' made every five-minute sweep GET a path
+  // the caller chose. Refused on the raw string, before parsing can hide it.
+  if (/[/?#@\\\s]/.test(a)) return '';
+  const inner = a.startsWith('[') && a.endsWith(']') ? a.slice(1, -1) : a;
+  if (!inner || /[[\]]/.test(inner)) return '';
+  let host;
+  try {
+    // A ':' means a v6 literal, which needs its brackets to be an authority; a
+    // `host:port` therefore fails to parse here and is refused, which is right.
+    const u = new URL(`http://${inner.includes(':') ? `[${inner}]` : inner}/`);
+    if (u.port || u.username || u.password || u.pathname !== '/' || u.search || u.hash) return '';
+    // ⚠ THE PARSER'S HOST, NOT THE TYPED ONE: one canonical spelling per address
+    // (fd00:0:0:0:0:0:0:6 is fd00::6, an IDN label is its punycode, case is
+    // folded). 3.9.0 stored what was typed, so two spellings of one address were
+    // two required addresses, each probed.
+    host = u.hostname.replace(/^\[/, '').replace(/\]$/, '');
+  } catch {
+    return '';
+  }
+  // ⚠ `::ffff:127.0.0.1` IS 127.0.0.1 — and WHATWG writes it `::ffff:7f00:1`.
+  const mapped = host.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (mapped) {
+    const hi = parseInt(mapped[1], 16);
+    const lo = parseInt(mapped[2], 16);
+    host = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+  }
+  return seedableHost(host) ? host : '';
 }
 
 /** `addr` as a URL authority — a v6 literal gets its brackets back. */
@@ -1435,18 +1528,33 @@ async function reachabilityProbe(rec, addrs = [], opts = {}) {
   // it never makes `ok` false and never earns a fix line — a device that
   // happened to arrive on an address once is not a promise the app must keep.
   const ok = required.length ? required.every((a) => a.ok === true) : null;
-  let note = '';
-  if (advisoryDown.length) {
-    note = `also not answering at ${advisoryDown.map((a) => a.addr).join(', ')} — devices have arrived there, but it is not required`;
-  } else if (!required.length) {
-    note = 'nothing is required of this app yet; only addresses devices happened to arrive on were tried';
+  const notes = [];
+  if (set.remote) {
+    // See the ⚠⚠ on the store's addressSet: another machine's app is asked at
+    // its own address, and the row says so rather than vouching for devices.
+    notes.push(`this app is on another host (${set.remote}), so huginn checks it only at its own address — `
+      + 'whether your devices can reach that host is not something huginn can see');
+  } else if (ok === true && required.every((a) => hostClass(a.addr) === 'loopback')) {
+    // ⚠ "REACHABLE FROM YOUR DEVICES" MEANT "ANSWERS ON LOOPBACK" (2026-10-02)
+    // whenever no device had reported a route — a 3.8 phone never does — and a
+    // phone that arrived on another address could not open what the row vouched
+    // for. Said, so the row can show it.
+    notes.push('only loopback is required so far — no device has reported the route it uses, '
+      + 'so this says nothing yet about your phone or laptop');
   }
+  if (advisoryDown.length) {
+    notes.push(`also not answering at ${advisoryDown.map((a) => a.addr).join(', ')} — devices have arrived there, but it is not required`);
+  } else if (!required.length) {
+    notes.push('nothing is required of this app yet; only addresses devices happened to arrive on were tried');
+  }
+  const note = notes.join('; ');
   // ⚠ THE PROBE ASKS THE ADDRESSES; THE FIX NAMES THE CLIENTS. Two different
   // sets doing two different jobs — probing a client's address would be asking
   // whether the PHONE serves this app. `opts.remotes` is the map the store
   // keeps; absent, every failing address falls to the comment branch, which is
   // the honest answer for a caller that has no client to name.
-  return { ok, checkedAt, addresses, fix: ok === false ? fixLines(rec, required, opts.remotes || {}) : [], note };
+  const fix = ok === false && !set.remote ? fixLines(rec, required, opts.remotes || {}) : [];
+  return { ok, checkedAt, addresses, fix, note, ...(set.remote ? { remote: set.remote } : {}) };
 }
 
 /**
@@ -1458,7 +1566,8 @@ function splitAddressSet(addrs) {
   if (Array.isArray(addrs)) return { required: uniqAddrs(addrs), advisory: [] };
   const required = uniqAddrs(addrs && addrs.required);
   const advisory = uniqAddrs(addrs && addrs.advisory).filter((a) => !required.includes(a));
-  return { required, advisory };
+  const remote = normalizeAddr(addrs && addrs.remote);
+  return { required, advisory, ...(remote ? { remote } : {}) };
 }
 
 function uniqAddrs(list) {
@@ -1476,6 +1585,9 @@ function reachRefusal(reach) {
   const rows = (reach && Array.isArray(reach.addresses) ? reach.addresses : [])
     .filter((a) => a && a.ok === false);
   const where = rows.map((a) => a.addr).join(', ') || 'the addresses huginn answers on';
+  if (reach && reach.remote) {
+    return `this app does not answer at ${where} — it is on another host, so huginn checks it only at its own address`;
+  }
   const head = `this app does not answer at ${where}`
     + ' — a device that can reach huginn has to be able to reach the app';
   if (rows.length && rows.every(reachedButSilent)) {
@@ -1901,43 +2013,154 @@ function addrEntry(raw) {
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, remotes };
 }
 
-/** One reported route with the clients that reported it, cleaned, or null. */
+/**
+ * The id a report is filed under: `X-Huginn-Client`, printable ASCII only.
+ *
+ * ⚠ CLEANED (2026-10-02). 3.9.0 stored the header verbatim — a tab or
+ * `<script>` went into the store and back out on every list. A client with no
+ * header at all files under the shared 'a client', and since a report REPLACES
+ * its own set, header-less clients replace each other: both shipped clients
+ * always send the header.
+ */
+function reportedClientId(raw) {
+  return String(raw == null ? '' : raw).replace(/[^\x21-\x7e]/g, '').slice(0, 64) || 'a client';
+}
+
+/**
+ * One 3.9.0-shaped reported route, `{addr, lastSeenAt, by:[client]}`, cleaned,
+ * or null. Still the shape on the wire and in consoles.json; read back only to
+ * migrate a store that has no sidecar yet.
+ */
 function reportedEntry(raw) {
   const addr = normalizeAddr(raw && raw.addr);
   if (!addr) return null;
-  const by = Array.isArray(raw.by) ? raw.by.map((b) => String(b || '').trim().slice(0, 64)).filter(Boolean) : [];
+  const by = Array.isArray(raw.by) ? raw.by.map(reportedClientId) : [];
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, by: [...new Set(by)] };
 }
 
-function readEnvelope(dir, fs = nodeFs) {
+/** One client's whole report, `{client, lastSeenAt, addrs}`, cleaned, or null. */
+function reporterEntry(raw) {
+  if (!isBodyObject(raw)) return null;
+  const addrs = [...new Set((Array.isArray(raw.addrs) ? raw.addrs : []).map(normalizeAddr).filter(Boolean))]
+    .slice(0, MAX_ROUTES_PER_CLIENT);
+  if (!addrs.length) return null;
+  return {
+    client: reportedClientId(raw.client),
+    lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0,
+    addrs,
+  };
+}
+
+/**
+ * A file this store owns that exists and cannot be used.
+ *
+ * ⚠⚠ UNREADABLE IS NOT MISSING (2026-10-02). Every read error used to come
+ * back as null, and null meant "first run": one trailing comma from a hand edit
+ * and the next list SEEDED OVER the owner's rows and routes, with no copy and no
+ * log line — breaking the seed's own promise to run only against a store that
+ * has never existed. Only ENOENT is missing now; anything else throws this.
+ */
+function unreadableError(file, cause) {
+  const parse = cause instanceof SyntaxError || (cause && cause.notObject);
+  const why = parse ? 'does not parse' : `cannot be read (${(cause && cause.code) || 'error'})`;
+  const e = new Error(`${path.basename(file)} ${why}`);
+  e.unreadable = true;
+  e.file = file;
+  e.cause = cause;
+  return e;
+}
+
+/** A JSON object off disk; null when the file does not exist; throws [unreadableError] otherwise. */
+function readJsonObject(file, fs = nodeFs) {
+  let text;
   try {
-    const raw = JSON.parse(fs.readFileSync(storePath(dir), 'utf8'));
-    return {
-      schema: Number(raw.schema) || SCHEMA,
-      seeded: !!raw.seeded,
-      // Same rule on the way out of the file, which is where an invented
-      // timestamp would become permanent — the next write saves what load read.
-      consoles: Array.isArray(raw.consoles) ? raw.consoles.map((c) => buildRecord(c, storedAddedAt(c))) : [],
-      // Added in 3.5.0. Absent in every store written before it, which is why
-      // this is a default and not a migration.
-      clientAddresses: Array.isArray(raw.clientAddresses)
-        ? raw.clientAddresses.map(addrEntry).filter(Boolean) : [],
-      // Added in 3.9: the routes clients reported. Same default-not-migration rule.
-      reportedAddresses: Array.isArray(raw.reportedAddresses)
-        ? raw.reportedAddresses.map(reportedEntry).filter(Boolean) : [],
-    };
-  } catch {
-    return null;
+    text = fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    throw unreadableError(file, e);
   }
+  let raw;
+  try { raw = JSON.parse(text); } catch (e) { throw unreadableError(file, e); }
+  if (!isBodyObject(raw)) throw unreadableError(file, { notObject: true });
+  return raw;
+}
+
+/** tmp+rename at 0600, like every other store here: a reader never sees half a file. */
+function writeJsonObject(file, obj, fs = nodeFs) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(obj, null, 2), { mode: 0o600 });
+  fs.renameSync(`${file}.tmp`, file);
+  return obj;
+}
+
+/**
+ * The store's envelope, null when there is no store, and a THROW (see
+ * [unreadableError]) when there is one that cannot be read.
+ *
+ * ⚠ KEYS THIS VERSION DOES NOT KNOW PASS THROUGH, on the envelope and on each
+ * row (2026-10-02). Rebuilding from a whitelist is exactly how 3.8 erased the
+ * 3.9 fields; the next addition must survive a rollback to this version.
+ */
+function readEnvelope(dir, fs = nodeFs) {
+  const raw = readJsonObject(storePath(dir), fs);
+  if (!raw) return null;
+  return {
+    ...raw,
+    schema: Number(raw.schema) || SCHEMA,
+    seeded: !!raw.seeded,
+    // Same rule on the way out of the file, which is where an invented
+    // timestamp would become permanent — the next write saves what load read.
+    consoles: Array.isArray(raw.consoles)
+      ? raw.consoles.filter(isBodyObject).map((c) => ({ ...c, ...buildRecord(c, storedAddedAt(c)) })) : [],
+    // Added in 3.5.0. Absent in every store written before it, which is why
+    // this is a default and not a migration.
+    clientAddresses: Array.isArray(raw.clientAddresses)
+      ? raw.clientAddresses.map(addrEntry).filter(Boolean) : [],
+    // Added in 3.9: the routes clients reported. Same default-not-migration rule.
+    reportedAddresses: Array.isArray(raw.reportedAddresses)
+      ? raw.reportedAddresses.map(reportedEntry).filter(Boolean) : [],
+  };
 }
 
 /** tmp+rename at 0600, like every other store here: a reader never sees half a file. */
 function writeEnvelope(dir, env, fs = nodeFs) {
-  const file = storePath(dir);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(env, null, 2), { mode: 0o600 });
-  fs.renameSync(`${file}.tmp`, file);
-  return env;
+  return writeJsonObject(storePath(dir), env, fs);
+}
+
+function sidecarPath(dir) { return path.join(dir, SIDECAR_NAME); }
+
+/**
+ * The address sidecar (see [SIDECAR_NAME]): null when absent, a throw when
+ * unreadable, otherwise `{schema, reporters:[{client,lastSeenAt,addrs}],
+ * rows:{id:{addedAt, addresses}}}`.
+ *
+ * ⚠ A ROW'S LIST IS KEYED BY ID *AND* addedAt. A row 3.8 deleted and then
+ * re-added under the same id is a different row, and must not inherit the old
+ * one's list.
+ */
+function readSidecar(dir, fs = nodeFs) {
+  const raw = readJsonObject(sidecarPath(dir), fs);
+  if (!raw) return null;
+  const rows = {};
+  if (isBodyObject(raw.rows)) {
+    for (const [id, v] of Object.entries(raw.rows)) {
+      if (!ID_RE.test(id) || !isBodyObject(v)) continue;
+      rows[id] = { addedAt: storedAddedAt(v), addresses: cleanAddrs(v.addresses) };
+    }
+  }
+  return {
+    ...raw,
+    schema: Number(raw.schema) || SCHEMA,
+    reporters: Array.isArray(raw.reporters) ? raw.reporters.map(reporterEntry).filter(Boolean) : [],
+    rows,
+  };
+}
+
+/** The sidecar's `rows`, for a list of stored records. */
+function sidecarRows(consoles) {
+  const rows = {};
+  for (const c of consoles || []) rows[c.id] = { addedAt: storedAddedAt(c), addresses: cleanAddrs(c.addresses) };
+  return rows;
 }
 
 /**
@@ -1986,7 +2209,17 @@ function createStore(opts = {}) {
    * did, and so an arrival with no client is still an arrival.
    */
   const remotes = new Map();
-  const reported = new Map();   // addr -> { lastSeenAt, by: Set<clientId> }
+  /**
+   * client id -> { lastSeenAt, addrs: [addr] }: each client's LAST report, whole.
+   *
+   * ⚠ KEYED BY CLIENT, NOT BY ADDRESS (2026-10-02). 3.9.0 kept addr -> {by} and a
+   * report could only add: a route the owner unpinned stayed REQUIRED of every
+   * app — every add a 422, every row red — for the 30-day TTL, and nothing short
+   * of hand-editing the store removed it. A report now REPLACES that client's
+   * own set, so removing a pin withdraws it on the next report, while a route
+   * another device still reports stays.
+   */
+  const reports = new Map();
   let addrsLoaded = false;
   let addrsFlushedAt = 0;
   let lastSweepStartedMs = 0;
@@ -2009,44 +2242,106 @@ function createStore(opts = {}) {
     pruneReported();
   }
 
-  function pruneReported() {
+  /**
+   * A month unreported and a client's report is gone; past [MAX_REPORTERS] the
+   * client heard from longest ago goes — a whole client, never `keep` (the one
+   * reporting right now), and never a slice of anybody's routes.
+   */
+  function pruneReported(keep = null) {
     const cutoff = stamp() - REPORTED_ADDR_TTL_SEC;
-    for (const [addr, v] of reported) if (v.lastSeenAt < cutoff) reported.delete(addr);
-    if (reported.size > MAX_REPORTED_ADDRS) {
-      const byAge = [...reported.entries()].sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
-      for (const [addr] of byAge.slice(0, reported.size - MAX_REPORTED_ADDRS)) reported.delete(addr);
+    for (const [who, v] of reports) if (v.lastSeenAt < cutoff) reports.delete(who);
+    if (reports.size > MAX_REPORTERS) {
+      const byAge = [...reports.entries()].filter(([who]) => who !== keep)
+        .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt);
+      for (const [who] of byAge.slice(0, reports.size - MAX_REPORTERS)) reports.delete(who);
     }
   }
 
   // ------------------------------------------------------- reported routes
 
+  /** Every reported address, in report order, once. */
+  function reportedAddrs() {
+    const out = [];
+    for (const v of reports.values()) for (const a of v.addrs) if (!out.includes(a)) out.push(a);
+    return out;
+  }
+
+  /** The 3.9.0 shape, `[{addr, lastSeenAt, by}]` — what the wire and consoles.json carry. */
   function reportedEntries() {
-    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    ensureLoaded();
     pruneReported();
-    return [...reported.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    const byAddr = new Map();
+    for (const [who, v] of reports) {
+      for (const addr of v.addrs) {
+        const cur = byAddr.get(addr) || { lastSeenAt: 0, by: new Set() };
+        cur.lastSeenAt = Math.max(cur.lastSeenAt, v.lastSeenAt);
+        cur.by.add(who);
+        byAddr.set(addr, cur);
+      }
+    }
+    return [...byAddr.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
       .map(([addr, v]) => ({ addr, lastSeenAt: v.lastSeenAt, by: [...v.by].sort() }));
+  }
+
+  function reporterEntries() {
+    pruneReported();
+    return [...reports.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([client, v]) => ({ client, lastSeenAt: v.lastSeenAt, addrs: [...v.addrs] }));
   }
 
   /**
    * A client says which routes it has pinned (`PUT /v1/apps/routes`). Every
    * host it names becomes REQUIRED of every app — that is the whole point: an
-   * address the phone will dial is one the app has to be at. Idempotent, and a
-   * fresh one is flushed at once for the same reason a fresh arrival is.
+   * address the phone will dial is one the app has to be at.
+   *
+   * ⚠ THE REPORT IS THAT CLIENT'S WHOLE SET (2026-10-02): what it named before
+   * and does not name now is withdrawn, and an empty list withdraws everything
+   * it had. See [reports].
+   *
+   * ⚠ AND A HOST THE RULE REFUSES IS A 400 NAMING IT, NOT A SILENT DROP. 3.9.0
+   * answered 200 with `huginn.jnet.ad` simply missing, and both clients threw
+   * the reply away — a device pinned only to that name was protected by nothing
+   * and told nothing. A refused report changes nothing (no half-applied set).
+   *
+   * `{ok:true, fresh, gone}` or `{ok:false, status, error, refused?}`.
    */
   function noteReportedRoutes(rawAddrs, by) {
-    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
-    const who = String(by || '').trim().slice(0, 64) || 'a client';
-    const fresh = [];
-    for (const addr of uniqAddrs(rawAddrs).slice(0, MAX_REPORTED_ADDRS)) {
-      const cur = reported.get(addr) || { lastSeenAt: 0, by: new Set() };
-      if (!reported.has(addr)) fresh.push(addr);
-      cur.lastSeenAt = stamp();
-      cur.by.add(who);
-      reported.set(addr, cur);
+    const who = reportedClientId(by);
+    if (!Array.isArray(rawAddrs)) return { ok: false, status: 400, error: 'addrs must be a list of hosts' };
+    const refused = [];
+    const next = [];
+    for (const raw of rawAddrs) {
+      const a = typeof raw === 'string' ? normalizeAddr(raw) : '';
+      if (!a) { refused.push({ addr: String(raw).slice(0, 80), why: REFUSED_ADDR }); continue; }
+      if (!next.includes(a)) next.push(a);
     }
+    if (refused.length) {
+      return {
+        ok: false, status: 400, refused,
+        error: `${refused.map((r) => `'${r.addr}'`).join(', ')} ${REFUSED_ADDR}`,
+      };
+    }
+    if (next.length > MAX_ROUTES_PER_CLIENT) {
+      return {
+        ok: false, status: 400,
+        error: `a device reports at most ${MAX_ROUTES_PER_CLIENT} routes, and this report named ${next.length}`,
+      };
+    }
+    ensureLoaded();
+    pruneReported();
+    const before = reportedAddrs();
+    const prev = reports.get(who);
+    if (next.length) reports.set(who, { lastSeenAt: stamp(), addrs: next });
+    else reports.delete(who);
+    pruneReported(who);
+    const after = reportedAddrs();
+    const fresh = after.filter((a) => !before.includes(a));
+    const gone = before.filter((a) => !after.includes(a));
     for (const addr of fresh) log(`apps: ${who} reports a route to huginn via ${addr} — every app now has to answer there too`);
-    if (fresh.length || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
-    return fresh;
+    for (const addr of gone) log(`apps: no device reports ${addr} any more — apps no longer have to answer there`);
+    const changed = !prev || prev.addrs.join(' ') !== next.join(' ');
+    if (fresh.length || gone.length || changed || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
+    return { ok: true, fresh, gone };
   }
 
   /** Loopback plus every reported route: what every app is REQUIRED to answer on. */
@@ -2055,12 +2350,39 @@ function createStore(opts = {}) {
   }
 
   /**
+   * Whether an app's host is THIS host — loopback, the name the seed falls back
+   * to, this machine's hostname, or an address huginn knows it answers on (an
+   * arrival, its own bind, a reported route).
+   */
+  function isLocalHost(host) {
+    if (!host) return true;
+    if (hostClass(host) === 'loopback' || host === SEED_FALLBACK_HOST) return true;
+    let own = '';
+    try { own = normalizeAddr(nodeOs.hostname()); } catch { /* no name */ }
+    if (own && host === own) return true;
+    return addresses().includes(host) || requiredAddresses().includes(host);
+  }
+
+  /**
    * The probe plan for ONE row: required = the host-wide required set plus the
    * row's own extras; advisory = the arrival set (and this host's own address)
    * minus anything already required.
+   *
+   * ⚠⚠ AN APP ON ANOTHER HOST IS CHECKED AT ITS OWN ADDRESS ONLY (2026-10-02).
+   * The plan swaps each of THIS host's addresses into the row's URL, which is
+   * only meaningful for a page this host serves. For `http://192.168.7.50:8088/`
+   * it asked huginn's OWN 127.0.0.1:8088 — armap — and passed the row on the
+   * strength of an unrelated service; the real app was never contacted. huginn
+   * cannot know which of another machine's addresses a device reaches it by, so
+   * what is required of a non-local app is exactly what a device opens: its own
+   * URL's host, plus any address the row lists for itself. No fix lines either —
+   * they rebind a unit on this machine.
    */
   function addressSet(rec) {
-    const required = [...new Set([...requiredAddresses(), ...cleanAddrs(rec && rec.addresses)])];
+    const own = cleanAddrs(rec && rec.addresses);
+    const host = normalizeAddr(hostnameOf(rec && rec.url));
+    if (host && !isLocalHost(host)) return { required: [...new Set([host, ...own])], advisory: [], remote: host };
+    const required = [...new Set([...requiredAddresses(), ...own])];
     const advisory = addresses().filter((a) => !required.includes(a));
     return { required, advisory };
   }
@@ -2110,7 +2432,7 @@ function createStore(opts = {}) {
    * knows, and withholding them is [fixLines]'s job, not the store's.
    */
   function clientRemotes() {
-    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    ensureLoaded();
     const out = {};
     for (const e of addrEntries()) out[e.addr] = e.remotes.map((r) => r.addr);
     return out;
@@ -2125,7 +2447,7 @@ function createStore(opts = {}) {
    * and the prerequisite would start refusing nothing, on a host that had been
    * checking two addresses the day before.
    */
-  function loadAddrs(env) {
+  function loadAddrs(env, side) {
     if (addrsLoaded) return;
     addrsLoaded = true;
     for (const e of (env && env.clientAddresses) || []) {
@@ -2135,13 +2457,112 @@ function createStore(opts = {}) {
       for (const r of e.remotes) if (!seen.has(r.addr) || seen.get(r.addr) < r.lastSeenAt) seen.set(r.addr, r.lastSeenAt);
       remotes.set(e.addr, seen);
     }
-    for (const e of (env && env.reportedAddresses) || []) {
-      const cur = reported.get(e.addr) || { lastSeenAt: 0, by: new Set() };
-      if (cur.lastSeenAt < e.lastSeenAt) cur.lastSeenAt = e.lastSeenAt;
-      for (const b of e.by || []) cur.by.add(b);
-      reported.set(e.addr, cur);
+    // The sidecar is the authority for reports; a store that has none yet (3.9.0)
+    // is migrated from its `reportedAddresses`, one client at a time. A report
+    // taken in memory before this read is newer and wins.
+    const loadedReports = side ? side.reporters : legacyReporters((env && env.reportedAddresses) || []);
+    for (const r of loadedReports) {
+      const cur = reports.get(r.client);
+      if (!cur || cur.lastSeenAt < r.lastSeenAt) reports.set(r.client, { lastSeenAt: r.lastSeenAt, addrs: r.addrs });
     }
     pruneAddrs();
+  }
+
+  /** 3.9.0's `[{addr, by}]`, turned into one report per client. */
+  function legacyReporters(entries) {
+    const byClient = new Map();
+    for (const e of entries) {
+      for (const who of e.by.length ? e.by : ['a client']) {
+        const cur = byClient.get(who) || { client: who, lastSeenAt: 0, addrs: [] };
+        cur.lastSeenAt = Math.max(cur.lastSeenAt, e.lastSeenAt);
+        if (cur.addrs.length < MAX_ROUTES_PER_CLIENT && !cur.addrs.includes(e.addr)) cur.addrs.push(e.addr);
+        byClient.set(who, cur);
+      }
+    }
+    return [...byClient.values()];
+  }
+
+  /**
+   * Read the files once and merge them in. TRUE when the in-memory sets now
+   * reflect what is on disk; FALSE when a file exists and cannot be read — the
+   * sets then stay in memory only, and nothing may be flushed over the file
+   * (see [unreadableError]). Tried again on the next call, so a file the owner
+   * repairs is picked up without a restart.
+   */
+  function ensureLoaded() {
+    if (addrsLoaded) return true;
+    try {
+      const env = readEnvelope(dir, fs);
+      const side = readSidecar(dir, fs);
+      loadAddrs(env, side);
+      return true;
+    } catch (e) {
+      if (!e || !e.unreadable) throw e;
+      noteUnreadable(e);
+      return false;
+    }
+  }
+
+  /**
+   * Said once per distinct broken file, with a copy of it set aside — never a
+   * rename: the owner's file stays exactly where it was, untouched.
+   */
+  const unreadableSeen = new Set();
+  function noteUnreadable(e) {
+    let key = e.file;
+    try { const st = fs.statSync(e.file); key = `${e.file}:${st.size}:${st.mtimeMs}`; } catch { /* key on the name */ }
+    if (unreadableSeen.has(key)) return;
+    unreadableSeen.add(key);
+    let copy = '';
+    try {
+      copy = `${e.file}.unreadable-${stamp()}`;
+      if (!fs.existsSync(copy)) fs.copyFileSync(e.file, copy);
+    } catch { copy = ''; }
+    log(`apps: ${e.message} — left exactly as it is${copy ? `, a copy is at ${copy}` : ''}; `
+      + 'nothing will be written to the apps store until it reads again');
+  }
+
+  /**
+   * The envelope with each row's `addresses` taken from the sidecar, or null
+   * when there is no store; throws a 503-shaped error when either file exists
+   * and cannot be read.
+   */
+  function readStore() {
+    let env;
+    let side;
+    try {
+      env = readEnvelope(dir, fs);
+      side = readSidecar(dir, fs);
+    } catch (e) {
+      if (!e || !e.unreadable) throw e;
+      noteUnreadable(e);
+      const err = new Error(`the apps store ${e.message} — huginn has left it exactly as it is (and set a copy `
+        + 'aside beside it) and will not write it until it reads; fix or move it, and the list comes back');
+      err.status = 503;
+      err.storeUnreadable = true;
+      throw err;
+    }
+    if (env && side) {
+      env.consoles = env.consoles.map((c) => {
+        const own = side.rows[c.id];
+        return own && own.addedAt === storedAddedAt(c) ? { ...c, addresses: own.addresses } : c;
+      });
+    }
+    return env;
+  }
+
+  /**
+   * The sidecar, written whole. `consoles` null keeps the rows already there —
+   * a flush with no store to read rows from must not wipe them.
+   */
+  function writeSidecar(consoles) {
+    let rows;
+    if (consoles) rows = sidecarRows(consoles);
+    else {
+      const was = readSidecar(dir, fs);
+      rows = was ? was.rows : {};
+    }
+    writeJsonObject(sidecarPath(dir), { schema: SCHEMA, reporters: reporterEntries(), rows }, fs);
   }
 
   /**
@@ -2172,7 +2593,7 @@ function createStore(opts = {}) {
     if (!addr) return false;
     // See the ⚠ on loadAddrs: one file read on the first authorised request of
     // this process's life, and a flag check on every one after it.
-    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    ensureLoaded();
     const fresh = !addrs.has(addr);
     addrs.set(addr, stamp());
 
@@ -2206,10 +2627,21 @@ function createStore(opts = {}) {
    * exactly as long as it matters.
    */
   function flushAddrs() {
-    const env = readEnvelope(dir, fs);
-    if (!env) return;
+    // ⚠ NEVER OVER A FILE THAT WAS NOT READ (2026-10-02): a flush from memory
+    // over an unreadable store would replace what is in it with what this
+    // process happens to know.
+    if (!ensureLoaded()) return;
+    let env;
+    try { env = readStore(); } catch { return; }
     addrsFlushedAt = stamp();
-    try { writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs); } catch { /* next time */ }
+    try {
+      // The sidecar is written even before the store exists: a route reported
+      // before the first list must survive a restart (2026-10-02 — it did not).
+      writeSidecar(env ? env.consoles : null);
+      if (env) {
+        writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
+      }
+    } catch { /* next time */ }
   }
 
   /**
@@ -2221,7 +2653,7 @@ function createStore(opts = {}) {
    * is broken in a way no client could route around.
    */
   function addresses() {
-    if (!addrsLoaded) loadAddrs(readEnvelope(dir, fs));
+    ensureLoaded();
     const out = new Set(addrEntries().map((e) => e.addr));
     const self = normalizeAddr(hostAddr);
     if (self) out.add(self);
@@ -2231,15 +2663,20 @@ function createStore(opts = {}) {
   // ------------------------------------------------------------------ the file
 
   function load() {
-    const env = readEnvelope(dir, fs);
+    const env = readStore();
     // First ever list: seed, once, and record that it happened.
     if (!env) {
-      loadAddrs(null);
-      return writeEnvelope(dir, {
+      ensureLoaded();
+      const seeded = {
         schema: SCHEMA, seeded: true, consoles: seedApps(hostAddr, stamp()), clientAddresses: addrEntries(),
-      }, fs);
+        // ⚠ AND THE ROUTES (2026-10-02): this write used to leave them out, so a
+        // route reported before the first list was gone after a restart.
+        reportedAddresses: reportedEntries(),
+      };
+      writeSidecar(seeded.consoles);
+      return writeEnvelope(dir, seeded, fs);
     }
-    loadAddrs(env);
+    ensureLoaded();
     // And every load after that: re-apply the seed's ADDRESS to any row still
     // carrying the one D10 pinned. Costs a list scan and returns `env` unchanged
     // on every load but the first that finds one — after the rewrite no row
@@ -2263,8 +2700,18 @@ function createStore(opts = {}) {
     return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles: united.apps }, fs);
   }
 
+  /**
+   * Write the rows. SYNCHRONOUS from read to rename, which is what makes every
+   * write here atomic with respect to every other: Node runs one of these at a
+   * time, so a caller that loads and saves with no `await` between cannot lose
+   * anybody else's write (see the ⚠ on `add`).
+   */
   function save(consoles) {
-    const env = readEnvelope(dir, fs) || { schema: SCHEMA, seeded: true, consoles: [] };
+    const env = readStore() || { schema: SCHEMA, seeded: true, consoles: [] };
+    ensureLoaded();
+    // Sidecar first: if the process dies between the two, the sidecar holds the
+    // newer lists and wins on the next read.
+    writeSidecar(consoles);
     return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
   }
 
@@ -2466,11 +2913,19 @@ function createStore(opts = {}) {
      * a row nobody should be able to create.
      */
     async add(input) {
-      const r = add(load().consoles, input, stamp());
-      if (!r.ok) return r;
-      const reach = await reachabilityProbe(r.app, addressSet(r.app),
+      const pre = add(load().consoles, input, stamp());
+      if (!pre.ok) return pre;
+      const reach = await reachabilityProbe(pre.app, addressSet(pre.app),
         { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() });
       if (reach.ok === false) return { ok: false, status: 422, error: reachRefusal(reach), reachable: reach };
+      // ⚠⚠ RE-READ AFTER THE PROBE (2026-10-02). The probe awaits up to the
+      // timeout per address, and 3.9.0 then saved the list it had read BEFORE
+      // it: three parallel adds all answered 201 and only the last survived, and
+      // a DELETE made during the probe came back. The list is read again and the
+      // add re-judged — the duplicate-id 409 included — and saved with no await
+      // between the read and the write.
+      const r = add(load().consoles, input, stamp());
+      if (!r.ok) return r;
       save(r.apps);
       reaches.set(r.app.id, reach);
       return { ...r, reachable: reach };
@@ -2533,7 +2988,9 @@ module.exports = {
   MAX_APPS, MAX_NAME, MAX_NOTES, ID_RE, KINDS, DEFAULT_KIND, UNIT_RE,
   PROBE_TIMEOUT_MS, PROBE_CONCURRENCY, PROBE_FRESH_MS, PROBE_INTERVAL_MS,
   CLIENT_ADDR_TTL_SEC, MAX_CLIENT_ADDRS, MAX_CLIENT_REMOTES, CLIENT_ADDR_FLUSH_SEC,
-  LOOPBACK_ADDR, REPORTED_ADDR_TTL_SEC, MAX_REPORTED_ADDRS, MAX_APP_ADDRS, cleanAddrs, addrsProblem, splitAddressSet,
+  LOOPBACK_ADDR, REPORTED_ADDR_TTL_SEC, MAX_ROUTES_PER_CLIENT, MAX_REPORTERS, MAX_APP_ADDRS,
+  cleanAddrs, addrsProblem, splitAddressSet, isBodyObject, REFUSED_BODY, REFUSED_ADDR, reportedClientId,
+  SIDECAR_NAME, sidecarPath, readSidecar,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
   REBIND_MARKER_NAME, STORE_NAME, SCHEMA, FIREWALL_FILE, UNIT_BIND_NOTES,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,
