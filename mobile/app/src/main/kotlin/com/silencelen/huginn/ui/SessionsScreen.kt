@@ -399,47 +399,65 @@ private fun SessionRow(
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f)) {
+            // ⚠ THE NAME GIVES WAY, NOT THE AGE. 2026-10-02 on the Fold at font
+            // scale 2.0: "now" vanished from one card and was 8 px wide and 252
+            // px tall on another, and "ctx 48%" took three lines. A Row measures
+            // its unweighted children in order, so the name took all it wanted
+            // and the trailing ctx and age wrapped per character into whatever
+            // was left. The name and state now sit in a weighted group (measured
+            // LAST, after ctx and age have their one line each). Inside it the
+            // name comes first and ellipsises only past the whole group's width;
+            // the state word, which the dot already says, gives way before it.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (s.state == "running" || s.bgShells > 0 || s.bgAgents > 0) {
-                    PulsingDot(
-                        if (s.state == "attention") MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    StateDot(s.state)
-                }
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    s.name,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    // "waiting" over a session running four background shells was
-                    // a lie of omission — the list is where "looks stalled" started.
-                    if (s.state != "running" && (s.bgShells > 0 || s.bgAgents > 0)) "background work"
-                    else stateLabel(s.state),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = when {
-                        s.state == "attention" -> MaterialTheme.colorScheme.error
-                        s.state == "running" || s.bgShells > 0 || s.bgAgents > 0 ->
-                            MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-                if (s.compacting) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    if (s.state == "running" || s.bgShells > 0 || s.bgAgents > 0) {
+                        PulsingDot(
+                            if (s.state == "attention") MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        StateDot(s.state)
+                    }
                     Spacer(Modifier.width(8.dp))
-                    CompactingChip()
+                    Text(
+                        s.name,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        // "waiting" over a session running four background shells was
+                        // a lie of omission — the list is where "looks stalled" started.
+                        if (s.state != "running" && (s.bgShells > 0 || s.bgAgents > 0)) "background work"
+                        else stateLabel(s.state),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            s.state == "attention" -> MaterialTheme.colorScheme.error
+                            s.state == "running" || s.bgShells > 0 || s.bgAgents > 0 ->
+                                MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (s.compacting) {
+                        Spacer(Modifier.width(8.dp))
+                        CompactingChip()
+                    }
                 }
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(8.dp))
                 // "ctx N%" next to the time; renders nothing when the host didn't report.
                 ContextBadge(s.contextPercent, Modifier.padding(end = 8.dp))
                 Text(
                     relTime(s.activityAt),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
                 )
             }
 
