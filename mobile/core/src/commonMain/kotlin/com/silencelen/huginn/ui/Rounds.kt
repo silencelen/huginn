@@ -94,8 +94,14 @@ private const val DAY = 24 * HOUR
  *
  * Deliberately coarse. A schedule is not a countdown — nobody needs "in 3h 42m"
  * for something weekly, and a precise figure invites the reader to check whether
- * it is right. Rounding to the largest useful unit says the true thing ("later
- * today", "in 4 days") without pretending to a precision the tick does not have.
+ * it is right. Rounding to the largest useful unit says the true thing ("in 5h",
+ * "in 4 days") without pretending to a precision the tick does not have.
+ *
+ * ⚠ NO CALENDAR WORDS. The bands are elapsed time and core has no timezone (see
+ * [TimeWords]), so it cannot know which DAY a run lands on. 2026-10-02: the
+ * [24h, 48h) band said "tomorrow", and on a Friday at 10:10 the Sunday 08:00
+ * Round (45h50m away, two calendar days out) read "tomorrow" while the real
+ * next-day run read "in 22h". That band is "in 1 day" now.
  */
 fun untilWords(nextRunAt: Long?, nowMs: Long): String {
     if (nextRunAt == null || nextRunAt <= 0L) return "not scheduled"
@@ -105,7 +111,7 @@ fun untilWords(nextRunAt: Long?, nowMs: Long): String {
         d < MIN -> "in under a minute"
         d < HOUR -> "in ${d / MIN}m"
         d < DAY -> "in ${d / HOUR}h"
-        d < 2 * DAY -> "tomorrow"
+        d < 2 * DAY -> "in 1 day"
         else -> "in ${d / DAY} days"
     }
 }

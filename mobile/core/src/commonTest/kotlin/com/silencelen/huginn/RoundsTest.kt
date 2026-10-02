@@ -56,8 +56,27 @@ class RoundsTest {
         assertEquals("in under a minute", untilWords(now + 30_000, now))
         assertEquals("in 30m", untilWords(now + 30 * 60_000, now))
         assertEquals("in 5h", untilWords(now + 5 * hour, now))
-        assertEquals("tomorrow", untilWords(now + 30 * hour, now))
+        assertEquals("in 1 day", untilWords(now + 30 * hour, now))
         assertEquals("in 4 days", untilWords(now + 4 * 24 * hour, now))
+    }
+
+    /**
+     * 2026-10-02, on the Fold: on a Friday at 10:10 the weekly Sunday 08:00 Round
+     * read "Sundays at 8:00 AM · tomorrow". The [24h, 48h) band was named with a
+     * CALENDAR word, but the countdown only knows elapsed time (core has no
+     * timezone on purpose), so a run 45h50m away landed two calendar days out
+     * while the real next-day run, 22h away, read "in 22h". No band may promise a
+     * calendar day it cannot see.
+     */
+    @Test
+    fun aCountdownWithoutATimezoneNeverSaysTomorrow() {
+        val fri1010 = 1_790_961_000_000L // Fri 2026-10-02 10:10 PDT
+        val sun0800 = fri1010 + 45 * hour + 50 * 60_000
+        assertEquals("in 1 day", untilWords(sun0800, fri1010))
+        for (h in 0L until 24 * 4) {
+            val w = untilWords(fri1010 + h * hour + 1, fri1010)
+            assertFalse(w == "tomorrow" || w == "today" || w == "later today", "h=$h said '$w'")
+        }
     }
 
     @Test
