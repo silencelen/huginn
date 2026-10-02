@@ -315,14 +315,20 @@ object AppRules {
      * - a route a PERSON put in the book ([PinnedRoute.byHand]) — they chose it, so
      *   they mean to dial it, even before it has answered once;
      * - the ACTIVE route — the device is dialling it now;
-     * - any route that has WORKED from this device ([RouteHealth.lastWorkedAt]).
-     * A seed nobody chose and the device has never reached is none of these.
+     * - any route that WORKS from this device: it has worked ([RouteHealth.lastWorkedAt])
+     *   and its newest news is not a failure ([RouteHealth.reachable]). A seed that
+     *   answered once before the 09-30 Tailscale cut and has failed ever since is
+     *   history, not a route (verifier, 2026-10-02).
+     * A seed nobody chose and the device does not reach is none of these.
      *
      * Lower-case, IPv6 without brackets: the daemon's spelling.
      */
     fun routeHosts(book: RouteBook, health: Map<String, RouteHealth>): List<String> =
         book.routes
-            .filter { r -> r.byHand || r.id == book.activeId || (health[r.id]?.lastWorkedAt ?: 0L) > 0L }
+            .filter { r ->
+                val h = health[r.id]
+                r.byHand || r.id == book.activeId || (h != null && h.lastWorkedAt > 0L && h.reachable == true)
+            }
             .mapNotNull { r ->
                 runCatching { Url(r.url).host }.getOrNull()
                     ?.trim()?.removePrefix("[")?.removeSuffix("]")?.lowercase()
@@ -337,9 +343,9 @@ object AppRules {
      * [routeHosts], split by [addressProblem] BEFORE the round trip.
      *
      * ⚠ A REFUSED HOST IS HELD BACK AND NAMED, NOT SENT TO BE DROPPED (2026-10-02).
-     * The daemon refuses the whole report naming any host it will not check (it
-     * used to drop it from a 200 that nobody read); sending one would cost this
-     * device every other route too. [routeNotice] says which were held back.
+     * The daemon applies the valid rest and names a refused host in its 200 (it
+     * used to drop it from a 200 that nobody read). Held back here as well, so the
+     * notice is right even against a daemon that predates `refused`.
      */
     fun routeReport(book: RouteBook, health: Map<String, RouteHealth>): RouteReport {
         val all = routeHosts(book, health)

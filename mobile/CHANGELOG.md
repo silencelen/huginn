@@ -50,6 +50,12 @@
   seconds, the chat it had just started was neither removed nor reused, so pressing Send again
   started a second chat and ran the same question twice. The retry now goes into the first chat.
 
+- **A route that has stopped working is not reported.** One that answered before the September
+  network change and has failed ever since is history, not a route your phone uses, so it no longer
+  makes every app add fail.
+- **The "working" dot rests when nothing is on screen.** Its breathing steps now wait for the screen
+  to draw, so the app does no work for it while the phone is locked or the app is in the background.
+
 ## 3.9.0 — 2026-10-01
 
 Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.

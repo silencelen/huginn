@@ -2189,7 +2189,12 @@ class HuginnClient(
                 RouteReportAnswer(supported = true, refused = r.refused.map { it.addr })
             }
             !resp.status.isSuccess() -> throw errorFrom(resp.status.value, text)
-            else -> RouteReportAnswer(supported = true)
+            // A refused host does not fail the report: the daemon applies the
+            // valid rest and names the refused ones in the 200.
+            else -> RouteReportAnswer(
+                supported = true,
+                refused = runCatching { decode<RouteRefusal>(text) }.getOrNull()?.refused?.map { it.addr }.orEmpty(),
+            )
         }
     }
 

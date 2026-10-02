@@ -12954,9 +12954,12 @@ const server = http.createServer(async (req, res) => {
           const body = await readJsonBody(req, 8 * 1024);
           if (!appsLib.isBodyObject(body)) return sendErr(res, 400, appsLib.REFUSED_BODY);
           const r = apps.noteReportedRoutes(body.addrs, req.headers['x-huginn-client']);
-          if (!r.ok) return sendJson(res, r.status || 400, { error: r.error, refused: r.refused || [] });
+          if (!r.ok) return sendJson(res, r.status || 400, { error: r.error, refused: [] });
+          // A refused host does NOT fail the report (see noteReportedRoutes): the
+          // valid ones are applied and `refused` names the rest.
           return sendJson(res, 200, {
-            fresh: r.fresh, gone: r.gone, reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses(),
+            fresh: r.fresh, gone: r.gone, refused: r.refused,
+            reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses(),
           });
         }
 

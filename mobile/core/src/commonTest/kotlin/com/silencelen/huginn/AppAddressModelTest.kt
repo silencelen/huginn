@@ -68,6 +68,11 @@ class AppAddressModelTest {
             listOf("192.168.2.117", "100.97.198.90"),
             AppRules.routeHosts(book, mapOf(tailscale.id to RouteHealth(lastOkAt = 5))),
         )
+        // But one that worked once and has FAILED since is history, not a route.
+        assertEquals(
+            listOf("192.168.2.117"),
+            AppRules.routeHosts(book, mapOf(tailscale.id to RouteHealth(lastOkAt = 5, lastFailAt = 9))),
+        )
         // A route a person typed is reported whether or not it has answered yet.
         val typed = RouteBook(routes = listOf(PinnedRoute(id = "m", name = "mesh", url = "http://[FD00::117]:8787")))
         assertEquals(listOf("fd00::117"), AppRules.routeHosts(typed, emptyMap()), "v6 without brackets, case folded")
@@ -135,6 +140,16 @@ class AppAddressModelTest {
         }.reportRoutes(listOf("10.0.0.1"))
         assertTrue(ok.supported)
         assertEquals(emptyList(), ok.refused)
+
+        // The partial answer: the valid hosts were applied, the refused one is named in the 200.
+        val partial = client {
+            respond(
+                """{"fresh":["10.0.0.1"],"gone":[],"refused":[{"addr":"huginn.example","why":"x"}],"reported":[],"requiredAddresses":[]}""",
+                HttpStatusCode.OK,
+            )
+        }.reportRoutes(listOf("10.0.0.1", "huginn.example"))
+        assertTrue(partial.supported)
+        assertEquals(listOf("huginn.example"), partial.refused)
     }
 
     // ------------------------------------------------- an older daemon drops addresses
