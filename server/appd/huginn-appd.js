@@ -12043,6 +12043,14 @@ const server = http.createServer(async (req, res) => {
        */
       if (req.method === 'POST' && rsub === '/ack') {
         const body = await readJsonBody(req);
+        // ⚠ 2026-10-02: a body of `null` answered 500 (a TypeError reading
+        // `.acknowledged`), and the STRING "false" acknowledged — `!== false` is
+        // true of everything that is not the boolean. An empty body is still `{}`
+        // and still acknowledges, which is what older clients send.
+        if (!appsLib.isBodyObject(body)) return sendErr(res, 400, 'the body must be a JSON object');
+        if (body.acknowledged !== undefined && typeof body.acknowledged !== 'boolean') {
+          return sendErr(res, 400, 'acknowledged must be true or false');
+        }
         const ack = body.acknowledged !== false;
         // ⚠ Re-read AFTER the await. `round` was loaded before the body was
         // read, and a run can finish in that window — writing the stale snapshot
@@ -12885,151 +12893,168 @@ const server = http.createServer(async (req, res) => {
       // `huginn` addressed an interface none of them listen on (D10).
       const apps = appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR });
       const APP_ID = '([a-z0-9][a-z0-9-]{0,23})';
+      // ⚠ AN UNREADABLE STORE IS A 503 THAT SAYS SO (2026-10-02), not the
+      // generic 500 — and never a re-seed: the lib refuses to write over a file
+      // it could not read, and its sentence names the file and the copy.
+      try {
 
-      // The list, and the FEATURE PROBE both clients use — a 404 from an older
-      // daemon hides the whole surface rather than showing a door that leads to
-      // an error (the archive/scratchpads precedent).
-      //
-      // ⚠ IT DOES NOT AWAIT THE NETWORK. `refreshSoon` schedules a sweep when the
-      // last one has aged out and returns immediately; this list is polled while
-      // a view is open, and a route that waited for four probes would turn one
-      // wedged listener into a slow app. Rows carry the last observation, and
-      // `up:null` / `reachable.ok:null` where there has never been one.
-      if (req.method === 'GET' && ap === '/v1/apps') {
-        apps.refreshSoon();
-        // ⚠ `approval: null`, not a synthesised card. Decision 55 deleted it,
-        // and a daemon that kept inventing one would be handing an old client
-        // four root commands computed from a belief this version no longer holds
-        // (the D11 exemption, the hard-coded source address). The field is
-        // nullable in the client that reads it, so the card simply does not draw.
-        if (alias) return sendJson(res, 200, appsLib.legacyConsoleList(apps.rows()));
-        return sendJson(res, 200, {
-          apps: apps.rows(),
-          max: appsLib.MAX_APPS,
-          kinds: appsLib.KINDS,
-          // The marker file, as one boolean. All that is left of the approval
-          // card (decision 55) — the remedy itself is on the row that needs it.
-          retrofitApplied: apps.retrofitApplied(),
-          // Every address an app has to answer on, so a client can say what the
-          // check was against instead of showing a refusal with no subject.
-          clientAddresses: apps.addresses(),
-          // ⚠ AND WHO HAS ARRIVED ON EACH — additive, 3.5.2, `{arrival: [client]}`.
-          // The arrival addresses say what was CHECKED; these say what the fix
-          // lines can put after `-source`, which is the only address in this
-          // payload a firewall rule on heimdall could ever match. An arrival
-          // with an empty list is a real state and is on the wire as one.
-          // NOT on the alias: /v1/consoles answers the frozen 3.4 body.
-          clientRemotes: apps.clientRemotes(),
-          // 3.9 (owner decision 2026-10-01): what every app is REQUIRED to answer
-          // on — loopback + the routes clients reported — and the routes
-          // themselves with who reported them. `clientAddresses` above is the
-          // arrival set, advisory now; an old client reading only it loses
-          // nothing it had.
-          requiredAddresses: apps.requiredAddresses(),
-          reportedRoutes: apps.reportedRoutes(),
-        });
-      }
-
-      // A client's pinned routes, reported once per launch. Every host it names
-      // joins loopback in the required set; the arrival set is advisory. The
-      // body is the client's own RouteBook hosts; nothing here is enumerated.
-      if (req.method === 'PUT' && ap === '/v1/apps/routes') {
-        const body = await readJsonBody(req, 8 * 1024);
-        const by = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
-        const hosts = Array.isArray(body && body.addrs) ? body.addrs : [];
-        const fresh = apps.noteReportedRoutes(hosts, by);
-        return sendJson(res, 200, { fresh, reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses() });
-      }
-
-      // ⚠ THE PREREQUISITE (decision 54). The add is REFUSED — 422, with the
-      // reachability result so the client can show which address failed and the
-      // exact lines that would fix it — rather than stored and marked. 400 is
-      // still "what you typed is not an app", 409 still "that id is taken".
-      if (req.method === 'POST' && ap === '/v1/apps') {
-        const body = await readJsonBody(req, 16 * 1024);
-        const r = await apps.add(body);
-        // The 422 body is the same on both paths. An old client has no field for
-        // `reachable` and ignores it, but it DOES show the daemon's `error`
-        // string, which is the sentence naming the addresses that failed — so
-        // the refusal still explains itself on a client that predates it.
-        if (!r.ok && r.status === 422) return sendJson(res, 422, { error: r.error, reachable: r.reachable });
-        if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(r.app.id)) });
-        if (!r.ok) return sendErr(res, r.status || 400, r.error);
-        log(`apps: added ${r.app.id} (${r.app.url})`);
-        return sendJson(res, 201, wire(apps.row(r.app.id)));
-      }
-
-      const probeMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/probe$`));
-      if (probeMatch && req.method === 'POST') {
-        // On demand, awaited, and still bounded by the same 2 s deadline — the
-        // person tapping this is looking at a spinner, and an unbounded probe
-        // here is a request that never comes back. Both questions are re-asked,
-        // and the favicon is re-fetched if it is due one.
-        const row = await apps.probeNow(probeMatch[1]);
-        if (!row) return sendErr(res, 404, 'no such app');
-        return sendJson(res, 200, wire(row));
-      }
-
-      // The cached favicon (decision 53). Served from DATA_DIR, never proxied:
-      // the bytes were fetched, type-checked and capped at probe time, and a
-      // route that fetched on demand would be a way to make this daemon dial an
-      // address on request.
-      const iconMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/icon$`));
-      if (iconMatch && req.method === 'GET') {
-        const found = apps.icon(iconMatch[1]);
-        if (!found.ok) return sendErr(res, 404, 'no icon for that app');
-        // ⚠ KEYED ON `iconAt`, NOT ON THE FILE'S mtime. The hourly refresh
-        // rewrites the cache whether or not the bytes differ, so an mtime ETag
-        // invalidated every client's copy of every icon every hour. `iconAt`
-        // moves only when the picture does (lib/apps.js refreshIcon); the mtime
-        // is the fallback for a cache written before this field existed.
-        const etag = filesLib.etagFor(found.size, found.iconAt ? found.iconAt * 1000 : found.mtimeMs);
-        // Private and short, like /v1/files/image: the token is the only thing
-        // in front of this, and the list is polled while the view is open.
-        const cacheHeaders = {
-          'Cache-Control': 'private, max-age=300',
-          ETag: etag,
-          // ⚠ These bytes came off another server. The content type was checked
-          // to be image/* when it was cached; nosniff is what stops a browser
-          // from deciding otherwise about the bytes themselves.
-          'X-Content-Type-Options': 'nosniff',
-        };
-        if (filesLib.etagMatches(req.headers['if-none-match'], etag)) {
-          res.writeHead(304, cacheHeaders);
-          return res.end();
+        // The list, and the FEATURE PROBE both clients use — a 404 from an older
+        // daemon hides the whole surface rather than showing a door that leads to
+        // an error (the archive/scratchpads precedent).
+        //
+        // ⚠ IT DOES NOT AWAIT THE NETWORK. `refreshSoon` schedules a sweep when the
+        // last one has aged out and returns immediately; this list is polled while
+        // a view is open, and a route that waited for four probes would turn one
+        // wedged listener into a slow app. Rows carry the last observation, and
+        // `up:null` / `reachable.ok:null` where there has never been one.
+        if (req.method === 'GET' && ap === '/v1/apps') {
+          apps.refreshSoon();
+          // ⚠ `approval: null`, not a synthesised card. Decision 55 deleted it,
+          // and a daemon that kept inventing one would be handing an old client
+          // four root commands computed from a belief this version no longer holds
+          // (the D11 exemption, the hard-coded source address). The field is
+          // nullable in the client that reads it, so the card simply does not draw.
+          if (alias) return sendJson(res, 200, appsLib.legacyConsoleList(apps.rows()));
+          return sendJson(res, 200, {
+            apps: apps.rows(),
+            max: appsLib.MAX_APPS,
+            kinds: appsLib.KINDS,
+            // The marker file, as one boolean. All that is left of the approval
+            // card (decision 55) — the remedy itself is on the row that needs it.
+            retrofitApplied: apps.retrofitApplied(),
+            // Every address an app has to answer on, so a client can say what the
+            // check was against instead of showing a refusal with no subject.
+            clientAddresses: apps.addresses(),
+            // ⚠ AND WHO HAS ARRIVED ON EACH — additive, 3.5.2, `{arrival: [client]}`.
+            // The arrival addresses say what was CHECKED; these say what the fix
+            // lines can put after `-source`, which is the only address in this
+            // payload a firewall rule on heimdall could ever match. An arrival
+            // with an empty list is a real state and is on the wire as one.
+            // NOT on the alias: /v1/consoles answers the frozen 3.4 body.
+            clientRemotes: apps.clientRemotes(),
+            // 3.9 (owner decision 2026-10-01): what every app is REQUIRED to answer
+            // on — loopback + the routes clients reported — and the routes
+            // themselves with who reported them. `clientAddresses` above is the
+            // arrival set, advisory now; an old client reading only it loses
+            // nothing it had.
+            requiredAddresses: apps.requiredAddresses(),
+            reportedRoutes: apps.reportedRoutes(),
+          });
         }
-        res.writeHead(200, { 'Content-Type': found.contentType, 'Content-Length': found.size, ...cacheHeaders });
-        const stream = fs.createReadStream(found.file);
-        res.on('close', () => stream.destroy());
-        stream.pipe(res);
-        stream.on('error', () => { try { res.destroy(); } catch { } });
-        return undefined;
-      }
 
-      const idMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}$`));
-      if (idMatch) {
-        const id = idMatch[1];
-        if (req.method === 'PATCH') {
+        // A client's pinned routes, reported once per launch. Every host it names
+        // joins loopback in the required set; the arrival set is advisory. The
+        // body is the client's own RouteBook hosts; nothing here is enumerated.
+        //
+        // ⚠ THE REPORT IS THE CLIENT'S WHOLE SET (2026-10-02), keyed by
+        // X-Huginn-Client: a route it no longer names is withdrawn, `[]` withdraws
+        // all of them. A host the rule refuses is a 400 that names it in `refused`
+        // and changes nothing; 3.9.0 answered 200 with it silently missing.
+        if (req.method === 'PUT' && ap === '/v1/apps/routes') {
+          const body = await readJsonBody(req, 8 * 1024);
+          if (!appsLib.isBodyObject(body)) return sendErr(res, 400, appsLib.REFUSED_BODY);
+          const r = apps.noteReportedRoutes(body.addrs, req.headers['x-huginn-client']);
+          if (!r.ok) return sendJson(res, r.status || 400, { error: r.error, refused: r.refused || [] });
+          return sendJson(res, 200, {
+            fresh: r.fresh, gone: r.gone, reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses(),
+          });
+        }
+
+        // ⚠ THE PREREQUISITE (decision 54). The add is REFUSED — 422, with the
+        // reachability result so the client can show which address failed and the
+        // exact lines that would fix it — rather than stored and marked. 400 is
+        // still "what you typed is not an app", 409 still "that id is taken".
+        if (req.method === 'POST' && ap === '/v1/apps') {
           const body = await readJsonBody(req, 16 * 1024);
-          const r = apps.patch(id, body);
-          // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
-          // collided needs to show what it collided WITH, which is the contract
-          // saveScratchpad already knows how to adopt as an answer.
-          // A FULL ROW, not the bare stored record: the editor that collided has
-          // to render what it collided with, and a row missing its probe fields is
-          // a row that draws as never-observed on a console that is up.
-          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(id)) });
+          if (!appsLib.isBodyObject(body)) return sendErr(res, 400, appsLib.REFUSED_BODY);
+          const r = await apps.add(body);
+          // The 422 body is the same on both paths. An old client has no field for
+          // `reachable` and ignores it, but it DOES show the daemon's `error`
+          // string, which is the sentence naming the addresses that failed — so
+          // the refusal still explains itself on a client that predates it.
+          if (!r.ok && r.status === 422) return sendJson(res, 422, { error: r.error, reachable: r.reachable });
+          if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(r.app.id)) });
           if (!r.ok) return sendErr(res, r.status || 400, r.error);
-          return sendJson(res, 200, wire(apps.row(id)));
+          log(`apps: added ${r.app.id} (${r.app.url})`);
+          return sendJson(res, 201, wire(apps.row(r.app.id)));
         }
-        if (req.method === 'DELETE') {
-          const r = apps.remove(id);
-          if (!r.ok) return sendErr(res, r.status || 404, r.error);
-          log(`apps: removed ${id}`);
-          return sendJson(res, 200, { ok: true });
+
+        const probeMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/probe$`));
+        if (probeMatch && req.method === 'POST') {
+          // On demand, awaited, and still bounded by the same 2 s deadline — the
+          // person tapping this is looking at a spinner, and an unbounded probe
+          // here is a request that never comes back. Both questions are re-asked,
+          // and the favicon is re-fetched if it is due one.
+          const row = await apps.probeNow(probeMatch[1]);
+          if (!row) return sendErr(res, 404, 'no such app');
+          return sendJson(res, 200, wire(row));
         }
+
+        // The cached favicon (decision 53). Served from DATA_DIR, never proxied:
+        // the bytes were fetched, type-checked and capped at probe time, and a
+        // route that fetched on demand would be a way to make this daemon dial an
+        // address on request.
+        const iconMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}/icon$`));
+        if (iconMatch && req.method === 'GET') {
+          const found = apps.icon(iconMatch[1]);
+          if (!found.ok) return sendErr(res, 404, 'no icon for that app');
+          // ⚠ KEYED ON `iconAt`, NOT ON THE FILE'S mtime. The hourly refresh
+          // rewrites the cache whether or not the bytes differ, so an mtime ETag
+          // invalidated every client's copy of every icon every hour. `iconAt`
+          // moves only when the picture does (lib/apps.js refreshIcon); the mtime
+          // is the fallback for a cache written before this field existed.
+          const etag = filesLib.etagFor(found.size, found.iconAt ? found.iconAt * 1000 : found.mtimeMs);
+          // Private and short, like /v1/files/image: the token is the only thing
+          // in front of this, and the list is polled while the view is open.
+          const cacheHeaders = {
+            'Cache-Control': 'private, max-age=300',
+            ETag: etag,
+            // ⚠ These bytes came off another server. The content type was checked
+            // to be image/* when it was cached; nosniff is what stops a browser
+            // from deciding otherwise about the bytes themselves.
+            'X-Content-Type-Options': 'nosniff',
+          };
+          if (filesLib.etagMatches(req.headers['if-none-match'], etag)) {
+            res.writeHead(304, cacheHeaders);
+            return res.end();
+          }
+          res.writeHead(200, { 'Content-Type': found.contentType, 'Content-Length': found.size, ...cacheHeaders });
+          const stream = fs.createReadStream(found.file);
+          res.on('close', () => stream.destroy());
+          stream.pipe(res);
+          stream.on('error', () => { try { res.destroy(); } catch { } });
+          return undefined;
+        }
+
+        const idMatch = ap.match(new RegExp(`^/v1/apps/${APP_ID}$`));
+        if (idMatch) {
+          const id = idMatch[1];
+          if (req.method === 'PATCH') {
+            const body = await readJsonBody(req, 16 * 1024);
+            if (!appsLib.isBodyObject(body)) return sendErr(res, 400, appsLib.REFUSED_BODY);
+            const r = apps.patch(id, body);
+            // 409 CARRIES THE CURRENT ROW, not just a sentence: the editor that
+            // collided needs to show what it collided WITH, which is the contract
+            // saveScratchpad already knows how to adopt as an answer.
+            // A FULL ROW, not the bare stored record: the editor that collided has
+            // to render what it collided with, and a row missing its probe fields is
+            // a row that draws as never-observed on a console that is up.
+            if (!r.ok && r.status === 409) return sendJson(res, 409, { error: r.error, [conflictKey]: wire(apps.row(id)) });
+            if (!r.ok) return sendErr(res, r.status || 400, r.error);
+            return sendJson(res, 200, wire(apps.row(id)));
+          }
+          if (req.method === 'DELETE') {
+            const r = apps.remove(id);
+            if (!r.ok) return sendErr(res, r.status || 404, r.error);
+            log(`apps: removed ${id}`);
+            return sendJson(res, 200, { ok: true });
+          }
+        }
+        return sendErr(res, 404, alias ? 'no such consoles route' : 'no such apps route');
+      } catch (e) {
+        if (e && e.storeUnreadable) return sendErr(res, 503, e.message);
+        throw e;
       }
-      return sendErr(res, 404, alias ? 'no such consoles route' : 'no such apps route');
     }
 
 

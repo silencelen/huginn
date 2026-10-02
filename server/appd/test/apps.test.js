@@ -1208,7 +1208,7 @@ test('adding an app is REFUSED when it does not answer on a REQUIRED address, an
     store.remove('half-bound');
 
     // A REPORTED route is required: the same add is now a 422, with the remedy.
-    assert.deepEqual(['127.0.0.2'], store.noteReportedRoutes(['127.0.0.2'], 'phone-1'), 'fresh, and said so');
+    assert.deepEqual(['127.0.0.2'], store.noteReportedRoutes(['127.0.0.2'], 'phone-1').fresh, 'fresh, and said so');
     const r = await within(9000, store.add({
       name: 'Half bound', url: `http://127.0.0.1:${server.address().port}/`, unit: 'half.service',
     }), 'the refused add');
@@ -1255,8 +1255,8 @@ test('reported routes: required of every app, remembered for a month, written do
     store.list();   // the seed writes, so the flush has a file to land in
     assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'loopback is required of everything, always');
 
-    assert.deepEqual(['192.168.2.117'], store.noteReportedRoutes(['192.168.2.117', ' 192.168.2.117 '], 'fold'));
-    assert.deepEqual([], store.noteReportedRoutes(['192.168.2.117'], 'desk'), 'the second report of an address is not news');
+    assert.deepEqual(['192.168.2.117'], store.noteReportedRoutes(['192.168.2.117', ' 192.168.2.117 '], 'fold').fresh);
+    assert.deepEqual([], store.noteReportedRoutes(['192.168.2.117'], 'desk').fresh, 'the second report of an address is not news');
     assert.deepEqual(['127.0.0.1', '192.168.2.117'], store.requiredAddresses());
     assert.deepEqual([{ addr: '192.168.2.117', lastSeenAt: Math.floor(clock / 1000), by: ['desk', 'fold'] }], store.reportedRoutes());
     assert.ok(lines.some((l) => /fold reports a route to huginn via 192\.168\.2\.117/.test(l)), lines.join(' | '));
@@ -1273,7 +1273,11 @@ test('reported routes: required of every app, remembered for a month, written do
     clock += (appsLib.REPORTED_ADDR_TTL_SEC + 1) * 1000;
     assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'a month unreported is gone');
     assert.equal('', appsLib.normalizeAddr('8.8.8.8'), 'precondition');
-    assert.deepEqual([], store.noteReportedRoutes(['8.8.8.8', ''], 'x'), 'an address the URL rule refuses is not a route');
+    // ⚠ 2026-10-02: and it is REFUSED, by name — no longer a 200 that dropped it.
+    const refused = store.noteReportedRoutes(['8.8.8.8', ''], 'x');
+    assert.equal(400, refused.status, 'an address the URL rule refuses is not a route');
+    assert.deepEqual(['8.8.8.8', ''], refused.refused.map((e) => e.addr));
+    assert.deepEqual(['127.0.0.1'], store.requiredAddresses());
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1313,7 +1317,9 @@ test('a fresh daemon that has never been connected to still requires loopback, a
     assert.equal(true, r.ok, JSON.stringify(r));
     assert.equal(true, r.reachable.ok);
     assert.deepEqual([{ addr: '127.0.0.1', ok: true, required: true }], r.reachable.addresses);
-    assert.equal('', r.reachable.note);
+    // ⚠ 2026-10-02: and it SAYS that loopback is all it proved — with no route
+    // reported, "reachable from your devices" would be a claim about nothing.
+    assert.match(r.reachable.note, /only loopback is required so far/);
     assert.ok(appsLib.findApp(store.list(), 'anything'), 'and it is in the list');
     // The pure probe with an EMPTY plan still answers null, which is the shape a
     // caller with no set of its own gets.

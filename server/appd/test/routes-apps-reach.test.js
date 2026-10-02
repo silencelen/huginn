@@ -210,11 +210,18 @@ test('the daemon checks against the addresses clients arrive on, plus its own', 
 });
 
 test('a REPORTED route is required of every app, says who reported it, and rides the list', async () => {
+  // ⚠ 2026-10-02: a host the rule refuses is a 400 NAMING it, and the report
+  // changes nothing — 3.9.0 answered 200 with the host silently missing.
+  const refused = await api('/v1/apps/routes', {
+    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8', 'huginn.jnet.ad'] }),
+  });
+  assert.equal(400, refused.status, JSON.stringify(refused.body));
+  assert.deepEqual(['8.8.8.8', 'huginn.jnet.ad'], refused.body.refused.map((r) => r.addr));
   const again = await api('/v1/apps/routes', {
-    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8'] }),
+    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2'] }),
   });
   assert.equal(200, again.status, JSON.stringify(again.body));
-  assert.deepEqual([], again.body.fresh, 'a second report of the same address is not news, and a public one is not a route');
+  assert.deepEqual([], again.body.fresh, 'a second report of the same address is not news');
   assert.deepEqual(['127.0.0.1', '127.0.0.2'], again.body.requiredAddresses, 'loopback, always, plus what was reported');
   const body = await list();
   assert.deepEqual(['127.0.0.1', '127.0.0.2'], body.requiredAddresses);
@@ -319,4 +326,58 @@ test('a refusal is never a delete: the row it collides with is not touched', asy
     body: JSON.stringify({ name: 'Yet another', url: `http://127.0.0.1:${onePort}/x` }),
   });
   assert.equal(before, (await list()).apps.length);
+});
+
+// ------------------------------------------------- 2026-10-02 breaker round
+
+test('a client\'s report replaces its own routes, so an unpinned route stops being required', async () => {
+  // 2026-10-02: PUT only ever added; DELETE/PATCH/POST /v1/apps/routes answered
+  // 404 "no such app", and an unpinned route was required of every app for 30 days.
+  const put = (who, addrs) => api('/v1/apps/routes', {
+    method: 'PUT', headers: { 'x-huginn-client': who }, body: JSON.stringify({ addrs }),
+  });
+  let r = await put('suite-fold', ['127.0.0.2', '127.0.0.3']);
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.ok(r.body.requiredAddresses.includes('127.0.0.3'));
+  r = await put('suite-fold', ['127.0.0.2']);
+  assert.equal(200, r.status);
+  assert.deepEqual(['127.0.0.3'], r.body.gone);
+  assert.ok(!r.body.requiredAddresses.includes('127.0.0.3'), JSON.stringify(r.body.requiredAddresses));
+  r = await put('suite-fold', []);
+  assert.equal(200, r.status);
+  assert.ok(r.body.requiredAddresses.includes('127.0.0.2'), 'the suite\'s other devices still pin 127.0.0.2');
+});
+
+test('a body that is not a JSON object is a 400 on every apps write, never a 500', async () => {
+  // 2026-10-02: POST and PATCH with body `null` answered 500 with a TypeError
+  // in the journal.
+  for (const [method, where] of [['POST', '/v1/apps'], ['PATCH', '/v1/apps/rebound'], ['PUT', '/v1/apps/routes']]) {
+    for (const body of ['null', '7', '[]', '"str"']) {
+      const r = await api(where, { method, body });
+      assert.equal(400, r.status, `${method} ${where} ${body}: ${JSON.stringify(r.body)}`);
+    }
+  }
+  const noList = await api('/v1/apps/routes', { method: 'PUT', body: JSON.stringify({}) });
+  assert.equal(400, noList.status, 'a report without addrs is not an empty report');
+});
+
+test('an apps store that does not parse is a 503 that says so, and is never re-seeded', async () => {
+  // 2026-10-02: a trailing comma made the next GET seed over the owner's rows.
+  // Runs LAST in this file: it breaks the store, then puts it back.
+  const file = appsLib.storePath(dataDir);
+  const good = fs.readFileSync(file, 'utf8');
+  const broken = good.replace(/\}\s*$/, ',}');
+  fs.writeFileSync(file, broken);
+  try {
+    const r = await api('/v1/apps');
+    assert.equal(503, r.status, JSON.stringify(r.body));
+    assert.match(r.body.error, /does not parse/);
+    const add = await api('/v1/apps', { method: 'POST', body: JSON.stringify({ name: 'n', url: `http://127.0.0.1:${BOTH_PORT}/` }) });
+    assert.equal(503, add.status, JSON.stringify(add.body));
+    assert.equal(broken, fs.readFileSync(file, 'utf8'), 'the bytes are the owner\'s, untouched');
+    assert.ok(fs.readdirSync(dataDir).some((f) => f.startsWith(`${appsLib.STORE_NAME}.unreadable-`)), 'and a copy is set aside');
+  } finally {
+    fs.writeFileSync(file, good);
+  }
+  assert.equal(200, (await api('/v1/apps')).status, 'repaired by hand, the list comes back');
 });
