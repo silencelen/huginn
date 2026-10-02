@@ -78,6 +78,18 @@ import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
 import com.silencelen.huginn.ui.TimeWords
 import java.awt.Cursor
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.outlined.Chat
+import androidx.compose.material.icons.outlined.Computer
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.Dp
+import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
+import com.silencelen.huginn.desktop.ui.common.MenuButton
 
 /**
  * The list pane, both flavours.
@@ -129,11 +141,15 @@ fun ChatsList(
     rows: LazyListState = rememberLazyListState(),
 ) {
     Column(Modifier.fillMaxSize()) {
-        ListHeader("Chats", chats.size, selection.size) {
-            TextButton(onClick = { onNew("ask") }) { Text("+ Ask", style = DeskType.rail) }
-            TextButton(onClick = { onNew("act") }) { Text("+ Act", style = DeskType.rail) }
-            if (onNewLocal != null) {
-                TextButton(onClick = onNewLocal) { Text("+ Local", style = DeskType.rail) }
+        // The header's width is the LIST PANE's, and the pane goes down to 220 dp.
+        // Three worded buttons need ~200 dp on their own, so below that the verbs
+        // become icons, and below what three icons need, one `+` with a menu.
+        // Measured here rather than guessed from the window: the pane has a
+        // splitter of its own.
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val width = maxWidth
+            ListHeader("Chats", chats.size, selection.size) {
+                NewChatVerbs(width, onNew, onNewLocal)
             }
         }
         // Loading and empty are DIFFERENT SENTENCES. `loaded` is false only until
@@ -692,6 +708,68 @@ internal fun ListHeader(title: String, count: Int, selected: Int, actions: @Comp
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
+
+/** One "new chat" verb: its word, its glyph, what it does. */
+private class NewChatVerb(val word: String, val icon: ImageVector, val run: () -> Unit)
+
+/**
+ * The chat list's "+ Ask / + Act / + Local" — in the form the width allows.
+ *
+ * ⚠ THE BUG THIS SHAPE EXISTS FOR (owner, 2026-10-01): at the default and
+ * narrow list widths the third button got the width left over after the first
+ * two, a `TextButton` wraps its label when squeezed, and "+ Local" came out one
+ * letter per line. Nothing in the old row said "one line"; now the words say so,
+ * and the tiers mean they never need to.
+ *
+ *   ≥ [NEW_CHAT_WORDS_AT]   the words, as before
+ *   ≥ [NEW_CHAT_ICONS_AT]   one icon each, the word in the tooltip
+ *   below                   a single `+` whose menu holds all three
+ *
+ * The keyboard shortcuts and the palette (`Shortcut.NEW_*`) do not go through
+ * here and are unchanged.
+ */
+@Composable
+private fun NewChatVerbs(width: Dp, onNew: (String) -> Unit, onNewLocal: (() -> Unit)?) {
+    val verbs = listOfNotNull(
+        NewChatVerb("Ask", Icons.Outlined.Chat) { onNew("ask") },
+        NewChatVerb("Act", Icons.Filled.Bolt) { onNew("act") },
+        onNewLocal?.let { NewChatVerb("Local", Icons.Outlined.Computer, it) },
+    )
+    when {
+        width >= NEW_CHAT_WORDS_AT -> verbs.forEach { v ->
+            TextButton(onClick = v.run) {
+                Text("+ ${v.word}", style = DeskType.rail, maxLines = 1, softWrap = false)
+            }
+        }
+        width >= NEW_CHAT_ICONS_AT -> verbs.forEach { v ->
+            Tip(newChatTip(v.word)) {
+                IconButton(onClick = v.run, modifier = Modifier.size(NEW_CHAT_ICON_BUTTON_DP)) {
+                    Icon(
+                        v.icon,
+                        contentDescription = newChatTip(v.word),
+                        modifier = Modifier.size(NEW_CHAT_GLYPH_DP),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        else -> MenuButton(
+            items = { verbs.map { v -> HuginnMenuItem("+ ${v.word}", onClick = v.run) } },
+            description = "New chat",
+            icon = Icons.Filled.Add,
+        )
+    }
+}
+
+private fun newChatTip(word: String) = when (word) {
+    "Local" -> "New chat on the local AI"
+    else -> "New ${word.lowercase()} chat"
+}
+
+private val NEW_CHAT_WORDS_AT = 320.dp
+private val NEW_CHAT_ICONS_AT = 250.dp
+private val NEW_CHAT_ICON_BUTTON_DP = 28.dp
+private val NEW_CHAT_GLYPH_DP = 16.dp
 
 /** Working. A dot inside the row's text flow — not a bar, not a badge. */
 @Composable
