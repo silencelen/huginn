@@ -12,6 +12,14 @@ import kotlin.test.assertTrue
  */
 class TerminalLaunchTest {
 
+    /** open() refuses when the CLI file is missing (2026-10-02), so give it one. */
+    private fun homeWithCli(): java.io.File = java.nio.file.Files.createTempDirectory("tl-home").toFile().also {
+        java.io.File(it, ".huginn").mkdirs()
+        java.io.File(it, ".huginn/huginn.sh").writeText("# stub\n")
+        java.io.File(it, ".huginn/huginn.ps1").writeText("# stub\n")
+        it.deleteOnExit()
+    }
+
     @Test
     fun `windows opens a profile-loading window through an ENCODED command`() {
         val argv = TerminalLaunch.argv("jtyper", TerminalLaunch.Os.WINDOWS)!!
@@ -25,7 +33,9 @@ class TerminalLaunchTest {
         val b64 = command.substringAfterLast("','").removeSuffix("'")
         val script = TerminalLaunch.decoded(b64)
         assertEquals(TerminalLaunch.script("jtyper"), script)
-        assertTrue(script.endsWith("huginn 'jtyper'"), script)
+        // Attach through the explicit verb when the loaded CLI has it, the plain
+        // form an older CLI understands otherwise (see TerminalLaunchNamesTest).
+        assertTrue(script.endsWith("{ huginn attach 'jtyper' } else { huginn 'jtyper' }"), script)
         // Dot-sourced explicitly, so a profile that forgot the CLI still gets it.
         assertTrue("\$HOME\\.huginn\\huginn.ps1" in script, script)
     }
@@ -44,7 +54,7 @@ class TerminalLaunchTest {
         assertTrue(mac.any { "huginn 'main'" in it })
         val linux = TerminalLaunch.argv("main", TerminalLaunch.Os.LINUX)!!
         assertEquals("x-terminal-emulator", linux[0])
-        assertTrue(linux.last().startsWith("huginn 'main'"))
+        assertTrue("then huginn attach 'main'; else huginn 'main'; fi; exec bash" in linux.last(), linux.last())
     }
 
     @Test
@@ -57,7 +67,7 @@ class TerminalLaunchTest {
             assertTrue(!spawned, bad)
         }
         var got: List<String>? = null
-        assertNull(TerminalLaunch.open("widgetshub-core", TerminalLaunch.Os.LINUX) { got = it })
+        assertNull(TerminalLaunch.open("widgetshub-core", TerminalLaunch.Os.LINUX, homeWithCli()) { got = it })
         assertEquals("x-terminal-emulator", got!![0])
     }
 
@@ -69,7 +79,7 @@ class TerminalLaunchTest {
 
     @Test
     fun `a spawn that throws is one sentence, not a crash`() {
-        val why = TerminalLaunch.open("main", TerminalLaunch.Os.WINDOWS) { throw java.io.IOException("no powershell here") }
+        val why = TerminalLaunch.open("main", TerminalLaunch.Os.WINDOWS, homeWithCli()) { throw java.io.IOException("no powershell here") }
         assertTrue(why != null && "no powershell here" in why, why)
     }
 }
