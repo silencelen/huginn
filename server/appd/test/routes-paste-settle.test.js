@@ -287,7 +287,14 @@ test('a composer with somebody ELSE\'s words in it is never pasted over', async 
   const text = 'the message that was swallowed';
 
   const { body } = await send(name, text);
-  assert.equal(body.delivered, true, 'the send was accepted; what it could not do is said on disk');
+  // 2026-10-02: this used to assert delivered:true — "accepted; what it could
+  // not do is said on disk". The breaker round showed what that costs: every
+  // client said "sent" about a message nobody sent. A message left out of the box
+  // now answers delivered:false with submitted:false and a lastError, and nothing
+  // is queued — the client is told, not just the journal.
+  assert.equal(body.delivered, false, `not delivered, and the answer says so: ${JSON.stringify(body)}`);
+  assert.equal(body.submitted, false);
+  assert.equal(body.queued, 0, 'and it is not waiting in a queue either');
 
   await wait(600);
   assert.equal(readOr(outFor(name)), '', 'nothing was submitted — not ours, and above all not theirs');
