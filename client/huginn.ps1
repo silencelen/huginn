@@ -638,6 +638,7 @@ function _Huginn-HelpBody {
   return @"
   huginn                      attach/create the live 'main' session (run claude inside)
   huginn <name>               a separate named session
+  huginn attach <name>        that session even when its name is a verb (update, solo...)
   huginn solo [name]          attach + detach all OTHER clients (resume solo / full screen)
   huginn list | ls            list sessions + attach status
   huginn status | st          health: uptime, auth, sessions, disk
@@ -716,6 +717,22 @@ function _Huginn-HelpBody {
   A state icon leads the tab title while Claude runs: working / needs-you / waiting
   (set host-side by the claude hooks; needs the server's title hook installed).
 "@
+}
+
+# `huginn attach <name>`: attach to a session BY NAME, never by verb.
+#
+# ⚠ WHY IT EXISTS (desktop breaker, 2026-10-02): `huginn <word>` reads the word
+# as a verb first and a session only when it is not one, and the daemon makes
+# sessions called update, solo, list, uninstall. The desktop's "Open in
+# PowerShell" ran `huginn 'update'` for a session named update - replacing this
+# very file - and `huginn 'solo'` threw every other device off main. This is the
+# form that cannot dispatch. The desktop checks for THIS FUNCTION'S NAME
+# (`Get-Command _Huginn-AttachNamed`) to know a CLI has `attach`, so it is not
+# to be renamed.
+function _Huginn-AttachNamed {
+  param([string]$H, [string]$Name)
+  if (-not (_Huginn-ValidName $Name)) { _Huginn-BadName $Name }
+  _Huginn-Attach -H $H -Session $Name
 }
 
 # `huginn <verb> --help` - ONE convention, and it used to be four. `projects`
@@ -1115,6 +1132,11 @@ function huginn {
       $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
       ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
     }
+  } elseif ($args[0] -eq 'attach') {
+    # By name, never by verb - see _Huginn-AttachNamed. No default: a bare
+    # `attach` is a mistake, not a request for main.
+    if ($args.Count -ne 2) { _Huginn-Fail "usage: huginn attach <name>" }
+    _Huginn-AttachNamed -H $H -Name ([string]$args[1])
   } elseif ($args[0] -eq 'solo') {
     $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
     if (-not (_Huginn-ValidName $name)) { _Huginn-BadName $name }
@@ -1281,14 +1303,14 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
   # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
   # neither.
-  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'project', 'solo', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
   $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
   if ($typed.Count -eq 0) {
     $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
-  } elseif ($prev -in 'kill', 'end', 'archive', 'solo', 'rename', 'mv') {
+  } elseif ($prev -in 'kill', 'end', 'archive', 'solo', 'attach', 'rename', 'mv') {
     $candidates = @(_Huginn-Sessions)                  # these take an existing session name
   } elseif ($prev -in 'usage', 'cost', 'ccusage') {
     $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'

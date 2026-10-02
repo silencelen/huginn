@@ -10,6 +10,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [Unreleased]
 
+### Added
+- **`huginn attach <name>`** attaches to a session by name and never reads the name as a
+  command. A session can be called `update`, `solo` or `list`, and `huginn update` will always
+  mean the command. This form opens such a session, and the desktop's "Open in PowerShell"
+  uses it. It folds case and checks the name like every other verb, and a bare
+  `huginn attach` prints its usage instead of opening main. Both clients, with tab completion.
+
 ## [1.5.1] - 2026-09-19
 
 The round-2 review's LOW findings on the CLI: help that was four different

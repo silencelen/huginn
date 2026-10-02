@@ -112,7 +112,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill archive revive solo rename list status rounds headroom devices device local projects desktop usage update uninstall version help; do
+for v in end kill archive revive solo rename list status rounds headroom devices device local projects desktop usage update uninstall version help attach; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -726,6 +726,66 @@ else
   grep -q '\^\[\]0;' <<<"$TTPIPE" \
     && bad "sh: title escapes went into a pipe" \
     || ok "sh: and nothing is written when stdout is not a terminal"
+fi
+
+echo "[5h/8] attach <name> attaches, even when the name is a verb"
+# ⚠ WHY (desktop breaker, 2026-10-02): `huginn <word>` reads the word as a VERB
+# first, and the daemon makes sessions called update, solo, list, uninstall.
+# The desktop's "Open in PowerShell" ran `huginn 'update'` for a session named
+# update - and replaced the installed client; `solo` evicted every other device
+# from main. `huginn attach <name>` is the form that never dispatches, and the
+# desktop probes for _huginn_attach_named / _Huginn-AttachNamed to know a CLI
+# has it. Driven with a stub ssh that logs argv; HUGINN_NO_RECONNECT keeps the
+# attach loop to one try.
+AT=$(mktemp -d); STUB_DIRS+=("$AT")
+cat > "$AT/ssh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SSH_LOG"
+exit 0
+STUB
+chmod +x "$AT/ssh"
+aemit () { export SSH_LOG="$AT/log"; : > "$SSH_LOG"
+           # set +u: this script runs under -u and the client does not (its
+           # attach reads an optional $3), as no interactive shell does.
+           ( set +u; export PATH="$AT:$PATH" HUGINN_NO_RECONNECT=1 HUGINN_NO_TITLE=1
+             . "$PWD/client/huginn.sh" >/dev/null 2>&1
+             eval "$1" ) >"$AT/out" 2>&1
+           cat "$SSH_LOG"; }
+for v in update solo list uninstall llm attach main; do
+  A=$(aemit "huginn attach $v")
+  grep -q -- "-tt .* cc $v\$" <<<"$A" && [ "$(wc -l <<<"$A")" -eq 1 ] \
+    && ok "sh: attach $v runs 'cc $v' and nothing else" || bad "sh: attach $v sent: $A / said: $(cat "$AT/out")"
+done
+A=$(aemit 'huginn attach Build_Box')
+grep -q "cc build_box\$" <<<"$A" && ok "sh: attach folds case like every verb" || bad "sh: attach Build_Box sent: $A"
+A=$(aemit 'huginn attach bad.name')
+[ -z "$A" ] && grep -q "invalid session name" "$AT/out" \
+  && ok "sh: attach refuses a dotted name before any network" || bad "sh: attach bad.name sent: $A"
+A=$(aemit 'huginn attach')
+[ -z "$A" ] && grep -q "usage: huginn attach" "$AT/out" \
+  && ok "sh: a bare attach is a usage line, not main" || bad "sh: bare attach sent: $A / said: $(cat "$AT/out")"
+( . "$PWD/client/huginn.sh" >/dev/null 2>&1; type _huginn_attach_named >/dev/null 2>&1 ) \
+  && ok "sh: _huginn_attach_named exists (the desktop's probe)" || bad "sh: no _huginn_attach_named - the desktop will refuse verb names"
+if ! command -v pwsh >/dev/null 2>&1; then
+  skip "ps1 attach (no pwsh)"
+else
+  pattach () { export SSH_LOG="$AT/log"; : > "$SSH_LOG"
+               PATH="$AT:$PATH" HUGINN_NO_RECONNECT=1 HUGINN_NO_TITLE=1 \
+                 pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" >"$AT/out" 2>&1
+               cat "$SSH_LOG"; }
+  for v in update solo list uninstall llm attach main; do
+    A=$(pattach "huginn attach $v")
+    grep -q -- "-tt .* cc $v\$" <<<"$A" && [ "$(wc -l <<<"$A")" -eq 1 ] \
+      && ok "ps1: attach $v runs 'cc $v' and nothing else" || bad "ps1: attach $v sent: $A / said: $(cat "$AT/out")"
+  done
+  A=$(pattach "huginn attach 'bad.name'")
+  [ -z "$A" ] && grep -q "invalid session name" "$AT/out" \
+    && ok "ps1: attach refuses a dotted name before any network" || bad "ps1: attach bad.name sent: $A"
+  A=$(pattach 'huginn attach')
+  [ -z "$A" ] && grep -q "usage: huginn attach" "$AT/out" \
+    && ok "ps1: a bare attach is a usage line, not main" || bad "ps1: bare attach sent: $A / said: $(cat "$AT/out")"
+  pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; if (Get-Command _Huginn-AttachNamed -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >/dev/null 2>&1 \
+    && ok "ps1: _Huginn-AttachNamed exists (the desktop's probe)" || bad "ps1: no _Huginn-AttachNamed - the desktop will refuse verb names"
 fi
 
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
