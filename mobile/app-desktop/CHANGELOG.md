@@ -10,6 +10,18 @@ Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
   so it left with no serializer and no content type and never reached the daemon — since the
   feature shipped in desktop 0.8.13. It is JSON now, the request builder refuses any body it
   cannot type, and a test pins both. Shared with the phone.
+- **Right-click a session's name to open it in PowerShell.** The tmux name beside the title in a
+  session's header has a menu with one verb: *Open in PowerShell* (*Open in terminal* elsewhere).
+  It starts a new window that loads your profile — `huginn` is a profile function — and runs
+  `huginn <name>`, so the session is in a real terminal in one click. The command crosses two
+  command lines as an encoded command, so a user folder with a space in it survives; a name with
+  characters a shell would read is refused, and if the window cannot start the line to type is
+  put on the clipboard instead.
+- **"+ Local" no longer stacks its letters.** The chat list's three new-chat verbs were plain text
+  buttons in a pane that can be 220 dp wide, and the last one got whatever width was left and
+  wrapped one letter per line. The row now fits itself to the pane: words when there is room,
+  one icon each (word in the tooltip) when there is less, and a single `+` with a menu below
+  that. The shortcuts and the palette are unchanged.
 
 ## 1.8.0
 

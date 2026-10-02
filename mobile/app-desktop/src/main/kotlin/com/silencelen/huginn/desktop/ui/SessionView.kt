@@ -161,6 +161,9 @@ import com.silencelen.huginn.ui.TranscriptRowItem
 import com.silencelen.huginn.ui.scrollToNewest
 import com.silencelen.huginn.ui.tailRevision
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import com.silencelen.huginn.desktop.TerminalLaunch
+import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
+import com.silencelen.huginn.desktop.ui.common.RowMenu
 
 /**
  * One open session: the conversation Claude is having, and the pane it is having
@@ -570,7 +573,23 @@ private fun SessionHeader(
                 // same rule the list row uses, because two identical strings side
                 // by side is the header spending width to say one thing twice.
                 if (!tight && name != title) {
-                    Muted(name, Modifier.padding(start = 10.dp).widthIn(max = NAME_MAX))
+                    // Right-click the NAME, not the title: the name is the tmux
+                    // session, and the one thing this window cannot do with it is
+                    // be a terminal. `TerminalLaunch` opens one through the CLI; when
+                    // it cannot, the line to type lands on the clipboard instead.
+                    val clipboard = LocalClipboardManager.current
+                    RowMenu(items = {
+                        listOf(HuginnMenuItem(TerminalLaunch.label()) {
+                            TerminalLaunch.open(name)?.let { why ->
+                                System.err.println("huginn: $why")
+                                clipboard.setText(AnnotatedString(TerminalLaunch.shellLine(name)))
+                            }
+                        })
+                    }) {
+                        Tip("Right-click: ${TerminalLaunch.label().lowercase()}") {
+                            Muted(name, Modifier.padding(start = 10.dp).widthIn(max = NAME_MAX))
+                        }
+                    }
                 }
             }
             if (compacting) CompactingChip(Modifier.padding(end = 10.dp))
