@@ -2294,10 +2294,10 @@ fun HuginnApp(
                             // so they keep a readable measure. Where that measure
                             // HANGS FROM is the next line's business — Status is
                             // left-snapped, these are still centred.
-                            is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            is Dest.Rounds -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundsPane() }
                             }
-                            is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            is Dest.RoundEdit -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { roundEditPane(d.id) }
                             }
                             // ⚠ CAPPED AND LEFT-SNAPPED, not capped and centred.
@@ -2315,7 +2315,10 @@ fun HuginnApp(
                             // are four separate call sites rather than one shared
                             // modifier, and only this one was reported.
                             is Dest.Status -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
-                                Box(Modifier.widthIn(max = 840.dp)) { statusPane() }
+                                // The ONE left-snapped page, at a wider measure than
+                                // the rest (owner 10-01, same as the desktop's
+                                // Frame.statusReading). Rounds and Apps are centred.
+                                Box(Modifier.widthIn(max = 1200.dp)) { statusPane() }
                             }
                             // Tree on the left, dashboard on the right — the shape
                             // Chats, Sessions and Pages already take when the fold
@@ -2333,7 +2336,7 @@ fun HuginnApp(
                             }
                             // A reading surface, capped and left-snapped like
                             // Status — it is Status's own card, full screen.
-                            is Dest.Apps -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            is Dest.Apps -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { appsPane() }
                             }
                             // List and detail side by side, the shape Chats,
@@ -2343,7 +2346,7 @@ fun HuginnApp(
                             // centring a column inside it.
                             is Dest.Settings, is Dest.SettingsSection ->
                                 settingsPane((dest as? Dest.SettingsSection)?.id)
-                            is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopStart) {
+                            is Dest.Devices -> Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
                                 Box(Modifier.widthIn(max = 840.dp)) { devicesPane() }
                             }
                             // List and editor side by side, the same shape the

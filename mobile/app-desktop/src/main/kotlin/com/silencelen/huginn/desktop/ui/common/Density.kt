@@ -138,6 +138,20 @@ object Frame {
     val reading = 840.dp
 
     /**
+     * The STATUS page's measure, and only its — wider than [reading] and the one
+     * surface that hangs from the left edge.
+     *
+     * ⚠ THE OWNER, TWICE. 09-15: keep the cap, snap the Status page LEFT instead of
+     * centring it. 10-01: *"this extended to all pages and body elements, no bueno.
+     * also we should extend the allowance of width before it stops and stays
+     * left."* The snap had ridden the shared [ReadingPane] onto Devices, Rounds
+     * and Apps, then Settings and the transcripts copied it. Status is a table of
+     * label/value rows, not prose, so it gets more room before it stops; every
+     * other capped surface is centred again at [reading].
+     */
+    val statusReading = 1200.dp
+
+    /**
      * How wide the CONVERSATION column is allowed to get.
      *
      * ⚠ D-24. THE USER'S OWN WORDS WERE CAPPED AND THE ANSWER WAS NOT. The shell

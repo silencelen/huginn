@@ -602,24 +602,27 @@ fun Shell(store: AppStore) {
                                     // `ArchivedTranscriptViewTest` greps it for exactly
                                     // that. Reviving stays on the archived row, beside
                                     // the warning about a swept transcript.
-                                    ArchivedTranscriptView(
-                                        events = archive.page?.events.orEmpty(),
-                                        title = archive.title,
-                                        truncated = archive.page?.transcriptTruncated == true,
-                                        onCopy = { copy(it) },
-                                        note = archive.note,
-                                        // ⚠ D-24, AND ON THE WHOLE VIEW rather than on its
-                                        // rows. An archived conversation is a conversation
-                                        // and was running to the window edge at 2196px like
-                                        // the live one; but this view owns its own
-                                        // `LazyColumn` in `:ui`, so the shell cannot reach
-                                        // the rows — the cap goes on what the shell CAN
-                                        // reach, which makes the whole read-only pane one
-                                        // capped, left-snapped column. Cap before fill.
-                                        modifier = Modifier
-                                            .widthIn(max = Frame.transcript)
-                                            .fillMaxWidth(),
-                                    )
+                                    // Centred (owner, 10-01) — the left-snap was Status's alone.
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                                        ArchivedTranscriptView(
+                                            events = archive.page?.events.orEmpty(),
+                                            title = archive.title,
+                                            truncated = archive.page?.transcriptTruncated == true,
+                                            onCopy = { copy(it) },
+                                            note = archive.note,
+                                            // ⚠ D-24, AND ON THE WHOLE VIEW rather than on its
+                                            // rows. An archived conversation is a conversation
+                                            // and was running to the window edge at 2196px like
+                                            // the live one; but this view owns its own
+                                            // `LazyColumn` in `:ui`, so the shell cannot reach
+                                            // the rows — the cap goes on what the shell CAN
+                                            // reach, which makes the whole read-only pane one
+                                            // capped, left-snapped column. Cap before fill.
+                                            modifier = Modifier
+                                                .widthIn(max = Frame.transcript)
+                                                .fillMaxWidth(),
+                                        )
+                                    }
                                 } else if (sessionEnded != null) {
                                     // ⚠⚠ THE PANE OWES AN ACCOUNT OF WHERE THE
                                     // CONVERSATION WENT. A session that wraps up

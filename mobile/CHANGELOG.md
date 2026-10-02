@@ -20,6 +20,9 @@ Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
   pinned — reported to huginn once per launch, nothing to set up — and whatever an app's own new
   *Also check from* field lists. Addresses devices arrived on are still probed and shown, marked
   *not required*, and never make a row red or refuse an add.
+- **Only the Status page hangs from the left, and it gets more room.** On a wide screen Rounds,
+  Devices, Apps and Settings had picked up Status's left-snap; they are centred again. Status stays left and
+  stops at 1200 dp instead of 840. Settings is shared with the desktop.
 
 ## 3.8.0 — 2026-09-20
 

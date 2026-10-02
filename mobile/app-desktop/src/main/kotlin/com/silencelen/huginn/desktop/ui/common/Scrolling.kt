@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 
 /**
  * The bar that says how much more there is — and lets a mouse go and get it.
@@ -126,16 +127,23 @@ private fun deskScrollbar(): ScrollbarStyle {
 fun ReadingPane(
     modifier: Modifier = Modifier,
     padding: PaddingValues = PaddingValues(Space.section),
+    /**
+     * Where the capped column hangs. CENTRED unless a page says otherwise — and
+     * only Status does (owner, 10-01: the left-snap "extended to all pages and
+     * body elements, no bueno"). See [Frame.statusReading].
+     */
+    snap: Alignment.Horizontal = Alignment.CenterHorizontally,
+    maxWidth: Dp = Frame.reading,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val scroll = rememberScrollState()
     Box(modifier.fillMaxSize()) {
         Column(
             Modifier.fillMaxSize().verticalScroll(scroll),
-            horizontalAlignment = Alignment.Start,
+            horizontalAlignment = snap,
         ) {
             Column(
-                Modifier.widthIn(max = Frame.reading).fillMaxWidth().padding(padding),
+                Modifier.widthIn(max = maxWidth).fillMaxWidth().padding(padding),
                 content = content,
             )
         }
@@ -163,5 +171,10 @@ fun ReadingPane(
  */
 @Composable
 fun TranscriptColumn(content: @Composable () -> Unit) {
-    Box(Modifier.widthIn(max = Frame.transcript).fillMaxWidth()) { content() }
+    // Centred in the pane (owner, 10-01): the left-snap was the Status page's and
+    // only its. The outer Box is the full row, so the scrollbar and the wheel
+    // target stay the pane's; the inner one is the capped measure.
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Box(Modifier.widthIn(max = Frame.transcript).fillMaxWidth()) { content() }
+    }
 }

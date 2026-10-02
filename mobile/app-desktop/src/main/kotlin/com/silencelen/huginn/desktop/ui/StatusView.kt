@@ -25,6 +25,8 @@ import com.silencelen.huginn.ui.KeepAwakeLine
 import com.silencelen.huginn.ui.PlanSection
 import com.silencelen.huginn.ui.UsageSection
 import kotlinx.coroutines.delay
+import androidx.compose.ui.Alignment
+import com.silencelen.huginn.desktop.ui.common.Frame
 
 /**
  * Host, plan headroom and token usage. Three endpoints on one screen, which makes
@@ -45,10 +47,15 @@ fun StatusView(status: Status?, plan: Plan?, usage: Usage?, route: String, watch
             delay(30_000)
         }
     }
-    // A reading pane: capped to a measure, centred, and with a scrollbar. It used
-    // to run to the window edge, which put ~1300px of nothing between `host` and
-    // `huginn` and drew a 1340px progress bar for a percentage.
-    ReadingPane(padding = PaddingValues(Space.section)) {
+    // A reading pane: capped, LEFT-SNAPPED, and with a scrollbar — the one page
+    // that hangs from the left (owner 09-15), at its own wider measure (owner
+    // 10-01). It used to run to the window edge, which put ~1300px of nothing
+    // between `host` and `huginn` and drew a 1340px progress bar for a percentage.
+    ReadingPane(
+        padding = PaddingValues(Space.section),
+        snap = Alignment.Start,
+        maxWidth = Frame.statusReading,
+    ) {
         Text("Status", style = MaterialTheme.typography.titleMedium)
 
         Section("Host")
