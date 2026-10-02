@@ -186,6 +186,7 @@ private fun App.asForm(): AppForm = AppForm(
     kind = kind,
     notes = notes.orEmpty(),
     unit = unit.orEmpty(),
+    alsoCheck = addresses.joinToString(" "),
 )
 
 /**

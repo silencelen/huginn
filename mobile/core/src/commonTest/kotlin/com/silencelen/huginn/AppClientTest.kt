@@ -171,6 +171,44 @@ class AppClientTest {
         assertEquals(true, made.app!!.reachable.ok, "it got in because it answered everywhere")
     }
 
+    @Test
+    fun `an add carries the row's own addresses, and the pinned routes go up as one PUT`() = runTest {
+        val c = client { respond("""{"id":"x","name":"X","url":"http://huginn:1/","addresses":["10.42.0.1"],"version":1}""", HttpStatusCode.Created) }
+        val made = c.createApp("X", "http://huginn:1/", addresses = listOf("10.42.0.1", "192.168.2.117"))
+        assertEquals(listOf("10.42.0.1"), made.app!!.addresses, "the row carries what the daemon kept")
+        val body = (seen.last().body as io.ktor.http.content.TextContent).text
+        assertTrue(""""addresses":["10.42.0.1","192.168.2.117"]""" in body, body)
+
+        c.reportRoutes(listOf("192.168.2.117", "100.97.198.90"))
+        val put = seen.last()
+        assertEquals("PUT", put.method.value)
+        assertEquals("/v1/apps/routes", put.url.encodedPath)
+        assertEquals("""{"addrs":["192.168.2.117","100.97.198.90"]}""", (put.body as io.ktor.http.content.TextContent).text)
+    }
+
+    @Test
+    fun `the list says what is required and who reported each route, and an address says whether it counts`() = runTest {
+        val c = client {
+            respond(
+                """{"apps":[{"id":"a","name":"A","url":"http://huginn:1/","version":1,
+                   "reachable":{"ok":true,"checkedAt":1,"addresses":[{"addr":"127.0.0.1","ok":true,"required":true},
+                   {"addr":"100.97.198.90","ok":false,"error":"timed out","required":false}],"fix":[],
+                   "note":"also not answering at 100.97.198.90 — devices have arrived there, but it is not required"}}],
+                   "max":32,"kinds":["tool"],"retrofitApplied":true,"clientAddresses":["100.97.198.90"],
+                   "requiredAddresses":["127.0.0.1","192.168.2.117"],
+                   "reportedRoutes":[{"addr":"192.168.2.117","lastSeenAt":5,"by":["fold","desk"]}]}""",
+                HttpStatusCode.OK,
+            )
+        }
+        val list = c.apps()!!
+        assertEquals(listOf("127.0.0.1", "192.168.2.117"), list.requiredAddresses)
+        assertEquals(listOf("fold", "desk"), list.reportedRoutes.single().by)
+        val row = list.apps.single()
+        assertEquals(true, row.reachable.ok, "an advisory miss is not a red row")
+        assertEquals(listOf(true, false), row.reachable.addresses.map { it.required })
+        assertTrue(row.addresses.isEmpty(), "absent on the wire is none")
+    }
+
     /**
      * ⚠ AND SO IS THE 409, which arrives carrying the row that already holds the
      * id. Renaming is one keystroke; emptying the form to say "that name is
