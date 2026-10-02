@@ -934,6 +934,18 @@ function remove(list, id) {
  * one line under the name. The ADDRESS is not in here, because it is not a
  * property of the page (see [seedHost]).
  */
+/**
+ * A row that IS one of the seeds — same id, same port — describes a service on
+ * THIS host whatever host its URL names (2026-10-02). The four live seeds still
+ * carry the retired Tailscale address 100.97.198.90; without this the non-local
+ * rule in addressSet would judge them as some other machine's apps the moment
+ * that address aged out of the arrival set.
+ */
+function isSeedRow(rec) {
+  const unit = SEED_UNITS.find((u) => u.id === (rec && rec.id));
+  return !!unit && Number(portOf(rec.url)) === unit.port;
+}
+
 const SEED_UNITS = [
   { id: 'armap', port: 8088, name: 'Architecture map', kind: 'docs', unit: 'armap.service',
     notes: 'Static armap dashboard (docs/current/armap).' },
@@ -2298,12 +2310,18 @@ function createStore(opts = {}) {
    * and does not name now is withdrawn, and an empty list withdraws everything
    * it had. See [reports].
    *
-   * ⚠ AND A HOST THE RULE REFUSES IS A 400 NAMING IT, NOT A SILENT DROP. 3.9.0
+   * ⚠ AND A HOST THE RULE REFUSES IS NAMED, NOT SILENTLY DROPPED. 3.9.0
    * answered 200 with `huginn.jnet.ad` simply missing, and both clients threw
    * the reply away — a device pinned only to that name was protected by nothing
-   * and told nothing. A refused report changes nothing (no half-applied set).
+   * and told nothing. The reply now carries `refused`, host by host.
    *
-   * `{ok:true, fresh, gone}` or `{ok:false, status, error, refused?}`.
+   * ⚠⚠ BUT THE REST OF THE REPORT IS STILL APPLIED. An all-or-nothing 400 was
+   * tried first and caught in review: 3.9.0 clients are in the field, send every
+   * pinned host unfiltered, and never read the body — one dotted pin would have
+   * cost such a device ALL its valid routes. So the valid hosts become this
+   * client's set and the refused ones ride back in the 200.
+   *
+   * `{ok:true, fresh, gone, refused}` or `{ok:false, status, error}` (shape errors only).
    */
   function noteReportedRoutes(rawAddrs, by) {
     const who = reportedClientId(by);
@@ -2316,10 +2334,7 @@ function createStore(opts = {}) {
       if (!next.includes(a)) next.push(a);
     }
     if (refused.length) {
-      return {
-        ok: false, status: 400, refused,
-        error: `${refused.map((r) => `'${r.addr}'`).join(', ')} ${REFUSED_ADDR}`,
-      };
+      log(`apps: ${who} reported ${refused.map((r) => `'${r.addr}'`).join(', ')} — ${REFUSED_ADDR}; applying the rest`);
     }
     if (next.length > MAX_ROUTES_PER_CLIENT) {
       return {
@@ -2341,7 +2356,7 @@ function createStore(opts = {}) {
     for (const addr of gone) log(`apps: no device reports ${addr} any more — apps no longer have to answer there`);
     const changed = !prev || prev.addrs.join(' ') !== next.join(' ');
     if (fresh.length || gone.length || changed || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
-    return { ok: true, fresh, gone };
+    return { ok: true, fresh, gone, refused };
   }
 
   /** Loopback plus every reported route: what every app is REQUIRED to answer on. */
@@ -2381,7 +2396,7 @@ function createStore(opts = {}) {
   function addressSet(rec) {
     const own = cleanAddrs(rec && rec.addresses);
     const host = normalizeAddr(hostnameOf(rec && rec.url));
-    if (host && !isLocalHost(host)) return { required: [...new Set([host, ...own])], advisory: [], remote: host };
+    if (host && !isLocalHost(host) && !isSeedRow(rec)) return { required: [...new Set([host, ...own])], advisory: [], remote: host };
     const required = [...new Set([...requiredAddresses(), ...own])];
     const advisory = addresses().filter((a) => !required.includes(a));
     return { required, advisory };
@@ -2999,7 +3014,7 @@ module.exports = {
   nameProblem, notesProblem, idProblem, unitProblem,
   buildRecord, storedAddedAt, noProbe, noReach, reachOf, appRow, sortApps,
   LEGACY_ROW_FIELDS, legacyConsoleRow, legacyConsoleList,
-  findApp, add, patch, rename, setUrl, remove,
+  findApp, add, patch, rename, setUrl, remove, isSeedRow,
   SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
   seedApps, migrateSeedUrls, migrateSeedUnits,
   portOf, hostnameOf, fixLines, reachedButSilent, remotesOf, firewallSources, slash24,
