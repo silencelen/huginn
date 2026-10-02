@@ -373,11 +373,12 @@ fun SettingsCategoryPage(
 ) {
     Column(
         modifier.fillMaxSize().verticalScroll(scroll),
-        // Capped AND left-snapped (owner, 09-15): the cap keeps a wide monitor from
-        // spreading a row's label and control across the screen; centring the capped
-        // column would then float it into the middle of the empty pane. Same rule as
-        // the Status page and the desktop's ReadingPane.
-        horizontalAlignment = Alignment.Start,
+        // Capped and CENTRED. The cap keeps a wide monitor from spreading a row's
+        // label and control across the screen. It was left-snapped for a while,
+        // copied from the Status page — and the owner (10-01): the left-snap
+        // "extended to all pages and body elements, no bueno". Status alone hangs
+        // from the left.
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
             Modifier.widthIn(max = SETTINGS_READING_WIDTH).fillMaxWidth().padding(20.dp),
