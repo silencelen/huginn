@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## Unreleased
+## 3.9.1 — 2026-10-02
 
 Message delivery, from a breaker round against 3.9.0 (2026-10-02): ten ways a message from the
 app could be left unsent, doubled, held for no reason or merged into somebody's draft, each

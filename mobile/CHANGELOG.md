@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## Unreleased
+## 3.9.1 — 2026-10-02
 
 - **No crash when push is not ready.** 3.9.0 closed itself seven times in a row on the first
   launches after updating: Play services answers "not available" for a minute after an app update,

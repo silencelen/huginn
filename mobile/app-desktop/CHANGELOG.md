@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 1.9.1
 
 - **Apps: a route you remove stops being required.** The desktop now reports the routes it uses
   whenever that list changes, not once per launch, and appd 3.9.1 treats each report as the
