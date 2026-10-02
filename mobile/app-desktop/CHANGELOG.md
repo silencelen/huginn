@@ -19,6 +19,13 @@
   does not answer no longer puts a "Why" beside "reachable from your devices"; the row offers
   "Details" with the host's note.
 
+- **Overview keeps your saved goals and notes.** Since 1.9.0, the first time you opened a
+  session's Overview the goals and notes editors stayed blank even when goals were saved, and the
+  first thing you typed replaced the saved text with only that. The editor threw away the server's
+  copy as older than its own empty starting point, and with the session already polled in the
+  background nothing sent it again until the session moved. It now shows the saved text on
+  arrival, and keeps asking for it until it has arrived. Shared with the phone.
+
 ## 1.9.0
 
 Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
