@@ -18,6 +18,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
+import io.ktor.http.encodeURLPathPart
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.writeFully
@@ -274,6 +275,23 @@ class HuginnClient(
 
     /** Releases the engine. Optional on Android (the process owns it); the desktop client should call it. */
     fun close() = http.close()
+
+    /**
+     * ONE path segment, from a name or id: percent-encoded, slash included.
+     *
+     * ⚠ 2026-10-02: every path used to interpolate the raw name, so a session
+     * called `VICTIM?x=` made `releaseSize` send `DELETE /v1/sessions/VICTIM?x=/size`
+     * — appd routes on the pathname alone, so that WAS `killSession("VICTIM")`,
+     * and the name is reachable from any app through the exported activity's
+     * `session` extra. A `/` or `..` walked the bearer to another route the same
+     * way. Encoding cannot rescue a segment that IS `.` or `..` (a URL parser
+     * resolves those before routing) and an empty one collapses the path, so
+     * those never leave the device: no real session, chat or id is spelled so.
+     */
+    private fun seg(part: String): String {
+        if (part.isEmpty() || part == "." || part == "..") throw HuginnException(0, "Not a valid name: '$part'")
+        return part.encodeURLPathPart()
+    }
 
     /**
      * Named `absolute`, not `url`: inside a Ktor request block `url(...)` is the
@@ -603,7 +621,7 @@ class HuginnClient(
      * status still throws like any request.
      */
     private suspend fun answerCall(session: String, body: JsonObject): AnswerResult {
-        val resp = http.request { build("/v1/sessions/$session/answer", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/sessions/${seg(session)}/answer", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.isSuccess() || resp.status.value == 409) {
             runCatching { decode<AnswerResult>(text) }.getOrNull()?.let { return it }
@@ -727,10 +745,10 @@ class HuginnClient(
     suspend fun savedAccounts(withPlan: Boolean = false): List<SavedAccount> =
         decode<SavedAccounts>(call("/v1/accounts${if (withPlan) "?plan=1" else ""}")).accounts
 
-    suspend fun activateAccount(slug: String): Account = decode(post("/v1/accounts/$slug/activate"))
+    suspend fun activateAccount(slug: String): Account = decode(post("/v1/accounts/${seg(slug)}/activate"))
 
     suspend fun forgetAccount(slug: String) {
-        call("/v1/accounts/$slug", HttpMethod.Delete)
+        call("/v1/accounts/${seg(slug)}", HttpMethod.Delete)
     }
 
     /**
@@ -751,11 +769,11 @@ class HuginnClient(
      * The whole vocabulary is on [AccountRefreshed.status].
      */
     suspend fun refreshAccount(slug: String): String =
-        decode<AccountRefreshed>(post("/v1/accounts/$slug/refresh")).status
+        decode<AccountRefreshed>(post("/v1/accounts/${seg(slug)}/refresh")).status
 
     /** The same call, whole — for a caller that needs more than the word. */
     suspend fun refreshAccountFull(slug: String): AccountRefreshed =
-        decode(post("/v1/accounts/$slug/refresh"))
+        decode(post("/v1/accounts/${seg(slug)}/refresh"))
 
     /** Plan utilization: the same numbers Claude Code's /usage shows. */
     suspend fun plan(): Plan = decode(call("/v1/plan"))
@@ -794,7 +812,7 @@ class HuginnClient(
      * silently undone is worse than no Undo.
      */
     suspend fun undoLadder(name: String): UndoResult =
-        decode(post("/v1/sessions/$name/headroom/undo"))
+        decode(post("/v1/sessions/${seg(name)}/headroom/undo"))
 
     // ---------------------------------------------------------- sessions
 
@@ -816,7 +834,7 @@ class HuginnClient(
         decode<CreatedSession>(post("/v1/sessions", body = jsonBody("name" to name))).name
 
     suspend fun killSession(name: String) {
-        call("/v1/sessions/$name", HttpMethod.Delete)
+        call("/v1/sessions/${seg(name)}", HttpMethod.Delete)
     }
 
     /**
@@ -827,7 +845,7 @@ class HuginnClient(
      * state rather than an error, because neither is a fault.
      */
     suspend fun sessionOverview(name: String): SessionOverview =
-        decode(call("/v1/sessions/$name/overview"))
+        decode(call("/v1/sessions/${seg(name)}/overview"))
 
     /**
      * The map, or nothing when the cursor still matches.
@@ -838,7 +856,7 @@ class HuginnClient(
      */
     suspend fun sessionGraph(name: String, cursor: GraphCursor? = null): SessionGraph {
         val q = cursor?.let { "?size=${it.size}&agentBytes=${it.agentBytes}" } ?: ""
-        return decode(call("/v1/sessions/$name/graph$q"))
+        return decode(call("/v1/sessions/${seg(name)}/graph$q"))
     }
 
     /**
@@ -849,7 +867,7 @@ class HuginnClient(
      * field held when this one was last read.
      */
     suspend fun saveSessionMeta(name: String, goals: String? = null, notes: String? = null): SessionMeta =
-        decode<SessionMetaSaved>(post("/v1/sessions/$name/meta", body = buildJsonObject {
+        decode<SessionMetaSaved>(post("/v1/sessions/${seg(name)}/meta", body = buildJsonObject {
             goals?.let { put("goals", JsonPrimitive(it)) }
             notes?.let { put("notes", JsonPrimitive(it)) }
         })).meta
@@ -863,7 +881,7 @@ class HuginnClient(
      * be indistinguishable on the wire otherwise.
      */
     suspend fun setSessionAutoResume(name: String, value: Boolean?): SessionMeta =
-        decode<SessionMetaSaved>(post("/v1/sessions/$name/meta", body = buildJsonObject {
+        decode<SessionMetaSaved>(post("/v1/sessions/${seg(name)}/meta", body = buildJsonObject {
             put("autoResume", if (value == null) JsonNull else JsonPrimitive(value))
         })).meta
 
@@ -875,7 +893,7 @@ class HuginnClient(
      * when the pane has no recorded Claude state (it may be a plain shell).
      */
     suspend fun softEndSession(name: String, auto: Boolean? = null): SoftEndResult =
-        decode(post("/v1/sessions/$name/soft-end", body = buildJsonObject {
+        decode(post("/v1/sessions/${seg(name)}/soft-end", body = buildJsonObject {
             if (auto != null) put("auto", JsonPrimitive(auto))
         }))
 
@@ -886,7 +904,7 @@ class HuginnClient(
      * Claude state (a plain shell would run "/compact" as a command).
      */
     suspend fun compactSession(name: String): CompactResult =
-        decode(post("/v1/sessions/$name/compact", body = buildJsonObject {}))
+        decode(post("/v1/sessions/${seg(name)}/compact", body = buildJsonObject {}))
 
     // ---- archive: sessions ended on purpose, and the way back into them
 
@@ -915,7 +933,7 @@ class HuginnClient(
      * shows verbatim rather than replacing with a summary of its own.
      */
     suspend fun archiveSession(name: String, now: Boolean = false): ArchiveResult =
-        decode(post("/v1/sessions/$name/archive", body = buildJsonObject {
+        decode(post("/v1/sessions/${seg(name)}/archive", body = buildJsonObject {
             put("mode", JsonPrimitive(if (now) "now" else "graceful"))
         }))
 
@@ -927,13 +945,13 @@ class HuginnClient(
      * numbered one when not, and the result carries what tmux actually called it.
      */
     suspend fun reviveArchive(id: String, name: String? = null): ReviveResult =
-        decode(post("/v1/archive/$id/revive", body = buildJsonObject {
+        decode(post("/v1/archive/${seg(id)}/revive", body = buildJsonObject {
             name?.let { put("name", JsonPrimitive(it)) }
         }))
 
     /** Forgets the row AND the transcript copy it was keeping. There is no undo. */
     suspend fun deleteArchive(id: String) {
-        call("/v1/archive/$id", HttpMethod.Delete)
+        call("/v1/archive/${seg(id)}", HttpMethod.Delete)
     }
 
     /**
@@ -967,7 +985,7 @@ class HuginnClient(
         limit: Int = 400,
         until: Long? = null,
     ): TranscriptPage? = probeGet(
-        "/v1/archive/$id/transcript?limit=$limit" +
+        "/v1/archive/${seg(id)}/transcript?limit=$limit" +
             (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
     )?.let { decode<TranscriptPage>(it) }
 
@@ -996,7 +1014,7 @@ class HuginnClient(
      *   answer with a name.
      */
     suspend fun renameSession(from: String, to: String): String {
-        val body = post("/v1/sessions/$from/rename", body = jsonBody("name" to to))
+        val body = post("/v1/sessions/${seg(from)}/rename", body = jsonBody("name" to to))
         val actual = runCatching {
             json.decodeFromString<JsonObject>(body)["name"]?.jsonPrimitive?.content
         }.getOrNull()
@@ -1037,14 +1055,14 @@ class HuginnClient(
             // client built before this sends, so one spelling covers both.
             if (live) add("live=1")
         }.joinToString("&")
-        val path = "/v1/sessions/$name/screen" + if (q.isEmpty()) "" else "?$q"
+        val path = "/v1/sessions/${seg(name)}/screen" + if (q.isEmpty()) "" else "?$q"
         // A long poll outlives the normal read timeout but must still time out.
         return decode(call(path, tier = if (waitMs > 0) Tier.POLL else Tier.NORMAL))
     }
 
     /** Hands the pane size back to tmux so an attached laptop re-fits at once. */
     suspend fun releaseSize(name: String) {
-        call("/v1/sessions/$name/size", HttpMethod.Delete)
+        call("/v1/sessions/${seg(name)}/size", HttpMethod.Delete)
     }
 
     /**
@@ -1053,10 +1071,10 @@ class HuginnClient(
      * long-poll tier rather than the 30s default.
      */
     suspend fun sessionSuggestions(name: String): Suggestions =
-        decode(call("/v1/sessions/$name/suggestions", tier = Tier.POLL))
+        decode(call("/v1/sessions/${seg(name)}/suggestions", tier = Tier.POLL))
 
     suspend fun chatSuggestions(id: String): Suggestions =
-        decode(call("/v1/chats/$id/suggestions", tier = Tier.POLL))
+        decode(call("/v1/chats/${seg(id)}/suggestions", tier = Tier.POLL))
 
     /**
      * Lands a file on huginn where a chat's Read tool can see it, STREAMING it.
@@ -1123,7 +1141,7 @@ class HuginnClient(
 
     /** Renames a chat; the title is the only field this touches. */
     suspend fun renameChat(id: String, title: String) {
-        call("/v1/chats/$id", HttpMethod.Patch, body = buildJsonObject { put("title", JsonPrimitive(title)) })
+        call("/v1/chats/${seg(id)}", HttpMethod.Patch, body = buildJsonObject { put("title", JsonPrimitive(title)) })
     }
 
     /**
@@ -1137,7 +1155,7 @@ class HuginnClient(
      * with a much longer answer.
      */
     suspend fun sessionAgents(name: String, all: Boolean = false): AgentsInfo =
-        decode(call("/v1/sessions/$name/agents${if (all) "?all=1" else ""}"))
+        decode(call("/v1/sessions/${seg(name)}/agents${if (all) "?all=1" else ""}"))
 
     /**
      * One agent's own transcript, paged exactly like the parent session's.
@@ -1160,7 +1178,7 @@ class HuginnClient(
         limit: Int = 400,
         until: Long? = null,
     ): TranscriptPage = decode(call(
-        "/v1/sessions/$name/agents/${agentId.encodeURLParameter()}/transcript?limit=$limit" +
+        "/v1/sessions/${seg(name)}/agents/${seg(agentId)}/transcript?limit=$limit" +
             (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
     ))
 
@@ -1178,7 +1196,7 @@ class HuginnClient(
         limit: Int = 400,
         until: Long? = null,
     ): TranscriptPage = decode(call(
-        "/v1/sessions/$name/transcript?limit=$limit" +
+        "/v1/sessions/${seg(name)}/transcript?limit=$limit" +
             (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
     ))
 
@@ -1189,7 +1207,7 @@ class HuginnClient(
         limit: Int = 400,
         until: Long? = null,
     ): TranscriptPage = decode(call(
-        "/v1/chats/$id/transcript?limit=$limit" +
+        "/v1/chats/${seg(id)}/transcript?limit=$limit" +
             (offset?.let { "&offset=$it" } ?: "") + (until?.let { "&until=$it" } ?: ""),
     ))
 
@@ -1211,7 +1229,7 @@ class HuginnClient(
             if (keys.isNotEmpty()) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
             scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
         }
-        return decode(post("/v1/sessions/$name/keys", body = payload))
+        return decode(post("/v1/sessions/${seg(name)}/keys", body = payload))
     }
 
     /**
@@ -1222,7 +1240,7 @@ class HuginnClient(
      * two clients can have the same session open.
      */
     suspend fun typingStatus(name: String): TypingState =
-        decode(call("/v1/sessions/$name/typing"))
+        decode(call("/v1/sessions/${seg(name)}/typing"))
 
     // ⚠ NO `cancelTyping`. `/v1/sessions/:name/typing` is GET-only — there has
     // never been a DELETE — so the method that used to sit here 404'd on every
@@ -1235,10 +1253,10 @@ class HuginnClient(
 
     suspend fun devices(): List<Device> = decode<DeviceList>(call("/v1/devices")).devices
 
-    suspend fun device(id: String): Device = decode(call("/v1/devices/$id"))
+    suspend fun device(id: String): Device = decode(call("/v1/devices/${seg(id)}"))
 
     suspend fun deleteDevice(id: String) {
-        call("/v1/devices/$id", HttpMethod.Delete)
+        call("/v1/devices/${seg(id)}", HttpMethod.Delete)
     }
 
     /**
@@ -1298,7 +1316,7 @@ class HuginnClient(
          */
         actWhileLocked: Boolean? = null,
     ): BeatResult = decode(
-        post("/v1/devices/$id/beat", body = buildJsonObject {
+        post("/v1/devices/${seg(id)}/beat", body = buildJsonObject {
             locked?.let { put("locked", JsonPrimitive(it)) }
             scope?.let { put("scope", JsonPrimitive(it)) }
             version?.let { put("version", JsonPrimitive(it)) }
@@ -1314,7 +1332,7 @@ class HuginnClient(
      * device look like it kept dropping off.
      */
     suspend fun pollWork(id: String, waitS: Int = 25, locked: Boolean? = null): DeviceWork? {
-        val q = StringBuilder("/v1/devices/$id/work?wait=$waitS")
+        val q = StringBuilder("/v1/devices/${seg(id)}/work?wait=$waitS")
         if (locked != null) q.append("&locked=").append(if (locked) "1" else "0")
         return decode<WorkEnvelope>(call(q.toString(), tier = Tier.WATCH)).work
     }
@@ -1335,7 +1353,7 @@ class HuginnClient(
         error: String? = null,
         locked: Boolean? = null,
     ): EventsAck = decode(
-        post("/v1/devices/$deviceId/work/$workId/events", body = buildJsonObject {
+        post("/v1/devices/${seg(deviceId)}/work/${seg(workId)}/events", body = buildJsonObject {
             put("lines", JsonArray(lines.map { JsonPrimitive(it) }))
             if (done) put("done", JsonPrimitive(true))
             exitCode?.let { put("exitCode", JsonPrimitive(it)) }
@@ -1348,7 +1366,7 @@ class HuginnClient(
 
     suspend fun rounds(): List<Round> = decode<RoundList>(call("/v1/rounds")).rounds
 
-    suspend fun round(id: String): Round = decode(call("/v1/rounds/$id"))
+    suspend fun round(id: String): Round = decode(call("/v1/rounds/${seg(id)}"))
 
     /**
      * Sent field by field rather than by serialising [RoundSchedule] whole: the
@@ -1420,7 +1438,7 @@ class HuginnClient(
         model: String? = null,
         effort: String? = null,
     ): Round = decode(
-        call("/v1/rounds/$id", HttpMethod.Patch, body = buildJsonObject {
+        call("/v1/rounds/${seg(id)}", HttpMethod.Patch, body = buildJsonObject {
             enabled?.let { put("enabled", JsonPrimitive(it)) }
             title?.let { put("title", JsonPrimitive(it)) }
             prompt?.let { put("prompt", JsonPrimitive(it)) }
@@ -1439,7 +1457,7 @@ class HuginnClient(
     )
 
     suspend fun deleteRound(id: String) {
-        call("/v1/rounds/$id", HttpMethod.Delete)
+        call("/v1/rounds/${seg(id)}", HttpMethod.Delete)
     }
 
     /**
@@ -1475,7 +1493,7 @@ class HuginnClient(
     )
 
     /** Fires the Round now. The report arrives the same way a scheduled one does. */
-    suspend fun runRound(id: String): RoundRunStarted = decode(post("/v1/rounds/$id/run"))
+    suspend fun runRound(id: String): RoundRunStarted = decode(post("/v1/rounds/${seg(id)}/run"))
 
     /**
      * "I have read this and dealt with it" — or, with false, "no I have not".
@@ -1489,7 +1507,7 @@ class HuginnClient(
         // Map, and [build] has no serializer for one: Ktor refused it before it
         // left the device ("Fail to prepare request body … Content-Type: null"),
         // so Mark done had never once reached the daemon (found 2026-10-01).
-        decode(post("/v1/rounds/$id/ack", body = buildJsonObject { put("acknowledged", JsonPrimitive(acknowledged)) }))
+        decode(post("/v1/rounds/${seg(id)}/ack", body = buildJsonObject { put("acknowledged", JsonPrimitive(acknowledged)) }))
 
     // ---- scratchpads: the user's own pages, quoted into a message on request
 
@@ -1505,7 +1523,7 @@ class HuginnClient(
     suspend fun scratchpads(): List<Scratchpad> = decode<ScratchpadList>(call("/v1/scratchpads")).pads
 
     /** One page, with its content and the rev a save must carry back. */
-    suspend fun scratchpad(id: String): Scratchpad = decode(call("/v1/scratchpads/$id"))
+    suspend fun scratchpad(id: String): Scratchpad = decode(call("/v1/scratchpads/${seg(id)}"))
 
     suspend fun createScratchpad(name: String, content: String = ""): Scratchpad = decode(
         post("/v1/scratchpads", body = buildJsonObject {
@@ -1534,7 +1552,7 @@ class HuginnClient(
             name?.let { put("name", JsonPrimitive(it)) }
             content?.let { put("content", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/scratchpads/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/scratchpads/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return ScratchpadSave(decode(text), conflict = true)
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -1542,7 +1560,7 @@ class HuginnClient(
     }
 
     suspend fun deleteScratchpad(id: String) {
-        call("/v1/scratchpads/$id", HttpMethod.Delete)
+        call("/v1/scratchpads/${seg(id)}", HttpMethod.Delete)
     }
 
     suspend fun chats(): List<Chat> = decode<ChatList>(call("/v1/chats")).chats
@@ -1574,17 +1592,17 @@ class HuginnClient(
             if (effort != null) put("effort", JsonPrimitive(effort))
             if (mode != null) put("mode", JsonPrimitive(mode))
         }
-        return decode(call("/v1/chats/$id", HttpMethod.Patch, body = body))
+        return decode(call("/v1/chats/${seg(id)}", HttpMethod.Patch, body = body))
     }
 
-    suspend fun chat(id: String): ChatDetail = decode(call("/v1/chats/$id"))
+    suspend fun chat(id: String): ChatDetail = decode(call("/v1/chats/${seg(id)}"))
 
     suspend fun deleteChat(id: String) {
-        call("/v1/chats/$id", HttpMethod.Delete)
+        call("/v1/chats/${seg(id)}", HttpMethod.Delete)
     }
 
     suspend fun cancelChat(id: String) {
-        post("/v1/chats/$id/cancel")
+        post("/v1/chats/${seg(id)}/cancel")
     }
 
     /**
@@ -1594,7 +1612,7 @@ class HuginnClient(
      * with [streamChat].
      */
     fun sendMessage(id: String, text: String, scratchpadId: String? = null): Flow<ChatEvent> =
-        sse("/v1/chats/$id/messages?stream=1", HttpMethod.Post, messageBody(text, scratchpadId))
+        sse("/v1/chats/${seg(id)}/messages?stream=1", HttpMethod.Post, messageBody(text, scratchpadId))
 
     /**
      * Posts a message to a chat that is already running. The server queues it and
@@ -1606,7 +1624,7 @@ class HuginnClient(
      * was pressed rather than as it reads whenever the queue happens to drain.
      */
     suspend fun queueMessage(id: String, text: String, scratchpadId: String? = null) {
-        post("/v1/chats/$id/messages", body = messageBody(text, scratchpadId))
+        post("/v1/chats/${seg(id)}/messages", body = messageBody(text, scratchpadId))
     }
 
     /**
@@ -1624,7 +1642,7 @@ class HuginnClient(
 
     /** Reattaches to an in-flight run, replaying events after [since] (0 = all). */
     fun streamChat(id: String, since: Long = 0): Flow<ChatEvent> =
-        sse("/v1/chats/$id/stream?since=$since", HttpMethod.Get, null)
+        sse("/v1/chats/${seg(id)}/stream?since=$since", HttpMethod.Get, null)
 
     private fun jsonBody(vararg pairs: Pair<String, String>) =
         buildJsonObject { pairs.forEach { (k, v) -> put(k, JsonPrimitive(v)) } }
@@ -1759,11 +1777,11 @@ class HuginnClient(
      * passes over the same text and would have let a project field called `row`
      * or `live` overwrite the daemon's own.
      */
-    suspend fun project(id: String): ProjectDetail = decode(call("/v1/projects/$id"))
+    suspend fun project(id: String): ProjectDetail = decode(call("/v1/projects/${seg(id)}"))
 
     /** The members' overviews, summed. Polled while the dashboard is on screen. */
     suspend fun projectDashboard(id: String): ProjectDashboard =
-        decode(call("/v1/projects/$id/dashboard"))
+        decode(call("/v1/projects/${seg(id)}/dashboard"))
 
     /**
      * Start a project: the daemon launches its lead session and types the brief
@@ -1838,7 +1856,7 @@ class HuginnClient(
             // rather than as a fence.
             manifest?.let { put("manifest", json.encodeToJsonElement(ProjectManifest.serializer(), it)) }
         }
-        val resp = http.request { build("/v1/projects/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/projects/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val current = runCatching { decode<Project>(text) }.getOrNull()?.takeIf { it.id.isNotBlank() }
@@ -1870,7 +1888,7 @@ class HuginnClient(
             put("approve", JsonPrimitive(true))
             put("manifestRev", JsonPrimitive(manifestRev))
         }
-        val resp = http.request { build("/v1/projects/$id/spawn", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/projects/${seg(id)}/spawn", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val why = runCatching { decode<ApiError>(text).error }.getOrNull()
@@ -1888,7 +1906,7 @@ class HuginnClient(
      * still open it; only the status moves back to drafting, and the lead is told
      * so it does not wait forever for an approval that is not coming.
      */
-    suspend fun discardProposal(id: String): Project = decode(post("/v1/projects/$id/discard"))
+    suspend fun discardProposal(id: String): Project = decode(post("/v1/projects/${seg(id)}/discard"))
 
     /**
      * ADOPT a session the owner already has open into this project.
@@ -1920,7 +1938,7 @@ class HuginnClient(
             // client that sends a blank is asserting something it does not mean.
             name?.takeIf { it.isNotBlank() }?.let { put("name", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/projects/$id/members", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/projects/${seg(id)}/members", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -1941,7 +1959,7 @@ class HuginnClient(
      * this project does not have.
      */
     suspend fun dropMember(id: String, role: String): MemberOutcome {
-        val resp = http.request { build("/v1/projects/$id/members/$role", HttpMethod.Delete, Tier.NORMAL, null) }
+        val resp = http.request { build("/v1/projects/${seg(id)}/members/${seg(role)}", HttpMethod.Delete, Tier.NORMAL, null) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -1969,7 +1987,7 @@ class HuginnClient(
     suspend fun messageProject(id: String, from: String, to: String, text: String): ProjectMessageResult =
         decode(
             post(
-                "/v1/projects/$id/message",
+                "/v1/projects/${seg(id)}/message",
                 body = buildJsonObject {
                     put("from", JsonPrimitive(from))
                     put("to", JsonPrimitive(to))
@@ -1989,7 +2007,7 @@ class HuginnClient(
     suspend fun deleteProject(id: String, end: String? = null): ProjectDeleted =
         decode(
             call(
-                "/v1/projects/$id",
+                "/v1/projects/${seg(id)}",
                 HttpMethod.Delete,
                 body = buildJsonObject { end?.let { put("end", JsonPrimitive(it)) } },
             ),
@@ -2132,7 +2150,7 @@ class HuginnClient(
             unit?.let { put("unit", JsonPrimitive(it)) }
             addresses?.let { put("addresses", JsonArray(it.map { a -> JsonPrimitive(a) })) }
         }
-        val resp = http.request { build("/v1/apps/$id", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http.request { build("/v1/apps/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             // The body is `{error, app}`: the refusal AND the current row. The row
@@ -2183,7 +2201,7 @@ class HuginnClient(
 
     /** Remove an app from the registry. A second delete is a 404, not a second success. */
     suspend fun deleteApp(id: String) {
-        call("/v1/apps/$id", HttpMethod.Delete)
+        call("/v1/apps/${seg(id)}", HttpMethod.Delete)
     }
 
     /**
@@ -2193,7 +2211,7 @@ class HuginnClient(
      * optimistically, so the row this returns is the verdict rather than a
      * promise of one.
      */
-    suspend fun probeApp(id: String): App = decode(post("/v1/apps/$id/probe"))
+    suspend fun probeApp(id: String): App = decode(post("/v1/apps/${seg(id)}/probe"))
 
     /**
      * The app's favicon, as the daemon cached it on probe.
@@ -2209,7 +2227,7 @@ class HuginnClient(
      * remembered miss and the initial-letter tile.
      */
     suspend fun appIconBytes(id: String): ByteArray {
-        val resp = http.request { build("/v1/apps/$id/icon", HttpMethod.Get, Tier.NORMAL, null) }
+        val resp = http.request { build("/v1/apps/${seg(id)}/icon", HttpMethod.Get, Tier.NORMAL, null) }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
         return resp.bodyAsBytes()
     }

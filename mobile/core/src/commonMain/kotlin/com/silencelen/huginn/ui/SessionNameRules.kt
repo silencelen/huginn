@@ -53,6 +53,20 @@ object SessionNameRules {
         return null
     }
 
+    /**
+     * Whether a name could be a session at all: the daemon's per-session ROUTE
+     * matcher, which still admits an old dotted name. For names that arrive
+     * from outside (an intent extra any app can set), not for creating one.
+     *
+     * 2026-10-02: the exported MainActivity navigated to whatever `session`
+     * extra it was handed, and `VICTIM?x=` turned a pane-size release into a
+     * kill of VICTIM. A name that fails this is never navigated to.
+     */
+    fun isAddressable(raw: String): Boolean = ROUTE.matches(raw)
+
+    /** `huginn-appd.js`'s per-session route matcher, verbatim. */
+    private val ROUTE = Regex("^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$")
+
     /** `huginn-appd.js`'s `NAME_RE`, verbatim. */
     private val NAME = Regex("^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$")
 }
