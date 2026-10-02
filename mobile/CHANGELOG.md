@@ -30,6 +30,8 @@ Small bugs from the 3.8.0 / desktop 1.8.0 pair, collected for one release.
   two-number answer when nothing changed), refreshes the moment you arrive on the tab and every
   5 s while you are there, and keeps its scroll position. Nothing polls while the app is in the
   background. Shared with the desktop.
+- **Tighter model, effort and mode menus.** Each option was a 48 dp row, so a short list ran long. Rows are
+  40 dp now: still an easy thumb target, a third less scrolling past white space.
 
 ## 3.8.0 — 2026-09-20
 

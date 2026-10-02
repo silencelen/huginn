@@ -34,6 +34,8 @@ Small bugs from the 1.8.0 / app 3.8.0 pair, collected for one release.
   stays current every 30 s behind the other tabs, refreshes the moment you arrive on the Overview
   tab and every 5 s while you are there, and keeps its scroll position and density between visits.
   Nothing polls while the window is hidden.
+- **Tighter model, effort and mode menus.** Each option was a 48 dp row; they are 32 dp now, in a chat and
+  in a session's header alike.
 
 ## 1.8.0
 
