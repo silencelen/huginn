@@ -1,9 +1,5 @@
 package com.silencelen.huginn.ui.work
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,16 +18,22 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.AgentRun
+import kotlinx.coroutines.delay
 import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.BgTask
 import com.silencelen.huginn.ui.WorkSummary
@@ -52,18 +54,34 @@ import com.silencelen.huginn.ui.WorkSummary
 /**
  * A slow breathing dot. A spinner reads as "the app is busy"; this reads as "the
  * thing over there is busy", which is the truth.
+ *
+ * ⚠ IN STEPS, NOT A TWEEN. 2026-10-02 on the Fold: the Sessions tab drew about
+ * 100 frames a second for as long as any session was working, every other tab
+ * 0. An infinite transition asks for a frame on every vsync, and its alpha was
+ * read in composition, so every one of those frames recomposed the dot too. The
+ * same 1.6 s breath in ten steps is about six draws a second, and the alpha is
+ * read in the draw phase, so a step redraws the dot and recomposes nothing.
  */
 @Composable
 fun PulseDot(color: Color, modifier: Modifier = Modifier, size: Int = 8) {
-    val transition = rememberInfiniteTransition(label = "pulse")
-    val a by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
-        label = "alpha",
+    var step by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(PULSE_STEP_MS)
+            step = (step + 1) % PULSE_ALPHAS.size
+        }
+    }
+    Box(
+        modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .drawBehind { drawRect(color.copy(alpha = PULSE_ALPHAS[step])) },
     )
-    Box(modifier.size(size.dp).clip(CircleShape).background(color.copy(alpha = a)))
 }
+
+/** 0.35 -> 1 -> 0.35, the old tween(800) Reverse breath, in 160 ms steps. */
+private val PULSE_ALPHAS = floatArrayOf(0.35f, 0.5f, 0.68f, 0.85f, 1f, 1f, 0.85f, 0.68f, 0.5f, 0.35f)
+private const val PULSE_STEP_MS = 160L
 
 /** A settled counterpart to [PulseDot]: present, not animated, not shouting. */
 @Composable

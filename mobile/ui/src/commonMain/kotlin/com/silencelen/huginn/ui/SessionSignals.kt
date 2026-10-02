@@ -87,6 +87,11 @@ fun ContextBadge(percent: Int?, modifier: Modifier = Modifier) {
         fontWeight = if (high) FontWeight.SemiBold else FontWeight.Normal,
         color = if (high) MaterialTheme.colorScheme.error
         else MaterialTheme.colorScheme.onSurfaceVariant,
+        // One token, never wrapped. 2026-10-02 at font scale 2.0 the Sessions
+        // card squeezed "ctx 48%" to three lines, since a trailing Text in a Row
+        // only gets what the name before it left over.
+        maxLines = 1,
+        softWrap = false,
         modifier = modifier,
     )
 }

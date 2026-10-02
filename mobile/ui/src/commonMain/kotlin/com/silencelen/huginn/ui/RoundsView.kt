@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -15,8 +16,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
@@ -151,44 +156,32 @@ private fun RoundRow(
                 modifier = Modifier.padding(top = 8.dp, start = 2.dp, end = 8.dp),
             )
 
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+            // ⚠ THE VERDICT IS NOT METADATA. "Needs you" sat in the same
+            // muted grey as "4 days ago · 8 items" while Pause / Run now /
+            // Edit took the accent beside it — the controls louder than the
+            // thing they are controls for. The word takes the mark's own
+            // colour, from the mark's own vocabulary; what follows it is the
+            // metadata it was wrongly wearing. One Text, so the line still
+            // reads as one line.
+            RoundVerdictRow(
+                buildAnnotatedString {
+                    val label = roundStatusLabel(status, acked).takeIf { round.lastRun != null }
+                    val rest = listOfNotNull(
+                        agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
+                        itemCountWords(round.lastRun),
+                    )
+                    if (label != null) {
+                        withStyle(
+                            SpanStyle(
+                                color = statusColor(status, acked),
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        ) { append(label) }
+                        if (rest.isNotEmpty()) append(" · ")
+                    }
+                    append(rest.joinToString(" · "))
+                },
             ) {
-                // ⚠ THE VERDICT IS NOT METADATA. "Needs you" sat in the same
-                // muted grey as "4 days ago · 8 items" while Pause / Run now /
-                // Edit took the accent beside it — the controls louder than the
-                // thing they are controls for. The word takes the mark's own
-                // colour, from the mark's own vocabulary; what follows it is the
-                // metadata it was wrongly wearing. One Text, so the line still
-                // ellipsises as one line.
-                Text(
-                    buildAnnotatedString {
-                        val label = roundStatusLabel(status, acked).takeIf { round.lastRun != null }
-                        val rest = listOfNotNull(
-                            agoWords(round.lastRun?.at, nowMs).takeIf { it.isNotBlank() },
-                            itemCountWords(round.lastRun),
-                        )
-                        if (label != null) {
-                            withStyle(
-                                SpanStyle(
-                                    color = statusColor(status, acked),
-                                    fontWeight = FontWeight.Medium,
-                                ),
-                            ) { append(label) }
-                            if (rest.isNotEmpty()) append(" · ")
-                        }
-                        append(rest.joinToString(" · "))
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 2.dp),
-                )
                 // Both controls as words, at the same weight, in the same place.
                 // This was a filled Switch riding the title row, which on a dark
                 // list was the loudest thing on screen — louder than the status
@@ -247,3 +240,60 @@ private fun statusColor(status: RoundStatus, acknowledged: Boolean): Color =
         "outlineVariant" -> MaterialTheme.colorScheme.outlineVariant
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+
+/**
+ * A Round's verdict line and its controls: side by side when both fit, the
+ * verdict on a line of its own above them when they do not.
+ *
+ * ⚠ 2026-10-02, on the Fold at font scale 1.3 and 2.0: this was one Row with the
+ * verdict as a weighted single-line Text. Weighted children are measured LAST,
+ * so Pause / Run now / Edit (whose labels grow with the font) took their width
+ * first and the verdict got the rest: 456 px at 1.0, 370 at 1.3, 210 at 2.0,
+ * where "Worth a look · 13h ago · 1 item" read "Worth a…" and the age and item
+ * count were simply gone. The verdict is the point of the row; the controls give
+ * way to it, not the other way round. At normal size nothing moves.
+ */
+@Composable
+internal fun RoundVerdictRow(
+    verdict: AnnotatedString,
+    onVerdictLayout: (TextLayoutResult) -> Unit = {},
+    controls: @Composable RowScope.() -> Unit,
+) {
+    Layout(
+        content = {
+            Text(
+                verdict,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // Two lines once it has the width to itself; past that it still
+                // ellipsises rather than pushing the card open without limit.
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                onTextLayout = onVerdictLayout,
+                modifier = Modifier.padding(start = 2.dp),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, content = controls)
+        },
+        modifier = Modifier.fillMaxWidth(),
+    ) { measurables, constraints ->
+        val (text, buttons) = measurables
+        val b = buttons.measure(constraints.copy(minWidth = 0, minHeight = 0))
+        val wants = text.maxIntrinsicWidth(Constraints.Infinity)
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else wants + b.width
+        if (wants + b.width <= width) {
+            // Side by side: the verdict takes exactly what is left, as before.
+            val t = text.measure(Constraints(minWidth = width - b.width, maxWidth = width - b.width))
+            val h = maxOf(t.height, b.height)
+            layout(width, h) {
+                t.place(0, (h - t.height) / 2)
+                b.place(width - b.width, (h - b.height) / 2)
+            }
+        } else {
+            val t = text.measure(Constraints(minWidth = width, maxWidth = width))
+            layout(width, t.height + b.height) {
+                t.place(0, 0)
+                b.place(width - b.width, t.height)
+            }
+        }
+    }
+}
