@@ -447,7 +447,14 @@ test('a STALE attention expires against the pane, not against the state file (#1
   const { body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'nothing is in the way', keys: ['Enter'] }),
   });
-  assert.equal(body.delivered, true, 'the pane contradicts the state file');
+  // 2026-10-02: NOT `delivered: true` any more. This pane is a `printf; sleep`
+  // that never reads its input, so the pasted text sits under the caret forever
+  // and the confirm sees the box never let go — `submitted: false`, which now
+  // answers delivered:false instead of claiming a send nobody took. What this
+  // test is about is unchanged: the stale `attention` did not HOLD the message.
+  assert.equal(body.blockedBy, null, `the pane contradicts the state file: ${JSON.stringify(body)}`);
+  assert.equal(body.queued, 0, 'released, not held');
+  assert.match(capture(name), /nothing is in the way/, 'and it was typed into the pane');
   assert.equal((await typingOf(name)).queued, 0);
 });
 

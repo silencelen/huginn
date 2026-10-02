@@ -9,6 +9,44 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## Unreleased
+
+Message delivery, from a breaker round against 3.9.0 (2026-10-02): ten ways a message from the
+app could be left unsent, doubled, held for no reason or merged into somebody's draft, each
+reproduced end to end against a stand-in that handles bracketed paste the way Claude Code does.
+
+- **A message the daemon left unsent no longer answers "delivered".** When the paste was typed
+  into the box and not submitted (the "leaving it alone" case), `/keys` said `delivered: true`
+  and every client showed the message as sent. It now answers `delivered: false` with a new
+  `submitted: false` field and a `lastError` saying the message is in the box but was not sent;
+  `GET /typing` carries the same `lastError`. `delivered` is still a boolean, so older clients
+  read it as before. `submitted` is `true`, `false`, or `null` when the pane cannot say.
+- **Short messages with a `---` or `======` line are sent.** A markdown rule or a heading
+  underline in a short message was read as the bottom edge of the input box, the rest of the
+  message went unseen, and the message sat in the box unsent.
+- **A message with a line starting with `❯` is sent.** A pasted terminal snippet moved the
+  daemon's idea of where the input box starts, with the same result. And pressing Send again
+  on a message that was never sent is no longer swallowed as a duplicate.
+- **Your own earlier messages no longer read as a dialog.** A numbered list you sent, or a
+  message or reply that mentions "esc to cancel" or "enter to confirm", could hold every later
+  message, including Screen-tab typing, as "a dialog is open" until enough output scrolled it
+  away. A live input box at the bottom of the screen now rules out a dialog above it.
+- **Two quick presses of Send deliver one message.** A second identical send 15 to 40 ms after
+  the first slipped past both duplicate checks while the first was being pasted.
+- **Your unsent draft is safer.** Three ways the draft guard mistook a person's half-typed text
+  for the daemon's own and pasted the next message onto the end of it: a short reply such as
+  `ok` or `yes` that happens to occur inside the draft, a `[Pasted text]` marker from your own
+  paste, and a draft that happens to be part of the message sent just before it.
+- **A slow session gets the message once.** When Claude Code was more than three seconds behind
+  its input, the daemon took the empty box for a lost paste, pasted again, and the message was
+  submitted twice in one prompt. It now waits for the first copy instead of pasting a second.
+- **A message that contains a paste-end escape is sent whole.** The sequence ended the paste
+  early, the first half was submitted on its own and the rest was left in the box. The
+  daemon now removes bracketed-paste markers from the text before pasting it.
+- **A message already sitting in the box is sent with Enter.** Pressing Send again on a
+  message that was left in the box now submits that copy rather than pasting a second one
+  behind it.
+
 ## 3.9.0 — 2026-10-01
 
 The owner's second report of a first message that "sits in the Screen tab's box unsent"

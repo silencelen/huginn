@@ -855,7 +855,13 @@ test('a one-line paste collapses WITHOUT a line count, and that marker counts to
   const text = brief(850);
   assert.equal(t.pasteLanded(COLLAPSED_ONE_LINE_PANE, text), true);
   assert.equal(t.composerCleared(COLLAPSED_ONE_LINE_PANE, text), false);
-  assert.equal(t.composerHoldsDraft(t.composerText(COLLAPSED_ONE_LINE_PANE), text), false);
+  // 2026-10-02: a marker is "ours" only when appd's own remembered paste could
+  // have drawn it (finding 6: the person's own collapsed paste drew the same
+  // marker and was welded to the next message). The daemon passes that paste as
+  // `ours`; on a resend of this brief it is this brief.
+  assert.equal(t.composerHoldsDraft(t.composerText(COLLAPSED_ONE_LINE_PANE), text, text), false);
+  assert.equal(t.composerHoldsDraft(t.composerText(COLLAPSED_ONE_LINE_PANE), text, null), true,
+    'with nothing of ours remembered, a marker is somebody\'s paste');
   assert.equal(t.pasteIndistinguishable(COLLAPSED_ONE_LINE_PANE, text), true,
     'a leftover marker reads the same whichever spelling the TUI gave it');
 });
@@ -1052,8 +1058,14 @@ test('a box already holding OUR text is not read as a stranger\'s draft', () => 
   // for no reason — the same trap `pasteIndistinguishable` was written to dodge.
   assert.equal(t.composerHoldsDraft(t.composerText(STUCK_PANE), STUCK_TEXT), false,
     'that is our message sitting there, not theirs');
-  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', MESSAGE), false,
+  // 2026-10-02 (finding 6): only when OUR last paste was long enough to be drawn
+  // as one. With no remembered paste the same marker is the person's own long
+  // Screen-tab paste, and calling it ours merged their draft into the message.
+  const forty = Array.from({ length: 40 }, (_, i) => `row ${i}`).join('\n');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', MESSAGE, forty), false,
     'a collapsed paste is how most long messages LOOK once they land');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', MESSAGE), true,
+    'but a marker nobody can account for is somebody else\'s');
 });
 
 test('a box holding what APPD last pasted is our leftover, not a stranger\'s draft', () => {
@@ -1118,8 +1130,13 @@ test('releaseDecision reports `draft`, and ranks it under the holds that swallow
 test('recoveryDecision tells `our text, late` from `our text, on top of a draft`', () => {
   // ⚠ THE DISTINCTION THE TIMEOUT COULD NOT MAKE. Both look like "the box is not
   // empty"; one wants an Enter and the other must never get one.
-  assert.equal(t.recoveryDecision(SENT_PANE, { text: MESSAGE, before: SENT_PANE }), 'resend',
-    'still nothing there: the lost band, unchanged');
+  // 2026-10-02 (finding 8): `before` here already showed a DRAWN composer, so
+  // this is not the lost band (that is bytes pasted before the TUI attached) but
+  // a TUI behind its input — and a re-paste there submitted the message twice.
+  assert.equal(t.recoveryDecision(SENT_PANE, { text: MESSAGE, before: SENT_PANE }), 'stalled',
+    'still nothing there, into a box that was up: an Enter behind the queued bytes');
+  assert.equal(t.recoveryDecision(SENT_PANE, { text: MESSAGE, before: [] }), 'resend',
+    'still nothing there, into a pane with no box before: the lost band, unchanged');
   assert.equal(t.recoveryDecision(MERGED_PANE, { text: MESSAGE, before: SENT_PANE }), 'landed',
     'ours arrived after the bound, into a box that was empty before it: press Enter');
   assert.equal(t.recoveryDecision(MERGED_PANE, { text: MESSAGE, before: DRAFT_PANE }), 'leave',
@@ -1256,4 +1273,131 @@ test('both startup rules take the grace as an argument, so a slow host can widen
   assert.equal(t.startingUnmarked({ composer: false, shell: false, claudeStart: true, ageMs: 500, graceMs: 0 }), false);
   assert.equal(t.startingUp({ launching: true, composer: false, ageMs: 500, graceMs: 0 }), false);
   assert.equal(t.startingUp({ launching: true, composer: false, ageMs: 500, graceMs: 60_000 }), true);
+});
+
+// ------------------------------------- the 2026-10-02 breaker round (paste)
+//
+// Every pane below is drawn the way the real TUI draws it: column-0 rules, the
+// caret row directly under the top one, continuation rows indented by two, the
+// echo of a submitted prompt as `❯ first row` + indented rows above the box.
+
+const R80 = '─'.repeat(80);
+const STATUS = ['  [bp] Fable 5.1 · main ~5', '  ⏵⏵ auto mode on (shift+tab to cycle)'];
+/** A live box holding `text`, the way Claude Code draws a bracketed paste. */
+const boxOf = (text, above = ['']) => {
+  const rows = String(text).split('\n');
+  return [...above, R80, `❯ ${rows[0]}`, ...rows.slice(1).map((r) => `  ${r}`), R80, ...STATUS];
+};
+const EMPTY_BOX = boxOf('');
+
+test('a message with a markdown rule or setext underline is read whole, not cut at the `---`', () => {
+  // Finding 0: RULE_RE was tested on the TRIMMED row, so the `  ---` row of the
+  // message read as the box's own closing rule and the composer was cut there.
+  for (const text of ['## Plan\n---\nstep one: rebuild the index tonight',
+    'Status\n======\nall green', 'a\n___\nb is the other half of it']) {
+    const pane = boxOf(text);
+    assert.equal(t.composerText(pane), text.split('\n').map((r, i) => (i ? `  ${r}` : r)).join('\n'), text);
+    assert.equal(t.pasteLanded(pane, text), true, text);
+    assert.equal(t.recoveryDecision(pane, { text, before: EMPTY_BOX }), 'landed', text);
+    assert.equal(t.composerCleared(pane, text), false, `${text}: still in the box, so not cleared`);
+  }
+});
+
+test('a message line starting with ❯ does not move the composer onto it', () => {
+  // Finding 1: the LAST caret glyph was taken as the composer, and a pasted
+  // terminal snippet draws one on a continuation row.
+  const text = 'look at this pane:\n❯ hello world';
+  const pane = boxOf(text, ['', '● earlier reply', '']);
+  assert.equal(t.composerText(pane), 'look at this pane:\n  ❯ hello world');
+  assert.equal(t.pasteLanded(pane, text), true);
+  assert.equal(t.composerHoldsDraft(t.composerText(pane), text), false, 'ours, not a draft');
+  // …and the old guarantee still holds: an echoed prompt above an empty box is
+  // not the composer.
+  assert.equal(t.composerText(['❯ an echoed prompt', '', '● ok', ...EMPTY_BOX]), '');
+});
+
+test('an echoed numbered list above a live, empty composer is history, not a dialog', () => {
+  // Finding 2: net 3 saw `❯ 1. …` + `  2. …` in the bottom 20 rows and held
+  // every later send as 'modal' with no ceiling.
+  const pane = ['', '❯ 1. fix the backup job', '  2. then rerun the audit', '',
+    '● Done — both handled.', '', '✻ Worked for 3s', ...EMPTY_BOX];
+  assert.notEqual(t.paneReadyForInput(pane).why, 'modal');
+  assert.equal(t.paneBlocks(t.paneReadyForInput(pane).why), false);
+  assert.equal(t.composerEmpty(pane), true);
+  // And the same list as a DRAFT in the box is a draft, not a selector.
+  const draft = boxOf('1. fix the backup job\n2. then rerun the audit');
+  assert.notEqual(t.paneReadyForInput(draft).why, 'modal');
+  assert.equal(t.composerHoldsDraft(t.composerText(draft), 'thanks'), true);
+});
+
+test("a footer phrase in the conversation is not a selector's footer", () => {
+  // Finding 3: DIALOG_FOOTER_RE matched the person's echoed question, and any
+  // numbered line anywhere on the pane completed net 2.
+  for (const said of ['the picker says esc to cancel, which do I pick?', 'it says enter to confirm',
+    'use arrow keys to navigate?']) {
+    const pane = ['❯ plan:', '    1. back up the db', '    2. rebuild the index', '', '● ok', '',
+      `❯ ${said}`, '', '● Pick option 1.', ...EMPTY_BOX];
+    assert.equal(t.paneReadyForInput(pane).why, 'busy', said);
+  }
+  const prose = ['● 1. press esc to cancel', '  2. then retype', ...EMPTY_BOX];
+  assert.equal(t.paneReadyForInput(prose).why, 'busy', "Claude's own prose, the same");
+});
+
+test('the real dialogs still read as dialogs (nothing above loosened them)', () => {
+  for (const [file, why] of Object.entries({
+    'ask-simple-80.txt': 'modal', 'ask-tall-desc-64.txt': 'modal', 'trust-dialog-80.txt': 'trust',
+    'model-picker-80.txt': 'modal', 'plan-approval-80.txt': 'modal' })) {
+    assert.equal(t.paneReadyForInput(fixturePane(file)).why, why, file);
+  }
+});
+
+test('a short message inside a longer draft does not make the draft ours', () => {
+  // Finding 5: the "ours" test asked whether the MESSAGE's probe was in the
+  // box, and a short message is its own probe — `ok` is in `look`, `token`.
+  assert.equal(t.composerHoldsDraft('look at the token cost x', 'ok'), true);
+  assert.equal(t.composerHoldsDraft('what happened yesterday', 'yes'), true);
+  assert.equal(t.composerHoldsDraft('i do not know why', 'no'), true);
+  assert.equal(t.composerHoldsDraft('continue with step 2 then', 'continue'), true);
+  assert.equal(t.composerHoldsDraft('ok', 'ok'), false, 'a resend of the same words is still ours');
+});
+
+test("a [Pasted text] marker is ours only when appd's own last paste made it", () => {
+  // Finding 6: any marker counted as the outgoing message having landed, so the
+  // person's own collapsed paste was welded to the next message.
+  const msg = 'please check the backup logs for errors tonight';
+  const forty = Array.from({ length: 40 }, (_, i) => `line ${i + 1} of the pasted log`).join('\n');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines] summarise this x', msg, null), true);
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines] summarise this x', msg, forty), true,
+    'their words around it are theirs whatever we pasted last');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1]', msg, null), true);
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', msg, forty), false,
+    'our own long paste, stranded collapsed, is ours to join');
+  assert.equal(t.composerHoldsDraft('[Pasted text #1 +40 lines]', msg, 'a short one'), true,
+    'a short last paste was never drawn as a marker');
+});
+
+test('an empty box after a paste into a box that was ALREADY drawn is a stall, not a loss', () => {
+  // Finding 8: the lost band is bytes pasted before the TUI attached. A TUI
+  // that was already up is behind its input, and a re-paste doubles the message.
+  const text = 'summarise the overnight backup report';
+  assert.equal(t.recoveryDecision(EMPTY_BOX, { text, before: EMPTY_BOX }), 'stalled');
+  const booting = ['Claude Code v2.1.258', 'Permission allow rule (settings): a wildcard'];
+  assert.equal(t.recoveryDecision(EMPTY_BOX, { text, before: booting }), 'resend', 'the lost band, unchanged');
+  assert.equal(t.recoveryDecision(EMPTY_BOX, { text, before: null }), 'resend', 'no capture: as before');
+});
+
+test('pasteSafe removes bracketed-paste markers the text carries, and nothing else', () => {
+  // Finding 9: ESC[201~ inside the text ended the paste early; the CR after it
+  // was an Enter.
+  assert.equal(t.pasteSafe('first part\u001b[201~\rsecond part'), 'first part\rsecond part');
+  assert.equal(t.pasteSafe('a\u001b[200~b'), 'ab');
+  assert.equal(t.pasteSafe('x\u001b[20\u001b[201~1~y'), 'xy', 'a marker spliced together by a removal goes too');
+  assert.equal(t.pasteSafe('tabs\tand\nnewlines \u001b[1m stay'), 'tabs\tand\nnewlines \u001b[1m stay');
+});
+
+test('boxHoldsExactly: the stranded copy is an Enter, a ghost or a draft is not', () => {
+  assert.equal(t.boxHoldsExactly('look at this pane:\n  ❯ hello world', 'look at this pane:\n❯ hello world'), true);
+  assert.equal(t.boxHoldsExactly('', 'x'), false);
+  assert.equal(t.boxHoldsExactly(null, 'x'), false);
+  assert.equal(t.boxHoldsExactly('somebody else', 'x'), false);
 });
