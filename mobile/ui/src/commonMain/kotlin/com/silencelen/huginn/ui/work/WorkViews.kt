@@ -37,6 +37,7 @@ import kotlinx.coroutines.delay
 import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.BgTask
 import com.silencelen.huginn.ui.WorkSummary
+import androidx.compose.runtime.withFrameMillis
 
 /**
  * "What is this session doing right now", for both clients.
@@ -68,6 +69,12 @@ fun PulseDot(color: Color, modifier: Modifier = Modifier, size: Int = 8) {
     LaunchedEffect(Unit) {
         while (true) {
             delay(PULSE_STEP_MS)
+            // ⚠ AND ONLY WHILE FRAMES ARE BEING MADE. A bare delay loop kept
+            // writing state about six times a second behind a stopped activity or
+            // a minimised window, where nothing draws (verifier, 2026-10-02). The
+            // frame clock does not tick there, so this parks the loop until the
+            // dot is on screen again.
+            withFrameMillis { }
             step = (step + 1) % PULSE_ALPHAS.size
         }
     }
