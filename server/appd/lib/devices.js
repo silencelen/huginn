@@ -66,6 +66,19 @@ const FRESH_MS = 3 * 60 * 1000;
 /** Forgotten after this, so a decommissioned laptop stops appearing forever. */
 const FORGET_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * How long a WATCHED device may stay quiet before its owner is told, and how
+ * soon the same machine may be reported again if it flaps.
+ *
+ * Longer than FRESH_MS on purpose. Three minutes of silence is already
+ * "offline" to the list, but a reboot for Windows Update, a laptop lid or an
+ * appd restart all last longer than that and must not page anyone. A machine
+ * nobody has heard from for ten minutes is a machine somebody has to go and
+ * look at — which is the whole reason the owner marked it.
+ */
+const WATCH_GRACE_MS = 10 * 60 * 1000;
+const WATCH_REPEAT_MS = 6 * 60 * 60 * 1000;
+
 function emptyState() {
   return { devices: {} };
 }
@@ -305,9 +318,90 @@ function noteSeen(state, id, now, patch = {}) {
 
 function pruneDevices(state, now) {
   for (const [id, d] of Object.entries(state.devices || {})) {
+    // A watched row is never forgotten: it is the one the owner is waiting
+    // for, and pruning it would also prune the alert that says it is gone.
+    if (d.watch === true) continue;
     if (now - (d.lastSeen || 0) > FORGET_MS) delete state.devices[id];
   }
   return state;
+}
+
+/**
+ * Marks a row as one the owner expects to be ALWAYS on.
+ *
+ * Set at the daemon, never by the device: a runner has no business declaring
+ * itself important, and the mark has to survive the runner being reinstalled —
+ * which is exactly when it matters. Off removes the key rather than storing
+ * `false`, so a row that was never watched and one that was unwatched are the
+ * same shape on disk and on the wire.
+ */
+function setWatch(state, id, on) {
+  const d = (state.devices || {})[id];
+  if (!d) return null;
+  if (on === true) d.watch = true; else delete d.watch;
+  return d;
+}
+
+/**
+ * Which watched devices have just gone quiet, and which have come back.
+ *
+ * `memo` is the caller's Map id → { down, told, toldAt }, kept across ticks
+ * (and across restarts, if the caller persists it); this reads and updates it
+ * so the daemon has ONE record of what it has already said. The rules:
+ *
+ *   - a watched row unheard for WATCH_GRACE_MS is reported once as `down`;
+ *   - its return is reported once as `up` — but only if the outage itself was
+ *     reported, because an outage nobody was told about has no recovery;
+ *   - after a `down` has been sent, a NEW outage inside WATCH_REPEAT_MS is not
+ *     reported (and so neither is its recovery): a flapping machine is one
+ *     message, not a stream;
+ *   - a row that stops being watched, or is removed, leaves the memo.
+ *
+ * Pure but for the memo, so the whole schedule is driven by a clock in a test
+ * rather than waited for.
+ */
+function presenceChanges(state, now, memo) {
+  const down = [];
+  const up = [];
+  const live = new Set();
+  for (const [id, d] of Object.entries(state.devices || {})) {
+    if (d.watch !== true) continue;
+    live.add(id);
+    const m = memo.get(id) || { down: null, told: false, toldAt: null };
+    const quietMs = now - (d.lastSeen || 0);
+    if (quietMs >= WATCH_GRACE_MS) {
+      if (m.down == null) m.down = now - quietMs;
+      const muted = m.toldAt != null && now - m.toldAt < WATCH_REPEAT_MS;
+      if (!m.told && !muted) {
+        down.push({ id, device: d, quietMs });
+        m.told = true;
+        m.toldAt = now;
+      }
+    } else {
+      if (m.told) up.push({ id, device: d, downMs: now - (m.down == null ? now : m.down) });
+      m.down = null;
+      m.told = false;
+      // toldAt stays: it is what rate-limits a flapping machine.
+    }
+    memo.set(id, m);
+  }
+  for (const id of [...memo.keys()]) if (!live.has(id)) memo.delete(id);
+  return { down, up };
+}
+
+/**
+ * The Telegram sentence for a presence change. A STATEMENT, never a question —
+ * the house rule for that channel, because nothing reads replies.
+ */
+function watchText(kind, device, ms) {
+  const what = device.scope === 'generate' ? 'local-AI device' : 'device';
+  const mins = Math.max(1, Math.round(ms / 60_000));
+  const dur = mins >= 120 ? `${Math.round(mins / 60)} h` : `${mins} min`;
+  if (kind === 'down') {
+    const seen = device.lastSeen ? new Date(device.lastSeen).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : 'never';
+    return `🔴 huginn device ${device.name} offline — the ${what} has not checked in for ${dur} (last seen ${seen}). It is marked always-on; if nobody restarted it, the machine needs looking at.`;
+  }
+  return `✅ huginn device ${device.name} back — the ${what} checked in again after ${dur} offline.`;
 }
 
 /** The client-facing view: the record plus what it would have to derive. */
@@ -335,6 +429,8 @@ function deviceView(id, device, now) {
     // Derived at view time too, so a row persisted before machines existed
     // groups correctly even before its runner re-registers.
     machine: device.machine || deriveMachine(device),
+    // Present only when ON — see setWatch. Clients that predate it ignore it.
+    ...(device.watch === true ? { watch: true } : {}),
     ...(device.llmSlug ? { llmSlug: device.llmSlug } : {}),
     ...(Array.isArray(device.models) ? { models: device.models } : {}),
     // Omitted, never defaulted — see validateRegistration. A client that reads
@@ -463,9 +559,10 @@ function workItem({ id, chatId, prompt, mode, model, effort, resumeSessionId, ro
 }
 
 module.exports = {
-  SCOPES, MODE_NEEDS, FRESH_MS, FORGET_MS,
+  SCOPES, MODE_NEEDS, FRESH_MS, FORGET_MS, WATCH_GRACE_MS, WATCH_REPEAT_MS,
   emptyState, validateRegistration, effectiveScope, scopeCovers,
   canRun, isOnline, noteSeen, pruneDevices, deviceView, workItem,
+  setWatch, presenceChanges, watchText,
   slugify, mintLlmSlug, cleanDisplay, canServe, localModelRows,
   normalizeMachine, deriveMachine, machineDisplayName,
 };

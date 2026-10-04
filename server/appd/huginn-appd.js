@@ -93,7 +93,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.9.1';
+const VERSION = '3.10.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -4432,6 +4432,27 @@ function saveDevices() {
   } catch (e) { log(`devices: could not persist (${e.message})`); }
 }
 
+/**
+ * What the daemon has already SAID about each watched device — see
+ * lib/devices presenceChanges. Persisted beside devices.json so a deploy or a
+ * restart does not re-announce an outage the owner was told about an hour ago,
+ * and does not forget one it owes a recovery for.
+ */
+const DEVICE_WATCH_FILE = path.join(DATA_DIR, 'device-watch.json');
+const deviceWatchMemo = (() => {
+  try {
+    const o = JSON.parse(fs.readFileSync(DEVICE_WATCH_FILE, 'utf8'));
+    if (o && typeof o === 'object') return new Map(Object.entries(o));
+  } catch { /* absent or unreadable: nothing has been said */ }
+  return new Map();
+})();
+function saveDeviceWatchMemo() {
+  try {
+    fs.writeFileSync(`${DEVICE_WATCH_FILE}.tmp`, JSON.stringify(Object.fromEntries(deviceWatchMemo)), { mode: 0o600 });
+    fs.renameSync(`${DEVICE_WATCH_FILE}.tmp`, DEVICE_WATCH_FILE);
+  } catch (e) { log(`devices: could not persist watch memo (${e.message})`); }
+}
+
 /** Work handed out but not yet finished, and the runs behind it. */
 const deviceQueues = new Map();   // deviceId -> [workItem]
 const deviceWaiters = new Map();  // deviceId -> [{ respond, timer }]
@@ -4617,6 +4638,26 @@ function devicesTick() {
   const before = Object.keys(deviceState.devices || {}).length;
   devicesLib.pruneDevices(deviceState, now);
   if (Object.keys(deviceState.devices || {}).length !== before) saveDevices();
+
+  // The one place a machine's ABSENCE becomes a message. Until this existed a
+  // device the owner relied on could sit offline for a week while its service
+  // manager said "Running" — and the only surface that knew was a list nobody
+  // was looking at. Through the same outbound-only Telegram path the alerts
+  // use; statements, never questions.
+  const changes = devicesLib.presenceChanges(deviceState, now, deviceWatchMemo);
+  if (changes.down.length || changes.up.length) {
+    saveDeviceWatchMemo();
+    for (const c of changes.down) {
+      deliverTelegram(devicesLib.watchText('down', c.device, c.quietMs))
+        .then((ok) => log(`devices: ${c.device.name} offline ${Math.round(c.quietMs / 60_000)} min — telegram ${ok ? 'sent' : 'NOT sent'}`))
+        .catch((e) => log(`devices: offline alert failed for ${c.device.name}: ${e.message}`));
+    }
+    for (const c of changes.up) {
+      deliverTelegram(devicesLib.watchText('up', c.device, c.downMs))
+        .then((ok) => log(`devices: ${c.device.name} back after ${Math.round(c.downMs / 60_000)} min — telegram ${ok ? 'sent' : 'NOT sent'}`))
+        .catch((e) => log(`devices: recovery alert failed for ${c.device.name}: ${e.message}`));
+    }
+  }
 }
 setInterval(() => { try { devicesTick(); } catch (e) { log('devices: tick failed', e.message); } }, 30_000).unref();
 
@@ -11779,6 +11820,19 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // The owner saying this machine is EXPECTED to be here (see lib/devices
+      // setWatch). Set at the daemon, never by the device. The one field is a
+      // real boolean or the request is refused: `"watch": "no"` turning a watch
+      // ON is the exact mistake a loose parse makes.
+      if (req.method === 'PATCH' && dsub === '') {
+        const body = await readJsonBody(req);
+        if (typeof body.watch !== 'boolean') return sendErr(res, 400, 'watch must be true or false');
+        devicesLib.setWatch(deviceState, devId, body.watch);
+        saveDevices();
+        log(`device ${device.name} ${body.watch ? 'watched' : 'unwatched'} (${devId})`);
+        return sendJson(res, 200, devicesLib.deviceView(devId, deviceState.devices[devId], now));
+      }
+
       if (req.method === 'DELETE' && dsub === '') {
         // Unenrolling does not reach onto the machine — nothing here can. It
         // stops work being offered; the runner on the far end is stopped there.
@@ -13639,11 +13693,18 @@ function tailnetAddr() {
   });
 }
 
-// Bind the tailscale address only. Resolved at startup; systemd orders us after
-// tailscaled and restarts us if the address is not yet available.
+// The bind: HUGINN_APPD_BIND when set (the deployed drop-in says 0.0.0.0 so the
+// LAN, the mesh gateway and loopback all reach one listener); otherwise the
+// tailnet address while tailscaled is up; otherwise every interface, said in the
+// log. Every route is bearer-gated, so a wider bind is not a wider door — whereas
+// a daemon that exited because `tailscale ip -4` had nothing to say was restarted
+// forever by systemd (StartLimitIntervalSec=0) and never served anybody.
 function resolveBind() {
   if (process.env.HUGINN_APPD_BIND) return Promise.resolve(process.env.HUGINN_APPD_BIND);
-  return tailnetAddr();
+  return tailnetAddr().catch(() => {
+    log('bind: no HUGINN_APPD_BIND and no tailnet address — binding 0.0.0.0 (set HUGINN_APPD_BIND to narrow it)');
+    return '0.0.0.0';
+  });
 }
 
 /**
