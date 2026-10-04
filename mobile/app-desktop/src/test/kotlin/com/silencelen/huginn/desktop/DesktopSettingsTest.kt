@@ -367,7 +367,8 @@ class DesktopSettingsTest {
             """{"baseUrl":"http://192.168.2.117:8787","token":"t","routePinned":true,"clientId":"desktop-kt-old"}""",
         )
         val book = DesktopSettings(file).routeBookNow()
-        assertEquals(listOf("Yggdrasil", "Tailscale"), book.routes.map { it.name })
+        // The second seed is the LAN address since the tailnet one was retired (AppdRoutes.RETIRED).
+        assertEquals(listOf("Yggdrasil", "LAN"), book.routes.map { it.name })
         assertEquals("yggdrasil", book.activeId)
         assertEquals("http://192.168.2.117:8787", book.activeUrl)
         assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")

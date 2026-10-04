@@ -30,8 +30,25 @@ data class AppdRoute(val label: String, val url: String)
  * whole point of this file's continued existence.
  */
 object AppdRoutes {
-    /** huginn's tailnet address, which is where the daemon binds. */
-    val TAILSCALE = AppdRoute(label = "Tailscale", url = "http://100.97.198.90:8787")
+    /**
+     * huginn's LAN address — the one every client at home reaches directly since
+     * the LAN-first change of 2026-09-29, and the address the headless runners
+     * dial. It replaced the tailnet address as the first seed when Tailscale was
+     * retired (see [RETIRED]).
+     */
+    val LAN = AppdRoute(label = "LAN", url = "http://192.168.7.117:8787")
+
+    /**
+     * Addresses this app ONCE shipped with that no longer answer anything: the
+     * tailnet address died with Tailscale on 2026-09-30. An upgrade from an
+     * install still pointed at one must NOT carry it forward as the active
+     * route — the install would come up "connected" to nothing and stay there
+     * with autoSwitch never consulted — so [migrate] treats it like a refused
+     * address: dropped, named in [RouteBook.droppedUrl], and the live seeds
+     * offered with no active route, which is what lets the auto-switch pick one
+     * that answers.
+     */
+    val RETIRED: Set<String> = setOf("http://100.97.198.90:8787")
 
     /**
      * huginn's VLAN-2 address. Off-LAN devices reach it through the yggdrasil
@@ -40,7 +57,7 @@ object AppdRoutes {
      */
     val YGGDRASIL = AppdRoute(label = "Yggdrasil", url = "http://192.168.2.117:8787")
 
-    val ALL = listOf(TAILSCALE, YGGDRASIL)
+    val ALL = listOf(LAN, YGGDRASIL)
 
     /**
      * The id a migrated hand-typed address gets. Fixed rather than minted so the
@@ -102,6 +119,7 @@ object AppdRoutes {
      * | `base_url` matching a built-in | that built-in as pin #1, named "Tailscale" / "Yggdrasil" |
      * | `base_url` matching nothing | pin #1 named after its own host — the owner's chosen address stays chosen |
      * | `base_url` the guard refuses | NOT pinned, NOT replaced: carried back as [RouteBook.droppedUrl] with no active route |
+     * | `base_url` in [RETIRED] | the same: dropped and named, the live seeds offered, nothing active |
      * | the built-ins not already emitted | appended, in [ALL] order |
      * | `base_url` absent (fresh install) | an EMPTY book; the first address saved becomes pin #1 |
      * | `appd_route_pinned` = true | `autoSwitch = false` — the same refusal to move, under its new name |
@@ -133,7 +151,8 @@ object AppdRoutes {
         // was never even probed. Now: the address is carried back as
         // `droppedUrl` and the book is left with NO active route.
         val builtIn = match(stored)?.let { seed(it, now) }
-        val first = builtIn ?: if (RouteGuard.isAllowed(stored)) {
+        // A RETIRED address is handled like a refused one — see RETIRED.
+        val first = builtIn ?: if (RouteGuard.isAllowed(stored) && stored !in RETIRED) {
             PinnedRoute(
                 id = MIGRATED_ID,
                 name = RouteBook.defaultName(stored),

@@ -117,14 +117,20 @@ class DeviceRunner(
                 serve()
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable, not Exception: an Error (an OOM, a NoClassDefFoundError
+                // from a half-replaced install) used to end this job for good, and
+                // the only thing that restarted it ran while the window was visible
+                // — so a tray-parked desktop stayed off the device list until
+                // somebody opened it.
+                //
                 // Never fatal. A daemon that is down, a token that was rotated, a
                 // sleeping laptop — all of these are "try again shortly", and a
                 // runner that gave up on the first failure would need the owner to
                 // notice and restart the app.
                 _status.value = _status.value.copy(
                     enrolled = false, busy = false,
-                    note = "Not reaching huginn: ${short(e)}",
+                    note = NOT_REACHING + short(e),
                 )
                 delay(15_000)
             }
@@ -155,28 +161,11 @@ class DeviceRunner(
         // questions: the poll asks "is there work", the beat says "I am still here
         // and this is what I will do now". A machine that only polled would look
         // present but never report that it had been locked.
+        lastBeatScope = scopeWire
         val beat = scope.launch {
             while (isActive) {
                 delay(60_000)
-                runCatching {
-                    val probe = LockProbe.read()
-                    val l = probe.locked
-                    // Re-read rather than captured: the setting is a row somebody
-                    // can flip while this loop is running, and the whole reason
-                    // the beat exists is to say "this is what I will do NOW".
-                    val k = settings.deviceActWhileLockedNow()
-                    val r = client.deviceBeat(
-                        id, locked = l, scope = scopeWire, version = appVersion, actWhileLocked = k,
-                    )
-                    _status.value = _status.value.copy(locked = l, lockKnown = probe.known)
-                    // A Stop reaches a run sitting in a long QUIET tool HERE: the
-                    // beat is the one channel still flowing when there are no event
-                    // batches to carry the cancel on their ack. Kill the in-flight
-                    // child; its finally posts the terminal frame, so the ending is
-                    // still something this device SAYS, not something the daemon
-                    // infers from a dropped connection.
-                    if (r.cancel) current?.destroy()
-                }
+                runCatching { beatOnce(id) }
             }
         }
 
@@ -205,6 +194,13 @@ class DeviceRunner(
                             locked = probe.locked, lockKnown = probe.known, note = next,
                         )
                     }
+                    // ⚠ THE SCOPE IS RE-READ, NOT CAPTURED. `scopeWire` is what this
+                    // machine ENROLLED at. The radio in Settings only persists a new
+                    // value, and the beat used to re-send the captured one — so
+                    // Look → Own never reached the daemon until the app restarted,
+                    // and every Act was refused with "enrolled as look" while
+                    // Settings showed Own. A change is beaten at once, here.
+                    if (scopeWireNow() != lastBeatScope) runCatching { beatOnce(id) }
                     w
                 } catch (e: CancellationException) {
                     throw e
@@ -293,6 +289,35 @@ class DeviceRunner(
         !locked -> "Enrolled, waiting for work"
         actWhileLocked -> "Enrolled, locked — still acting, as this machine is set to"
         else -> "Enrolled, read-only while locked"
+    }
+
+    /** The scope this machine would enrol at RIGHT NOW, on the wire. */
+    private fun scopeWireNow(): String = DevicePolicy.wire(DevicePolicy.parse(settings.deviceScopeNow()))
+
+    /** What the last beat told the daemon this machine offers. */
+    @Volatile
+    private var lastBeatScope: String = ""
+
+    /**
+     * One beat: "I am still here, and this is what I will do NOW". Lock state,
+     * scope and the lock rule are all re-read rather than captured, because every
+     * one of them is a setting somebody can change while the loop runs — and the
+     * daemon treats the beat as authoritative for all three.
+     */
+    private suspend fun beatOnce(id: String) {
+        val probe = LockProbe.read()
+        val l = probe.locked
+        val k = settings.deviceActWhileLockedNow()
+        val s = scopeWireNow()
+        val r = client.deviceBeat(id, locked = l, scope = s, version = appVersion, actWhileLocked = k)
+        lastBeatScope = s
+        _status.value = _status.value.copy(locked = l, lockKnown = probe.known)
+        // A Stop reaches a run sitting in a long QUIET tool HERE: the beat is the
+        // one channel still flowing when there are no event batches to carry the
+        // cancel on their ack. Kill the in-flight child; its finally posts the
+        // terminal frame, so the ending is still something this device SAYS, not
+        // something the daemon infers from a dropped connection.
+        if (r.cancel) current?.destroy()
     }
 
     private suspend fun enrol(scopeWire: String, locked: Boolean, actWhileLocked: Boolean): String {
@@ -496,7 +521,7 @@ class DeviceRunner(
         }
     }
 
-    private fun short(e: Exception): String =
+    private fun short(e: Throwable): String =
         (e.message ?: e::class.simpleName ?: "unknown").take(120)
 
     companion object {
@@ -507,6 +532,9 @@ class DeviceRunner(
          * note by it. Written once, so the writer and the clearer cannot drift.
          */
         const val RETRYING: String = "Retrying: "
+
+        /** The supervise loop's note while it cannot enrol at all. A prefix, like [RETRYING]. */
+        const val NOT_REACHING: String = "Not reaching huginn: "
 
         /**
          * The note after a poll that CAME BACK.
