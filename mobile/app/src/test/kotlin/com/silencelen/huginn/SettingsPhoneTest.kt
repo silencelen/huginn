@@ -41,8 +41,8 @@ class SettingsPhoneTest {
     @Test
     fun `the home screen says what each drawer is set to`() {
         val f = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.TAILSCALE.url,
-            routeName = "Tailscale",
+            baseUrl = AppdRoutes.LAN.url,
+            routeName = "LAN",
             connected = true,
             accountEmail = "jacob@monahanhosting.com",
             savedAccounts = 2,
@@ -236,10 +236,10 @@ class SettingsPhoneTest {
     fun `the diagnostics bundle always names the route`() {
         // The first question asked of a phone that stopped notifying is which
         // address it was on — the tunnel, not the app, is usually the answer.
-        val tailscale = diagnosticsBundle(
-            PhoneSettingsFacts(baseUrl = AppdRoutes.TAILSCALE.url, routeName = "Tailscale"), NOW,
+        val lan = diagnosticsBundle(
+            PhoneSettingsFacts(baseUrl = AppdRoutes.LAN.url, routeName = "LAN"), NOW,
         )
-        assertTrue(tailscale, "route: Tailscale · 100.97.198.90:8787" in tailscale)
+        assertTrue(lan, "route: LAN · 192.168.7.117:8787" in lan)
 
         // The owner's own word for the path, when they have renamed it — this is
         // the line somebody pastes into a chat, and "the mesh" is what they will
@@ -258,8 +258,8 @@ class SettingsPhoneTest {
     @Test
     fun `the bundle carries the delivery facts the question is actually about`() {
         val f = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.TAILSCALE.url,
-            routeName = "Tailscale",
+            baseUrl = AppdRoutes.LAN.url,
+            routeName = "LAN",
             appVersion = "3.1.0",
             appdVersion = "3.0.5",
             notifyEnabled = true,

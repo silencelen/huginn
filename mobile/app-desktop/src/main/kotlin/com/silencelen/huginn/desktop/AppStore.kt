@@ -1410,6 +1410,9 @@ class AppStore(
      */
     private val routeFailures = RouteFailures()
 
+    /** How often [deviceSupervisor] looks. Half a minute: cheap, and a dead runner is back inside one. */
+    private val DEVICE_SUPERVISOR_MS: Long = 30_000
+
     /** The name the connection indicator and the diagnostics report say. */
     val routeName: String get() = _routeBook.value.activeName
 
@@ -2071,11 +2074,44 @@ class AppStore(
         // offer this machine nor pay off a pending unenrol until somebody happened
         // to open the window. Idempotent, so the poll's own call still costs nothing.
         syncDeviceRunner()
+        scope.launch { deviceSupervisor() }
         updater.start(scope)
         // Records stream connects/drops, update outcomes and uncaught errors into
         // the ring buffer the Settings screen copies. Derived entirely from state
         // this store already publishes — no second source of truth, no new poll.
         com.silencelen.huginn.desktop.diag.AppLog.attach(this)
+    }
+
+    /**
+     * Keeps the device runner alive WITHOUT the window.
+     *
+     * The poll loop also calls [syncDeviceRunner], but that loop is gated on the
+     * window being visible — so a runner whose job had died (an Error, which
+     * `supervise` used to let through) stayed dead for as long as the app sat in
+     * the tray. A machine offered as a device is offered while the app RUNS, not
+     * while it is being looked at.
+     *
+     * Also the one place a device that cannot reach huginn asks the route book
+     * for another address. The runner's failures never fed the resolver (only
+     * the UI poll's did, and only while visible), so a tray-parked desktop whose
+     * active route died dialled it forever. Two consecutive half-minutes, so a
+     * blip is not a reconnect; `resolveRoute` itself refuses to move off a
+     * hand-pinned route.
+     */
+    private suspend fun deviceSupervisor() {
+        var unreachable = 0
+        while (scope.isActive) {
+            delay(DEVICE_SUPERVISOR_MS)
+            syncDeviceRunner()
+            val note = deviceRunner.status.value.note
+            val failing = settings.deviceEnabledNow() &&
+                (note.startsWith(DeviceRunner.RETRYING) || note.startsWith(DeviceRunner.NOT_REACHING))
+            unreachable = if (failing) unreachable + 1 else 0
+            if (unreachable >= 2) {
+                unreachable = 0
+                resolveRoute()
+            }
+        }
     }
 
     /**

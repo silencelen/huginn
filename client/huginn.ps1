@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 1.6.0
+# Version: 1.6.1
 
-$script:HUGINN_VERSION = '1.6.0'
+$script:HUGINN_VERSION = '1.6.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -666,7 +666,11 @@ function _Huginn-HelpBody {
   huginn device off           stop offering it
   huginn device update        fetch a newer runner from the pinned mirror
   huginn device serve         the runner itself - this is what a service starts
-  huginn device unit          print a service unit that keeps the runner up [--system]
+  huginn device unit          print what keeps the runner up: a systemd unit [--system], or on
+                              Windows a scheduled task that runs it as you with nobody signed in
+  huginn devices watch <name> on|off
+                              tell the host this machine is always on - it messages you when the
+                              machine stops checking in, and when it is back
   huginn llm "prompt"         one question to the local tier (a serving machine answers, not Claude)
                               [--model ROW] [--timeout S]; 'huginn llm -' reads stdin
   huginn local [status]       what THIS machine serves as local AI, if anything
@@ -901,7 +905,15 @@ function huginn {
       ssh -T $H huginn-headroom
     }
   } elseif ($args[0] -eq 'devices') {
-    ssh -T $H huginn-devices
+    # Arguments go through like headroom's: 'huginn devices watch <name> on|off'
+    # is parsed by the renderer on the host, so each one is remote shell input.
+    $dvArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($dvArgs.Count) {
+      $dvStr = ($dvArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-devices $dvStr"
+    } else {
+      ssh -T $H huginn-devices
+    }
   } elseif ($args[0] -eq 'projects' -or $args[0] -eq 'project') {
     # A PROJECT is a cluster of sessions with roles and a lead that sizes the
     # work. Same host-side renderer the bash client calls (see huginn.sh): one

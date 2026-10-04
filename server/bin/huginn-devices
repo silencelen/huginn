@@ -7,17 +7,56 @@ set -u
 
 # --help, before the token check, exit 0 - the one convention the renderers
 # share; see huginn-archive.
+WATCH_NAME=""; WATCH_ON=""
 case "${1:-}" in
   -h|--help)
     echo "usage: huginn-devices"
+    echo "       huginn-devices watch <name-or-id> on|off"
     echo "  The machines enrolled with this host: what each offers, and when it was last seen."
+    echo "  'watch' marks one the host should expect to be ALWAYS on: it then messages you (Telegram)"
+    echo "  when the machine has not checked in for ten minutes, and again when it is back."
     exit 0 ;;
   '') ;;
-  *) echo "usage: huginn-devices" >&2; exit 1 ;;
+  watch)
+    WATCH_NAME="${2:-}"; WATCH_ON="${3:-}"
+    case "$WATCH_ON" in on|off) ;; *) WATCH_ON="" ;; esac
+    [ -n "$WATCH_NAME" ] && [ -n "$WATCH_ON" ] || { echo "usage: huginn-devices watch <name-or-id> on|off" >&2; exit 1; } ;;
+  *) echo "usage: huginn-devices [watch <name-or-id> on|off]" >&2; exit 1 ;;
 esac
 
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-devices: no appd token at $TOKEN_FILE" >&2; exit 1; }
+
+if [ -n "$WATCH_NAME" ]; then
+  # Resolved on the host, by name or id. Two rows can share a name (a machine
+  # re-enrolled from a second profile did exactly that), so a name that matches
+  # more than one row is refused with the ids, rather than marking the wrong one.
+  LIST="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" http://127.0.0.1:8787/v1/devices 2>/dev/null)" \
+    || { echo "huginn-devices: huginn-appd is not answering on 127.0.0.1:8787" >&2; exit 1; }
+  ID="$(python3 -c '
+import json, sys
+want, rows = sys.argv[1].lower(), json.loads(sys.argv[2]).get("devices", [])
+hit = [r for r in rows if r.get("id") == sys.argv[1]] or [r for r in rows if str(r.get("name", "")).lower() == want]
+if not hit:
+    sys.stderr.write("huginn-devices: no device called %r (see: huginn devices)\n" % sys.argv[1]); sys.exit(1)
+if len(hit) > 1:
+    sys.stderr.write("huginn-devices: %d rows are called %r - say which, by id:\n" % (len(hit), sys.argv[1]))
+    for r in hit: sys.stderr.write("  %s  v%s  %s  %s\n" % (r["id"], r.get("version"), r.get("scope"), "online" if r.get("online") else "offline"))
+    sys.exit(1)
+print(hit[0]["id"])' "$WATCH_NAME" "$LIST")" || exit 1
+  FLAG=false; [ "$WATCH_ON" = on ] && FLAG=true
+  OUT="$(curl -sf -m 10 -X PATCH -H "Authorization: Bearer $(cat "$TOKEN_FILE")" -H 'content-type: application/json' \
+    -d "{\"watch\":$FLAG}" "http://127.0.0.1:8787/v1/devices/$ID" 2>/dev/null)" \
+    || { echo "huginn-devices: the daemon refused (is appd 3.10 or newer deployed?)" >&2; exit 1; }
+  python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+if d.get("watch"):
+    print("  %s is now WATCHED: you will be messaged when it has not checked in for 10 minutes, and when it is back." % d["name"])
+else:
+    print("  %s is no longer watched." % d["name"])' "$OUT"
+  exit 0
+fi
 
 BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
   http://127.0.0.1:8787/v1/devices 2>/dev/null)" || {
@@ -99,7 +138,9 @@ for k in order:
     any_on = any(x.get("online") for x in rows)
     # `or "?"`, not `.get(k, "?")`: the default only covers a MISSING key, and a
     # key that is present-but-null sails straight through it and prints "None".
-    print("  %-1s %s" % ("*" if any_on else " ", clean(head.get("name")) or "?"))
+    watched = any(x.get("watch") for x in rows)
+    print("  %-1s %s%s" % ("*" if any_on else " ", clean(head.get("name")) or "?",
+                           "  (watched: expected always on)" if watched else ""))
     for x in claude:
         # Enrolled scope AND what it will do right now, when they differ: "own,
         # read-only while locked" is a different situation from "enrolled

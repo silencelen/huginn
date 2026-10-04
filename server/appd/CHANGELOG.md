@@ -9,6 +9,23 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.10.0 — 2026-10-03
+
+### Added
+- **Watched devices.** `PATCH /v1/devices/:id {"watch": true}` marks a machine the owner expects to be
+  always on. When a watched device has not checked in for ten minutes the daemon sends one Telegram
+  statement through the existing outbound-only path, and one more when it checks in again; a machine
+  that flaps is not reported again for six hours, and what has been said survives a restart
+  (`device-watch.json`). Watched rows are never pruned. `huginn devices watch <name> on|off` sets it
+  from either CLI. Until now nothing anywhere said a device had gone: RAGNAR's local-AI row sat
+  offline for a week pointed at a retired address while its Windows service read "Running".
+
+### Changed
+- **Bind default.** With `HUGINN_APPD_BIND` unset and no tailnet address, the daemon binds `0.0.0.0`
+  and says so in the log, instead of exiting and being restarted forever by systemd
+  (`StartLimitIntervalSec=0`) on a host without tailscaled. The unit no longer orders itself after
+  `tailscaled.service`. Every route is bearer-gated either way.
+
 ## 3.9.1 — 2026-10-02
 
 Message delivery, from a breaker round against 3.9.0 (2026-10-02): ten ways a message from the

@@ -215,7 +215,7 @@ interface HuginnSettings {
          * route field SUGGESTS and what [AppdRoutes.migrate] seeds an upgrade
          * with — not what an unconfigured client quietly points at.
          */
-        const val DEFAULT_BASE_URL: String = "http://100.97.198.90:8787"
+        const val DEFAULT_BASE_URL: String = "http://192.168.7.117:8787"
 
         /**
          * What the add-a-route field shows when it is EMPTY.

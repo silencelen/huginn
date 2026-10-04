@@ -229,9 +229,9 @@ object Autostart {
      * so the flag wins — quietly, because a notification about a shortcut is
      * noise, and nothing here is destructive either way.
      */
-    fun reconcile(settings: DesktopSettings) {
+    fun reconcile(settings: DesktopSettings): Result<String>? {
         val want = settings.autostartNow()
-        if (want == isEnabled()) return
-        if (want) enable() else disable()
+        if (want == isEnabled()) return null
+        return if (want) enable() else disable()
     }
 }

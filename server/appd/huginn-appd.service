@@ -1,6 +1,6 @@
 [Unit]
-Description=huginn-appd — backend for the Huginn Android app (chats + tmux sessions over the tailnet)
-After=network-online.target tailscaled.service
+Description=huginn-appd — backend for the Huginn apps (chats + tmux sessions + devices)
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -8,7 +8,7 @@ Type=simple
 ExecStart=/usr/bin/node /opt/huginn-appd/huginn-appd.js
 Restart=on-failure
 RestartSec=3
-# tailscale IP may not be assignable yet right after boot — keep retrying.
+# The network may not be up yet right after boot — keep retrying.
 StartLimitIntervalSec=0
 # Deployment-specific settings (bind address, chat working directory, memory-node
 # probe, alert delivery script) belong in a drop-in, NOT here — deploy.sh rewrites

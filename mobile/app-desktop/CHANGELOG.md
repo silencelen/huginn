@@ -1,5 +1,25 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+- **A scope change reaches huginn.** The device runner captured the scope once at enrolment and
+  re-sent that on every beat, so changing Look → Own in Settings never left the machine until the
+  app restarted, and huginn kept refusing Act with "enrolled as look" while Settings showed Own.
+  The beat now reads the current scope, and a change is beaten straight away. (RAGNAR's row read
+  `look` for exactly this reason.)
+- **The device runner survives the tray.** Its supervisor is restarted from an always-on ticker,
+  not only from the window's poll, and it catches Errors as well as Exceptions. A device that
+  cannot reach huginn for a minute asks the route book for another address instead of dialling the
+  dead one forever.
+- **"Start with your session" shows the disk.** The toggle reflects whether the startup entry
+  actually exists, re-read after every change, and a launch-time reconcile that fails is logged.
+- **Setup says when claude has never been run here.** The claude step still passes on a found
+  binary, and adds that the first job will fail until someone runs `claude` once and signs in as
+  this account.
+- **The retired tailnet address is no longer a seed.** An install still pointed at it is migrated
+  to no active route with the LAN and mesh addresses offered, instead of coming up "connected" to
+  an address that stopped answering on 2026-09-30.
+
 ## 1.9.1
 
 - **Apps: a route you remove stops being required.** The desktop now reports the routes it uses

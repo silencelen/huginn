@@ -8,20 +8,24 @@ import kotlin.test.assertTrue
 import kotlin.test.Test
 
 /**
- * What is LEFT of the two built-in addresses: a seed and a migration.
+ * What is LEFT of the built-in addresses: a seed and a migration.
  *
  * Everything else this file used to assert — `labelFor`, `candidates`, the whole
  * "Tailscale or Yggdrasil or Custom" vocabulary — went with the feature. Routes
  * are the owner's list now, so a label this app chose is not a fact about
  * anything. What survives is the one thing an upgrade turns on: that a phone
  * which has been talking to one of these addresses for a year keeps talking to
- * exactly that one, under a name it recognises.
+ * exactly that one, under a name it recognises — and, since Tailscale was
+ * retired, that an install still pointed at the dead tailnet address is NOT
+ * kept talking to it.
  */
 class AppdRoutesTest {
 
+    private val RETIRED_TAILNET = "http://100.97.198.90:8787"
+
     @Test
     fun `normalize makes trailing slashes and whitespace irrelevant`() {
-        val want = "http://100.97.198.90:8787"
+        val want = "http://192.168.7.117:8787"
         for (raw in listOf(want, "$want/", " $want ", "$want///")) {
             assertEquals(want, AppdRoutes.normalize(raw))
         }
@@ -29,9 +33,10 @@ class AppdRoutesTest {
 
     @Test
     fun `the built-ins are still recognised, by address, for migration`() {
-        assertEquals(AppdRoutes.TAILSCALE, AppdRoutes.match("http://100.97.198.90:8787/"))
+        assertEquals(AppdRoutes.LAN, AppdRoutes.match("http://192.168.7.117:8787/"))
         assertEquals(AppdRoutes.YGGDRASIL, AppdRoutes.match("http://192.168.2.117:8787"))
         assertNull(AppdRoutes.match("http://10.0.0.9:8787"), "a hand-typed address is nobody's built-in")
+        assertNull(AppdRoutes.match(RETIRED_TAILNET), "the retired tailnet address is nobody's built-in any more")
     }
 
     /**
@@ -40,10 +45,10 @@ class AppdRoutesTest {
      */
     @Test
     fun `a seeded pin is named after the built-in and badged from its address`() {
-        val t = AppdRoutes.seed(AppdRoutes.TAILSCALE, now = 0)
-        assertEquals("tailscale", t.id)
-        assertEquals("Tailscale", t.name)
-        assertEquals(RouteKind.TAILNET, t.kind, "100.64/10 is the tailnet block")
+        val l = AppdRoutes.seed(AppdRoutes.LAN, now = 0)
+        assertEquals("lan", l.id)
+        assertEquals("LAN", l.name)
+        assertEquals(RouteKind.LAN, l.kind)
 
         val y = AppdRoutes.seed(AppdRoutes.YGGDRASIL, now = 0)
         assertEquals("yggdrasil", y.id)
@@ -62,28 +67,49 @@ class AppdRoutesTest {
      * first, then the built-ins in `ALL` order.
      */
     @Test
-    fun `an install on the tailnet address migrates to Tailscale as pin one`() {
-        val book = AppdRoutes.migrate(AppdRoutes.TAILSCALE.url, routePinned = false)
-        assertEquals(listOf("tailscale", "yggdrasil"), book.routes.map { it.id })
-        assertEquals(listOf("Tailscale", "Yggdrasil"), book.routes.map { it.name })
-        assertEquals("tailscale", book.activeId)
-        assertEquals(AppdRoutes.TAILSCALE.url, book.activeUrl)
+    fun `an install on the LAN address migrates to LAN as pin one`() {
+        val book = AppdRoutes.migrate(AppdRoutes.LAN.url, routePinned = false)
+        assertEquals(listOf("lan", "yggdrasil"), book.routes.map { it.id })
+        assertEquals(listOf("LAN", "Yggdrasil"), book.routes.map { it.name })
+        assertEquals("lan", book.activeId)
+        assertEquals(AppdRoutes.LAN.url, book.activeUrl)
         assertTrue(book.autoSwitch)
     }
 
     @Test
     fun `an install on the mesh address migrates to Yggdrasil as pin one`() {
         val book = AppdRoutes.migrate(AppdRoutes.YGGDRASIL.url, routePinned = false)
-        assertEquals(listOf("yggdrasil", "tailscale"), book.routes.map { it.id })
+        assertEquals(listOf("yggdrasil", "lan"), book.routes.map { it.id })
         assertEquals("yggdrasil", book.activeId)
         assertEquals(0, book.routes.first().order)
         assertEquals(1, book.routes.last().order)
     }
 
+    /**
+     * ⚠ THE ONE ROW THAT CHANGED BEHAVIOUR ON PURPOSE. The tailnet address was
+     * pin #1 for every install that upgraded from 2.x, and it stopped answering
+     * on 2026-09-30. Carrying it forward as the ACTIVE route would bring such an
+     * install up "connected" to nothing, with autoSwitch consulted only after
+     * three failures on a poll loop that runs while the window is visible. So it
+     * is treated exactly like a refused address: named, not chosen, and the live
+     * seeds offered for the resolver to pick from.
+     */
+    @Test
+    fun `an install on the retired tailnet address is not carried forward`() {
+        for (pinned in listOf(false, true)) {
+            val book = AppdRoutes.migrate(RETIRED_TAILNET, routePinned = pinned)
+            assertEquals(RETIRED_TAILNET, book.droppedUrl, "named, so the person can see what went: pinned=$pinned")
+            assertNull(book.activeId, "and not chosen: pinned=$pinned")
+            assertEquals("", book.activeUrl)
+            assertEquals(listOf("lan", "yggdrasil"), book.routes.map { it.id }, "the live seeds are offered")
+        }
+        assertTrue(AppdRoutes.RETIRED.all { AppdRoutes.match(it) == null }, "a retired address must never also be a seed")
+    }
+
     @Test
     fun `a hand-typed address stays chosen and is named after its own host`() {
         val book = AppdRoutes.migrate("http://10.0.0.9:8787", routePinned = false)
-        assertEquals(listOf(AppdRoutes.MIGRATED_ID, "tailscale", "yggdrasil"), book.routes.map { it.id })
+        assertEquals(listOf(AppdRoutes.MIGRATED_ID, "lan", "yggdrasil"), book.routes.map { it.id })
         assertEquals("10.0.0.9:8787", book.routes.first().name)
         assertEquals(RouteKind.LAN, book.routes.first().kind)
         assertEquals(AppdRoutes.MIGRATED_ID, book.activeId)
@@ -92,9 +118,9 @@ class AppdRoutesTest {
 
     @Test
     fun `a trailing slash in the stored address does not produce a third pin`() {
-        val book = AppdRoutes.migrate("${AppdRoutes.TAILSCALE.url}/", routePinned = false)
+        val book = AppdRoutes.migrate("${AppdRoutes.LAN.url}/", routePinned = false)
         assertEquals(2, book.routes.size, "normalized before matching: ${book.routes.map { it.url }}")
-        assertEquals("tailscale", book.activeId)
+        assertEquals("lan", book.activeId)
     }
 
     /**
@@ -178,7 +204,7 @@ class AppdRoutesTest {
             assertEquals(url, book.droppedUrl, "stored=$url pinned=$pinned")
             assertNull(book.activeId, "no built-in is adopted in its place: $url")
             assertEquals("", book.activeUrl, "and therefore no derived base URL: $url")
-            assertEquals(listOf("tailscale", "yggdrasil"), book.routes.map { it.id },
+            assertEquals(listOf("lan", "yggdrasil"), book.routes.map { it.id },
                 "the built-ins are still offered, they are just not chosen: $url")
         }
     }
@@ -186,15 +212,15 @@ class AppdRoutesTest {
     @Test
     fun `an address the guard allows is not reported as dropped`() {
         assertNull(AppdRoutes.migrate("http://10.0.0.9:8787", routePinned = false).droppedUrl)
-        assertNull(AppdRoutes.migrate(AppdRoutes.TAILSCALE.url, routePinned = false).droppedUrl)
+        assertNull(AppdRoutes.migrate(AppdRoutes.LAN.url, routePinned = false).droppedUrl)
         assertNull(AppdRoutes.migrate(null, routePinned = false).droppedUrl)
     }
 
     /** The migrated `addedAt` is zero on purpose — see [AppdRoutes.MIGRATED_AT]. */
     @Test
     fun `migration is a pure function of the stored bytes`() {
-        val a = AppdRoutes.migrate(AppdRoutes.TAILSCALE.url, routePinned = false)
-        val b = AppdRoutes.migrate(AppdRoutes.TAILSCALE.url, routePinned = false)
+        val a = AppdRoutes.migrate(AppdRoutes.LAN.url, routePinned = false)
+        val b = AppdRoutes.migrate(AppdRoutes.LAN.url, routePinned = false)
         assertEquals(a, b, "two reads of unchanged bytes must produce the same book")
         assertTrue(a.routes.all { it.addedAt == AppdRoutes.MIGRATED_AT })
     }

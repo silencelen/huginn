@@ -132,9 +132,24 @@ approval, and the lead says so in its own words when the proposal is ready.
 `huginn device on` offers the machine you are typing on to the host as a place to run work, at a
 scope you choose (`--scope look|work|own`, `--root DIR`). `huginn device status` says what it
 offers and what the host sees, including whether it keeps acting while the screen is locked
-(`--act-while-locked` / `--no-act-while-locked`). `huginn device unit` prints a systemd unit that
-keeps the runner up; `huginn device update` refreshes the runner from the pinned sources.
-`huginn devices` (plural) is the host's list of every enrolled machine.
+(`--act-while-locked` / `--no-act-while-locked`). `huginn device unit` prints what keeps the runner
+up — a systemd unit on Linux (`--system` for a machine nobody logs in to), and on Windows a
+PowerShell snippet that registers a scheduled task (below); `huginn device update` refreshes the
+runner from the pinned sources. `huginn devices` (plural) is the host's list of every enrolled
+machine; **`huginn devices watch <name> on|off`** marks one the host should expect to be always
+on, after which you are messaged (Telegram) when it has not checked in for ten minutes, and again
+when it is back.
+
+**Windows, with nobody signed in.** The desktop app's device runner lives inside the app, and the
+app's "Start with your session" is a Startup-folder shortcut — so a Windows box offered through the
+app is a device only while someone is signed in, and a reboot (Windows Update, a power cut) takes
+it off the list until the next login. For a server-shaped Windows machine use the headless runner
+instead: sign in as the account that holds the Claude login, run `claude` once, then
+`huginn device on --scope work --root C:\work` (or `own`), then `huginn device unit` and paste what
+it prints into an Administrator PowerShell. That registers a Task Scheduler task that starts the
+runner at boot **as that account**, with the password stored by Task Scheduler (asked once), no
+72-hour stop limit, and a restart on failure. The desktop app can stay installed for the window
+and the tray; turn its own "Available to huginn" off so the machine is one row, not two.
 
 **The address the runner dials.** Enrolling needs one thing ssh cannot provide by itself: the
 runner talks to the daemon *directly*, over HTTP, so it needs an address rather than an alias.

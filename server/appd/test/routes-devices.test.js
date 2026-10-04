@@ -196,6 +196,20 @@ test('a nameless device is refused', async () => {
   assert.match(r.body.error, /name/);
 });
 
+test('the owner can mark a device watched, and only with a real boolean', async () => {
+  const d = await enrol({ name: 'alwayson' });
+  let r = await api(`/v1/devices/${d.id}`, { method: 'PATCH', body: JSON.stringify({ watch: 'yes' }) });
+  assert.equal(r.status, 400, 'a string is not a boolean, however it reads');
+  r = await api(`/v1/devices/${d.id}`, { method: 'PATCH', body: JSON.stringify({ watch: true }) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.watch, true);
+  const list = await api('/v1/devices');
+  assert.equal(list.body.devices.find((x) => x.id === d.id).watch, true, 'the list carries it');
+  r = await api(`/v1/devices/${d.id}`, { method: 'PATCH', body: JSON.stringify({ watch: false }) });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.watch, undefined, 'off is absent on the wire, not false');
+});
+
 test('re-enrolling under the same id does not leave a ghost', async () => {
   const first = await enrol({ name: 'restarts' });
   const again = await api('/v1/devices', {
