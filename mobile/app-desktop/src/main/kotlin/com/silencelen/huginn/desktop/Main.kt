@@ -170,7 +170,14 @@ fun main(args: Array<String>) {
     // profile, the desktop's own Startup editor — and the flag is what the owner
     // actually chose, so the flag wins. Off the launch path: on Windows it can
     // spawn a PowerShell, and nothing about a shortcut is worth delaying a window.
-    scope.launch { runCatching { Autostart.reconcile(settings) } }
+    scope.launch {
+        runCatching { Autostart.reconcile(settings) }.getOrNull()?.onFailure {
+            // Said somewhere a person can find it: the Settings toggle reads the
+            // disk now, and this is the line that explains why it disagrees with
+            // the flag.
+            AppLog.warn("autostart", "could not make the startup entry match the setting: ${it.message}")
+        }
+    }
     // ⚠ EMPTINESS IS THE SIGNAL, not a version number or a sentinel. Desktop
     // 1.2.0 made a fresh install an empty route book plus `NO_ROUTE` precisely
     // so a first run is distinguishable from an upgrade; an install that has

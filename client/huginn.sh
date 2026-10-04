@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 1.6.0
+# Version: 1.6.1
 
-HUGINN_VERSION='1.6.0'
+HUGINN_VERSION='1.6.1'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -1069,7 +1069,11 @@ EOF
     headroom)
       if [ "$#" -gt 1 ]; then ssh -T "$H" "huginn-headroom $(printf '%q ' "${@:2}")"
       else ssh -T "$H" huginn-headroom; fi ;;
-    devices) ssh -T "$H" huginn-devices ;;
+    # Arguments go through like headroom's: `huginn devices watch <name> on|off`
+    # is parsed by the renderer on the host, so each one is remote shell input.
+    devices)
+      if [ "$#" -gt 1 ]; then ssh -T "$H" "huginn-devices $(printf '%q ' "${@:2}")"
+      else ssh -T "$H" huginn-devices; fi ;;
     # A PROJECT is a cluster of sessions with roles and a lead that sizes the
     # work. Host-side for the same three reasons as headroom above -- one
     # renderer for both clients, the bearer token never leaves huginn, and the

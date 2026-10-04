@@ -8,6 +8,26 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.6.1] - 2026-10-03
+
+### Added
+- **`huginn devices watch <name> on|off`** marks a machine the host should expect to be always on.
+  The daemon (appd 3.10+) then sends one Telegram statement when that machine has not checked in
+  for ten minutes and one when it is back; `huginn devices` marks watched rows. Until now nothing
+  said a device had gone.
+- **`huginn device unit` on Windows prints the Windows shape** — a PowerShell snippet that registers
+  a scheduled task running the headless runner **as your account, at boot, with nobody signed in**
+  (Task Scheduler asks for the password once and keeps it; `ExecutionTimeLimit` is zero so it is not
+  stopped on day three). From another machine: `huginn-device unit --windows --user DOMAIN\name
+  --home C:\Users\name …`. Before this, `unit` printed a systemd unit on Windows and exited 0, and
+  the only always-on path on a Windows box was the desktop app's Startup shortcut, which needs an
+  interactive sign-in.
+
+### Fixed
+- **An npm `claude.cmd` shim on Windows runs.** Node refuses to spawn a `.cmd` without a shell; the
+  headless runner now runs the `cli.js` the shim points at, so a device whose claude came from
+  `npm i -g` no longer fails every job.
+
 ## [1.6.0] - 2026-10-02
 
 ### Added

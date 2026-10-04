@@ -269,7 +269,15 @@ class DesktopSetupProbes(
             if (store.settings.deviceClaudePathNow().isBlank() && found.path != DEFAULT_CLAUDE) {
                 store.settings.setDeviceClaudePath(found.path)
             }
-            "${found.path} — ${found.version}"
+            // A found binary is not a signed-in one, and the device step passed on
+            // this before: the first job then failed with "check auth" on a machine
+            // Settings called ready. Claude keeps everything under ~/.claude, so a
+            // profile with no such folder has never run it. Said, not failed — the
+            // person typed nothing wrong, and signing in is the next thing to do.
+            val home = System.getProperty("user.home")
+            val everRan = home != null && java.io.File(home, ".claude").isDirectory
+            "${found.path} — ${found.version}" +
+                if (everRan) "" else " — never run as this account: open a terminal, run `claude` once and sign in, or the first job will fail"
         }
     }
 

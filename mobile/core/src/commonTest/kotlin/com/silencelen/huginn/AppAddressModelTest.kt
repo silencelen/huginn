@@ -57,21 +57,23 @@ class AppAddressModelTest {
 
     @Test
     fun `a migrated seed nobody chose and the device never reached is not reported`() {
-        // 2026-10-02: an install that talked on the LAN address reported the
+        // 2026-10-02: an install that talked on the mesh address reported the
         // migrated Tailscale literal 100.97.198.90 too — gone from the host since
-        // 09-30 — and every app add became a 422 against it.
+        // 09-30 — and every app add became a 422 against it. That literal is no
+        // longer a seed at all (AppdRoutes.RETIRED); the migrated seed nobody chose
+        // is now the LAN address, and the rule is the same.
         val book = AppdRoutes.migrate("http://192.168.2.117:8787", routePinned = false)
         assertEquals(listOf("192.168.2.117"), AppRules.routeHosts(book, emptyMap()))
         // Once it has actually worked from this device it is a route the device uses.
-        val tailscale = book.routes.first { it.url.contains("100.97") }
+        val lan = book.routes.first { it.url.contains("192.168.7.117") }
         assertEquals(
-            listOf("192.168.2.117", "100.97.198.90"),
-            AppRules.routeHosts(book, mapOf(tailscale.id to RouteHealth(lastOkAt = 5))),
+            listOf("192.168.2.117", "192.168.7.117"),
+            AppRules.routeHosts(book, mapOf(lan.id to RouteHealth(lastOkAt = 5))),
         )
         // But one that worked once and has FAILED since is history, not a route.
         assertEquals(
             listOf("192.168.2.117"),
-            AppRules.routeHosts(book, mapOf(tailscale.id to RouteHealth(lastOkAt = 5, lastFailAt = 9))),
+            AppRules.routeHosts(book, mapOf(lan.id to RouteHealth(lastOkAt = 5, lastFailAt = 9))),
         )
         // A route a person typed is reported whether or not it has answered yet.
         val typed = RouteBook(routes = listOf(PinnedRoute(id = "m", name = "mesh", url = "http://[FD00::117]:8787")))

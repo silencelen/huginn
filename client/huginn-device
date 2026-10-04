@@ -31,7 +31,7 @@ const https = require('https');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -410,11 +410,28 @@ const exitedText = (mode, host, code, err) => {
   return `${engineWords(mode).label} exited ${code} on ${host}${w ? `: ${w}` : ''}`;
 };
 
-/** How an engine path becomes a spawn: a .js engine runs through node. */
-const execFor = (engineBin, argv) =>
-  String(engineBin).endsWith('.js')
-    ? [process.execPath, [engineBin, ...argv]]
-    : [engineBin, argv];
+/**
+ * How an engine path becomes a spawn: a .js engine runs through node.
+ *
+ * ⚠ AND SO DOES AN NPM SHIM. `npm i -g @anthropic-ai/claude-code` on Windows
+ * leaves `claude.cmd` on the PATH, and Node refuses to spawn a `.cmd` without
+ * a shell (EINVAL since 18.20/20.12) — a shell near a prompt being exactly
+ * what this runner will not do. The shim's only job is to run
+ * `node_modules\@anthropic-ai\claude-code\cli.js` beside it, so run that.
+ * A `.cmd` with no cli.js beside it is spawned as given and fails as before,
+ * with the reason in the chat rather than a guess.
+ */
+const execFor = (engineBin, argv) => {
+  const bin = String(engineBin);
+  if (bin.endsWith('.js')) return [process.execPath, [bin, ...argv]];
+  const cli = /\.(cmd|bat)$/i.test(bin) ? cliBesideShim(bin) : null;
+  if (cli) return [process.execPath, [cli, ...argv]];
+  return [bin, argv];
+};
+function cliBesideShim(shim) {
+  const cli = path.join(path.dirname(shim), 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+  try { return fs.statSync(cli).isFile() ? cli : null; } catch { return null; }
+}
 
 function argvFor(work, scope, locked, persona) {
   // A granted generate argv is the bare stream flags plus the request: no tool
@@ -987,6 +1004,76 @@ async function serve() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (m) => console.log(`[huginn-device] ${new Date().toISOString()} ${m}`);
 
+// ------------------------------------------------------------- windows task
+
+/**
+ * "Keep the runner up" on Windows: a Task Scheduler task, not a service.
+ *
+ * Why a task running AS THE PERSON and not a LocalSystem service like
+ * huginn-local's: this runner spawns `claude`, and claude's login lives in the
+ * account's profile (`%USERPROFILE%\.claude`). SYSTEM has no such login, and a
+ * `work`/`own` device under SYSTEM would be SYSTEM-scope — the one thing the
+ * scope model exists to prevent. A task with a stored credential performs a
+ * batch logon for that account at boot, loads its profile, and runs with
+ * nobody signed in; Task Scheduler asks for the password ONCE at creation and
+ * keeps it itself, so nothing here ever sees or writes it.
+ *
+ * The pieces, and why each one is there:
+ *   - a .cmd wrapper, because a task action carries no environment and this
+ *     program finds both its config and claude's login through HOME /
+ *     HUGINN_DEVICE_DIR (the same reason the systemd unit sets them);
+ *   - ExecutionTimeLimit ZERO, because the default of 72 hours silently stops a
+ *     task on day three — which is what took ThrottleStop down on RAGNAR once;
+ *   - RestartCount/RestartInterval, so a crash is a minute's gap, not a stop;
+ *   - IgnoreNew, so a second start (two triggers firing) never runs two runners
+ *     enrolling under one id;
+ *   - the log is rotated once at start (.log → .log.1) rather than appended
+ *     forever: a runner that cannot reach huginn writes a line every 15 s.
+ *
+ * ⚠ The snippet is printed, not run. It needs an ADMINISTRATOR PowerShell and
+ * the account's password, and both belong to the person at the machine.
+ */
+function windowsTaskScript({ user, home, node, self, confDir, machine }) {
+  const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+  const logFile = `${confDir}\\huginn-device.log`;
+  const wrapper = `${confDir}\\huginn-device-serve.cmd`;
+  return `# Huginn device on ${machine} as a Windows scheduled task: starts at boot, runs as ${user},
+# keeps running with nobody signed in. Paste the whole block into an ADMINISTRATOR PowerShell
+# on ${machine}. It asks for ${user}'s Windows password once — Task Scheduler stores it; this
+# file never sees it — and nothing here needs typing again after a reboot.
+#
+# Before this: 'claude' must be signed in for ${user} (open a terminal as that account, run
+# claude once, /login), and 'huginn device on' must have been run as ${user} so
+# ${confDir} holds device.json and the token.
+\$ErrorActionPreference = 'Stop'
+\$user = ${q(user)}
+\$cred = Get-Credential -UserName \$user -Message 'Windows password for the account the Huginn device runner will run as'
+\$wrapper = ${q(wrapper)}
+New-Item -ItemType Directory -Force -Path (Split-Path \$wrapper) | Out-Null
+@"
+@echo off
+set HOME=${home}
+set USERPROFILE=${home}
+set HUGINN_DEVICE_DIR=${confDir}
+if exist "${logFile}.1" del "${logFile}.1"
+if exist "${logFile}" ren "${logFile}" huginn-device.log.1
+"${node}" "${self}" serve > "${logFile}" 2>&1
+"@ | Set-Content -Path \$wrapper -Encoding ASCII
+\$action   = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c "' + \$wrapper + '"')
+\$trigger  = New-ScheduledTaskTrigger -AtStartup
+\$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries \`
+  -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) \`
+  -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'Huginn device' -Action \$action -Trigger \$trigger -Settings \$settings \`
+  -User \$user -Password \$cred.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask -TaskName 'Huginn device'
+Start-Sleep -Seconds 20
+Get-ScheduledTask -TaskName 'Huginn device' | Select-Object TaskName,State
+Get-Content ${q(logFile)} -Tail 3
+# Expect "enrolled as ${machine} (...)" in those lines, and the row online in 'huginn devices'.
+# Undo:  Unregister-ScheduledTask -TaskName 'Huginn device' -Confirm:\$false`;
+}
+
 // ------------------------------------------------------------------ status
 
 async function status() {
@@ -1206,6 +1293,26 @@ async function main() {
       const self = fs.realpathSync(process.argv[1]);
       const system = process.argv.includes('--system');
       const who = os.userInfo();
+      // The Windows shape, by default on Windows and on request anywhere (so the
+      // snippet for a Windows box can be generated from the host). This used to
+      // print a systemd unit on Windows and exit 0 — the one platform where the
+      // only always-on path was the desktop app's Startup shortcut, which needs
+      // somebody to sign in. See windowsTaskScript for what this one does instead.
+      if (process.platform === 'win32' || process.argv.includes('--windows')) {
+        const parsed = parseFlags(process.argv.slice(3), ['windows', 'system', 'user', 'home', 'node', 'self', 'conf-dir', 'name'], ['windows', 'system']);
+        if (parsed.error) { console.error(`huginn-device unit: ${parsed.error}`); process.exit(2); }
+        const f = parsed.flags;
+        const user = f.user || (process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${who.username}` : who.username);
+        console.log(windowsTaskScript({
+          user,
+          home: f.home || who.homedir,
+          node: f.node || process.execPath,
+          self: f.self || self,
+          confDir: f['conf-dir'] || CONF_DIR,
+          machine: f.name || os.hostname(),
+        }));
+        break;
+      }
       // HOME is set explicitly rather than left to systemd. A system unit derives
       // it from User=, which is usually right and silently is not the moment
       // anyone changes User= — and this program finds BOTH its config and claude's
@@ -1294,6 +1401,11 @@ WantedBy=default.target`);
   huginn-device status        what this machine offers, and what huginn sees
   huginn-device unit          print a systemd USER unit (one person's session)
   huginn-device unit --system print a systemd SYSTEM unit (a headless machine)
+  huginn-device unit --windows
+                              print the Windows shape: a PowerShell snippet that registers a
+                              scheduled task running the runner AS YOUR ACCOUNT at boot, with
+                              nobody signed in (the default on Windows; from elsewhere pass
+                              --user DOMAIN\\name --home C:\\Users\\name --node --self --conf-dir)
 
   Settings:  ${CONF_FILE}
   Token:     ${TOKEN_FILE}   (0600; the same token /etc/huginn-appd/token holds)`);
@@ -1312,6 +1424,7 @@ if (require.main === module) {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
     shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor, refusal,
+    execFor, cliBesideShim, windowsTaskScript,
     locked, gateLocked,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
     permanent, authFailed, noTokenError, retryDelayMs,

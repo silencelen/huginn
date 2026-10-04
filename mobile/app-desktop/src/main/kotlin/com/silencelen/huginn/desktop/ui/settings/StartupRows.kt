@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop.ui.settings
 
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,13 +44,19 @@ import kotlinx.coroutines.withContext
 fun ColumnScope.StartupRow(store: AppStore, mark: String? = null) {
     val scope = rememberCoroutineScope()
     val on by store.settings.autostart.collectAsState()
+    // ⚠ THE DISK, NOT THE FLAG. The comment above promised that and the code
+    // checked the flag — so a reconcile that could not write (PowerShell blocked,
+    // a redirected profile) left a switch proudly ON over an empty Startup
+    // folder. Re-read when the flag changes and after every write.
+    var onDisk by remember { mutableStateOf(Autostart.isEnabled()) }
+    LaunchedEffect(on) { onDisk = withContext(Dispatchers.IO) { Autostart.isEnabled() } }
     var note by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
     SettingsToggleRow(
         id = ID,
         title = "Start with your session",
-        checked = on,
+        checked = onDisk,
         enabled = !busy,
         onCheckedChange = { want ->
             busy = true
@@ -67,10 +74,15 @@ fun ColumnScope.StartupRow(store: AppStore, mark: String? = null) {
                     // the exact lie this row exists to avoid.
                     onFailure = { note = it.message ?: "could not change the startup entry" },
                 )
+                onDisk = withContext(Dispatchers.IO) { Autostart.isEnabled() }
                 busy = false
             }
         },
-        summary = note ?: Autostart.describe(ClaudePath.isWindows()),
+        summary = note ?: if (on && !onDisk) {
+            "Turned on, but no startup entry is on disk — toggle it again. " + Autostart.describe(ClaudePath.isWindows())
+        } else {
+            Autostart.describe(ClaudePath.isWindows())
+        },
         highlighted = SettingsRowStyle.isHighlighted(ID, mark),
         modifier = revealMark(ID),
     )
