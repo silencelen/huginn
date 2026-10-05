@@ -429,13 +429,20 @@ internal class AgentStream {
     /**
      * A read failed.
      *
-     * A 404 here has exactly one expected cause and it is not a missing agent: a
-     * daemon older than 3.0.0 has no such route. Saying so and disabling the
-     * strip is the documented compat answer — an empty body under a working
-     * picker would read as "this agent did nothing".
+     * A 404 here, unless it carries the daemon's own [StreamPicker.AGENT_GONE]
+     * sentence, has exactly one expected cause: a daemon older than 3.0.0 has no
+     * such route. Saying so and disabling the strip is the documented compat
+     * answer — an empty body under a working picker would read as "this agent
+     * did nothing".
+     *
+     * A 404 that says "no such agent" is about this one id — the route answered
+     * and the id is not in the session's agents directory, because the state
+     * file named another transcript between the list and the read (a nested
+     * `claude -p` in the pane, 2026-10-04). The strip stays; the next list poll
+     * drops the chip, and a page already read stays on screen.
      */
     fun fail(code: Int?, message: String?) {
-        if (code == 404) {
+        if (code == 404 && message != StreamPicker.AGENT_GONE) {
             supported = false
             note = HuginnViewModel.STREAMS_UNSUPPORTED
         } else if (page == null) {
