@@ -278,8 +278,12 @@ function hookFor(name, event, payload) {
   if (!hookCopy) {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'bin', 'huginn-claude-title'), 'utf8');
     hookCopy = path.join(tmp, 'huginn-claude-title');
-    fs.writeFileSync(hookCopy,
-      src.replace('STATE_DIR=/run/huginn-claude-state', `STATE_DIR=${stateDir}`), { mode: 0o755 });
+    // The hook reads its state directory from HUGINN_CLAUDE_STATE_DIR (1.6.2);
+    // this used to be a string replace of the hardcoded path, which silently
+    // stopped matching when the hook grew the override — and a copy that no
+    // longer matched wrote into the REAL /run/huginn-claude-state.
+    assert.ok(src.includes('HUGINN_CLAUDE_STATE_DIR'), 'the hook honours HUGINN_CLAUDE_STATE_DIR');
+    fs.writeFileSync(hookCopy, src, { mode: 0o755 });
     const shimDir = path.join(tmp, 'hookbin');
     fs.mkdirSync(shimDir, { recursive: true });
     fs.writeFileSync(path.join(shimDir, 'tmux'),
@@ -295,6 +299,11 @@ function hookFor(name, event, payload) {
       PATH: `${path.join(tmp, 'hookbin')}:${process.env.PATH}`,
       TMUX: 'set-so-the-hook-does-not-no-op',
       TMUX_PANE: paneId,
+      HUGINN_CLAUDE_STATE_DIR: stateDir,
+      // The nested-claude guard (1.6.2) would exit silently if this suite were
+      // run from inside a `claude -p` child; the hook here is the thing under
+      // test, so force the top-level verdict.
+      HUGINN_CLAUDE_TITLE_NESTED: '0',
     },
   });
 }
