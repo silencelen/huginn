@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 1.10.0
 
 - **A scope change reaches huginn.** The device runner captured the scope once at enrolment and
   re-sent that on every beat, so changing Look → Own in Settings never left the machine until the
