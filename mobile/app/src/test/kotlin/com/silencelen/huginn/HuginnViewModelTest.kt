@@ -244,6 +244,20 @@ class HuginnViewModelTest {
             HuginnViewModel.STREAMS_UNSUPPORTED,
             stream.note,
         )
+
+        // But a 404 carrying the daemon's own "no such agent" is about ONE id —
+        // the route answered — and must not take the strip away (2026-10-04: a
+        // nested `claude -p` rewrote the state file between the list and the read).
+        val gone = AgentStream()
+        gone.select("agent-eee")
+        gone.fail(404, StreamPicker.AGENT_GONE)
+        assertTrue("the strip stays", gone.supported)
+        assertEquals("the daemon's text, verbatim", StreamPicker.AGENT_GONE, gone.note)
+        gone.land(page(listOf(ev(1, "still here")), nextOffset = 50, windowStart = 0))
+        assertNull("a read that lands clears it", gone.note)
+        gone.fail(404, StreamPicker.AGENT_GONE)
+        assertTrue(gone.supported)
+        assertEquals("a page already read stays put", 1, gone.page!!.events.size)
     }
 
     // ------------------------------------------------------------ the 409

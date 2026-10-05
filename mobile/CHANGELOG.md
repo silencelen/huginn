@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## 3.9.2 — 2026-10-05
+
+- **A missing agent no longer switches the stream strip off.** The strip read every 404 from the
+  agent-transcript route as "the host is older than appd 3.0" and disabled itself for the rest of
+  the session — including the daemon's own "no such agent", which it answers when an id the list
+  just returned is not in the session's agents directory. That happened whenever a `claude -p` run
+  inside the session's tmux pane rewrote the session's state file between the list and the read
+  (fixed on the host in CLI 1.6.2), so on a 3.10 host the picker vanished mid-session with "needs
+  appd 3.0" under it. A 404 carrying "no such agent" now keeps the strip and the page already
+  read; only a 404 without that sentence means the route is missing.
+
 ## 3.9.1 — 2026-10-02
 
 - **No crash when push is not ready.** 3.9.0 closed itself seven times in a row on the first
