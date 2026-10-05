@@ -65,6 +65,20 @@ object StreamPicker {
     const val OVERFLOW_KEY: String = "more"
 
     /**
+     * The daemon's exact sentence for a 404 that is about ONE agent — the id is
+     * not among the files in this session's agents directory — as opposed to a
+     * 404 for the ROUTE, which is what a daemon older than 3.0.0 answers. Both
+     * clients see only the status code and this text, so the text is the
+     * contract: a 404 carrying it keeps the strip; any other 404 disables it.
+     *
+     * Seen 2026-10-04: a nested `claude -p` in the same tmux pane rewrote the
+     * session's state file, the agent list came from one transcript and the read
+     * went to the other, and both clients took "no such agent" for "no such
+     * route" and switched the strip off for the rest of the session.
+     */
+    const val AGENT_GONE: String = "no such agent"
+
+    /**
      * The most finished agents the pill will ever unfold.
      *
      * ⚠ 40 UNTIL THE FOLD BECAME SEARCHABLE. The old number's argument — "past a

@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.ui.StreamPicker
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
@@ -175,6 +176,38 @@ class SessionControllerTest {
         c.pollMainOnce()
         assertEquals(1, c.page.value?.events?.size)
         assertNull(c.transcriptError.value)
+
+        scope.cancel()
+    }
+
+    /**
+     * ⚠ NOT THE COMPAT CASE EITHER. The daemon that lists agents and the daemon
+     * that reads one are the same process, but the session's state file between
+     * the two calls need not name the same transcript: a nested `claude -p` in the
+     * pane rewrote it (2026-10-04), the list came from one agents directory, the
+     * read looked in the other, and the daemon said "no such agent" — a 404 with
+     * the route very much present. Taking that for "needs appd 3.0" switched the
+     * strip off for the rest of the session over one chip that was gone.
+     */
+    @Test
+    fun `a 404 that says no such agent keeps the strip and asks for the list again`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val c = controller(scope) { path ->
+            when {
+                "/agents/" in path -> HttpStatusCode.NotFound to """{"error":"${StreamPicker.AGENT_GONE}"}"""
+                "/agents?all=1" in path -> HttpStatusCode.OK to agentsBody(agentRow("bbb", true, NOW - 10))
+                else -> HttpStatusCode.OK to page("main line", nextOffset = 100)
+            }
+        }
+
+        c.selectStream("aaa")
+        assertFalse(c.pollAgentOnce("aaa"))
+        assertTrue(c.streamsSupported.value, "the route exists — it said so by naming the agent")
+        assertEquals(StreamPicker.AGENT_GONE, c.streamNote.value, "the daemon's text, verbatim")
+        // And the list was asked for at once, so the stale chip goes with this frame
+        // rather than the next ten-second poll.
+        assertTrue(paths().any { "/agents?all=1" in it }, "a fresh list was asked for: ${paths()}")
+        assertEquals(listOf("bbb"), c.agents.value.map { it.id })
 
         scope.cancel()
     }

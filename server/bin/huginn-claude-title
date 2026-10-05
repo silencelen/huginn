@@ -27,6 +27,49 @@ set -u
 [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || exit 0
 command -v tmux >/dev/null 2>&1 || exit 0
 
+# --- nested claude guard -----------------------------------------------------
+# A claude started by a Bash tool INSIDE a tmux Claude session (`claude -p` for a
+# scan, a bake-off, `huginn -p`) inherits $TMUX/$TMUX_PANE, so below it would
+# resolve the SAME session name as the claude that owns the pane and write ITS
+# session_id/transcript into that session's state file — flipping the file between
+# two conversations on every hook event. huginn-appd re-reads it per poll, so a
+# client watching the session saw its history replaced by the child's and back,
+# the agent chips swap between two sessions' sets, and a 404 for an agent listed
+# a second earlier, which the clients took for "needs appd 3.0" (2026-10-04).
+#
+# The hook's OWN environment cannot tell the two apart: a top-level claude also
+# hands its hooks CLAUDECODE=1 and CLAUDE_CODE_SESSION_ID=<its own id>. The claude
+# PROCESS's environment can — a top-level claude was started by a shell and has no
+# CLAUDECODE; a nested one inherited CLAUDECODE=1 from the parent's Bash tool. So
+# walk up to the nearest claude ancestor and read /proc. No claude found within a
+# few hops = not nested (fail OPEN, i.e. the behaviour before this guard existed).
+# HUGINN_CLAUDE_TITLE_NESTED=0|1 forces the verdict, for tests.
+_is_claude_proc() {   # $1 = pid
+  local comm cmd
+  comm="$(cat "/proc/$1/comm" 2>/dev/null)" || return 1
+  [ "$comm" = claude ] && return 0
+  # A claude run through node: argv[0] is node and argv[1] is its cli.js.
+  cmd="$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)"
+  case "$cmd" in
+    claude\ *|*/claude\ *|*claude-code/cli.js*|*/claude/cli.js*) return 0 ;;
+  esac
+  return 1
+}
+_nested_claude() {
+  case "${HUGINN_CLAUDE_TITLE_NESTED:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  local pid="$PPID" hops=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 8 ]; do
+    if _is_claude_proc "$pid"; then
+      tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q '^CLAUDECODE=' && return 0
+      return 1
+    fi
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_nested_claude && exit 0
+
 ICON_RUN="${HUGINN_ICON_RUN:-🔄}"
 ICON_NEEDYOU="${HUGINN_ICON_NEEDYOU:-✋}"
 ICON_IDLE="${HUGINN_ICON_IDLE:-✅}"
@@ -72,7 +115,7 @@ sess="${info#*|}"
 # ~/.claude/projects/*.jsonl instead of scraping the pane — there is no other
 # way to learn which transcript belongs to which tmux session. Without jq it
 # degrades to the bare state word, which readers still accept.
-STATE_DIR=/run/huginn-claude-state
+STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
 case "$icon" in
   "$ICON_RUN")     st=running ;;
   "$ICON_NEEDYOU") st=attention ;;

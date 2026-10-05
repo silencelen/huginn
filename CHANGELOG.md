@@ -8,6 +8,31 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.6.2] - 2026-10-05
+
+### Fixed
+- **A `claude -p` run from inside a tmux session no longer takes over that session's state.**
+  `huginn-claude-title` is a Claude Code hook, and a claude started by a Bash tool inside a tmux
+  Claude session inherits `$TMUX`/`$TMUX_PANE`, so the hook resolved the same session name for
+  both and wrote the child's session id and transcript into `/run/huginn-claude-state/<session>`
+  on every hook event — the file flipped between two conversations every few seconds. appd
+  re-reads it on every poll, so a client watching that session saw its history replaced by the
+  child's and back (the "flicker"), the agent chips swap between two sessions' sets, and a 404
+  for an agent that had been listed a second earlier, which both clients took for "needs appd
+  3.0" and switched the strip off for good (their side is fixed in app 3.9.2 / desktop 1.10.1).
+  The hook now walks up to the nearest `claude` ancestor and does nothing when that process
+  carries `CLAUDECODE=1` — the mark a parent Claude Code puts on everything its Bash tool
+  starts, and one a top-level claude never has. The hook's own environment could not tell the
+  two apart: a top-level claude hands its hooks `CLAUDECODE=1` too. No claude ancestor found
+  means not nested, so a host where the walk cannot run behaves exactly as before.
+
+### Added
+- **`scripts/test-claude-title.sh`** runs the hook under a fake top-level and a fake nested
+  `claude` and asserts the state file is written for one and untouched for the other;
+  `scripts/test-client.sh` runs it as a lane. It needs a tmux pane and skips loudly without one.
+  `HUGINN_CLAUDE_STATE_DIR` points the hook at another state directory and
+  `HUGINN_CLAUDE_TITLE_NESTED=0|1` forces the verdict, both for tests.
+
 ## [1.6.1] - 2026-10-03
 
 ### Added

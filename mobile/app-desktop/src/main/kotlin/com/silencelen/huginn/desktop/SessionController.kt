@@ -630,10 +630,17 @@ class SessionController(
      *
      * TWO failures, and only one of them is about the feature.
      *
-     * A **404** has exactly one expected cause and it is not a missing agent: a
-     * daemon older than 3.0.0 has no such route at all. Saying so and disabling
-     * the strip is the documented compat answer — an empty body under a working
-     * picker would read as "this agent did nothing".
+     * A **404** without the daemon's own [StreamPicker.AGENT_GONE] sentence has
+     * exactly one expected cause: a daemon older than 3.0.0 has no such route at
+     * all. Saying so and disabling the strip is the documented compat answer — an
+     * empty body under a working picker would read as "this agent did nothing".
+     *
+     * A **404 that says "no such agent"** is about this one id: the route
+     * answered, and the id is not in the session's agents directory. In practice
+     * the session's state file named a different transcript between the list and
+     * this read (a nested `claude -p` in the pane rewrote it, 2026-10-04), so the
+     * chip came from another session's agent set. The strip stays, the sentence
+     * goes on it, and the list is asked for again at once so the chip goes.
      *
      * **ANYTHING ELSE** is about this one agent, so the strip stays alive and the
      * daemon's own sentence goes on it. A 400 used to fall through here into the
@@ -647,6 +654,7 @@ class SessionController(
      */
     internal suspend fun pollAgentOnce(agentId: String): Boolean {
         var ok = false
+        var refreshList = false
         runCatching { client.agentTranscript(name, agentId, agentOffset) }
             .onSuccess { page ->
                 ok = true
@@ -662,7 +670,10 @@ class SessionController(
             }
             .onFailure { e ->
                 val code = (e as? HuginnClient.HuginnException)?.code
-                if (code == 404) {
+                if (code == 404 && e.message == StreamPicker.AGENT_GONE) {
+                    _streamNote.value = e.message
+                    refreshList = true
+                } else if (code == 404) {
                     _streamsSupported.value = false
                     _streamNote.value = STREAMS_UNSUPPORTED
                 } else {
@@ -673,6 +684,7 @@ class SessionController(
                     _streamNote.value = e.message ?: "could not read this agent"
                 }
             }
+        if (refreshList) pollAgentListOnce()
         return ok
     }
 

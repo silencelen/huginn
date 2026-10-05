@@ -1180,6 +1180,16 @@ else
   grep -E '^not ok|error:' <<<"$LT_OUT" | head -12 >&2
 fi
 
+# The title hook's nested-claude guard (server/bin/huginn-claude-title). It needs
+# a tmux pane to resolve a session name; outside one the script says SKIP and
+# this lane prints that, loudly, rather than counting it green.
+TCT_OUT=$(scripts/test-claude-title.sh 2>&1); TCT_RC=$?
+case "$TCT_OUT" in
+  SKIP*) echo "  skip  $TCT_OUT" ;;
+  *) if [ "$TCT_RC" -eq 0 ]; then ok "title hook: ${TCT_OUT##*$'\n'}"
+     else bad "title hook nested-claude guard FAILED:"; echo "$TCT_OUT" | head -8 >&2; fi ;;
+esac
+
 # The device-unit lesson, re-applied: a unit that drops the env var that moves
 # its own files is a service that loops forever while systemd calls it healthy.
 UNIT_LLM=$(HUGINN_LOCAL_DIR=/tmp/hl-gate node client/huginn-local unit --system --which llm)
