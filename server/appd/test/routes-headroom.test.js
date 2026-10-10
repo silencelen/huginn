@@ -907,6 +907,32 @@ test('at the ladder threshold the picker is driven by LABEL and `s` is pressed',
     'the host settings.json must be byte-identical after a ladder move');
 });
 
+test('the `Switch model?` cache-cost dialog after `s` is confirmed, then the move is confirmed', async () => {
+  // Claude Code 2.1.296, captured live 2026-10-10: on a warm prompt cache `s`
+  // opens a confirmation BEFORE the model changes. Before appd handled it, every
+  // ladder move on the box ended delivery_unconfirmed.
+  const name = mkPicker('conf', [
+    { label: 'Default (recommended)', desc: 'Opus 5.5' },
+    { label: 'Opus 5.5', desc: 'For complex work' },
+    { label: 'Fable 5.1', desc: 'For your toughest challenges', current: true },
+    { label: 'Sonnet 5.5', desc: 'Most efficient' },
+  ], 'confirm');
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  const settingsFile = path.join(claudeDir, 'settings.json');
+  const before = fs.readFileSync(settingsFile);
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93 });
+  await tick({ cooldownMs: 0 });
+  const body = await until(
+    (b) => b.sessions.some((s) => s.name === name && s.ladder && s.ladder.delivery === 'confirmed'),
+    20_000, 'a confirmed ladder move through the switch confirmation');
+  const row = body.sessions.find((s) => s.name === name);
+  assert.equal(row.ladder.to, 'opus');
+  assert.match(capture(name), /Set model to Opus 5\.5 for this session only/);
+  assert.deepEqual(fs.readFileSync(settingsFile), before,
+    'the host settings.json must be byte-identical after a ladder move');
+});
+
 test('the row NUMBER is never trusted: a shuffled picker still lands on opus', async () => {
   // The list is built from the installed CLI's model table and a `claude update`
   // renumbers it. A daemon that remembered "opus is row 2" would press `s` on

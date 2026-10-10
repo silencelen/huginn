@@ -14,6 +14,9 @@
 //              the test, so a suite can prove the daemon reads LABELS and never
 //              row numbers.
 //   nopicker   swallow `/model` and draw nothing: the abort path.
+//   confirm    `s` opens the "Switch model?" cache-cost dialog first, the way
+//              Claude Code 2.1.296 does whenever the prompt cache is warm
+//              (captured live 2026-10-10); Enter on its default row confirms.
 //
 // Frames CLEAR the screen the way a real TUI does, which matters for more than
 // tidiness: `paneReadyForInput` refuses to release a queued send while selector
@@ -27,6 +30,7 @@ const mode = process.argv[3] || 'normal';
 let cursor = rows.findIndex((r) => r.current);
 if (cursor < 0) cursor = 0;
 let open = false;
+let confirming = false;
 let typed = '';
 
 function w(s) { process.stdout.write(s); }
@@ -50,12 +54,30 @@ process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdin.on('data', (buf) => {
   const s = buf.toString('utf8');
+  if (confirming) {
+    if (s.includes('\r') || s.includes('\n')) {
+      confirming = false;
+      w(`${CLEAR}  ⎿  Set model to ${rows[cursor].label} for this session only\n`);
+      caret();
+      return;
+    }
+    if (s.includes('\u001b')) { confirming = false; w(`${CLEAR}  cancelled\n`); caret(); return; }
+    return;
+  }
   if (open) {
     // Arrow keys arrive as CSI sequences; a bare ESC is the cancel.
     if (s.includes('[A') || s.includes('OA')) { cursor = Math.max(0, cursor - 1); draw(); return; }
     if (s.includes('[B') || s.includes('OB')) { cursor = Math.min(rows.length - 1, cursor + 1); draw(); return; }
     if (s.includes('s')) {
       open = false;
+      if (mode === 'confirm') {
+        confirming = true;
+        w([CLEAR, '  Switch model?', '  Your next response will be slower and use more tokens',
+          `  This conversation is cached for the current model. Switching to ${rows[cursor].label}`,
+          '  means the full history gets re-read on your next message.', '',
+          `  ❯ 1. Yes, switch to ${rows[cursor].label}`, '    2. No, go back', ''].join('\n'));
+        return;
+      }
       w(`${CLEAR}  ⎿  Set model to ${rows[cursor].label} for this session only\n`);
       caret();
       return;

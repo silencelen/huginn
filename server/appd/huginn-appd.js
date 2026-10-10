@@ -93,7 +93,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.10.0';
+const VERSION = '3.10.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -7379,6 +7379,10 @@ const LADDER_FEEDBACK_MS = 5_000;
 const MAX_CURSOR_MOVES = 10;
 /** Both spellings observed for the session-only confirmation (native-rl §4). */
 const LADDER_FEEDBACK_RE = /Set model to .* for this session only|Model set to .* for this session only/;
+/** The `Switch model?` cache-cost dialog that can sit between `s` and the feedback line. */
+const LADDER_CONFIRM_RE = /^\s*Switch model\?\s*$/m;
+/** Its default row, which names the target: `❯ 1. Yes, switch to Sonnet 5.5`. */
+const LADDER_CONFIRM_ROW_RE = /❯\s*1\.\s*Yes, switch to (.+?)\s*$/m;
 
 // ---- auto-resume timings ---------------------------------------------------
 //
@@ -7834,11 +7838,29 @@ async function applyLadder(name, to) {
   }
   const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
   if (set.err) return fail('tmux refused the s key');
+  // ⚠ THE CACHE-COST CONFIRMATION. Since Claude Code ~2.1.29x, `s` on a session
+  // whose prompt cache is warm — every live session the ladder ever moves — opens
+  // `Switch model?` with `❯ 1. Yes, switch to <label>` / `2. No, go back` BEFORE
+  // the model changes. Without this step every ladder move on the box ended
+  // `delivery_unconfirmed` (7 of 7 recorded, last 2026-10-05). Enter goes only
+  // when the dialog names the row we chose; a dialog about any other model is a
+  // surprise, and the rule here is to abort rather than guess.
+  let confirmed = false;
   const by = Date.now() + LADDER_FEEDBACK_MS;
   for (;;) {
     const lines = await paneLines(name);
-    if (lines && LADDER_FEEDBACK_RE.test(lines.join('\n'))) {
+    const text = lines ? lines.join('\n') : '';
+    if (LADDER_FEEDBACK_RE.test(text)) {
       return { ok: true, delivery: 'confirmed', to };
+    }
+    if (!confirmed && LADDER_CONFIRM_RE.test(text)) {
+      const m = text.match(LADDER_CONFIRM_ROW_RE);
+      if (!m || m[1].trim() !== want.label) {
+        return fail(`the switch confirmation names ${m ? m[1].trim() : 'no model'}, not ${want.label}`);
+      }
+      const ok = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+      if (ok.err) return fail('tmux refused Enter on the switch confirmation');
+      confirmed = true;
     }
     if (Date.now() >= by) break;
     await sleep(200);
