@@ -9,6 +9,25 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.10.1 — 2026-10-10
+
+### Fixed
+- **The headroom model ladder moves sessions again.** On a session whose prompt cache is warm — which
+  is every live session the ladder ever acts on — Claude Code now answers the picker's `s` key with a
+  `Switch model?` cache-cost confirmation (`❯ 1. Yes, switch to <model>` / `2. No, go back`) before it
+  changes anything. The ladder waited only for the `… for this session only` line, timed out, pressed
+  Esc and recorded `delivery_unconfirmed`: all 7 ladder moves recorded on the reference box failed
+  that way, the last on 2026-10-05. The ladder now presses Enter on that dialog, and only when it names
+  the row it chose; a confirmation naming any other model aborts as before.
+
+### Tests
+- Live Claude Code 2.1.296 captures added as fixtures: the new picker (versioned labels such as
+  `Opus 5.5` / `Haiku 4.5`, several rows per family, newest first — the ladder's first-row-per-family
+  pick still lands on the newest), the `Switch model?` confirmation, plan approval, a single
+  AskUserQuestion, and the trust dialog, which has **lost its option numbers** and now pre-selects
+  `No, exit`. The send gate still holds every send off it (asserted); `detectPrompt` does not card it
+  for the phone (pinned as a known gap).
+
 ## 3.10.0 — 2026-10-03
 
 ### Added

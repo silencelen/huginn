@@ -12,7 +12,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { detectPrompt, parseStatusLine, promptFingerprint } = require('../lib/pane');
+const { detectPrompt, parseStatusLine, promptFingerprint, parseModelPicker } = require('../lib/pane');
 
 const DIR = path.join(__dirname, 'fixtures', 'prompts');
 const load = (name) => fs.readFileSync(path.join(DIR, name), 'utf8').split('\n');
@@ -134,4 +134,31 @@ test('parseStatusLine tolerates a line with no ctx and no branch', () => {
   assert.equal(s.model, 'Opus 4.8');
   assert.equal(s.contextPercent, null);
   assert.equal(s.branch, null);
+});
+
+// ---- Claude Code 2.1.296 captures (2026-10-10) ------------------------------
+
+test('2.1.296 picker: versioned labels, several rows per family, newest first', () => {
+  const rows = parseModelPicker(load('model-picker-v2-80.txt'));
+  assert.ok(rows, 'the picker still parses');
+  // The ladder takes the FIRST row of a family, so the newest must come first.
+  const first = (f) => rows.find((r) => r.family === f).label;
+  assert.equal(first('opus'), 'Opus 5.5');
+  assert.equal(first('fable'), 'Fable 5.1');
+  assert.equal(first('sonnet'), 'Sonnet 5.5');
+  assert.equal(first('haiku'), 'Haiku 5.5');
+  assert.equal(rows.find((r) => r.current).label, 'Haiku 5.5');
+});
+
+test('2.1.296 `Switch model?` confirmation reads as a dialog naming its target', () => {
+  const p = detectPrompt(load('switch-model-confirm-80.txt'));
+  assert.equal(p.question, 'Switch model?');
+  assert.equal(p.options[0].label, 'Yes, switch to Sonnet 5.5');
+});
+
+test('2.1.296 trust dialog has NO option numbers, so detectPrompt does not card it (known gap)', () => {
+  // Kept as a pinned fact, not a goal: the phone shows no card for this dialog
+  // until /answer can walk an unnumbered list. The send gate (typing.test.js)
+  // is what keeps it safe — its default is now "No, exit".
+  assert.equal(detectPrompt(load('trust-dialog-unnumbered-80.txt')), null);
 });
