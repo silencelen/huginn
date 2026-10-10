@@ -434,6 +434,12 @@ test('every committed dialog capture still reads as a dialog', () => {
     'ask-wrapped-desc-80.txt': 'modal', 'fable-consent-80.txt': 'modal',
     'model-picker-80.txt': 'modal', 'plan-approval-80.txt': 'modal',
     'plan-approval-with-task-80.txt': 'modal', 'trust-dialog-80.txt': 'trust',
+    // Claude Code 2.1.296, captured live 2026-10-10. The trust dialog lost its
+    // `1.`/`2.` numbers and now pre-selects "No, exit" on top — the gate must
+    // still hold every send off it.
+    'trust-dialog-unnumbered-80.txt': 'trust', 'model-picker-v2-80.txt': 'modal',
+    'switch-model-confirm-80.txt': 'modal', 'plan-approval-v2-80.txt': 'modal',
+    'ask-simple-v2-80.txt': 'modal',
   };
   for (const [file, why] of Object.entries(expect)) {
     assert.equal(t.paneReadyForInput(fixturePane(file)).why, why, file);
