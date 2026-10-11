@@ -14,21 +14,25 @@ version number collided. Entries below are reconstructed from the shipping commi
 ### Added
 - **Answers through Claude Code's own hook, not keystrokes.** A new `PermissionRequest` hook
   (`hooks/huginn-permission-hook`, installed by `deploy.sh` as matcher `*`, timeout 960) parks each
-  tool prompt and AskUserQuestion of a huginn tmux session under `$STATE_DIR/.perm/<session>/`. When a
-  tap reaches `/answer`, the daemon (`lib/permhook.js`) matches it against the dialog on screen — the
-  question text for AskUserQuestion, the command / path / url inside the dialog's own border for a tool
-  prompt — and hands the decision to the waiting hook instead of typing: **Yes** → allow, **No** → deny
+  Bash prompt and single AskUserQuestion of a huginn tmux session under `$STATE_DIR/.perm/<session>/`.
+  When a tap reaches `/answer`, the daemon (`lib/permhook.js`) binds it to EXACTLY ONE waiting request —
+  the whole command equal to the dialog's own command block, or the whole question and option list
+  equal to the AskUserQuestion on screen; zero or several matches and it does nothing — and hands the
+  decision to that hook instead of typing: **Yes** → allow, **No** → deny
   with interrupt (identical to the TUI's "What should Claude do instead?"), an AskUserQuestion pick →
   `updatedInput.answers` (multi-select joined `", "`). No digits, no Right/Enter choreography, no
   timing. The response carries `via: "hook"`. Everything it is not sure of goes to the keystroke path
-  unchanged: "always allow" / "switch to auto mode" rows, "Type something." / "Chat about this", tabbed
+  unchanged: file / MCP / every other tool prompt, "always allow" / "switch to auto mode" rows, "Type something." / "Chat about this", tabbed
   multi-question dialogs, plan approval (the CLI ignores a hook allow there — measured), a request for a
   different prompt or an earlier claude in the same tmux name, and any hook that does not claim the
   answer within 2.5 s (the answer is withdrawn by rename so a late hook cannot act on it). The hook acts
   only for the pane's top-level interactive claude (its session id must match the title hook's state
   file): a PermissionRequest hook ALSO fires in headless `claude -p`, which then waits on it, so cron
   runs and nested children return at once. Measured on Claude Code 2.1.296: answering at the keyboard
-  does not stop a waiting hook, so request files are matched by content and ties go to the newest.
+  does not stop a waiting hook, so a request file proves only that a hook is alive; matching is exact and
+  must be unique. (The pre-release `/claude-security scan changes` found that a first cut matching a
+  40-character prefix or a file basename, with newest-wins, could hand a Yes to an unseen twin request
+  from a parallel subagent — fixed before release.)
 - **API lane for suggested replies** (`lib/apilane.js`). Max plans now include a monthly Claude
   Platform API credit that pays for the Messages API but not for Claude Code, so the caged
   `claude -p --tools ''` call behind suggestions was spending subscription headroom on work that needs
