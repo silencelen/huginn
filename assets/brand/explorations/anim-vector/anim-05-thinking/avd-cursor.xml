@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- avd-cursor.xml: SKETCH of anim-05-thinking (c) as an Android AnimatedVectorDrawable
+     (API 23+ for <keyframe>). Not compiled here. The raven glyph (48 wide on a 108x54
+     canvas) and a block cursor 14.4 x 26.3 on the body's baseline, whose fillAlpha
+     steps through the apps' PulseDot table (0.35 0.5 0.68 0.85 1 1 0.85 0.68 0.5 0.35,
+     160 ms each, 1.6 s): the chat indicator breathes on the same clock as the live
+     marker. Steps are made with paired keyframes (hold, then jump). In Compose the same
+     thing is one Animatable stepping through the table; this file is for a notification
+     or widget surface that takes a drawable. Tint from the theme as for the icon. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+  <aapt:attr name="android:drawable">
+    <vector android:width="108dp" android:height="54dp"
+        android:viewportWidth="108" android:viewportHeight="54">
+      <group android:translateX="10" android:translateY="14" android:scaleX="0.5674" android:scaleY="0.5674">
+        <group android:translateX="-10" android:translateY="-17">
+          <path android:name="raven" android:fillColor="#161310" android:fillType="evenOdd"
+              android:pathData="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/>
+        </group>
+      </group>
+      <path android:name="cursor" android:fillColor="#161310" android:fillAlpha="1"
+          android:pathData="M65.2,14 h14.4 v26.3 h-14.4 Z"/>
+    </vector>
+  </aapt:attr>
+  <target android:name="cursor">
+    <aapt:attr name="android:animator">
+      <objectAnimator android:propertyName="fillAlpha" android:duration="1600"
+          android:repeatCount="infinite" android:interpolator="@android:interpolator/linear">
+        <propertyValuesHolder android:propertyName="fillAlpha">
+          <keyframe android:fraction="0.0000" android:value="0.35"/>
+          <keyframe android:fraction="0.0999" android:value="0.35"/>
+          <keyframe android:fraction="0.1000" android:value="0.5"/>
+          <keyframe android:fraction="0.1999" android:value="0.5"/>
+          <keyframe android:fraction="0.2000" android:value="0.68"/>
+          <keyframe android:fraction="0.2999" android:value="0.68"/>
+          <keyframe android:fraction="0.3000" android:value="0.85"/>
+          <keyframe android:fraction="0.3999" android:value="0.85"/>
+          <keyframe android:fraction="0.4000" android:value="1"/>
+          <keyframe android:fraction="0.4999" android:value="1"/>
+          <keyframe android:fraction="0.5000" android:value="1"/>
+          <keyframe android:fraction="0.5999" android:value="1"/>
+          <keyframe android:fraction="0.6000" android:value="0.85"/>
+          <keyframe android:fraction="0.6999" android:value="0.85"/>
+          <keyframe android:fraction="0.7000" android:value="0.68"/>
+          <keyframe android:fraction="0.7999" android:value="0.68"/>
+          <keyframe android:fraction="0.8000" android:value="0.5"/>
+          <keyframe android:fraction="0.8999" android:value="0.5"/>
+          <keyframe android:fraction="0.9000" android:value="0.35"/>
+          <keyframe android:fraction="0.9999" android:value="0.35"/>
+          <keyframe android:fraction="1" android:value="0.35"/>
+        </propertyValuesHolder>
+      </objectAnimator>
+    </aapt:attr>
+  </target>
+</animated-vector>

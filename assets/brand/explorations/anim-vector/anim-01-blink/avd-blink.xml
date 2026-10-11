@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- avd-blink.xml: SKETCH of anim-01-blink as an Android AnimatedVectorDrawable (API 23+
+     for <keyframe>; the interpolators are the CSS curves as pathInterpolator resources:
+     @interpolator/huginn_ease_in  = pathInterpolator 0.4,0 1,1
+     @interpolator/huginn_ease_out = pathInterpolator 0.2,0 0,1 ). Not compiled here.
+     The lid is an ink circle r 2.6 over the evenodd eye hole (centre 64.5,25.5 r 2),
+     scaled from its top edge (pivotY 22.9). Same 12 s timeline as anim.svg:
+     blinks at 0.00, 3.90, 8.20 and 8.58 s; close 100 ms / hold 60 ms / open 160 ms.
+     Tint: set fillColor from the theme (ink #161310 on light, bone #E8E2DA on dark). -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt">
+  <aapt:attr name="android:drawable">
+    <vector android:width="108dp" android:height="108dp"
+        android:viewportWidth="108" android:viewportHeight="108">
+      <group android:translateX="2" android:translateY="11">
+        <path android:name="raven" android:fillColor="#161310" android:fillType="evenOdd"
+            android:pathData="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/>
+        <group android:name="lid" android:pivotX="64.5" android:pivotY="22.9" android:scaleY="0">
+          <path android:fillColor="#161310"
+              android:pathData="M64.5,22.9 a2.6,2.6 0 1,1 0,5.2 a2.6,2.6 0 1,1 0,-5.2 Z"/>
+        </group>
+      </group>
+    </vector>
+  </aapt:attr>
+  <target android:name="lid">
+    <aapt:attr name="android:animator">
+      <objectAnimator android:propertyName="scaleY" android:duration="12000"
+          android:repeatCount="infinite" android:interpolator="@android:interpolator/linear">
+        <propertyValuesHolder android:propertyName="scaleY">
+          <!-- fraction = t / 12 s; each keyframe's interpolator shapes the segment that ENDS at it -->
+          <keyframe android:fraction="0"        android:value="0"/>
+          <keyframe android:fraction="0.008333" android:value="1" android:interpolator="@interpolator/huginn_ease_in"/>
+          <keyframe android:fraction="0.013333" android:value="1"/>
+          <keyframe android:fraction="0.026667" android:value="0" android:interpolator="@interpolator/huginn_ease_out"/>
+          <keyframe android:fraction="0.325"    android:value="0"/>
+          <keyframe android:fraction="0.333333" android:value="1" android:interpolator="@interpolator/huginn_ease_in"/>
+          <keyframe android:fraction="0.338333" android:value="1"/>
+          <keyframe android:fraction="0.351667" android:value="0" android:interpolator="@interpolator/huginn_ease_out"/>
+          <keyframe android:fraction="0.683333" android:value="0"/>
+          <keyframe android:fraction="0.691667" android:value="1" android:interpolator="@interpolator/huginn_ease_in"/>
+          <keyframe android:fraction="0.696667" android:value="1"/>
+          <keyframe android:fraction="0.71"     android:value="0" android:interpolator="@interpolator/huginn_ease_out"/>
+          <keyframe android:fraction="0.715"    android:value="0"/>
+          <keyframe android:fraction="0.723333" android:value="1" android:interpolator="@interpolator/huginn_ease_in"/>
+          <keyframe android:fraction="0.728333" android:value="1"/>
+          <keyframe android:fraction="0.741667" android:value="0" android:interpolator="@interpolator/huginn_ease_out"/>
+          <keyframe android:fraction="1"        android:value="0"/>
+        </propertyValuesHolder>
+      </objectAnimator>
+    </aapt:attr>
+  </target>
+</animated-vector>

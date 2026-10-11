@@ -1,6 +1,8 @@
 # type-03-instrument — Instrument Serif + Instrument Sans + JetBrains Mono
 
-**Files:** `specimen.html` (self-contained, Google Fonts `<link>` only), `preview.png` (full-page render at 1200 px).
+**Files:** `specimen.html` (self-contained, Google Fonts `<link>` only),
+`preview.png` (full-page render at 1200 px, then DPR-3 crops of the phone mock
+and the lockup cards at 1:1 device pixels).
 
 ## Concept
 
@@ -33,7 +35,9 @@ post, bill pointing on into the word.
 displaySmall 44/52 · Instrument Serif 400 → headlineMedium 28/36 · Instrument
 Sans 500 → titleLarge 22/28 · Instrument Sans 600 → bodyLarge 16/24 ·
 Instrument Sans 400 → labelMedium 13/16 · Instrument Sans 600, +6 % tracking →
-mono 13/18 · JetBrains Mono 400. The serif never appears below 28 px.
+mono 13/18 · JetBrains Mono 400. The serif never appears below 28 px; the
+specimen's 24 px line is labelled "not for use" and shows the Instrument Sans
+600 fallback and the 13 px label beside it.
 
 In the terminal this direction has no presence beyond the ASCII wordmarks;
 `word-09-hairline` (thin box drawing) is the closest terminal cousin in
@@ -47,11 +51,14 @@ spirit (fine lines, tall proportions).
   maps cleanly onto Material roles.
 - Italic tagline is genuinely beautiful; `Thought, on call from anywhere.`
   reads like a line of verse.
+- At DPR 3 (preview crop) the Instrument Sans 13 px label, 16 px body and
+  the JetBrains Mono rows are crisp; the risk is confined to the serif.
 
 ## Weaknesses
 
-- Weak at small sizes: the 24 px wordmark is thin and loses the serifs on a
-  phone; notifications and tray tooltips must use the sans or the mark alone.
+- Weak at small sizes: the 24 px serif wordmark is thin and loses the serifs
+  on a phone (shown for comparison in the specimen, marked not for use);
+  notifications and tray tooltips must use the sans or the mark alone.
 - Only Regular and Italic exist: no bold for emphasis, no way to make the
   wordmark heavier if it is ever needed small.
 - Instrument Serif + Instrument Sans is a fashionable pairing on indie SaaS
@@ -61,6 +68,9 @@ spirit (fine lines, tall proportions).
 - Condensed serif capitals and the raven's horizontal silhouette fight a
   little in the side-by-side lockup; the stacked and tittle lockups are
   better.
+- No outlined SVG was produced for this direction (only the recommended one
+  got that work); it would be the same fontTools step with
+  `InstrumentSerif-Regular.ttf`.
 
 ## Relation to the current identity
 
@@ -68,3 +78,10 @@ Uses `raven.svg` unchanged; palette is Theme.kt verbatim. Of the three, this
 is the biggest departure from the current all-system-font product, and the
 only one that changes the *mood* (from tool to object). It keeps the raven
 primary by giving the type a supporting, ceremonial role.
+
+## Revision
+
+The 24 px line is relabelled "not for use; shown for comparison" and shows
+the Instrument Sans 600 fallback and the 13 px label beside it. The preview
+now includes a DPR-3 crop of the phone mock (label, mono, body at 1:1 device
+pixels) and the tittle cards at DPR 3.

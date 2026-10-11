@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 108 54" width="432" height="216" class="opt" id="opt-b">
   <title>Huginn thinking: eye scan</title>
   <style>
-    :root { --ink: #161310; }
+    svg { --ink: #161310; }
     .ink { fill: var(--ink); }
     #opt-b .pupil { animation: huginn-scan 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
     @keyframes huginn-scan {
-      0%   { transform: translateX(-0.80px); }
-      32%  { transform: translateX(0.80px); }
-      50%  { transform: translateX(0.80px); }
-      82%  { transform: translateX(-0.80px); }
-      100% { transform: translateX(-0.80px); }
+      0%   { transform: translateX(-0.90px); }
+      32%  { transform: translateX(0.90px); }
+      50%  { transform: translateX(0.90px); }
+      82%  { transform: translateX(-0.90px); }
+      100% { transform: translateX(-0.90px); }
     }
     @media (prefers-reduced-motion: reduce) { #opt-b .pupil { animation: none; transform: none; } }
   </style>
@@ -17,5 +17,5 @@
     <path id="raven" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/>
   </defs>
   <g transform="translate(14,3) scale(0.9456) translate(-10,-17)"><use href="#raven" class="ink"/></g>
-  <circle class="pupil ink" cx="65.54" cy="11.04" r="0.95"/>
+  <circle class="pupil ink" cx="65.54" cy="11.04" r="1.28"/>
 </svg>

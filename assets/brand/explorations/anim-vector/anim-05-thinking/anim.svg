@@ -1,15 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 108 54" width="432" height="216" class="opt" id="opt-c">
   <title>Huginn thinking: cursor</title>
   <style>
-    :root { --ink: #161310; }
+    svg { --ink: #161310; }
     .ink { fill: var(--ink); }
-    #opt-c .cursor { animation: huginn-cursor 1.06s steps(2, jump-none) infinite; }
-    @keyframes huginn-cursor { from { opacity: 1; } to { opacity: 0; } }
+    /* PulseDot: the apps' live marker. Ten alphas, 160 ms each, stepped (about 6 fps). */
+    #opt-c .cursor { opacity: 1; animation: huginn-pulse 1.6s linear infinite; }
+    @keyframes huginn-pulse {
+      0% { opacity: 0.35; animation-timing-function: step-end; }
+      10% { opacity: 0.5; animation-timing-function: step-end; }
+      20% { opacity: 0.68; animation-timing-function: step-end; }
+      30% { opacity: 0.85; animation-timing-function: step-end; }
+      40% { opacity: 1; animation-timing-function: step-end; }
+      50% { opacity: 1; animation-timing-function: step-end; }
+      60% { opacity: 0.85; animation-timing-function: step-end; }
+      70% { opacity: 0.68; animation-timing-function: step-end; }
+      80% { opacity: 0.5; animation-timing-function: step-end; }
+      90% { opacity: 0.35; animation-timing-function: step-end; }
+      100% { opacity: 0.35; }
+    }
     @media (prefers-reduced-motion: reduce) { #opt-c .cursor { animation: none; opacity: 1; } }
   </style>
   <defs>
     <path id="raven" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/>
   </defs>
   <g transform="translate(10,14) scale(0.5674) translate(-10,-17)"><use href="#raven" class="ink"/></g>
-  <rect class="cursor ink" x="68" y="17.5" width="10" height="21"/>
+  <rect class="cursor ink" x="65.22" y="14" width="14.45" height="26.27"/>
 </svg>
