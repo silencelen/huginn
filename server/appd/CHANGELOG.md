@@ -11,6 +11,19 @@ version number collided. Entries below are reconstructed from the shipping commi
 
 ## 3.10.1 — 2026-10-10
 
+### Added
+- **API lane for suggested replies** (`lib/apilane.js`). Max plans now include a monthly Claude
+  Platform API credit that pays for the Messages API but not for Claude Code, so the caged
+  `claude -p --tools ''` call behind suggestions was spending subscription headroom on work that needs
+  no harness. With `HUGINN_API_KEY_FILE` set (a file holding the key, or with
+  `HUGINN_API_KEY_VAR=NAME` an env-file read in place), suggestions go to `claude-haiku-5-5` on the
+  Messages API first — about $0.00004 a call, measured. The daemon keeps its own monthly ledger
+  (`api-lane-spend.json`) from the usage each response reports and stops at
+  `HUGINN_API_MONTHLY_USD` (default $5), whatever the Console allows. Any failure — off, over the cap,
+  network, non-2xx — falls back to the CLI call exactly as before. Off by default. The key is never
+  put in the environment, and never as `ANTHROPIC_API_KEY`, which would move `claude` children off the
+  subscription.
+
 ### Fixed
 - **The headroom model ladder moves sessions again.** On a session whose prompt cache is warm — which
   is every live session the ladder ever acts on — Claude Code now answers the picker's `s` key with a
