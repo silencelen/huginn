@@ -156,9 +156,16 @@ test('2.1.296 `Switch model?` confirmation reads as a dialog naming its target',
   assert.equal(p.options[0].label, 'Yes, switch to Sonnet 5.5');
 });
 
-test('2.1.296 trust dialog has NO option numbers, so detectPrompt does not card it (known gap)', () => {
-  // Kept as a pinned fact, not a goal: the phone shows no card for this dialog
-  // until /answer can walk an unnumbered list. The send gate (typing.test.js)
-  // is what keeps it safe — its default is now "No, exit".
-  assert.equal(detectPrompt(load('trust-dialog-unnumbered-80.txt')), null);
+test('2.1.296 trust dialog (no option numbers, "No, exit" first) is carded as UNNUMBERED', () => {
+  // /answer walks it with arrow keys; the send gate (typing.test.js) still holds
+  // every send off it, because its default destroys the session.
+  const p = detectPrompt(load('trust-dialog-unnumbered-80.txt'));
+  assert.equal(p.unnumbered, true);
+  assert.match(p.question, /Is this a project you created or one you trust\?/);
+  assert.deepEqual(p.options.map((o) => [o.label, o.selected]), [['No, exit', true], ['Yes, I trust this folder', false]]);
+});
+
+test('the unnumbered detector admits ONLY the trust dialog: two look-alike rows without its question are not a card', () => {
+  const lines = ['Some prose.', '', ' ❯ No, exit', '   Yes, I trust this folder', '', ' Enter to confirm · Esc to cancel'];
+  assert.equal(detectPrompt(lines), null);
 });

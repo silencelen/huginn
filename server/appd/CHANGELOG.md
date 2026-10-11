@@ -9,6 +9,25 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.10.2 — 2026-10-11
+
+### Added
+- **The ladder takes Claude Code's own word for a model switch.** A new hook,
+  `hooks/huginn-modelswitch-hook` (installed by `deploy.sh` as `PostModelSwitch` `*`, timeout 10),
+  records each completed switch of a huginn session's top-level claude to
+  `$STATE_DIR/.modelswitch/<session>` (`from`, `to` as the full model id, `source`, `ts`). After pressing
+  `s` the ladder accepts either proof — the pane's `… for this session only` line, or a switch to the
+  target family recorded after the keypress by the same claude — so a reworded or missing feedback line
+  no longer strands a move as `delivery_unconfirmed` (it reports `via: "hook"`). Measured live on
+  2.1.296: the picker's session-only switch fires PostModelSwitch with `source:"picker"`, after the
+  `Switch model?` confirmation.
+- **The folder-trust dialog is a card again.** Claude Code 2.1.296 draws it with no option numbers and
+  `No, exit` pre-selected, which the numbered detector rightly refused, so the phone showed nothing.
+  `detectTrustDialog` recognises exactly that dialog (its two rows, its question, the `Enter to confirm`
+  footer, one caret) and marks it `unnumbered`; `/answer` then walks the caret with arrow keys,
+  re-reading the pane after every key and once more before Enter, and replies `via: "arrows"`. The send
+  gate still holds typed messages off it, since its default ends the session.
+
 ## 3.10.1 — 2026-10-10
 
 ### Added
