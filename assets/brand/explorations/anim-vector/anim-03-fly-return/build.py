@@ -10,7 +10,7 @@ Revision 2 (after review):
 - ONE outer <g transform="translate(2,11)"> (the mark's own group transform) holds both
   the perched mark and the flyer, so the rest frame IS raven.svg's placement; the
   perched group no longer carries a transform attribute that its CSS animation overrode.
-- Hand-overs are cuts, not dissolves. The wings are the continuous element: they unfurl
+- Hand-overs are cuts (step-end), not dissolves. The wings are the continuous element: they unfurl
   on the perched mark (2.26-2.40 s) and the body swap (perched -> flight body) is a
   30 ms step at 2.50 s under the first downstroke. On landing the body swaps back at
   4.60 s during the flare and the wings fold away on the perched mark (4.60-4.80 s).
@@ -57,7 +57,8 @@ def kf(name, frames):
     out.append("    }")
     return '\n'.join(out)
 
-CUT = 0.03  # s: a "cut" is a 30 ms linear ramp (two frames at 60 fps)
+CUT = 0.03  # s: a cut is a step-end over 30 ms: the value holds, then jumps; no frame ever shows both bodies
+STEP = 'step-end'
 REST = 'translate(-5px, -6px)'   # flyer rest: its shoulder pivot sits on the perched mark's shoulder
 PUSH = 'translate(-5px, -9px)'   # same, lifted 3 units by the push-off
 
@@ -67,9 +68,9 @@ perched = [
     (2.00, {'transform': 'translate(0px, 0px) scaleY(1)', 'opacity': 1}, EIO),
     (2.30, {'transform': 'translate(0px, 0px) scaleY(0.94)', 'opacity': 1}, EIO),
     (2.44, {'transform': 'translate(0px, 0px) scaleY(1)', 'opacity': 1}, EIO),
-    (2.50, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 1}, LIN),
+    (2.50, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 1}, STEP),
     (2.50 + CUT, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 0}, None),
-    (4.60, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 0}, LIN),
+    (4.60, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 0}, STEP),
     (4.60 + CUT, {'transform': 'translate(0px, -3px) scaleY(1)', 'opacity': 1}, EO),
     (4.75, {'transform': 'translate(0px, 0px) scaleY(1)', 'opacity': 1}, EIO),
     (4.85, {'transform': 'translate(0px, 0px) scaleY(0.965)', 'opacity': 1}, EO),
@@ -109,9 +110,9 @@ pose = [
 # --- flight body: present only between the two cuts ----------------------------------
 body = [
     (0.00, {'opacity': 0}, None),
-    (2.50, {'opacity': 0}, LIN),
+    (2.50, {'opacity': 0}, STEP),
     (2.50 + CUT, {'opacity': 1}, None),
-    (4.60, {'opacity': 1}, LIN),
+    (4.60, {'opacity': 1}, STEP),
     (4.60 + CUT, {'opacity': 0}, None),
     (5.00, {'opacity': 0}, None),
 ]

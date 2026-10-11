@@ -49,7 +49,8 @@ changing; the tuck translates the whole head region (every pixel above the
 shoulder, beak included) along the back's own diagonal, so the back line
 stays unbroken and the beak keeps its length (round 1 slid only part of the
 head and the beak doubled in length for the 1.1 s hold; frames 0 and 6 now
-have the same beak tip, three half-height cells, two columns further left).
+end in the identical beak-tip cells, `██▙▖` at 24 columns, one column left
+and one row down, i.e. the 2 px translation and nothing else).
 The round-1 ruffle, four frames that differed by 3-4 edge cells, was
 sub-perceptual at 13 px and was cut rather than kept as a cost with no return.
 The eye is a hole, as in the SVG, so the mark keeps working on any ground.
