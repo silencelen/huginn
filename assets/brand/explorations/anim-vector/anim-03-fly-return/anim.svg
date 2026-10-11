@@ -24,9 +24,9 @@
       40.000%   { transform: translate(0px, 0px) scaleY(1); opacity: 1; animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
       46.000%   { transform: translate(0px, 0px) scaleY(0.94); opacity: 1; animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
       48.800%   { transform: translate(0px, 0px) scaleY(1); opacity: 1; animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
-      50.000%   { transform: translate(0px, -3px) scaleY(1); opacity: 1; animation-timing-function: linear; }
+      50.000%   { transform: translate(0px, -3px) scaleY(1); opacity: 1; animation-timing-function: step-end; }
       50.600%   { transform: translate(0px, -3px) scaleY(1); opacity: 0; }
-      92.000%   { transform: translate(0px, -3px) scaleY(1); opacity: 0; animation-timing-function: linear; }
+      92.000%   { transform: translate(0px, -3px) scaleY(1); opacity: 0; animation-timing-function: step-end; }
       92.600%   { transform: translate(0px, -3px) scaleY(1); opacity: 1; animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
       95.000%   { transform: translate(0px, 0px) scaleY(1); opacity: 1; animation-timing-function: cubic-bezier(0.45, 0, 0.55, 1); }
       97.000%   { transform: translate(0px, 0px) scaleY(0.965); opacity: 1; animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
@@ -63,9 +63,9 @@
     }
     @keyframes huginn-body {
       0.000%    { opacity: 0; }
-      50.000%   { opacity: 0; animation-timing-function: linear; }
+      50.000%   { opacity: 0; animation-timing-function: step-end; }
       50.600%   { opacity: 1; }
-      92.000%   { opacity: 1; animation-timing-function: linear; }
+      92.000%   { opacity: 1; animation-timing-function: step-end; }
       92.600%   { opacity: 0; }
       100.000%  { opacity: 0; }
     }
