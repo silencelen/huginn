@@ -41,8 +41,11 @@ case "$sess" in ''|.*|*[!A-Za-z0-9_.-]*) exit 0 ;; esac
 sid=$(printf '%s' "$in" | jq -r '.session_id // empty' 2>/dev/null)
 tool=$(printf '%s' "$in" | jq -r '.tool_name // empty' 2>/dev/null)
 [ -n "$sid" ] && [ -n "$tool" ] || exit 0
-# Plan approval ignores a hook's allow (measured): leave it to the pane path.
-[ "$tool" = ExitPlanMode ] && exit 0
+# Only the two prompts appd can bind a tap to EXACTLY (lib/permhook.js): a Bash
+# command and a single AskUserQuestion. Everything else — plan approval (the CLI
+# ignores a hook allow there, measured), file and MCP tools — returns at once and
+# stays on the keystroke path, with no process left waiting.
+case "$tool" in Bash|AskUserQuestion) ;; *) exit 0 ;; esac
 own=$(jq -r '.sessionId // empty' "$STATE_DIR/$sess" 2>/dev/null)
 [ -n "$own" ] && [ "$own" = "$sid" ] || exit 0
 
