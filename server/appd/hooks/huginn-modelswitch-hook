@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# huginn-modelswitch-hook — records every completed model switch of a huginn tmux
+# session, so the headroom ladder can CONFIRM a move from a structured event rather
+# than only from the `… for this session only` line it reads off the pane.
+#
+# Installed by install-hooks.js as `PostModelSwitch` (Claude Code >= 2.1.251),
+# timeout 10. Writes $STATE_DIR/.modelswitch/<session>:
+#   {v:1, sessionId, from, to, requested, source, ts(ms)}
+# Measured on 2.1.296 (2026-10-10): the picker's `s` (session-only) fires it after
+# the switch lands, `source:"picker"`, `to_model` the full id (claude-sonnet-5-5).
+# Same guards as huginn-permission-hook: only the pane's top-level interactive
+# claude (session id must match the title hook's state file). Always exit 0.
+set -u
+umask 077
+STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
+in=$(cat) || exit 0
+[ -n "${TMUX_PANE:-}" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+sess=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null) || exit 0
+case "$sess" in ''|.*|*[!A-Za-z0-9_.-]*) exit 0 ;; esac
+sid=$(printf '%s' "$in" | jq -r '.session_id // empty' 2>/dev/null)
+[ -n "$sid" ] || exit 0
+own=$(jq -r '.sessionId // empty' "$STATE_DIR/$sess" 2>/dev/null)
+[ -n "$own" ] && [ "$own" = "$sid" ] || exit 0
+dir="$STATE_DIR/.modelswitch"
+mkdir -p "$dir" 2>/dev/null || exit 0
+tmp="$dir/.$sess.$$.tmp"
+printf '%s' "$in" | jq -c '{v:1, sessionId:.session_id, from:(.from_model // null), to:(.to_model // null),
+  requested:(.requested_model // null), source:(.source // null), ts:(now*1000|floor)}' > "$tmp" 2>/dev/null \
+  && mv "$tmp" "$dir/$sess" 2>/dev/null
+rm -f "$tmp" 2>/dev/null
+exit 0
