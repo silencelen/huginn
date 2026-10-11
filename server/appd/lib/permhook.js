@@ -17,10 +17,15 @@
 //     NOT stop the hook — it lingers until its own deadline. A request file is
 //     therefore evidence that a hook is alive, never that its prompt is.
 //
-// So every request is matched against the dialog actually on screen, by content,
-// before anything is written: AskUserQuestion by its question text, a tool prompt
-// by a fingerprint of its command / path / url found INSIDE the dialog's own
-// border (the conversation above can show an earlier run of the same command).
+// So every request is matched against the dialog actually on screen, EXACTLY,
+// before anything is written: AskUserQuestion by its whole question text and its
+// whole option list, a Bash prompt by its whole command against the dialog's own
+// command block (the lines between its `╌╌╌` rules). No other tool takes the hook
+// path — their dialog shapes were never captured — and when more than one live
+// request matches, nothing does: an approval must bind to exactly one request
+// (claude-security scan 2026-10-11, F1/F2: a prefix or basename match plus a
+// newest-wins tie-break could route a Yes to a different, unseen tool call when
+// parallel subagents — which share the session id — have prompts pending).
 // Anything this module is not sure about returns null, and /answer types the
 // digit exactly as it always has.
 //
@@ -37,7 +42,6 @@ const path = require('path');
 const PERM_DIRNAME = '.perm';
 const ID_RE = /^[0-9]{6,25}-[0-9]{1,10}$/;
 const REQ_MAX_AGE_MS = 20 * 60 * 1000;   // past the hook's own 900 s deadline
-const NEEDLE_CHARS = 40;
 
 function permDir(stateDir, name) { return path.join(stateDir, PERM_DIRNAME, name); }
 
@@ -87,17 +91,18 @@ function dialogRegion(lines) {
   return plain.slice(Math.max(0, first - 30)).join('\n');
 }
 
-/** What identifies a tool prompt on screen, or null for a tool we can't fingerprint. */
-function toolNeedle(input) {
-  const i = input || {};
-  let s = null;
-  if (typeof i.command === 'string') s = i.command.split('\n')[0];
-  else if (typeof i.file_path === 'string') s = path.basename(i.file_path);
-  else if (typeof i.notebook_path === 'string') s = path.basename(i.notebook_path);
-  else if (typeof i.url === 'string') s = i.url;
-  if (!s) return null;
-  const n = squash(s).slice(0, NEEDLE_CHARS);
-  return n.length >= 4 ? n : null;
+/**
+ * The Bash dialog's own command: the lines between the first two `╌╌╌` rules of
+ * the dialog region, or null when the region has no such block.
+ */
+function dialogCommandBlock(region) {
+  const lines = String(region || '').split('\n');
+  const rules = [];
+  for (let i = 0; i < lines.length && rules.length < 2; i++) {
+    if (/^\s*╌{10,}\s*$/.test(lines[i])) rules.push(i);
+  }
+  if (rules.length < 2 || rules[1] - rules[0] < 2) return null;
+  return lines.slice(rules[0] + 1, rules[1]).join('\n');
 }
 
 function askQuestion(req) {
@@ -105,46 +110,45 @@ function askQuestion(req) {
   return qs.length === 1 && qs[0] && typeof qs[0].question === 'string' ? qs[0] : null;
 }
 
-/** Is this request the dialog on screen? */
+/** Rows the TUI adds under every AskUserQuestion; not part of the tool's options. */
+const TUI_ASK_ROWS = new Set(['type something.', 'chat about this']);
+
+/** Is this request EXACTLY the dialog on screen? */
 function matchesPrompt(req, prompt, region) {
   if (!req || !prompt || !Array.isArray(prompt.options)) return false;
-  if (req.tool === 'ExitPlanMode') return false;
   if (req.tool === 'AskUserQuestion') {
     // One question only: a tabbed dialog is answered a tab at a time on the
     // pane, and the hook can only answer the whole tool call at once.
     const q = askQuestion(req);
     if (!q) return false;
-    const want = norm(q.question);
-    const got = norm(prompt.question);
-    if (!want || !got) return false;
-    return want === got || (got.length >= 12 && want.startsWith(got.replace(/…$/, '')));
+    if (!norm(q.question) || norm(q.question) !== norm(prompt.question)) return false;
+    const want = (Array.isArray(q.options) ? q.options : []).map((o) => norm(o && o.label));
+    const got = prompt.options.map((o) => norm(o.label)).filter((l) => !TUI_ASK_ROWS.has(l));
+    return want.length > 0 && want.length === got.length && want.every((l, i) => l === got[i]);
   }
-  // A tool permission: the plain "Yes … No" selector, and the tool's own
-  // fingerprint inside the dialog border.
+  if (req.tool !== 'Bash') return false;
   const labels = prompt.options.map((o) => o.label);
   if (labels[0] !== 'Yes' || !labels.includes('No')) return false;
-  const needle = toolNeedle(req.input);
-  return !!needle && squash(region).includes(needle);
+  const cmd = req.input && typeof req.input.command === 'string' ? req.input.command : '';
+  const block = dialogCommandBlock(region);
+  return !!cmd && block != null && squash(block) === squash(cmd);
 }
 
 /**
- * The request a tap on this dialog answers, or null. Ties on content go to the
- * NEWEST: an identical earlier request is far more likely a lingering hook whose
- * prompt was answered at the keyboard than a concurrent twin.
+ * The ONE request a tap on this dialog answers, or null. Zero matches or more
+ * than one: null, and the tap goes to the keys.
  */
 function pickRequest(reqs, prompt, region) {
   const hits = reqs.filter((r) => matchesPrompt(r, prompt, region));
-  return hits.length ? hits[hits.length - 1] : null;
+  return hits.length === 1 ? hits[0] : null;
 }
 
 function exactLabel(q, paneLabel) {
   const opts = Array.isArray(q.options) ? q.options : [];
   const p = String(paneLabel || '').replace(/…$/, '').trim();
   if (!p) return null;
-  const exact = opts.find((o) => o && o.label === p);
-  if (exact) return exact.label;
-  const pre = opts.filter((o) => o && typeof o.label === 'string' && o.label.startsWith(p));
-  return pre.length === 1 ? pre[0].label : null;
+  const exact = opts.find((o) => o && norm(o.label) === norm(p));
+  return exact ? exact.label : null;
 }
 
 /**
@@ -220,6 +224,6 @@ function clearRequests(stateDir, name) {
 }
 
 module.exports = {
-  PERM_DIRNAME, permDir, liveRequests, dialogRegion, toolNeedle, matchesPrompt, pickRequest,
+  PERM_DIRNAME, permDir, liveRequests, dialogRegion, dialogCommandBlock, matchesPrompt, pickRequest,
   decisionFor, deliver, clearRequests,
 };

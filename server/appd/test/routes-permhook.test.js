@@ -18,14 +18,22 @@ require('./retry-fetch');
 const TMUX_SOCK = `huginn-test-ph-${process.pid}`;
 let tmp, token, daemon, stateDir;
 
+// The live Claude Code 2.1.296 Bash dialog shape: a top rule, the command between
+// two dashed rules, then the selector.
+const RULE = '─'.repeat(60);
+const DASH = '╌'.repeat(60);
 const PROMPT = [
-  'Do you want to create probe.txt?',
+  RULE,
+  ' Bash command',
+  DASH,
+  ' touch probe.txt',
+  DASH,
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  '   2. Yes, and do not ask again',
+  '   3. No',
   '',
-  '❯ 1. Yes',
-  '  2. Yes, and do not ask again',
-  '  3. No',
-  '',
-  'Enter to select · Esc to cancel',
+  ' Esc to cancel',
 ].join('\\n');
 
 function sh(cmd, args) {
@@ -112,7 +120,7 @@ const typedOnPane = (name) => sh('tmux', ['capture-pane', '-p', '-t', `=${name}:
 
 test('a tap with a matching hook waiting is delivered THROUGH the hook, and nothing is typed', async () => {
   const { name, fingerprint } = await questionSession();
-  const { dir, id } = writeReq(name, { tool: 'Write', input: { file_path: '/srv/x/probe.txt', content: 'hi' } });
+  const { dir, id } = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
   const got = fakeHook(dir, id);
   const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 1, fingerprint }) });
   assert.equal(r.status, 200);
@@ -124,7 +132,7 @@ test('a tap with a matching hook waiting is delivered THROUGH the hook, and noth
 
 test('"No" through the hook is a deny that interrupts, like the TUI', async () => {
   const { name, fingerprint } = await questionSession();
-  const { dir, id } = writeReq(name, { tool: 'Write', input: { file_path: '/srv/x/probe.txt' } });
+  const { dir, id } = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
   const got = fakeHook(dir, id);
   const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 3, fingerprint }) });
   assert.equal(r.body.via, 'hook');
@@ -133,7 +141,7 @@ test('"No" through the hook is a deny that interrupts, like the TUI', async () =
 
 test('a hook that never claims the answer: it is withdrawn and the digit is typed as before', async () => {
   const { name, fingerprint } = await questionSession();
-  const { dir } = writeReq(name, { tool: 'Write', input: { file_path: '/srv/x/probe.txt' } });
+  const { dir } = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
   const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 1, fingerprint }) });
   assert.equal(r.status, 200);
   assert.equal(r.body.via, undefined);
@@ -152,15 +160,29 @@ test('a request for a DIFFERENT prompt is ignored: keys, and the stale hook gets
 
 test('"Yes, and do not ask again" changes standing permissions, so it always goes to the keys', async () => {
   const { name, fingerprint } = await questionSession();
-  writeReq(name, { tool: 'Write', input: { file_path: '/srv/x/probe.txt' } });
+  writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
   const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 2, fingerprint }) });
   assert.equal(r.body.via, undefined);
 });
 
 test('a request from a previous claude in the same tmux name (other session id) is ignored', async () => {
   const { name, fingerprint } = await questionSession();
-  const { dir, id } = writeReq(name, { tool: 'Write', input: { file_path: '/srv/x/probe.txt' }, sessionId: 'sid-old' });
+  const { dir, id } = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' }, sessionId: 'sid-old' });
   const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 1, fingerprint }) });
   assert.equal(r.body.via, undefined);
   assert.equal(fs.existsSync(path.join(dir, `${id}.ans`)), false);
+});
+
+test('two live requests matching the same dialog: neither gets it, the keys answer (F1/F2)', async () => {
+  const { name, fingerprint } = await questionSession();
+  const a = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
+  await wait(5);
+  const dir = a.dir;
+  const id2 = `${Date.now()}000001-${process.pid}`;
+  fs.writeFileSync(path.join(dir, `${id2}.json`), JSON.stringify({
+    v: 1, id: id2, pid: process.pid, sessionId: `sid-${name}`, ts: Date.now(), tool: 'Bash', input: { command: 'touch probe.txt' },
+  }));
+  const r = await api(`/v1/sessions/${name}/answer`, { method: 'POST', body: JSON.stringify({ option: 1, fingerprint }) });
+  assert.equal(r.body.via, undefined);
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.ans')), []);
 });
