@@ -153,6 +153,10 @@ echo "[deploy] gate sentinels: $HEADROOM_DIR"
 # that refusal must stop the deploy — a daemon that arms sentinels nothing reads
 # is a pause button wired to nothing.
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate" --headroom-dir "$HEADROOM_DIR"
+# The PermissionRequest hook (appd >= 3.10.1): /answer resolves a prompt through the
+# CLI's own hook when one is waiting, and falls back to keystrokes when not. Same
+# refusal rule as above.
+node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-permission-hook"
 
 systemctl restart huginn-appd
 sleep 2

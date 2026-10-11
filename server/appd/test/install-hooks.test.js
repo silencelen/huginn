@@ -375,3 +375,29 @@ test('a path with spaces survives the env prefix', () => {
   assert.equal(scriptOf(cmd), '/opt/my gate/huginn-headroom-gate');
   assert.equal(scriptOf('/opt/huginn-appd/hooks/huginn-headroom-gate'), '/opt/huginn-appd/hooks/huginn-headroom-gate');
 });
+
+test('the permission hook installs as PermissionRequest "*" timeout 960, beside the gate, idempotently', () => {
+  const dir = scratch();
+  const file = copyFixture(dir);
+  const PERM = '/opt/huginn-appd/hooks/huginn-permission-hook';
+  run(['--settings', file, '--script', SCRIPT]);
+  run(['--settings', file, '--script', PERM]);
+  const once = fs.readFileSync(file, 'utf8');
+  run(['--settings', file, '--script', PERM]);
+  assert.equal(fs.readFileSync(file, 'utf8'), once, 'a second run is a no-op');
+  const { hooks } = JSON.parse(once);
+  const rules = (hooks.PermissionRequest || []).filter((r) => (r.hooks || []).some((h) => h.command === PERM));
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].matcher, '*');
+  assert.equal(rules[0].hooks[0].timeout, 960);
+  assert.equal(rules[0].hooks[0].async, undefined, 'it must hold the prompt, so never async');
+  // The gate's own entries are untouched by the second script.
+  assert.equal(ours(hooks, 'SubagentStart').length, 1);
+  assert.equal(ours(hooks, 'PreToolUse').length, 1);
+  assert.equal((hooks.PreToolUse || []).some((r) => r.hooks.some((h) => h.command === PERM)), false);
+  // --uninstall of the permission hook takes only its own entry.
+  run(['--settings', file, '--script', PERM, '--uninstall']);
+  const back = JSON.parse(fs.readFileSync(file, 'utf8')).hooks;
+  assert.equal(back.PermissionRequest, undefined);
+  assert.equal(ours(back, 'SubagentStart').length, 1);
+});
