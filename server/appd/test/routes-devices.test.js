@@ -474,6 +474,53 @@ test('one machine is never asked to run two things at once', async () => {
   await postEvents(d.id, w2.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
 });
 
+test('a device that asks for work while holding a run has dropped it — the run settles (restart mid-run)', async () => {
+  // Seen live 2026-10-10 on stigo: an act chat said "reboot the machine", the
+  // machine did, and the run it was holding could never report. The fresh runner
+  // beat every 60s, every beat refreshed the orphan, and the device answered 409
+  // "already running something" to everything until the two-hour cap. Both
+  // runners take one job at a time and only poll while idle, so a poll from the
+  // device that holds a run is the device saying it no longer has it.
+  const d = await enrol({ name: 'rebooter' });
+  const chat = await chatOn(d.id, 'act');
+  assert.equal((await send(chat.body.id, 'reboot the machine')).status, 202);
+  const work = (await poll(d.id)).body.work;
+  assert.ok(work, 'handed over');
+  await postEvents(d.id, work.id, [assistant('Rebooting now.')]);
+
+  // The restarted runner beats first. A beat proves the machine, not the run,
+  // so on its own it must NOT settle anything.
+  await api(`/v1/devices/${d.id}/beat`, { method: 'POST', body: JSON.stringify({ scope: 'work' }) });
+  assert.equal((await api(`/v1/chats/${chat.body.id}`)).body.running, true, 'a beat alone settles nothing');
+
+  // Then it asks for work: it is idle, so the run it was given is gone.
+  const next = await poll(d.id, 1);
+  assert.equal(next.status, 200);
+  assert.equal(next.body.work, null);
+  const open = await api(`/v1/chats/${chat.body.id}`);
+  assert.equal(open.body.running, false, 'the orphaned run settled');
+  assert.ok(open.body.messages.some((m) => m.type === 'error' && /rebooter/.test(m.text || '') && /asked for new work/.test(m.text || '')),
+    `the chat says which machine dropped it and why: ${JSON.stringify(open.body.messages.slice(-2))}`);
+
+  // And the machine is free again.
+  const other = await chatOn(d.id, 'ask');
+  assert.equal((await send(other.body.id, 'still there?')).status, 202);
+  const w2 = (await poll(d.id)).body.work;
+  await postEvents(d.id, w2.id, [{ type: 'result', is_error: false }], { done: true, exitCode: 0 });
+});
+
+test('a Stop on a run whose device restarted settles on its next poll, not at the cap', async () => {
+  const d = await enrol({ name: 'stopped' });
+  const chat = await chatOn(d.id, 'act');
+  await send(chat.body.id, 'long job');
+  const work = (await poll(d.id)).body.work;
+  assert.ok(work);
+  assert.equal((await api(`/v1/chats/${chat.body.id}/cancel`, { method: 'POST' })).status, 200);
+  assert.equal((await api(`/v1/chats/${chat.body.id}`)).body.running, true, 'with the device, so it waits for the device');
+  await poll(d.id, 1);
+  assert.equal((await api(`/v1/chats/${chat.body.id}`)).body.running, false, 'the device moved on, so the Stop lands');
+});
+
 test('results are only accepted from the device that owns the run', async () => {
   const owner = await enrol({ name: 'owner' });
   const other = await enrol({ name: 'other' });
