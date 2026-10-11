@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="512" height="512">
+  <!-- "A bird returning": the attention cue, simplified to THREE shapes (body with head and wedge tail; two swept
+       wings) in a 20x20 box centred in 24 (2-unit pad for notification / tray slots). No fingers on purpose: slots are
+       sub-pixel below 48 px. It carries no raven field mark and is not a raven at any size; it is a bird in flight
+       for 16-32 px next to the perched tray icon. Ink #161310, bone #E8E2DA. -->
+  <path fill="#161310" d="M12,2.2 L12.7,4.2 L13.4,4.5 C14.2,5.3 14.3,6.8 13.5,7.9 L13.1,8.6 L13.3,13.4 L14.7,17.6 L12.3,21.6 C12.2,21.8 12.1,21.8 12,21.8 C11.9,21.8 11.8,21.8 11.7,21.6 L9.3,17.6 L10.7,13.4 L10.9,8.6 L10.5,7.9 C9.7,6.8 9.8,5.3 10.6,4.5 L11.3,4.2 L12,2.2 Z"/>
+  <path fill="#161310" d="M12.4,8.4 C15,7.6 18.6,6.1 21.5,4.5 C22.1,4.8 22.1,5.7 21.6,6.6 C19.2,10.2 16.2,12.3 12.6,12.9 Z"/>
+  <path fill="#161310" d="M11.6,8.4 C9.0,7.6 5.4,6.1 2.5,4.5 C1.9,4.8 1.9,5.7 2.4,6.6 C4.8,10.2 7.8,12.3 11.4,12.9 Z"/>
+</svg>
