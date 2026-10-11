@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# huginn-permission-hook — lets a tap in the huginn app ANSWER a Claude Code prompt
+# through the CLI's own PermissionRequest hook instead of keystrokes at the pane.
+#
+# Installed by install-hooks.js as `PermissionRequest` matcher "*", timeout 960.
+# For each tool prompt (AskUserQuestion included) it writes the request to
+#   $STATE_DIR/.perm/<tmux session>/<id>.json
+# and waits. huginn-appd's /answer (lib/permhook.js) matches a tap against the
+# dialog on screen and, when it is sure, writes <id>.ans; this script claims it by
+# renaming it to <id>.taken and prints it — the CLI applies the decision and closes
+# its own dialog. Anything else (no answer, appd down, a choice appd routes to the
+# keys) and this exits 0 having printed nothing: the dialog is still there and is
+# answered exactly as before. The exit code is ALWAYS 0 and we never print anything
+# but a well-formed decision, so this hook can delay a prompt but never block or
+# answer it on its own.
+#
+# ⚠ MEASURED (Claude Code 2.1.296, 2026-10-10), and why the guards below exist:
+#   * A PermissionRequest hook fires in headless `claude -p` runs TOO, and the run
+#     WAITS on it. So we act only for the top-level interactive claude of a huginn
+#     tmux pane — the one whose session id huginn-claude-title recorded in
+#     $STATE_DIR/<session>. Cron runs (no TMUX_PANE), nested `claude -p` children
+#     (a different session id) and everything else return at once.
+#   * Answering the dialog at the keyboard does NOT stop this hook; it lingers until
+#     its own deadline. appd therefore treats a request file as "a hook is alive",
+#     never as "this prompt is on screen", and matches by content.
+#   * On the CLI's `timeout` the hook is SIGKILLed (no trap runs), so we leave 60 s
+#     early and clean up ourselves.
+set -u
+umask 077
+
+STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
+WAIT="${HUGINN_PERM_WAIT:-900}"      # installer timeout is 960
+POLL="${HUGINN_PERM_POLL:-0.25}"
+
+in=$(cat) || exit 0
+[ -n "${TMUX_PANE:-}" ] || exit 0
+command -v jq >/dev/null 2>&1 || exit 0
+sess=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null) || exit 0
+case "$sess" in ''|.*|*[!A-Za-z0-9_.-]*) exit 0 ;; esac
+
+sid=$(printf '%s' "$in" | jq -r '.session_id // empty' 2>/dev/null)
+tool=$(printf '%s' "$in" | jq -r '.tool_name // empty' 2>/dev/null)
+[ -n "$sid" ] && [ -n "$tool" ] || exit 0
+# Plan approval ignores a hook's allow (measured): leave it to the pane path.
+[ "$tool" = ExitPlanMode ] && exit 0
+own=$(jq -r '.sessionId // empty' "$STATE_DIR/$sess" 2>/dev/null)
+[ -n "$own" ] && [ "$own" = "$sid" ] || exit 0
+
+dir="$STATE_DIR/.perm/$sess"
+mkdir -p "$dir" 2>/dev/null || exit 0
+id="$(date +%s%N)-$$"
+req="$dir/$id.json"
+trap 'rm -f "$req" "$dir/$id.taken" "$dir/.$id.tmp"' EXIT
+printf '%s' "$in" | jq -c --arg id "$id" --argjson pid "$$" \
+  '{v:1, id:$id, pid:$pid, sessionId:.session_id, tool:.tool_name, input:(.tool_input // {}), ts:(now*1000|floor)}' \
+  > "$dir/.$id.tmp" 2>/dev/null && mv "$dir/.$id.tmp" "$req" 2>/dev/null || exit 0
+
+deadline=$(( $(date +%s) + WAIT ))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  if mv "$dir/$id.ans" "$dir/$id.taken" 2>/dev/null; then
+    out=$(cat "$dir/$id.taken" 2>/dev/null)
+    if printf '%s' "$out" | jq -e '.hookSpecificOutput.hookEventName == "PermissionRequest"
+        and (.hookSpecificOutput.decision.behavior == "allow" or .hookSpecificOutput.decision.behavior == "deny")' \
+        >/dev/null 2>&1; then
+      printf '%s\n' "$out"
+    fi
+    exit 0
+  fi
+  sleep "$POLL"
+done
+exit 0
