@@ -1,0 +1,13 @@
+{
+ "name": "waiting / no claude: still",
+ "encoding": "unicode",
+ "fps": 1,
+ "loop": true,
+ "rest": "first",
+ "cols": 4,
+ "rows": 1,
+ "note": "one frame; the colour carries the difference between waiting and no-claude",
+ "frames": [
+  "◢▆█▀"
+ ]
+}

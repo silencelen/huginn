@@ -1,0 +1,222 @@
+# color-02-slate-verdigris - contrast proof
+#
+# Sections 1-3 are the verbatim output of tools/contrast.py (text pairs must be >= 4.5:1,
+# UI pairs >= 3:1, ANSI slots >= 3:1, the CLI 16-colour slots >= 3:1 on legacy palettes).
+# Sections 4-6 are lightness (CIELAB L*) and hue tables computed by build/colorlib.py.
+
+## 1. dark scheme: tools/contrast.py output, one line per pair
+##   fg role                  ground role              min   contrast.py
+onBackground               background               4.5   #E4E2DC on #14171C: 13.87:1  AAA
+onSurface                  surface                  4.5   #E4E2DC on #14171C: 13.87:1  AAA
+onSurface                  surfaceContainerLowest   4.5   #E4E2DC on #0E1013: 14.71:1  AAA
+onSurface                  surfaceContainerLow      4.5   #E4E2DC on #1B1F25: 12.77:1  AAA
+onSurface                  surfaceContainer         4.5   #E4E2DC on #22272E: 11.60:1  AAA
+onSurface                  surfaceContainerHigh     4.5   #E4E2DC on #2A3038: 10.27:1  AAA
+onSurface                  surfaceContainerHighest  4.5   #E4E2DC on #343B44: 8.74:1  AAA
+onSurfaceVariant           background               4.5   #9DA6AE on #14171C: 7.27:1  AAA
+onSurfaceVariant           surfaceContainer         4.5   #9DA6AE on #22272E: 6.08:1  AA
+onSurfaceVariant           surfaceContainerHigh     4.5   #9DA6AE on #2A3038: 5.38:1  AA
+onSurfaceVariant           surfaceContainerHighest  4.5   #9DA6AE on #343B44: 4.58:1  AA
+primary                    background               4.5   #5DBBA6 on #14171C: 7.80:1  AAA
+primary                    surfaceContainerHigh     4.5   #5DBBA6 on #2A3038: 5.78:1  AA
+onPrimary                  primary                  4.5   #06201C on #5DBBA6: 7.41:1  AAA
+onPrimaryContainer         primaryContainer         4.5   #BFE8DF on #1C3D38: 8.92:1  AAA
+secondary                  background               4.5   #C9A775 on #14171C: 7.93:1  AAA
+onSecondary                secondary                4.5   #2A1E08 on #C9A775: 7.20:1  AAA
+onSecondaryContainer       secondaryContainer       4.5   #EBD7B3 on #3E3220: 8.86:1  AAA
+tertiary                   background               4.5   #C4A0D0 on #14171C: 7.94:1  AAA
+error                      background               4.5   #E8767A on #14171C: 6.25:1  AA
+error                      surfaceContainerHigh     4.5   #E8767A on #2A3038: 4.63:1  AA
+onError                    error                    4.5   #2B0F11 on #E8767A: 6.19:1  AA
+onErrorContainer           errorContainer           4.5   #F6C7C9 on #4A2024: 9.15:1  AAA
+stateIdle                  background               4.5   #7F8992 on #14171C: 5.04:1  AA
+stateWorking               background               4.5   #5DBBA6 on #14171C: 7.80:1  AAA
+stateAttention             background               4.5   #EFD3A0 on #14171C: 12.40:1  AAA
+stateSuccess               background               4.5   #A9C97E on #14171C: 9.70:1  AAA
+stateInfo                  background               4.5   #86B8E8 on #14171C: 8.58:1  AAA
+inkMark                    boneTile                 4.5   #15181C on #E4E2DC: 13.75:1  AAA
+outline                    background               3.0   #6F7983 on #14171C: 4.05:1  AA-large
+outline                    surfaceContainerHigh     3.0   #6F7983 on #2A3038: 3.00:1  AA-large
+stateIdle                  surfaceContainerHigh     3.0   #7F8992 on #2A3038: 3.74:1  AA-large
+stateWorking               surfaceContainerHigh     3.0   #5DBBA6 on #2A3038: 5.78:1  AA
+stateAttention             surfaceContainerHigh     3.0   #EFD3A0 on #2A3038: 9.18:1  AAA
+stateSuccess               surfaceContainerHigh     3.0   #A9C97E on #2A3038: 7.19:1  AAA
+stateError                 surfaceContainerHigh     3.0   #E8767A on #2A3038: 4.63:1  AA
+stateInfo                  surfaceContainerHigh     3.0   #86B8E8 on #2A3038: 6.36:1  AA
+primary                    surfaceContainerHighest  3.0   #5DBBA6 on #343B44: 4.92:1  AA
+syntax.keyword             surfaceContainerLowest   4.5   #B9A3E3 on #0E1013: 8.54:1  AAA
+syntax.string              surfaceContainerLowest   4.5   #8FCBA3 on #0E1013: 10.20:1  AAA
+syntax.number              surfaceContainerLowest   4.5   #E3C58A on #0E1013: 11.45:1  AAA
+syntax.comment             surfaceContainerLowest   4.5   #8A949D on #0E1013: 6.17:1  AA
+syntax.function            surfaceContainerLowest   4.5   #86B8E8 on #0E1013: 9.10:1  AAA
+syntax.meta                surfaceContainerLowest   4.5   #6EC2B0 on #0E1013: 9.08:1  AAA
+syntax.added               surfaceContainerLowest   4.5   #8FCBA3 on #0E1013: 10.20:1  AAA
+syntax.removed             surfaceContainerLowest   4.5   #E8767A on #0E1013: 6.63:1  AA
+
+## 1. light scheme: tools/contrast.py output, one line per pair
+##   fg role                  ground role              min   contrast.py
+onBackground               background               4.5   #1A1D21 on #F5F5F1: 15.47:1  AAA
+onSurface                  surface                  4.5   #1A1D21 on #F5F5F1: 15.47:1  AAA
+onSurface                  surfaceContainerLowest   4.5   #1A1D21 on #FFFFFF: 16.91:1  AAA
+onSurface                  surfaceContainerLow      4.5   #1A1D21 on #EFF0EC: 14.78:1  AAA
+onSurface                  surfaceContainer         4.5   #1A1D21 on #E9EAE5: 13.99:1  AAA
+onSurface                  surfaceContainerHigh     4.5   #1A1D21 on #E2E4DE: 13.20:1  AAA
+onSurface                  surfaceContainerHighest  4.5   #1A1D21 on #DADDD6: 12.32:1  AAA
+onSurfaceVariant           background               4.5   #555C63 on #F5F5F1: 6.20:1  AA
+onSurfaceVariant           surfaceContainer         4.5   #555C63 on #E9EAE5: 5.61:1  AA
+onSurfaceVariant           surfaceContainerHigh     4.5   #555C63 on #E2E4DE: 5.29:1  AA
+onSurfaceVariant           surfaceContainerHighest  4.5   #555C63 on #DADDD6: 4.94:1  AA
+primary                    background               4.5   #175B50 on #F5F5F1: 7.25:1  AAA
+primary                    surfaceContainerHigh     4.5   #175B50 on #E2E4DE: 6.19:1  AA
+onPrimary                  primary                  4.5   #FFFFFF on #175B50: 7.93:1  AAA
+onPrimaryContainer         primaryContainer         4.5   #063A33 on #CBEAE2: 9.88:1  AAA
+secondary                  background               4.5   #7A5A2E on #F5F5F1: 5.77:1  AA
+onSecondary                secondary                4.5   #FFFFFF on #7A5A2E: 6.31:1  AA
+onSecondaryContainer       secondaryContainer       4.5   #3A2810 on #F0E2C8: 11.01:1  AAA
+tertiary                   background               4.5   #5C3A63 on #F5F5F1: 8.58:1  AAA
+error                      background               4.5   #B3262E on #F5F5F1: 5.94:1  AA
+error                      surfaceContainerHigh     4.5   #B3262E on #E2E4DE: 5.07:1  AA
+onError                    error                    4.5   #FFFFFF on #B3262E: 6.49:1  AA
+onErrorContainer           errorContainer           4.5   #5E1418 on #F9DBDC: 10.19:1  AAA
+stateIdle                  background               4.5   #677078 on #F5F5F1: 4.61:1  AA
+stateWorking               background               4.5   #175B50 on #F5F5F1: 7.25:1  AAA
+stateAttention             background               4.5   #3A2A0A on #F5F5F1: 12.68:1  AAA
+stateSuccess               background               4.5   #2E7A4E on #F5F5F1: 4.79:1  AA
+stateInfo                  background               4.5   #245FA5 on #F5F5F1: 5.90:1  AA
+inkMark                    boneTile                 4.5   #15181C on #E4E2DC: 13.75:1  AAA
+outline                    background               3.0   #7A838C on #F5F5F1: 3.52:1  AA-large
+outline                    surfaceContainerHigh     3.0   #7A838C on #E2E4DE: 3.01:1  AA-large
+stateIdle                  surfaceContainerHigh     3.0   #677078 on #E2E4DE: 3.93:1  AA-large
+stateWorking               surfaceContainerHigh     3.0   #175B50 on #E2E4DE: 6.19:1  AA
+stateAttention             surfaceContainerHigh     3.0   #3A2A0A on #E2E4DE: 10.81:1  AAA
+stateSuccess               surfaceContainerHigh     3.0   #2E7A4E on #E2E4DE: 4.09:1  AA-large
+stateError                 surfaceContainerHigh     3.0   #B3262E on #E2E4DE: 5.07:1  AA
+stateInfo                  surfaceContainerHigh     3.0   #245FA5 on #E2E4DE: 5.03:1  AA
+primary                    surfaceContainerHighest  3.0   #175B50 on #DADDD6: 5.77:1  AA
+syntax.keyword             surfaceContainerLowest   4.5   #5E4A8A on #FFFFFF: 7.44:1  AAA
+syntax.string              surfaceContainerLowest   4.5   #2E7A4E on #FFFFFF: 5.24:1  AA
+syntax.number              surfaceContainerLowest   4.5   #8A5A00 on #FFFFFF: 5.93:1  AA
+syntax.comment             surfaceContainerLowest   4.5   #6B747C on #FFFFFF: 4.76:1  AA
+syntax.function            surfaceContainerLowest   4.5   #245FA5 on #FFFFFF: 6.45:1  AA
+syntax.meta                surfaceContainerLowest   4.5   #175B50 on #FFFFFF: 7.93:1  AAA
+syntax.added               surfaceContainerLowest   4.5   #2E7A4E on #FFFFFF: 5.24:1  AA
+syntax.removed             surfaceContainerLowest   4.5   #B3262E on #FFFFFF: 6.49:1  AA
+
+## 2. ANSI-16 against the terminal ground (tools/contrast.py; black is the ground itself)
+ansi.red                   background               3.0   #D9636A on #14171C: 5.08:1  AA
+ansi.green                 background               3.0   #86B36A on #14171C: 7.42:1  AAA
+ansi.yellow                background               3.0   #D4B06A on #14171C: 8.74:1  AAA
+ansi.blue                  background               3.0   #6A9ED8 on #14171C: 6.41:1  AA
+ansi.magenta               background               3.0   #A98BD1 on #14171C: 6.24:1  AA
+ansi.cyan                  background               3.0   #5DBBA6 on #14171C: 7.80:1  AAA
+ansi.white                 background               3.0   #C9CDCF on #14171C: 11.22:1  AAA
+ansi.brightBlack           background               3.0   #6F7983 on #14171C: 4.05:1  AA-large
+ansi.brightRed             background               3.0   #E8767A on #14171C: 6.25:1  AA
+ansi.brightGreen           background               3.0   #A9C97E on #14171C: 9.70:1  AAA
+ansi.brightYellow          background               3.0   #EFD3A0 on #14171C: 12.40:1  AAA
+ansi.brightBlue            background               3.0   #86B8E8 on #14171C: 8.58:1  AAA
+ansi.brightMagenta         background               3.0   #B9A3E3 on #14171C: 8.05:1  AAA
+ansi.brightCyan            background               3.0   #7FD0BE on #14171C: 9.98:1  AAA
+ansi.brightWhite           background               3.0   #E4E2DC on #14171C: 13.87:1  AAA
+
+## 3. The CLI 16-colour branch on legacy palettes (tools/contrast.py): slot hex on that palette's ground
+conhost ok                 brightGreen              3.0   #00FF00 on #000000: 15.30:1  AAA
+conhost warn               brightYellow             3.0   #FFFF00 on #000000: 19.56:1  AAA
+conhost error              brightRed                3.0   #FF0000 on #000000: 5.25:1  AA
+conhost muted              brightBlack              3.0   #808080 on #000000: 5.32:1  AA
+conhost accent             brightCyan               3.0   #00FFFF on #000000: 16.75:1  AAA
+powershell-5.1 ok          brightGreen              3.0   #00FF00 on #012456: 11.03:1  AAA
+powershell-5.1 warn        brightYellow             3.0   #FFFF00 on #012456: 14.09:1  AAA
+powershell-5.1 error       brightRed                3.0   #FF0000 on #012456: 3.78:1  AA-large
+powershell-5.1 muted       brightBlack              3.0   #808080 on #012456: 3.83:1  AA-large
+powershell-5.1 accent      brightCyan               3.0   #00FFFF on #012456: 12.07:1  AAA
+campbell ok                brightGreen              3.0   #16C60C on #0C0C0C: 8.49:1  AAA
+campbell warn              brightYellow             3.0   #F9F1A5 on #0C0C0C: 16.91:1  AAA
+campbell error             brightRed                3.0   #E74856 on #0C0C0C: 5.09:1  AA
+campbell muted             brightBlack              3.0   #767676 on #0C0C0C: 4.31:1  AA-large
+campbell accent            brightCyan               3.0   #61D6D6 on #0C0C0C: 11.27:1  AAA
+xterm ok                   brightGreen              3.0   #00FF00 on #000000: 15.30:1  AAA
+xterm warn                 brightYellow             3.0   #FFFF00 on #000000: 19.56:1  AAA
+xterm error                brightRed                3.0   #FF0000 on #000000: 5.25:1  AA
+xterm muted                brightBlack              3.0   #7F7F7F on #000000: 5.24:1  AA
+xterm accent               brightCyan               3.0   #00FFFF on #000000: 16.75:1  AAA
+
+## 4. State colours by lightness (L*)
+## Rule: adjacent tray states (idle -> working -> attention) differ by >= 12 L*,
+## in the app tokens, in the ANSI-16 ladder (brightBlack -> accent slot -> brightYellow) and
+## in the monochrome tray tints (onSurface at 45%, 75%, 100% over the ground).
+## dark
+stateIdle        #7F8992  L*= 56.6  hue=208.4  vs background  5.04:1 AA
+stateWorking     #5DBBA6  L*= 69.9  hue=166.6  vs background  7.80:1 AAA
+stateAttention   #EFD3A0  L*= 85.7  hue= 38.7  vs background 12.40:1 AAA
+stateSuccess     #A9C97E  L*= 77.1  hue= 85.6  vs background  9.70:1 AAA
+stateError       #E8767A  L*= 62.9  hue=357.9  vs background  6.25:1 AA
+stateInfo        #86B8E8  L*= 73.0  hue=209.4  vs background  8.58:1 AAA
+   pairwise (dL* / contrast ratio between the two state colours):
+   idle      vs working    dL*= 13.3  1.55:1   (tray pair)
+   idle      vs attention  dL*= 29.2  2.46:1   (tray pair)
+   idle      vs success    dL*= 20.5  1.92:1
+   idle      vs error      dL*=  6.4  1.24:1
+   idle      vs info       dL*= 16.4  1.70:1
+   working   vs attention  dL*= 15.8  1.59:1   (tray pair)
+   working   vs success    dL*=  7.2  1.24:1
+   working   vs error      dL*=  7.0  1.25:1
+   working   vs info       dL*=  3.1  1.10:1
+   attention vs success    dL*=  8.6  1.28:1
+   attention vs error      dL*= 22.8  1.98:1
+   attention vs info       dL*= 12.7  1.44:1
+   success   vs error      dL*= 14.2  1.55:1
+   success   vs info       dL*=  4.1  1.13:1
+   error     vs info       dL*= 10.1  1.37:1
+   monochrome tray tints:
+   idle      onSurface at 45% over background = #727272  L*= 48.0
+   working   onSurface at 75% over background = #B0AFAC  L*= 71.5
+   attention onSurface at 100% over background = #E4E2DC  L*= 89.9
+
+## light
+stateIdle        #677078  L*= 46.7  hue=208.2  vs background  4.61:1 AA
+stateWorking     #175B50  L*= 34.5  hue=170.3  vs background  7.25:1 AAA
+stateAttention   #3A2A0A  L*= 18.3  hue= 40.0  vs background 12.68:1 AAA
+stateSuccess     #2E7A4E  L*= 45.7  hue=145.3  vs background  4.79:1 AA
+stateError       #B3262E  L*= 39.9  hue=356.6  vs background  5.94:1 AA
+stateInfo        #245FA5  L*= 40.0  hue=212.6  vs background  5.90:1 AA
+   pairwise (dL* / contrast ratio between the two state colours):
+   idle      vs working    dL*= 12.3  1.57:1   (tray pair)
+   idle      vs attention  dL*= 28.5  2.75:1   (tray pair)
+   idle      vs success    dL*=  1.0  1.04:1
+   idle      vs error      dL*=  6.9  1.29:1
+   idle      vs info       dL*=  6.7  1.28:1
+   working   vs attention  dL*= 16.2  1.75:1   (tray pair)
+   working   vs success    dL*= 11.2  1.51:1
+   working   vs error      dL*=  5.4  1.22:1
+   working   vs info       dL*=  5.6  1.23:1
+   attention vs success    dL*= 27.4  2.65:1
+   attention vs error      dL*= 21.6  2.13:1
+   attention vs info       dL*= 21.8  2.15:1
+   success   vs error      dL*=  5.8  1.24:1
+   success   vs info       dL*=  5.7  1.23:1
+   error     vs info       dL*=  0.2  1.01:1
+   monochrome tray tints:
+   idle      onSurface at 45% over background = #929493  L*= 61.1
+   working   onSurface at 75% over background = #515355  L*= 35.2
+   attention onSurface at 100% over background = #1A1D21  L*= 10.6
+
+## 5. ANSI-16 state ladder (L*)
+brightBlack      #6F7983  L*= 50.3
+cyan             #5DBBA6  L*= 69.9
+brightYellow     #EFD3A0  L*= 85.7
+
+## 6. tertiary vs each state: needs dL* >= 12 or a hue gap >= 60 degrees (neutral states count by L* only)
+dark  tertiary #C4A0D0 vs stateIdle      #7F8992  dL*= 13.9  dHue=  0.0
+dark  tertiary #C4A0D0 vs stateWorking   #5DBBA6  dL*=  0.6  dHue=118.4
+dark  tertiary #C4A0D0 vs stateAttention #EFD3A0  dL*= 15.3  dHue=113.7
+dark  tertiary #C4A0D0 vs stateSuccess   #A9C97E  dL*=  6.6  dHue=160.6
+dark  tertiary #C4A0D0 vs stateError     #E8767A  dL*=  7.5  dHue= 72.9
+dark  tertiary #C4A0D0 vs stateInfo      #86B8E8  dL*=  2.5  dHue= 75.6
+light tertiary #5C3A63 vs stateIdle      #677078  dL*= 16.8  dHue=  0.0
+light tertiary #5C3A63 vs stateWorking   #175B50  dL*=  4.6  dHue=119.5
+light tertiary #5C3A63 vs stateAttention #3A2A0A  dL*= 11.7  dHue=110.2
+light tertiary #5C3A63 vs stateSuccess   #2E7A4E  dL*= 15.8  dHue=144.5
+light tertiary #5C3A63 vs stateError     #B3262E  dL*=  9.9  dHue= 66.8
+light tertiary #5C3A63 vs stateInfo      #245FA5  dL*= 10.1  dHue= 77.2
+

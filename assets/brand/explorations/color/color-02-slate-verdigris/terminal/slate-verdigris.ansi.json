@@ -1,0 +1,97 @@
+{
+  "name": "Huginn Slate & Verdigris",
+  "id": "color-02-slate-verdigris",
+  "background": "#14171C",
+  "foreground": "#E4E2DC",
+  "cursor": "#5DBBA6",
+  "selection": "#2A3F3C",
+  "ansi16": {
+    "black": "#3A424B",
+    "red": "#D9636A",
+    "green": "#86B36A",
+    "yellow": "#D4B06A",
+    "blue": "#6A9ED8",
+    "magenta": "#A98BD1",
+    "cyan": "#5DBBA6",
+    "white": "#C9CDCF",
+    "brightBlack": "#6F7983",
+    "brightRed": "#E8767A",
+    "brightGreen": "#A9C97E",
+    "brightYellow": "#EFD3A0",
+    "brightBlue": "#86B8E8",
+    "brightMagenta": "#B9A3E3",
+    "brightCyan": "#7FD0BE",
+    "brightWhite": "#E4E2DC"
+  },
+  "contrastOnGround": {
+    "black": 1.76,
+    "red": 5.08,
+    "green": 7.42,
+    "yellow": 8.74,
+    "blue": 6.41,
+    "magenta": 6.24,
+    "cyan": 7.8,
+    "white": 11.22,
+    "brightBlack": 4.05,
+    "brightRed": 6.25,
+    "brightGreen": 9.7,
+    "brightYellow": 12.4,
+    "brightBlue": 8.58,
+    "brightMagenta": 8.05,
+    "brightCyan": 9.98,
+    "brightWhite": 13.87
+  },
+  "lstar": {
+    "black": 27.6,
+    "red": 56.8,
+    "green": 68.3,
+    "yellow": 73.6,
+    "blue": 63.7,
+    "magenta": 62.9,
+    "cyan": 69.9,
+    "white": 82.2,
+    "brightBlack": 50.3,
+    "brightRed": 62.9,
+    "brightGreen": 77.1,
+    "brightYellow": 85.7,
+    "brightBlue": 73.0,
+    "brightMagenta": 70.9,
+    "brightCyan": 78.1,
+    "brightWhite": 89.9
+  },
+  "brand": {
+    "accentSlot": "cyan",
+    "accentTruecolor": "#5DBBA6",
+    "states": {
+      "stateIdle": "brightBlack",
+      "stateWorking": "cyan",
+      "stateAttention": "brightYellow",
+      "stateSuccess": "brightGreen",
+      "stateError": "brightRed",
+      "stateInfo": "brightBlue"
+    },
+    "cli": {
+      "ok": "brightGreen",
+      "warn": "brightYellow",
+      "error": "brightRed",
+      "muted": "brightBlack",
+      "accent": "brightCyan"
+    },
+    "slotPins": {
+      "brightRed": "error",
+      "brightGreen": "stateSuccess",
+      "brightYellow": "stateAttention",
+      "brightBlue": "stateInfo"
+    },
+    "stateLadderLstar": {
+      "brightBlack": 50.3,
+      "cyan": 69.9,
+      "brightYellow": 85.7
+    },
+    "glyph": {
+      "unicode": "\u25e2\u2586\u2588\u2580",
+      "block": "\u2597\u2586\u2588\u2580",
+      "ascii": "(o)==-"
+    }
+  }
+}

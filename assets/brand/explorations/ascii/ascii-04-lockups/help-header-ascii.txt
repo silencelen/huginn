@@ -1,0 +1,4 @@
+        _                                                     
+       (o)=-   huginn - Thought, on call from anywhere.       
+      //  \    remote Claude Code node.  aliases: rclaude, rcc
+   =~/____/                                                   
