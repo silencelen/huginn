@@ -96,7 +96,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.10.2';
+const VERSION = '3.10.3';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -12017,6 +12017,18 @@ const server = http.createServer(async (req, res) => {
         // proves it is reachable, which is a different question and the one the
         // daemon used to answer instead.
         polledSince.set(devId, Date.now());
+        // ...which also means any run already HANDED to this device is gone. Both
+        // runners take one job at a time and only poll while idle, so a device that
+        // holds a run and asks for another restarted or dropped the first: a run
+        // that rebooted its own machine (a Linux laptop, 2026-10-10) would otherwise never
+        // report, because the fresh runner's beats refresh `lastHeard` and the
+        // device answered 409 "already running something" until RUN_HARD_CAP_MS.
+        // Only handed-over runs: a queued one is exactly what this poll is for.
+        for (const [workId, entry] of [...remoteRuns]) {
+          if (entry.deviceId === devId && entry.handedAt) {
+            loseRemoteRun(workId, 'it asked for new work while this run was still with it — the runner restarted (or the machine rebooted) mid-run');
+          }
+        }
         const lockedParam = u.searchParams.get('locked');
         devicesLib.noteSeen(deviceState, devId, now, {
           locked: lockedParam === '1' ? true : (lockedParam === '0' ? false : undefined),
@@ -12029,7 +12041,7 @@ const server = http.createServer(async (req, res) => {
           const item = q.shift();
           deviceQueues.set(devId, q);
           const entry = remoteRuns.get(item.id);
-          if (entry) entry.lastHeard = Date.now();
+          if (entry) { entry.lastHeard = Date.now(); entry.handedAt = Date.now(); }
           return sendJson(res, 200, { work: item });
         }
         deviceQueues.set(devId, q);
@@ -12042,7 +12054,7 @@ const server = http.createServer(async (req, res) => {
           answered = true;
           if (item) {
             const entry = remoteRuns.get(item.id);
-            if (entry) entry.lastHeard = Date.now();
+            if (entry) { entry.lastHeard = Date.now(); entry.handedAt = Date.now(); }
           }
           sendJson(res, 200, { work: item || null });
           return true;

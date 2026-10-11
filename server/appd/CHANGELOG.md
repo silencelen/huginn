@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.10.3 — 2026-10-11
+
+### Fixed
+- **A device that restarts mid-run is free again on its next poll, not two hours later.** A run that
+  rebooted its own machine (an act chat on a Linux laptop that said "reboot the machine", and did) could never
+  report back, and nothing else ended it: every heartbeat from the restarted runner refreshed the
+  orphan's liveness, so the silence timer never fired, and Stop was carried on that heartbeat to a
+  runner that had never heard of the run. The device answered *"a Linux laptop is already running something"*
+  to every new job until the 2-hour hard cap. Both runners take one job at a time and ask for work
+  only while idle, so the daemon now treats a poll from a device that still holds a handed-over run
+  as the device saying it no longer has it: the run settles with a readable reason
+  (*"a Linux laptop: it asked for new work while this run was still with it — the runner restarted (or the
+  machine rebooted) mid-run"*), and a pending Stop lands at the same moment. A heartbeat alone still
+  settles nothing, and a run that is queued but not yet handed over is left alone.
+
 ## 3.10.2 — 2026-10-11
 
 ### Fixed
