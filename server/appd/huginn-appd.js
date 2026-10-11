@@ -57,6 +57,7 @@ const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('.
 // cluster of twelve live sessions.
 const projectsLib = require('./lib/projects');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
+const { createApiLane } = require('./lib/apilane');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 // Only `agedLimits` is still called from here: the account-switch DECISION moved
 // inside lib/headroom's arbiter, which imports the rest of this module itself so
@@ -7113,6 +7114,9 @@ if (fcm) {
 }
 
 const suggestCache = new Map();   // sessionId -> {size, suggestions, promise}
+// Optional: pay suggestion calls from an API key instead of subscription headroom
+// (lib/apilane.js; off unless HUGINN_API_KEY_FILE is set, local monthly cap).
+const apiLane = createApiLane({ dataDir: DATA_DIR });
 
 /**
  * Suggestions for one transcript, cached on its size, single-flight per id.
@@ -7136,6 +7140,15 @@ async function suggestionsFor(id, transcriptPath) {
 
   const entry = { size, suggestions: [], promise: null };
   entry.promise = (async () => {
+    // API lane first: the same prompt, no harness, priced in fractions of a cent.
+    // null = off, over its cap, or failed — then the caged CLI call, as before.
+    const viaApi = await apiLane.complete(buildPrompt(context), { maxTokens: 200 });
+    if (viaApi != null) {
+      entry.suggestions = parseSuggestions(viaApi);
+      entry.promise = null;
+      log(`suggest: ${id} -> ${entry.suggestions.length} for size ${size} (api lane)`);
+      return;
+    }
     const r = await run('claude', [
       '-p',
       // Caged: no CLAUDE.md (global or project), no tools, one turn, cheap
