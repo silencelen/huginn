@@ -117,8 +117,15 @@ function createApiLane({ dataDir, env = process.env, now = Date.now, fetchImpl =
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
+        // ⚠ THINKING OFF. Haiku 5.5 thinks by default (measured 2026-10-11): on a
+        // 200-token budget it spent 175 thinking and returned a truncated line,
+        // sometimes no text at all — a charged call that then fell back to the CLI.
+        // A one-shot rewrite needs no reasoning. A model that refuses a disabled-
+        // thinking request (Opus 5.5 does) gets a 400 here, i.e. null, i.e. the
+        // CLI path — never a wrong answer.
         body: JSON.stringify({
-          model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }],
+          model, max_tokens: maxTokens, thinking: { type: 'disabled' },
+          messages: [{ role: 'user', content: prompt }],
         }),
       });
       if (!resp.ok) return null;

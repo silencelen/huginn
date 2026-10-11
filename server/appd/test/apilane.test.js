@@ -33,6 +33,7 @@ test('with a key: posts to /v1/messages with the key header and returns the text
   const sent = JSON.parse(calls[0].init.body);
   assert.equal(sent.model, 'claude-haiku-5-5');
   assert.deepEqual(sent.messages, [{ role: 'user', content: 'hi' }]);
+  assert.deepEqual(sent.thinking, { type: 'disabled' }, 'Haiku 5.5 thinks by default and eats the budget');
 });
 
 test('spend is charged from the reported usage and the cap stops further calls', async () => {

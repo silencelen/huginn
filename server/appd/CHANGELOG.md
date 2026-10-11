@@ -11,6 +11,12 @@ version number collided. Entries below are reconstructed from the shipping commi
 
 ## 3.10.2 — 2026-10-11
 
+### Fixed
+- **The API lane actually serves suggestions.** Haiku 5.5 thinks by default: on the 200-token
+  suggestion budget it spent ~175 tokens thinking and returned a truncated line or no text at all,
+  so a charged call fell back to the CLI anyway (seen live the first hour the lane was on). Requests
+  now send `thinking: {type: "disabled"}`.
+
 ### Added
 - **The ladder takes Claude Code's own word for a model switch.** A new hook,
   `hooks/huginn-modelswitch-hook` (installed by `deploy.sh` as `PostModelSwitch` `*`, timeout 10),
