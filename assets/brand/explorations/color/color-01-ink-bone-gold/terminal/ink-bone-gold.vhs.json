@@ -1,0 +1,23 @@
+{
+  "name": "Huginn Ink, Bone & Gold",
+  "background": "#12100F",
+  "foreground": "#E8E2DA",
+  "selection": "#4A3F2A",
+  "cursor": "#C8A45C",
+  "black": "#3A3431",
+  "red": "#D1544F",
+  "green": "#69A95B",
+  "yellow": "#C8A45C",
+  "blue": "#5B8FD6",
+  "magenta": "#A974C4",
+  "cyan": "#4FA5A8",
+  "white": "#CFC8BF",
+  "brightBlack": "#7A736C",
+  "brightRed": "#E8736D",
+  "brightGreen": "#8CCB7B",
+  "brightYellow": "#F3D58F",
+  "brightBlue": "#7DAFEA",
+  "brightMagenta": "#C495DC",
+  "brightCyan": "#6FC4C7",
+  "brightWhite": "#F2ECE4"
+}

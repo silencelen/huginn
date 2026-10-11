@@ -1,0 +1,97 @@
+{
+  "name": "Huginn Soot & Ember",
+  "id": "color-03-soot-ember",
+  "background": "#141212",
+  "foreground": "#EAE3DC",
+  "cursor": "#E58A4C",
+  "selection": "#452A1E",
+  "ansi16": {
+    "black": "#3C3634",
+    "red": "#D4514F",
+    "green": "#8FA85A",
+    "yellow": "#D9A45A",
+    "blue": "#6E94C4",
+    "magenta": "#B47BA4",
+    "cyan": "#5EA9A0",
+    "white": "#CBC3BD",
+    "brightBlack": "#7C736E",
+    "brightRed": "#EE6E7C",
+    "brightGreen": "#B5C27A",
+    "brightYellow": "#F2CF96",
+    "brightBlue": "#8FB4DE",
+    "brightMagenta": "#D39BC0",
+    "brightCyan": "#7FC2BA",
+    "brightWhite": "#F1E9E2"
+  },
+  "contrastOnGround": {
+    "black": 1.57,
+    "red": 4.52,
+    "green": 7.04,
+    "yellow": 8.36,
+    "blue": 5.95,
+    "magenta": 5.61,
+    "cyan": 6.81,
+    "white": 10.74,
+    "brightBlack": 4.03,
+    "brightRed": 6.36,
+    "brightGreen": 9.74,
+    "brightYellow": 12.57,
+    "brightBlue": 8.67,
+    "brightMagenta": 8.2,
+    "brightCyan": 9.18,
+    "brightWhite": 15.55
+  },
+  "lstar": {
+    "black": 23.2,
+    "red": 52.3,
+    "green": 65.4,
+    "yellow": 70.9,
+    "blue": 60.3,
+    "magenta": 58.6,
+    "cyan": 64.4,
+    "white": 79.3,
+    "brightBlack": 49.1,
+    "brightRed": 62.3,
+    "brightGreen": 76.0,
+    "brightYellow": 84.8,
+    "brightBlue": 72.1,
+    "brightMagenta": 70.2,
+    "brightCyan": 74.0,
+    "brightWhite": 92.8
+  },
+  "brand": {
+    "accentSlot": "yellow",
+    "accentTruecolor": "#E58A4C",
+    "states": {
+      "stateIdle": "brightBlack",
+      "stateWorking": "yellow",
+      "stateAttention": "brightYellow",
+      "stateSuccess": "brightGreen",
+      "stateError": "brightRed",
+      "stateInfo": "brightBlue"
+    },
+    "cli": {
+      "ok": "brightGreen",
+      "warn": "brightYellow",
+      "error": "brightRed",
+      "muted": "brightBlack",
+      "accent": "yellow"
+    },
+    "slotPins": {
+      "brightRed": "error",
+      "brightGreen": "stateSuccess",
+      "brightYellow": "stateAttention",
+      "brightBlue": "stateInfo"
+    },
+    "stateLadderLstar": {
+      "brightBlack": 49.1,
+      "yellow": 70.9,
+      "brightYellow": 84.8
+    },
+    "glyph": {
+      "unicode": "\u25e2\u2586\u2588\u2580",
+      "block": "\u2597\u2586\u2588\u2580",
+      "ascii": "(o)==-"
+    }
+  }
+}

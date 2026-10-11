@@ -1,0 +1,5 @@
+state      apps word    unicode  narrow  ascii   tab title (unicode / narrow / ascii)
+working    working      ●        ▪       *       ● main    ▪ main    * main          
+needs you  needs you    ▲        ▴       !       ▲ main    ▴ main    ! main          
+waiting    waiting      ○        ▫       o       ○ main    ▫ main    o main          
+no claude  (outline)    ·        ·       -       · main    · main    - main          

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Huginn type specimen · Schibsted Grotesk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:ital,wght@0,400..900;1,400..900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#12100F;--s1:#1B1817;--s2:#241F1D;--ink:#E8E2DA;--muted:#8A8177;--gold:#C8A45C;--gold-ink:#241C09;--blue:#7DAFEA;--red:#E8736D;--outline:#3A3431;
+  --lbg:#FAF7F2;--link:#1B1817;--lsv:#EFE9E0;--lmuted:#5C544B;--loutline:#D3CAC0;--lgold:#7A5A16;--lred:#B3261E;
+  --ui:'Schibsted Grotesk', system-ui, sans-serif;--display:'Schibsted Grotesk', system-ui, sans-serif;--mono:'JetBrains Mono', 'DejaVu Sans Mono', monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{width:1200px;background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{padding:0 56px}
+header{padding:44px 56px 28px;display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1px solid var(--outline)}
+header .k{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold)}
+header h1{margin:6px 0 0;font-family:var(--ui);font-size:28px;font-weight:600;letter-spacing:-0.01em}
+header .fam{text-align:right;font-size:13px;color:var(--muted);line-height:1.6}
+header .fam b{color:var(--ink);font-weight:600}
+section{padding:36px 56px;border-bottom:1px solid var(--outline)}
+h2{margin:0 0 20px;font-family:var(--mono);font-size:12px;font-weight:500;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ann{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.02em}
+.wm{font-family:var(--display);font-weight:800;letter-spacing:-0.035em;line-height:1;text-transform:none;}
+.sizes{display:grid;grid-template-columns:1fr auto;gap:10px 32px;align-items:baseline}
+.sizes .ann{text-align:right;white-space:nowrap}
+.raven{height:1em;width:auto;display:inline-block;vertical-align:baseline;color:currentColor}
+.lockups{display:grid;grid-template-columns:1fr 1fr 1fr ;gap:14px}
+.card{border:1px solid var(--outline);border-radius:12px;padding:28px 24px 20px;display:flex;flex-direction:column;justify-content:space-between;min-height:190px;background:var(--s1)}
+.card.light{background:var(--lbg);color:var(--link);border-color:var(--loutline)}
+.card .ann{margin-top:18px} .card.light .ann{color:var(--lmuted)}
+.lk{display:flex;align-items:center;gap:0.22em;font-size:56px;white-space:nowrap}
+.lk.above{flex-direction:column;align-items:flex-start;gap:0.12em}
+.lk.above .raven{height:1.15em}
+.lk.left .raven{height:0.9em;margin-right:0.04em}
+.tittle{position:relative;display:inline-block}
+.tittle-raven{position:absolute;left:calc(50% + var(--tx));bottom:var(--tb);height:var(--th);width:auto;transform:translateX(-46%)}
+.cursor{display:inline-block;width:0.5em;height:0.95em;background:currentColor;margin-left:0.08em;vertical-align:-0.08em}
+.lk.cur .raven{height:0.92em;margin-left:0.1em;align-self:flex-end;margin-bottom:0.02em}
+.tagline{display:flex;align-items:baseline;gap:48px}
+.tagline .t{font-family:var(--ui);font-size:44px;line-height:1.1;letter-spacing:-0.01em;font-weight:400;font-style:italic}
+.tagline .sub{font-size:14px;color:var(--muted);max-width:300px}
+.scalewrap{display:grid;grid-template-columns:190px 1fr 1fr;gap:28px;align-items:start}
+.roles{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7;padding-top:8px}
+.roles b{display:block;color:var(--ink);font-weight:500} .roles div{margin-bottom:12px}
+.phone{border-radius:28px;padding:22px 22px 26px;border:1px solid var(--outline);background:var(--bg)}
+.phone.light{background:var(--lbg);color:var(--link);border-color:var(--loutline)}
+.status{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;margin-bottom:18px}
+.muted{color:var(--muted)} .phone.light .muted{color:var(--lmuted)}
+.r-display{font-family:var(--display);font-size:44px;line-height:52px;font-weight:800;letter-spacing:-0.02em;margin-bottom:6px}
+.r-title{font-family:var(--ui);font-size:28px;line-height:36px;font-weight:700;letter-spacing:-0.01em;margin:10px 0 2px}
+.r-headline{font-family:var(--ui);font-size:22px;line-height:28px;font-weight:600;letter-spacing:-0.005em}
+.r-body{font-family:var(--ui);font-size:16px;line-height:24px;font-weight:400}
+.r-label{font-family:var(--ui);font-size:13px;line-height:16px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.phone.light .r-label{color:var(--lmuted)}
+.r-mono{font-family:var(--mono);font-size:13px;line-height:18px;color:var(--ink)} .phone.light .r-mono{color:var(--link)}
+.row{padding:14px 0;border-top:1px solid var(--outline)} .phone.light .row{border-color:var(--loutline)}
+.row.kv{display:flex;flex-direction:column;gap:4px}
+.row.toggle{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.sw{width:40px;height:22px;border-radius:11px;background:var(--s2);border:1px solid var(--outline);position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:8px;background:var(--muted)}
+.sw.on{background:var(--gold);border-color:var(--gold)} .sw.on::after{left:20px;background:var(--gold-ink)}
+.phone.light .sw{background:var(--lsv);border-color:var(--loutline)} .phone.light .sw.on{background:var(--lgold);border-color:var(--lgold)} .phone.light .sw.on::after{background:#fff}
+.dot{display:inline-block;width:8px;height:8px;border-radius:4px;background:var(--gold);margin-right:4px;vertical-align:middle}
+.phone.light .dot{background:var(--lgold)}
+.actions{display:flex;gap:10px;margin-top:18px}
+.btn{font-family:var(--ui);font-size:15px;font-weight:600;padding:12px 20px;border-radius:999px;background:var(--gold);color:var(--gold-ink)}
+.btn.ghost{background:transparent;color:var(--red);border:1px solid var(--outline)}
+.phone.light .btn{background:var(--lgold);color:#fff} .phone.light .btn.ghost{background:transparent;color:var(--lred);border-color:var(--loutline)}
+footer{padding:22px 56px 40px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between}
+</style></head><body>
+<header><div><div class="k">Direction 1 · geometric / neo-grotesk sans</div><h1>Huginn &middot; Schibsted Grotesk &middot; a Norwegian grotesk for Odin’s raven</h1></div>
+<div class="fam"><b>Schibsted Grotesk</b> &middot; wordmark, display, UI · 400–900 + italics · OFL<br><b>JetBrains Mono</b> &middot; terminal, code, key/value rows · 400/500 · OFL</div></header>
+
+<section><h2>Wordmark at three sizes</h2>
+<div class="sizes">
+  <div class="wm" style="font-size:144px">Huginn</div><div class="ann">144px · 800 · tracking -0.035em</div>
+  <div class="wm" style="font-size:64px">Huginn</div><div class="ann">64px · app title bar, docs header</div>
+  <div class="wm" style="font-size:24px">Huginn</div><div class="ann">24px · notification, tray tooltip, installer</div>
+</div></section>
+
+<section><h2>Lockups with the canonical raven · dark</h2>
+<div class="lockups" style="grid-template-columns:repeat(4,1fr)">
+  <div class="card"><div class="lk left"><svg class="raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg><span class="wm">Huginn</span></div><div class="ann">mark left of word</div></div>
+  <div class="card"><div class="lk above"><svg class="raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg><span class="wm">Huginn</span></div><div class="ann">mark above word</div></div>
+  <div class="card"><div class="lk"><span class="wm">Hug<span class="tittle" style="--th:0.42em;--tb:0.62em;--tx:0.05em">ı<svg class="tittle-raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg></span>nn</span></div><div class="ann">mark as the tittle of the i (dotless ı + raven) · 56px</div></div>
+  <div class="card"><div class="lk" style="font-size:44px"><span class="wm">Hug<span class="tittle" style="--th:0.42em;--tb:0.62em;--tx:0.05em">ı<svg class="tittle-raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg></span>nn</span></div><div class="ann">tittle lockup at 44px (app title bar): tail clears the g</div></div>
+</div></section>
+
+<section style="background:var(--lbg);color:var(--link)"><h2 style="color:var(--lmuted)">Lockups with the canonical raven · light</h2>
+<div class="lockups">
+  <div class="card light"><div class="lk left"><svg class="raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg><span class="wm">Huginn</span></div><div class="ann">mark left of word</div></div>
+  <div class="card light"><div class="lk above"><svg class="raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg><span class="wm">Huginn</span></div><div class="ann">mark above word</div></div>
+  <div class="card light"><div class="lk"><span class="wm">Hug<span class="tittle" style="--th:0.42em;--tb:0.62em;--tx:0.05em">ı<svg class="tittle-raven" viewBox="0 0 108 108" aria-hidden="true"><g transform="translate(2,11)"><path fill="currentColor" fill-rule="evenodd" d="M94,32 C87,27.5 80,25.8 74,25.5 C72.5,19.5 64,17 58.5,19.3 C54,21.3 51,24 48,27 C41,32.5 35,37.5 30,42 L10,60 L16,69 L37,54 C40,58.5 45,61.5 51,62.5 C58,63.3 64,60 67,55.5 C70.3,50.3 71.8,45.2 70,41 L67.8,40.2 L71.3,37.8 L68.8,36.2 L72,34.8 C79,34.6 86,34.2 93,33.6 C94.6,33 94.6,32.5 94,32 Z M64.5,25.5 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0 Z"/></g></svg></span>nn</span></div><div class="ann">mark as the tittle of the i</div></div>
+  
+</div></section>
+
+<section><h2>Outlined SVG · no font dependency (wordmark.svg, lockup.svg; -dark twins in bone)</h2>
+<div class="lockups" style="grid-template-columns:1fr 1fr">
+  <div class="card light" style="gap:14px"><img src="wordmark.svg" style="height:96px;width:auto" alt="Huginn wordmark"><img src="lockup.svg" style="height:56px;width:auto" alt="Huginn lockup"><img src="lockup.svg" style="height:24px;width:auto" alt=""><div class="ann">ink on light · 96 / 56 / 24 px · Schibsted Grotesk ExtraBold outlined with fontTools, HarfBuzz kerning, tracking -0.035em; raven.svg path unchanged at cap height</div></div>
+  <div class="card" style="gap:14px"><img src="wordmark-dark.svg" style="height:96px;width:auto" alt=""><img src="lockup-dark.svg" style="height:56px;width:auto" alt=""><img src="lockup-dark.svg" style="height:24px;width:auto" alt=""><div class="ann">bone on dark · the README hero can use &lt;picture&gt; with prefers-color-scheme to switch between the two files</div></div>
+</div></section>
+
+<section><h2>Tagline</h2>
+<div class="tagline"><div class="t">Thought, on call from anywhere.</div><div class="sub">Italic 400 of the UI face: the voice stays one family.</div></div></section>
+
+<section><h2>UI type scale · mini settings screen · dark and light</h2>
+<div class="scalewrap">
+  <div class="roles">
+    <div><b>display · 44/52</b> Schibsted Grotesk 800<br>M3 displaySmall</div>
+    <div><b>title · 28/36</b> Schibsted Grotesk 700<br>M3 headlineMedium</div>
+    <div><b>headline · 22/28</b> Schibsted Grotesk 600<br>M3 titleLarge</div>
+    <div><b>body · 16/24</b> Schibsted Grotesk 400<br>M3 bodyLarge</div>
+    <div><b>label · 13/16</b> Schibsted Grotesk 600 · +6% tracking<br>M3 labelMedium</div>
+    <div><b>mono · 13/18</b> JetBrains Mono 400<br>LocalMonoStyle (desktop)</div>
+  </div>
+  
+<div class="phone dark">
+  <div class="status"><span>09:41</span><span class="muted">huginn</span></div>
+  <div class="role r-display">Settings</div>
+  <div class="role r-title">Host</div>
+  <div class="row"><div><div class="r-headline">Connection</div><div class="r-body">A persistent session on your own always-on host, reachable from this device.</div></div></div>
+  <div class="row kv"><span class="r-label">ALWAYS-ON HOST</span><span class="r-mono">ssh huginn@ravn.example.net</span></div>
+  <div class="row kv"><span class="r-label">SESSION</span><span class="r-mono">tmux: main &middot; 1 window (attached)</span></div>
+  <div class="row toggle"><span class="r-body">Reconnect automatically</span><span class="sw on"></span></div>
+  <div class="row toggle"><span class="r-body">Answer permission prompts from the lock screen</span><span class="sw"></span></div>
+  <div class="row kv"><span class="r-label">STATE</span><span class="r-mono"><span class="dot"></span> working &middot; 14 min</span></div>
+  <div class="actions"><span class="btn">Attach</span><span class="btn ghost">Wrap up</span></div>
+</div>
+  
+<div class="phone light">
+  <div class="status"><span>09:41</span><span class="muted">huginn</span></div>
+  <div class="role r-display">Settings</div>
+  <div class="role r-title">Host</div>
+  <div class="row"><div><div class="r-headline">Connection</div><div class="r-body">A persistent session on your own always-on host, reachable from this device.</div></div></div>
+  <div class="row kv"><span class="r-label">ALWAYS-ON HOST</span><span class="r-mono">ssh huginn@ravn.example.net</span></div>
+  <div class="row kv"><span class="r-label">SESSION</span><span class="r-mono">tmux: main &middot; 1 window (attached)</span></div>
+  <div class="row toggle"><span class="r-body">Reconnect automatically</span><span class="sw on"></span></div>
+  <div class="row toggle"><span class="r-body">Answer permission prompts from the lock screen</span><span class="sw"></span></div>
+  <div class="row kv"><span class="r-label">STATE</span><span class="r-mono"><span class="dot"></span> working &middot; 14 min</span></div>
+  <div class="actions"><span class="btn">Attach</span><span class="btn ghost">Wrap up</span></div>
+</div>
+</div></section>
+<footer><span>Huginn brand explorations · wordmark/type-01-schibsted · all families under the SIL Open Font License</span><span>palette: Theme.kt (dark primary, light styled)</span></footer>
+</body></html>

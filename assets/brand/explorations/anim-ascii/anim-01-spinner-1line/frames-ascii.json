@@ -1,0 +1,16 @@
+{
+ "name": "wingbeat (7-bit twin)",
+ "encoding": "ascii",
+ "fps": 8,
+ "loop": true,
+ "rest": "first",
+ "cols": 3,
+ "rows": 1,
+ "note": "same registration: _ body low under raised wings, ' body high under lowered wings",
+ "frames": [
+  "-_-",
+  "\\_/",
+  "-_-",
+  "/'\\"
+ ]
+}

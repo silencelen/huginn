@@ -1,0 +1,14 @@
+{
+ "name": "needs you: raven turns to face you, marker blinks",
+ "encoding": "unicode",
+ "fps": 1,
+ "loop": true,
+ "rest": "first",
+ "cols": 6,
+ "rows": 1,
+ "frames": [
+  "▀█▆◣ ◆",
+  "▀█▆◣ ◇",
+  "◢▆█▀ ◆"
+ ]
+}

@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Soot & Ember terminal</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"><style>
+*{box-sizing:border-box} body{margin:0;font-family:Inter, 'Segoe UI', Roboto, 'DejaVu Sans', sans-serif}
+.win{margin:28px auto 0;width:1120px;border-radius:8px;overflow:hidden;border:1px solid #3C3634}
+.tabs{height:36px;display:flex;align-items:flex-end;padding:0 10px;gap:2px;font-size:12px}
+.tab{padding:7px 14px 8px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:8px}
+.tab i{width:7px;height:7px;border-radius:50%;display:inline-block}
+pre{margin:0;font-family:'JetBrains Mono', 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;font-variant-ligatures:none;font-size:13.5px;line-height:1.5;padding:16px 20px 12px;white-space:pre}
+.status{font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace;font-size:13.5px;line-height:1.5;display:flex;white-space:pre}
+.strip{display:grid;grid-template-columns:repeat(8,1fr);gap:0;font-family:'JetBrains Mono', 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;font-variant-ligatures:none;font-size:10.5px}
+.strip div{height:46px;padding:5px 8px;line-height:1.25}
+.cap{width:1120px;margin:14px auto 26px;font-size:12px;font-family:Inter, 'Segoe UI', Roboto, 'DejaVu Sans', sans-serif;line-height:1.5}
+.cap .g{font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace}
+b{font-weight:700}
+</style></head><body style="background:#242020;color:#A39A94"><div class="win"><div class="tabs" style="background:#1C1919;color:#A39A94"><div class="tab" style="background:#141212;color:#EAE3DC"><i style="background:#D9A45A"></i>costtracking</div><div class="tab"><i style="background:#F2CF96"></i>brandbook</div><div class="tab"><i style="border:1px solid #7C736E"></i>notes</div><div class="tab" style="padding:7px 10px 8px">+</div><span style="margin-left:auto;padding:0 6px 9px;font-size:11px">Soot & Ember</span></div><pre style="background:#141212;color:#EAE3DC"><span style="color:#7C736E">~/huginn</span> <span style="color:#8FA85A">feat/brand-colour</span> <span style="color:#7C736E">$</span> git status
+On branch <span style="color:#5EA9A0">feat/brand-colour</span>
+Changes to be committed:
+  <span style="color:#7C736E">(use "git restore --staged <file>..." to unstage)</span>
+        <span style="color:#8FA85A">modified:   mobile/ui/src/commonMain/kotlin/com/silencelen/huginn/ui/theme/Theme.kt</span>
+        <span style="color:#8FA85A">new file:   assets/brand/explorations/color/README.md</span>
+Changes not staged for commit:
+        <span style="color:#D4514F">modified:   assets/demo.tape</span>
+        <span style="color:#D4514F">modified:   server/tmux.conf</span>
+Untracked files:
+        <span style="color:#D4514F">docs/palette.md</span>
+
+<span style="color:#7C736E">~/huginn</span> <span style="color:#8FA85A">feat/brand-colour</span> <span style="color:#7C736E">$</span> npm test
+<span style="color:#7C736E">> huginn@1.4.0 test</span>
+<span style="color:#8FA85A">ok</span>    palette: every text pair >= 4.5:1               <span style="color:#7C736E">12 ms</span>
+<span style="color:#8FA85A">ok</span>    palette: tray states >= 12 L* apart            <span style="color:#7C736E">3 ms</span>
+<span style="color:#8FA85A">ok</span>    tmux: status-left is single-width glyphs       <span style="color:#7C736E">1 ms</span>
+<span style="color:#D4514F;font-weight:700">FAIL</span>  demo.tape: theme is still Catppuccin Mocha      <span style="color:#7C736E">0 ms</span>
+      <span style="color:#D4514F">expected</span> <span style="color:#D9A45A">Huginn Soot & Ember</span>  <span style="color:#D4514F">received</span> <span style="color:#D9A45A">Catppuccin Mocha</span>
+<span style="color:#D9A45A">warn</span>  Ansi.kt: palette[0..15] differs from soot-ember.ansi.json
+<span style="color:#F1E9E2;font-weight:700">3 passed</span>, <span style="color:#EE6E7C;font-weight:700">1 failed</span>, <span style="color:#F2CF96">1 warning</span>  <span style="color:#7C736E">(4 total, 16 ms)</span>
+
+<span style="color:#7C736E">~/huginn</span> <span style="color:#8FA85A">feat/brand-colour</span> <span style="color:#7C736E">$</span> huginn status
+<span style="color:#D9A45A;font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace">◢▆█▀</span> <span style="color:#D9A45A;font-weight:700">huginn</span> <span style="color:#7C736E">- thought, on call from anywhere.</span>
+<span style="color:#D9A45A;font-weight:700">host</span>      ravenhost       <span style="color:#7C736E">up 12d 4h  appd 1.4.0  3 devices</span>
+<span style="color:#D9A45A;font-weight:700">sessions</span>  3
+  costtracking   <span style="color:#D9A45A">working</span>    claude  <span style="color:#7C736E">12m   phone + desktop</span>
+  brandbook      <span style="color:#F2CF96;font-weight:700">attention</span>  <span style="color:#F2CF96">permission: Edit Theme.kt</span>
+  scratch        <span style="color:#7C736E">idle</span>       <span style="color:#7C736E">2h</span>
+<span style="color:#B5C27A">ok</span> link up   <span style="color:#F2CF96">warn</span> 1 device stale   <span style="color:#EE6E7C">error</span> none   <span style="color:#B47BA4">llm</span> local tier off
+<span style="color:#7C736E">~/huginn</span> <span style="color:#8FA85A">feat/brand-colour</span> <span style="color:#7C736E">$</span> <span style="background:#E58A4C;color:#141212">&nbsp;</span></pre><div class="status" style="background:#1C1919;color:#A39A94"><span style="background:#2D2828;color:#E58A4C;font-weight:700"> ◢▆█▀ </span><span style="background:#2D2828;color:#EAE3DC;font-weight:700">costtracking </span><span style="color:#2D2828">&#9612;</span><span style="color:#EAE3DC;font-weight:700"> 1:claude </span><span style="color:#E58A4C">&#9612;</span><span> 2:bash </span><span> 3:logs </span><span style="flex:1"></span><span style="color:#7C736E">Alt-d:detach  Alt-o:solo  ^b[:scroll </span><span> ravenhost </span><span style="color:#E58A4C;font-weight:700"> 23:41 </span></div><div class="strip"><div style="background:#3C3634;color:#EAE3DC">black<br>#3C3634<br>1.6:1</div><div style="background:#D4514F;color:#141212">red<br>#D4514F<br>4.5:1</div><div style="background:#8FA85A;color:#141212">green<br>#8FA85A<br>7.0:1</div><div style="background:#D9A45A;color:#141212">yellow<br>#D9A45A<br>8.4:1</div><div style="background:#6E94C4;color:#141212">blue<br>#6E94C4<br>6.0:1</div><div style="background:#B47BA4;color:#141212">magenta<br>#B47BA4<br>5.6:1</div><div style="background:#5EA9A0;color:#141212">cyan<br>#5EA9A0<br>6.8:1</div><div style="background:#CBC3BD;color:#141212">white<br>#CBC3BD<br>10.7:1</div><div style="background:#7C736E;color:#EAE3DC">brightBlack<br>#7C736E<br>4.0:1</div><div style="background:#EE6E7C;color:#141212">brightRed<br>#EE6E7C<br>6.4:1</div><div style="background:#B5C27A;color:#141212">brightGreen<br>#B5C27A<br>9.7:1</div><div style="background:#F2CF96;color:#141212">brightYellow<br>#F2CF96<br>12.6:1</div><div style="background:#8FB4DE;color:#141212">brightBlue<br>#8FB4DE<br>8.7:1</div><div style="background:#D39BC0;color:#141212">brightMagenta<br>#D39BC0<br>8.2:1</div><div style="background:#7FC2BA;color:#141212">brightCyan<br>#7FC2BA<br>9.2:1</div><div style="background:#F1E9E2;color:#141212">brightWhite<br>#F1E9E2<br>15.6:1</div></div></div><div class="cap">ANSI-16 of <b>color-03-soot-ember</b> on its ground #141212; every slot but black is >= 3:1 (see soot-ember.ansi.json). The tab strip is drawn in the direction's own tiers with the state dots; the bottom row is the tmux status line from tmux.conf.snippet. The one-row raven <span class="g">◢▆█▀</span> is the ascii dimension's pick (ascii-03-compact), four single-width cells, set here in DejaVu Sans Mono, which has U+25E2.</div></body></html>

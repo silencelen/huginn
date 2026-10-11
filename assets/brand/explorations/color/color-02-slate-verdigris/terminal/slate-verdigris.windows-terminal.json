@@ -1,0 +1,23 @@
+{
+  "name": "Huginn Slate & Verdigris",
+  "background": "#14171C",
+  "foreground": "#E4E2DC",
+  "cursorColor": "#5DBBA6",
+  "selectionBackground": "#2A3F3C",
+  "black": "#3A424B",
+  "red": "#D9636A",
+  "green": "#86B36A",
+  "yellow": "#D4B06A",
+  "blue": "#6A9ED8",
+  "purple": "#A98BD1",
+  "cyan": "#5DBBA6",
+  "white": "#C9CDCF",
+  "brightBlack": "#6F7983",
+  "brightRed": "#E8767A",
+  "brightGreen": "#A9C97E",
+  "brightYellow": "#EFD3A0",
+  "brightBlue": "#86B8E8",
+  "brightPurple": "#B9A3E3",
+  "brightCyan": "#7FD0BE",
+  "brightWhite": "#E4E2DC"
+}
