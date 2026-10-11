@@ -157,6 +157,8 @@ node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate" --head
 # CLI's own hook when one is waiting, and falls back to keystrokes when not. Same
 # refusal rule as above.
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-permission-hook"
+# PostModelSwitch recorder (appd >= 3.10.2): structured confirmation for the ladder.
+node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
 
 systemctl restart huginn-appd
 sleep 2

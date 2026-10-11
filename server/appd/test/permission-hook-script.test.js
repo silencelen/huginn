@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const HOOK = path.join(__dirname, '..', 'hooks', 'huginn-permission-hook');
+const SWITCH_HOOK = path.join(__dirname, '..', 'hooks', 'huginn-modelswitch-hook');
 const SOCK = `huginn-permhook-${process.pid}`;
 const SESSION = `ph-${process.pid}`;
 let stateDir, pane;
@@ -27,11 +28,11 @@ after(() => {
 });
 
 /** Run the hook; resolves {code, out, ms}. `env` overrides; the private socket is how tmux finds the pane. */
-function runHook(event, env = {}, onSpawn = null) {
+function runHook(event, env = {}, onSpawn = null, script = HOOK) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     const sockPath = path.join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid()}`, SOCK);
-    const child = spawn(HOOK, [], {
+    const child = spawn(script, [], {
       env: {
         PATH: process.env.PATH, HUGINN_CLAUDE_STATE_DIR: stateDir, HUGINN_PERM_POLL: '0.05',
         TMUX: `${sockPath},0,0`, TMUX_PANE: pane, ...env,
@@ -103,4 +104,25 @@ test('nobody answers: leaves at its own deadline with nothing printed and nothin
   const r = await runHook(ev(), { HUGINN_PERM_WAIT: '1' });
   assert.equal(r.code, 0); assert.equal(r.out, '');
   assert.deepEqual(fs.readdirSync(permDir()), []);
+});
+
+// ---- hooks/huginn-modelswitch-hook (PostModelSwitch recorder) ---------------
+
+const sw = (over = {}) => ({ hook_event_name: 'PostModelSwitch', session_id: 'sid-top', from_model: 'claude-fable-5-1',
+  to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'picker', ...over });
+const swFile = () => path.join(stateDir, '.modelswitch', SESSION);
+
+test('modelswitch hook: records the top-level claude\'s switch', async () => {
+  const r = await runHook(sw(), {}, null, SWITCH_HOOK);
+  assert.equal(r.code, 0); assert.equal(r.out, '');
+  const rec = JSON.parse(fs.readFileSync(swFile(), 'utf8'));
+  assert.equal(rec.v, 1); assert.equal(rec.to, 'claude-opus-5-5'); assert.equal(rec.source, 'picker');
+  assert.equal(rec.sessionId, 'sid-top'); assert.ok(Math.abs(rec.ts - Date.now()) < 5000);
+});
+
+test('modelswitch hook: a nested claude or no tmux pane writes nothing', async () => {
+  fs.rmSync(swFile(), { force: true });
+  await runHook(sw({ session_id: 'sid-nested' }), {}, null, SWITCH_HOOK);
+  await runHook(sw(), { TMUX_PANE: '' }, null, SWITCH_HOOK);
+  assert.equal(fs.existsSync(swFile()), false);
 });

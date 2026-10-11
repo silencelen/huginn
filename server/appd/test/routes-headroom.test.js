@@ -108,8 +108,9 @@ function mkPicker(suffix, rows, mode = 'normal') {
   const name = `${PFX}-${suffix}`;
   const script = path.join(__dirname, 'fixtures', 'stub-picker.js');
   const arg = JSON.stringify(JSON.stringify(rows));
+  const extra = mode === 'hookonly' ? ` ${JSON.stringify(stateDir)} ${name}` : '';
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
-    `${process.execPath} ${script} ${arg} ${mode}`]);
+    `${process.execPath} ${script} ${arg} ${mode}${extra}`]);
   madeSessions.add(name);
   return name;
 }
@@ -931,6 +932,25 @@ test('the `Switch model?` cache-cost dialog after `s` is confirmed, then the mov
   assert.match(capture(name), /Set model to Opus 5\.5 for this session only/);
   assert.deepEqual(fs.readFileSync(settingsFile), before,
     'the host settings.json must be byte-identical after a ladder move');
+});
+
+test('a PostModelSwitch record after `s` confirms the move when the pane prints no feedback line', async () => {
+  // hooks/huginn-modelswitch-hook writes $STATE_DIR/.modelswitch/<session> from
+  // Claude Code's PostModelSwitch event; the ladder takes it as proof, so a TUI
+  // that stops printing (or rewords) `… for this session only` no longer strands it.
+  const name = mkPicker('hookonly', [
+    { label: 'Opus 5.5', id: 'claude-opus-5-5' },
+    { label: 'Fable 5.1', id: 'claude-fable-5-1', current: true },
+  ], 'hookonly');
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93 });
+  await tick({ cooldownMs: 0 });
+  const body = await until(
+    (b) => b.sessions.some((s) => s.name === name && s.ladder && s.ladder.delivery === 'confirmed'),
+    20_000, 'a ladder move confirmed by the PostModelSwitch record');
+  assert.equal(body.sessions.find((s) => s.name === name).ladder.to, 'opus');
+  assert.doesNotMatch(capture(name), /for this session only/, 'the pane printed no feedback line');
 });
 
 test('the row NUMBER is never trusted: a shuffled picker still lands on opus', async () => {

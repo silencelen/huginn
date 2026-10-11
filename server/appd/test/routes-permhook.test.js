@@ -186,3 +186,23 @@ test('two live requests matching the same dialog: neither gets it, the keys answ
   assert.equal(r.body.via, undefined);
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.ans')), []);
 });
+
+// ---- the unnumbered trust dialog (Claude Code 2.1.296) -------------------------
+
+test('the unnumbered trust dialog is carded, and a tap moves the caret with arrows and presses Enter', async () => {
+  const name = `trust-${process.pid}`;
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `${process.execPath} ${path.join(__dirname, 'fixtures', 'stub-trust.js')}`]);
+  await wait(600);
+  const { body } = await api(`/v1/sessions/${name}/screen`);
+  assert.ok(body.prompt, 'the trust dialog is a card now');
+  assert.equal(body.prompt.unnumbered, true);
+  assert.deepEqual(body.prompt.options.map((o) => o.label), ['No, exit', 'Yes, I trust this folder']);
+  const r = await api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 2, fingerprint: body.prompt.fingerprint }),
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.via, 'arrows');
+  await wait(400);
+  assert.match(sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]), /chose: Yes, I trust this folder/);
+});

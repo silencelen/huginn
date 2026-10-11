@@ -59,6 +59,7 @@ const projectsLib = require('./lib/projects');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { createApiLane } = require('./lib/apilane');
 const permhook = require('./lib/permhook');
+const modelswitch = require('./lib/modelswitch');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 // Only `agedLimits` is still called from here: the account-switch DECISION moved
 // inside lib/headroom's arbiter, which imports the rest of this module itself so
@@ -95,7 +96,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.10.1';
+const VERSION = '3.10.2';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -794,6 +795,7 @@ function clearSessionState(name) {
   }
   // PermissionRequest hand-off files (lib/permhook.js) belong to the name too.
   permhook.clearRequests(STATE_DIR, name);
+  modelswitch.clearSwitch(STATE_DIR, name);
   sessionBorn.delete(name);
 }
 
@@ -7763,6 +7765,43 @@ async function paneLines(name) {
 }
 
 /**
+ * Answer an UNNUMBERED dialog (today: the folder-trust dialog, pane.js
+ * detectTrustDialog) by moving its caret with arrow keys and pressing Enter —
+ * a digit typed there does nothing useful. Same discipline as the ladder's
+ * picker walk: re-read after EVERY key, require the same question
+ * (fingerprint) throughout, and one last read before Enter, so a dialog that
+ * changed or vanished mid-walk gets nothing but the arrows already sent.
+ * Runs inside /answer's lock, after the fingerprint guard.
+ */
+async function answerByArrows(name, fingerprint, chosen) {
+  const target = `=${name}:`;
+  const look = async () => {
+    const c = await run('tmux', ['capture-pane', '-p', '-t', target]);
+    if (c.err) return null;
+    const p = detectPrompt(c.stdout.replace(/\n$/, '').split('\n'));
+    return p && p.unnumbered && promptFingerprint(p) === fingerprint ? p : null;
+  };
+  for (let moves = 0; ; moves++) {
+    const p = await look();
+    if (!p) return { ok: false, reason: 'the dialog changed while the caret was moving' };
+    const cur = p.options.find((o) => o.selected);
+    if (!cur) return { ok: false, reason: 'the dialog draws no caret' };
+    if (cur.label === chosen.label) break;
+    if (moves >= 6) return { ok: false, reason: `the caret never reached ${chosen.label}` };
+    const key = cur.number < chosen.number ? 'Down' : 'Up';
+    const r = await run('tmux', ['send-keys', '-t', target, key]);
+    if (r.err) return { ok: false, reason: `tmux refused ${key}` };
+    await sleep(150);
+  }
+  const last = await look();
+  const on = last && last.options.find((o) => o.selected);
+  if (!on || on.label !== chosen.label) return { ok: false, reason: 'the caret moved before Enter' };
+  const e = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+  if (e.err) return { ok: false, reason: 'tmux refused Enter' };
+  return { ok: true };
+}
+
+/**
  * Answer the dialog on `name` through its waiting PermissionRequest hook instead
  * of keystrokes (lib/permhook.js; hooks/huginn-permission-hook). True only when
  * the hook took the decision; false — for ANY reason — means nothing was
@@ -7879,6 +7918,8 @@ async function applyLadder(name, to) {
   if (!stillThere || stillThere.label !== want.label) {
     return fail(`the cursor left ${want.label} before the model could be set`);
   }
+  const sAt = Date.now();
+  const sid = (readSessionState(name) || {}).sessionId || null;
   const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
   if (set.err) return fail('tmux refused the s key');
   // ⚠ THE CACHE-COST CONFIRMATION. Since Claude Code ~2.1.29x, `s` on a session
@@ -7895,6 +7936,13 @@ async function applyLadder(name, to) {
     const text = lines ? lines.join('\n') : '';
     if (LADDER_FEEDBACK_RE.test(text)) {
       return { ok: true, delivery: 'confirmed', to };
+    }
+    // Structured proof (hooks/huginn-modelswitch-hook, PostModelSwitch): a switch
+    // to the target family recorded AFTER `s`, by this claude. Either proof will do.
+    const sw = modelswitch.readSwitch(STATE_DIR, name);
+    if (sw && sw.ts >= sAt && (!sid || !sw.sessionId || sw.sessionId === sid)
+      && headroomLib.familyOf(sw.to) === to) {
+      return { ok: true, delivery: 'confirmed', to, via: 'hook' };
     }
     if (!confirmed && LADDER_CONFIRM_RE.test(text)) {
       const m = text.match(LADDER_CONFIRM_ROW_RE);
@@ -11590,6 +11638,16 @@ const server = http.createServer(async (req, res) => {
             error: `option ${option} is not offered any more`,
             prompt, fingerprint: live,
           });
+        }
+
+        if (prompt.unnumbered) {
+          const r = await answerByArrows(name, live, chosen);
+          if (!r.ok) {
+            return sendJson(res, 409, { ok: false, reason: 'changed', error: r.reason, prompt, fingerprint: live });
+          }
+          rememberAnswered(name, live);
+          log(`answer: ${name} <- ${option} by arrows (${chosen.label.slice(0, 60)})`);
+          return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'arrows' });
         }
 
         const viaHook = await tryHookAnswer(name, prompt, screen.lines, { option });

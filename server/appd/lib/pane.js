@@ -132,7 +132,7 @@ function previewLines(lines, max = 3) {
  * matching is deliberately strict: options must be numbered from 1, contiguous,
  * and at a consistent indent.
  */
-function detectPrompt(lines) {
+function detectNumberedPrompt(lines) {
   const plain = lines.map((l) => stripAnsi(l).replace(/\s+$/, ''));
   let lastContent = -1;
   for (let i = plain.length - 1; i >= 0; i--) {
@@ -322,6 +322,52 @@ function detectPrompt(lines) {
     // exactly one prompt, and only because leaving it unanswered destroys work.
     ...(recommended ? { recommended } : {}),
   };
+}
+
+// ---- the folder-trust dialog, unnumbered ------------------------------------
+//
+// Claude Code 2.1.296 (captured live 2026-10-10, fixture
+// trust-dialog-unnumbered-80) draws the trust dialog WITHOUT option numbers and
+// with "No, exit" first and pre-selected:
+//
+//    ❯ No, exit
+//      Yes, I trust this folder
+//
+//    Enter to confirm · Esc to cancel
+//
+// The numbered detector above rightly refuses that shape, and loosening it for
+// every unnumbered list would read conversation as dialogs. So this recognises
+// exactly this one dialog — the two known rows, the trust question above them,
+// the `Enter to confirm` footer, one caret — and marks it `unnumbered`: its
+// `number`s are positions, and /answer moves the caret with arrow keys instead
+// of typing a digit (a digit typed here goes nowhere useful).
+const TRUST_ROW_RE = /^\s*(❯)?\s*(No, exit|Yes, I trust this folder)\s*$/;
+const TRUST_QUESTION_RE = /Is this a project you created or one you trust\?/;
+
+function detectTrustDialog(lines) {
+  const plain = (lines || []).map((l) => stripAnsi(l).replace(/\s+$/, ''));
+  let i = plain.length - 1;
+  while (i >= 0 && !plain[i].trim()) i--;
+  if (i < 0 || !/^\s*Enter to confirm\b/.test(plain[i])) return null;
+  i--;
+  while (i >= 0 && !plain[i].trim()) i--;
+  const rows = [];
+  while (i >= 0 && TRUST_ROW_RE.test(plain[i])) { rows.unshift(i); i--; }
+  if (rows.length !== 2) return null;
+  const options = rows.map((k, idx) => {
+    const m = TRUST_ROW_RE.exec(plain[k]);
+    return { number: idx + 1, label: m[2], selected: !!m[1] };
+  });
+  if (options.filter((o) => o.selected).length !== 1) return null;
+  if (options[0].label === options[1].label) return null;
+  const q = plain.slice(Math.max(0, rows[0] - 20), rows[0]).map((t) => t.trim()).find((t) => TRUST_QUESTION_RE.test(t));
+  if (!q) return null;
+  return { question: q.slice(0, 240), options, multiSelect: false, unnumbered: true };
+}
+
+/** The question on this pane: a numbered selector, or the unnumbered trust dialog. */
+function detectPrompt(lines) {
+  return detectNumberedPrompt(lines) || detectTrustDialog(lines);
 }
 
 // ---- the Fable consent dialog ----------------------------------------------
