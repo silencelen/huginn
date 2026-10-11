@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- mark-02-faceted-16: the compact drawing for 16-22 px (tray, favicon-16): head, bill and neck in 9 straight edges
+       plus a circular eye hole, near-square box (x 14-105, y 24-90 of a plain 108 viewBox, no translate). -->
+  <g transform="translate(0,0)">
+    <path fill="#161310" fill-rule="evenodd" d="
+      M105,52.5
+      L88,37
+      L66,26.5
+      L42,24
+      L22,36
+      L16,52
+      L14,76
+      L54,90
+      L64,60
+      Z
+      M56,41.5
+      m-6.5,0
+      a6.5,6.5 0 1,0 13,0
+      a6.5,6.5 0 1,0 -13,0
+      Z"/>
+  </g>
+</svg>

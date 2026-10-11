@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- Status-bar silhouette (ic_stat_huginn.xml, 24 dp = 48-96 physical px): the polygon without the eye hole. Android tints it. -->
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="
+      M94.6,34
+      L84,25.5
+      L70,19.5
+      L55,18.5
+      L46,26
+      L42,30.5
+      L10.5,60.5
+      L14.5,67.5
+      L36,59
+      L54,62
+      L68,51
+      L71.5,36.5
+      Z"/>
+  </g>
+</svg>

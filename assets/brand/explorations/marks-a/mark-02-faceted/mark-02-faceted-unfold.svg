@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- mark-02-faceted-unfold: a one-shot build-in, 1.6 s, ease-out (the house motion budget: slow, one cycle, no spinner).
+       The polygon morphs vertex-for-vertex from its own back edge into the mark; the eye fades in last. SMIL; the
+       same keyframes port to Compose (animate a float, lerp the 12 vertices) or to a VectorDrawable path morph. -->
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M94.6,34
+      L84,25.5
+      L70,19.5
+      L55,18.5
+      L46,26
+      L42,30.5
+      L10.5,60.5
+      L14.5,67.5
+      L36,59
+      L54,62
+      L68,51
+      L71.5,36.5
+      Z">
+      <animate attributeName="d" dur="1.6s" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="0.2 0.8 0.2 1"
+        values="M42,30.5
+      L42,30.5
+      L42,30.5
+      L42,30.5
+      L42,30.5
+      L42,30.5
+      L10.5,60.5
+      L10.5,60.5
+      L24.6,47.1
+      L32.6,39.5
+      L42,30.5
+      L42,30.5
+      Z;M94.6,34
+      L84,25.5
+      L70,19.5
+      L55,18.5
+      L46,26
+      L42,30.5
+      L10.5,60.5
+      L14.5,67.5
+      L36,59
+      L54,62
+      L68,51
+      L71.5,36.5
+      Z"/>
+    </path>
+    <circle cx="66.5" cy="27" r="3.5" fill="#E8E2DA" opacity="0">
+      <animate attributeName="opacity" begin="1.2s" dur="0.4s" fill="freeze" values="0;1"/>
+    </circle>
+  </g>
+</svg>
