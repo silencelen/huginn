@@ -58,6 +58,7 @@ const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('.
 const projectsLib = require('./lib/projects');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { createApiLane } = require('./lib/apilane');
+const permhook = require('./lib/permhook');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 // Only `agedLimits` is still called from here: the account-switch DECISION moved
 // inside lib/headroom's arbiter, which imports the rest of this module itself so
@@ -791,6 +792,8 @@ function clearSessionState(name) {
   ]) {
     try { fs.unlinkSync(f); } catch { /* already gone */ }
   }
+  // PermissionRequest hand-off files (lib/permhook.js) belong to the name too.
+  permhook.clearRequests(STATE_DIR, name);
   sessionBorn.delete(name);
 }
 
@@ -7760,6 +7763,33 @@ async function paneLines(name) {
 }
 
 /**
+ * Answer the dialog on `name` through its waiting PermissionRequest hook instead
+ * of keystrokes (lib/permhook.js; hooks/huginn-permission-hook). True only when
+ * the hook took the decision; false — for ANY reason — means nothing was
+ * delivered and the caller types the digit exactly as before. Runs inside
+ * /answer's per-session lock, after the fingerprint guard, so the dialog it
+ * matches against is the one the person tapped.
+ */
+async function tryHookAnswer(name, prompt, lines, choice) {
+  try {
+    const st = readSessionState(name);
+    const sid = st && st.sessionId;
+    const reqs = permhook.liveRequests(STATE_DIR, name).filter((r) => !sid || r.sessionId === sid);
+    if (!reqs.length) return null;
+    const req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines));
+    if (!req) return null;
+    const decision = permhook.decisionFor(req, prompt, choice);
+    if (!decision) return null;
+    const ok = await permhook.deliver(STATE_DIR, name, req, decision);
+    if (!ok) log(`answer: ${name} hook for ${req.tool} did not take the decision — falling back to keys`);
+    return ok ? { tool: req.tool, behavior: decision.behavior } : null;
+  } catch (e) {
+    log(`answer: ${name} hook path failed (${e.message}) — falling back to keys`);
+    return null;
+  }
+}
+
+/**
  * Move a LIVE session to another model for THIS SESSION ONLY.
  *
  * Measured (native-rl spike): `/model <name>` takes no flags and always writes
@@ -11527,6 +11557,14 @@ const server = http.createServer(async (req, res) => {
               error: 'an option is not offered any more', prompt, fingerprint: live,
             });
           }
+          const labelsOf = () => prompt.options
+            .filter((o) => desired.includes(o.number)).map((o) => o.label);
+          const viaHook = await tryHookAnswer(name, prompt, screen.lines, { options: desired });
+          if (viaHook) {
+            rememberAnswered(name, live);
+            log(`answer: ${name} <- multi [${desired.join(',')}] via hook (${labelsOf().join(', ').slice(0, 80)})`);
+            return sendJson(res, 200, { ok: true, options: desired, labels: labelsOf(), via: 'hook' });
+          }
           const digits = multiToggleDigits(prompt.options, desired);
           for (const d of digits) {
             const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
@@ -11552,6 +11590,13 @@ const server = http.createServer(async (req, res) => {
             error: `option ${option} is not offered any more`,
             prompt, fingerprint: live,
           });
+        }
+
+        const viaHook = await tryHookAnswer(name, prompt, screen.lines, { option });
+        if (viaHook) {
+          rememberAnswered(name, live);
+          log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
+          return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
 
         // The digit and Enter separately, literal digit first, so a multi-digit option
