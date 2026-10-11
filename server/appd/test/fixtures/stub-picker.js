@@ -17,6 +17,10 @@
 //   confirm    `s` opens the "Switch model?" cache-cost dialog first, the way
 //              Claude Code 2.1.296 does whenever the prompt cache is warm
 //              (captured live 2026-10-10); Enter on its default row confirms.
+//   hookonly   `s` switches with NO feedback line on the pane, and records the
+//              switch the way hooks/huginn-modelswitch-hook does from
+//              PostModelSwitch — argv[4] is the state dir, argv[5] the session
+//              name, and a row's `id` is the model id written as `to`.
 //
 // Frames CLEAR the screen the way a real TUI does, which matters for more than
 // tidiness: `paneReadyForInput` refuses to release a queued send while selector
@@ -26,6 +30,8 @@
 
 const rows = JSON.parse(process.argv[2] || '[]');
 const mode = process.argv[3] || 'normal';
+const hookStateDir = process.argv[4] || null;
+const hookSession = process.argv[5] || null;
 
 let cursor = rows.findIndex((r) => r.current);
 if (cursor < 0) cursor = 0;
@@ -70,6 +76,19 @@ process.stdin.on('data', (buf) => {
     if (s.includes('[B') || s.includes('OB')) { cursor = Math.min(rows.length - 1, cursor + 1); draw(); return; }
     if (s.includes('s')) {
       open = false;
+      if (mode === 'hookonly' && hookStateDir && hookSession) {
+        const fs = require('fs');
+        const path = require('path');
+        const dir = path.join(hookStateDir, '.modelswitch');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, hookSession), JSON.stringify({
+          v: 1, sessionId: `sid-${hookSession}`, from: null, to: rows[cursor].id || rows[cursor].label,
+          source: 'picker', ts: Date.now(),
+        }));
+        w(`${CLEAR}`);
+        caret();
+        return;
+      }
       if (mode === 'confirm') {
         confirming = true;
         w([CLEAR, '  Switch model?', '  Your next response will be slower and use more tokens',

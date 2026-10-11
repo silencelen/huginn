@@ -17,6 +17,7 @@
 //   huginn-headroom-gate     SubagentStart      "*"               timeout 1800
 //                            PreToolUse         "Agent|Workflow"  timeout 1800
 //   huginn-permission-hook   PermissionRequest  "*"               timeout 960
+//   huginn-modelswitch-hook  PostModelSwitch    "*"               timeout 10
 //
 // deploy.sh runs this once per script. The permission hook (appd >= 3.10.1) lets
 // /answer resolve a prompt through the CLI's own hook instead of keystrokes; it
@@ -59,6 +60,7 @@ const ENTRIES = [
 const SCRIPT_SPECS = {
   'huginn-headroom-gate': { entries: ENTRIES, timeout: TIMEOUT_S },
   'huginn-permission-hook': { entries: [['PermissionRequest', '*']], timeout: 960 },
+  'huginn-modelswitch-hook': { entries: [['PostModelSwitch', '*']], timeout: 10 },
 };
 function specFor(script) {
   return SCRIPT_SPECS[path.basename(String(script || ''))] || SCRIPT_SPECS['huginn-headroom-gate'];

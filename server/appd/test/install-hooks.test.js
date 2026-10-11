@@ -401,3 +401,15 @@ test('the permission hook installs as PermissionRequest "*" timeout 960, beside 
   assert.equal(back.PermissionRequest, undefined);
   assert.equal(ours(back, 'SubagentStart').length, 1);
 });
+
+test('the modelswitch hook installs as PostModelSwitch "*" timeout 10', () => {
+  const dir = scratch();
+  const file = copyFixture(dir);
+  const SW = '/opt/huginn-appd/hooks/huginn-modelswitch-hook';
+  run(['--settings', file, '--script', SW]);
+  const { hooks } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const rules = (hooks.PostModelSwitch || []).filter((r) => r.hooks.some((h) => h.command === SW));
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].matcher, '*');
+  assert.equal(rules[0].hooks[0].timeout, 10);
+});
