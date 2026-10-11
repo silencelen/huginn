@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <!-- Huginn "terminal raven": the container is the ink, the raven head and breast are the hole,
+       the eye is a 4x4 cell of ink inside the hole (evenodd: container - raven + eye), so the whole
+       mark is ONE path and works in one colour on any ground. The breast opens onto the bottom edge.
+       Head: flat crown y=18, forehead step at x=35, straight culmen to (52,27) with the arch in the
+       last 3 units, tip (55,29), gonys straight back to the chin (38,33), throat flowing into the
+       breast (no neck). Bill 20 long, 12.7 deep at the base. Walls: 18 above the crown, 9 right of
+       the tip, 9-14 left. Eye cell at x 28-32, y 24-28: whole pixels at 16, 32 and 64.
+       Ink #161310, bone #E8E2DA. -->
+  <path fill="#161310" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M55,29 L38,33 C37,36 39,41 44,46 C48,51 47,58 45,64 L9,64 C10,54 12,42 14,32 C14.5,22 19,18 22,18 L32,18 C34,18 34,20 35,21 L52,27 C53.6,27.6 55,27.8 55,29 Z M28,24 h4 v4 h-4 Z"/>
+</svg>

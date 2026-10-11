@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <!-- Terminal-window container: an 8-unit title bar split off by a 4-unit gap (y 8-12: 2 px and 1 px at 16),
+       a 4x4 bone cell at the bar's left as the prompt block (echoing the eye cell), the same head moved
+       down 8 (eye at y 32-36, still whole pixels at 16/32/64). -->
+  <path fill="#161310" fill-rule="evenodd" d="M10,0 H54 A10,10 0 0 1 64,10 V54 A10,10 0 0 1 54,64 H10 A10,10 0 0 1 0,54 V10 A10,10 0 0 1 10,0 Z M0,8 H64 V12 H0 Z M6,2 h4 v4 h-4 Z M55,37 L38,41 C37,44 39,49 44,54 C48,59 47,66 45,64 L9,64 C10,62 12,50 14,40 C14.5,30 19,26 22,26 L32,26 C34,26 34,28 35,29 L52,35 C53.6,35.6 55,35.8 55,37 Z M28,32 h4 v4 h-4 Z"/>
+</svg>
