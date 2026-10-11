@@ -12,10 +12,15 @@
 // HUGINN_HEADROOM_DIR set — and wrong there means a pause button wired to
 // nothing, with no symptom. deploy.sh passes the dir the service will really use.
 //
-// The two entries it manages:
+// The entries it manages depend on WHICH script --script names (by basename):
 //
-//   SubagentStart  matcher "*"               timeout 1800
-//   PreToolUse     matcher "Agent|Workflow"  timeout 1800
+//   huginn-headroom-gate     SubagentStart      "*"               timeout 1800
+//                            PreToolUse         "Agent|Workflow"  timeout 1800
+//   huginn-permission-hook   PermissionRequest  "*"               timeout 960
+//
+// deploy.sh runs this once per script. The permission hook (appd >= 3.10.1) lets
+// /answer resolve a prompt through the CLI's own hook instead of keystrokes; it
+// leaves 60 s before its timeout so every exit is its own, like the gate.
 //
 // Both are needed and neither is redundant. SubagentStart is the only event that
 // sees an agent spawned INSIDE a Workflow script (the parent turn keeps running
@@ -43,13 +48,21 @@ const path = require('node:path');
 
 const DEFAULT_SCRIPT = '/opt/huginn-appd/hooks/huginn-headroom-gate';
 const TIMEOUT_S = 1800;
-// event -> matcher. The matcher is a regex over tool_name (PreToolUse) and over
-// agent_type (SubagentStart), where "*" is how the CLI's own examples spell
-// "every agent type".
+// event -> matcher. The matcher is a regex over tool_name (PreToolUse,
+// PermissionRequest) and over agent_type (SubagentStart), where "*" is how the
+// CLI's own examples spell "every agent type".
 const ENTRIES = [
   ['SubagentStart', '*'],
   ['PreToolUse', 'Agent|Workflow'],
 ];
+/** Per-script entries + timeout, keyed by basename. Unknown scripts get the gate's. */
+const SCRIPT_SPECS = {
+  'huginn-headroom-gate': { entries: ENTRIES, timeout: TIMEOUT_S },
+  'huginn-permission-hook': { entries: [['PermissionRequest', '*']], timeout: 960 },
+};
+function specFor(script) {
+  return SCRIPT_SPECS[path.basename(String(script || ''))] || SCRIPT_SPECS['huginn-headroom-gate'];
+}
 
 // PRESENCE, not truthiness. An empty HUGINN_CLAUDE_SETTINGS used to fall back to
 // the live shared file, so a caller that meant to point this tool at a scratch
@@ -137,7 +150,7 @@ function parseArgs(argv) {
 function ruleFor(matcher, script, headroomDir = null) {
   return {
     matcher,
-    hooks: [{ type: 'command', command: commandFor(script, headroomDir), timeout: TIMEOUT_S }],
+    hooks: [{ type: 'command', command: commandFor(script, headroomDir), timeout: specFor(script).timeout }],
   };
 }
 
@@ -172,7 +185,7 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
   if (uninstall) {
     const hooks = settings.hooks;
     if (!hooks || typeof hooks !== 'object') return { settings, changes };
-    for (const [event] of ENTRIES) {
+    for (const [event] of specFor(script).entries) {
       const list = hooks[event];
       if (!Array.isArray(list)) continue;
       let removed = 0;
@@ -198,7 +211,7 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
   // called (it is somebody's file, not ours to replace with `{}`), so the only
   // thing left to do here is create it when it is genuinely absent.
   if (settings.hooks === undefined) settings.hooks = {};
-  for (const [event, matcher] of ENTRIES) {
+  for (const [event, matcher] of specFor(script).entries) {
     const list = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
     // Sweep OUR OWN entries first: prune one whose script is gone, repoint one
     // that moved, and drop a second copy. Everyone else's hooks are untouched,
@@ -348,6 +361,6 @@ function main(argv) {
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
-  DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, mergeHooks, parseArgs, main, isOurCommand,
+  DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, SCRIPT_SPECS, specFor, mergeHooks, parseArgs, main, isOurCommand,
   commandFor, scriptOf,
 };
