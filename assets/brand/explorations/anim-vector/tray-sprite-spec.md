@@ -4,101 +4,136 @@
 This spec turns `anim-04-attention-pulse/anim.svg` into frames that code can draw with
 the same `RavenMark.draw` call, so nothing is shipped as a file.
 
+**Revision 2.** The sequence now starts from the icon the tray is actually showing:
+`TrayIcons.kt` draws IDLE and WORKING with `RavenMark.draw(g, 2.0, 2.0, 60.0, 60.0)`
+and ATTENTION with `(0.0, 22.0, 50.0, 42.0)`, so the raven shrinks 17 % and drops 14 px
+on entering ATTENTION. That reposition is the first thing the owner sees and the old spec
+started after it. The first 300 ms now slide the raven box from one to the other with
+the same easing; the badge and the ring follow. The badge pop lost its overshoot (one
+100 ms frame of overshoot at 10 fps read as a flicker). The frame tables are generated
+by `anim-04-attention-pulse/build.py --table` from the same numbers that make the SVG.
+
 ## Geometry (64-unit canvas, 1 unit = 1 px of the 64 px sprite)
 
 | element | value | today |
 |---|---|---|
-| raven | `RavenMark.draw(g, 0.0, 22.0, 50.0, 42.0, color)` | unchanged |
-| badge | `Ellipse2D.Double(44.0, 2.0, 18.0, 18.0)` (centre 53,11, r 9) | unchanged |
+| raven, IDLE / WORKING | `RavenMark.draw(g, 2.0, 2.0, 60.0, 60.0, color)` | unchanged |
+| raven, ATTENTION | `RavenMark.draw(g, 0.0, 22.0, 50.0, 42.0, color)` | unchanged |
+| raven, slide | `RavenMark.draw(g, x(t), y(t), w(t), h(t), color)`: the box interpolated | new |
+| badge | `Ellipse2D.Double(44.0, 2.0, 18.0, 18.0)` (centre 53,11, r 9), scaled about its centre | unchanged |
 | ring | circle centre (29, 36), radius r(t), stroke w(t), alpha a(t), drawn BEFORE the raven | new |
 
-## Frame math
+## Frame maths
 
-Ring, per 1.2 s cycle, with `E(u)` = CSS `cubic-bezier(0.2, 0, 0, 1)` evaluated at
-progress `u` (solve the x-bezier for u, read y; or use the table):
-
-```
-u  = (t mod 1.2) / 1.2
-if u < 0.75:  p = E(u / 0.75)
-              r = 17 + 10.2 * p
-              w = 4 - 2.5 * p
-              a = 0.85 * E(u / 0.08)             if u < 0.08
-                = 0.85 * (1 - (u - 0.08) / 0.67)  otherwise
-else:         ring not drawn (a = 0)
-```
-
-Badge, first 0.26 s only, `p = E(min(t / 0.26, 1))`:
+`E(u)` is CSS `cubic-bezier(0.2, 0, 0, 1)` evaluated at progress `u` (solve the x-bezier
+for the parameter, read y; `build.py` has a 40-step bisection), clamped to [0, 1].
 
 ```
-scale = 1.08 * p / 0.65                      if p < 0.65
-      = 1.08 - 0.08 * (p - 0.65) / 0.35      otherwise
-alpha = min(1, p / 0.15)
+t  = seconds since entering ATTENTION
+
+slide, t < 0.30:   p = E(t / 0.30)
+                   box = (2, 2, 60, 60) + p * ((0, 22, 50, 42) - (2, 2, 60, 60))
+                   no badge, no ring
+after the slide:   tt = t - 0.30, box = (0, 22, 50, 42)
+
+badge, tt < 0.24:  scale = E(tt / 0.24), alpha = min(1, scale / 0.15)    (no overshoot)
+                   else scale = 1, alpha = 1
+
+ring, two cycles:  u = (tt mod 1.2) / 1.2, drawn only while tt < 2.4 and u < 0.75
+                   p = E(u / 0.75)
+                   r = 17 + 10.2 * p
+                   w = 4 - 2.5 * p
+                   a = 0.85 * E(u / 0.08)                if u < 0.08
+                     = 0.85 * (1 - (u - 0.08) / 0.67)    otherwise
 ```
 
-### 12 frames at 10 fps (recommended for the tray)
+Because `RavenMark.draw` fits the bbox into the box by `min(w/84.6, h/52)` and the width
+is the limiting axis in both boxes, interpolating the box linearly is the same as
+interpolating the raven's scale and offset linearly, which is what the SVG does.
 
-The ring cycle is 1.2 s; at 100 ms ticks that is 12 frames per cycle. Values below are
-the keyframes evaluated at each tick (all px on the 64 px sprite):
+### 10 fps (recommended for the tray)
 
-| frame | t (s) | ring r | stroke | ring alpha |
-|---|---|---|---|---|
-| 0 | 0.0 | 17.0 | 4.00 | 0.00 |
-| 1 | 0.1 | 19.0 | 3.50 | 0.85 |
-| 2 | 0.2 | 22.6 | 2.62 | 0.74 |
-| 3 | 0.3 | 24.5 | 2.17 | 0.63 |
-| 4 | 0.4 | 25.6 | 1.90 | 0.53 |
-| 5 | 0.5 | 26.3 | 1.73 | 0.42 |
-| 6 | 0.6 | 26.7 | 1.62 | 0.32 |
-| 7 | 0.7 | 27.0 | 1.55 | 0.21 |
-| 8 | 0.8 | 27.2 | 1.51 | 0.11 |
-| 9-11 | 0.9-1.1 | - | - | 0 (static icon) |
+One frame per 100 ms tick, evaluated exactly at the tick. Rows are from
+`python3 anim-04-attention-pulse/build.py --table`.
 
-Badge pop frames (first cycle only): frame 0 scale 0 / alpha 0, frame 1 scale 1.05 /
-alpha 1, frame 2 scale 1.00 / alpha 1.
+| tick | t (s) | phase | raven box (x, y, w, h) | badge scale | ring r | stroke | ring alpha |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.00 | slide | (2.0, 2.0, 60.0, 60.0) | - | - | - | 0 |
+| 1 | 0.10 | slide | (0.5, 16.6, 52.7, 46.8) | - | - | - | 0 |
+| 2 | 0.20 | slide | (0.1, 21.1, 50.5, 42.8) | - | - | - | 0 |
+| 3 | 0.30 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 0.00 | 17.0 | 4.00 | 0.00 |
+| 4 | 0.40 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 0.82 | 19.0 | 3.50 | 0.85 |
+| 5 | 0.50 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 0.99 | 22.6 | 2.62 | 0.74 |
+| 6 | 0.60 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 24.5 | 2.17 | 0.63 |
+| 7 | 0.70 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 25.6 | 1.90 | 0.53 |
+| 8 | 0.80 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 26.3 | 1.73 | 0.42 |
+| 9 | 0.90 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 26.7 | 1.62 | 0.32 |
+| 10 | 1.00 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 27.0 | 1.55 | 0.21 |
+| 11 | 1.10 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 27.2 | 1.51 | 0.11 |
+| 12 | 1.20 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 13 | 1.30 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 14 | 1.40 | cycle 1 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 15 | 1.50 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 17.0 | 4.00 | 0.00 |
+| 16 | 1.60 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 19.0 | 3.50 | 0.85 |
+| 17 | 1.70 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 22.6 | 2.62 | 0.74 |
+| 18 | 1.80 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 24.5 | 2.17 | 0.63 |
+| 19 | 1.90 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 25.6 | 1.90 | 0.53 |
+| 20 | 2.00 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 26.3 | 1.73 | 0.42 |
+| 21 | 2.10 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 26.7 | 1.62 | 0.32 |
+| 22 | 2.20 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 27.0 | 1.55 | 0.21 |
+| 23 | 2.30 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | 27.2 | 1.51 | 0.11 |
+| 24 | 2.40 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 25 | 2.50 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 26 | 2.60 | cycle 2 | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
+| 27 | 2.70 | rest | (0.0, 22.0, 50.0, 42.0) | 1.00 | - | - | 0 |
 
-Playback sequence on entering ATTENTION, one frame per 100 ms tick:
+Tick 0 is today's IDLE/WORKING icon and tick 27 is today's static ATTENTION icon, so
+the transition starts and ends on frames that already exist. Ticks 12-14 and 24-26 are
+the ATTENTION icon with no ring (the rest between cycles).
 
-```
-pop0 pop1 pop2 ring3 ring4 ... ring11      (cycle 1: 12 ticks, badge pops in)
-ring0 ring1 ... ring11                     (cycle 2: 12 ticks)
-hold ring11 (= today's static ATTENTION icon)
-```
+### 24 fps variant
 
-24 ticks = 2.4 s, then nothing moves until the state changes.
-
-### Why not 12 frames at 24 fps
-
-Twelve frames at 24 fps is a 0.5 s cycle, which is a flicker, not a pulse; the brief's
-1.2 s is right. If the tray can repaint at 24 fps, keep the maths and change the tick:
-29 frames per cycle (`t = i / 24`), 58 ticks for the two cycles, ~460 KB cached. Windows
-and GNOME trays repaint `TrayIcon.setImage` reliably at 10 Hz; at 24 Hz some shells
-coalesce updates and the ring visibly stutters anyway, which is why 10 fps is the
-recommendation. Test on the target shell before choosing 24.
+Same maths, `t = i / 24`: 7 slide frames, 6 pop frames, 29 frames per ring cycle, 66
+ticks for the whole sequence (`build.py --table` prints it). Windows and GNOME trays
+repaint `TrayIcon.setImage` reliably at 10 Hz; at 24 Hz some shells coalesce updates
+and the ring stutters anyway, which is why 10 fps is the recommendation. Test on the
+target shell before choosing 24.
 
 ## Memory and CPU
 
-- Cached frames: 12 ring + 3 pop = 15 `BufferedImage`s of 64 x 64 ARGB = 15 x 16 KB
-  = 240 KB. Build them once per tint colour (ATTENTION only), lazily, on first use.
-- Ticker: one coroutine, `delay(100)`, 24 iterations; set `Tray(icon = painter)` state
-  each tick. Swapping the painter calls `TrayIcon.setImage`; 24 calls over 2.4 s is
+- Cached frames at 10 fps: 2 slide + 9 distinct ring frames (ticks 3-11; cycle 2 reuses
+  them, the badge is static by then) + 3 badge-pop frames with the ring (ticks 3-5 differ
+  from the plain ring frames only by the badge) = at most 17 `BufferedImage`s of
+  64 x 64 ARGB = 17 x 16 KB = 272 KB. Build them once per tint colour (ATTENTION only),
+  lazily, on first use.
+- Ticker: one coroutine, `delay(100)`, 27 iterations; set `Tray(icon = painter)` state
+  each tick. Swapping the painter calls `TrayIcon.setImage`; 27 calls over 2.7 s is
   negligible. Cancel the job if the state leaves ATTENTION mid-sequence and show that
   state's static icon.
 - Drawing a frame (Java2D, antialiasing on): draw the ring first with
   `g.stroke = BasicStroke(w)`, `g.composite = AlphaComposite.SrcOver.derive(a)`, then
-  reset the composite and draw the raven and the badge as today. The ring is drawn
-  before the raven so it appears to leave the body.
+  reset the composite and draw the raven in its box and the badge (scaled about
+  (53, 11)) as today. The ring is drawn before the raven so it appears to leave the body.
+
+## How it looks at tray sizes
+
+The OS downscales the 64 px image to 16-32 px. `anim-04-attention-pulse/preview.png`
+rows 3 and 4 are the 64 px sprite frames Lanczos-downscaled to 24 and 16 px (not live
+renders): at 24 px the ring is a thin, clear circle for 4-5 ticks; at 16 px it is a
+brief halo around the raven for 2-3 ticks and the badge pop is the cue that reads.
 
 ## Behaviour rules
 
 - Play once per transition INTO ATTENTION; never loop while the state persists.
 - If the user has a "reduce motion" preference in the app settings (Java cannot read
-  the OS one portably), skip straight to `ring11`.
+  the OS one portably), skip the ring and the pop: slide in 300 ms, then the static icon.
 - Do not animate WORKING or IDLE in the tray; the chat UI owns the "thinking"
   indicator (`anim-05-thinking`).
 - Frames are monochrome: the tint comes from the state colour exactly as today.
 
 ## Verifying
 
-`node anim-04-attention-pulse/capture.mjs` regenerates `sprite-ring.png` and
-`sprite-pop.png` from the SVG at 64 px (dark ground, bone ink) so a Kotlin
-implementation can be diffed against them frame by frame.
+`node anim-04-attention-pulse/capture.mjs` regenerates `sprite-ring.png` (12 ring
+frames, ticks 15-26) and `sprite-pop.png` (6 entry frames, ticks 0-5) from the SVG at
+64 px (dark ground, bone ink) so a Kotlin implementation can be diffed against them
+frame by frame.
