@@ -1,0 +1,97 @@
+{
+  "name": "Huginn Ink, Bone & Gold",
+  "id": "color-01-ink-bone-gold",
+  "background": "#12100F",
+  "foreground": "#E8E2DA",
+  "cursor": "#C8A45C",
+  "selection": "#4A3F2A",
+  "ansi16": {
+    "black": "#3A3431",
+    "red": "#D1544F",
+    "green": "#69A95B",
+    "yellow": "#C8A45C",
+    "blue": "#5B8FD6",
+    "magenta": "#A974C4",
+    "cyan": "#4FA5A8",
+    "white": "#CFC8BF",
+    "brightBlack": "#7A736C",
+    "brightRed": "#E8736D",
+    "brightGreen": "#8CCB7B",
+    "brightYellow": "#F3D58F",
+    "brightBlue": "#7DAFEA",
+    "brightMagenta": "#C495DC",
+    "brightCyan": "#6FC4C7",
+    "brightWhite": "#F2ECE4"
+  },
+  "contrastOnGround": {
+    "black": 1.55,
+    "red": 4.6,
+    "green": 6.71,
+    "yellow": 8.06,
+    "blue": 5.73,
+    "magenta": 5.41,
+    "cyan": 6.58,
+    "white": 11.45,
+    "brightBlack": 4.06,
+    "brightRed": 6.42,
+    "brightGreen": 9.89,
+    "brightYellow": 13.31,
+    "brightBlue": 8.31,
+    "brightMagenta": 7.84,
+    "brightCyan": 9.39,
+    "brightWhite": 16.17
+  },
+  "lstar": {
+    "black": 22.2,
+    "red": 52.4,
+    "green": 63.5,
+    "yellow": 69.2,
+    "blue": 58.7,
+    "magenta": 57.0,
+    "cyan": 62.8,
+    "white": 80.9,
+    "brightBlack": 48.9,
+    "brightRed": 62.1,
+    "brightGreen": 75.9,
+    "brightYellow": 86.3,
+    "brightBlue": 70.1,
+    "brightMagenta": 68.3,
+    "brightCyan": 74.2,
+    "brightWhite": 93.7
+  },
+  "brand": {
+    "accentSlot": "yellow",
+    "accentTruecolor": "#C8A45C",
+    "states": {
+      "stateIdle": "brightBlack",
+      "stateWorking": "yellow",
+      "stateAttention": "brightYellow",
+      "stateSuccess": "brightGreen",
+      "stateError": "brightRed",
+      "stateInfo": "brightBlue"
+    },
+    "cli": {
+      "ok": "brightGreen",
+      "warn": "brightYellow",
+      "error": "brightRed",
+      "muted": "brightBlack",
+      "accent": "yellow"
+    },
+    "slotPins": {
+      "brightRed": "error",
+      "brightGreen": "stateSuccess",
+      "brightYellow": "stateAttention",
+      "brightBlue": "stateInfo"
+    },
+    "stateLadderLstar": {
+      "brightBlack": 48.9,
+      "yellow": 69.2,
+      "brightYellow": 86.3
+    },
+    "glyph": {
+      "unicode": "\u25e2\u2586\u2588\u2580",
+      "block": "\u2597\u2586\u2588\u2580",
+      "ascii": "(o)==-"
+    }
+  }
+}

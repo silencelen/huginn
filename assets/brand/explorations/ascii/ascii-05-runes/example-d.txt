@@ -1,0 +1,5 @@
+▸ host     odin · up 3d                 
+▸ session  main · 3 windows             
+· client   android · attached           
+huginn · thought, on call from anywhere.
+odin │ main │ 3 windows                 

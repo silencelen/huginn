@@ -1,0 +1,16 @@
+{
+ "name": "wingbeat",
+ "encoding": "unicode",
+ "fps": 8,
+ "loop": true,
+ "rest": "first",
+ "cols": 3,
+ "rows": 1,
+ "note": "(a) raven in flight seen from behind: level, wings up (body low), level, wings down (body rises). 8 fps = one beat per 0.5 s",
+ "frames": [
+  "─▄─",
+  "╲▄╱",
+  "─▄─",
+  "╱▀╲"
+ ]
+}

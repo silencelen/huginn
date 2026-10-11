@@ -1,0 +1,3 @@
+ᚺ sessions                      
+  main      attached   3 windows
+  scratch   detached   1 window 

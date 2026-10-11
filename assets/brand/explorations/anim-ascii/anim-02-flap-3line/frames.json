@@ -1,0 +1,17 @@
+{
+ "name": "3-row raven flap-hop (4 rows with the hop)",
+ "encoding": "unicode",
+ "fps": 10,
+ "loop": true,
+ "rest": "first",
+ "cols": 9,
+ "rows": 4,
+ "frames": [
+  "         \n    ▗▛▜▄▖\n  ▗▟███  \n▗▛▀▝▀▀▀  ",
+  "         \n  ▝█▌▛▜▄▖\n  ▗▟███  \n▗▛▀▝▀▀▀  ",
+  "         \n ▝█▄▖▛▜▄▖\n  ▗████  \n▗▛▀▝▀▀▀  ",
+  " ▗▄  ▄▄  \n  ▀█▙▙▟▀▘\n ▄▟▜███  \n▝▘       ",
+  "  ▗▄▖▄▄  \n   ▜▙▙▟▀▘\n ▄▟▜███  \n▝▘       ",
+  "         \n    ▗▛▜▄▖\n  ▗▟███  \n▗▛▀▝▀▀▀  "
+ ]
+}

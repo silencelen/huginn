@@ -1,0 +1,15 @@
+{
+ "name": "working (quiet): the body swells",
+ "encoding": "unicode",
+ "fps": 1,
+ "loop": true,
+ "rest": "first",
+ "cols": 4,
+ "rows": 1,
+ "frames": [
+  "◢▄█▀",
+  "◢▆█▀",
+  "◢██▀",
+  "◢▆█▀"
+ ]
+}

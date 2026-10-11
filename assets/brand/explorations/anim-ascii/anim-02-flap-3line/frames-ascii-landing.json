@@ -1,0 +1,21 @@
+{
+ "name": "landing (7-bit twin), 22x5",
+ "encoding": "ascii",
+ "fps": 10,
+ "loop": false,
+ "rest": "last",
+ "cols": 22,
+ "rows": 5,
+ "note": "ends on the client's own help-screen raven, so the resting frame is the thing the CLI already prints",
+ "frames": [
+  "                    / \n                   /  \n             -==(o)=~~\n                      \n                      ",
+  "                      \n          -==(o)=~~   \n               \\      \n                \\     \n                      ",
+  "                      \n              /       \n             /        \n       -==(o)=~~      \n                      ",
+  "                      \n                      \n    -==(o)=~~         \n         \\            \n          \\           ",
+  "                      \n     _  /             \n -==(o)/              \n     /|               \n     \\_\\~=            ",
+  "                      \n     _                \n -==(o) /             \n     /\\/              \n     \\_\\~=            ",
+  "                      \n     _                \n -==(o)               \n    /\\\\               \n     \\_\\~=            ",
+  "                      \n     _                \n -==(o)               \n    /\\\\               \n     \\_\\~=            ",
+  "                      \n     _                \n    (o)==-            \n    //\\               \n =~/_/                "
+ ]
+}

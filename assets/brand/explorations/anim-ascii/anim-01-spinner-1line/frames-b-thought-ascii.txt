@@ -1,0 +1,51 @@
+# huginn-frames cols=16 rows=1 fps=12 loop=yes rest=first pad=@
+
+(o>.           o
+
+---
+
+(o> .          o
+
+---
+
+(o>   .        o
+
+---
+
+(o>      .     o
+
+---
+
+(o>        .   o
+
+---
+
+(o>          . o
+
+---
+
+(o>            *
+
+---
+
+(o>          . o
+
+---
+
+(o>        .   o
+
+---
+
+(o>      .     o
+
+---
+
+(o>   .        o
+
+---
+
+(o> .          o
+
+---
+
+(o>.           o

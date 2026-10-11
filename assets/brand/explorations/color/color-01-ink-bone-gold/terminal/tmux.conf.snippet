@@ -1,0 +1,45 @@
+# Huginn tmux status line - Ink, Bone & Gold (color-01-ink-bone-gold)
+# Drop into server/tmux.conf in place of the current status-left line.
+#
+# The hex values are app tokens (tier 1 / tier 3 surfaces, onSurface, the accent);
+# they need truecolor, which in tmux means BOTH of these (without the override tmux
+# rounds every hex to the nearest of 256 colours):
+#   set -g  default-terminal "tmux-256color"
+#   set -as terminal-overrides ",*:Tc"          # tmux >= 3.2 may use: set -as terminal-features ",*:RGB"
+# A 16-colour-only fallback with the same layout is at the bottom of this file.
+set -g status-position bottom
+set -g status-justify left
+set -g status-style "bg=#1B1817,fg=#A39A8F"
+set -g status-left-length 60
+set -g status-right-length 60
+# left: the one-row raven in the accent on the tier-3 surface, then the session name
+# (the quiet default from ascii-04-lockups). The raven is `◢▆█▀`: U+25E2 U+2586 U+2588
+# U+2580 (ascii-03-compact raven-1line-a); if the host font lacks Geometric Shapes use
+# `▗▆█▀` (U+2597 first). The separator is U+258C. All single-width; no powerline
+# glyphs (private-use, often missing).
+set -g status-left "#[fg=#C8A45C,bg=#2D2725,bold] ◢▆█▀ #[fg=#E8E2DA,bg=#2D2725,bold]#{session_name} #[fg=#2D2725,bg=#1B1817]▌#[default] "
+set -g window-status-format "#[fg=#A39A8F] #I:#W "
+set -g window-status-current-format "#[fg=#E8E2DA,bold] #I:#W #[fg=#C8A45C]▌#[default]"
+set -g window-status-separator ""
+# right: the keybind hints the current config shows, then host and clock
+set -g status-right "#[fg=#7A736C]Alt-d:detach  Alt-o:solo  ^b[:scroll #[fg=#A39A8F] #H #[fg=#C8A45C,bold] %H:%M "
+set -g pane-border-style "fg=#3A3431"
+set -g pane-active-border-style "fg=#C8A45C"
+set -g message-style "bg=#2D2725,fg=#E8E2DA"
+set -g message-command-style "bg=#2D2725,fg=#C8A45C"
+set -g mode-style "bg=#4A3F2A,fg=#E8E2DA"
+set -g clock-mode-colour "#C8A45C"
+
+# ---- 16-colour fallback: no truecolor, ANSI names only. With ink-bone-gold.ansi.json
+# installed in the terminal these are black=#3A3431 (outlineVariant), brightblack=#7A736C
+# (outline), white=#CFC8BF, yellow=#C8A45C (the accent slot); on any other palette
+# they are that palette's colours.
+# set -g status-style "bg=black,fg=brightblack"
+# set -g status-left "#[fg=yellow,bg=brightblack,bold] ◢▆█▀ #[fg=white,bg=brightblack,bold]#{session_name} #[fg=brightblack,bg=black]▌#[default] "
+# set -g window-status-format "#[fg=brightblack] #I:#W "
+# set -g window-status-current-format "#[fg=white,bold] #I:#W #[fg=yellow]▌#[default]"
+# set -g status-right "#[fg=brightblack]Alt-d:detach  Alt-o:solo  ^b[:scroll #[fg=white] #H #[fg=yellow,bold] %H:%M "
+# set -g pane-border-style "fg=brightblack"
+# set -g pane-active-border-style "fg=yellow"
+# set -g message-style "bg=brightblack,fg=white"
+# set -g clock-mode-colour "yellow"

@@ -1,0 +1,15 @@
+{
+ "name": "flap (7-bit twin of the flap-hop, 4 rows, no hop)",
+ "encoding": "ascii",
+ "fps": 8,
+ "loop": true,
+ "rest": "first",
+ "cols": 22,
+ "rows": 5,
+ "frames": [
+  "                      \n     _                \n    (o)==-            \n    //\\               \n =~/_/                ",
+  "                      \n     _                \n  \\ (o)==-            \n   \\/\\                \n =~/_/                ",
+  "                      \n  \\  _                \n   \\(o)==-            \n    |\\                \n =~/_/                ",
+  "                      \n     _                \n  \\ (o)==-            \n   \\/\\                \n =~/_/                "
+ ]
+}

@@ -1,0 +1,20 @@
+{
+ "name": "takeoff (detached), 12x5, for terminals under 60 columns",
+ "encoding": "unicode",
+ "fps": 10,
+ "loop": false,
+ "rest": "none",
+ "cols": 12,
+ "rows": 5,
+ "frames": [
+  "            \n            \n    ▗▛▜▄▖   \n  ▗▟███     \n▗▛▀▝▀▀▀     ",
+  "            \n            \n  ▝█▌▛▜▄▖   \n  ▗▟███     \n▗▛▀▝▀▀▀     ",
+  "            \n ▗▄  ▄▄     \n  ▀█▙▙▟▀▘   \n ▄▟▜███     \n▝▘          ",
+  "            \n   ▐█▖      \n    ▜█▗▄    \n   ▀███▛▀   \n            ",
+  "            \n        ▗▄  \n     ▀▜███▛ \n       ▜▛▘  \n            ",
+  "       ▗▄   \n       ▝█▙  \n       ▄▟█▟█\n        ▀▀▀▘\n            ",
+  "            \n         ▀▜█\n           ▜\n            \n            ",
+  "           ▐\n            \n           ▀\n            \n            ",
+  "            \n            \n            \n            \n            "
+ ]
+}
