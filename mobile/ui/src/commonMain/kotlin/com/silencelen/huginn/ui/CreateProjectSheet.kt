@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.theme.huginnFilterChipColors
 
 /**
  * Starting a project: a name, what kind it is, the brief, and where it runs.
@@ -123,6 +124,7 @@ fun CreateProjectSheet(
                 FlowRow(Modifier.fillMaxWidth()) {
                     ProjectRules.KINDS.forEach { k ->
                         FilterChip(
+                            colors = huginnFilterChipColors(),
                             selected = k == kind,
                             onClick = { kind = k },
                             label = { Text(k, style = MaterialTheme.typography.labelMedium, maxLines = 1) },

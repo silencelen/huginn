@@ -206,7 +206,7 @@ object Tints {
 
     /** Under the pointer, and nothing more. */
     val hover: androidx.compose.ui.graphics.Color
-        @Composable get() = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        @Composable get() = MaterialTheme.colorScheme.surfaceContainer
 }
 
 /**

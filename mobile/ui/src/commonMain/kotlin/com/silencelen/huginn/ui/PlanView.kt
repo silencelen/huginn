@@ -206,7 +206,7 @@ private fun ExtraUsageCard(card: PlanFormat.ExtraUsageCard) {
         // Explicit contentColor: a Surface is what provides LocalContentColor, and
         // a tinted container without one hands its children whatever the last
         // Surface decided.
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),

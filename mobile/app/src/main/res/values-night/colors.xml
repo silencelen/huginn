@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="huginn_bg">#141615</color>
+    <color name="huginn_ink">#E2E6E1</color>
+    <color name="huginn_tile">#E2E6E1</color>
+</resources>

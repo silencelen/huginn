@@ -28,6 +28,7 @@ import com.silencelen.huginn.ui.ScratchpadEditorView
 import com.silencelen.huginn.ui.ScratchpadListView
 import com.silencelen.huginn.ui.SendTargetPanel
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The desktop's two homes for a page.
@@ -96,7 +97,7 @@ fun ScratchpadsDetail(store: AppStore) {
  */
 @Composable
 fun ScratchpadSidePanel(store: AppStore, target: PadTarget) {
-    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
     Box(Modifier.width(PANEL_WIDTH).fillMaxHeight()) {
         PadEditor(store = store, target = target, modifier = Modifier.fillMaxSize())
     }

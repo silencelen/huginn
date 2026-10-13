@@ -57,6 +57,8 @@ import com.silencelen.huginn.ui.ProjectMemberActions
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.ProjectsListView
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.theme.huginnFilterChipColors
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The desktop's home for a cluster of sessions.
@@ -324,7 +326,7 @@ fun ProjectsDetail(store: AppStore) {
 
     Column(Modifier.fillMaxSize()) {
         ProjectCrumb(row, member, verbs, onBackToProject = { store.openProjectMember(null) })
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         if (member != null) {
             // The ordinary session detail, reused whole. A member is a session;
             // drawing a second, thinner version of one here would be a transcript
@@ -651,7 +653,7 @@ private fun ManifestEditorDialog(
                 )
                 sessions.forEachIndexed { i, s ->
                     Spacer(Modifier.height(10.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                     Spacer(Modifier.height(8.dp))
                     DialogField(
                         value = s.role,
@@ -710,6 +712,7 @@ private fun ChipRow(label: String, options: List<String>, selected: String?, onP
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEach { option ->
             FilterChip(
+                colors = huginnFilterChipColors(),
                 selected = selected == option,
                 onClick = { onPick(if (selected == option) null else option) },
                 label = { Text(option, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center) },

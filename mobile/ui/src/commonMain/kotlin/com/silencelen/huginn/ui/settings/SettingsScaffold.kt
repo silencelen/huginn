@@ -39,6 +39,7 @@ import com.silencelen.huginn.settings.SettingsCategory
 import com.silencelen.huginn.settings.SettingsProbe
 import com.silencelen.huginn.settings.SettingsSearch
 import com.silencelen.huginn.settings.Surface as SettingsSurface
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The frame both Settings screens are drawn in: one search field, one category
@@ -181,7 +182,7 @@ fun SettingsScaffold(
                 SettingsSearchField(query, onQuery)
                 SettingsListPane(shown, selectedCategory, summaryOf, ::openCategory, ::openHit)
             }
-            VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 if (landing != null) content(landing, mark)
             }

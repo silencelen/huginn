@@ -19,6 +19,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.theme.Severity
+import com.silencelen.huginn.ui.theme.severityColor
 
 /**
  * The "context used" reading (the statusline's `ctx N%`) and the "Compacting…"
@@ -44,7 +46,8 @@ fun ContextMeter(percent: Int?, modifier: Modifier = Modifier) {
     if (percent == null) return
     val p = percent.coerceIn(0, 100)
     val high = p >= CONTEXT_HIGH
-    val fill = if (high) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    // The severity ramp (theme/StateColors.kt): 80 % is a warning, not a failure.
+    val fill = severityColor(if (high) Severity.WARNING else Severity.NORMAL)
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
@@ -66,7 +69,7 @@ fun ContextMeter(percent: Int?, modifier: Modifier = Modifier) {
             "$p%",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = if (high) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (high) MaterialTheme.colorScheme.error
+            color = if (high) severityColor(Severity.WARNING)
             else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -85,7 +88,7 @@ fun ContextBadge(percent: Int?, modifier: Modifier = Modifier) {
         "ctx $p%",
         style = MaterialTheme.typography.labelSmall,
         fontWeight = if (high) FontWeight.SemiBold else FontWeight.Normal,
-        color = if (high) MaterialTheme.colorScheme.error
+        color = if (high) severityColor(Severity.WARNING)
         else MaterialTheme.colorScheme.onSurfaceVariant,
         // One token, never wrapped. 2026-10-02 at font scale 2.0 the Sessions
         // card squeezed "ctx 48%" to three lines, since a trailing Text in a Row

@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import com.silencelen.huginn.ui.theme.huginnFilterChipColors
 
 /**
  * The ask bar's other half: a thin overlay over the launcher with the keyboard
@@ -248,6 +249,7 @@ private fun AskSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     FilterChip(
+                        colors = huginnFilterChipColors(),
                         selected = mode == "ask",
                         onClick = { mode = "ask" },
                         label = { Text("Ask") },
@@ -255,6 +257,7 @@ private fun AskSheet(
                     )
                     Spacer(Modifier.width(8.dp))
                     FilterChip(
+                        colors = huginnFilterChipColors(),
                         selected = mode == "act",
                         onClick = { mode = "act" },
                         label = { Text("Act") },

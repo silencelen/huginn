@@ -36,6 +36,7 @@ import com.silencelen.huginn.ui.RoundsSection
 import com.silencelen.huginn.ui.toDraft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.material3.OutlinedButton
 
 /**
  * The Rounds destination: every scheduled job, what it last found, and now the
@@ -104,7 +105,7 @@ fun RoundsPane(store: AppStore) {
                 // what makes it read as a paragraph.
                 modifier = Modifier.widthIn(max = Frame.prose).padding(top = 8.dp, bottom = 12.dp),
             )
-            Button(onClick = { writingNew = true }) { Text("New round") }
+            OutlinedButton(onClick = { writingNew = true }) { Text("New round") }
         }
         return
     }
@@ -207,7 +208,7 @@ private fun RoundEditorPane(
                         error = err
                         if (err == null) onDone()
                     }
-                }) { Text("Delete") }
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )

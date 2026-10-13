@@ -153,7 +153,7 @@ fun ProjectsListView(
                 onOpenMember = { onOpenMember(project, it) },
                 trailing = rowTrailing?.let { slot -> { slot(project) } },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         }
     }
 }

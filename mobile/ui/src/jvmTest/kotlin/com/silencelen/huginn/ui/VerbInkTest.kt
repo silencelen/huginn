@@ -2,7 +2,6 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.ui.graphics.Color
-import com.silencelen.huginn.ui.theme.SOFT_VERB_ALPHA
 import com.silencelen.huginn.ui.theme.verbInk
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -31,20 +30,13 @@ class VerbInkTest {
     }
 
     @Test
-    fun `the soft verb is the SAME red, quieter`() {
+    fun `the soft verb is the quiet ink, not a lighter red`() {
+        // PR 2 (2026-10-13): "Wrap up" asks Claude to finish; it ends nothing by
+        // force, so it takes the secondary ink. Red, at any alpha, is for Kill.
         val soft = verbInk(VerbTone.SOFT, scheme)
-        val hard = verbInk(VerbTone.DESTRUCTIVE, scheme)
-        assertNotEquals(hard, soft, "two verbs drawn identically are one verb twice")
-        // Same hue, less of it: a different red would read as a different kind of
-        // thing, and the point is that these two are a pair.
-        assertEquals(hard.red, soft.red)
-        assertEquals(hard.green, soft.green)
-        assertEquals(hard.blue, soft.blue)
-        assertTrue(soft.alpha < hard.alpha, "the soft verb must be the quieter of the two")
-        // ⚠ A TOLERANCE, because Color PACKS its channels: 0.7f does not survive
-        // the round trip through the packed ULong as 0.7f, and an exact compare
-        // here fails on a token that is perfectly correct.
-        assertEquals(SOFT_VERB_ALPHA, soft.alpha, absoluteTolerance = 0.01f)
+        assertEquals(scheme.onSurfaceVariant, soft)
+        assertNotEquals(verbInk(VerbTone.DESTRUCTIVE, scheme), soft, "two verbs drawn identically are one verb twice")
+        assertNotEquals(verbInk(VerbTone.PLAIN, scheme), soft, "soft is quieter than plain, not the same")
     }
 
     @Test
@@ -60,9 +52,9 @@ class VerbInkTest {
     fun `the token follows the scheme rather than being a fixed colour`() {
         // Light mode has its own error red (a darker one), and a hard-coded token
         // would be a phone-at-night colour printed on a white background.
-        val light = darkColorScheme(error = Color(0xFFB3261E), onSurface = Color(0xFF1B1817))
+        val light = darkColorScheme(error = Color(0xFFB3261E), onSurface = Color(0xFF1B1817), onSurfaceVariant = Color(0xFF535B56))
         assertEquals(light.error, verbInk(VerbTone.DESTRUCTIVE, light))
-        assertEquals(light.error.copy(alpha = SOFT_VERB_ALPHA), verbInk(VerbTone.SOFT, light))
+        assertEquals(light.onSurfaceVariant, verbInk(VerbTone.SOFT, light))
         assertNotEquals(verbInk(VerbTone.SOFT, scheme), verbInk(VerbTone.SOFT, light))
     }
 }

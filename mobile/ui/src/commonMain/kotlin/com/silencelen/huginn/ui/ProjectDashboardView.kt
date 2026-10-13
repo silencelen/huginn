@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectDashboardMember
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * A cluster, seen whole: what it is doing, who is stuck, and the proposal waiting
@@ -136,10 +137,10 @@ fun ProjectDashboardView(
             return@Column
         }
         members.forEach { m ->
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
             DashboardMemberRow(m, nowMs, onOpen = { onOpenMember(m) }, membership = membership)
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         membership?.let { AdoptMemberRow(it, members) }
         Spacer(Modifier.height(12.dp))
     }

@@ -56,11 +56,11 @@ import com.silencelen.huginn.data.Plan
 import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMetaSaver
 import com.silencelen.huginn.data.SessionOverview
-import com.silencelen.huginn.ui.theme.LocalSyntaxColors
 import com.silencelen.huginn.ui.work.PulseDot
 import com.silencelen.huginn.ui.work.SettledDot
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * A place to rest during a long run.
@@ -310,7 +310,7 @@ private fun shortModel(id: String) = id.removePrefix("claude-").removeSuffix("-l
 @Composable
 private fun Stat(label: String, value: String) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = RoundedCornerShape(8.dp),
     ) {
         Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -450,7 +450,7 @@ private fun MapHeader(
     onDensity: (OverviewDensity) -> Unit,
 ) {
     Column {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         Row(
             Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -515,16 +515,20 @@ private fun MapRow(
         else -> 64.dp
     }
     val scheme = MaterialTheme.colorScheme
-    val syntax = LocalSyntaxColors.current
-    val hues = remember(syntax) {
-        listOf(syntax.function, syntax.string, syntax.keyword, syntax.number, syntax.meta, syntax.comment)
+    // Lanes on ink steps, not the syntax rainbow (BRAND.md: monochrome first;
+    // failed = error, live = primary). Six steps, so adjacent agents still part.
+    val hues = remember(scheme) {
+        listOf(
+            scheme.onSurface, scheme.onSurfaceVariant, scheme.outline,
+            scheme.onSurface.copy(alpha = 0.6f), scheme.onSurfaceVariant.copy(alpha = 0.6f), scheme.outline.copy(alpha = 0.6f),
+        )
     }
     val gutter = LANE_W * laneCount
     val tone = blockTone(node.kind)
     val fill = when (tone) {
         BlockTone.SAID -> scheme.primary.copy(alpha = 0.16f)
-        BlockTone.WORK -> scheme.surfaceVariant
-        BlockTone.SPOKE -> scheme.surfaceVariant.copy(alpha = 0.4f)
+        BlockTone.WORK -> scheme.surfaceContainer
+        BlockTone.SPOKE -> scheme.surfaceContainerLow
         BlockTone.BREAK -> Color.Transparent
     }
     val edge = if (node.errors > 0) scheme.error.copy(alpha = 0.55f) else Color.Transparent
@@ -746,7 +750,7 @@ private fun NodeDetail(node: GraphNode, agents: List<GraphAgent>, modifier: Modi
 private fun GraphAgentCard(a: GraphAgent) {
     val running = a.status == "running"
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (running) 0.65f else 0.3f),
+        color = if (running) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -775,7 +779,7 @@ private fun GraphAgentCard(a: GraphAgent) {
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.weight(1f))

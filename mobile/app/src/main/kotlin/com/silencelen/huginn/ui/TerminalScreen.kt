@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.Screen
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The live pane. Not a terminal emulator (there is no PTY here), but a real
@@ -251,7 +252,7 @@ fun TerminalScreen(
                         )
                         // Marks where history ends and the live pane begins, which
                         // is otherwise invisible: both are the same terminal text.
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                     }
                     TerminalCanvas(
                         grid = grid,
@@ -331,7 +332,7 @@ fun TerminalScreen(
                     )
                 }
             }
-        } else Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+        } else Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -450,7 +451,7 @@ private fun KeyRow(
     onToggleLive: (() -> Unit)? = null,
 ) {
     val hScroll = rememberScrollState()
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
         // ⚠ THE KEY PAD RUNS PAST THE RIGHT EDGE (P-27/D-17) — `PgUp` was sliced
         // in half on both shells, and nothing said the row drags. See [EdgeFade].
         EdgeFadeRow(

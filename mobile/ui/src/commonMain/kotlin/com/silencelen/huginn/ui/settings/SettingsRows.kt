@@ -41,6 +41,7 @@ import com.silencelen.huginn.data.DaemonChallenge
 import com.silencelen.huginn.ui.REMOVE_ROUTE_BODY
 import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.data.RouteHealth
+import androidx.compose.material3.OutlinedButton
 
 /**
  * The five shapes a settings row can be, drawn once for both shells.
@@ -240,7 +241,7 @@ fun SettingsActionRow(
                 Text(actionLabel, color = MaterialTheme.colorScheme.error)
             }
         } else {
-            Button(onClick = onAction, enabled = enabled) { Text(actionLabel) }
+            OutlinedButton(onClick = onAction, enabled = enabled) { Text(actionLabel) }
         }
     }
 }
