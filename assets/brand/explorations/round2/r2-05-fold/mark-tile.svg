@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- App-icon master: ink mark centred on the bone tile (12.5 % inset left/right, 26 % top/bottom). Same path as mark.svg. -->
+  <rect width="108" height="108" fill="#E8E2DA"/>
+  <g transform="translate(0,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M94.5,33.25 L85.5,26.75 L72,20.25 L54,17 L45,26.75 L41.3647,29.3755 L46.1702,46.7288 L23.0003,60.1159 L21.9997,58.3841 L43.8298,45.7712 L39.7018,30.8647 L13.5,59.25 L18,69 L36,59.25 L54,62.5 L67.5,52.75 L72,36.5 Z M62.25,25.125 a3.0,3.0 0 1,0 6,0 a3.0,3.0 0 1,0 -6,0 Z"/>
+  </g>
+</svg>

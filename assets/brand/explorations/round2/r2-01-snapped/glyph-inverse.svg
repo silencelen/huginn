@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  <!-- Huginn glyph tile, r2-01-snapped: the container is the ink, the raven is the hole. The hole is the
-       r2-01 mark's own head (flat crown, forehead, culmen, bill tip, horizontal bill underside, throat,
-       nape) scaled 0.85 and set with 18 units of ink above the crown, 9 right of the tip, 9.5 left of the
-       nape, the breast opening onto the bottom edge; the eye is a 4x4 cell of ink at x 28-32, y 24-28
-       (whole pixels at 16, 32 and 64). ONE evenodd path: container - head + eye cell. -->
+  <!-- Huginn glyph tile, r2-01-snapped: the container is the ink, the raven is the hole. The hole is the r2-01
+       mark's own head (bill tip, culmen, forehead, flat crown, back of head, nape, throat, breast) scaled 0.85
+       and set with 18 units of ink above the crown and 9 right of the tip; the nape drops straight to the bottom
+       edge and the breast flares to it, so the bird rises out of the ground. The eye is a 4x4 cell of ink at
+       x 28-32, y 24-28 (whole pixels at 16, 32 and 64). ONE evenodd path: container - head + eye cell. -->
   <rect width="64" height="64" fill="#161310"/>
-  <path fill="#E8E2DA" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M55,32.5 L47.5,24 L36,18 L20.5,18 L13,24 L9.5,30 L9.5,64 L39,64 L33,47 L36,32.5 Z M28,24 h4 v4 h-4 Z"/>
+  <path fill="#E8E2DA" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M55,32.5 L47.5,24 L36,18 L24.5,18 L13,24 L9,29.5 L9,64 L38,64 L32,44 L36,32.5 Z M28,24 h4 v4 h-4 Z"/>
 </svg>

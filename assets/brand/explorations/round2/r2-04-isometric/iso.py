@@ -51,8 +51,8 @@ MARK = [
     (1, 16),   # tail end: one column flat
     (7, 12),   # under-tail: 30 up
     (10, 14),  # belly: 30 down
-    (13, 12),  # belly to breast: 30 up
-    (16, 6),   # breast: 60 up to the chin
+    (13, 14),  # belly: flat (the perch line)
+    (17, 6),   # breast: 60 up to the chin, four columns
     (23, 6),   # gonys: flat
 ]              # undercut: 60 up to the tip
 EYE = ((15, 3), 3.5)   # centre in grid coordinates (a corner of four half-row cells), radius in units
