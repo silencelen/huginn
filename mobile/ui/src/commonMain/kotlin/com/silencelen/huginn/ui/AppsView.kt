@@ -72,7 +72,7 @@ fun AppsView(
     nowMs: Long,
     onOpen: (App) -> Unit,
     modifier: Modifier = Modifier,
-    header: String? = "APPS",
+    header: String? = "Apps",
     /** Whether the owner has run the retrofit, so the rows can drop the caveat. */
     retrofitApplied: Boolean = false,
     /** The one-line transition note, or null. Built by [AppRules.retrofitNote]. */
@@ -99,9 +99,7 @@ fun AppsView(
         if (header != null) {
             Text(
                 header,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.2.sp,
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 14.dp, top = 6.dp, bottom = 2.dp),
             )
@@ -380,10 +378,8 @@ fun AppsStatusCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "APPS",
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.2.sp,
+                "Apps",
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )

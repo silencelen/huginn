@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Session
+import androidx.compose.material.icons.automirrored.outlined.Chat
 
 /**
  * Where something should land: a new chat, a running session, or a chat that
@@ -112,7 +113,7 @@ fun SendTargetList(
                 TargetRow(
                     icon = {
                         Icon(
-                            Icons.AutoMirrored.Filled.Chat, null,
+                            Icons.AutoMirrored.Outlined.Chat, null,
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(20.dp),
                         )

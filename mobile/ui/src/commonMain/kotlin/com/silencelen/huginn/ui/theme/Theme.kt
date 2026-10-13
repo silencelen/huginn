@@ -264,9 +264,12 @@ fun HuginnTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     monoStyle: TextStyle = MonoStylePhone,
     rootSurface: Boolean = false,
+    /** How rows sit on this platform (ui/system/Scale.kt): phone 16/10, desktop 12/6. */
+    rowMetrics: com.silencelen.huginn.ui.system.RowMetrics = com.silencelen.huginn.ui.system.PhoneRowMetrics,
     content: @Composable () -> Unit,
 ) {
     CompositionLocalProvider(
+        com.silencelen.huginn.ui.system.LocalRowMetrics provides rowMetrics,
         LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax,
         LocalHuginnColors provides if (darkTheme) DarkHuginnColors else LightHuginnColors,
         LocalMonoStyle provides monoStyle,

@@ -138,6 +138,11 @@ import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.runtime.key
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.automirrored.outlined.Chat
+import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.Settings
 
 class MainActivity : FragmentActivity() {
 
@@ -2124,21 +2129,21 @@ fun HuginnApp(
                             colors = huginnNavColors(),
                             selected = section == 0,
                             onClick = { onTab(0) },
-                            icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
+                            icon = { Icon(if (section == 0) Icons.AutoMirrored.Filled.Chat else Icons.AutoMirrored.Outlined.Chat, contentDescription = null) },
                             label = { Text("Chats") },
                         )
                         NavigationBarItem(
                             colors = huginnNavColors(),
                             selected = section == 1,
                             onClick = { onTab(1) },
-                            icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                            icon = { Icon(if (section == 1) Icons.Filled.Terminal else Icons.Outlined.Terminal, contentDescription = null) },
                             label = { Text("Sessions") },
                         )
                         NavigationBarItem(
                             colors = huginnNavColors(),
                             selected = section == 3,
                             onClick = { onTab(3) },
-                            icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                            icon = { Icon(if (section == 3) Icons.Filled.Schedule else Icons.Outlined.Schedule, contentDescription = null) },
                             label = { Text("Rounds") },
                         )
                         NavigationBarItem(
@@ -2209,21 +2214,21 @@ fun HuginnApp(
                                 colors = huginnRailColors(),
                                 selected = section == 0,
                                 onClick = { onTab(0) },
-                                icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
+                                icon = { Icon(if (section == 0) Icons.AutoMirrored.Filled.Chat else Icons.AutoMirrored.Outlined.Chat, contentDescription = null) },
                                 label = { Text("Chats") },
                             )
                             NavigationRailItem(
                                 colors = huginnRailColors(),
                                 selected = section == 1,
                                 onClick = { onTab(1) },
-                                icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                                icon = { Icon(if (section == 1) Icons.Filled.Terminal else Icons.Outlined.Terminal, contentDescription = null) },
                                 label = { Text("Sessions") },
                             )
                             NavigationRailItem(
                                 colors = huginnRailColors(),
                                 selected = section == 3,
                                 onClick = { onTab(3) },
-                                icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
+                                icon = { Icon(if (section == 3) Icons.Filled.Schedule else Icons.Outlined.Schedule, contentDescription = null) },
                                 label = { Text("Rounds") },
                             )
                             NavigationRailItem(
@@ -2249,14 +2254,14 @@ fun HuginnApp(
                                 colors = huginnRailColors(),
                                 selected = section == 6,
                                 onClick = { vm.refreshDevices(); dest = Dest.Devices },
-                                icon = { Icon(Icons.Filled.Devices, contentDescription = "Devices") },
+                                icon = { Icon(Icons.Outlined.Devices, contentDescription = "Devices") },
                                 label = { Text("Devices") },
                             )
                             NavigationRailItem(
                                 colors = huginnRailColors(),
                                 selected = section == 4,
                                 onClick = { dest = Dest.Settings },
-                                icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
+                                icon = { Icon(Icons.Outlined.Settings, contentDescription = "Settings") },
                                 label = { Text("Settings") },
                             )
                             Spacer(Modifier.height(8.dp))

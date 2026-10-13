@@ -11,7 +11,7 @@ checks and what a reviewer should screenshot.
 |---|---|---|
 | 1 · State language | [`01-state-language.md`](01-state-language.md) | done; verified on the Fold 2026-10-13; tokens frozen in round 7 |
 | 2 · Surfaces, severity, the accent | [`02-surfaces-severity-accent.md`](02-surfaces-severity-accent.md) | done on `reskin` (e950f3e6, 2026-10-13); suites pass; Fold shots |
-| 3 · The row system | [`03-row-system.md`](03-row-system.md) | brief only |
+| 3 · The row system | [`03-row-system.md`](03-row-system.md) | system layer landed (`ui/system/`: Scale + RowMetrics, ListRow, ListHeader, EmptyState, HouseDialog); headers Title Case; glyphs → icons; bar icons outlined, filled when active; quote bar; desktop rows 12/6. REMAINING: migrate the lists to ListRow (Sessions, Chats, desktop Lists, Projects/members, Apps, Devices, Archived, Pages, Settings rows, setup rail, palette), move the house Menu to :ui, HouseDialog adoption, the emoji markers (send contract, owner) |
 | 4 · Session screen and the composer | [`04-session-and-composer.md`](04-session-and-composer.md) | brief only |
 | 5 · Notifications, widgets, type | [`05-notifications-widgets-type.md`](05-notifications-widgets-type.md) | brief only |
 | 6 · Terminal | [`06-terminal.md`](06-terminal.md) | brief only |

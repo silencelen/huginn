@@ -890,7 +890,7 @@ private fun WorkStrip(
     val detailRows = buildList {
         addAll(statusLines)
         tasks.take(2).forEach { t ->
-            add("⚙ ${t.command}" + if (t.forSeconds > 0) " · ${agoShort(t.forSeconds)}" else "")
+            add("◦ ${t.command}" + if (t.forSeconds > 0) " · ${agoShort(t.forSeconds)}" else "")
         }
         if (bgAgents > 0 && statusLines.none { it.contains("agent") }) {
             add("$bgAgents background agent${if (bgAgents == 1) "" else "s"}")

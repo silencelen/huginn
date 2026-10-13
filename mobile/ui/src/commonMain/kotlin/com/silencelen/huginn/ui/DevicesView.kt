@@ -44,7 +44,7 @@ fun DevicesSection(
     onStart: (Device, String) -> Unit,
     onForget: (MachineGroup) -> Unit,
     modifier: Modifier = Modifier,
-    header: String? = "DEVICES",
+    header: String? = "Devices",
     /**
      * The reader's own machine key (the daemon's normalised-hostname grouping
      * key), so their machine's card can say so. Null — a phone, which never
@@ -64,9 +64,7 @@ fun DevicesSection(
         if (header != null) {
             Text(
                 header,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.2.sp,
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 14.dp, top = 6.dp),
             )

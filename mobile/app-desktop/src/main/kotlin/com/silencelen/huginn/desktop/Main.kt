@@ -699,7 +699,7 @@ fun main(args: Array<String>) {
             // distance), and a root Surface — which is load-bearing and silent when
             // missing, because `LocalContentColor` defaults to BLACK and only a
             // Surface provides it. The phone's root is a Scaffold and needs none.
-            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+            HuginnTheme(darkTheme = true, rowMetrics = com.silencelen.huginn.ui.system.DesktopRowMetrics, monoStyle = MonoStyleDesktop, rootSurface = true) {
                 // The one thing the shared transcript rows cannot work out for
                 // themselves: a bubble sized as 90% of a phone is a bubble; 90% of a
                 // 1280pt window is a bar. Full width with a reading-measure cap, set

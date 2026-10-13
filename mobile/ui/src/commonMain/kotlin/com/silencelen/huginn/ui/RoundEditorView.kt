@@ -143,7 +143,7 @@ fun RoundEditor(
             )
         }
 
-        SectionLabel("WHEN")
+        SectionLabel("When")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Kind("Daily", "daily", draft, onDraft)
             Kind("Weekly", "weekly", draft, onDraft)
@@ -225,7 +225,7 @@ fun RoundEditor(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        SectionLabel("WHAT IT MAY DO")
+        SectionLabel("What it may do")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 colors = huginnFilterChipColors(),
@@ -258,7 +258,7 @@ fun RoundEditor(
         // while Pause/Resume kept working, so the row looked perfectly alive.
         val pinnedElsewhere = draft.host != "local"
         if (devices.isNotEmpty() || pinnedElsewhere) {
-            SectionLabel("WHERE IT RUNS")
+            SectionLabel("Where it runs")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     colors = huginnFilterChipColors(),
@@ -306,7 +306,7 @@ fun RoundEditor(
             }
         }
 
-        SectionLabel("TELL ME")
+        SectionLabel("Tell me")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Notify("Every time", "always", draft, onDraft)
             Notify("When it needs me", "attention", draft, onDraft)
@@ -467,9 +467,7 @@ private fun Notify(label: String, value: String, draft: RoundDraft, onDraft: (Ro
 private fun SectionLabel(text: String) {
     Text(
         text,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.Medium,
-        letterSpacing = 1.2.sp,
+        style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }

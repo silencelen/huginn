@@ -34,6 +34,12 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectDashboardMember
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * A cluster, seen whole: what it is doing, who is stuck, and the proposal waiting
@@ -121,9 +127,8 @@ fun ProjectDashboardView(
             Spacer(Modifier.height(10.dp))
         }
         Text(
-            "MEMBERS",
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium,
+            "Members",
+            style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 14.dp, top = 4.dp, bottom = 4.dp),
         )
@@ -315,11 +320,11 @@ private fun DashboardMemberRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                if (open) "▾" else "▸",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.clickable { open = !open }.padding(horizontal = 6.dp, vertical = 4.dp),
+            Icon(
+                if (open) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
+                contentDescription = if (open) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clickable { open = !open }.padding(horizontal = 6.dp, vertical = 4.dp).size(Scale.iconLarge),
             )
         }
         // ⚠⚠ HEIGHT ONLY — see the file KDoc and DisclosureHeightOnlyTest.

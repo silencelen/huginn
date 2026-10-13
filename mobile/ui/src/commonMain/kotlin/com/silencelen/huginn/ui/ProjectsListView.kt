@@ -31,6 +31,11 @@ import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.Icon
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The projects, each one folding open to the sessions it is made of.
@@ -179,11 +184,11 @@ private fun ProjectRowItem(
         ) {
             // The triangle is the disclosure and has its own hit target: tapping
             // the NAME opens the project, which is what a name is for.
-            Text(
-                if (expanded) "▾" else "▸",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.clickable(onClick = onToggle).padding(horizontal = 4.dp, vertical = 2.dp),
+            Icon(
+                if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.clickable(onClick = onToggle).padding(horizontal = 4.dp, vertical = 2.dp).size(Scale.iconLarge),
             )
             Spacer(Modifier.width(6.dp))
             Column(Modifier.weight(1f)) {
