@@ -9921,7 +9921,13 @@ async function handleRequest(req, res) {
   const t0 = Date.now();
   const u = new URL(req.url, 'http://x');
   const p = u.pathname.replace(/\/+$/, '') || '/';
-  res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms`));
+  // ` PLAIN <addr>` marks a plain-HTTP request from off this host: under
+  // HUGINN_APPD_PLAINTEXT=any that is a client still sending its token in the
+  // clear, and the migration window ends when these stop appearing. (A 426 is
+  // marked too, so the same grep finds the clients the default policy refuses.)
+  const peer = req.socket.remoteAddress;
+  const plainOffHost = !req.socket.encrypted && !tlsLib.isLoopback(peer);
+  res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms${plainOffHost ? ` PLAIN ${peer}` : ''}`));
 
   // ⚠ ON EVERY RESPONSE, INCLUDING THE 401 (cross-batch contract 2). The
   // clients' route probe has to be able to tell huginn-appd from ANY OTHER
