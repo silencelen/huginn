@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- mark-16: the compact drawing for 16-22 px (tray, favicon-16): the upright bird's head, bill, throat and chest on a 7-unit cell, 10 straight edges plus a circular eye hole r 7; box x 21-105, y 17-90 of a plain 108 viewBox, no fold. -->
+  <g>
+    <path fill="#161310" fill-rule="evenodd" d="M105,40 L83.5,29 L54.5,24 L40,24 L26,29 L18.5,40 L14,90 L84,90 L90.5,73 L76,51 Z M51.5,37.5 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 Z"/>
+  </g>
+</svg>

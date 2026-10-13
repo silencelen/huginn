@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
+  <!-- Glyph B "shoulder wedge": the head, throat, chest and the wing's upper edge as a hole (the bird at 0.83), the breast open onto the bottom edge; the fold is a short ink wedge (3 units at the mouth, 11 long, tapering to nothing) opening at the shoulder only; eye a 4x4 ink cell at x 32-36, y 24-28. ONE evenodd path. -->
+  <g>
+    <path fill="#161310" fill-rule="evenodd" d="M14,0 L50,0 A14,14 0 0 1 64,14 L64,50 A14,14 0 0 1 50,64 L42.925,64 L49.795,43.238 L42.775,32.63 L56.815,27.326 L46.285,22.022 L32.245,19.37 L25.225,19.37 L18.205,22.022 L17.136,27.865 L10.818,44.903 L12.254,26.787 L35.201,64 L14,64 A14,14 0 0 1 0,50 L0,14 A14,14 0 0 1 14,0 Z M32,24 h4 v4 h-4 Z"/>
+  </g>
+</svg>

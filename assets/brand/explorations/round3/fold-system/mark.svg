@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- Huginn mark, round 3 fold-system: the fold raven standing upright (chest forward, head raised, bill slightly up) on Snapped's 24x16 half-block lattice (x = 4.5i, y = 14.4 + 3.4j), twelve lattice vertices plus ONE interior cut, a 2-unit slit that opens at the shoulder and separates the folded wing from the body. ONE evenodd path: the outer ring and a circular eye hole. Box x 18-81, y 17.8-68.8 (63 x 51, 1.24:1); translate(2,11). Ink #161310. Vertices (col,row): bill tip (19,4) culmen (16,2) forehead (12,1) crown (10,1) back of head (8,2) nape (7,4) tail tip (5,16) tail bottom (8,16) under-tail notch (12,13) belly (16,14) chest (17,10) throat (15,6). Below 32 px use mark-32.svg (no fold). -->
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M85.5,28 L72,21.2 L54,17.8 L45,17.8 L36,21.2 L32.119,27.065 L46.244,51.966 L32.21,66.104 L30.79,64.696 L43.756,51.634 L31.178,29.459 L22.5,68.8 L36,68.8 L54,58.6 L72,62 L76.5,48.4 L67.5,34.8 Z M53.05,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
+  </g>
+</svg>
