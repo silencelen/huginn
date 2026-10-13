@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- Huginn mark, r2-01-snapped. Inverse: bone for dark grounds (#12100F).
+       The round-1 faceted raven with every vertex on a 24 x 16 half-block grid (cell 4.5 x 3.4 units,
+       columns from x 0, half-rows from y 14.4): ONE evenodd polygon, 12 vertices clockwise from the bill tip,
+       plus a circular eye hole (r 3.4) centred on grid cell (14,3). 108 viewBox, translate(2,11),
+       box x 13.5-94.5, y 17.8-68.8 (inside the canon box x 10-95, y 17-69). Launcher: pivot (52,43) scale 0.72
+       keeps every vertex <= 31.2 dp from centre. Ink #161310, bone #E8E2DA. grid.txt in this folder is
+       this polygon rasterised onto its own grid; the terminal art is generated from that. -->
+  <g transform="translate(2,11)">
+    <path fill="#E8E2DA" fill-rule="evenodd" d="
+      M94.5,34.8
+      L85.5,24.6
+      L72,17.8
+      L54,17.8
+      L45,24.6
+      L40.5,31.4
+      L13.5,58.6
+      L18,68.8
+      L36,58.6
+      L54,62
+      L67.5,51.8
+      L72,34.8
+      Z
+      M65.25,26.3 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 Z"/>
+  </g>
+</svg>
