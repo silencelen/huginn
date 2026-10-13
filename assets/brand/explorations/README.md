@@ -1,4 +1,6 @@
-# Brand explorations — round 1
+# Brand explorations
+
+The decisions these explorations produced are written up in [`../BRAND.md`](../BRAND.md).
 
 Variations for the Huginn identity overhaul, made to decide between before the
 brand book is written. The raven stays the primary mark; everything else is on
