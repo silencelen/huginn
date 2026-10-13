@@ -141,6 +141,7 @@ class ReplyReceiver : BroadcastReceiver() {
         }
         val builder = NotificationCompat.Builder(context, SessionWatchWorker.CHANNEL_CHATS)
             .setSmallIcon(R.drawable.ic_stat_huginn)
+            .setColor(SessionWatchWorker.ACCENT)
             .setContentTitle(title)
             .setStyle(style)
             .setAutoCancel(true)

@@ -46,6 +46,11 @@ kotlin {
             // already shipped this set, so on Android it resolves to the same
             // androidx artifact the app was already carrying.
             implementation(compose.materialIconsExtended)
+            // The bundled IBM Plex (BRAND.md section 5): static TTFs in
+            // src/commonMain/composeResources/font/, read through the generated
+            // `Res` so the phone and the desktop draw the same glyphs instead of
+            // whatever each platform calls monospace.
+            implementation(compose.components.resources)
         }
         // The GLYPH BLIT is the one part of the terminal painter that cannot be
         // common: the grid walk, run coalescing, cursor and echo are shared, but
@@ -70,6 +75,14 @@ kotlin {
             implementation(compose.desktop.currentOs)
         }
     }
+}
+
+// The generated `Res` for the fonts. An explicit package, because the default
+// is derived from the Gradle group and this build sets none; internal, because
+// only theme/Theme.kt reads it and the families it builds are the public API.
+compose.resources {
+    publicResClass = false
+    packageOfResClass = "com.silencelen.huginn.ui.resources"
 }
 
 android {

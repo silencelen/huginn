@@ -105,7 +105,11 @@ object ProjectNotices {
         val replyChat: String? = null,
         val answers: List<SessionWatchWorker.Companion.AnswerOption> = emptyList(),
         val fingerprint: String? = null,
-        /** NEWS, not "needs you": it rides the channel that can be silenced alone. */
+        /**
+         * NEWS, not "needs you". The channel itself is "Proposals" (brand PR 5):
+         * [SessionWatchWorker.channelFor] routes anything carrying
+         * [projectActions] there, so it can be silenced apart from "Finished".
+         */
         val isResult: Boolean = true,
     )
 

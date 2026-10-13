@@ -312,8 +312,7 @@ fun PlanApprovalCard(
             Spacer(Modifier.height(6.dp))
             Text(
                 body,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
+                style = com.silencelen.huginn.ui.theme.LocalMonoStyle.current,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()

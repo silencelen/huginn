@@ -81,6 +81,11 @@ import com.silencelen.huginn.desktop.ui.common.sessionMenu
 import com.silencelen.huginn.desktop.ui.common.sessionStateTip
 import com.silencelen.huginn.desktop.ui.common.timeTip
 import com.silencelen.huginn.ui.TimeWords
+import com.silencelen.huginn.ui.system.LocalRowMetrics
+import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import com.silencelen.huginn.ui.theme.StateKind
+import androidx.compose.ui.text.font.FontWeight
 import java.awt.Cursor
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -202,13 +207,23 @@ private fun ChatRow(
     onClick: (ctrl: Boolean, shift: Boolean) -> Unit,
 ) {
     val now = remember(chat) { System.currentTimeMillis() / 1000 }
+    // THE HOUSE ROW (UI-AUDIT section 3), at the desktop's 12/6: dot · title ·
+    // one meta line · the time trailing. The frame keeps its hover and its
+    // multi-select; everything inside is on the Scale.
     RowFrame(active = active, selected = selected, onClick = onClick) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // The dot is the whole state mark, and hover is what makes that
             // affordable: "running" plus how long, plus what is queued behind it.
+            // Working is the live 8 dp accent; queued messages wait on the quiet
+            // 6 dp dot; a settled chat keeps the column empty.
             Tip(chatStateTip(chat.running, chat.pending, chat.turns, chat.updatedAt, now)) {
-                if (chat.running) StateDot(MaterialTheme.colorScheme.primary)
-                else Spacer(Modifier.width(TEXT_INDENT))
+                DotColumn {
+                    when {
+                        chat.running -> com.silencelen.huginn.ui.theme.StateDot(StateKind.WORKING)
+                        chat.pending > 0 -> com.silencelen.huginn.ui.theme.StateDot(StateKind.WAITING)
+                        else -> {}
+                    }
+                }
             }
             Text(
                 ChatRules.listLabel(chat),
@@ -221,25 +236,25 @@ private fun ChatRow(
             // which MACHINE a chat is changing matters more than that it can.
             if (chat.host != null && chat.host != "local") {
                 Tip("This chat runs on ${chat.hostName ?: "another machine"}, not on huginn") {
-                    HostBadge(chat.host, chat.hostName, Modifier.padding(start = Space.tight))
+                    HostBadge(chat.host, chat.hostName, Modifier.padding(start = Scale.s4))
                 }
             }
             if (chat.mode == "act") {
                 Tip("Act mode — this chat can run commands and change files on the host") {
-                    Muted("act", Modifier.padding(start = Space.tight))
+                    Muted("act", Modifier.padding(start = Scale.s4))
                 }
             }
             Tip(timeTip("Last activity", chat.updatedAt, now)) {
-                Muted(TimeWords.short(chat.updatedAt, now * 1000L), Modifier.padding(start = Space.unit))
+                Muted(TimeWords.short(chat.updatedAt, now * 1000L), Modifier.padding(start = Scale.s8))
             }
         }
         val snippet = chat.lastSnippet
         if (chat.pending > 0 || !snippet.isNullOrBlank()) {
             Row(
-                Modifier.padding(top = Space.hair, start = TEXT_INDENT),
+                Modifier.padding(start = TEXT_INDENT),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (chat.pending > 0) Muted("+${chat.pending} queued", Modifier.padding(end = Space.unit))
+                if (chat.pending > 0) Muted("+${chat.pending} queued", Modifier.padding(end = Scale.s8))
                 if (!snippet.isNullOrBlank()) {
                     Muted(snippet.replace('\n', ' '), Modifier.weight(1f), maxLines = 1)
                 }
@@ -402,53 +417,58 @@ private fun SessionRow(
     onClick: (ctrl: Boolean, shift: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val scheme = MaterialTheme.colorScheme
     val now = remember(session) { System.currentTimeMillis() / 1000 }
-    val dot = when (session.state) {
-        "running" -> scheme.primary
-        "attention" -> LocalHuginnColors.current.stateAttention
-        else -> null
-    }
+    // THE HOUSE ROW (UI-AUDIT section 3), at the desktop's 12/6: the state dot ·
+    // the session's NAME in the mono face (it is a name) · one meta line · the
+    // time trailing. The frame keeps its hover and its multi-select.
     RowFrame(active = active, selected = selected, onClick = onClick, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Tip(sessionStateTip(session.state, session.stateSince, now)) {
-                if (dot != null) StateDot(dot)
-                else Spacer(Modifier.width(TEXT_INDENT))
+                // The one state language: working is the accent, needs-you is
+                // stateAttention (never the error red), waiting the quiet 6 dp dot.
+                DotColumn { com.silencelen.huginn.ui.theme.StateDot(session.state) }
             }
             Text(
-                session.title ?: session.name,
-                style = DeskType.rowTitle,
+                session.name,
+                style = LocalMonoStyle.current.copy(
+                    fontSize = DeskType.rowTitle.fontSize,
+                    lineHeight = DeskType.rowTitle.lineHeight,
+                ),
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             // A session mid-compaction gets the marker on the first line, where it
             // reads at a glance in the Conversations list.
-            if (session.compacting) CompactingChip(Modifier.padding(start = Space.unit))
+            if (session.compacting) CompactingChip(Modifier.padding(start = Scale.s8))
             Tip(timeTip("Last pane activity", session.activityAt, now)) {
-                Muted(TimeWords.short(session.activityAt, now * 1000L), Modifier.padding(start = Space.unit))
+                Muted(TimeWords.short(session.activityAt, now * 1000L), Modifier.padding(start = Scale.s8))
             }
         }
+        // THE ONE META LINE: what the session is about, then what it is doing.
         Row(
-            Modifier.padding(top = Space.hair, start = TEXT_INDENT),
+            Modifier.padding(start = TEXT_INDENT),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // The tmux name, shown only when the title is something else — two
-            // identical strings on two lines is the row wasting half its height.
-            if (session.title != null && session.title != session.name) {
-                Muted(session.name, Modifier.padding(end = Space.unit))
+            // The session's own title, shown only when it is something other than
+            // the name above — two identical strings on two lines is the row
+            // wasting half its height.
+            val title = session.title
+            if (title != null && title != session.name) {
+                Muted(title, Modifier.padding(end = Scale.s8))
             }
             // A row that will not open says so where it stands. Anything else is
             // a click that does nothing, forever, with no way to find out why.
             if (!sessionAddressable(session.name)) {
                 Tip("Every huginn route for this session answers 404; tmux itself is fine.") {
-                    Muted(UNADDRESSABLE_NOTE, Modifier.padding(end = Space.unit), maxLines = 2)
+                    Muted(UNADDRESSABLE_NOTE, Modifier.padding(end = Scale.s8), maxLines = 2)
                 }
             }
             val work = bgWorkTip(session.bgShells, session.bgAgents, session.bgTask)
             if (work.isNotEmpty()) {
                 Tip(work) {
-                    Muted(bgLabel(session.bgShells, session.bgAgents), Modifier.padding(end = Space.unit))
+                    Muted(bgLabel(session.bgShells, session.bgAgents), Modifier.padding(end = Scale.s8))
                 }
             }
             // A message the daemon is HOLDING for this session. It belongs on the
@@ -460,14 +480,14 @@ private fun SessionRow(
                     "${session.pendingSends} message${if (session.pendingSends == 1) "" else "s"} " +
                         "waiting to go in — the daemon sends them when the turn ends",
                 ) {
-                    Muted("${session.pendingSends} queued", Modifier.padding(end = Space.unit))
+                    Muted("${session.pendingSends} queued", Modifier.padding(end = Scale.s8))
                 }
             }
             // "ctx N%" sits with the row's other metadata, only when the host
             // reported a percentage (no statusline / not a Claude pane → absent).
             if (session.contextPercent != null) {
                 Tip("Context window used") {
-                    ContextBadge(session.contextPercent, Modifier.padding(end = Space.unit))
+                    ContextBadge(session.contextPercent, Modifier.padding(end = Scale.s8))
                 }
             }
             // ⚠ P-14. `❯ run sleep 10 …` on a row nobody had typed into: Claude
@@ -499,6 +519,18 @@ private fun SessionRow(
 }
 
 /**
+ * The dot's column: always [Scale.dot] wide, with the house gap after it, so the
+ * quiet 6 dp dot and an empty column leave every title on one edge.
+ */
+@Composable
+private fun DotColumn(dot: @Composable () -> Unit) {
+    Box(
+        Modifier.padding(end = Scale.s8).size(Scale.dot),
+        contentAlignment = Alignment.Center,
+    ) { dot() }
+}
+
+/**
  * How far the second line hangs, so both lines of a row share one text column.
  *
  * The dot's own width plus its gap. Without it the title starts 11dp right of its
@@ -506,7 +538,7 @@ private fun SessionRow(
  * a screenshot the moment the rows got dense enough to sit close together, and
  * invisible before that.
  */
-private val TEXT_INDENT = Frame.dot + Space.tight
+private val TEXT_INDENT = Scale.dot + Scale.s8
 
 /**
  * Whether huginn can actually address this session, or only list it.
@@ -649,7 +681,7 @@ private fun RowFrame(
                 onClick(mods.ctrl, mods.shift)
             }
             // 12/6: the desktop row (ui/system/Scale.kt DesktopRowMetrics).
-            .padding(horizontal = Space.wide, vertical = 6.dp),
+            .padding(horizontal = LocalRowMetrics.current.inset, vertical = LocalRowMetrics.current.vertical),
         content = content,
     )
 }
@@ -664,7 +696,7 @@ private class Mods {
 @Composable
 private fun RowRule() {
     HorizontalDivider(
-        Modifier.padding(start = Space.wide),
+        Modifier.padding(start = LocalRowMetrics.current.inset),
         color = LocalHuginnColors.current.outlineHairline,
     )
 }
@@ -805,10 +837,10 @@ private val NEW_CHAT_GAP = 4.dp
 private val NEW_CHAT_ICON_BUTTON_DP = 28.dp
 private val NEW_CHAT_GLYPH_DP = 16.dp
 
-/** Working. A dot inside the row's text flow — not a bar, not a badge. */
+/** Working. A dot inside the row's text flow — not a bar, not a badge. The live 8 dp dot (Scale). */
 @Composable
 fun StateDot(color: Color) {
-    Box(Modifier.padding(end = Space.tight).size(Frame.dot).clip(CircleShape).background(color))
+    Box(Modifier.padding(end = Scale.s4).size(Scale.dot).clip(CircleShape).background(color))
 }
 
 @Composable

@@ -20,11 +20,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -420,47 +418,44 @@ private fun Composer(
         SealedNote(Modifier.fillMaxWidth().systemNavPadding(), onContinue = onContinueRound)
         return
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-      Column {
-        // Above the box rather than inside the row: the reference is a fact about
-        // the message being written, and the row below is already four controls
-        // deep on a phone. ONLY when one is set — the invitation to attach moved
-        // into the attach button's chooser, which is where "attach" already lives.
-        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-            ScratchpadRefBadge(
-                pad = chosen,
-                pads = pads,
-                onSelect = onPadRef,
-                modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+    // A photo alone is a complete message; a FAILED one is not.
+    val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
+    // THE SHARED COMPOSER (ui/system/Composer.kt): the outlined field, attach and
+    // mic as plain icons, Send as the one filled circle, Stop as a plain outlined
+    // one. What sends and when is unchanged: Stop still replaces Send exactly when
+    // a turn is running and nothing is typed.
+    com.silencelen.huginn.ui.system.Composer(
+        value = draft,
+        onValueChange = onDraft,
+        onSend = onSend,
+        placeholder = if (sending) "Send anyway, it will queue"
+        else if (mode == "act") "Ask huginn to do something"
+        else "Ask huginn",
+        canSend = canSend,
+        // Nothing typed: the useful action on a running turn is to stop it.
+        stopInstead = sending && draft.isBlank(),
+        onStop = onCancel,
+        rowModifier = Modifier.imeAndSystemNavPadding(),
+        header = {
+            // Above the box rather than inside the row: the reference is a fact about
+            // the message being written, and the row below is already four controls
+            // deep on a phone. ONLY when one is set — the invitation to attach moved
+            // into the attach button's chooser, which is where "attach" already lives.
+            pads.firstOrNull { it.id == padRefId }?.let { chosen ->
+                ScratchpadRefBadge(
+                    pad = chosen,
+                    pads = pads,
+                    onSelect = onPadRef,
+                    modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+                )
+            }
+            AttachChipRow(
+                attachments,
+                onRemoveAttachment,
+                Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
             )
-        }
-        AttachChipRow(
-            attachments,
-            onRemoveAttachment,
-            Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .imeAndSystemNavPadding()
-                .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = onDraft,
-                modifier = Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        if (sending) "Send anyway, it will queue"
-                        else if (mode == "act") "Ask huginn to do something"
-                        else "Ask huginn"
-                    )
-                },
-                maxLines = 6,
-                shape = RoundedCornerShape(20.dp),
-            )
-            Spacer(Modifier.width(6.dp))
+        },
+        leading = {
             AttachButton(
                 onPickImages = onAttach,
                 onPickFiles = onAttachFile,
@@ -474,6 +469,8 @@ private fun Composer(
                 onRequestMic = onRequestMic,
                 onText = { heard -> onDraft(appendDictation(draft, heard)) },
             )
+        },
+        trailing = {
             // Voice MODE, distinct from dictation: a hands-free loop that listens,
             // sends, reads the answer aloud, and listens again.
             IconButton(
@@ -484,45 +481,11 @@ private fun Composer(
                 modifier = Modifier.size(46.dp),
             ) {
                 Icon(
-                    Icons.Filled.GraphicEq,
+                    Icons.Outlined.GraphicEq,
                     contentDescription = "Voice conversation",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (sending && draft.isBlank()) {
-                // Nothing typed: the useful action on a running turn is to stop it.
-                IconButton(
-                    onClick = onCancel,
-                    // Plain and outlined: stopping is not a failure (BRAND.md; UI-AUDIT section 3).
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(23.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(23.dp)),
-                ) {
-                    Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onSurface)
-                }
-            } else {
-                val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
-                IconButton(
-                    onClick = onSend,
-                    enabled = canSend,
-                    modifier = Modifier
-                        .size(46.dp)
-                        .clip(RoundedCornerShape(23.dp))
-                        .background(
-                            if (canSend) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceContainerHigh
-                        ),
-                ) {
-                    Icon(
-                        Icons.Filled.Send,
-                        contentDescription = "Send",
-                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-      }
-    }
+        },
+    )
 }

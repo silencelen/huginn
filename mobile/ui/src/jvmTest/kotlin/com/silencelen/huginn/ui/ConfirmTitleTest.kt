@@ -56,7 +56,7 @@ class ConfirmTitleTest {
         val verbAt = text.indexOf("style = MaterialTheme.typography.labelLarge")
         val nameAt = text.indexOf("style = MaterialTheme.typography.headlineSmall")
         assertTrue(verbAt in 0 until nameAt, "the small verb comes first, the big name second")
-        assertTrue("FontFamily.Monospace" in text, "a session name is monospace everywhere else in the product")
+        assertTrue("LocalMonoStyle.current.fontFamily" in text, "a session name is in the theme's mono (Plex Mono) everywhere else in the product")
         assertTrue("maxLines = 2" in text, "two lines, because the TAIL of a name is what distinguishes it")
     }
 

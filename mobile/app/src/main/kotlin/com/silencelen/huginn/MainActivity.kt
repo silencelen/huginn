@@ -1960,7 +1960,7 @@ fun HuginnApp(
                                 title,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
-                                fontFamily = if (dest is Dest.SessionView && transcript?.title == null) FontFamily.Monospace else null,
+                                fontFamily = if (dest is Dest.SessionView && transcript?.title == null) com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily else null,
                             )
                             if (dest is Dest.SessionView) SessionSubtitle(transcript, screen)
                         }

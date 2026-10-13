@@ -222,6 +222,20 @@ val updaterProbe by tasks.registering(JavaExec::class) {
     classpath = sourceSets["main"].runtimeClasspath
 }
 
+/**
+ * The libnotify icon (LibnotifyNotifier.RAVEN_ICON): the 96 px raven rendered
+ * from assets/brand/raven-inverse.svg into packaging/raven-notify.png, staged as
+ * Compose app-resources for LINUX only (`<root>/linux/`), so packageDeb and
+ * createDistributable ship it under the directory the launcher passes as
+ * `compose.application.resources.dir`. Windows toasts keep the AUMID icon and get
+ * nothing from here.
+ */
+val notifyIconResources by tasks.registering(Sync::class) {
+    from(layout.projectDirectory.file("packaging/raven-notify.png"))
+    into(layout.buildDirectory.dir("notify-app-resources/linux"))
+}
+tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(notifyIconResources) }
+
 compose.desktop {
     application {
         mainClass = "com.silencelen.huginn.desktop.MainKt"
@@ -242,6 +256,8 @@ compose.desktop {
                 // assets/brand/raven-tile.svg by assets/brand/generate.sh.
                 iconFile.set(project.file("packaging/huginn.png"))
             }
+            // packaging/raven-notify.png, staged by notifyIconResources above.
+            appResourcesRootDir.set(layout.buildDirectory.dir("notify-app-resources"))
             // The jlink runtime image is minimal by default. java.net.http and
             // java.sql are not needed (Ktor uses OkHttp, no JDBC), but Ktor's
             // OkHttp engine and the coroutines debug agent both want

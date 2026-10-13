@@ -10,12 +10,25 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.silencelen.huginn.ui.resources.Res
+import com.silencelen.huginn.ui.resources.ibm_plex_mono_italic
+import com.silencelen.huginn.ui.resources.ibm_plex_mono_medium
+import com.silencelen.huginn.ui.resources.ibm_plex_mono_regular
+import com.silencelen.huginn.ui.resources.ibm_plex_mono_semibold
+import com.silencelen.huginn.ui.resources.ibm_plex_sans_medium
+import com.silencelen.huginn.ui.resources.ibm_plex_sans_regular
+import com.silencelen.huginn.ui.resources.ibm_plex_sans_semibold
+import org.jetbrains.compose.resources.Font
 import com.silencelen.huginn.ui.VerbTone
 
 // Moss & Heather: a dark grey ground with a breath of green in it, cool bone ink,
@@ -47,7 +60,12 @@ private val Accent = Color(0xFF7CB98E)       // moss: huginn's one accent
 private val AccentInk = Color(0xFF0B2316)
 private val Muted = Color(0xFFA2ABA5)        // onSurfaceVariant
 
-private val DarkColors = darkColorScheme(
+/**
+ * The dark Material scheme. Public (brand PR 5) so the launcher widgets can hand
+ * the SAME scheme to Glance's `ColorProviders(light = …, dark = …)` instead of
+ * keeping a lookalike copy.
+ */
+val HuginnDarkColorScheme: ColorScheme = darkColorScheme(
     primary = Accent,
     onPrimary = AccentInk,
     primaryContainer = Color(0xFF1F3D2C),
@@ -74,7 +92,8 @@ private val DarkColors = darkColorScheme(
     onErrorContainer = Color(0xFFF8C5CA),
 )
 
-private val LightColors = lightColorScheme(
+/** The light Material scheme; see [HuginnDarkColorScheme]. */
+val HuginnLightColorScheme: ColorScheme = lightColorScheme(
     primary = Color(0xFF1F5A3A),             // evergreen
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFCDEAD6),
@@ -224,10 +243,14 @@ val LightSyntax = SyntaxColors(
 val LocalSyntaxColors = staticCompositionLocalOf { DarkSyntax }
 
 /**
- * Terminal + code text. `FontFamily.Monospace` resolves to whatever mono face the
- * platform has; the brand face is IBM Plex Mono (BRAND.md section 5), and
- * bundling it as a Compose resource is the step that makes the phone and the
- * laptop show the same glyphs. Until then the platform mono stands in.
+ * Terminal + code text, in IBM Plex Mono 400 (BRAND.md section 5).
+ *
+ * ⚠ THE FAMILY HERE IS A PLACEHOLDER, AND [HuginnTheme] REPLACES IT. The bundled
+ * Plex Mono is a Compose resource, and a resource font can only be built inside
+ * a composition (`org.jetbrains.compose.resources.Font` is `@Composable`), so a
+ * top-level `TextStyle` cannot name it. [HuginnTheme] swaps the platform mono
+ * for [plexMonoFamily] before it provides [LocalMonoStyle]; the platform mono
+ * only ever shows outside a HuginnTheme (a bare test composition).
  *
  * The two clients genuinely disagree about the SIZE and only about the size, so
  * it is a theme parameter rather than a second renderer: a phone is read at
@@ -244,7 +267,85 @@ val MonoStyleDesktop = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 1
 
 val LocalMonoStyle = staticCompositionLocalOf { MonoStylePhone }
 
-private val HuginnTypography = Typography()
+/**
+ * IBM Plex Mono, bundled (`composeResources/font/ibm_plex_mono_*.ttf`): 400, 500,
+ * 600 and italic 400. The display role, labels, terminal, code and key-value rows.
+ */
+@Composable
+fun plexMonoFamily(): FontFamily {
+    val regular = Font(Res.font.ibm_plex_mono_regular, FontWeight.Normal)
+    val medium = Font(Res.font.ibm_plex_mono_medium, FontWeight.Medium)
+    val semibold = Font(Res.font.ibm_plex_mono_semibold, FontWeight.SemiBold)
+    val italic = Font(Res.font.ibm_plex_mono_italic, FontWeight.Normal, FontStyle.Italic)
+    return remember(regular, medium, semibold, italic) { FontFamily(regular, medium, semibold, italic) }
+}
+
+/** IBM Plex Sans, bundled: 400, 500, 600. Titles and body, so transcripts read. */
+@Composable
+fun plexSansFamily(): FontFamily {
+    val regular = Font(Res.font.ibm_plex_sans_regular, FontWeight.Normal)
+    val medium = Font(Res.font.ibm_plex_sans_medium, FontWeight.Medium)
+    val semibold = Font(Res.font.ibm_plex_sans_semibold, FontWeight.SemiBold)
+    return remember(regular, medium, semibold) { FontFamily(regular, medium, semibold) }
+}
+
+/**
+ * The type scale, from BRAND.md section 5's role table:
+ *
+ * | role | size / leading | face |
+ * |---|---|---|
+ * | displaySmall | 44 / 52 | Mono 600, −3 % |
+ * | headlineMedium | 28 / 36 | Sans 600 |
+ * | titleLarge | 22 / 28 | Sans 500 |
+ * | bodyLarge | 16 / 24 | Sans 400 |
+ * | labelMedium | 13 / 16 | Mono 500, +6 % |
+ * | labelSmall | 11 / 16 | Mono 500 |
+ *
+ * The roles the table does not name keep Material's sizes and take the face of
+ * their neighbours: the display ladder is Mono 600 at −3 % (negative tracking
+ * only above 22), headlines Sans 600, titles and labelLarge Sans 500, body Sans
+ * 400. The mono is never letter-spaced apart from labelMedium's +6 %.
+ *
+ * A plain function of the two families, not a composable, so a test can assert
+ * the scale without a composition.
+ */
+fun HuginnTypography(sans: FontFamily, mono: FontFamily): Typography {
+    val base = Typography()
+    fun TextStyle.on(family: FontFamily, weight: FontWeight) = copy(fontFamily = family, fontWeight = weight)
+    val displayTracking = (-0.03).em
+    return Typography(
+        displayLarge = base.displayLarge.on(mono, FontWeight.SemiBold).copy(letterSpacing = displayTracking),
+        displayMedium = base.displayMedium.on(mono, FontWeight.SemiBold).copy(letterSpacing = displayTracking),
+        displaySmall = TextStyle(
+            fontFamily = mono, fontWeight = FontWeight.SemiBold,
+            fontSize = 44.sp, lineHeight = 52.sp, letterSpacing = displayTracking,
+        ),
+        headlineLarge = base.headlineLarge.on(sans, FontWeight.SemiBold),
+        headlineMedium = TextStyle(
+            fontFamily = sans, fontWeight = FontWeight.SemiBold,
+            fontSize = 28.sp, lineHeight = 36.sp, letterSpacing = 0.sp,
+        ),
+        headlineSmall = base.headlineSmall.on(sans, FontWeight.SemiBold),
+        titleLarge = TextStyle(
+            fontFamily = sans, fontWeight = FontWeight.Medium,
+            fontSize = 22.sp, lineHeight = 28.sp, letterSpacing = 0.sp,
+        ),
+        titleMedium = base.titleMedium.on(sans, FontWeight.Medium),
+        titleSmall = base.titleSmall.on(sans, FontWeight.Medium),
+        bodyLarge = base.bodyLarge.on(sans, FontWeight.Normal).copy(fontSize = 16.sp, lineHeight = 24.sp),
+        bodyMedium = base.bodyMedium.on(sans, FontWeight.Normal),
+        bodySmall = base.bodySmall.on(sans, FontWeight.Normal),
+        labelLarge = base.labelLarge.on(sans, FontWeight.Medium),
+        labelMedium = TextStyle(
+            fontFamily = mono, fontWeight = FontWeight.Medium,
+            fontSize = 13.sp, lineHeight = 16.sp, letterSpacing = 0.06.em,
+        ),
+        labelSmall = TextStyle(
+            fontFamily = mono, fontWeight = FontWeight.Medium,
+            fontSize = 11.sp, lineHeight = 16.sp, letterSpacing = 0.sp,
+        ),
+    )
+}
 
 /**
  * @param darkTheme the phone follows the system; the desktop passes `true`
@@ -268,15 +369,25 @@ fun HuginnTheme(
     rowMetrics: com.silencelen.huginn.ui.system.RowMetrics = com.silencelen.huginn.ui.system.PhoneRowMetrics,
     content: @Composable () -> Unit,
 ) {
+    val mono = plexMonoFamily()
+    val sans = plexSansFamily()
+    val typography = remember(sans, mono) { HuginnTypography(sans = sans, mono = mono) }
+    // The caller's size, on the bundled face. A caller that named a family of
+    // its own (anything but the platform-mono placeholder) keeps it.
+    val resolvedMono = remember(monoStyle, mono) {
+        if (monoStyle.fontFamily == null || monoStyle.fontFamily == FontFamily.Monospace) {
+            monoStyle.copy(fontFamily = mono)
+        } else monoStyle
+    }
     CompositionLocalProvider(
         com.silencelen.huginn.ui.system.LocalRowMetrics provides rowMetrics,
         LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax,
         LocalHuginnColors provides if (darkTheme) DarkHuginnColors else LightHuginnColors,
-        LocalMonoStyle provides monoStyle,
+        LocalMonoStyle provides resolvedMono,
     ) {
         MaterialTheme(
-            colorScheme = if (darkTheme) DarkColors else LightColors,
-            typography = HuginnTypography,
+            colorScheme = if (darkTheme) HuginnDarkColorScheme else HuginnLightColorScheme,
+            typography = typography,
         ) {
             if (rootSurface) {
                 Surface(

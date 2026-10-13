@@ -84,11 +84,11 @@ fun SessionControls(
             contentPadding = PaddingValues(start = 8.dp, end = 16.dp, top = 6.dp, bottom = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // Status readouts lead so they stay visible if the controls scroll:
-            // the "Compacting…" marker and the "context used" meter (both render
-            // nothing when there's nothing to say).
+            // THE CONTEXT STRIP (PR 4), one line under the tabs: model · effort ·
+            // mode as chips, then the context meter, then the auto-resume toggle.
+            // "Compacting…" still leads — it is the one readout that explains why
+            // the session has gone quiet — and renders nothing the rest of the time.
             if (compacting) CompactingChip()
-            ContextMeter(contextPercent)
             // What the limit has already done to this session, BEFORE the model
             // chip it explains: a session laddered to opus shows a model nobody
             // on this phone chose, and this is the only thing on screen that says
@@ -121,6 +121,9 @@ fun SessionControls(
                     labelColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
+            // The "context used" meter, after the three controls it is read
+            // beside; it renders nothing when the pane has not reported a figure.
+            ContextMeter(contextPercent)
             // Last in the row, because it is the one control here that is about
             // TOMORROW rather than about the turn in front of you. Hidden against
             // a daemon with no headroom subsystem — a toggle whose host cannot

@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.ColorFilter
+import androidx.glance.color.ColorProviders
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
@@ -51,6 +52,14 @@ import com.silencelen.huginn.notify.Fleet
 import com.silencelen.huginn.notify.FleetSnapshot
 import com.silencelen.huginn.notify.SessionWatchWorker
 import com.silencelen.huginn.ui.stateLabel
+import com.silencelen.huginn.ui.theme.DarkHuginnColors
+import com.silencelen.huginn.ui.theme.HuginnDarkColorScheme
+import com.silencelen.huginn.ui.theme.HuginnLightColorScheme
+import com.silencelen.huginn.ui.theme.LightHuginnColors
+import com.silencelen.huginn.ui.theme.StateKind
+import com.silencelen.huginn.ui.theme.stateKindOf
+import com.silencelen.huginn.ui.theme.stateWord
+import androidx.glance.material3.ColorProviders
 import kotlinx.coroutines.flow.first
 
 /**
@@ -81,7 +90,7 @@ class FleetWidget : GlanceAppWidget() {
         val signedIn = settings.token.first().isNotBlank()
         val snapshot = Fleet.decode(settings.fleetSnapshot.first())
         provideContent {
-            GlanceTheme {
+            GlanceTheme(colors = HuginnGlanceColors) {
                 FleetContent(signedIn, snapshot)
             }
         }
@@ -149,7 +158,11 @@ private fun FleetContent(signedIn: Boolean, snapshot: FleetSnapshot?) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .background(GlanceTheme.colors.widgetBackground)
+            // `background`, NOT `widgetBackground`: Glance's M3 bridge fills
+            // widgetBackground from secondaryContainer, a role Theme.kt leaves to
+            // Material's baseline violet (see PaletteTest). The ground is the
+            // app's own.
+            .background(GlanceTheme.colors.background)
             .cornerRadius(16.dp)
             .padding(12.dp),
     ) {
@@ -178,12 +191,16 @@ private fun Header(snapshot: FleetSnapshot?) {
             .clickable(actionStartActivity(openApp(context))),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The wordmark is typed, lowercase, in the mono (BRAND.md section 5).
+        // RemoteViews cannot load the bundled Plex, so the launcher's mono
+        // stands in, at the heaviest weight Glance offers short of bold.
         Text(
-            "Huginn",
+            "huginn",
             style = TextStyle(
                 color = GlanceTheme.colors.onSurface,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Monospace,
             ),
         )
         Spacer(GlanceModifier.defaultWeight())
@@ -212,9 +229,9 @@ private fun CountsLine(snapshot: FleetSnapshot) {
     Row(GlanceModifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         if (snapshot.attention > 0) {
             Text(
-                "${snapshot.attention} need you",
+                "${snapshot.attention} ${stateWord(StateKind.NEEDS_YOU)}",
                 style = TextStyle(
-                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else attentionColor(),
+                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else GlanceStateColors.needsYou,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                 ),
@@ -222,16 +239,16 @@ private fun CountsLine(snapshot: FleetSnapshot) {
             Dot(sepColor())
         }
         Text(
-            "${snapshot.running} working",
+            "${snapshot.running} ${stateWord(StateKind.WORKING)}",
             style = TextStyle(
-                color = if (snapshot.running > 0 && !stale) GlanceTheme.colors.primary
+                color = if (snapshot.running > 0 && !stale) GlanceStateColors.working
                 else GlanceTheme.colors.onSurfaceVariant,
                 fontSize = 12.sp,
             ),
         )
         Dot(sepColor())
         Text(
-            "${snapshot.quiet} waiting",
+            "${snapshot.quiet} ${stateWord(StateKind.WAITING)}",
             style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 12.sp),
         )
         if (snapshot.chatsRunning > 0) {
@@ -314,20 +331,51 @@ private fun SessionRows(snapshot: FleetSnapshot) {
 }
 
 /**
- * Same code the sessions list speaks: needs you = the accent lit up, working =
- * primary, muted = quiet. Glance cannot read the app's composition locals, so the
- * needs-you colour is the brand token spelled out (light / dark stateAttention
- * from color-04-moss-heather/tokens.json) until the widget is on the scheme.
+ * The app's scheme, handed to Glance: the SAME `ColorScheme` values Theme.kt
+ * gives MaterialTheme (brand PR 5), day and night, so the widget cannot drift
+ * from the app the way a hand-kept copy would.
  */
-private fun attentionColor(): ColorProvider =
-    androidx.glance.color.ColorProvider(day = Color(0xFF3D2B05), night = Color(0xFFE8D07E))
-
-@Composable
-private fun stateColor(state: String?): ColorProvider = when (state) {
-    Fleet.ATTENTION -> attentionColor()
-    Fleet.RUNNING -> GlanceTheme.colors.primary
-    else -> GlanceTheme.colors.onSurfaceVariant
+// Lazy: Glance's material bridge reads android.graphics.Color when it builds the
+// providers, and a JVM unit test that touches this file's pure functions must not
+// trip that at class load.
+internal val HuginnGlanceColors: ColorProviders by lazy {
+    ColorProviders(light = HuginnLightColorScheme, dark = HuginnDarkColorScheme)
 }
+
+/**
+ * The state ladder for Glance. Glance cannot read the app's composition locals
+ * (`LocalHuginnColors`, `stateColor`), so this mirrors theme/StateColors.kt with
+ * day/night providers built from the same token objects ([LightHuginnColors] /
+ * [DarkHuginnColors], tokens.json): the same seven words, the same colours, and
+ * needs-you the lit gold, never the error red.
+ */
+internal object GlanceStateColors {
+    private fun dayNight(day: Color, night: Color): ColorProvider =
+        androidx.glance.color.ColorProvider(day = day, night = night)
+
+    val working: ColorProvider = dayNight(LightHuginnColors.stateWorking, DarkHuginnColors.stateWorking)
+    val needsYou: ColorProvider = dayNight(LightHuginnColors.stateAttention, DarkHuginnColors.stateAttention)
+    val waiting: ColorProvider = dayNight(LightHuginnColors.stateIdle, DarkHuginnColors.stateIdle)
+    val shell: ColorProvider = dayNight(HuginnLightColorScheme.outline, HuginnDarkColorScheme.outline)
+    val ok: ColorProvider = dayNight(LightHuginnColors.stateSuccess, DarkHuginnColors.stateSuccess)
+    val error: ColorProvider = dayNight(LightHuginnColors.stateError, DarkHuginnColors.stateError)
+    val info: ColorProvider = dayNight(LightHuginnColors.stateInfo, DarkHuginnColors.stateInfo)
+
+    fun of(kind: StateKind): ColorProvider = when (kind) {
+        StateKind.WORKING -> working
+        StateKind.NEEDS_YOU -> needsYou
+        StateKind.WAITING -> waiting
+        StateKind.SHELL -> shell
+        StateKind.OK -> ok
+        StateKind.ERROR -> error
+        StateKind.INFO -> info
+    }
+
+    /** The daemon's wire word (`running` / `attention` / `idle` …), mapped once by [stateKindOf]. */
+    fun forWire(state: String?): ColorProvider = of(stateKindOf(state))
+}
+
+private fun stateColor(state: String?): ColorProvider = GlanceStateColors.forWire(state)
 
 @Composable
 private fun Empty(message: String, onTap: androidx.glance.action.Action) {

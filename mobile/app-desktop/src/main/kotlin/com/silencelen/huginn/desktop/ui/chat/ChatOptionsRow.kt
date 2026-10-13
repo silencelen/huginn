@@ -63,7 +63,7 @@ fun ChatOptionsRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        PickerChip(
+        OptionPickerChip(
             label = if (model.isNullOrBlank()) "Default model" else ModelLabels.model(model, models),
             // The menu is the daemon's truth: a STARTED chat is pinned to its
             // family and machine, so ModelLabels shrinks the rows accordingly —
@@ -78,7 +78,7 @@ fun ChatOptionsRow(
         )
         // A local model has no effort knob — the chip is absent, not disabled.
         if (!localNow) {
-            PickerChip(
+            OptionPickerChip(
                 label = if (effort.isNullOrBlank()) "Default effort" else ModelLabels.effort(effort),
                 options = ModelLabels.effortOptions() + (CLEAR to "Host default"),
                 enabled = enabled,
@@ -97,7 +97,7 @@ fun ChatOptionsRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            PickerChip(
+            OptionPickerChip(
                 label = if (mode == "act") "Act" else "Ask",
                 options = listOf("ask" to "Ask — reasoning and memory, no tools", "act" to "Act — files, commands, the web"),
                 enabled = enabled,
@@ -110,21 +110,31 @@ fun ChatOptionsRow(
 /** An empty string is how the daemon is told to go back to its own default. */
 private const val CLEAR = ""
 
+/**
+ * THE desktop picker chip: the chat's options row and the session header both
+ * draw through it (PR 4), so a model picker looks like a model picker wherever
+ * it is. Reads as its current value; the arrow says it opens.
+ *
+ * NEVER WRAPS: the session header can lose 360dp to the pages panel between one
+ * frame and the next, and a two-word model name folding onto a second line makes
+ * the header taller — which on the Screen tab is measured into tmux rows.
+ */
 @Composable
-private fun PickerChip(
+fun OptionPickerChip(
     label: String,
     options: List<Pair<String, String>>,
-    enabled: Boolean,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
     onPick: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    Box {
+    Box(modifier) {
         AssistChip(
             onClick = { open = true },
             enabled = enabled,
             label = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, style = MaterialTheme.typography.labelMedium)
+                    Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
                     Spacer(Modifier.width(2.dp))
                     Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(15.dp))
                 }
@@ -144,4 +154,19 @@ private fun PickerChip(
             }
         }
     }
+}
+
+/**
+ * A chip that acts rather than opens, drawn like [OptionPickerChip] without the
+ * arrow: permission mode has no slash command that sets it, so the session
+ * header's mode chip sends the Shift+Tab that cycles it.
+ */
+@Composable
+fun OptionActionChip(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    AssistChip(
+        onClick = onClick,
+        modifier = modifier,
+        label = { Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false) },
+        colors = AssistChipDefaults.assistChipColors(labelColor = MaterialTheme.colorScheme.onSurface),
+    )
 }
