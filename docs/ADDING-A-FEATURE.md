@@ -45,9 +45,13 @@ window narrowed to a phone's width then gets the phone's answer, which
 `expect`/`actual` cannot express because it is a runtime question, not a
 platform one.
 
-Reach for `expect`/`actual` only when the platform API itself differs — the HTTP
-engine and the IO dispatcher. There are **two** in the whole project, both in
-`:core/data/Platform.kt`; that number should stay small.
+Reach for `expect`/`actual` only when the platform API itself differs: the HTTP
+engine (GitHub only, with ordinary CA validation), the daemon transport (the
+TLS-pinned channel to appd, see `docs/TLS.md`), the IO dispatcher and the local
+time format. All four live in `:core/data/Platform.kt`, and the number should
+stay small. ⚠ Anything that dials appd goes through `huginnTransport()` /
+`HuginnClient`, never `huginnHttpEngine()`: the plain engine trusts system CAs
+and would carry the token past the pin check.
 
 The glyph blit is drawn the same way on both platforms but through different
 graphics APIs, and it is deliberately NOT `expect`/`actual`: it is a source-set

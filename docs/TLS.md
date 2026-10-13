@@ -86,6 +86,18 @@ fingerprint, so relaying it doesn't help.
    HTTP) or answers the challenge without `tls`. Report it as *"the daemon is
    older than 3.11 and has no TLS; update it."* Do not downgrade.
 
+## Known limits
+
+- **A TLS-terminating reverse proxy can't sit in front of appd.** The daemon
+  proves its own certificate, and a proxy that ends TLS (Caddy, nginx, Traefik
+  with its own certificate) shows clients a different one, so every client
+  refuses it. That refusal is exactly what the proof exists to do. Use TLS
+  passthrough (SNI routing with no termination), or give appd the CA-issued
+  certificate directly with `HUGINN_APPD_TLS_CERT` and `HUGINN_APPD_TLS_KEY`.
+- **Android can't speak plain HTTP to `[::1]`.** The network security config
+  allows cleartext only to `localhost` and `127.0.0.1`, and an IPv6 literal
+  can't be listed reliably. Use `http://127.0.0.1:<port>` on the phone.
+
 ## Test vector
 
 ```
