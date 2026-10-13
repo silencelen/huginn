@@ -80,3 +80,31 @@ fun StateDot(kind: StateKind, modifier: Modifier = Modifier, quiet: Boolean = ki
 
 @Composable
 fun StateDot(wire: String?, modifier: Modifier = Modifier) = StateDot(stateKindOf(wire), modifier)
+
+/**
+ * THE ONE SEVERITY RAMP (BRAND.md section 4; UI-AUDIT.md section 3 "Severity").
+ * Every meter and threshold reads it: normal is the outline, warning is the
+ * needs-you step, critical is the error red. Before this existed the plan
+ * meters drew "normal" in heather and "warning" in the accent, so under the
+ * Moss & Heather tokens a disk at 88 % and a week at 81 % read as healthy green.
+ */
+enum class Severity { NORMAL, WARNING, CRITICAL }
+
+/**
+ * The daemon's severity words ([HeadroomRules.severityColorKey]: `critical`,
+ * `high`, `warning`, `normal`) and the percentage thresholds the meters share
+ * (90 critical, 70 warning), mapped once. Pass [percent] only where a bar has
+ * no word of its own.
+ */
+fun severityOf(key: String?, percent: Double? = null, warnAt: Double = 70.0, criticalAt: Double = 90.0): Severity = when {
+    key == "critical" || key == "high" || (percent != null && percent >= criticalAt) -> Severity.CRITICAL
+    key == "warning" || (percent != null && percent >= warnAt) -> Severity.WARNING
+    else -> Severity.NORMAL
+}
+
+@Composable
+fun severityColor(s: Severity): Color = when (s) {
+    Severity.NORMAL -> androidx.compose.material3.MaterialTheme.colorScheme.outline
+    Severity.WARNING -> LocalHuginnColors.current.stateAttention
+    Severity.CRITICAL -> LocalHuginnColors.current.stateError
+}

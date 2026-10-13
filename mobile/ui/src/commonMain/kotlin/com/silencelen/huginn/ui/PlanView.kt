@@ -13,6 +13,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.severityColor
+import com.silencelen.huginn.ui.theme.severityOf
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -258,11 +260,8 @@ private fun Meter(percent: Double, color: Color) {
  * the bar under it calls it amber.
  */
 @Composable
-internal fun meterColor(severity: String?, percent: Double): Color = when {
-    severity == "critical" || severity == "high" || percent >= 90 -> MaterialTheme.colorScheme.error
-    severity == "warning" || percent >= 70 -> MaterialTheme.colorScheme.primary
-    else -> MaterialTheme.colorScheme.secondary
-}
+internal fun meterColor(severity: String?, percent: Double): Color =
+    severityColor(severityOf(severity, percent))
 
 @Composable
 private fun UsageRow(label: String, tokens: Long, cost: Double?) {
