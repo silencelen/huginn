@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -234,6 +235,8 @@ private fun StatusDot(status: RoundStatus, acknowledged: Boolean = false, modifi
 @Composable
 private fun statusColor(status: RoundStatus, acknowledged: Boolean): Color =
     when (roundStatusColorKey(status, acknowledged)) {
+        "attention" -> LocalHuginnColors.current.stateAttention
+        "info" -> LocalHuginnColors.current.stateInfo
         "error" -> MaterialTheme.colorScheme.error
         "primary" -> MaterialTheme.colorScheme.primary
         "outline" -> MaterialTheme.colorScheme.outline

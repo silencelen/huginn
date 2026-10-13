@@ -32,6 +32,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -560,7 +561,7 @@ private fun SessionHeader(
             ) {
                 when (state) {
                     "running" -> StateDot(MaterialTheme.colorScheme.primary)
-                    "attention" -> StateDot(MaterialTheme.colorScheme.error)
+                    "attention" -> StateDot(LocalHuginnColors.current.stateAttention)
                 }
                 Text(
                     title,

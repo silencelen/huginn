@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -474,7 +475,7 @@ private fun ReachDot(app: App) {
         AppRules.reach(app) == AppRules.Reach.DOWN -> MaterialTheme.colorScheme.error
         // ⚠ UP BUT NOT WHERE YOU ARE IS NOT UP, to the person holding the phone.
         // This is the one row on the page that wants the accent.
-        AppRules.deviceReach(app) == AppRules.DeviceReach.RETROFIT -> MaterialTheme.colorScheme.primary
+        AppRules.deviceReach(app) == AppRules.DeviceReach.RETROFIT -> LocalHuginnColors.current.stateAttention
         AppRules.reach(app) == AppRules.Reach.UP -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> null
     }
