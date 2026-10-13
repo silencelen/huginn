@@ -1,5 +1,33 @@
 # Huginn changelog
 
+## 3.11.0 — 2026-10-13
+
+### The new skin
+- **Moss & Heather.** Every colour comes from the brand's token file (`assets/brand/BRAND.md`):
+  a dark grey ground with a breath of green, cool bone ink, moss as the one accent, heather for
+  code, links and the "worth a look" voice. Light mode is the same scheme deepened, with light
+  system bars. The launcher and the status-bar glyph are the new raven.
+- **One state language.** Seven words everywhere — working, needs you, waiting, shell, ok,
+  error, info — with one colour each. *Needs you* is the lit accent (gold), never the error red:
+  a question is not a failure. Red now means something failed, or a verb that destroys. Success
+  is teal, info is heather, waiting is a quiet grey dot.
+- **One severity ramp.** Disk, the context meter, the plan meters and the usage-limit notice all
+  read normal / warning / critical the same way; a week at 81 % is a warning in gold, not a
+  healthy green and not a failure.
+- **Surfaces in tiers.** Code blocks and tables sit in the darkest well; rows and strips on the
+  first tier; cards on the second; chips on the top. Dividers are hairlines.
+- **The accent means live and you.** Section labels, tool detail, attribution and routine
+  buttons left the accent; Send is the one filled button on a screen; Stop and Interrupt are
+  plain; Wrap up is quiet ink; the active tab, selected rows and selected chips share one tint.
+- **One row, one header, one dialog.** Lists share a row anatomy (dot, title, one meta line,
+  trailing time or state), headers are Title Case with no tracking, confirm dialogs share one
+  shape with destructive verbs in red, and the triangles, chevrons and arrows that stood in for
+  icons are icons.
+- **Notifications and widgets carry the brand**: the accent colour, channels named *Needs you*,
+  *Finished*, *Watching* and *Proposals*, and widgets on the scheme with the same words and dots.
+- **Type.** IBM Plex Mono leads (names, labels, the terminal); IBM Plex Sans reads (titles and
+  body), bundled so the phone and the desktop show the same glyphs.
+
 ## 3.10.0 — 2026-10-12
 
 ### Security

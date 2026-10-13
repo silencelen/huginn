@@ -28,6 +28,13 @@ import java.util.concurrent.TimeUnit
  */
 class LibnotifyNotifier internal constructor(
     private val canClose: Boolean,
+    /**
+     * Absolute path of the brand raven (BRAND.md section 7: "the brand raven as
+     * the libnotify icon on Linux"), or null to fall back to the stock
+     * dialog-warning / dialog-information names. Injected so a test pins it;
+     * declared BEFORE [send] so the tests' trailing-lambda calls still bind there.
+     */
+    private val ravenIcon: String? = ravenIconPath(),
     /** How a command is actually run. Injected so the failure path is testable. */
     private val send: (List<String>, Long) -> String? = { cmd, ms -> runQuiet(cmd, ms) },
 ) : Notifier {
@@ -73,12 +80,12 @@ class LibnotifyNotifier internal constructor(
             // notification. Most daemons also play a sound for it.
             cmd += "--urgency=critical"
             cmd += "--expire-time=0"
-            cmd += "--icon=dialog-warning"
+            cmd += "--icon=${ravenIcon ?: "dialog-warning"}"
             cmd += "--hint=string:sound-name:message-new-instant"
         } else {
             cmd += "--urgency=low"
             cmd += "--expire-time=8000"
-            cmd += "--icon=dialog-information"
+            cmd += "--icon=${ravenIcon ?: "dialog-information"}"
             cmd += "--hint=string:suppress-sound:true"
         }
         // "--" so a title that starts with a dash is a title and not a flag.
@@ -117,6 +124,24 @@ class LibnotifyNotifier internal constructor(
         private const val NOTIFY_SEND = "notify-send"
         private const val GDBUS = "gdbus"
         private const val TIMEOUT_MS = 4_000L
+
+        /** The file name in the packaged app-resources dir; see app-desktop/build.gradle.kts. */
+        internal const val RAVEN_ICON = "raven-notify.png"
+
+        /**
+         * The raven PNG (96 px, rendered from assets/brand/raven-inverse.svg into
+         * app-desktop/packaging/) as the installed app ships it: Compose's
+         * `appResourcesRootDir` puts it in the directory the launcher names in
+         * `compose.application.resources.dir`, which `run` sets too. Null when the
+         * property or the file is missing (a bare jar, a test), which keeps the
+         * stock icon rather than handing notify-send a path that does not exist.
+         */
+        internal fun ravenIconPath(): String? = runCatching {
+            System.getProperty("compose.application.resources.dir")
+                ?.let { java.io.File(it, RAVEN_ICON) }
+                ?.takeIf { it.isFile }
+                ?.absolutePath
+        }.getOrNull()
 
         /**
          * Null when this desktop cannot be reached this way — no `notify-send`, no

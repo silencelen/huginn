@@ -26,8 +26,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.silencelen.huginn.ui.system.Scale
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -646,7 +648,7 @@ private fun Composer(
             },
             actions = { layout ->
                 if (running) {
-                    ComposerAction(layout, "Stop", Icons.Filled.Stop, onStop)
+                    ComposerAction(layout, "Stop", Icons.Outlined.Stop, onStop)
                 }
                 // ONE send button whatever the state. A separate "Queue" verb was a
                 // second control for the same act — the message goes to the same
@@ -654,7 +656,7 @@ private fun Composer(
                 ComposerAction(
                     layout,
                     "Send",
-                    Icons.AutoMirrored.Filled.Send,
+                    Icons.AutoMirrored.Outlined.Send,
                     submit,
                     enabled = canSend,
                     prominent = true,
@@ -745,6 +747,8 @@ private fun Composer(
                     )
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
+                // The house field (ui/system/Composer.kt): the 20 dp outlined box.
+                shape = RoundedCornerShape(Scale.s20),
             )
         }
     }

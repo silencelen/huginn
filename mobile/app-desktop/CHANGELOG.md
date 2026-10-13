@@ -1,5 +1,21 @@
 # Huginn Desktop changelog
 
+## 1.12.0
+
+### The new skin
+- **Moss & Heather, shared with the phone.** The same tokens, the same seven state words and
+  colours (needs you is the lit accent, never red), the same severity ramp, the same surface
+  tiers and hairlines, the same row anatomy at the desktop's 12/6 density, and the same house
+  dialog with destructive verbs in red. Headers are Title Case; the rail's marks, the status line
+  and the header dot agree on one needs-you colour.
+- **The tray is the brand's tile**: the raven cut out of a rounded square, tinted idle, working
+  or needs-you, with the badge on needs-you; the window icon is the new mark.
+- **Composer and session view.** Send is the one filled circle; Interrupt is plain; pickers are
+  chips like Chat's; Live is an outlined toggle; one notice line.
+- **Type.** IBM Plex Mono and Sans bundled; the terminal canvas prefers Plex Mono.
+- Tooltips say *Waiting* and *Needs you*, never *Idle* or *Waiting on you*.
+- Linux notifications carry the raven icon.
+
 ## 1.11.0
 
 ### Security

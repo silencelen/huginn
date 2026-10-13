@@ -344,7 +344,7 @@ class DevicesViewTest {
         assertTrue(text.length > 5_000, "DevicesView.kt read as ${text.length} chars — wrong file")
         val card = text.substringAfter("private fun MachineCard(").substringBefore("private fun ")
         assertTrue(card.length > 500, "MachineCard read as ${card.length} chars — wrong slice")
-        val row = card.substringAfter("Column(Modifier.padding(start = 14.dp").substringBefore("Column(Modifier.padding(start = 10.dp")
+        val row = card.substringAfter("Column(Modifier.padding(start = Scale.s12, end").substringBefore("Column(Modifier.padding(start = Scale.s12).weight")
         assertTrue(row.length in 1..1_500, "the title row read as ${row.length} chars — wrong slice")
         assertTrue(
             "Row(verticalAlignment = Alignment.Top)" in row,

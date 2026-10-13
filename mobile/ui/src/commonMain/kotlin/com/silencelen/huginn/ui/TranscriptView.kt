@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.RelayProject
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import com.silencelen.huginn.ui.theme.LocalMonoStyle
 
 /**
  * The two measurements a transcript row cannot decide for itself, handed down by
@@ -582,8 +583,7 @@ private fun ToolCard(ev: TranscriptEvent) {
                 Box(Modifier.horizontalScroll(rememberScrollState())) {
                     Text(
                         highlighted(input, langForTool(ev.name)),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        style = LocalMonoStyle.current,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 2,
                     )
@@ -597,8 +597,7 @@ private fun ToolCard(ev: TranscriptEvent) {
                     Box(Modifier.horizontalScroll(rememberScrollState())) {
                         Text(
                             highlighted(ev.result.orEmpty(), resultLang(ev.result.orEmpty())),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
+                            style = LocalMonoStyle.current,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -700,8 +699,7 @@ private fun ToolResultOrphan(ev: TranscriptEvent) {
         Box(Modifier.padding(10.dp).horizontalScroll(rememberScrollState())) {
             Text(
                 ev.result.orEmpty(),
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = FontFamily.Monospace,
+                style = LocalMonoStyle.current,
                 color = if (ev.ok == false) MaterialTheme.colorScheme.error
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -723,8 +721,8 @@ private fun CommandNote(text: String, isResult: Boolean) {
         ) {
             Text(
                 text,
-                style = MaterialTheme.typography.labelSmall,
-                fontFamily = if (isResult) FontFamily.Default else FontFamily.Monospace,
+                // The output reads as prose (Plex Sans), the command as code.
+                style = if (isResult) MaterialTheme.typography.bodySmall else LocalMonoStyle.current,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             )

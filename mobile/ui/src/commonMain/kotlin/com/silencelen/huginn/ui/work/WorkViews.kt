@@ -238,7 +238,7 @@ fun AgentCard(a: AgentRun, nowSec: Long, modifier: Modifier = Modifier) {
                         // wf_b3db6247-567 → b3db6247: enough to tell runs apart.
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -266,8 +266,9 @@ fun AgentCard(a: AgentRun, nowSec: Long, modifier: Modifier = Modifier) {
                 Spacer(Modifier.size(3.dp))
                 Text(
                     last,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = if (last == summary) FontFamily.Default else FontFamily.Monospace,
+                    // A settled agent's summary reads as prose (Plex Sans); a live
+                    // tool line is code, on the theme's mono.
+                    style = if (last == summary) MaterialTheme.typography.bodySmall else com.silencelen.huginn.ui.theme.LocalMonoStyle.current,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,

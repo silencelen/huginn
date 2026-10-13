@@ -47,6 +47,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.Icon
 import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.LocalRowMetrics
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.ArrowDownward
 
@@ -59,9 +61,10 @@ import androidx.compose.material.icons.outlined.ArrowDownward
  * inseparable: a row that moves takes its highlight with it.
  *
  * ⚠ NO LEFT ACCENT BARS. The owner's standing note, and [SettingsHouseRulesTest]
- * greps this file for the shape of one. State here is what it is everywhere else
- * in this product: a small dot in the row's own text flow, plus a brief surface
- * tint. A rail down the side of a row is a second vocabulary for the same bit.
+ * greps this file for the shape of one. The arrival target is what a selected
+ * row is everywhere else in this product (UI-AUDIT section 3): the Low surface
+ * tier plus a SemiBold title, nothing else. A rail down the side of a row is a
+ * second vocabulary for the same bit.
  *
  * ⚠ CAP BEFORE FILL. `widthIn(max).fillMaxWidth()`, never the reverse —
  * `fillMaxWidth` hands down FIXED constraints and a `widthIn` inside them can
@@ -92,7 +95,7 @@ fun SettingsStateDot(color: Color) {
 }
 
 /**
- * The shared frame: the cap, the tint, the dot and the title/summary column.
+ * The shared frame: the house [ListRow] under the id tag and the reading cap.
  * Every row below is this plus its own control.
  */
 @Composable
@@ -105,40 +108,23 @@ private fun RowFrame(
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    val tint = MaterialTheme.colorScheme.primary.copy(alpha = SettingsRowStyle.tintAlpha(highlighted))
-    val base = modifier
-        .testTag(id)
-        .widthIn(max = SettingsRowStyle.ROW_MAX_WIDTH)
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(8.dp))
-        .background(tint)
-    Row(
-        modifier = (if (onClick != null) base.clickable(onClick = onClick) else base)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (highlighted) SettingsStateDot(MaterialTheme.colorScheme.primary)
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal,
-                )
-            }
-            if (!summary.isNullOrBlank()) {
-                Text(
-                    summary,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-        trailing?.invoke()
-    }
+    // THE HOUSE ROW (UI-AUDIT section 3, PR 3). The arrival target is the
+    // house selection — surfaceContainerLow plus a SemiBold title — and nothing
+    // else: no accent tint, no dot. The id tag and the reading cap stay here;
+    // cap before fill (see the file comment).
+    ListRow(
+        title = title,
+        meta = summary,
+        metaMaxLines = 3,
+        selected = highlighted,
+        onClick = onClick,
+        modifier = modifier
+            .testTag(id)
+            .widthIn(max = SettingsRowStyle.ROW_MAX_WIDTH)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Scale.radiusCard)),
+        trailing = if (trailing == null) null else ({ trailing() }),
+    )
 }
 
 /** A setting that is on or off. */
@@ -180,24 +166,23 @@ fun SettingsFieldRow(
     isError: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    val tint = MaterialTheme.colorScheme.primary.copy(alpha = SettingsRowStyle.tintAlpha(highlighted))
+    // Framed like [RowFrame]'s ListRow: the house inset, and the arrival target
+    // is surfaceContainerLow plus SemiBold, nothing else.
+    val metrics = LocalRowMetrics.current
     Column(
         modifier
             .testTag(id)
             .widthIn(max = SettingsRowStyle.ROW_MAX_WIDTH)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(tint)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(Scale.radiusCard))
+            .background(if (highlighted) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = metrics.inset, vertical = metrics.vertical),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (highlighted) SettingsStateDot(MaterialTheme.colorScheme.primary)
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal,
-            )
-        }
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Medium,
+        )
         if (!summary.isNullOrBlank()) {
             Text(
                 summary,
@@ -505,24 +490,23 @@ fun SettingsRouteListRow(
     var editing by remember { mutableStateOf<String?>(null) }
     var adding by remember { mutableStateOf(false) }
 
-    val tint = MaterialTheme.colorScheme.primary.copy(alpha = SettingsRowStyle.tintAlpha(highlighted))
+    // Framed like [RowFrame]'s ListRow: the house inset, and the arrival target
+    // is surfaceContainerLow plus SemiBold, nothing else.
+    val metrics = LocalRowMetrics.current
     Column(
         modifier
             .testTag(id)
             .widthIn(max = SettingsRowStyle.ROW_MAX_WIDTH)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(tint)
-            .padding(horizontal = 8.dp, vertical = 10.dp),
+            .clip(RoundedCornerShape(Scale.radiusCard))
+            .background(if (highlighted) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = metrics.inset, vertical = metrics.vertical),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (highlighted) SettingsStateDot(MaterialTheme.colorScheme.primary)
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Normal,
-            )
-        }
+        Text(
+            title,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Medium,
+        )
         if (!summary.isNullOrBlank()) {
             Text(
                 summary,

@@ -141,7 +141,7 @@ object HeadroomNotices {
         val replyChat: String? = null,
         val answers: List<String> = emptyList(),
         val fingerprint: String? = null,
-        /** NEWS, not "needs you": these ride the channel that can be silenced alone. */
+        /** NEWS, not "needs you": these ride "Finished", the channel that can be silenced alone. */
         val isResult: Boolean = true,
     )
 

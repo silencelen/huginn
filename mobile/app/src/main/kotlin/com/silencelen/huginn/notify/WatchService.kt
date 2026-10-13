@@ -213,21 +213,17 @@ class WatchService : Service() {
         else "Not connected: ${failure.take(60)}"
 
     /** The ongoing notification says what is happening, not merely that we exist. */
-    private fun summary(watch: Watch): String {
-        val needing = watch.sessions.count { it.value == "attention" }
-        val working = watch.sessions.count { it.value == "running" }
-        val chatsRunning = watch.chats.count { it.value.running }
-        return buildList {
-            if (needing > 0) add(if (needing == 1) "1 session needs you" else "$needing sessions need you")
-            if (working > 0) add("$working working")
-            if (chatsRunning > 0) add("$chatsRunning chat${if (chatsRunning == 1) "" else "s"} running")
-            if (isEmpty()) add("${watch.sessions.size} session${if (watch.sessions.size == 1) "" else "s"}, all idle")
-        }.joinToString(" · ")
-    }
+    private fun summary(watch: Watch): String = ongoingSummary(
+        needing = watch.sessions.count { it.value == "attention" },
+        working = watch.sessions.count { it.value == "running" },
+        chatsRunning = watch.chats.count { it.value.running },
+        total = watch.sessions.size,
+    )
 
     private fun ongoing(title: String, text: String) =
         NotificationCompat.Builder(this, CHANNEL_ONGOING)
             .setSmallIcon(R.drawable.ic_stat_huginn)
+            .setColor(SessionWatchWorker.ACCENT)
             .setContentTitle(title)
             .setContentText(text)
             .setOngoing(true)
@@ -296,7 +292,7 @@ class WatchService : Service() {
         fun createChannels(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ONGOING, "Watching huginn", NotificationManager.IMPORTANCE_MIN).apply {
+                NotificationChannel(CHANNEL_ONGOING, "Watching", NotificationManager.IMPORTANCE_MIN).apply {
                     description = "The quiet notification Android requires while huginn is watched continuously"
                     setShowBadge(false)
                 }
@@ -326,4 +322,17 @@ class WatchService : Service() {
  * on living, notification and all. A completed job is not a running one, and
  * `job?.isActive == true` is this codebase's convention everywhere else.
  */
+/**
+ * The ongoing notice's line, in the brand's state words (BRAND.md section 8):
+ * "1 needs you · 2 working · 3 chats", and "all waiting", never "all idle" —
+ * a session with nothing to do is waiting for you, not asleep.
+ */
+internal fun ongoingSummary(needing: Int, working: Int, chatsRunning: Int, total: Int): String =
+    buildList {
+        if (needing > 0) add("$needing needs you")
+        if (working > 0) add("$working working")
+        if (chatsRunning > 0) add("$chatsRunning chat${if (chatsRunning == 1) "" else "s"}")
+        if (isEmpty()) add("$total session${if (total == 1) "" else "s"}, all waiting")
+    }.joinToString(" · ")
+
 internal fun needsRevival(job: Job?): Boolean = job?.isActive != true

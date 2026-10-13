@@ -12,15 +12,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.Button
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -169,18 +167,19 @@ private fun ComposerControlRow(content: @Composable RowScope.() -> Unit) {
 }
 
 /**
- * One composer verb, in whichever form this width can afford.
+ * One composer verb: a circle, with its word on hover ([Tip]).
  *
- * A word at desk widths, because a labelled button is unambiguous and there is
- * room for it. Its own icon under the breakpoint, with the word on hover — the
- * same trade the nav rail already makes, which is why [Tip] is here rather than a
- * tooltip of its own invention.
+ * PR 4 (UI-AUDIT.md section 3, "Composer" and "Accent"): Send is THE one filled
+ * primary circle on the screen, in both shapes; every other verb here — Stop,
+ * Interrupt — is a plain outlined circle in onSurface ink, because stopping is
+ * not a failure and red is for failures. The word lives in the tooltip and the
+ * content description, the same trade the nav rail already makes.
  *
- * @param prominent the primary verb (Send). Filled in both shapes: a composer
- *   with two identical-weight icons beside it gives no clue which one commits.
- * @param danger Interrupt, which stops a live agent mid-turn. Red in both shapes,
- *   because the colour is the warning and dropping it at a narrow width would
- *   make the destructive control the QUIET one.
+ * The circle is [Composer.CONTROL_DP] under the breakpoint, where every control on
+ * the line must share one size (`ComposerControlSizeTest`), and [FULL_VERB] at
+ * desk widths, where it sits beside a field at least [Composer.FIELD_MIN_DP] tall.
+ *
+ * @param prominent the primary verb (Send): the filled circle.
  */
 @Composable
 fun RowScope.ComposerAction(
@@ -190,44 +189,39 @@ fun RowScope.ComposerAction(
     onClick: () -> Unit,
     enabled: Boolean = true,
     prominent: Boolean = false,
-    danger: Boolean = false,
 ) {
     val scheme = MaterialTheme.colorScheme
-    if (layout == ComposerLayout.FULL) {
-        when {
-            danger -> OutlinedButton(onClick = onClick, enabled = enabled) {
-                Text(label, color = scheme.error)
-            }
-            prominent -> Button(onClick = onClick, enabled = enabled) { Text(label) }
-            else -> TextButton(onClick = onClick, enabled = enabled) { Text(label) }
-        }
-        return
-    }
+    val full = layout == ComposerLayout.FULL
+    val square = if (full) FULL_VERB else COMPACT_CONTROL
+    val glyph = if (full) FULL_GLYPH else COMPACT_GLYPH
     Tip(label) {
         if (prominent) {
             FilledIconButton(
                 onClick = onClick,
                 enabled = enabled,
-                modifier = Modifier.size(COMPACT_CONTROL),
+                shape = CircleShape,
+                modifier = Modifier.size(square),
             ) {
-                Icon(icon, contentDescription = label, modifier = Modifier.size(COMPACT_GLYPH))
+                Icon(icon, contentDescription = label, modifier = Modifier.size(glyph))
             }
         } else {
-            IconButton(
+            OutlinedIconButton(
                 onClick = onClick,
                 enabled = enabled,
-                modifier = Modifier.size(COMPACT_CONTROL),
-                colors = if (danger) {
-                    IconButtonDefaults.iconButtonColors(contentColor = scheme.error)
-                } else {
-                    IconButtonDefaults.iconButtonColors()
-                },
+                shape = CircleShape,
+                border = BorderStroke(1.dp, scheme.outline),
+                colors = IconButtonDefaults.outlinedIconButtonColors(contentColor = scheme.onSurface),
+                modifier = Modifier.size(square),
             ) {
-                Icon(icon, contentDescription = label, modifier = Modifier.size(COMPACT_GLYPH))
+                Icon(icon, contentDescription = label, modifier = Modifier.size(glyph))
             }
         }
     }
 }
+
+/** The verb circle at desk widths, and its glyph. Not on the compact line. */
+private val FULL_VERB = 40.dp
+private val FULL_GLYPH = 20.dp
 
 /**
  * The compact control's own square, and the glyph inside it — [Composer.CONTROL_DP]

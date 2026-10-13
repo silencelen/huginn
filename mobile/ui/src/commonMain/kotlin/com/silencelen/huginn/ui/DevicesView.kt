@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
@@ -23,6 +24,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.device.DevicePolicy
+import com.silencelen.huginn.ui.system.ListHeader
+import com.silencelen.huginn.ui.system.LocalRowMetrics
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The machines that have offered themselves to huginn.
@@ -60,16 +64,14 @@ fun DevicesSection(
     nowMs: Long? = null,
 ) {
     if (devices.isEmpty()) return
-    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    val groups = groupByMachine(devices)
+    val inset = LocalRowMetrics.current.inset
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Scale.s8)) {
         if (header != null) {
-            Text(
-                header,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, top = 6.dp),
-            )
+            // The house header, counted in machines: a person owns a box, not a credential.
+            ListHeader(header, count = groups.size, hairline = false)
         }
-        groupByMachine(devices).forEach { g ->
+        groups.forEach { g ->
             MachineCard(
                 group = g,
                 isThis = g.isThisMachine(thisMachine),
@@ -85,7 +87,7 @@ fun DevicesSection(
             "What a machine will do is set on the machine itself, not from here.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = inset, end = inset, bottom = Scale.s4),
         )
     }
 }
@@ -144,12 +146,15 @@ private fun MachineCard(
     onForget: (MachineGroup) -> Unit,
     nowMs: Long? = null,
 ) {
+    // A CARD, not a row: it carries verbs. Tier 2 (surfaceContainer) on the
+    // card radius, inset to the platform's row inset (UI-AUDIT section 3).
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant,
+        color = MaterialTheme.colorScheme.surfaceContainer,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+        shape = RoundedCornerShape(Scale.radiusCard),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Scale.s8),
     ) {
-        Column(Modifier.padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 6.dp)) {
+        Column(Modifier.padding(start = Scale.s12, end = Scale.s4, top = Scale.s12, bottom = Scale.s4)) {
             // ⚠⚠ THE DOT BELONGS TO THE TITLE, NOT TO THE CARD (P-36). Centred
             // against the whole column it landed ON the name for a machine with
             // one capability line and FLOATED between two lines for a machine
@@ -169,10 +174,10 @@ private fun MachineCard(
                         color = if (group.online) LocalHuginnColors.current.stateIdle
                         else MaterialTheme.colorScheme.outlineVariant,
                         shape = CircleShape,
-                        modifier = Modifier.size(if (group.online) 8.dp else 6.dp),
+                        modifier = Modifier.size(if (group.online) Scale.dot else Scale.dotQuiet),
                     ) {}
                 }
-                Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                Column(Modifier.padding(start = Scale.s12).weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             group.head.name,
@@ -226,12 +231,13 @@ private fun MachineCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = 18.dp, top = 2.dp),
+                        // Under the name: the dot's column plus the house gap.
+                        modifier = Modifier.padding(start = Scale.s20, top = Scale.s4),
                     )
                 }
             }
             Row(
-                Modifier.fillMaxWidth().padding(top = 2.dp),
+                Modifier.fillMaxWidth().padding(top = Scale.s4),
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {

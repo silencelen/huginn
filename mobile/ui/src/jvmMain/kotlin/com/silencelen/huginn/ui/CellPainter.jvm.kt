@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import org.jetbrains.skia.Data
 import org.jetbrains.skia.Font
 import org.jetbrains.skia.FontMgr
 import org.jetbrains.skia.FontStyle
@@ -28,9 +29,13 @@ import org.jetbrains.skia.Typeface
  */
 class SkiaCellPainter(textSizePx: Float) : CellPainter {
 
-    private val typeface: Typeface = MONO_FAMILIES.firstNotNullOfOrNull {
-        FontMgr.default.matchFamilyStyle(it, FontStyle.NORMAL)
-    } ?: FontMgr.default.matchFamilyStyle(null, FontStyle.NORMAL)
+    // The bundled IBM Plex Mono first (BRAND.md section 5: the same glyphs on
+    // the phone and the laptop, box and block sets included), then the named
+    // families, then whatever the platform calls its default.
+    private val typeface: Typeface = bundledPlexMono()
+        ?: MONO_FAMILIES.firstNotNullOfOrNull {
+            FontMgr.default.matchFamilyStyle(it, FontStyle.NORMAL)
+        } ?: FontMgr.default.matchFamilyStyle(null, FontStyle.NORMAL)
         ?: Typeface.makeEmpty()
 
     private val font = Font(typeface, textSizePx)
@@ -73,13 +78,34 @@ class SkiaCellPainter(textSizePx: Float) : CellPainter {
         }
     }
 
+    // No ligatures, and none are possible: `drawString` blits glyph by glyph
+    // without shaping, so a `->` or `!=` is never fused across two cells. That is
+    // the brand's "disable ligatures in the terminal view", met by construction.
+
     private companion object {
+        /**
+         * The Plex Mono TTF from :ui's compose resources, read straight off the
+         * classpath. Synchronous on purpose (the painter is built inside a
+         * `remember`, and the generated `Res.readBytes` is a suspend function);
+         * the path is the compose-resources layout, `composeResources/<package of
+         * Res>/font/…`, with `packageOfResClass` set in ui/build.gradle.kts.
+         * Null, never a throw, when the file is not there: the family list below
+         * still draws a terminal.
+         */
+        fun bundledPlexMono(): Typeface? = runCatching {
+            val path = "composeResources/com.silencelen.huginn.ui.resources/font/ibm_plex_mono_regular.ttf"
+            val loader = SkiaCellPainter::class.java.classLoader ?: return null
+            val bytes = loader.getResourceAsStream(path)?.use { it.readBytes() } ?: return null
+            FontMgr.default.makeFromData(Data.makeFromBytes(bytes))
+        }.getOrNull()
+
         /**
          * In preference order, then whatever the platform calls its default. A
          * terminal drawn in a proportional face is not a terminal, so the fallback
          * chain is worth spelling out rather than trusting one name to exist.
          */
         val MONO_FAMILIES = listOf(
+            "IBM Plex Mono",
             "JetBrains Mono",
             "DejaVu Sans Mono",
             "Liberation Mono",

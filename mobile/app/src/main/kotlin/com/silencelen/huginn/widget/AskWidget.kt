@@ -50,7 +50,8 @@ class AskWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         provideContent {
-            GlanceTheme {
+            // The app's own scheme, shared with FleetWidget (HuginnGlanceColors).
+            GlanceTheme(colors = HuginnGlanceColors) {
                 AskBar()
             }
         }
@@ -69,7 +70,9 @@ private fun AskBar() {
             modifier = GlanceModifier
                 .fillMaxWidth()
                 .height(52.dp)
-                .background(GlanceTheme.colors.widgetBackground)
+                // Tier 1, not `widgetBackground` (Glance fills that from
+                // secondaryContainer, Material's baseline violet here).
+                .background(GlanceTheme.colors.surfaceVariant)
                 .cornerRadius(26.dp)
                 .clickable(actionStartActivity(Intent(context, AskActivity::class.java)))
                 .padding(horizontal = 16.dp),

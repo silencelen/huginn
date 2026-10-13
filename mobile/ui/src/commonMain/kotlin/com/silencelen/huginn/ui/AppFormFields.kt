@@ -233,7 +233,7 @@ private fun AppRefusalPanel(form: AppForm, refusal: String, onCopy: ((String) ->
                 Spacer(Modifier.height(6.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     lines.forEach {
-                        Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text(it, style = com.silencelen.huginn.ui.theme.LocalMonoStyle.current)
                     }
                 }
                 Spacer(Modifier.height(6.dp))

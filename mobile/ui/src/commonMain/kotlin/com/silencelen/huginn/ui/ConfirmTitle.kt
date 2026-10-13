@@ -50,7 +50,7 @@ fun ConfirmTitle(verb: String, target: String, modifier: Modifier = Modifier) {
             // `bodyMedium` of the explanation below it and the `labelLarge` of
             // both buttons, so the name is what the eye lands on first.
             style = MaterialTheme.typography.headlineSmall,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
             fontWeight = FontWeight.SemiBold,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,

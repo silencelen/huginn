@@ -31,11 +31,17 @@ class SessionCardHeaderShapeTest {
     @Test
     fun `the age and ctx are measured before the name and never wrap`() {
         val row = header()
-        // The name and state ride a weighted group, so the trailing pair is
-        // measured first; a bare Spacer(weight) only soaked up spare room.
-        assertTrue("the name/state group is not weighted", "Row(Modifier.weight(1f)" in row)
+        // The row is the house ListRow (PR 3): its title column is the weighted
+        // group, so the trailing ctx and age are measured first; a bare
+        // Spacer(weight) only soaked up spare room.
+        assertTrue("the session row is not the house ListRow", "ListRow(" in row && "title = s.name" in row)
         assertFalse("a bare weighted Spacer is back in the header", "Spacer(Modifier.weight(1f))" in row)
-        val name = row.substringAfter("s.name,").substringBefore(")")
+        val root = generateSequence(File("").absoluteFile) { it.parentFile }
+            .first { File(it, "settings.gradle.kts").isFile }
+        val listRow = File(root, "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/system/ListRow.kt").readText()
+            .substringAfter("fun ListRow(")
+        assertTrue("ListRow's title column is not weighted", "Column(Modifier.weight(1f))" in listRow)
+        val name = listRow.substringAfter("Text(\n                title,").substringBefore("\n            )")
         assertTrue("the name must stay on one line and ellipsise", "maxLines = 1" in name && "Ellipsis" in name)
         val age = row.substringAfter("relTime(s.activityAt),").substringBefore(")")
         assertTrue("the age label must not wrap", "maxLines = 1" in age && "softWrap = false" in age)

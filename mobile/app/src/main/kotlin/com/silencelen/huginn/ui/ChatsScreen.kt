@@ -54,7 +54,10 @@ import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material.icons.automirrored.outlined.Chat
-import com.silencelen.huginn.ui.system.LocalRowMetrics
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.theme.StateDot
+import com.silencelen.huginn.ui.theme.StateKind
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -321,109 +324,97 @@ private fun HostChoice(
 @Composable
 private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .then(
-                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerLow)
-                else Modifier
-            )
-            .clickable(onClick = onOpen)
-            .padding(start = LocalRowMetrics.current.inset, end = 4.dp, top = LocalRowMetrics.current.vertical, bottom = LocalRowMetrics.current.vertical),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    // THE HOUSE ROW (UI-AUDIT section 3): dot · title · the last snippet · the
+    // state word or age trailing, with the ⋮ last. Frame, inset and selection
+    // are ListRow's; nothing here pads itself.
+    ListRow(
+        title = chat.title ?: "Untitled",
+        // MARKERS OFF. This row is drawn in ONE style, so `**` can only
+        // ever be two characters of noise at the front of the one line a
+        // reader scans the list by — and the front is exactly where an
+        // answer that opens with a bold headline puts them.
+        meta = chat.lastSnippet?.let { Markdown.plainInline(it) }?.takeIf { it.isNotBlank() }
+            ?: "No messages yet",
+        metaMaxLines = 2,
+        selected = selected,
+        onClick = onOpen,
+        leading = {
+            // One dot column for every row, so the titles line up: working
+            // pulses in the accent, queued messages wait on the quiet dot, and
+            // a settled chat keeps the slot empty.
+            Box(Modifier.size(Scale.dot), contentAlignment = Alignment.Center) {
                 if (chat.running) {
                     PulsingDot(MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(7.dp))
                 } else if (chat.pending > 0) {
-                    Box(
-                        Modifier.size(8.dp).clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.onSurfaceVariant)
-                    )
-                    Spacer(Modifier.width(7.dp))
-                }
-                Text(
-                    chat.title ?: "Untitled",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                // Where it runs, when that is not here. Before the act bolt, because
-                // "this is happening on another machine" is the bigger fact about a
-                // row than which tools it holds.
-                if (chat.host != null && chat.host != "local") {
-                    Spacer(Modifier.width(6.dp))
-                    HostBadge(chat.host, chat.hostName)
-                }
-                if (chat.mode == "act") {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        Icons.Filled.Bolt,
-                        contentDescription = "tools enabled",
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    StateDot(StateKind.WAITING)
                 }
             }
-            Spacer(Modifier.size(2.dp))
-            Text(
-                // MARKERS OFF. This row is drawn in ONE style, so `**` can only
-                // ever be two characters of noise at the front of the one line a
-                // reader scans the list by — and the front is exactly where an
-                // answer that opens with a bold headline puts them.
-                chat.lastSnippet?.let { Markdown.plainInline(it) }?.takeIf { it.isNotBlank() }
-                    ?: "No messages yet",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(horizontalAlignment = Alignment.End) {
-            when {
-                chat.running -> {
-                    Text(
-                        "working",
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    if (chat.pending > 0) {
-                        Text(
-                            "+${chat.pending} queued",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+        },
+        trailing = {
+            Column(horizontalAlignment = Alignment.End) {
+                // Where it runs, when that is not here, and whether it holds
+                // tools. "This is happening on another machine" is the bigger
+                // fact, so it comes first.
+                val elsewhere = chat.host != null && chat.host != "local"
+                if (elsewhere || chat.mode == "act") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (elsewhere) HostBadge(chat.host, chat.hostName)
+                        if (chat.mode == "act") {
+                            if (elsewhere) Spacer(Modifier.width(Scale.s4))
+                            Icon(
+                                Icons.Filled.Bolt,
+                                contentDescription = "tools enabled",
+                                modifier = Modifier.size(Scale.icon),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
-                chat.pending > 0 -> Text(
-                    "+${chat.pending} queued",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                else -> Text(
-                    relTime(chat.updatedAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                when {
+                    chat.running -> {
+                        Text(
+                            "working",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                        )
+                        if (chat.pending > 0) {
+                            Text(
+                                "+${chat.pending} queued",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    chat.pending > 0 -> Text(
+                        "+${chat.pending} queued",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                    else -> Text(
+                        relTime(chat.updatedAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
             }
-        }
-        Box {
-            IconButton(onClick = { menu = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "Chat actions")
+            Box {
+                IconButton(onClick = { menu = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Chat actions")
+                }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Delete") },
+                        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                        onClick = { menu = false; onDelete() },
+                    )
+                }
             }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                    onClick = { menu = false; onDelete() },
-                )
-            }
-        }
-    }
+        },
+    )
 }
