@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -861,9 +862,9 @@ private fun RouteForm(
  */
 @Composable
 private fun dotColour(health: RouteHealth?): Color = when (health?.reachable) {
-    true -> MaterialTheme.colorScheme.primary
+    true -> LocalHuginnColors.current.stateSuccess
     false -> MaterialTheme.colorScheme.error
-    null -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+    null -> LocalHuginnColors.current.stateIdle.copy(alpha = 0.35f)
 }
 
 /**

@@ -264,10 +264,10 @@ class RoundsTest {
      */
     @Test
     fun `the state word is coloured like the mark beside it`() {
-        assertEquals("error", roundStatusColorKey(RoundStatus.ACTION))
+        assertEquals("attention", roundStatusColorKey(RoundStatus.ACTION))
         assertNotEquals("muted", roundStatusColorKey(RoundStatus.ACTION),
             "a needs-you word read as metadata is the defect")
-        assertEquals("primary", roundStatusColorKey(RoundStatus.ATTENTION))
+        assertEquals("info", roundStatusColorKey(RoundStatus.ATTENTION))
         // The quiet ones stay quiet: a screen of healthy Rounds has to recede.
         assertEquals("muted", roundStatusColorKey(RoundStatus.OK))
         assertEquals("outlineVariant", roundStatusColorKey(RoundStatus.NEVER_RUN))

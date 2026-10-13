@@ -153,8 +153,8 @@ fun humanDuration(sec: Long): String = when {
 fun sessionStateTip(state: String?, stateSince: Long?, nowSec: Long): String {
     val what = when (state) {
         "running" -> "Working"
-        "attention" -> "Waiting on you"
-        "idle" -> "Idle"
+        "attention" -> "Needs you"
+        "idle" -> "Waiting"
         null, "" -> return "No state recorded for this session yet"
         else -> state.replaceFirstChar { it.uppercase() }
     }

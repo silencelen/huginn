@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -405,7 +406,7 @@ private fun SessionRow(
     val now = remember(session) { System.currentTimeMillis() / 1000 }
     val dot = when (session.state) {
         "running" -> scheme.primary
-        "attention" -> scheme.error
+        "attention" -> LocalHuginnColors.current.stateAttention
         else -> null
     }
     RowFrame(active = active, selected = selected, onClick = onClick, modifier = modifier) {

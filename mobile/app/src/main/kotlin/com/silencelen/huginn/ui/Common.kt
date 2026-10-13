@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.stateWord
+import com.silencelen.huginn.ui.theme.stateColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.gestures.scrollBy
@@ -201,12 +203,9 @@ fun JumpToNewest(onClick: () -> Unit) {
  */
 @Composable
 fun StateDot(state: String?, modifier: Modifier = Modifier) {
-    val c = when (state) {
-        "running" -> MaterialTheme.colorScheme.primary
-        "attention" -> MaterialTheme.colorScheme.error
-        "idle" -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.outline
-    }
+    // One state language (ui/theme/StateColors.kt): needs-you is the lit accent,
+    // never the error red; idle is the ladder's quiet step.
+    val c = stateColor(state)
     Box(modifier.size(8.dp).clip(CircleShape).background(c))
 }
 
@@ -222,12 +221,7 @@ fun PulsingDot(color: Color, modifier: Modifier = Modifier) {
     com.silencelen.huginn.ui.work.PulseDot(color, modifier)
 }
 
-fun stateLabel(state: String?): String = when (state) {
-    "running" -> "working"
-    "attention" -> "needs you"
-    "idle" -> "waiting"
-    else -> "no claude"
-}
+fun stateLabel(state: String?): String = stateWord(state)
 
 /**
  * "3m", "2h", "4d" — a phone has no room for timestamps nobody reads.

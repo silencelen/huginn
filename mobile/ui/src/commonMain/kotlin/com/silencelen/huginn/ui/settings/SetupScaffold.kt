@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -497,14 +498,13 @@ private fun SetupRail(state: SetupState, onOpenStep: (SetupStep) -> Unit) {
 @Composable
 private fun toneColour(tone: SetupTone): Color = when (tone) {
     SetupTone.WAITING -> MaterialTheme.colorScheme.onSurfaceVariant
-    SetupTone.PROVEN -> MaterialTheme.colorScheme.primary
+    SetupTone.PROVEN -> LocalHuginnColors.current.stateSuccess
     SetupTone.REFUSED -> MaterialTheme.colorScheme.error
     // Quieter than a failure and quieter than a pass: a decline is a settled
     // answer nobody needs to act on.
     SetupTone.DECLINED -> MaterialTheme.colorScheme.outline
-    // Full-strength ink: louder than WAITING's muted variant, because something
-    // has happened, and deliberately NOT the accent, which in this rail means
-    // proven. `secondary` would have been the obvious third colour and is the
-    // blue D-26 is about — it is not defined in the light scheme at all.
-    SetupTone.WAITING_ON_YOU -> MaterialTheme.colorScheme.onSurface
+    // Something has happened and a person has to act: the brand's needs-you
+    // colour, the accent lit up (BRAND.md section 2), the same step the tray and
+    // the session rows use. Proven is the success step, not the accent.
+    SetupTone.WAITING_ON_YOU -> LocalHuginnColors.current.stateAttention
 }
