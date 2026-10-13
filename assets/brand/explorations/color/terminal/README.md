@@ -13,6 +13,7 @@ The files live beside each direction so that a direction stays self-contained:
 | Ink, Bone & Gold | [`../color-01-ink-bone-gold/terminal/`](../color-01-ink-bone-gold/terminal/) | yellow | `ink-bone-gold.ansi.json`, `.windows-terminal.json`, `.vhs.json`, `.tape.snippet`, `tmux.conf.snippet`, `cli-colors.sh`, `cli-colors.ps1`, `glyph.txt`, `mock.html`, `preview.png` |
 | Slate & Verdigris | [`../color-02-slate-verdigris/terminal/`](../color-02-slate-verdigris/terminal/) | cyan | `slate-verdigris.ansi.json`, `.windows-terminal.json`, `.vhs.json`, `.tape.snippet`, `tmux.conf.snippet`, `cli-colors.sh`, `cli-colors.ps1`, `glyph.txt`, `mock.html`, `preview.png` |
 | Soot & Ember | [`../color-03-soot-ember/terminal/`](../color-03-soot-ember/terminal/) | yellow (an amber; the ember #E58A4C is the cursor, the tmux segment and the truecolor CLI accent) | `soot-ember.ansi.json`, `.windows-terminal.json`, `.vhs.json`, `.tape.snippet`, `tmux.conf.snippet`, `cli-colors.sh`, `cli-colors.ps1`, `glyph.txt`, `mock.html`, `preview.png` |
+| Moss & Heather | [`../color-04-moss-heather/terminal/`](../color-04-moss-heather/terminal/) | green | `moss-heather.ansi.json`, `.windows-terminal.json`, `.vhs.json`, `.tape.snippet`, `tmux.conf.snippet`, `cli-colors.sh`, `cli-colors.ps1`, `glyph.txt`, `mock.html`, `preview.png` |
 
 ## Rules every palette meets
 
@@ -29,7 +30,7 @@ The files live beside each direction so that a direction stays self-contained:
 - **Slot pins**: brightRed = `error`, brightGreen = `stateSuccess`, brightYellow =
   `stateAttention`, brightBlue = `stateInfo`, in every direction, by rule.
 - **The state ladder in 16 colours** (brightBlack -> accent slot -> brightYellow)
-  has steps >= 12 L*: Ink, Bone & Gold 49 / 69 / 86 (steps 20, 17); Slate & Verdigris 50 / 70 / 86 (steps 20, 16); Soot & Ember 49 / 71 / 85 (steps 22, 14).
+  has steps >= 12 L*: Ink, Bone & Gold 49 / 69 / 86 (steps 20, 17); Slate & Verdigris 50 / 70 / 86 (steps 20, 16); Soot & Ember 49 / 71 / 85 (steps 22, 14); Moss & Heather 52 / 70 / 89 (steps 19, 19).
 - The CLI's five semantic uses map to slots: ok = brightGreen, warn =
   brightYellow, error = brightRed, muted = brightBlack, accent = the
   direction's accent slot (yellow for 01 and 03, brightCyan for 02). The bash
