@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
   <!-- The upright silhouette without the fold: 32 px and below (favicon-32, tray at 200 %), and the source of grid-upright.txt. Same twelve vertices. -->
   <g transform="translate(2,11)">
-    <path fill="#161310" fill-rule="evenodd" d="M85.5,28 L72,21.2 L54,17.8 L45,17.8 L36,21.2 L31.5,28 L22.5,68.8 L36,68.8 L54,58.6 L72,62 L76.5,48.4 L67.5,34.8 Z M53.05,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
+    <path fill="#161310" fill-rule="evenodd" d="M76.5,28 L67.5,24.6 L54,17.8 L45,17.8 L36,21.2 L31.5,28 L22.5,68.8 L40.5,68.8 L54,62 L58.5,62 L63,48.4 L63,34.8 Z M48.55,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
   </g>
 </svg>
