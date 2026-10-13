@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- r2-03-watching-16: the compact drawing for 16-22 px (tray, favicon-16): the alert head, bill and neck in 11 straight
+       edges + a circular eye hole, cut from the same cells as the mark's head on a 7-unit cell (x 14-105, y 24-87, no translate).
+       Vertices (cells): tip (13,2), chin (8,4), throat (8,6), chest (10,9), back (0,9), nape (2,5), occiput (1,2), crown (3,0), crown2 (6,0), forehead (7,1), culmen (9,1); eye (5,2) r 1.0. -->
+  <path fill="#161310" fill-rule="evenodd" d="M105,38 L70,52 L70,66 L84,87 L14,87 L28,59 L21,38 L35,24 L56,24 L63,31 L77,31 Z M49,38 m-7,0 a7,7 0 1,0 14,0 a7,7 0 1,0 -14,0 Z"/>
+</svg>
