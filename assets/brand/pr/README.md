@@ -9,8 +9,8 @@ checks and what a reviewer should screenshot.
 
 | PR | brief | state on this branch |
 |---|---|---|
-| 1 · State language | [`01-state-language.md`](01-state-language.md) | in code; compiles, RoundsTest + PaletteTest pass (2026-10-13); awaiting device screenshots |
-| 2 · Surfaces, severity, the accent | [`02-surfaces-severity-accent.md`](02-surfaces-severity-accent.md) | brief only |
+| 1 · State language | [`01-state-language.md`](01-state-language.md) | done; verified on the Fold 2026-10-13; tokens frozen in round 7 |
+| 2 · Surfaces, severity, the accent | [`02-surfaces-severity-accent.md`](02-surfaces-severity-accent.md) | done on `reskin` (e950f3e6, 2026-10-13); suites pass; Fold shots |
 | 3 · The row system | [`03-row-system.md`](03-row-system.md) | brief only |
 | 4 · Session screen and the composer | [`04-session-and-composer.md`](04-session-and-composer.md) | brief only |
 | 5 · Notifications, widgets, type | [`05-notifications-widgets-type.md`](05-notifications-widgets-type.md) | brief only |
