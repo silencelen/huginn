@@ -29,8 +29,12 @@ esac
 # The two rules are the informal standard: no colour when stdout is not a TTY,
 # and no colour when NO_COLOR is set to anything at all (no-color.org - the
 # VALUE is not consulted, only whether it is set and non-empty).
+# The slots are the brand's 16-colour table (assets/brand/BRAND.md section 4):
+# headings in the accent slot (brightMagenta, heather in the brand palette and
+# readable on every stock palette), ok = brightGreen, error = brightRed,
+# warn = brightYellow. Slot numbers, never hex: the user's terminal owns the hues.
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  C=$(printf '\033[36m'); G=$(printf '\033[32m'); R=$(printf '\033[31m'); Y=$(printf '\033[33m'); Z=$(printf '\033[0m')
+  C=$(printf '\033[95m'); G=$(printf '\033[92m'); R=$(printf '\033[91m'); Y=$(printf '\033[93m'); Z=$(printf '\033[0m')
 else
   C=''; G=''; R=''; Y=''; Z=''
 fi
@@ -41,7 +45,9 @@ MEMPALACE_HOST="${HUGINN_MEMPALACE_HOST:-}"
 MEMPALACE_MARKER="${HUGINN_MEMPALACE_MARKER:-~/.mempalace/REBUILD_IN_PROGRESS}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=3)
 
-echo "${C}Huginn${Z} — $(hostname)"
+# The one-row raven leads the first line (BRAND.md section 3): 7-bit, so it is the
+# same glyph here, in tmux and in the clients.
+echo "${C}(o> huginn${Z} — $(hostname)"
 echo "  uptime    : $(uptime -p | sed 's/^up //')"
 echo "  load      : $(cut -d' ' -f1-3 /proc/loadavg) (on $(nproc) cores)"
 echo "  claude    : $(claude --version 2>/dev/null | head -1)"

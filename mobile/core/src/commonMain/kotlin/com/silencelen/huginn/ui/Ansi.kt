@@ -11,14 +11,18 @@ import androidx.compose.ui.graphics.Color
 object Ansi {
 
     val palette: List<Color> = buildList {
-        // 0-15: standard + bright, tuned to read on the app's near-black surface
-        // rather than matching a specific terminal's defaults exactly.
+        // 0-15: the brand's ANSI-16, Moss & Heather
+        // (assets/brand/explorations/color/color-04-moss-heather/terminal/moss-heather.ansi.json).
+        // Four slots ARE app tokens, by rule: brightRed = error, brightGreen =
+        // stateSuccess, brightYellow = stateAttention, brightBlue = stateInfo, so the
+        // terminal view and the app never show two reds. Every slot but black is
+        // >= 3:1 on the app ground (#141615); black is the outlineVariant.
         addAll(
             listOf(
-                Color(0xFF3B3733), Color(0xFFD1544F), Color(0xFF69A95B), Color(0xFFC7A24A),
-                Color(0xFF5B8FD6), Color(0xFFA974C4), Color(0xFF4FA5A8), Color(0xFFCFC8BF),
-                Color(0xFF6B645D), Color(0xFFE8736D), Color(0xFF8CCB7B), Color(0xFFE3C169),
-                Color(0xFF7DAFEA), Color(0xFFC495DC), Color(0xFF6FC4C7), Color(0xFFF2ECE4),
+                Color(0xFF3A423E), Color(0xFFD65A62), Color(0xFF7CB98E), Color(0xFFD4B872),
+                Color(0xFF6C9BD6), Color(0xFFA98BD6), Color(0xFF5EB5B0), Color(0xFFC8CDC9),
+                Color(0xFF747D77), Color(0xFFEE757D), Color(0xFFC4CF7A), Color(0xFFE4E2A8),
+                Color(0xFF86B5E6), Color(0xFFC3A8E8), Color(0xFF80CFC9), Color(0xFFE2E6E1),
             )
         )
         // 16-231: the 6x6x6 cube

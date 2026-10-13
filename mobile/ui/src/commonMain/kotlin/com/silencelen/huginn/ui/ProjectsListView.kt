@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -269,7 +270,7 @@ private fun MemberRow(member: ProjectLive, onClick: () -> Unit) {
 @Composable
 internal fun MemberDot(word: String?) {
     val colour: Color? = when (word) {
-        "attention" -> MaterialTheme.colorScheme.error
+        "attention" -> LocalHuginnColors.current.stateAttention
         "running" -> MaterialTheme.colorScheme.primary
         "idle" -> MaterialTheme.colorScheme.outline
         else -> null

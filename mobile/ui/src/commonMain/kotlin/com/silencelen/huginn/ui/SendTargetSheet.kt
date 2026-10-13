@@ -22,6 +22,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -198,7 +199,7 @@ private fun SectionLabel(text: String) {
 private fun SessionMark(state: String?) {
     val color = when (state) {
         "running" -> MaterialTheme.colorScheme.primary
-        "attention" -> MaterialTheme.colorScheme.error
+        "attention" -> LocalHuginnColors.current.stateAttention
         else -> Color.Transparent
     }
     Surface(color = color, shape = CircleShape, modifier = Modifier.size(8.dp).clip(CircleShape)) {}
