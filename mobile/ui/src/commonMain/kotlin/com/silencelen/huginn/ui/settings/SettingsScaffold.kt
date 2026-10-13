@@ -46,6 +46,7 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.foundation.layout.size
 import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.system.ListRow
 
 /**
  * The frame both Settings screens are drawn in: one search field, one category
@@ -281,45 +282,22 @@ fun SettingsCategoryList(
 ) {
     Column(modifier.fillMaxWidth()) {
         for (c in categories) {
-            val isSelected = c.id == selected
-            val tint = MaterialTheme.colorScheme.primary
-                .copy(alpha = if (isSelected) SettingsRowStyle.HIGHLIGHT_ALPHA else 0f)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(tint)
-                    .clickable { onOpen(c.id) }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (isSelected) SettingsStateDot(MaterialTheme.colorScheme.primary)
-                        Text(
-                            c.title,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    }
-                    summaryOf(c)?.takeIf { it.isNotBlank() }?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-                Icon(
-                    Icons.Outlined.ChevronRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(Scale.iconLarge),
-                )
-            }
+            // The house row (ui/system/ListRow.kt): selected is the Low tier plus
+            // SemiBold, nothing else. The pill tint and the 7 dp dot are gone.
+            ListRow(
+                title = c.title,
+                meta = summaryOf(c)?.takeIf { it.isNotBlank() },
+                selected = c.id == selected,
+                onClick = { onOpen(c.id) },
+                trailing = {
+                    Icon(
+                        Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Scale.iconLarge),
+                    )
+                },
+            )
         }
     }
 }

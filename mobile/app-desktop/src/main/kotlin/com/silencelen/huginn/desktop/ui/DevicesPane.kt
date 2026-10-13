@@ -26,6 +26,7 @@ import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.ReadingPane
 import com.silencelen.huginn.ui.DevicesSection
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.system.HouseDialog
 
 /**
  * The machines that have offered themselves to huginn.
@@ -98,9 +99,16 @@ fun DevicesPane(store: AppStore) {
     }
 
     forgetTarget?.let { g ->
-        AlertDialog(
-            onDismissRequest = { forgetTarget = null },
-            title = { Text("Forget ${g.head.name}?") },
+        HouseDialog(
+            title = null,
+            titleContent = { Text("Forget ${g.head.name}?") },
+            onDismiss = { forgetTarget = null },
+            confirmLabel = "Forget",
+            destructive = true,
+            onConfirm = {
+                val t = g; forgetTarget = null
+                scope.launch { t.rows.forEach { store.forgetDevice(it.id) } }
+            },
             // The same words as the phone, deliberately: two dialogs describing
             // one action differently is how people learn to distrust both.
             text = {
@@ -117,13 +125,6 @@ fun DevicesPane(store: AppStore) {
                     },
                 )
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    val t = g; forgetTarget = null
-                    scope.launch { t.rows.forEach { store.forgetDevice(it.id) } }
-                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )
     }
 }

@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.theme.verbInk
+import com.silencelen.huginn.ui.system.HouseDialog
 
 /**
  * The live tmux sessions. Each row leads with what the session is actually doing
@@ -249,9 +250,12 @@ fun SessionsScreen(
         // it is typed, so a refusal arrives here rather than as a 400 after the
         // dialog has closed.
         val problem = SessionNameRules.nameProblem(newName).takeIf { newName.isNotBlank() }
-        AlertDialog(
-            onDismissRequest = { showNew = false },
-            title = { Text("New session") },
+        HouseDialog(
+            title = "New session",
+            onDismiss = { showNew = false },
+            confirmLabel = "Create",
+            onConfirm = { showNew = false; onCreate(newName) },
+            confirmEnabled = newName.isNotBlank() && problem == null,
             text = {
                 Column {
                     OutlinedTextField(
@@ -271,22 +275,16 @@ fun SessionsScreen(
                     )
                 }
             },
-            confirmButton = {
-                TextButton(
-                    onClick = { showNew = false; onCreate(newName) },
-                    enabled = newName.isNotBlank() && problem == null,
-                ) {
-                    Text("Create")
-                }
-            },
-            dismissButton = { TextButton(onClick = { showNew = false }) { Text("Cancel") } },
         )
     }
 
     renaming?.let { from ->
-        AlertDialog(
-            onDismissRequest = { renaming = null },
-            title = { Text("Rename $from") },
+        HouseDialog(
+            title = "Rename $from",
+            onDismiss = { renaming = null },
+            confirmLabel = "Rename",
+            onConfirm = { renaming = null; onRename(from, renameTo) },
+            confirmEnabled = renameTo.isNotBlank() && renameTo != from,
             text = {
                 OutlinedTextField(
                     value = renameTo,
@@ -295,32 +293,29 @@ fun SessionsScreen(
                     label = { Text("New name") },
                 )
             },
-            confirmButton = {
-                TextButton(
-                    onClick = { renaming = null; onRename(from, renameTo) },
-                    enabled = renameTo.isNotBlank() && renameTo != from,
-                ) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { renaming = null }) { Text("Cancel") } },
         )
     }
 
     confirmKill?.let { name ->
-        AlertDialog(
-            onDismissRequest = { confirmKill = null },
-            title = { ConfirmTitle(EndVerbs.HARD, name) },
+        HouseDialog(
+            title = null,
+            titleContent = { ConfirmTitle(EndVerbs.HARD, name) },
+            onDismiss = { confirmKill = null },
+            confirmLabel = EndVerbs.HARD,
+            onConfirm = { confirmKill = null; onKill(name) },
+            destructive = true,
             text = { Text("The session and anything running inside it are terminated. Unsaved work in that session is lost.") },
-            confirmButton = {
-                TextButton(onClick = { confirmKill = null; onKill(name) }) { Text(EndVerbs.HARD, color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmKill = null }) { Text("Cancel") } },
         )
     }
 
     confirmArchive?.let { name ->
-        AlertDialog(
-            onDismissRequest = { confirmArchive = null },
-            title = { ConfirmTitle("Archive", name) },
+        HouseDialog(
+            title = null,
+            titleContent = { ConfirmTitle("Archive", name) },
+            onDismiss = { confirmArchive = null },
+            confirmLabel = "Archive",
+            onConfirm = { confirmArchive = null; onArchive(name) },
+            destructive = true,
             text = {
                 Text(
                     "Claude is asked to wrap up, and the session is ended once it settles. " +
@@ -328,25 +323,21 @@ fun SessionsScreen(
                         "conversation and the exact resume command, so you can bring it back.",
                 )
             },
-            confirmButton = {
-                TextButton(onClick = { confirmArchive = null; onArchive(name) }) { Text("Archive", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmArchive = null }) { Text("Cancel") } },
         )
     }
 
     confirmDeleteArchive?.let { row ->
-        AlertDialog(
-            onDismissRequest = { confirmDeleteArchive = null },
-            title = { ConfirmTitle("Forget", ArchiveRules.label(row)) },
+        HouseDialog(
+            title = null,
+            titleContent = { ConfirmTitle("Forget", ArchiveRules.label(row)) },
+            onDismiss = { confirmDeleteArchive = null },
+            confirmLabel = "Forget",
+            onConfirm = { val r = row; confirmDeleteArchive = null; onDeleteArchive(r) },
+            destructive = true,
             // Named for what is actually lost. "Delete" against a row that looks
             // like a list entry reads as tidying; the copy of the conversation
             // going with it is the part worth a sentence.
             text = { Text("The row and the kept copy of its conversation are removed. This cannot be undone.") },
-            confirmButton = {
-                TextButton(onClick = { val r = row; confirmDeleteArchive = null; onDeleteArchive(r) }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmDeleteArchive = null }) { Text("Cancel") } },
         )
     }
 

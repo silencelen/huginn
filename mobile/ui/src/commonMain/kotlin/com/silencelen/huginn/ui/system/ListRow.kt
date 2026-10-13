@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import androidx.compose.foundation.layout.ColumnScope
 
 /**
  * THE ONE ROW (UI-AUDIT.md section 3, "Row"): a leading dot or icon, a title
@@ -39,6 +40,8 @@ fun ListRow(
     onClick: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
+    /** Lines below the meta line, for the few rows (sessions, chats) that carry detail. */
+    detail: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val m = LocalRowMetrics.current
     val base = modifier.fillMaxWidth()
@@ -69,6 +72,7 @@ fun ListRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            detail?.invoke(this)
         }
         if (trailing != null) {
             Spacer(Modifier.width(Scale.s12))
