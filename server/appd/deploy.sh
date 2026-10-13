@@ -163,10 +163,22 @@ node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
 systemctl restart huginn-appd
 sleep 2
 TOKEN="$(cat "$TOKEN_FILE")"
-APPD_ADDR="${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}"
+# Loopback, both protocols. Since 3.11 plain HTTP is honoured only from this host
+# (HUGINN_APPD_PLAINTEXT=local), so the old tailnet-address ping would get a 426;
+# and the https ping proves the TLS half came up too (-k is fine on loopback:
+# there is no network in between to be intercepted on).
+APPD_ADDR="${HUGINN_APPD_URL:-http://127.0.0.1:8787}"
 PING="$(curl -sf -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping")"
 echo "[deploy] $PING"
 grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back healthy" >&2; exit 1; }
+SPING="$(curl -sfk -H "Authorization: Bearer $TOKEN" "https://127.0.0.1:8787/v1/ping")"
+grep -q '"secure":true' <<<"$SPING" || { echo "[deploy] daemon is up but its https listener did not answer" >&2; exit 1; }
+TLS_CERT="${HUGINN_APPD_TLS_CERT:-$(unit_env HUGINN_APPD_TLS_CERT)}"
+if [ -z "$TLS_CERT" ]; then
+  TLS_DATA="${HUGINN_APPD_DATA:-$(unit_env HUGINN_APPD_DATA)}"
+  TLS_CERT="${TLS_DATA:-/var/lib/huginn-appd}/tls/cert.pem"
+fi
+echo "[deploy] https ok (tls sha256 $(openssl x509 -in "$TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d : | tr A-F a-f))"
 
 # Mirror the release to GitHub, like ship.sh and release-desktop.sh already do.
 # Without this appd was the only component whose public Releases page did not track
