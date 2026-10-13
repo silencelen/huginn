@@ -115,6 +115,23 @@ fi
 # it carries the devstore-sync `source` block, and scp'ing a build-time copy
 # over it would silently revert huginn to push-only.
 # ---------------------------------------------------------------------------
+# ⚠ A DEBUG BUILD CANNOT UPDATE A RELEASE INSTALL. The store has ONE manifest per
+# app, and this path used to copy the debug manifest over it. Once devstore
+# started pulling releases from GitHub (devstore-sync, 2026-08-23) that did two
+# wrong things at once: the phone, carrying the release-signed build, was offered
+# a debug-signed "update" its installer refused (signature mismatch, 2026-10-13),
+# and fifteen minutes later devstore-sync put the release manifest back, so the
+# debug build was never installable from the store at all. Refuse while the store
+# entry is GitHub-sourced; a debug build is for `adb install -r`, not the store.
+if ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEVSERV" \
+     "test -f '$DEVSERV_DIR/app.json' && jq -e '.source.type == \"github\"' '$DEVSERV_DIR/app.json' >/dev/null" 2>/dev/null; then
+  echo "[ship] REFUSING: $DEVSERV_DIR/app.json is GitHub-sourced (devstore-sync owns its manifest)." >&2
+  echo "       A debug build pushed there replaces the release manifest with a debug-signed APK" >&2
+  echo "       the phone's installer rejects. Install it directly instead:" >&2
+  echo "         adb install -r $APK" >&2
+  exit 1
+fi
+
 echo "[ship 2/3] (debug) uploading $(basename "$APK") to $DEVSERV:$DEVSERV_DIR/"
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$DEVSERV" "mkdir -p '$DEVSERV_DIR'"
 scp -o BatchMode=yes -o ConnectTimeout=10 "${UPLOADS[@]}" "$DEVSERV:$DEVSERV_DIR/"
