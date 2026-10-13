@@ -65,18 +65,18 @@ and brand assets carry no emoji.
 | surface | state | token | ANSI slot | glyph | word |
 |---|---|---|---|---|---|
 | apps: session list, overview, Work views (`SessionOverviewView.kt`, `WorkViews.kt`) | running (today `primary`) | `stateWorking`; `PulseDot` breathes it | accent slot | `●` / `*` | working |
-| | attention: permission, question (today `error`) | `stateAttention` + badge | brightYellow | `◆` / `!` | needs you |
+| | attention: permission, question (today `error`) | `stateAttention` + badge | brightYellow | `▲` / `!` | needs you |
 | | idle, turn finished (today `onSurfaceVariant`) | `stateIdle`; `SettledDot` | brightBlack | `○` / `o` | waiting |
 | | no Claude, shell only (today `outline`) | `outline`, hollow dot | default foreground | `◦` / `-` | shell |
 | | tool ok, tests passed | `stateSuccess` | brightGreen | `■` / `+` | ok |
-| | tool failed, exit != 0, disconnected | `stateError` (= `error`) | brightRed | `▲` / `x` | error |
+| | tool failed, exit != 0, disconnected | `stateError` (= `error`) | brightRed | `×` / `x` | error |
 | | informational, links | `stateInfo` (= `secondary`) | brightBlue | `▸` / `>` | info |
 | desktop tray (`TrayIcons.kt`) | idle / working / attention | `stateIdle` / `stateWorking` / `stateAttention` + badge; template tray: `onSurface` at 45% / 75% / 100% + badge | - | the raven itself | same three words in the tooltip |
-| terminal title (`server/bin/huginn-claude-title`, `HUGINN_ICON_RUN` / `_NEEDYOU` / `_IDLE`) | running / needs you / waiting (today the emoji 🔄 ✋ ✅) | none: the title is text | - | `●` / `*`, `◆` / `!`, `○` / `o` | running, needs you, waiting |
-| Rounds (`core/.../ui/Rounds.kt` `RoundStatus`, `RoundsView.kt`) | OK "All clear" / ATTENTION "Worth a look" / ACTION "Needs you" | `stateSuccess` / `stateInfo` (it is news, not a demand: `Notifier.kt` keeps "needs you" and "news" apart) / `stateAttention` | brightGreen / brightBlue / brightYellow | `■` / `+` / `▸` / `>` / `◆` / `!` | the verdict words |
+| terminal title (`server/bin/huginn-claude-title`, `HUGINN_ICON_RUN` / `_NEEDYOU` / `_IDLE`) | running / needs you / waiting (today the emoji 🔄 ✋ ✅) | none: the title is text | - | `●` / `*`, `▲` / `!`, `○` / `o` | running, needs you, waiting |
+| Rounds (`core/.../ui/Rounds.kt` `RoundStatus`, `RoundsView.kt`) | OK "All clear" / ATTENTION "Worth a look" / ACTION "Needs you" | `stateSuccess` / `stateInfo` (it is news, not a demand: `Notifier.kt` keeps "needs you" and "news" apart) / `stateAttention` | brightGreen / brightBlue / brightYellow | `■` / `+` / `▸` / `>` / `▲` / `!` | the verdict words |
 | `huginn status` (`server/bin/huginn-status`, today cyan / green / yellow / red) | headings / ok / warn / error / dim | `H_ACCENT` / `H_OK` / `H_WARN` / `H_ERROR` / `H_MUTED` from `cli-colors.sh` | accent slot / brightGreen / brightYellow / brightRed / brightBlack | `H_GLYPH` on the first line | - |
 | CLI reconnect and give-up messages (`client/huginn.sh`, `huginn.ps1`) | warn / error | `H_WARN`, `H_ERROR` / `$HuginnColor.Warn`, `.Error` | brightYellow / brightRed | `H_GLYPH_ASCII` (7-bit) | - |
-| Telegram (`server/appd/huginn-appd.js` `ROUND_MARK`, today ✅ ⚠️ 🔴 ❓) | ok / attention / action / unknown | text only, no colour | - | `■` / `+` / `▸` / `>` / `◆` / `!` / `◦` / `-` | All clear / Worth a look / Needs you / unknown |
+| Telegram (`server/appd/huginn-appd.js` `ROUND_MARK`, today ✅ ⚠️ 🔴 ❓) | ok / attention / action / unknown | text only, no colour | - | `■` / `+` / `▸` / `>` / `▲` / `!` / `◦` / `-` | All clear / Worth a look / Needs you / unknown |
 | Linux notifications (`LibnotifyNotifier.kt`, today `dialog-warning` / `dialog-information`) | needs you / news | the brand raven as the icon for both; the kind is carried by the words and `--urgency` | - | - | - |
 | Glance widgets (`AskWidget.kt`, `FleetWidget.kt`, today bare `GlanceTheme`) | member states | the same tokens through a `ColorProviders(light, dark)` built from the schemes | - | - | same words |
 
@@ -167,10 +167,10 @@ the chosen direction's `tokens.json` / `terminal/*.ansi.json`.
 | `assets/demo.tape` | `Set Theme "Catppuccin Mocha"` | the one line in `terminal/<slug>.tape.snippet` |
 | `server/tmux.conf` | `status-left` with `colour238` | `terminal/tmux.conf.snippet` (status-style, window-status, left segment with `◢▆█▀`, the `Tc` override, right segment with the existing keybind hints; a 16-colour fallback is in the same file) |
 | `server/bin/huginn-status` | `C`=36 cyan, `G`=32, `R`=31, `Y`=33 | the table in `terminal/cli-colors.sh`: `H_ACCENT` for headings, `H_OK`, `H_ERROR`, `H_WARN`, `H_MUTED`, `H_GLYPH` on the first line |
-| `server/bin/huginn-claude-title` lines 73-75 | `ICON_RUN` 🔄, `ICON_NEEDYOU` ✋, `ICON_IDLE` ✅ | `●`, `◆`, `○` (U+25CF, U+25C6, U+25CB); `*`, `!`, `o` when the terminal is not UTF-8; still overridable via `HUGINN_ICON_*` |
+| `server/bin/huginn-claude-title` lines 73-75 | `ICON_RUN` 🔄, `ICON_NEEDYOU` ✋, `ICON_IDLE` ✅ | `●`, `▲`, `○` (U+25CF, U+25B2, U+25CB); `*`, `!`, `o` when the terminal is not UTF-8; still overridable via `HUGINN_ICON_*` |
 | `client/huginn.sh` | no colour; only the terminal title | inline `terminal/cli-colors.sh` (7-bit ASCII): `H_WARN` / `H_ERROR` on the reconnect and give-up messages, `H_GLYPH` / `H_GLYPH_ASCII` on the help screen, same TTY / `NO_COLOR` guard |
 | `client/huginn.ps1` | `Write-Host -ForegroundColor Red` / `Yellow` | `$HuginnColor.Error` / `.Warn` from `terminal/cli-colors.ps1` (the same ConsoleColor names it uses today, so this is a rename), `$HuginnGlyph` |
-| `server/appd/huginn-appd.js` line 5266 `ROUND_MARK` | ✅ ⚠️ 🔴 ❓ | out of scope for brand assets (chat text), but the glyph table above gives `■` / `▸` / `◆` / `◦` if the owner wants Telegram to match |
+| `server/appd/huginn-appd.js` line 5266 `ROUND_MARK` | ✅ ⚠️ 🔴 ❓ | out of scope for brand assets (chat text), but the glyph table above gives `■` / `▸` / `▲` / `◦` if the owner wants Telegram to match |
 | `README.md` | emoji section headers, stock figlet wordmark, shields.io badge colours | the wordmark and README hero are other dimensions; badges may take the accent hex (optional) |
 
 ## Not done, and why
