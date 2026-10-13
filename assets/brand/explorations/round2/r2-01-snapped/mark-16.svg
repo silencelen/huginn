@@ -1,7 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <!-- r2-01-snapped, the compact drawing for 16-22 px (tray, favicon-16): the mark's own head facets
-       (crown, forehead, culmen, bill tip, horizontal bill underside, nape) scaled 1.7x about the bill tip,
-       closed by a straight neck and a breast; 10 edges plus a circular eye hole r 6.5.
-       Near-square box x 14-105 / y 23-92 of a plain 108 viewBox, no translate. -->
-  <path fill="#161310" fill-rule="evenodd" d="M105,52 L90,35 L67,23 L36,23 L21,35 L14,46 L14,78 L48,92 L60,80 L50,52 Z M55,37.5 m-6.5,0 a6.5,6.5 0 1,0 13.0,0 a6.5,6.5 0 1,0 -13.0,0 Z"/>
+  <!-- r2-01-snapped, the compact drawing for 16-22 px (tray, favicon-16): the mark's own head nodes (bill tip,
+       culmen, forehead, flat crown, back of head, nape, throat, breast) scaled 1.7x about the bill tip, closed by
+       a straight neck and a belly: 10 edges plus a circular eye hole r 6.5 at the mark's eye, scaled the same way.
+       Near-square box x 13-105 / y 23-92 of a plain 108 viewBox, no translate. -->
+  <path fill="#161310" fill-rule="evenodd" d="
+      M105,52
+      L90,35
+      L67,23
+      L44,23
+      L21,35
+      L13,46
+      L13,78
+      L48,92
+      L59,75
+      L67,52
+      Z
+      M55,37.5 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 Z"/>
 </svg>

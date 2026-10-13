@@ -1,11 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
   <!-- Huginn mark, r2-01-snapped. Ink on transparent.
-       The round-1 faceted raven with every vertex on a 24 x 16 half-block grid (cell 4.5 x 3.4 units,
-       columns from x 0, half-rows from y 14.4): ONE evenodd polygon, 12 vertices clockwise from the bill tip,
-       plus a circular eye hole (r 3.4) centred on grid cell (14,3). 108 viewBox, translate(2,11),
-       box x 13.5-94.5, y 17.8-68.8 (inside the canon box x 10-95, y 17-69). Launcher: pivot (52,43) scale 0.72
-       keeps every vertex <= 31.2 dp from centre. Ink #161310, bone #E8E2DA. grid.txt in this folder is
-       this polygon rasterised onto its own grid; the terminal art is generated from that. -->
+       The round-1 faceted raven (mark-02-faceted) with every vertex on a 24 x 16 half-block grid: cell 4.5 x 3.4
+       units, column c at x = 4.5c, half-row r at y = 14.4 + 3.4r. ONE evenodd polygon, 12 vertices clockwise from the
+       bill tip, plus a circular eye hole (r 3.2) centred on grid cell (14,3) = (65.25,26.3).
+       Vertices (col,row): bill tip (21,6), culmen (19,3), forehead (16,1), crown (13,1), back of head (10,3), nape (9,5), tail tip (3,13), tail bottom (3,15), under-tail notch (8,13), belly bottom (12,14), breast (15,10), throat (16,6).
+       108 viewBox, translate(2,11), box x 13.5-94.5, y 17.8-65.4 (inside the canon box x 10-95, y 17-69).
+       Launcher: pivot (52,43) scale 0.72 keeps every vertex <= 32.1 dp from centre. Ink #161310, bone #E8E2DA.
+       grid.txt in this folder is this polygon rasterised onto its own grid; the terminal art is generated from it. -->
   <g transform="translate(2,11)">
     <path fill="#161310" fill-rule="evenodd" d="
       M94.5,34.8
@@ -14,13 +15,13 @@
       L58.5,17.8
       L45,24.6
       L40.5,31.4
-      L13.5,62
-      L18,68.8
+      L13.5,58.6
+      L13.5,65.4
       L36,58.6
       L54,62
       L67.5,48.4
       L72,34.8
       Z
-      M65.25,26.3 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 Z"/>
+      M65.25,26.3 m-3.2,0 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
   </g>
 </svg>

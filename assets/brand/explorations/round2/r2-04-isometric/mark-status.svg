@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
   <!-- Status-bar silhouette (ic_stat_huginn.xml): the polygon without the eye hole; the platform tints it. -->
   <g transform="translate(2,11)">
-    <path fill="#161310" d="M93.638,30.5 L72.854,18.5 L52.069,18.5 L45.141,30.5 L24.356,42.5 L10.5,66.5 L13.964,66.5 L34.749,54.5 L45.141,60.5 L55.533,54.5 L65.926,36.5 L90.174,36.5 Z"/>
+    <path fill="#161310" d="M93.638,30.5 L72.854,18.5 L52.069,18.5 L45.141,30.5 L24.356,42.5 L10.5,66.5 L13.964,66.5 L34.749,54.5 L45.141,60.5 L55.533,60.5 L69.39,36.5 L90.174,36.5 Z"/>
   </g>
 </svg>
