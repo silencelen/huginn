@@ -279,7 +279,13 @@ Done on `claude/amazing-keller-uk2wd5`, 2026-10-13:
   carries the tile geometry (revision 3).
 - README header and section headers.
 
-Still to build:
+Shipped 2026-10-13 as the skin train (CLI 1.8.0, appd 3.12.0, app 3.11.0, desktop
+1.12.0): the six PRs under `pr/` landed on `main`; the owner waived the
+claude-security scan for this train. Open after the train: the house Menu into
+`:ui`, the app-side chat markers (send contract), the `--help` width inside the
+renderers.
+
+Built on the train (was "still to build"):
 
 1. Bundle IBM Plex Mono and Sans as Compose resources and fill
    `HuginnTypography` and `LocalMonoStyle` from them (section 5).
