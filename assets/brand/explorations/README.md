@@ -66,6 +66,12 @@ are single-width; one has to win.
 - The apps' motion rule, a slow stepped pulse rather than a spinner, bounds
   every in-app animation.
 
+## Round 6
+
+The last chooser, "The Raven in Motion": [`round6/README.md`](round6/README.md)
+asks the hero form, the client's help header and the motion set, with the
+recommendation. After it, the brand book.
+
 ## Round 5
 
 Type, on the decided mark and ground: [`round5/README.md`](round5/README.md).
