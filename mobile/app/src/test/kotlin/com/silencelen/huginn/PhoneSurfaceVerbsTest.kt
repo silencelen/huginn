@@ -93,13 +93,14 @@ class PhoneSurfaceVerbsTest {
     @Test
     fun `every verb in the session row menu has a leading icon`() {
         val text = read("ui/SessionsScreen.kt")
-        // The row's own menu, bounded by the state flag that opens it, so the
-        // count cannot drift onto a dialog's buttons elsewhere in the file.
-        val open = text.indexOf("DropdownMenu(expanded = menu")
+        // The row's own menu — the house menu since the reskin — bounded by the
+        // state flag that opens it, so the count cannot drift onto a dialog's
+        // buttons elsewhere in the file.
+        val open = text.indexOf("HouseMenu(\n                    expanded = menuOpen")
         assertTrue("the session row's menu is gone — this gate is scanning the wrong file", open > 0)
-        val menu = text.substring(open)
-        val verbs = Regex("""DropdownMenuItem\(""").findAll(menu).count()
-        val icons = Regex("""leadingIcon = \{""").findAll(menu).count()
+        val menu = text.substring(open, text.indexOf("detail = {", open))
+        val verbs = Regex("""HouseMenuItem\(""").findAll(menu).count()
+        val icons = Regex("""HouseMenuItem\([^\n]*icon = Icons\.""").findAll(menu).count()
         assertTrue("expected Rename, Wrap up, Archive and Kill; found $verbs", verbs >= 4)
         assertEquals(
             "a menu item with no leading icon starts in the icon column, misaligned with the rest",

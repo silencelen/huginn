@@ -1,5 +1,8 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
+import com.silencelen.huginn.ui.system.HouseMenuButton
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.icons.Icons
@@ -169,28 +172,11 @@ fun projectEntries(available: Boolean?): ProjectEntries {
  */
 @Composable
 private fun ProjectRowMenu(onOpen: () -> Unit, onEnd: () -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }) {
-            Icon(Icons.Filled.MoreVert, contentDescription = "Project actions")
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text("Open") },
-                leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
-                onClick = { open = false; onOpen() },
-            )
-            DropdownMenuItem(
-                text = { Text("End\u2026", color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
-                leadingIcon = {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = null,
-                        tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                    )
-                },
-                onClick = { open = false; onEnd() },
-            )
-        }
-    }
+    HouseMenuButton(
+        contentDescription = "Project actions",
+        items = listOf(
+            HouseMenuItem("Open", icon = Icons.AutoMirrored.Filled.KeyboardArrowRight, onClick = onOpen),
+            HouseMenuItem("End\u2026", icon = Icons.Filled.Delete, tone = VerbTone.DESTRUCTIVE, onClick = onEnd),
+        ),
+    )
 }

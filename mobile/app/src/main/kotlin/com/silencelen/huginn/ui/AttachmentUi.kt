@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -141,11 +142,11 @@ fun AttachButton(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            AttachChooserItems(rows) { menuOpen = false; it.onPick() }
-        }
-        DropdownMenu(expanded = pagePicker, onDismissRequest = { pagePicker = false }) {
-            ScratchpadPickerItems(pads, padRefId) { pagePicker = false; onPadRef(it) }
-        }
+        HouseMenu(expanded = menuOpen, onDismiss = { menuOpen = false }, items = attachChooserItems(rows))
+        HouseMenu(
+            expanded = pagePicker,
+            onDismiss = { pagePicker = false },
+            items = scratchpadPickerItems(pads, padRefId, onPadRef),
+        )
     }
 }

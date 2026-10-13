@@ -115,7 +115,7 @@ class ComposeMessageTest {
         // not the daemon's storage path. A marker whose regex stops matching leaves
         // a raw path sitting in the user's own message.
         val shown = AttachmentText.displayText(sent)
-        assertEquals("what is on this screen?\n\n📷 Photo attached", shown)
+        assertEquals("what is on this screen?\n\nPhoto attached", shown)
     }
 
     @Test
@@ -125,7 +125,7 @@ class ComposeMessageTest {
         assertEquals(marker, sent, "a blank draft sends the marker alone")
         assertTrue(sent.contains("shell tools"), "a binary must not be pointed at Read")
         assertTrue(sent.contains("act mode"), "and the reader is told what that costs")
-        assertEquals("📎 backup.tar.gz", AttachmentText.displayText(sent))
+        assertEquals("File: backup.tar.gz", AttachmentText.displayText(sent))
     }
 
     @Test

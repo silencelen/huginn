@@ -1,5 +1,7 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -360,20 +362,13 @@ private fun PadSwitcher(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            pads.forEach { p ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            p.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (p.id == current.id) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                    },
-                    onClick = { open = false; if (p.id != current.id) onSwitch(p) },
-                )
-            }
-        }
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = pads.map { p ->
+                HouseMenuItem(p.name, selected = p.id == current.id) { if (p.id != current.id) onSwitch(p) }
+            },
+        )
     }
 }
 
@@ -483,9 +478,11 @@ fun ScratchpadRefBadge(
                 }
             }
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            ScratchpadPickerItems(pads, pad.id) { open = false; onSelect(it) }
-        }
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = scratchpadPickerItems(pads, pad.id, onSelect),
+        )
     }
 }
 
@@ -496,40 +493,19 @@ fun ScratchpadRefBadge(
  * Rows rather than a menu, so the two places that ask "which page" can put them
  * in their own framing: the badge hangs them off itself, and each composer's
  * attach chooser hangs them off the clip button under "Notes page". Same list,
- * same order, same bold-for-current, wherever it is asked from.
+ * same order, same bold-for-current, wherever it is asked from. Drawn by the
+ * house menu ([HouseMenu]), which closes itself before running the row.
  *
- * [onPick] is handed null for "No page"; the caller closes its own menu.
+ * [onPick] is handed null for "No page".
  */
-@Composable
-fun ScratchpadPickerItems(
+fun scratchpadPickerItems(
     pads: List<Scratchpad>,
     selectedId: String?,
     onPick: (String?) -> Unit,
-) {
-    if (pads.isEmpty()) {
-        DropdownMenuItem(
-            text = { Text("No pages yet", style = MaterialTheme.typography.bodyMedium) },
-            enabled = false,
-            onClick = {},
-        )
-    }
-    pads.forEach { p ->
-        DropdownMenuItem(
-            text = {
-                Text(
-                    p.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (p.id == selectedId) FontWeight.SemiBold else FontWeight.Normal,
-                )
-            },
-            onClick = { onPick(p.id) },
-        )
-    }
+): List<HouseMenuItem> = buildList {
+    if (pads.isEmpty()) add(HouseMenuItem("No pages yet", enabled = false) {})
+    pads.forEach { p -> add(HouseMenuItem(p.name, selected = p.id == selectedId) { onPick(p.id) }) }
     if (pads.any { it.id == selectedId }) {
-        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
-        DropdownMenuItem(
-            text = { Text("No page", style = MaterialTheme.typography.bodyMedium) },
-            onClick = { onPick(null) },
-        )
+        add(HouseMenuItem("No page", dividerBefore = true) { onPick(null) })
     }
 }

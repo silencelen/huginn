@@ -10,12 +10,18 @@ set -u
 WATCH_NAME=""; WATCH_ON=""
 case "${1:-}" in
   -h|--help)
-    echo "usage: huginn-devices"
-    echo "       huginn-devices watch <name-or-id> on|off"
-    echo "  The machines enrolled with this host: what each offers, and when it was"
-    echo "  last seen. 'watch' marks one the host should expect to be always on: it"
-    echo "  then messages you (Telegram) when the machine has not checked in for ten"
-    echo "  minutes, and again when it is back."
+    # The line grammar: see huginn-archive.
+    cat <<'EOF'
+(o> huginn - devices
+
+  huginn-devices
+    The machines enrolled with this host: what each offers, and when it was
+    last seen.
+  huginn-devices watch <name-or-id> on|off
+    Mark one the host should expect to be always on: it then messages you
+    (Telegram) when the machine has not checked in for ten minutes, and
+    again when it is back.
+EOF
     exit 0 ;;
   '') ;;
   watch)

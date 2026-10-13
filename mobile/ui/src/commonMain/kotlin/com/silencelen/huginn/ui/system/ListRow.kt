@@ -19,6 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.platform.LocalDensity
 
 /**
  * THE ONE ROW (UI-AUDIT.md section 3, "Row"): a leading dot or icon, a title
@@ -42,27 +45,42 @@ fun ListRow(
     trailing: (@Composable RowScope.() -> Unit)? = null,
     /** Lines below the meta line, for the few rows (sessions, chats) that carry detail. */
     detail: (@Composable ColumnScope.() -> Unit)? = null,
+    /** Drawn on the title line after the title (a state word, a host chip): the title gives way first. */
+    titleSuffix: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val m = LocalRowMetrics.current
     val base = modifier.fillMaxWidth()
         .let { if (selected) it.background(MaterialTheme.colorScheme.surfaceContainerLow) else it }
         .let { if (onClick != null) it.clickable(onClick = onClick) else it }
         .padding(horizontal = m.inset, vertical = m.vertical)
-    Row(base, verticalAlignment = Alignment.CenterVertically) {
+    // A row with detail lines aligns its dot and its trailing on the TITLE line,
+    // top-left and top-right like the desktop, not on the row's middle (owner,
+    // 2026-10-13). A one-line row stays centred.
+    val topAligned = detail != null
+    val titleLine = with(LocalDensity.current) { MaterialTheme.typography.bodyMedium.lineHeight.toDp() }
+    val anchor: Modifier = if (topAligned) Modifier.height(titleLine) else Modifier
+    Row(base, verticalAlignment = if (topAligned) Alignment.Top else Alignment.CenterVertically) {
         if (leading != null) {
-            leading()
+            Box(anchor, contentAlignment = Alignment.Center) { leading() }
             Spacer(Modifier.width(Scale.s12))
         }
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = if (titleMono) LocalMonoStyle.current.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize)
-                else MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                color = titleColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = if (titleMono) LocalMonoStyle.current.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize)
+                    else MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = titleColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (titleSuffix != null) {
+                    Spacer(Modifier.width(Scale.s8))
+                    titleSuffix()
+                }
+            }
             if (!meta.isNullOrBlank()) {
                 Text(
                     meta,
@@ -76,7 +94,7 @@ fun ListRow(
         }
         if (trailing != null) {
             Spacer(Modifier.width(Scale.s12))
-            trailing()
+            Row(anchor, verticalAlignment = Alignment.CenterVertically) { trailing() }
         }
     }
 }

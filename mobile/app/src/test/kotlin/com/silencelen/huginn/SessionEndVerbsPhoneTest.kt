@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * THE PHONE'S TWO SESSION MENUS DRAW THE SHARED VERBS, NOT THEIR OWN COPIES.
  *
- * The phone builds its menus inside composables — `DropdownMenuItem` with a
+ * The phone builds its menus inside composables — a `HouseMenuItem` with a
  * literal in it — so unlike the desktop's `sessionMenu` there is no pure list to
  * assert. That is exactly how the words drifted in the first place: five literals
  * in three files, and the ellipsis on one of them already disagreed with the rest
@@ -72,8 +72,17 @@ class SessionEndVerbsPhoneTest {
         // phone cannot land on a lighter red of its own.
         for (name in surfaces.keys) {
             val text = source(name)
-            assertTrue("$name does not tint its wrap-up", text.contains("verbInk(VerbTone.SOFT"))
-            assertTrue("$name does not tint its kill", text.contains("verbInk(VerbTone.DESTRUCTIVE"))
+            // Since the reskin the menus are the house menu, which inks every row
+            // by its tone through `verbInk`; what a surface owns is the tone.
+            assertTrue("$name does not draw the house menu", text.contains("HouseMenu("))
+            assertTrue(
+                "$name does not tint its wrap-up",
+                Regex("""HouseMenuItem\(EndVerbs\.soft\(1\)[^\n]*tone = VerbTone\.SOFT""").containsMatchIn(text),
+            )
+            assertTrue(
+                "$name does not tint its kill",
+                Regex("""HouseMenuItem\(EndVerbs\.hard\(1\)[^\n]*tone = VerbTone\.DESTRUCTIVE""").containsMatchIn(text),
+            )
         }
     }
 

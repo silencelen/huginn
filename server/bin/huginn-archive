@@ -23,14 +23,21 @@ set -u
 # "'--help' is not a session name" at exit 1.
 case "${1:-}" in
   -h|--help)
-    echo "usage: huginn-archive [<session> [--now]] | revive <id|name>"
-    echo
-    echo "  huginn-archive                    what has been archived, and how to bring it back"
-    echo "  huginn-archive <session>          end it for good and keep the way back (the title,"
-    echo "                                    the cwd, the last thing said, a copy of the"
-    echo "                                    transcript and the exact 'claude --resume')"
-    echo "  huginn-archive <session> --now    the same, without waiting for a wrap-up"
-    echo "  huginn-archive revive <id|name>   bring one back and resume into it"
+    # The renderers' line grammar (PR 6): the (o> line, a blank line, rows at
+    # 2, details at 4, nothing past column 79.
+    cat <<'EOF'
+(o> huginn - archive
+
+  huginn-archive
+    What has been archived, and how to bring it back.
+  huginn-archive <session>
+    End it for good and keep the way back: the title, the cwd, the last
+    thing said, a copy of the transcript and the exact 'claude --resume'.
+  huginn-archive <session> --now
+    The same, without waiting for a wrap-up.
+  huginn-archive revive <id|name>
+    Bring one back and resume into it.
+EOF
     exit 0 ;;
 esac
 

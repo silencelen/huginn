@@ -172,7 +172,10 @@ object ScratchpadRules {
     }
 
     private const val MARKER = "[Scratchpad \""
-    private const val PILL = "📝"
+    // Words, not a pictograph (BRAND.md section 8): the pill reads "Page: <name>",
+    // the same word the daemon's chat titles use. Display only — nothing on the
+    // wire changes, the frame above is what travels.
+    private const val PILL = "Page:"
 
     // ---------------------------------------------------------------- keys
     //
