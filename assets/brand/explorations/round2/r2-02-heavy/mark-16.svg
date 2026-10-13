@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- mark-16: the compact drawing for 16-22 px (tray, favicon-16). Head, hooked bill and neck in 8 straight edges plus a circular eye hole r 6.5, near-square box (x 14-105, y 24-90 of a plain 108 viewBox, no translate). Same facets as mark.svg: the hook knee (92,36), the long culmen to the crown (42,24), the nape (14,41); near-flat gonys from the chin (64,59) to the tip (105,57). -->
+  <path fill="#161310" fill-rule="evenodd" d="M105,57 L92,36 L42,24 L14,41 L14,76 L52,90 L70,76 L64,59 Z M64,42 m-6.5,0 a6.5,6.5 0 1,0 13,0 a6.5,6.5 0 1,0 -13,0 Z"/>
+</svg>
