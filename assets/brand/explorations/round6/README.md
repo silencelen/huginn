@@ -28,3 +28,17 @@ What the chooser's demos change from round 1:
   composite round.
 
 The round-6 chooser records the picks; after it, the brand book.
+
+## Decided (round-6 chooser, 2026-10-13)
+
+| question | pick |
+|---|---|
+| Hero form | the still cursor lockup as SVG outlines, with a dark twin |
+| The client's help header | keep today's `(o)==-` bird, so the 7-bit landing and takeoff stay as grown |
+| Motion set | the recommended set |
+
+With this the decision checklist is complete; the brand book is `../../BRAND.md`.
+Two consequences: the blink stays in the folder as an in-app idle option, not a
+README hero; and the client's 7-bit art (help bird, landing, takeoff, boot) is
+the one place the old drawing survives, by the owner's choice, so the brand book
+lists it as a deliberate exception rather than a migration item.
