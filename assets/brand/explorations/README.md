@@ -34,10 +34,12 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | Round 3 | the fold raven redrawn upright on Snapped's lattice, three glyph constructions with the fold, Snapped's text art proved to be this bird's own raster | [`round3/fold-system/`](round3/fold-system/); the round-3 chooser records the pick |
 | **The mark, decided** | the upright fold raven, slimmed (`round3/fold-system/mark.svg`, 54 × 51); the glyph tile is `glyph-c.svg`, the whole mark in negative; the CLI art is Snapped's 24 × 8 (`ascii-7bit.txt` / `ascii-halfblock.txt`), the 48 × 16 fold art for the README and host splash | round-3 chooser, 2026-10-13: "approved, i like this version better" |
 | **Colour, decided** | `color-04-moss-heather` (evergreen accent on dark grey, heather second voice; added at the owner's request and proved by the same rules); needs-you = the accent lit up (`stateAttention`, not error); tray needs-you = tinted tile + badge dot; needs-you glyph = `▲` / `!`, so error takes `×` / `x` | round-4 chooser, 2026-10-13 |
+| **Type, decided** | `type-02-plex-mono`: IBM Plex Mono for the wordmark (lowercase `huginn`), display, labels, terminal and code, IBM Plex Sans for titles and body; the raven-as-cursor lockup. Terminal letterform: the hairline, `word-10-perch` with the raven re-cut from the decided mark (`round5/perch-upright*.txt`), `word-09` where no bird fits, `word-06-pagga` under 34 columns. One-row raven: `(o>` with its state variants, 7-bit everywhere | round-5 chooser, 2026-10-13 |
 
-Still open, in order: the type direction; the terminal letterform; the one-row
-raven and its 7-bit twin; the hero form; the motion set. All of these now build
-on `round3/fold-system/` and `color/color-04-moss-heather/`.
+Still open: the hero form for README, splash and installer; the client's help
+header; the motion set. Then the brand book. Everything builds on
+`round3/fold-system/`, `color/color-04-moss-heather/`, `wordmark/type-02-plex-mono/`
+and `round5/`.
 
 ## How to review
 
@@ -63,6 +65,12 @@ are single-width; one has to win.
 - Monochrome first: every mark works as one flat colour before colour is added.
 - The apps' motion rule, a slow stepped pulse rather than a spinner, bounds
   every in-app animation.
+
+## Round 5
+
+Type, on the decided mark and ground: [`round5/README.md`](round5/README.md).
+**Decided:** Plex Mono-led, the hairline perch with the re-cut raven, `(o>` as
+the one-row raven.
 
 ## Round 4
 
