@@ -296,3 +296,53 @@ DIRECTIONS.append(dict(
                     stateSuccess='brightGreen', stateError='brightRed', stateInfo='brightBlue'),
     cli=dict(ok='brightGreen', warn='brightYellow', error='brightRed', muted='brightBlack', accent='yellow'),
 ))
+
+# ========================================================== 04 moss-heather
+# Owner's ask after round 4 went up: "a new theme, more evergreens, purples, dark greys".
+DIRECTIONS.append(dict(
+    id='color-04-moss-heather', slug='moss-heather', name='Moss & Heather',
+    tagline='evergreen on dark grey, heather for the second voice; a raven in a pine wood at dusk',
+    accent_name='moss', accent_ansi='green',
+    dark=dict(
+        background='#141615', onBackground='#E2E6E1', surface='#141615',
+        surfaceContainerLowest='#0E100F', surfaceContainerLow='#1C1F1D', surfaceContainer='#242826',
+        surfaceContainerHigh='#2D3230', surfaceContainerHighest='#383E3B',
+        onSurface='#E2E6E1', onSurfaceVariant='#A2ABA5',
+        outline='#747D77', outlineVariant='#3A423E', outlineHairline='#2A302D',
+        primary='#7CB98E', onPrimary='#0B2316', primaryContainer='#1F3D2C', onPrimaryContainer='#C2E6CF',
+        secondary='#B49CDB', onSecondary='#221640', secondaryContainer='#352A52', onSecondaryContainer='#E2D7F5',
+        tertiary='#E6AEC6',
+        error='#EE757D', onError='#2B0C10', errorContainer='#4C1C22', onErrorContainer='#F8C5CA',
+        stateIdle='#848C87', stateWorking='#7CB98E', stateAttention='#E4E2A8',
+        stateSuccess='#C4CF7A', stateError='#EE757D', stateInfo='#86B5E6',
+        inkMark='#141615', boneTile='#E2E6E1', accent='#7CB98E',
+    ),
+    light=dict(
+        background='#F4F6F3', onBackground='#191C1A', surface='#F4F6F3',
+        surfaceContainerLowest='#FFFFFF', surfaceContainerLow='#EDF0EC', surfaceContainer='#E6EAE6',
+        surfaceContainerHigh='#DFE4DF', surfaceContainerHighest='#D6DCD6',
+        onSurface='#191C1A', onSurfaceVariant='#535B56',
+        outline='#78817B', outlineVariant='#C6CDC8', outlineHairline='#DDE2DE',
+        primary='#1F5A3A', onPrimary='#FFFFFF', primaryContainer='#CDEAD6', onPrimaryContainer='#0A3320',
+        secondary='#5B3E8A', onSecondary='#FFFFFF', secondaryContainer='#E6DCF5', onSecondaryContainer='#2E1A52',
+        tertiary='#6E3A7A',
+        error='#B3262E', onError='#FFFFFF', errorContainer='#F9DBDC', onErrorContainer='#5E1418',
+        stateIdle='#687069', stateWorking='#1F5A3A', stateAttention='#0F3320',
+        stateSuccess='#4E7A1C', stateError='#B3262E', stateInfo='#2A5FA5',
+        inkMark='#141615', boneTile='#E2E6E1', accent='#1F5A3A',
+    ),
+    syntax_dark=dict(keyword='#C3A8E8', string='#9FD3AD', number='#E3C58A', comment='#8C958F',
+                     function='#86B5E6', meta='#7FC9B8', added='#9FD3AD', removed='#EE757D'),
+    syntax_light=dict(keyword='#5B3E8A', string='#1F5A3A', number='#8A5A00', comment='#6B746E',
+                      function='#2A5FA5', meta='#176B66', added='#1F5A3A', removed='#B3262E'),
+    ansi=dict(
+        black='#3A423E', red='#D65A62', green='#7CB98E', yellow='#D4B872', blue='#6C9BD6',
+        magenta='#A98BD6', cyan='#5EB5B0', white='#C8CDC9',
+        brightBlack='#747D77', brightRed='#EE757D', brightGreen='#C4CF7A', brightYellow='#E4E2A8',
+        brightBlue='#86B5E6', brightMagenta='#C3A8E8', brightCyan='#80CFC9', brightWhite='#E2E6E1',
+        foreground='#E2E6E1', background='#141615', cursor='#7CB98E', selection='#2C4035',
+    ),
+    state_ansi=dict(stateIdle='brightBlack', stateWorking='green', stateAttention='brightYellow',
+                    stateSuccess='brightGreen', stateError='brightRed', stateInfo='brightBlue'),
+    cli=dict(ok='brightGreen', warn='brightYellow', error='brightRed', muted='brightBlack', accent='brightMagenta'),
+))
