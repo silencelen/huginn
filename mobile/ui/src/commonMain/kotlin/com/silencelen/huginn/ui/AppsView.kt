@@ -474,7 +474,8 @@ private fun ReachDot(app: App) {
     val colour = when {
         AppRules.reach(app) == AppRules.Reach.DOWN -> MaterialTheme.colorScheme.error
         // ⚠ UP BUT NOT WHERE YOU ARE IS NOT UP, to the person holding the phone.
-        // This is the one row on the page that wants the accent.
+        // This is the one row on the page that needs somebody: the brand's
+        // needs-you step (StateColors.kt), not the working accent.
         AppRules.deviceReach(app) == AppRules.DeviceReach.RETROFIT -> LocalHuginnColors.current.stateAttention
         AppRules.reach(app) == AppRules.Reach.UP -> MaterialTheme.colorScheme.onSurfaceVariant
         else -> null

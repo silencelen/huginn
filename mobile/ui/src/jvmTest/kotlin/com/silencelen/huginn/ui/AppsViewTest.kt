@@ -175,7 +175,7 @@ class AppsViewTest {
      * left to say it with.
      */
     @Test
-    fun `a healthy app is drawn calmly and the accent is kept for the row that needs somebody`() {
+    fun `a healthy app is drawn calmly and needs-you is kept for the row that needs somebody`() {
         val dot = read("ui/src/commonMain/kotlin/com/silencelen/huginn/ui/AppsView.kt")
             .substringAfter("private fun ReachDot(")
             .substringBefore("internal fun RowVerb(")
@@ -188,10 +188,14 @@ class AppsViewTest {
             dot.substring(up).startsWith("Reach.UP -> MaterialTheme.colorScheme.onSurfaceVariant"),
             "an app that simply answers is not asking for attention",
         )
+        // The brand's state language (StateColors.kt, BRAND.md section 4): a row a
+        // person has to do something about is NEEDS-YOU, the accent lit up — not
+        // the working accent itself, and never the error red.
         assertTrue(
-            dot.substring(retrofit).startsWith("DeviceReach.RETROFIT -> MaterialTheme.colorScheme.primary"),
-            "the accent belongs to the row a person has to do something about",
+            dot.substring(retrofit).startsWith("DeviceReach.RETROFIT -> LocalHuginnColors.current.stateAttention"),
+            "the needs-you colour belongs to the row a person has to do something about",
         )
+        assertFalse("MaterialTheme.colorScheme.primary" in dot, "the working accent is not a reach state")
         // ⚠ AND NOT `tertiary`, which the retrofit dot used to draw: the theme
         // defines neither it nor its container, so it was Material's baseline
         // pink in a warm rune-gold palette. PaletteTest's rule, one role short.
