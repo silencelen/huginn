@@ -1997,6 +1997,14 @@ elif [ ! -r /etc/huginn-appd/token ]; then
 else
   mkdir -p "$PJL/data" "$PJL/state" "$PJL/home" "$PJL/claude" "$PJL/work" "$PJL/bin"
   cp /etc/huginn-appd/token "$PJL/token"; chmod 600 "$PJL/token"
+  # ⚠ THE PROJECTS DIRECTORY IS TRUSTED ONCE, THE WAY AN OPERATOR DOES IT. Since
+  # projects got a folder of their own (R4), `new` with no --cwd makes
+  # $HOME/projects/<slug> — not the daemon's WORKDIR, whose auto-trust does not
+  # travel to children — and the daemon refuses a directory Claude Code has not
+  # trusted. Claude Code reads trust up the tree, so one entry for the projects
+  # dir in this daemon's scratch config (CLAUDE_DIR + ".json") covers it. The
+  # lane failed on exactly this from R4 until 2026-10-12.
+  printf '{"projects":{"%s":{"hasTrustDialogAccepted":true}}}\n' "$PJL/home/projects" > "$PJL/claude.json"
   # The stand-in for `claude`. The launcher runs `claude --name … ; exec "$SHELL" -l`,
   # so a stand-in earlier on the daemon's PATH is the only way to intercept it.
   # It answers --version (so nothing that probes the binary hangs) and otherwise
