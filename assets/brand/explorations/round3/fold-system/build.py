@@ -16,7 +16,9 @@ fold along the folded wing):
   PERCHED  the r2-05 fold raven re-snapped to Snapped's twelve vertices (mark-perched.svg);
            its solid silhouette IS r2-01-snapped's mark, so it rasterises to Snapped's grid.
   UPRIGHT  the same bird standing up (owner's amendment): chest forward, head raised, bill
-           slightly up, 1.24:1, fold running steeper. mark.svg and the masters.
+           slightly up, fold running steeper. mark.svg and the masters. Revised after the
+           round-3 chooser ("too wide"): bill tip pulled in two columns, chest and belly three,
+           so the box is 54 x 51 (1.06:1) instead of 63 x 51 (1.24:1).
 No dependencies beyond Python 3 for the files; the preview uses ../../tools and PIL.
 """
 import math, os, subprocess, sys, tempfile
@@ -54,21 +56,21 @@ PERCHED_SHOULDER = 5
 PERCHED_FOLD = [PERCHED[5], P(10, 10), P(5, 13)]   # shoulder -> flap corner -> wing tip on the tail
 
 # ---------------------------------------------------------------- the upright bird (the mark)
-UPRIGHT = [P(19, 4),   # bill tip
-           P(16, 2),   # culmen
+UPRIGHT = [P(17, 4),   # bill tip
+           P(15, 3),   # culmen
            P(12, 1),   # forehead
            P(10, 1),   # crown
            P(8, 2),    # back of head
            P(7, 4),    # nape / shoulder (the fold opens here)
            P(5, 16),   # tail tip
-           P(8, 16),   # tail bottom (the tail stands on the ground)
-           P(12, 13),  # under-tail notch
-           P(16, 14),  # belly
-           P(17, 10),  # chest
-           P(15, 6)]   # throat
-UPRIGHT_EYE = ((56.25, 26.3), 3.2)           # centre of cell (12,3)
+           P(9, 16),   # tail bottom (the tail stands on the ground)
+           P(12, 14),  # under-tail notch
+           P(13, 14),  # belly
+           P(14, 10),  # chest
+           P(14, 6)]   # throat
+UPRIGHT_EYE = ((51.75, 26.3), 3.2)           # centre of cell (11,3)
 UPRIGHT_SHOULDER = 5
-UPRIGHT_FOLD = [UPRIGHT[5], P(10, 11), P(7, 15)]   # shoulder -> flap corner -> wing tip on the tail
+UPRIGHT_FOLD = [UPRIGHT[5], P(9, 11), P(7, 15)]   # shoulder -> flap corner -> wing tip on the tail
 FOLD_W = 1.0                                  # half-width: the slit is 2 units
 
 NAMES = ['bill tip', 'culmen', 'forehead', 'crown', 'back of head', 'nape', 'tail tip', 'tail bottom',
@@ -184,9 +186,19 @@ def svg(paths, fill=INK, bg=None, size=512, vb='0 0 108 108', tr='translate(2,11
 
 
 # ---------------------------------------------------------------- the head drawing (16-22 px)
-# the upright bird's head, bill and neck on a 7-unit cell (plain 108 viewBox), 10 edges + eye hole r 7
-HEAD = [(105, 40), (83.5, 29), (54.5, 24), (40, 24), (26, 29), (18.5, 40), (14, 90), (84, 90), (90.5, 73), (76, 51)]
-HEAD_EYE = ((58, 37.5), 6.5)
+# the upright bird's head, bill, throat and chest scaled HS about the bill tip (placed at 105,40), closed by the
+# ground line y 90; plain 108 viewBox, 10 edges + eye hole r 6.5 (bigger than scale for legibility at 16)
+HS = 1.8
+
+
+def _H(p):
+    t = UPRIGHT[0]
+    return (round(105 + HS * (p[0] - t[0]), 1), round(40 + HS * (p[1] - t[1]), 1))
+
+
+HEAD = [_H(UPRIGHT[0]), _H(UPRIGHT[1]), _H(UPRIGHT[2]), _H(UPRIGHT[3]), _H(UPRIGHT[4]), _H(UPRIGHT[5]),
+        (14, 90), (round(_H(UPRIGHT[10])[0] - 6, 1), 90), _H(UPRIGHT[10]), _H(UPRIGHT[11])]
+HEAD_EYE = (_H(UPRIGHT_EYE[0]), 6.5)
 
 # ---------------------------------------------------------------- glyph tiles (64 box)
 GLYPH_RX = 14
@@ -345,7 +357,7 @@ def extend(a, b, y):
 GLYPH = {  # the construction parameters: scale, eye cell (x, y of its top-left, multiples of 4), slit half-width (mark units)
     'a': dict(s=0.95, cell=(28, 24), w=1.0),
     'b': dict(s=0.78, cell=(32, 24), mouth=5.0, length=18.0, kind='hole'),
-    'c': dict(s=0.78, cell=(32, 16), w=1.4),
+    'c': dict(s=0.84, cell=(32, 16), w=1.4),
 }
 
 
@@ -476,19 +488,19 @@ def build_files(verbose=True):
     note = ('Huginn mark, round 3 fold-system: the fold raven standing upright (chest forward, head raised, bill '
             'slightly up) on Snapped\'s 24x16 half-block lattice (x = 4.5i, y = 14.4 + 3.4j), twelve lattice vertices '
             'plus ONE interior cut, a 2-unit slit that opens at the shoulder and separates the folded wing from the body. '
-            'ONE evenodd path: the outer ring and a circular eye hole. Box x 18-81, y 17.8-68.8 (63 x 51, 1.24:1); '
+            'ONE evenodd path: the outer ring and a circular eye hole. Box x 22.5-76.5, y 17.8-68.8 (54 x 51, 1.06:1); '
             'translate(2,11). Ink #161310. Vertices (col,row): ' + cells(UPRIGHT) + '. Below 32 px use mark-32.svg (no fold).')
     write('mark.svg', svg(up_paths, comment=note))
     write('mark-inverse.svg', svg(up_paths, fill=BONE, comment='Inverse: bone mark for dark grounds (#12100F). Same path as mark.svg.'))
-    # tile master: the 63 x 51 box scaled 1.3 and centred on the bone tile (x 13.05-94.95, 12 % inset)
-    s = 1.3
+    # tile master: the 54 x 51 box scaled 1.4 and centred on the bone tile (x 16.2-91.8, 15 % inset)
+    s = 1.4
     tx, ty = 54 - s * 49.5, 54 - s * 43.3
     write('mark-tile.svg', svg(up_paths, bg=BONE, tr=f'translate({tx:.2f},{ty:.2f}) scale({s})',
-                               comment='App-icon master: ink mark scaled 1.3 about the box centre on the bone tile (x 13-95, y 23.2-89.5; 12 % side inset). Same path as mark.svg.'))
+                               comment='App-icon master: ink mark scaled 1.4 about the box centre on the bone tile (x 16.2-91.8, y 18.3-89.7; 15 % side inset). Same path as mark.svg.'))
     write('mark-32.svg', svg(up_solid, comment='The upright silhouette without the fold: 32 px and below (favicon-32, tray at 200 %), and the source of grid-upright.txt. Same twelve vertices.'))
     write('mark-16.svg', svg([poly_d(HEAD), circle_d(*HEAD_EYE)], tr=None, comment=(
         'mark-16: the compact drawing for 16-22 px (tray, favicon-16): the upright bird\'s head, bill, throat and chest '
-        'on a 7-unit cell, 10 straight edges plus a circular eye hole r 7; box x 21-105, y 17-90 of a plain 108 viewBox, no fold.')))
+        'scaled 1.8 about the bill tip, 10 straight edges plus a circular eye hole r 6.5; box x 14-105, y 21.6-90 of a plain 108 viewBox, no fold.')))
     write('mark-perched.svg', svg(pe_paths, comment=(
         'For comparison: the perched r2-05 fold raven re-snapped to r2-01-snapped\'s twelve vertices on its lattice '
         '(x = 4.5i, y = 14.4 + 3.4j), with the 2-unit fold slit spliced at the nape. Its solid silhouette is byte-for-byte '
@@ -504,7 +516,7 @@ def build_files(verbose=True):
             'b': ('Glyph B "shoulder wedge": the head, throat, chest and the wing\'s upper edge as a hole (the bird at 0.83), the breast open '
                   'onto the bottom edge; the fold is a short ink wedge (3 units at the mouth, 11 long, tapering to nothing) opening at the '
                   'shoulder only; eye a 4x4 ink cell at x 32-36, y 24-28. ONE evenodd path.'),
-            'c': ('Glyph C "negative mark": the whole upright mark with its fold at 0.72 as a hole in the rounded square, so the tile is the mark '
+            'c': ('Glyph C "negative mark": the whole upright mark with its fold at 0.84 as a hole in the rounded square, so the tile is the mark '
                   'in negative; the fold is a 2.2-unit ink hairline, the eye a 4x4 ink cell at x 36-40, y 20-24. ONE evenodd path.')}[g]
         write(f'glyph-{g}.svg', svg(paths, vb='0 0 64 64', tr=None, comment=gnote))
         write(f'glyph-{g}-inverse.svg', svg(paths, fill=BONE, bg=INK, vb='0 0 64 64', tr=None,
@@ -833,8 +845,8 @@ def build_preview(grids):
     put(Tp('m-bone-64.png'), 1200, y, 1, label='upright 64', frame='#4A4541')
     put(Tp('p-bone-64.png'), 1100, y + 100, 4, frame='#4A4541')
     put(Tp('m-bone-64.png'), 1380, y + 100, 4, frame='#4A4541')
-    sub(1100, y + 365, 'same lattice, twelve edges, eye and fold; the body turned up to 1.24:1')
-    sub(1100, y + 385, 'perched box 81 x 47.6 (1.7:1); upright box 63 x 51 (1.24:1)')
+    sub(1100, y + 365, 'same lattice, twelve edges, eye and fold; the body turned up to 1.06:1')
+    sub(1100, y + 385, 'perched box 81 x 47.6 (1.7:1); upright box 54 x 51 (1.06:1)')
 
     # C ---------------------------------------------------------------- glyphs
     yC = yB + 32 + 512 + 50
@@ -843,7 +855,7 @@ def build_preview(grids):
     y = yC + 52
     desc = {'a': "a  full fold: the bird's head, chest and body at 0.95, hole runs off the bottom-left corner, the fold hairline (1.9 units) as in the mark",
             'b': "b  shoulder wedge: head, throat and chest as the hole, its back along the fold line, breast open to the bottom; a short tapering sliver of hole peels off at the shoulder along the back edge (the wing's upper edge)",
-            'c': "c  negative mark: the whole upright mark with its fold at 0.78, centred, so the tile is the mark in negative; fold 2.2 units"}
+            'c': "c  negative mark: the whole upright mark with its fold at 0.84, centred, so the tile is the mark in negative; fold 2.2 units"}
     for g in 'abc':
         sub(24, y, desc[g], '#F2ECE4')
         y += 20
