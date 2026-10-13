@@ -740,9 +740,25 @@ _huginn_json_num() { printf '%s' "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:
 _huginn_desktop_platform() {
   case "$(uname -o 2>/dev/null)" in Android*) return ;; esac
   case "$(uname -s 2>/dev/null)" in
-    Linux*)                        echo 'linux-x64' ;;
+    Linux*)                        if _huginn_arch_family; then echo 'linux-x64-arch'; else echo 'linux-x64'; fi ;;
     MINGW*|MSYS*|CYGWIN*|Windows*) echo 'windows-x64' ;;
   esac
+}
+
+# Arch family = os-release says ID=arch, or lists arch among its ID_LIKE ancestors
+# (Omarchy: ID=omarchy ID_LIKE=arch; Manjaro/EndeavourOS/CachyOS likewise). Read from
+# the file, never inferred from `command -v pacman` — a Debian build host with the
+# pacman tooling installed is still a Debian box. Same rule as the desktop app's
+# UpdatePlatform, so `huginn desktop` and the app resolve to the same artifact.
+_huginn_arch_family() {
+  local f ids=''
+  for f in /etc/os-release /usr/lib/os-release; do
+    [ -r "$f" ] || continue
+    ids="$(sed -n 's/^ID=//p; s/^ID_LIKE=//p' "$f" | tr -d "\"'" | tr '\n' ' ')"
+    break
+  done
+  case " ${ids,,} " in *' arch '*|*' archlinux '*) return 0 ;; esac
+  return 1
 }
 
 # --- auto-reconnecting attach ---
@@ -906,7 +922,7 @@ _huginn_help_body() {
                                 e.g. huginn usage monthly | session | blocks | blocks --live
   huginn usage <when>         shortcut date range: today | yesterday | week | month
                                 e.g. huginn usage today | huginn usage week session
-  huginn desktop              download links for the latest Huginn Desktop build
+  huginn desktop              download links for the latest Huginn Desktop build (Windows, Debian .deb, Arch pacman)
   huginn desktop win|linux    just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($HUGINN_REPO);
                               without gh, from the PINNED ${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT} mirror
@@ -1123,7 +1139,8 @@ EOF
         ''|both|all)             want='' ;;
         win|windows|exe)         want='windows-x64' ;;
         linux|deb|debian|ubuntu) want='linux-x64' ;;
-        *) echo "usage: huginn desktop [windows|linux]" >&2; return 1 ;;
+        arch|pacman|omarchy)     want='linux-x64-arch' ;;
+        *) echo "usage: huginn desktop [windows|linux|arch]" >&2; return 1 ;;
       esac
       local rel tag man
       rel="$(_huginn_desktop_release)" || {
@@ -1144,14 +1161,15 @@ EOF
         echo "$base/$file"
         return 0
       fi
-      local p label sz sha mark linux_file=''
+      local p label sz sha mark linux_file='' arch_file=''
       printf '\n  Huginn Desktop %s   (%s)\n\n' "${ver:-?}" "$tag"
-      for p in windows-x64 linux-x64; do
+      for p in windows-x64 linux-x64 linux-x64-arch; do
         obj="$(_huginn_json_obj "$man" "$p")"
         file="$(_huginn_json_str "$obj" file)"
         [ -n "$file" ] || continue
         [ "$p" = 'linux-x64' ] && linux_file="$file"
-        case "$p" in windows-x64) label='Windows' ;; *) label='Linux  ' ;; esac
+        [ "$p" = 'linux-x64-arch' ] && arch_file="$file"
+        case "$p" in windows-x64) label='Windows' ;; linux-x64) label='Debian ' ;; *) label='Arch   ' ;; esac
         [ "$p" = "$here" ] && mark='   <- this machine' || mark=''
         sz="$(_huginn_json_num "$obj" size)"; sha="$(_huginn_json_str "$obj" sha256)"
         printf '  %s  %s%s\n' "$label" "$base/$file" "$mark"
@@ -1159,8 +1177,9 @@ EOF
           "$(awk -v b="${sz:-0}" 'BEGIN{printf "%6.1f MB", b/1048576}')" "${sha:0:16}..."
       done
       case "$here" in
-        linux-x64)   printf '\n  install:  curl -fLO %s/%s && sudo dpkg -i %s\n' "$base" "$linux_file" "$linux_file" ;;
-        windows-x64) printf '\n  install:  run the .exe (per-user NSIS installer, no admin needed)\n' ;;
+        linux-x64)      printf '\n  install:  curl -fLO %s/%s && sudo apt install ./%s\n' "$base" "$linux_file" "$linux_file" ;;
+        linux-x64-arch) printf '\n  install:  curl -fLO %s/%s && sudo pacman -U %s\n' "$base" "$arch_file" "$arch_file" ;;
+        windows-x64)    printf '\n  install:  run the .exe (per-user NSIS installer, no admin needed)\n' ;;
         *)           printf '\n  (no desktop build for this machine - these links are for your laptop)\n' ;;
       esac
       printf '  An installed client self-updates from this same feed.\n\n' ;;
@@ -1367,7 +1386,7 @@ _huginn_complete() {
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
       desktop)
-        mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
+        mapfile -t COMPREPLY < <(compgen -W "windows linux arch both" -- "$cur") ;;
       device)
         mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve --help" -- "$cur") ;;
       local)

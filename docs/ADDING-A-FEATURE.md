@@ -91,9 +91,12 @@ like coverage.
 ## Releasing
 
 - **Phone**: `mobile/scripts/build.sh` then `ship.sh` (devstore).
-- **Desktop**: `mobile/scripts/release-desktop.sh` — builds the Linux `.deb` and
-  the Windows installer *on this box* (jpackage under wine, then `makensis`),
-  stages them into `/v1/desktop-kt`, and verifies both back through the wire.
+- **Desktop**: `mobile/scripts/release-desktop.sh` — builds the Linux `.deb`, the
+  Arch pacman package (`scripts/package-arch.sh` repacks the same app-image; needs
+  `bsdtar` + `zstd`, no Arch box) and the Windows installer *on this box* (jpackage
+  under wine, then `makensis`), stages all three into `/v1/desktop-kt`, and verifies
+  them back through the wire. Manifest keys: `windows-x64`, `linux-x64` (deb),
+  `linux-x64-arch` (pacman) — `UpdatePlatform` picks by os-release lineage.
   Installed clients pick it up themselves.
 
 Traps that have already cost time here are in

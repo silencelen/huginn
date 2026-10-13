@@ -5,9 +5,11 @@
 # Everything happens on THIS box. No Windows machine is involved and none is
 # needed: the Windows installer is built by running the WINDOWS jpackage.exe
 # under wine against a Windows jlink runtime, then wrapped by Linux makensis.
-# The Linux .deb comes from Compose's own packageDeb. Both are staged into
-# DATA_DIR/desktop-kt by local moves and verified back through the wire with the
-# real Bearer token.
+# The Linux .deb comes from Compose's own packageDeb, and the Arch Linux pacman
+# package is repacked from the same createDistributable app-image by
+# scripts/package-arch.sh (bsdtar, no makepkg, no Arch box). All three are staged
+# into DATA_DIR/desktop-kt by local moves and verified back through the wire with
+# the real Bearer token.
 #
 # /v1/desktop was the ELECTRON client's channel. That client was deleted on
 # 2026-08-27 by owner directive — strictly Compose — and the daemon stopped
@@ -71,6 +73,14 @@ WIN=$BUILD/windows
 DIST=$BUILD/release
 EXE="Huginn-Desktop-Setup-$VERSION.exe"
 DEB="huginn-desktop-kt_${VERSION}-1_amd64.deb"
+# The Arch package: same /opt/huginn-desktop-kt payload as the deb, pacman's own name
+# shape (<name>-<ver>-<rel>-<arch>.pkg.tar.zst). Omarchy/Arch clients ask the manifest
+# for the `linux-x64-arch` key; Debian-family clients keep `linux-x64` = the deb.
+PKG="huginn-desktop-kt-${VERSION}-1-x86_64.pkg.tar.zst"
+# The purge-time hygiene block, ONE source for both package families: injected into the
+# deb's postrm (step 2) and into the pacman .INSTALL (step 2b).
+HYGIENE=app-desktop/packaging/linux/uninstall-hygiene.sh
+ARCH_INSTALL_IN=app-desktop/packaging/arch/huginn-desktop-kt.install.in
 # The installer, the plugin that stamps the notification identity, and the file
 # that holds the identity itself. Named once: two gates and the makensis
 # invocation all reach for them, and the plugin path is DERIVED from the .nsi
@@ -400,90 +410,12 @@ POSTRM="$DEB_TMP/root/DEBIAN/postrm"
 if [ -f "$POSTRM" ] && grep -q 'huginn-uninstall-hygiene' "$POSTRM"; then
   echo "REFUSING: the deb's postrm already carries the hygiene block — blind prepend would double it" >&2; exit 1
 fi
-cat > "$DEB_TMP/hygiene.sh" <<'HYGIENE_EOF'
-### BEGIN huginn-uninstall-hygiene (injected by mobile/scripts/release-desktop.sh) ###
-#
-# ON PURGE ONLY. These are per-user dotfiles under $HOME. dpkg does not track
-# them, they are not conffiles, and `apt remove` is meant to be undone by `apt
-# install`. Purge is where Debian puts "and the configuration too", so purge is
-# where this goes.
-#
-# THE SERVER FIRST, THE DISK SECOND — the ordering client/huginn-device keeps.
-# A device row can only ever be retired with the token in the file that is
-# about to be deleted, so the DELETE is attempted while that token still
-# exists; wipe first and the row is stranded, reading "not reachable" in
-# `huginn devices` forever. Best effort and never a gate: a package removal
-# that hung on a sleeping daemon, or failed because of one, would be a far
-# worse bug than a stale row.
-#
-# DEFENSIVE BY CONSTRUCTION: no `set -e`, every path quoted, every rm aimed at
-# a name spelled out in full, nothing globbed, and exit 0 unconditionally. A
-# maintainer script that fails leaves the package half-configured, and this one
-# is doing housekeeping — it has no business being able to break an uninstall.
-if [ "$1" = purge ]; then
-  # The string value of "key": "value". Anchored on the KEY's own quotes rather
-  # than a greedy `.*:` — the greedy form eats through the colon in
-  # "http://127.0.0.1:8787" and hands back a fragment of the port.
-  hyg_json() {
-    [ -r "$1" ] || return 0
-    LC_ALL=C grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" 2>/dev/null \
-      | head -1 | sed 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'
-  }
-  hyg_drop() {   # $1=base url  $2=device id  $3=bearer token
-    [ -n "$1" ] && [ -n "$2" ] && [ -n "$3" ] || return 0
-    command -v curl >/dev/null 2>&1 || return 0
-    curl -sS -o /dev/null --max-time 5 -X DELETE \
-      -H "Authorization: Bearer $3" "${1%/}/v1/devices/$2" >/dev/null 2>&1
-    return 0
-  }
-  # uid >= 1000 is "a person", and root is added because plenty of these boxes
-  # run as root and would otherwise be the one home this never cleaned. nobody
-  # (65534) is excluded: it has a home path and no business owning one.
-  getent passwd 2>/dev/null \
-    | awk -F: '($3 >= 1000 && $3 < 65534) || $3 == 0 { print $6 }' \
-    | while IFS= read -r h; do
-    case "$h" in
-      /*) ;;
-      *) continue ;;                 # relative or empty: not a home, not ours
-    esac
-    [ -d "$h" ] || continue
-
-    hyg_cfg="$h/.config/huginn-desktop-kt"
-    hyg_drop "$(hyg_json "$hyg_cfg/settings.json" baseUrl)" \
-             "$(hyg_json "$hyg_cfg/settings.json" deviceId)" \
-             "$(hyg_json "$hyg_cfg/settings.json" token)"
-    # The SECOND enrolment. A machine that also serves local models has a row of
-    # its own (<host>-llm, scope generate) with its own id and its own copy of
-    # the token; retiring one and not the other leaves a ghost that shows up
-    # only in the model picker.
-    hyg_ltier="$h/.config/huginn-local"
-    hyg_drop "$(hyg_json "$hyg_ltier/device/device.json" url)" \
-             "$(hyg_json "$hyg_ltier/device/device.json" id)" \
-             "$(head -1 "$hyg_ltier/device/appd-token" 2>/dev/null | tr -d '[:space:]')"
-
-    rm -rf "$hyg_cfg"
-    rm -rf "$h/.cache/huginn-desktop-kt"
-    rm -rf "$hyg_ltier"
-    rm -f  "$h/.local/share/applications/huginn-desktop-kt.desktop"
-    # NAMED ONE BY ONE. ~/.huginn also holds a separately installed base client
-    # (client/install.sh) and its .bak files, and that install is not this
-    # package's to undo — a wildcard here would take huginn.sh with it and
-    # leave somebody's .bashrc sourcing a file that no longer exists.
-    for hyg_f in huginn-device huginn-local; do
-      rm -f "$h/.huginn/$hyg_f" "$h/.huginn/$hyg_f.bak" \
-            "$h/.huginn/$hyg_f.tmp.js" "$h/.huginn/$hyg_f.appsync.tmp.js"
-    done
-    # Unit FILES only, and never systemctl. A root maintainer script cannot
-    # reach another user's session bus, and `systemctl --user` from here would
-    # either fail or — worse — act on root's own manager instead.
-    for hyg_u in huginn-device huginn-local-llm huginn-local-runner; do
-      rm -f "$h/.config/systemd/user/$hyg_u.service" \
-            "$h/.config/systemd/user/default.target.wants/$hyg_u.service"
-    done
-  done
-fi
-### END huginn-uninstall-hygiene ###
-HYGIENE_EOF
+# The block itself lives in ONE file, shared with the Arch package's install scriptlet
+# (step 2b) so the two package families cannot drift apart on what a purge means.
+grep -q '^### BEGIN huginn-uninstall-hygiene' "$HYGIENE" && grep -q '^### END huginn-uninstall-hygiene' "$HYGIENE" || {
+  echo "REFUSING: $HYGIENE does not carry the BEGIN/END hygiene markers" >&2; exit 1; }
+sh -n "$HYGIENE" || { echo "REFUSING: $HYGIENE does not parse" >&2; exit 1; }
+cp "$HYGIENE" "$DEB_TMP/hygiene.sh"
 if [ -f "$POSTRM" ]; then
   head -1 "$POSTRM" | grep -q '^#!' \
     || { echo "REFUSING: the deb's postrm does not start with a shebang — refusing to prepend into it" >&2; exit 1; }
@@ -514,6 +446,45 @@ grep -q 'huginn-uninstall-hygiene' "$DEB_TMP/ctrl/postrm" 2>/dev/null || {
 mv -f "$DEB_TMP/$DEB" "$DEB_SRC"
 rm -rf "$DEB_TMP"
 echo "  Recommends: nodejs (>= 16) + purge-time hygiene postrm injected ($(stat -c %s "$DEB_SRC") bytes repacked)"
+
+# ------------------------------------------------------------ 2b. arch package
+#
+# jpackage cannot emit a pacman package (its Linux types are deb, rpm, app-image), so
+# the Arch artifact is the createDistributable app-image — the exact tree the deb
+# installs under /opt/huginn-desktop-kt — repacked by scripts/package-arch.sh with
+# pacman's own metadata. The install scriptlet is the template plus the SAME hygiene
+# block the deb's postrm got above, behind HUGINN_DESKTOP_PURGE=1 (pacman has no purge).
+echo "[2b/7] arch package (pacman, from the app-image)"
+APP_IMAGE="$BUILD/compose/binaries/main/app/huginn-desktop-kt"
+[ -x "$APP_IMAGE/bin/huginn-desktop-kt" ] || { echo "REFUSING: $APP_IMAGE has no launcher — createDistributable did not run" >&2; exit 1; }
+ARCH_DIR="$BUILD/arch"; rm -rf "$ARCH_DIR"; mkdir -p "$ARCH_DIR"
+ARCH_INSTALL="$ARCH_DIR/huginn-desktop-kt.install"
+grep -q '^@@HYGIENE@@$' "$ARCH_INSTALL_IN" || { echo "REFUSING: $ARCH_INSTALL_IN has no @@HYGIENE@@ line to fill" >&2; exit 1; }
+awk -v f="$HYGIENE" '/^@@HYGIENE@@$/{while ((getline l < f) > 0) print l; next} 1' "$ARCH_INSTALL_IN" > "$ARCH_INSTALL"
+grep -q 'huginn-uninstall-hygiene' "$ARCH_INSTALL" || { echo "REFUSING: the rendered .install carries no hygiene block" >&2; exit 1; }
+sh -n "$ARCH_INSTALL" || { echo "REFUSING: the rendered .install does not parse" >&2; exit 1; }
+# Depends: the deb's dpkg-shlibdeps list translated to Arch names, minus what the jlink
+# runtime bundles itself (libjpeg, lcms, giflib, harfbuzz live inside lib/runtime).
+# nodejs is the deb's Recommends; libnotify is what LibnotifyNotifier shells out to.
+scripts/package-arch.sh \
+  --app-image "$APP_IMAGE" --name huginn-desktop-kt --version "$VERSION" --release 1 \
+  --desc "Huginn desktop client" --url "https://github.com/silencelen/huginn" \
+  --license MIT --license-file ../LICENSE --display-name "Huginn" --categories "Development;Utility;" \
+  --depends "alsa-lib fontconfig freetype2 libglvnd libx11 libxext libxi libxrender libxtst zlib gcc-libs glibc hicolor-icon-theme xdg-utils" \
+  --optdepend "nodejs: the device runner and local-AI features (huginn device on / huginn local on)" \
+  --optdepend "libnotify: desktop notifications through notify-send" \
+  --install "$ARCH_INSTALL" --packager "silencelen <88355883+silencelen@users.noreply.github.com>" \
+  --out "$ARCH_DIR" >> "$LOG" 2>&1 || { tail -30 "$LOG"; echo "REFUSING: package-arch.sh failed (full log: $LOG)" >&2; exit 1; }
+PKG_SRC="$ARCH_DIR/$PKG"
+[ -f "$PKG_SRC" ] || { echo "REFUSING: $PKG_SRC was not produced" >&2; exit 1; }
+# ARTIFACTS, never exit codes — read the scriptlet and the launcher back out of the package.
+bsdtar -xOf "$PKG_SRC" .INSTALL | grep -q 'huginn-uninstall-hygiene' || {
+  echo "REFUSING: $PKG carries no purge hygiene in its .INSTALL" >&2; exit 1; }
+bsdtar -tf "$PKG_SRC" | grep -qx 'opt/huginn-desktop-kt/bin/huginn-desktop-kt' || {
+  echo "REFUSING: $PKG carries no launcher" >&2; exit 1; }
+bsdtar -tf "$PKG_SRC" | grep -qx 'usr/share/applications/huginn-desktop-kt.desktop' || {
+  echo "REFUSING: $PKG carries no .desktop entry" >&2; exit 1; }
+echo "  $PKG $(stat -c %s "$PKG_SRC") bytes ($(bsdtar -xOf "$PKG_SRC" .PKGINFO | grep -c '^depend = ') depends, purge via HUGINN_DESKTOP_PURGE=1)"
 
 # ----------------------------------------------------------- 3. windows build
 if [ "$LINUX_ONLY" = 0 ]; then
@@ -743,11 +714,12 @@ fi
 echo "[4/7] checksums + manifest"
 rm -rf "$DIST"; mkdir -p "$DIST"
 cp "$DEB_SRC" "$DIST/$DEB"
+cp "$PKG_SRC" "$DIST/$PKG"
 [ "$LINUX_ONLY" = 1 ] || cp "$WIN/out/$EXE" "$DIST/$EXE"
 
-node - "$VERSION" "$DIST" "$LINUX_ONLY" "$EXE" "$DEB" << 'EOF' > "$DIST/manifest.json"
+node - "$VERSION" "$DIST" "$LINUX_ONLY" "$EXE" "$DEB" "$PKG" << 'EOF' > "$DIST/manifest.json"
 const fs = require('fs'), crypto = require('crypto'), path = require('path')
-const [version, dist, linuxOnly, exe, deb] = process.argv.slice(2)
+const [version, dist, linuxOnly, exe, deb, pkg] = process.argv.slice(2)
 const entry = (name) => {
   const p = path.join(dist, name)
   return {
@@ -756,7 +728,9 @@ const entry = (name) => {
     size: fs.statSync(p).size,
   }
 }
-const man = { version, releasedAt: new Date().toISOString(), artifacts: { 'linux-x64': entry(deb) } }
+// Keys are UpdatePlatform's: linux-x64 stays the deb (every installed Debian-family
+// client asks for it), linux-x64-arch is the pacman package Arch-family clients ask for.
+const man = { version, releasedAt: new Date().toISOString(), artifacts: { 'linux-x64': entry(deb), 'linux-x64-arch': entry(pkg) } }
 if (linuxOnly !== '1') man.artifacts['windows-x64'] = entry(exe)
 // The changelog section for THIS version, so the client can show what changed
 // without a second fetch.
@@ -778,7 +752,7 @@ echo "[5/7] stage (artifacts first, manifest last, atomic)"
 # downloads a 404; every move is a rename within the same filesystem so a reader
 # sees the old file or the new one and never a partial.
 install -d -m 755 "$CHANNEL_DIR"
-for f in "$DIST/$DEB" "$DIST/$EXE"; do
+for f in "$DIST/$DEB" "$DIST/$PKG" "$DIST/$EXE"; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
   install -m 644 "$f" "$CHANNEL_DIR/$b.tmp"
@@ -796,8 +770,11 @@ node - "$CHANNEL_DIR" "$KEEP" << 'EOF'
 const fs = require('fs'), path = require('path')
 const [dir, keepStr] = process.argv.slice(2)
 const keep = Number(keepStr)
-// Both shapes: Huginn-Desktop-Setup-0.1.0.exe and huginn-desktop-kt_0.1.0-1_amd64.deb
-const VER = /[-_](\d+\.\d+\.\d+)(?:-\d+)?[_.]/
+// All three shapes: Huginn-Desktop-Setup-0.1.0.exe, huginn-desktop-kt_0.1.0-1_amd64.deb
+// and huginn-desktop-kt-0.1.0-1-x86_64.pkg.tar.zst (pacman follows the release with
+// `-<arch>`, hence the `-` in the closing class — without it the Arch files matched
+// nothing and would never have been pruned).
+const VER = /[-_](\d+\.\d+\.\d+)(?:-\d+)?[_.-]/
 // The version a file BELONGS TO, or null. Deciding by `name.includes(version)`
 // instead is a substring bug waiting for the first double-digit major: "1.0.0"
 // is a substring of "11.0.0", so pruning 1.0.0 would delete 11.0.0's installer
@@ -820,7 +797,7 @@ TOKEN=$(cat "$TOKEN_FILE")
 SERVED=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL$FEED/manifest" \
   | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
 [ "$SERVED" = "$VERSION" ] || { echo "FAIL: served manifest says '$SERVED'" >&2; exit 1; }
-for f in "$DIST/$DEB" "$DIST/$EXE"; do
+for f in "$DIST/$DEB" "$DIST/$PKG" "$DIST/$EXE"; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
   LEN=$(curl -sf -o /dev/null -w '%{size_download}' \
@@ -848,7 +825,8 @@ if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   # unconditionally and github-release.sh refuses a missing artifact — so a
   # --linux-only run hard-failed HERE, after the live channel had already been updated.
   GH_ARTIFACTS=("$CHANNEL_DIR/manifest.json#Release manifest (per-artifact sha256)"
-                "$CHANNEL_DIR/$DEB#Linux .deb (amd64)")
+                "$CHANNEL_DIR/$DEB#Linux .deb (Debian/Ubuntu, amd64)"
+                "$CHANNEL_DIR/$PKG#Linux pacman package (Arch/Omarchy, x86_64)")
   [ "$LINUX_ONLY" = 1 ] || GH_ARTIFACTS+=("$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)")
   ../scripts/github-release.sh desktop "$VERSION" "${GH_ARTIFACTS[@]}" \
     || { echo "FAIL: GitHub release desktop-v$VERSION did not publish — the updater fetches from it" >&2; exit 1; }
@@ -863,14 +841,19 @@ if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   #
   # NEVER `gradle | tail` on a gate: the pipe's exit status is the LAST command's,
   # so a failing build reads as green. Redirect, then read the code.
-  set +e
-  $GRADLE -q :app-desktop:updaterProbe \
-    --args="--current 0.0.0 --expect $VERSION --cache-dir $BUILD/probe-cache" \
-    > "$LOG.probe" 2>&1
-  PROBE_RC=$?
-  set -e
-  sed 's/^/  /' "$LOG.probe"; cat "$LOG.probe" >> "$LOG"
-  [ "$PROBE_RC" = 0 ] || { echo "FAIL: the updater could not fetch and verify $VERSION from GitHub" >&2; exit 1; }
+  # Once per Linux package family: this box is Debian-family, so the first run proves
+  # the deb path as a real client would; the second names the Arch key explicitly, which
+  # is what an Omarchy client resolves to, and proves the pacman artifact the same way.
+  for plat in "" linux-x64-arch; do
+    set +e
+    $GRADLE -q :app-desktop:updaterProbe \
+      --args="--current 0.0.0 --expect $VERSION --cache-dir $BUILD/probe-cache${plat:+ --platform $plat}" \
+      > "$LOG.probe" 2>&1
+    PROBE_RC=$?
+    set -e
+    sed 's/^/  /' "$LOG.probe"; cat "$LOG.probe" >> "$LOG"
+    [ "$PROBE_RC" = 0 ] || { echo "FAIL: the updater could not fetch and verify $VERSION${plat:+ ($plat)} from GitHub" >&2; exit 1; }
+  done
 fi
 
 echo "== $VERSION published: GitHub desktop-v$VERSION (updater source) + $BASE_URL$FEED (0.5.x transition) =="

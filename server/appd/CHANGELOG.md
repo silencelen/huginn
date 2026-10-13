@@ -9,6 +9,11 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## Unreleased
+
+- `/v1/desktop-kt`: the Arch Linux package (`*.pkg.tar.zst`) is served as `application/zstd`
+  (it already passed the name gate; it was falling through to octet-stream).
+
 ## 3.11.0 — 2026-10-12
 
 ### Security

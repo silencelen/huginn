@@ -35,9 +35,10 @@ sealed interface UpdateState {
     }
 
     /**
-     * Verified and on disk. [file] is an installer on Windows and a `.deb` on
-     * Linux; [installable] says whether this client can do anything with it
-     * beyond telling the user where it is.
+     * Verified and on disk. [file] is an installer on Windows and a package on
+     * Linux — a `.deb` on the Debian family, a pacman `.pkg.tar.zst` on the Arch
+     * family (see [UpdatePlatform]); [installable] says whether this client can
+     * do anything with it beyond telling the user where it is.
      */
     data class Ready(
         val version: String,
@@ -190,9 +191,9 @@ class DesktopUpdater(
             version = manifest.version,
             file = dest,
             notes = manifest.notes,
-            // Linux gets a .deb and a sentence: installing it needs root, and an
-            // app that asks for a password to update itself is an app teaching
-            // the owner to type one into whatever asks.
+            // Linux gets a package and a sentence: installing it (dpkg or pacman)
+            // needs root, and an app that asks for a password to update itself is
+            // an app teaching the owner to type one into whatever asks.
             installable = isWindows && artifact.file.endsWith(".exe"),
         )
 

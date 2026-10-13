@@ -711,7 +711,7 @@ function _Huginn-HelpBody {
   huginn usage <when>         shortcut date range: today | yesterday | week | month
                                 e.g. huginn usage today | huginn usage week session
   huginn desktop              download links for the latest Huginn Desktop build
-  huginn desktop win|linux    just that platform's url, bare, for scripting
+  huginn desktop win|linux|arch   just that platform's url, bare, for scripting
   huginn update               self-update this client from the repo ($script:HUGINN_REPO);
                               without gh, from the PINNED $(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }) mirror
                               (never `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }) - the box
@@ -1093,9 +1093,10 @@ function huginn {
       { $_ -in '', 'both', 'all' }              { ''; break }
       { $_ -in 'win', 'windows', 'exe' }        { 'windows-x64'; break }
       { $_ -in 'linux', 'deb', 'debian', 'ubuntu' } { 'linux-x64'; break }
+      { $_ -in 'arch', 'pacman', 'omarchy' }         { 'linux-x64-arch'; break }
       default { 'BAD' }
     }
-    if ($want -eq 'BAD') { _Huginn-Fail "usage: huginn desktop [windows|linux]" }
+    if ($want -eq 'BAD') { _Huginn-Fail "usage: huginn desktop [windows|linux|arch]" }
     $rel = _Huginn-DesktopRelease
     if (-not $rel) {
       _Huginn-Fail ("huginn: could not read the desktop release feed (offline, or GitHub rate-limited this IP).`n" +
@@ -1118,10 +1119,10 @@ function huginn {
     Write-Host ""
     Write-Host "  Huginn Desktop $($rel.manifest.version)   ($($rel.tag))"
     Write-Host ""
-    foreach ($p in @('windows-x64', 'linux-x64')) {
+    foreach ($p in @('windows-x64', 'linux-x64', 'linux-x64-arch')) {
       $a = $arts.$p
       if (-not $a) { continue }
-      $label = if ($p -eq 'windows-x64') { 'Windows' } else { 'Linux  ' }
+      $label = switch ($p) { 'windows-x64' { 'Windows' } 'linux-x64' { 'Debian ' } default { 'Arch   ' } }
       $mark  = if ($p -eq $here) { '   <- this machine' } else { '' }
       Write-Host "  $label  $base/$($a.file)$mark"
       Write-Host ("           {0,6:N1} MB   sha256 {1}..." -f ($a.size / 1MB), $a.sha256.Substring(0, 16)) -ForegroundColor DarkGray
@@ -1131,7 +1132,8 @@ function huginn {
       Write-Host "  install:  run the .exe (per-user NSIS installer, no admin needed)"
     } elseif ($here -eq 'linux-x64') {
       $deb = $arts.'linux-x64'.file
-      Write-Host "  install:  curl -fLO $base/$deb && sudo dpkg -i $deb"
+      Write-Host "  install:  curl -fLO $base/$deb && sudo apt install ./$deb"
+      if ($arts.'linux-x64-arch') { Write-Host "  (Arch:    curl -fLO $base/$($arts.'linux-x64-arch'.file) && sudo pacman -U $($arts.'linux-x64-arch'.file))" }
     } else {
       Write-Host "  (no desktop build for this machine - these links are for your laptop)"
     }

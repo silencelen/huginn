@@ -1,0 +1,34 @@
+# pacman install scriptlet for huginn-desktop-kt — a TEMPLATE. mobile/scripts/release-desktop.sh
+# replaces the @@HYGIENE@@ line with packaging/linux/uninstall-hygiene.sh, the very block the
+# .deb runs from its postrm on purge, and ships the result as the package's .INSTALL.
+#
+# pacman has no "purge". `pacman -R` keeps per-user files, exactly like `apt remove`, and that
+# is the default here too: nothing under $HOME is touched by a plain remove. The deb's purge
+# behaviour — retire the device row on the daemon FIRST (it needs the token that is about to
+# be deleted), then delete the per-user settings, cache, local-tier files and user units — is
+# reachable through ONE environment flag, read by pre_remove while the package's files and
+# this scriptlet still exist:
+#
+#     sudo HUGINN_DESKTOP_PURGE=1 pacman -R huginn-desktop-kt
+#
+# libalpm runs scriptlets with the caller's environment (fork + execv, nothing scrubbed);
+# a probe package on an Omarchy box confirmed the flag arrives (2026-10-13).
+# Everything below is POSIX sh, defensive by construction, and exits 0 unconditionally —
+# a scriptlet that fails is a package pacman reports as broken, over housekeeping.
+
+pre_remove() {
+  if [ "${HUGINN_DESKTOP_PURGE:-}" = 1 ]; then
+    set -- purge
+@@HYGIENE@@
+  fi
+  return 0
+}
+
+post_remove() {
+  if [ "${HUGINN_DESKTOP_PURGE:-}" != 1 ]; then
+    echo "huginn-desktop-kt: per-user settings, cache and the device enrolment were KEPT (as 'apt remove' would)."
+    echo "  Reinstall to pick up where you left off, or to unenrol this device and delete them too:"
+    echo "    sudo HUGINN_DESKTOP_PURGE=1 pacman -R huginn-desktop-kt"
+  fi
+  return 0
+}

@@ -29,6 +29,24 @@ class UpdatePlatformTest {
         assertNull(UpdatePlatform.current("Mac OS X", "aarch64"))
         assertNull(UpdatePlatform.current("Linux", "aarch64"))
     }
+
+    @Test
+    fun `linux splits into the deb and the pacman package by os-release lineage`() {
+        // Omarchy (the owner's laptop) says it is LIKE arch, not that it IS arch.
+        val omarchy = "NAME=\"Omarchy\"\nPRETTY_NAME=\"Omarchy\"\nID=omarchy\nID_LIKE=arch\nBUILD_ID=\"4.0.4\"\n"
+        assertEquals("linux-x64-arch", UpdatePlatform.current("Linux", "amd64", omarchy))
+        assertEquals("linux-x64-arch", UpdatePlatform.current("Linux", "x86_64", "ID=arch\nID_LIKE=\n"))
+        assertEquals("linux-x64-arch", UpdatePlatform.current("Linux", "amd64", "ID=manjaro\nID_LIKE=\"arch\"\n"))
+        // Debian-family and unknown stay on the deb, exactly as before the key existed.
+        val ubuntu = "PRETTY_NAME=\"Ubuntu 24.04 LTS\"\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n"
+        assertEquals("linux-x64", UpdatePlatform.current("Linux", "amd64", ubuntu))
+        assertEquals("linux-x64", UpdatePlatform.current("Linux", "amd64", null))
+        assertEquals("linux-x64", UpdatePlatform.current("Linux", "amd64", ""))
+        // Lineage is read, not substring-matched: "archaic" is not arch; and Windows ignores it.
+        assertEquals("linux-x64", UpdatePlatform.current("Linux", "amd64", "ID=archaic\nID_LIKE=debian\n"))
+        assertEquals("windows-x64", UpdatePlatform.current("Windows 11", "amd64", omarchy))
+        assertNull(UpdatePlatform.current("Linux", "aarch64", omarchy))
+    }
 }
 
 class Sha256Test {

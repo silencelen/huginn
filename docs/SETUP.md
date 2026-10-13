@@ -78,7 +78,9 @@ By default it binds the host's **Tailscale address** on port 8787 (override with
 Then the clients: build the **Android app** with `mobile/scripts/build.sh` (or
 `ship.sh` if you run a self-hosted app store), and the **Windows/Linux desktop app**
 with `mobile/scripts/release-desktop.sh` — both build on a Linux host, the Windows
-installer included. Details, requirements, and what the apps do:
+installer included, and the Linux side comes out as BOTH a `.deb` (Debian/Ubuntu) and a
+pacman package (Arch/Omarchy), from one app-image. `huginn desktop` prints the links for
+the machine you run it on. Details, requirements, and what the apps do:
 [`../mobile/README.md`](../mobile/README.md).
 
 ## Verify
@@ -98,5 +100,8 @@ It unenrols **before** it deletes — the row can only be retired with the token
 about to go — and prints what it removed and what it deliberately left. Details, including
 why your SSH key survives by default: [`USAGE.md`](USAGE.md#uninstalling).
 
-The desktop app is removed the usual way for its platform (Programs and Features, or
-`apt purge huginn-desktop-kt`), and its uninstaller does the same unenrol-then-delete.
+The desktop app is removed the usual way for its platform (Programs and Features,
+`apt purge huginn-desktop-kt`, or on Arch `sudo HUGINN_DESKTOP_PURGE=1 pacman -R
+huginn-desktop-kt` — pacman has no purge, so the flag is what asks for the unenrol-then-delete;
+a plain `pacman -R` keeps your settings like `apt remove` does), and its uninstaller does
+the same unenrol-then-delete.

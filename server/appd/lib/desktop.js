@@ -27,7 +27,8 @@ const path = require('path');
 
 // Valid by construction — no separator can appear, so no traversal exists.
 // Artifact names are short ASCII (Huginn-Desktop-Setup-0.1.0.exe,
-// huginn-desktop-kt_0.1.0-1_amd64.deb, manifest.json).
+// huginn-desktop-kt_0.1.0-1_amd64.deb, huginn-desktop-kt_0.1.0-1-x86_64.pkg.tar.zst,
+// manifest.json).
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,80}$/;
 
 const CONTENT_TYPES = {
@@ -37,6 +38,7 @@ const CONTENT_TYPES = {
   '.exe': 'application/octet-stream',
   '.AppImage': 'application/octet-stream',
   '.deb': 'application/octet-stream',
+  '.zst': 'application/zstd',   // the Arch package (<name>-<ver>-<rel>-x86_64.pkg.tar.zst)
   '.zip': 'application/zip',
   '.blockmap': 'application/octet-stream',
 };

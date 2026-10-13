@@ -1,5 +1,19 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+### Added
+- **An Arch Linux package beside the `.deb`.** `release-desktop.sh` now also emits
+  `huginn-desktop-kt-<ver>-1-x86_64.pkg.tar.zst` (pacman; `scripts/package-arch.sh` repacks
+  the same app-image, no makepkg or Arch box needed) and publishes it as the manifest's
+  `linux-x64-arch` artifact. The updater reads `/etc/os-release` and asks for the pacman
+  package on Arch-family distributions (Arch, Omarchy, Manjaro…) and the `.deb` everywhere
+  else; Settings shows the one `sudo pacman -U` / `sudo apt install` line that finishes the
+  job. `pacman -R` keeps per-user settings like `apt remove`; the deb's purge behaviour
+  (unenrol the device, delete settings/cache/local-tier files) is
+  `sudo HUGINN_DESKTOP_PURGE=1 pacman -R huginn-desktop-kt`. The purge block itself moved to
+  `packaging/linux/uninstall-hygiene.sh`, one source for both package families.
+
 ## 1.11.0
 
 ### Security

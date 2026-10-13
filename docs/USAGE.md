@@ -23,7 +23,7 @@
 | `huginn local [status\|plan\|on\|off\|update\|persist\|doctor\|unit]` | this machine as a **local-AI serving** machine — see [`LOCAL-TIER.md`](LOCAL-TIER.md) |
 | `huginn llm "prompt"` | one question answered by the local tier (a serving machine's model), never Claude |
 | `huginn projects` | the clusters of sessions on this host, and who is waiting — see [Projects](#projects) |
-| `huginn desktop [windows\|linux]` | download links for the latest Huginn Desktop build; with a platform, the bare URL for scripting |
+| `huginn desktop [windows\|linux\|arch]` | download links for the latest Huginn Desktop build (Windows installer, Debian `.deb`, Arch pacman package); with a platform, the bare URL for scripting. On Linux it marks the package family this machine is (os-release `ID`/`ID_LIKE`) |
 | `huginn -p "question"` | one-shot **headless** query — reads files; **not a sandbox**, see [Headless one-shots](#headless-one-shots) |
 | `huginn -y "task"` | one-shot that also grants the mutating tools (bash / files / web) |
 | `huginn usage [args]` / `cost` | Claude Code token/cost report ([ccusage]) — e.g. `usage monthly`, `session`, `blocks --live` |

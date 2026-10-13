@@ -44,12 +44,14 @@ test('content types map by extension, octet-stream otherwise', () => {
   assert.equal(contentTypeFor('Huginn-Setup-0.1.0.exe'), 'application/octet-stream');
   assert.equal(contentTypeFor('huginn-desktop-0.1.0.AppImage'), 'application/octet-stream');
   assert.equal(contentTypeFor('weird.xyz'), 'application/octet-stream');
+  assert.equal(contentTypeFor('huginn-desktop-kt-1.12.0-1-x86_64.pkg.tar.zst'), 'application/zstd');
 });
 
 test('the Compose client\'s artifact names pass', () => {
   // /v1/desktop-kt serves jpackage/NSIS output and Compose's own packageDeb.
   assert.ok(validName('Huginn-Desktop-Setup-0.1.0.exe'));
   assert.ok(validName('huginn-desktop-kt_0.1.0-1_amd64.deb'));
+  assert.ok(validName('huginn-desktop-kt-0.1.0-1-x86_64.pkg.tar.zst'));
 });
 
 test('manifest reads back, and absence is null not a throw', () => {

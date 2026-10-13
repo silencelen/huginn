@@ -8,6 +8,15 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `huginn desktop arch` (also `pacman`, `omarchy`): the bare URL of the desktop app's Arch
+  Linux pacman package, next to `windows` and `linux` (the `.deb`). The listing shows all
+  three, marks the package family this machine is from os-release `ID`/`ID_LIKE` (Omarchy
+  reports `ID_LIKE=arch`), and prints the matching `sudo pacman -U` / `sudo apt install`
+  line. PowerShell client: same keywords, Arch line listed under the Linux install hint.
+
 ## [1.7.0] - 2026-10-12
 
 ### Security

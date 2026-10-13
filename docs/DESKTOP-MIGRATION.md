@@ -260,7 +260,11 @@ that undoes itself.
      `jpackage.exe` under wine builds the app-image, and Linux `makensis` wraps
      it. The jlink module list is READ OUT of the Linux runtime image's
      `release` file rather than maintained a second time.
-   - **Linux**: Compose's own `packageDeb`.
+   - **Linux**: Compose's own `packageDeb` for the Debian family, and for the Arch
+     family `scripts/package-arch.sh` repacks the `createDistributable` app-image
+     (the identical `/opt/huginn-desktop-kt` tree) into a pacman `.pkg.tar.zst` —
+     jpackage has no pacman type, and makepkg refuses to run as root, so the
+     package is written with `bsdtar` in makepkg's own recipe.
    - **Channel**: `/v1/desktop-kt`, served from `DATA_DIR/desktop-kt`, which the
      Electron channel's code cannot reach. `/v1/desktop` is untouched, and the
      release script asserts that on every run.

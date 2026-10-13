@@ -658,10 +658,19 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         }
     }
     (state as? UpdateState.Ready)?.takeIf { !it.installable }?.let {
+        // The one command that finishes the job, by package family — the file's own
+        // extension says which: the deb for Debian/Ubuntu, the pacman package for
+        // Arch/Omarchy. Anything else gets the old sentence.
+        val path = it.file.absolutePath
+        val how = when {
+            path.endsWith(".pkg.tar.zst") -> ": sudo pacman -U $path"
+            path.endsWith(".deb") -> ": sudo apt install $path"
+            else -> " on this platform"
+        }
         Muted(
-            "downloaded to ${it.file.absolutePath} — install it by hand on this platform",
+            "downloaded to $path — install it by hand$how",
             Modifier.padding(top = 4.dp, start = 8.dp),
-            maxLines = 2,
+            maxLines = 3,
         )
     }
 

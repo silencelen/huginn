@@ -130,8 +130,9 @@ talking to `huginn-appd` — a zero-dependency Node daemon on the host — over 
   milliseconds into deep Doze), an alarm fallback, and optional Telegram from the host;
   stale alerts take themselves down when you answer elsewhere.
 - **Desktop niceties** — tray with live state, `Ctrl+K` palette, keyboard-first
-  navigation, self-updating installers for Windows and a `.deb` for Linux, all built on
-  a Linux host (Windows installer included — jpackage under wine, no Windows box needed).
+  navigation, self-updating installers for Windows and native Linux packages — a `.deb`
+  for Debian/Ubuntu and a pacman package for Arch/Omarchy — all built on one Linux host
+  (Windows installer included — jpackage under wine, no Windows box needed).
 
 Start at [`mobile/README.md`](mobile/README.md) for what they do and how to build them,
 and read [`docs/SECURITY.md`](docs/SECURITY.md) **before** deploying the daemon — it is a
