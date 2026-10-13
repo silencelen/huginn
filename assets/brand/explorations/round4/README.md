@@ -18,3 +18,19 @@ looking at the system rather than at swatches.
 Whichever ground wins, the tiers, the state ladder, the ANSI slot pins and the
 terminal layer carry over unchanged. The round-4 chooser records the picks;
 round 5 is the type direction and the terminal letterform on the chosen ground.
+
+## Decided (round-4 chooser, 2026-10-13)
+
+| question | pick |
+|---|---|
+| Palette ground | `color-04-moss-heather` |
+| What needs-you means | the accent lit up (`stateAttention`) |
+| Tray cue | tinted tile + badge dot |
+| State glyph for needs-you | `▲` (`!` in 7-bit); error therefore takes `×` (`x`), set in `color/build/spec.py` `STATE_GLYPH` and regenerated into every direction's `tokens.json` |
+
+The recommendation above was 01; the owner chose the direction they asked for.
+The three trade-offs in `color/color-04-moss-heather/README.md` (green means
+working and success; the heather never reaches the tray; the lit moss is a
+highlighter) are the open refinements for the brand book. `▲` is not in
+JetBrains Mono's geometric set, so the apps' terminal view will draw it from a
+fallback font; the apps themselves draw dots, not glyphs.

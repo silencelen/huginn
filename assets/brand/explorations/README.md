@@ -33,11 +33,11 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | Round 2 pick | `r2-05-fold` for the mark; `r2-01-snapped`'s text art for the CLI; the glyph tile gains the wing fold | round-2 chooser, 2026-10-13 |
 | Round 3 | the fold raven redrawn upright on Snapped's lattice, three glyph constructions with the fold, Snapped's text art proved to be this bird's own raster | [`round3/fold-system/`](round3/fold-system/); the round-3 chooser records the pick |
 | **The mark, decided** | the upright fold raven, slimmed (`round3/fold-system/mark.svg`, 54 × 51); the glyph tile is `glyph-c.svg`, the whole mark in negative; the CLI art is Snapped's 24 × 8 (`ascii-7bit.txt` / `ascii-halfblock.txt`), the 48 × 16 fold art for the README and host splash | round-3 chooser, 2026-10-13: "approved, i like this version better" |
+| **Colour, decided** | `color-04-moss-heather` (evergreen accent on dark grey, heather second voice; added at the owner's request and proved by the same rules); needs-you = the accent lit up (`stateAttention`, not error); tray needs-you = tinted tile + badge dot; needs-you glyph = `▲` / `!`, so error takes `×` / `x` | round-4 chooser, 2026-10-13 |
 
-Still open, in order: what attention means and which accent carries it; the
-palette ground; the type direction; the terminal letterform; the one-row
-raven's 7-bit twin; the motion set. All of these now build on
-`round3/fold-system/`.
+Still open, in order: the type direction; the terminal letterform; the one-row
+raven and its 7-bit twin; the hero form; the motion set. All of these now build
+on `round3/fold-system/` and `color/color-04-moss-heather/`.
 
 ## How to review
 
@@ -69,7 +69,8 @@ are single-width; one has to win.
 Colour, on the decided mark: [`round4/README.md`](round4/README.md) lists the
 four questions (palette ground, what needs-you means, the tray cue, the state
 glyph) with the recommendation; the round-4 chooser "The Raven in Colour"
-shows the raven on each direction's real surfaces and records the picks.
+showed the raven on each direction's real surfaces. **Decided:** Moss & Heather,
+the lit accent for needs-you, tint plus badge in the tray, the triangle glyph.
 
 ## Round 3
 

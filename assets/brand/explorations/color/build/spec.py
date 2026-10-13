@@ -102,8 +102,10 @@ SGR = {'black': 30, 'red': 31, 'green': 32, 'yellow': 33, 'blue': 34, 'magenta':
 GLYPH = {'unicode': '\u25e2\u2586\u2588\u2580', 'block': '\u2597\u2586\u2588\u2580', 'ascii': '(o)==-'}
 # Where every state surface in the product takes its colour from (root README "state mapping").
 # glyphs: single-width Unicode first, 7-bit ASCII second; the app draws dots, not glyphs.
-STATE_GLYPH = {'stateWorking': ('\u25cf', '*'), 'stateAttention': ('\u25c6', '!'), 'stateIdle': ('\u25cb', 'o'),
-               'stateSuccess': ('\u25a0', '+'), 'stateError': ('\u25b2', 'x'), 'stateInfo': ('\u25b8', '>'),
+# Round-4 decision (owner, 2026-10-13): needs-you is the triangle, so error takes the multiplication
+# sign (U+00D7, Latin-1, single width everywhere; its 7-bit twin was already x).
+STATE_GLYPH = {'stateWorking': ('\u25cf', '*'), 'stateAttention': ('\u25b2', '!'), 'stateIdle': ('\u25cb', 'o'),
+               'stateSuccess': ('\u25a0', '+'), 'stateError': ('\u00d7', 'x'), 'stateInfo': ('\u25b8', '>'),
                'outline': ('\u25e6', '-')}
 
 ANSI_KEYS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
