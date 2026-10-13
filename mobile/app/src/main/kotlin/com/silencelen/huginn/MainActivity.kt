@@ -2120,24 +2120,28 @@ fun HuginnApp(
                 if (barShown) {
                     NavigationBar {
                         NavigationBarItem(
+                            colors = huginnNavColors(),
                             selected = section == 0,
                             onClick = { onTab(0) },
                             icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
                             label = { Text("Chats") },
                         )
                         NavigationBarItem(
+                            colors = huginnNavColors(),
                             selected = section == 1,
                             onClick = { onTab(1) },
                             icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
                             label = { Text("Sessions") },
                         )
                         NavigationBarItem(
+                            colors = huginnNavColors(),
                             selected = section == 3,
                             onClick = { onTab(3) },
                             icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
                             label = { Text("Rounds") },
                         )
                         NavigationBarItem(
+                            colors = huginnNavColors(),
                             selected = section == 2,
                             onClick = { onTab(2) },
                             icon = { StatusIcon(sessionUsage) },
@@ -2201,24 +2205,28 @@ fun HuginnApp(
                         ) {
                             Spacer(Modifier.height(8.dp))
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 0,
                                 onClick = { onTab(0) },
                                 icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null) },
                                 label = { Text("Chats") },
                             )
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 1,
                                 onClick = { onTab(1) },
                                 icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
                                 label = { Text("Sessions") },
                             )
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 3,
                                 onClick = { onTab(3) },
                                 icon = { Icon(Icons.Filled.Schedule, contentDescription = null) },
                                 label = { Text("Rounds") },
                             )
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 2,
                                 onClick = { onTab(2) },
                                 icon = { StatusIcon(sessionUsage) },
@@ -2237,12 +2245,14 @@ fun HuginnApp(
                             // bar stays four, because giving this a bar slot would
                             // cost one of the four a place it earns every day.
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 6,
                                 onClick = { vm.refreshDevices(); dest = Dest.Devices },
                                 icon = { Icon(Icons.Filled.Devices, contentDescription = "Devices") },
                                 label = { Text("Devices") },
                             )
                             NavigationRailItem(
+                                colors = huginnRailColors(),
                                 selected = section == 4,
                                 onClick = { dest = Dest.Settings },
                                 icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
@@ -2508,3 +2518,22 @@ private fun noChatOpenHint(listShut: Boolean) =
 private fun noSessionOpenHint(listShut: Boolean) =
     if (listShut) "The list is hidden — the notch at the top left brings it back."
     else "Pick one on the left."
+
+/**
+ * The selected tab sits on `primaryContainer`, the tint a selected row takes
+ * (round 7, Q4, 2026-10-13). Material's default is `secondaryContainer`, which
+ * this theme never defines, so the bar used to show the library's own violet.
+ */
+@Composable
+private fun huginnNavColors() = androidx.compose.material3.NavigationBarItemDefaults.colors(
+    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+)
+
+@Composable
+private fun huginnRailColors() = androidx.compose.material3.NavigationRailItemDefaults.colors(
+    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+)

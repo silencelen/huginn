@@ -31,18 +31,18 @@ onError                    error                    4.5   #2B0C10 on #EE757D: 6.
 onErrorContainer           errorContainer           4.5   #F8C5CA on #4C1C22: 9.24:1  AAA
 stateIdle                  background               4.5   #848C87 on #141615: 5.26:1  AA
 stateWorking               background               4.5   #7CB98E on #141615: 7.95:1  AAA
-stateAttention             background               4.5   #E4E2A8 on #141615: 13.63:1  AAA
-stateSuccess               background               4.5   #C4CF7A on #141615: 10.87:1  AAA
-stateInfo                  background               4.5   #86B5E6 on #141615: 8.45:1  AAA
+stateAttention             background               4.5   #E8D07E on #141615: 11.91:1  AAA
+stateSuccess               background               4.5   #80CFC9 on #141615: 10.12:1  AAA
+stateInfo                  background               4.5   #B49CDB on #141615: 7.55:1  AAA
 inkMark                    boneTile                 4.5   #141615 on #E2E6E1: 14.40:1  AAA
 outline                    background               3.0   #747D77 on #141615: 4.28:1  AA-large
 outline                    surfaceContainerHigh     3.0   #747D77 on #2D3230: 3.07:1  AA-large
 stateIdle                  surfaceContainerHigh     3.0   #848C87 on #2D3230: 3.78:1  AA-large
 stateWorking               surfaceContainerHigh     3.0   #7CB98E on #2D3230: 5.70:1  AA
-stateAttention             surfaceContainerHigh     3.0   #E4E2A8 on #2D3230: 9.78:1  AAA
-stateSuccess               surfaceContainerHigh     3.0   #C4CF7A on #2D3230: 7.79:1  AAA
+stateAttention             surfaceContainerHigh     3.0   #E8D07E on #2D3230: 8.54:1  AAA
+stateSuccess               surfaceContainerHigh     3.0   #80CFC9 on #2D3230: 7.26:1  AAA
 stateError                 surfaceContainerHigh     3.0   #EE757D on #2D3230: 4.64:1  AA
-stateInfo                  surfaceContainerHigh     3.0   #86B5E6 on #2D3230: 6.06:1  AA
+stateInfo                  surfaceContainerHigh     3.0   #B49CDB on #2D3230: 5.41:1  AA
 primary                    surfaceContainerHighest  3.0   #7CB98E on #383E3B: 4.78:1  AA
 syntax.keyword             surfaceContainerLowest   4.5   #C3A8E8 on #0E100F: 9.17:1  AAA
 syntax.string              surfaceContainerLowest   4.5   #9FD3AD on #0E100F: 11.27:1  AAA
@@ -73,25 +73,25 @@ onPrimaryContainer         primaryContainer         4.5   #0A3320 on #CDEAD6: 10
 secondary                  background               4.5   #5B3E8A on #F4F6F3: 7.73:1  AAA
 onSecondary                secondary                4.5   #FFFFFF on #5B3E8A: 8.40:1  AAA
 onSecondaryContainer       secondaryContainer       4.5   #2E1A52 on #E6DCF5: 11.49:1  AAA
-tertiary                   background               4.5   #6E3A7A on #F4F6F3: 7.58:1  AAA
+tertiary                   background               4.5   #5E1E3C on #F4F6F3: 11.19:1  AAA
 error                      background               4.5   #B3262E on #F4F6F3: 5.98:1  AA
 error                      surfaceContainerHigh     4.5   #B3262E on #DFE4DF: 5.04:1  AA
 onError                    error                    4.5   #FFFFFF on #B3262E: 6.49:1  AA
 onErrorContainer           errorContainer           4.5   #5E1418 on #F9DBDC: 10.19:1  AAA
 stateIdle                  background               4.5   #687069 on #F4F6F3: 4.70:1  AA
 stateWorking               background               4.5   #1F5A3A on #F4F6F3: 7.48:1  AAA
-stateAttention             background               4.5   #0F3320 on #F4F6F3: 12.76:1  AAA
-stateSuccess               background               4.5   #4E7A1C on #F4F6F3: 4.68:1  AA
-stateInfo                  background               4.5   #2A5FA5 on #F4F6F3: 5.89:1  AA
+stateAttention             background               4.5   #3D2B05 on #F4F6F3: 12.50:1  AAA
+stateSuccess               background               4.5   #176B66 on #F4F6F3: 5.80:1  AA
+stateInfo                  background               4.5   #5B3E8A on #F4F6F3: 7.73:1  AAA
 inkMark                    boneTile                 4.5   #141615 on #E2E6E1: 14.40:1  AAA
 outline                    background               3.0   #78817B on #F4F6F3: 3.70:1  AA-large
 outline                    surfaceContainerHigh     3.0   #78817B on #DFE4DF: 3.12:1  AA-large
 stateIdle                  surfaceContainerHigh     3.0   #687069 on #DFE4DF: 3.97:1  AA-large
 stateWorking               surfaceContainerHigh     3.0   #1F5A3A on #DFE4DF: 6.31:1  AA
-stateAttention             surfaceContainerHigh     3.0   #0F3320 on #DFE4DF: 10.76:1  AAA
-stateSuccess               surfaceContainerHigh     3.0   #4E7A1C on #DFE4DF: 3.95:1  AA-large
+stateAttention             surfaceContainerHigh     3.0   #3D2B05 on #DFE4DF: 10.54:1  AAA
+stateSuccess               surfaceContainerHigh     3.0   #176B66 on #DFE4DF: 4.89:1  AA
 stateError                 surfaceContainerHigh     3.0   #B3262E on #DFE4DF: 5.04:1  AA
-stateInfo                  surfaceContainerHigh     3.0   #2A5FA5 on #DFE4DF: 4.97:1  AA
+stateInfo                  surfaceContainerHigh     3.0   #5B3E8A on #DFE4DF: 6.52:1  AA
 primary                    surfaceContainerHighest  3.0   #1F5A3A on #D6DCD6: 5.84:1  AA
 syntax.keyword             surfaceContainerLowest   4.5   #5B3E8A on #FFFFFF: 8.40:1  AAA
 syntax.string              surfaceContainerLowest   4.5   #1F5A3A on #FFFFFF: 8.13:1  AAA
@@ -113,9 +113,9 @@ ansi.white                 background               3.0   #C8CDC9 on #141615: 11
 ansi.brightBlack           background               3.0   #747D77 on #141615: 4.28:1  AA-large
 ansi.brightRed             background               3.0   #EE757D on #141615: 6.47:1  AA
 ansi.brightGreen           background               3.0   #C4CF7A on #141615: 10.87:1  AAA
-ansi.brightYellow          background               3.0   #E4E2A8 on #141615: 13.63:1  AAA
+ansi.brightYellow          background               3.0   #E8D07E on #141615: 11.91:1  AAA
 ansi.brightBlue            background               3.0   #86B5E6 on #141615: 8.45:1  AAA
-ansi.brightMagenta         background               3.0   #C3A8E8 on #141615: 8.73:1  AAA
+ansi.brightMagenta         background               3.0   #B49CDB on #141615: 7.55:1  AAA
 ansi.brightCyan            background               3.0   #80CFC9 on #141615: 10.12:1  AAA
 ansi.brightWhite           background               3.0   #E2E6E1 on #141615: 14.40:1  AAA
 
@@ -148,26 +148,26 @@ xterm accent               brightMagenta            3.0   #FF00FF on #000000: 6.
 ## dark
 stateIdle        #848C87  L*= 57.5  hue=142.5  vs background  5.26:1 AA
 stateWorking     #7CB98E  L*= 70.1  hue=137.7  vs background  7.95:1 AAA
-stateAttention   #E4E2A8  L*= 88.8  hue= 58.0  vs background 13.63:1 AAA
-stateSuccess     #C4CF7A  L*= 80.6  hue= 67.8  vs background 10.87:1 AAA
+stateAttention   #E8D07E  L*= 83.8  hue= 46.4  vs background 11.91:1 AAA
+stateSuccess     #80CFC9  L*= 78.1  hue=175.4  vs background 10.12:1 AAA
 stateError       #EE757D  L*= 63.7  hue=356.0  vs background  6.47:1 AA
-stateInfo        #86B5E6  L*= 72.1  hue=210.6  vs background  8.45:1 AAA
+stateInfo        #B49CDB  L*= 68.5  hue=262.9  vs background  7.55:1 AAA
    pairwise (dL* / contrast ratio between the two state colours):
    idle      vs working    dL*= 12.7  1.51:1   (tray pair)
-   idle      vs attention  dL*= 31.3  2.59:1   (tray pair)
-   idle      vs success    dL*= 23.1  2.06:1
+   idle      vs attention  dL*= 26.4  2.26:1   (tray pair)
+   idle      vs success    dL*= 20.7  1.92:1
    idle      vs error      dL*=  6.2  1.23:1
-   idle      vs info       dL*= 14.6  1.61:1
-   working   vs attention  dL*= 18.7  1.71:1   (tray pair)
-   working   vs success    dL*= 10.5  1.37:1
+   idle      vs info       dL*= 11.0  1.43:1
+   working   vs attention  dL*= 13.7  1.50:1   (tray pair)
+   working   vs success    dL*=  8.0  1.27:1
    working   vs error      dL*=  6.5  1.23:1
-   working   vs info       dL*=  2.0  1.06:1
-   attention vs success    dL*=  8.2  1.25:1
-   attention vs error      dL*= 25.1  2.11:1
-   attention vs info       dL*= 16.7  1.61:1
-   success   vs error      dL*= 17.0  1.68:1
-   success   vs info       dL*=  8.5  1.29:1
-   error     vs info       dL*=  8.5  1.31:1
+   working   vs info       dL*=  1.7  1.05:1
+   attention vs success    dL*=  5.7  1.18:1
+   attention vs error      dL*= 20.2  1.84:1
+   attention vs info       dL*= 15.4  1.58:1
+   success   vs error      dL*= 14.5  1.56:1
+   success   vs info       dL*=  9.7  1.34:1
+   error     vs info       dL*=  4.8  1.17:1
    monochrome tray tints:
    idle      onSurface at 45% over background = #717471  L*= 48.5
    working   onSurface at 75% over background = #AEB2AE  L*= 72.2
@@ -176,26 +176,26 @@ stateInfo        #86B5E6  L*= 72.1  hue=210.6  vs background  8.45:1 AAA
 ## light
 stateIdle        #687069  L*= 46.4  hue=127.5  vs background  4.70:1 AA
 stateWorking     #1F5A3A  L*= 33.8  hue=147.5  vs background  7.48:1 AAA
-stateAttention   #0F3320  L*= 18.2  hue=148.3  vs background 12.76:1 AAA
-stateSuccess     #4E7A1C  L*= 46.5  hue= 88.1  vs background  4.68:1 AA
+stateAttention   #3D2B05  L*= 18.9  hue= 40.7  vs background 12.50:1 AAA
+stateSuccess     #176B66  L*= 40.7  hue=176.4  vs background  5.80:1 AA
 stateError       #B3262E  L*= 39.9  hue=356.6  vs background  5.98:1 AA
-stateInfo        #2A5FA5  L*= 40.2  hue=214.1  vs background  5.89:1 AA
+stateInfo        #5B3E8A  L*= 32.9  hue=262.9  vs background  7.73:1 AAA
    pairwise (dL* / contrast ratio between the two state colours):
    idle      vs working    dL*= 12.6  1.59:1   (tray pair)
-   idle      vs attention  dL*= 28.1  2.71:1   (tray pair)
-   idle      vs success    dL*=  0.1  1.00:1
+   idle      vs attention  dL*= 27.4  2.66:1   (tray pair)
+   idle      vs success    dL*=  5.7  1.23:1
    idle      vs error      dL*=  6.5  1.27:1
-   idle      vs info       dL*=  6.1  1.25:1
-   working   vs attention  dL*= 15.5  1.70:1   (tray pair)
-   working   vs success    dL*= 12.7  1.60:1
+   idle      vs info       dL*= 13.5  1.64:1
+   working   vs attention  dL*= 14.9  1.67:1   (tray pair)
+   working   vs success    dL*=  6.9  1.29:1
    working   vs error      dL*=  6.1  1.25:1
-   working   vs info       dL*=  6.4  1.27:1
-   attention vs success    dL*= 28.2  2.72:1
-   attention vs error      dL*= 21.6  2.13:1
-   attention vs info       dL*= 22.0  2.16:1
-   success   vs error      dL*=  6.6  1.28:1
-   success   vs info       dL*=  6.2  1.26:1
-   error     vs info       dL*=  0.4  1.01:1
+   working   vs info       dL*=  0.9  1.03:1
+   attention vs success    dL*= 21.7  2.15:1
+   attention vs error      dL*= 20.9  2.09:1
+   attention vs info       dL*= 14.0  1.62:1
+   success   vs error      dL*=  0.8  1.03:1
+   success   vs info       dL*=  7.7  1.33:1
+   error     vs info       dL*=  6.9  1.29:1
    monochrome tray tints:
    idle      onSurface at 45% over background = #919491  L*= 61.0
    working   onSurface at 75% over background = #505250  L*= 34.6
@@ -204,19 +204,19 @@ stateInfo        #2A5FA5  L*= 40.2  hue=214.1  vs background  5.89:1 AA
 ## 5. ANSI-16 state ladder (L*)
 brightBlack      #747D77  L*= 51.5
 green            #7CB98E  L*= 70.1
-brightYellow     #E4E2A8  L*= 88.8
+brightYellow     #E8D07E  L*= 83.8
 
 ## 6. tertiary vs each state: needs dL* >= 12 or a hue gap >= 60 degrees (neutral states count by L* only)
 dark  tertiary #E6AEC6 vs stateIdle      #848C87  dL*= 19.3  dHue=  0.0
 dark  tertiary #E6AEC6 vs stateWorking   #7CB98E  dL*=  6.7  dHue=163.4
-dark  tertiary #E6AEC6 vs stateAttention #E4E2A8  dL*= 12.0  dHue= 83.7
-dark  tertiary #E6AEC6 vs stateSuccess   #C4CF7A  dL*=  3.8  dHue= 93.5
+dark  tertiary #E6AEC6 vs stateAttention #E8D07E  dL*=  7.1  dHue= 72.1
+dark  tertiary #E6AEC6 vs stateSuccess   #80CFC9  dL*=  1.3  dHue=158.8
 dark  tertiary #E6AEC6 vs stateError     #EE757D  dL*= 13.1  dHue= 21.7
-dark  tertiary #E6AEC6 vs stateInfo      #86B5E6  dL*=  4.7  dHue=123.7
-light tertiary #6E3A7A vs stateIdle      #687069  dL*= 12.9  dHue=  0.0
-light tertiary #6E3A7A vs stateWorking   #1F5A3A  dL*=  0.3  dHue=141.3
-light tertiary #6E3A7A vs stateAttention #0F3320  dL*= 15.2  dHue=140.4
-light tertiary #6E3A7A vs stateSuccess   #4E7A1C  dL*= 13.0  dHue=159.3
-light tertiary #6E3A7A vs stateError     #B3262E  dL*=  6.4  dHue= 67.8
-light tertiary #6E3A7A vs stateInfo      #2A5FA5  dL*=  6.8  dHue= 74.6
+dark  tertiary #E6AEC6 vs stateInfo      #B49CDB  dL*=  8.3  dHue= 71.4
+light tertiary #5E1E3C vs stateIdle      #687069  dL*= 24.0  dHue=  0.0
+light tertiary #5E1E3C vs stateWorking   #1F5A3A  dL*= 11.4  dHue=175.6
+light tertiary #5E1E3C vs stateAttention #3D2B05  dL*=  3.5  dHue= 68.8
+light tertiary #5E1E3C vs stateSuccess   #176B66  dL*= 18.2  dHue=155.4
+light tertiary #5E1E3C vs stateError     #B3262E  dL*= 17.4  dHue= 24.7
+light tertiary #5E1E3C vs stateInfo      #5B3E8A  dL*= 10.5  dHue= 69.0
 

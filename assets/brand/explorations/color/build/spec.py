@@ -315,8 +315,8 @@ DIRECTIONS.append(dict(
         secondary='#B49CDB', onSecondary='#221640', secondaryContainer='#352A52', onSecondaryContainer='#E2D7F5',
         tertiary='#E6AEC6',
         error='#EE757D', onError='#2B0C10', errorContainer='#4C1C22', onErrorContainer='#F8C5CA',
-        stateIdle='#848C87', stateWorking='#7CB98E', stateAttention='#E4E2A8',
-        stateSuccess='#C4CF7A', stateError='#EE757D', stateInfo='#86B5E6',
+        stateIdle='#848C87', stateWorking='#7CB98E', stateAttention='#E8D07E',
+        stateSuccess='#80CFC9', stateError='#EE757D', stateInfo='#B49CDB',
         inkMark='#141615', boneTile='#E2E6E1', accent='#7CB98E',
     ),
     light=dict(
@@ -327,10 +327,10 @@ DIRECTIONS.append(dict(
         outline='#78817B', outlineVariant='#C6CDC8', outlineHairline='#DDE2DE',
         primary='#1F5A3A', onPrimary='#FFFFFF', primaryContainer='#CDEAD6', onPrimaryContainer='#0A3320',
         secondary='#5B3E8A', onSecondary='#FFFFFF', secondaryContainer='#E6DCF5', onSecondaryContainer='#2E1A52',
-        tertiary='#6E3A7A',
+        tertiary='#5E1E3C',
         error='#B3262E', onError='#FFFFFF', errorContainer='#F9DBDC', onErrorContainer='#5E1418',
-        stateIdle='#687069', stateWorking='#1F5A3A', stateAttention='#0F3320',
-        stateSuccess='#4E7A1C', stateError='#B3262E', stateInfo='#2A5FA5',
+        stateIdle='#687069', stateWorking='#1F5A3A', stateAttention='#3D2B05',
+        stateSuccess='#176B66', stateError='#B3262E', stateInfo='#5B3E8A',
         inkMark='#141615', boneTile='#E2E6E1', accent='#1F5A3A',
     ),
     syntax_dark=dict(keyword='#C3A8E8', string='#9FD3AD', number='#E3C58A', comment='#8C958F',
@@ -340,11 +340,14 @@ DIRECTIONS.append(dict(
     ansi=dict(
         black='#3A423E', red='#D65A62', green='#7CB98E', yellow='#D4B872', blue='#6C9BD6',
         magenta='#A98BD6', cyan='#5EB5B0', white='#C8CDC9',
-        brightBlack='#747D77', brightRed='#EE757D', brightGreen='#C4CF7A', brightYellow='#E4E2A8',
-        brightBlue='#86B5E6', brightMagenta='#C3A8E8', brightCyan='#80CFC9', brightWhite='#E2E6E1',
+        brightBlack='#747D77', brightRed='#EE757D', brightGreen='#C4CF7A', brightYellow='#E8D07E',
+        brightBlue='#86B5E6', brightMagenta='#B49CDB', brightCyan='#80CFC9', brightWhite='#E2E6E1',
         foreground='#E2E6E1', background='#141615', cursor='#7CB98E', selection='#2C4035',
     ),
     state_ansi=dict(stateIdle='brightBlack', stateWorking='green', stateAttention='brightYellow',
-                    stateSuccess='brightGreen', stateError='brightRed', stateInfo='brightBlue'),
+                    stateSuccess='brightCyan', stateError='brightRed', stateInfo='brightMagenta'),
     cli=dict(ok='brightGreen', warn='brightYellow', error='brightRed', muted='brightBlack', accent='brightMagenta'),
+    # Round 7 (2026-10-13, on the Fold): success is teal and info is heather, so this palette pins
+    # brightCyan and brightMagenta instead of the global brightGreen / brightBlue.
+    slot_pins=[('brightRed', 'error'), ('brightCyan', 'stateSuccess'), ('brightYellow', 'stateAttention'), ('brightMagenta', 'stateInfo')],
 ))
