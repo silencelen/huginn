@@ -18,9 +18,10 @@ the lot including the previews.
 | [`color-01-ink-bone-gold`](color-01-ink-bone-gold/) | the current palette finished: tiers, outlines, a brand-native state set, terminal; nothing the owner likes moves | [preview](color-01-ink-bone-gold/preview.png), [terminal](color-01-ink-bone-gold/terminal/preview.png) |
 | [`color-02-slate-verdigris`](color-02-slate-verdigris/) | cool departure: slate ground, bone ink, verdigris accent over a bronze secondary - the raven's sheen and a patinated statue | [preview](color-02-slate-verdigris/preview.png), [terminal](color-02-slate-verdigris/terminal/preview.png) |
 | [`color-03-soot-ember`](color-03-soot-ember/) | warm-hot departure: soot ground, one ember accent, oxblood in daylight, olive and ash around it | [preview](color-03-soot-ember/preview.png), [terminal](color-03-soot-ember/terminal/preview.png) |
-| [`terminal/`](terminal/) | the terminal layer explained, the one-row raven, and the three terminal mocks on one sheet | [sheet](terminal/preview.png) |
+| [`color-04-moss-heather`](color-04-moss-heather/) | the owner's round-4 ask: evergreen accent on dark grey, heather purple as the second voice, a pale yellow-green for needs-you; README written by hand, every number from `contrast.txt` | [preview](color-04-moss-heather/preview.png), [terminal](color-04-moss-heather/terminal/preview.png) |
+| [`terminal/`](terminal/) | the terminal layer explained, the one-row raven, and the terminal mocks on one sheet | [sheet](terminal/preview.png) |
 
-## What is common to all three
+## What is common to all four
 
 - **One semantic state system.** `stateIdle` / `stateWorking` / `stateAttention`
   are one family at three lightness steps: a dim neutral, the accent, the
@@ -86,7 +87,7 @@ bold and the word. Only 02 separates `warn` from the *accent* by hue.
 **Motion.** `PulseDot(MaterialTheme.colorScheme.primary)` is the live marker and
 `stateWorking` equals `primary` in every direction, so the breath needs no new
 token. Its 0.35 floor (`WorkViews.kt` `PULSE_ALPHAS`) is decorative: at the
-bottom of the breath the dot is #52442A (2.0:1) in ink-bone-gold, #2E504C (2.0:1) in slate-verdigris, #5D3C26 (1.9:1) in soot-ember
+bottom of the breath the dot is #52442A (2.0:1) in ink-bone-gold, #2E504C (2.0:1) in slate-verdigris, #5D3C26 (1.9:1) in soot-ember, #384F3F (2.0:1) in moss-heather
 over the ground, below any text rule on purpose; the word and the dot's presence
 carry the state, the motion only says "alive". The "Thinking" text fade
 (0.35 -> 1 over 900 ms) follows the same rule. No other brand motion is defined
@@ -137,7 +138,9 @@ the host product's own terracotta family, and its error red can never be pure.
 
 Whichever ground wins, the state system, the tiers, the slot pins, the terminal
 layer and the one-row raven carry over unchanged - they are the deliverable; the
-hue is the choice.
+hue is the choice. `color-04-moss-heather` was added after the round-4 chooser went
+up, at the owner's request; it passes the same rules and is not in the comparison
+table above (its README carries its own numbers).
 
 ## Migration list
 

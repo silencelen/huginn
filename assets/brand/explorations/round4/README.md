@@ -10,7 +10,7 @@ looking at the system rather than at swatches.
 
 | question | options | recommendation |
 |---|---|---|
-| Palette ground | `color-01-ink-bone-gold` · `color-02-slate-verdigris` · `color-03-soot-ember` | 01: the owner's palette is already the product's most distinctive trait and the raven was drawn on it; zero shipped assets change |
+| Palette ground | `color-01-ink-bone-gold` · `color-02-slate-verdigris` · `color-03-soot-ember` · `color-04-moss-heather` (added at the owner's request: evergreens, purples, dark greys) | 01: the owner's palette is already the product's most distinctive trait and the raven was drawn on it; zero shipped assets change |
 | What needs-you means | the accent lit up (new `stateAttention`, the ladder every direction is built on) · error red (today) | lit accent: a question and a failure stop sharing a colour, and the tray ladder survives monochrome |
 | Tray cue for needs-you | tinted tile + badge dot · tint only | tint + badge: two cues, survives a template tray, and the attention pulse already pops the dot |
 | The state glyph for needs-you | `◆` (colour table) · `▲` (ascii table); `!` in 7-bit either way | diamond: it is in JetBrains Mono and leaves the triangle for error |

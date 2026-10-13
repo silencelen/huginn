@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 RENDERS=${RENDERS:-/tmp/claude-0/-home-user-huginn/dc9f86f2-f60d-5445-8434-59f9b7f51183/scratchpad/renders/color}
-DIRS="color-01-ink-bone-gold color-02-slate-verdigris color-03-soot-ember"
+DIRS="color-01-ink-bone-gold color-02-slate-verdigris color-03-soot-ember color-04-moss-heather"
 mkdir -p "$RENDERS" "$RENDERS/tray"
 
 # 1. tokens, sheets, terminal files (refuses if a rule fails), then the READMEs
