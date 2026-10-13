@@ -1,5 +1,7 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.ui.system.HouseMenuItem
+import com.silencelen.huginn.ui.system.HouseMenu
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
@@ -2025,98 +2027,60 @@ fun HuginnApp(
                                 IconButton(onClick = { surfaceMenu = true }) {
                                     Icon(Icons.Filled.MoreVert, contentDescription = "Actions")
                                 }
-                                DropdownMenu(expanded = surfaceMenu, onDismissRequest = { surfaceMenu = false }) {
-                                    when (val d = dest) {
-                                        is Dest.SessionView -> {
+                                // SNAPSHOT ON OPEN. Read live, a URL scrolling on or
+                                // off the pane inserts or removes the FIRST item
+                                // while the menu is open — shifting every item below
+                                // it by a row, so a tap aimed at "Wrap up" lands on
+                                // "Kill session".
+                                val links = remember(surfaceMenu) {
+                                    if (dest is Dest.SessionView) linksOn(vm.screen.value) else emptyList()
+                                }
+                                HouseMenu(
+                                    expanded = surfaceMenu,
+                                    onDismiss = { surfaceMenu = false },
+                                    items = when (val d = dest) {
+                                        is Dest.SessionView -> buildList {
                                             // Getting text back OUT of the pane, which until now
                                             // could be read and nothing else. Links first and only
                                             // when there are some: a wrapped URL is the case a
                                             // person cannot solve any other way — they cannot
                                             // retype 450 characters, and selecting it would hand
                                             // back the rows the terminal broke it into.
-                                            // SNAPSHOT ON OPEN. Read live, a URL
-                                            // scrolling on or off the pane inserts
-                                            // or removes the FIRST item while the
-                                            // menu is open — shifting every item
-                                            // below it by a row, so a tap aimed at
-                                            // "Wrap up" lands on "Kill session".
-                                            val links = remember(surfaceMenu) { linksOn(vm.screen.value) }
                                             if (links.size == 1) {
-                                                DropdownMenuItem(text = { Text("Copy link") },
-                                                    onClick = { surfaceMenu = false; vm.copy(links[0], "link") })
+                                                add(HouseMenuItem("Copy link") { vm.copy(links[0], "link") })
                                             } else if (links.size > 1) {
-                                                DropdownMenuItem(text = { Text("Copy ${links.size} links") },
-                                                    onClick = { surfaceMenu = false; vm.copy(links.joinToString("\n"), "links") })
+                                                add(HouseMenuItem("Copy ${links.size} links") { vm.copy(links.joinToString("\n"), "links") })
                                             }
-                                            DropdownMenuItem(text = { Text("Copy screen") },
-                                                onClick = { surfaceMenu = false; vm.copy(screenText(vm.screen.value), "screen") })
-                                            DropdownMenuItem(text = { Text("Rename session") },
-                                                onClick = { surfaceMenu = false; renameTarget = d.name; renameText = d.name })
-                                            DropdownMenuItem(text = { Text("Fit pane to phone") },
-                                                onClick = { surfaceMenu = false; vm.forceFit() })
-                                            DropdownMenuItem(text = { Text("Interrupt (Esc)") },
-                                                onClick = { surfaceMenu = false; vm.interruptSession(d.name) })
-                                            DropdownMenuItem(text = { Text("Compact context") },
-                                                onClick = { surfaceMenu = false; vm.compactSession(d.name) })
-                                            // The pair, in the two reds — same
-                                            // words and same token as the session
-                                            // list's row menu and the desktop's
-                                            // right-click. See EndVerbs.
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        EndVerbs.soft(1),
-                                                        color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
-                                                    )
-                                                },
-                                                onClick = { surfaceMenu = false; softEndTarget = d.name },
-                                            )
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        EndVerbs.hard(1),
-                                                        color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                                                    )
-                                                },
-                                                onClick = { surfaceMenu = false; killTarget = d.name },
-                                            )
+                                            add(HouseMenuItem("Copy screen") { vm.copy(screenText(vm.screen.value), "screen") })
+                                            add(HouseMenuItem("Rename session") { renameTarget = d.name; renameText = d.name })
+                                            add(HouseMenuItem("Fit pane to phone") { vm.forceFit() })
+                                            add(HouseMenuItem("Interrupt (Esc)") { vm.interruptSession(d.name) })
+                                            add(HouseMenuItem("Compact context") { vm.compactSession(d.name) })
+                                            // The pair, in the two tones — same words and
+                                            // same token as the session list's row menu and
+                                            // the desktop's right-click. See EndVerbs.
+                                            add(HouseMenuItem(EndVerbs.soft(1), tone = VerbTone.SOFT) { softEndTarget = d.name })
+                                            add(HouseMenuItem(EndVerbs.hard(1), tone = VerbTone.DESTRUCTIVE) { killTarget = d.name })
                                         }
-                                        is Dest.Project -> {
-                                            // ONE VERB, and it is the one with no
-                                            // other door. Open-a-member is the row
-                                            // itself and drop-a-member is inside
-                                            // the member's own disclosure; ending
-                                            // the cluster had nowhere at all.
-                                            DropdownMenuItem(
-                                                text = {
-                                                    Text(
-                                                        "End project…",
-                                                        color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                                                    )
-                                                },
-                                                leadingIcon = {
-                                                    Icon(
-                                                        Icons.Filled.Delete,
-                                                        contentDescription = null,
-                                                        tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                                                    )
-                                                },
-                                                onClick = { surfaceMenu = false; endProjectTarget = d.id },
-                                            )
-                                        }
-                                        is Dest.Chat -> {
-                                            DropdownMenuItem(text = { Text("Rename chat") },
-                                                onClick = {
-                                                    surfaceMenu = false
-                                                    renameChatTarget = d.id
-                                                    renameText = chatTitle ?: ""
-                                                })
-                                            DropdownMenuItem(text = { Text("Delete chat…") },
-                                                onClick = { surfaceMenu = false; deleteChatTarget = d.id })
-                                        }
-                                        else -> Unit
-                                    }
-                                }
+                                        // ONE VERB, and it is the one with no other
+                                        // door. Open-a-member is the row itself and
+                                        // drop-a-member is inside the member's own
+                                        // disclosure; ending the cluster had nowhere.
+                                        is Dest.Project -> listOf(
+                                            HouseMenuItem("End project…", icon = Icons.Filled.Delete, tone = VerbTone.DESTRUCTIVE) {
+                                                endProjectTarget = d.id
+                                            },
+                                        )
+                                        is Dest.Chat -> listOf(
+                                            HouseMenuItem("Rename chat") {
+                                                renameChatTarget = d.id
+                                                renameText = chatTitle ?: ""
+                                            },
+                                            HouseMenuItem("Delete chat…", tone = VerbTone.DESTRUCTIVE) { deleteChatTarget = d.id },
+                                        )
+                                        else -> emptyList()
+                                    },
+                                )
                             }
                         }
                     },

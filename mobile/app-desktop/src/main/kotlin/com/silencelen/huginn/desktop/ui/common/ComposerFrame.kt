@@ -1,5 +1,7 @@
 package com.silencelen.huginn.desktop.ui.common
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -85,12 +87,17 @@ fun ComposerFrame(
             max = Composer.fieldMaxHeight(maxHeight.value).dp,
         )
         when (layout) {
+            // The side controls are 40 dp against a field at least FIELD_MIN_DP
+            // tall, and the row aligns to the bottom so a grown field keeps them
+            // on its last line; each control therefore sits in a FIELD_MIN_DP-high
+            // band, centred, so on one line it shares the field's centre instead
+            // of hanging 8 dp below it.
             ComposerLayout.FULL -> Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                attach(layout)
+                Box(Modifier.height(Composer.FIELD_MIN_DP.dp), contentAlignment = Alignment.Center) { attach(layout) }
                 // CAP BEFORE FILL, and before the weight for the same reason: the
                 // weight hands down a fixed width, and a cap inside fixed
                 // constraints can only coerce into them. The chat composer had no
@@ -102,7 +109,11 @@ fun ComposerFrame(
                         .then(fieldHeight),
                     layout,
                 )
-                actions(layout)
+                Row(
+                    Modifier.height(Composer.FIELD_MIN_DP.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) { actions(layout) }
             }
 
             ComposerLayout.COMPACT -> Column(Modifier.fillMaxWidth()) {

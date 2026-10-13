@@ -1,5 +1,8 @@
 package com.silencelen.huginn.desktop.ui.chat
 
+import com.silencelen.huginn.ui.VerbTone
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -120,24 +123,17 @@ fun ChatTopBar(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                // Only a LOCAL chat can escalate — the conversation goes to a
-                // NEW Claude chat as a DRAFT the person sends themselves.
-                if (onEscalate != null) {
-                    DropdownMenuItem(
-                        text = { Text("Escalate to Claude", style = MaterialTheme.typography.bodySmall) },
-                        onClick = { menuOpen = false; onEscalate() },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text("Rename", style = MaterialTheme.typography.bodySmall) },
-                    onClick = { menuOpen = false; renaming = true },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete", style = MaterialTheme.typography.bodySmall) },
-                    onClick = { menuOpen = false; confirmDelete = true },
-                )
-            }
+            HouseMenu(
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                items = buildList {
+                    // Only a LOCAL chat can escalate — the conversation goes to a
+                    // NEW Claude chat as a DRAFT the person sends themselves.
+                    if (onEscalate != null) add(HouseMenuItem("Escalate to Claude", onClick = onEscalate))
+                    add(HouseMenuItem("Rename") { renaming = true })
+                    add(HouseMenuItem("Delete", tone = VerbTone.DESTRUCTIVE) { confirmDelete = true })
+                },
+            )
         }
     }
 

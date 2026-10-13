@@ -68,7 +68,20 @@ class AttachmentTextTest {
 
     @Test
     fun `displayText still renders the pill (the fallback path)`() {
-        assertEquals("📷 Photo attached", AttachmentText.displayText(AttachmentText.marker("/up/x.jpg")))
+        assertEquals("Photo attached", AttachmentText.displayText(AttachmentText.marker("/up/x.jpg")))
+    }
+
+    @Test
+    fun `the markers read back as words, not pictographs`() {
+        // BRAND.md section 8: no emoji. A named file says its name, an unnamed
+        // one says what it is, and nothing leads with a pictograph.
+        assertEquals("File: notes.pdf", AttachmentText.displayText(AttachmentText.fileMarker("/up/notes.pdf", "notes.pdf")))
+        assertEquals("File attached", AttachmentText.displayText(AttachmentText.fileMarker("/up/f-1", null)))
+        val shown = AttachmentText.displayText(
+            "see both\n\n" + AttachmentText.marker("/up/x.jpg") + "\n" + AttachmentText.fileMarker("/up/a.log", "a.log"),
+        )
+        assertEquals("see both\n\nPhoto attached\nFile: a.log", shown)
+        assertTrue(shown.none { it.code > 0x2FFF }, "a pictograph is back in the display text: $shown")
     }
 
     @Test

@@ -1,5 +1,7 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -227,14 +229,11 @@ private fun AdoptMemberRow(actions: ProjectMemberActions, members: List<ProjectD
                 ) {
                     Text(picked ?: if (free.isEmpty()) PROJECT_ADOPT_NOTHING_FREE else "Pick a session")
                 }
-                DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
-                    free.forEach { name ->
-                        DropdownMenuItem(
-                            text = { Text(name) },
-                            onClick = { picked = name; picking = false },
-                        )
-                    }
-                }
+                HouseMenu(
+                    expanded = picking,
+                    onDismiss = { picking = false },
+                    items = free.map { name -> HouseMenuItem(name) { picked = name } },
+                )
             }
             OutlinedTextField(
                 value = role,

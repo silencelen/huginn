@@ -68,6 +68,8 @@ import com.silencelen.huginn.ui.QuickActionRules
 import com.silencelen.huginn.ui.SelectionAction
 import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.ui.theme.verbInk
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -111,6 +113,31 @@ class HuginnMenuItem(
     val tone: VerbTone = VerbTone.PLAIN,
     onClick: () -> Unit,
 ) : ContextMenuItem(label, onClick)
+
+// ------------------------------------------------------------------ adapter
+//
+// ONE MODEL, TWO RENDERINGS. `:ui`'s [HouseMenuItem] is the platform-neutral row
+// the phone's ⋮ menus and this file's [MenuButton] draw; [HuginnMenuItem] is the
+// same row in the shape the toolkit's `ContextMenuArea` accepts. The two
+// converters below are the only bridge, so a field added to one has exactly one
+// place to be carried across — the drift this exists to stop.
+
+/** A context-menu row as a house row. A plain toolkit item is a PLAIN verb. */
+fun ContextMenuItem.toHouseMenuItem(): HouseMenuItem =
+    HouseMenuItem(label, tone = (this as? HuginnMenuItem)?.tone ?: VerbTone.PLAIN, onClick = onClick)
+
+/**
+ * A house row as a context-menu row. The toolkit's item has no disabled state,
+ * so a disabled house row keeps its label and does nothing when pressed; use
+ * [toHuginnMenu] to drop such rows from a list instead.
+ */
+fun HouseMenuItem.toHuginnMenuItem(): HuginnMenuItem {
+    val house = this
+    return HuginnMenuItem(label, tone) { if (house.enabled) house.onClick() }
+}
+
+/** A context menu offers only what can be done: disabled house rows are dropped. */
+fun List<HouseMenuItem>.toHuginnMenu(): List<HuginnMenuItem> = filter { it.enabled }.map { it.toHuginnMenuItem() }
 
 /**
  * The menu, drawn in the app's palette instead of the toolkit's default grey.
@@ -300,23 +327,13 @@ fun MenuButton(
                 tint = scheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            items().forEach { item ->
-                val tone = (item as? HuginnMenuItem)?.tone ?: VerbTone.PLAIN
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            item.label,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = verbInk(tone, scheme),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    onClick = { open = false; item.onClick() },
-                )
-            }
-        }
+        // The house menu from `:ui`, the same one every phone ⋮ draws: tier-3
+        // surface, labels inked per tone by `verbInk`.
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = items().map { it.toHouseMenuItem() },
+        )
     }
 }
 

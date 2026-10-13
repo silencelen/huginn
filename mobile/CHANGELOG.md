@@ -1,5 +1,19 @@
 # Huginn changelog
 
+## 3.11.1 — 2026-10-13
+
+### Fixes to the new skin
+- **The composer lines up.** A one-line field is the same 46 dp as the attach, mic and send
+  circles beside it, with one gap between everything; more lines grow upward with the controls
+  anchored on the last one.
+- **Sessions rows** carry the dot top-left on the title line, with the state word beside the
+  name, like the desktop; chats carry their host chip and tools bolt on the title line, so the
+  trailing column is only the time and the menu.
+- **One house menu** for every ⋮ on the phone: tier-3 surface, each verb inked by its tone,
+  destructive verbs in red.
+- Attachment and page markers read *Photo attached*, *File: name* and *Page: title* instead of
+  emoji; nothing on the wire changed.
+
 ## 3.11.0 — 2026-10-13
 
 ### The new skin

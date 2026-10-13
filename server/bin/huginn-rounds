@@ -16,8 +16,14 @@ set -u
 # share; see huginn-archive.
 case "${1:-}" in
   -h|--help)
-    echo "usage: huginn-rounds"
-    echo "  What this host does on a schedule, when each last ran, and what it found."
+    # The line grammar: see huginn-archive.
+    cat <<'EOF'
+(o> huginn - rounds
+
+  huginn-rounds
+    What this host does on a schedule, when each last ran, and what it
+    found.
+EOF
     exit 0 ;;
   '') ;;
   *) echo "usage: huginn-rounds" >&2; exit 1 ;;

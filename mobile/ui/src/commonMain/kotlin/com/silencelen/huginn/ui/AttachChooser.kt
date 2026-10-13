@@ -1,5 +1,6 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.DropdownMenuItem
@@ -63,19 +64,11 @@ object AttachChooser {
 }
 
 /**
- * The chooser's rows, drawn the same way in both shells.
+ * The chooser's rows, drawn the same way in both shells, by the house menu.
  *
- * [onPicked] closes the shell's own menu and then runs the row — in that order,
+ * [HouseMenu] closes the shell's own menu and then runs the row — in that order,
  * because a row that opens a second menu (the page picker) on the same anchor
  * needs the first one gone before the second appears.
  */
-@Composable
-fun AttachChooserItems(rows: List<AttachRow>, onPicked: (AttachRow) -> Unit) {
-    rows.forEach { row ->
-        DropdownMenuItem(
-            text = { Text(row.label, style = MaterialTheme.typography.bodyMedium) },
-            leadingIcon = row.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
-            onClick = { onPicked(row) },
-        )
-    }
-}
+fun attachChooserItems(rows: List<AttachRow>): List<HouseMenuItem> =
+    rows.map { row -> HouseMenuItem(row.label, icon = row.icon, onClick = row.onPick) }

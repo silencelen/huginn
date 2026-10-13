@@ -39,6 +39,7 @@ object AttachmentText {
     // (lazily — server-named files never contain " — ").
     private val MARKER_RE = Regex("""\[Attached image at [^\]]+ — view it with the Read tool\.\]""")
     private val MARKER_PATH_RE = Regex("""\[Attached image at ([^\]]+?) — view it with the Read tool\.\]""")
+    private const val PHOTO = "Photo attached"
     private val FILE_RE = Regex("""\[Attached file at \S+( \(([^)]{1,80})\))? — [^\]]*\]""")
 
     /**
@@ -48,11 +49,15 @@ object AttachmentText {
      */
     fun displayText(text: String): String {
         if ('[' !in text) return text
+        // Words, not pictographs (BRAND.md section 8): "Photo attached",
+        // "File: <name>" and the page pill's "Page: <name>". Display only — the
+        // markers on the wire are unchanged, and appd's humanizeUserText reads
+        // those, never this.
         val cleaned = ScratchpadRules.collapse(text)
-            .replace(MARKER_RE, "📷 Photo attached")
-            .replace(FILE_RE) { m -> "📎 " + (m.groupValues[2].ifBlank { "File attached" }) }
+            .replace(MARKER_RE, PHOTO)
+            .replace(FILE_RE) { m -> m.groupValues[2].ifBlank { null }?.let { "File: $it" } ?: "File attached" }
             .trim()
-        return cleaned.ifBlank { "📷 Photo attached" }
+        return cleaned.ifBlank { PHOTO }
     }
 
     /** Every image path the message's markers name, in order. */
