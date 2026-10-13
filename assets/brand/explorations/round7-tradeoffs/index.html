@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Huginn Colour Round 7</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one column of questions, each a row of option cards that hold the real screens
+   drawn in that option's colours; a sticky record bar at the bottom. Dark first: the app's
+   primary target. Every value is a Moss & Heather token (color-04-moss-heather/tokens.json). */
+:root {
+  --bg: #141615; --s0: #0E100F; --s1: #1C1F1D; --s2: #242826; --s3: #2D3230; --s4: #383E3B;
+  --ink: #E2E6E1; --muted: #A2ABA5; --outline: #747D77; --outline2: #3A423E; --hair: #2A302D;
+  --moss: #7CB98E; --on-moss: #0B2316; --moss-c: #1F3D2C; --on-moss-c: #C2E6CF;
+  --heather: #B49CDB; --heather-c: #352A52; --on-heather-c: #E2D7F5;
+  --error: #EE757D; --idle: #848C87; --attn: #E4E2A8; --success: #C4CF7A; --info: #86B5E6;
+  --bone: #E2E6E1; --inkmark: #141615;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #F4F6F3; --s0: #FFFFFF; --s1: #EDF0EC; --s2: #E6EAE6; --s3: #DFE4DF; --s4: #D6DCD6;
+  --ink: #191C1A; --muted: #535B56; --outline: #78817B; --outline2: #C6CDC8; --hair: #DDE2DE;
+  --moss: #1F5A3A; --on-moss: #FFFFFF; --moss-c: #CDEAD6; --on-moss-c: #0A3320;
+  --heather: #5B3E8A; --heather-c: #E6DCF5; --on-heather-c: #2E1A52;
+  --error: #B3262E; --idle: #687069; --attn: #0F3320; --success: #4E7A1C; --info: #2A5FA5;
+  color-scheme: light;
+} }
+:root[data-theme="light"] {
+  --bg: #F4F6F3; --s0: #FFFFFF; --s1: #EDF0EC; --s2: #E6EAE6; --s3: #DFE4DF; --s4: #D6DCD6;
+  --ink: #191C1A; --muted: #535B56; --outline: #78817B; --outline2: #C6CDC8; --hair: #DDE2DE;
+  --moss: #1F5A3A; --on-moss: #FFFFFF; --moss-c: #CDEAD6; --on-moss-c: #0A3320;
+  --heather: #5B3E8A; --heather-c: #E6DCF5; --on-heather-c: #2E1A52;
+  --error: #B3262E; --idle: #687069; --attn: #0F3320; --success: #4E7A1C; --info: #2A5FA5;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); padding-block: 0 96px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding-inline: 16px; }
+header.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; padding-block: 28px 8px; border-bottom: 1px solid var(--hair); }
+.raven { font: 600 22px/1 var(--mono); color: var(--moss); letter-spacing: -0.06em; }
+h1 { font: 600 22px/1.2 var(--mono); letter-spacing: -0.03em; margin: 0; }
+.sub { color: var(--muted); font-size: 14px; margin: 0; flex-basis: 100%; }
+.sub code { font-family: var(--mono); font-size: 13px; color: var(--heather); }
+.toggle { margin-left: auto; display: inline-flex; gap: 2px; background: var(--s2); border-radius: 6px; padding: 2px; }
+.toggle button { font: 500 12px/1 var(--mono); color: var(--muted); background: none; border: 0; border-radius: 5px; padding: 7px 10px; cursor: pointer; }
+.toggle button[aria-pressed="true"] { background: var(--s4); color: var(--ink); }
+.lede { max-width: 66ch; color: var(--muted); padding-block: 18px 0; }
+.lede b { color: var(--ink); font-weight: 500; }
+
+section.q { padding-block: 36px 8px; border-bottom: 1px solid var(--hair); }
+.qhead { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; align-items: baseline; max-width: 72ch; }
+.qnum { font: 500 12px/1 var(--mono); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; padding-top: 6px; }
+h2 { font: 600 20px/1.25 var(--sans); margin: 0; text-wrap: balance; }
+.qwhy { grid-column: 2; color: var(--muted); margin: 0; }
+.qwhy code, .opt code, .rec code { font-family: var(--mono); font-size: 0.92em; }
+.opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 18px; }
+.opt { position: relative; display: flex; flex-direction: column; gap: 12px; background: var(--s1); border: 1px solid var(--hair); border-radius: 8px; padding: 14px; min-width: 0; cursor: pointer; }
+.opt:hover { border-color: var(--outline2); }
+.opt.picked { border-color: var(--moss); background: var(--s2); }
+.opt:focus-within { outline: 2px solid var(--moss); outline-offset: 2px; }
+.opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+.oh { display: flex; align-items: baseline; gap: 10px; }
+.ol { font: 600 12px/1 var(--mono); color: var(--muted); letter-spacing: 0.08em; }
+.opt.picked .ol { color: var(--moss); }
+.ot { font-weight: 600; }
+.rec { margin-left: auto; font: 500 11px/1 var(--mono); color: var(--on-moss-c); background: var(--moss-c); padding: 4px 7px; border-radius: 6px; white-space: nowrap; }
+.od { color: var(--muted); font-size: 14px; margin: 0; }
+.sw { display: flex; gap: 10px; flex-wrap: wrap; font: 12px/1.3 var(--mono); color: var(--muted); }
+.sw i { display: inline-block; width: 14px; height: 14px; border-radius: 50%; vertical-align: -2px; margin-right: 5px; border: 1px solid var(--hair); }
+
+/* The screens, drawn as the app draws them. A card sets --c1/--c2/--c3 for its option. */
+.screen { background: var(--bg); border: 1px solid var(--hair); border-radius: 8px; overflow: hidden; }
+.screen + .screen { margin-top: 0; }
+.ph { padding: 10px 14px; border-bottom: 1px solid var(--hair); font: 500 12px/1 var(--mono); color: var(--muted); letter-spacing: 0.04em; }
+.row { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; column-gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--hair); }
+.row:last-child { border-bottom: 0; }
+.dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+.dot.q { width: 6px; height: 6px; }
+.nm { font: 500 15px/1.2 var(--mono); }
+.nm small { font: 500 12px/1 var(--sans); margin-left: 8px; }
+.meta { font: 12px/1 var(--sans); color: var(--muted); font-variant-numeric: tabular-nums; }
+.sub2 { grid-column: 2 / 4; color: var(--muted); font-size: 13px; margin-top: 3px; }
+.kv { display: flex; justify-content: space-between; gap: 12px; padding: 9px 14px; font-size: 14px; }
+.kv span:first-child { color: var(--muted); }
+.kv b { font-weight: 500; }
+.card { margin: 12px 14px; background: var(--s2); border-radius: 8px; padding: 12px 14px; }
+.card .t { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.card .t i { width: 8px; height: 8px; border-radius: 50%; }
+.card .b { font-size: 13px; color: var(--ink); margin: 8px 0 6px; }
+.card .f { font-size: 12px; color: var(--muted); }
+.card .f b { font-weight: 600; }
+.meter { padding: 8px 14px 10px; }
+.meter .l { display: flex; justify-content: space-between; font-size: 14px; }
+.meter .bar { height: 5px; border-radius: 3px; background: var(--s3); margin-top: 7px; overflow: hidden; }
+.meter .bar i { display: block; height: 100%; border-radius: 3px; }
+.term { background: var(--s0); font: 13px/1.6 var(--mono); padding: 10px 14px; white-space: pre; overflow-x: auto; }
+.term .h { color: var(--heather); }
+.term .k { color: #C3A8E8; } .term .s { color: #9FD3AD; } .term .cm { color: #8C958F; } .term .fn { color: var(--heather); }
+:root[data-theme="light"] .term .k, :root:not([data-theme="dark"]) .term .k { color: #5B3E8A; }
+.tray { display: flex; align-items: flex-end; gap: 18px; padding: 12px 14px; background: var(--s3); }
+.tray figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; font: 11px/1 var(--mono); color: var(--muted); }
+.tray svg { display: block; }
+.nav { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--s1); padding: 8px 6px 10px; border-top: 1px solid var(--hair); }
+.nav div { display: flex; flex-direction: column; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.nav .pill { width: 56px; height: 30px; border-radius: 15px; display: grid; place-items: center; }
+.nav .pill svg { width: 20px; height: 20px; }
+.nav .on { color: var(--ink); font-weight: 600; }
+.rail { padding: 10px 14px; display: grid; gap: 6px; font-size: 13px; }
+.rail div { display: flex; gap: 10px; align-items: center; }
+.rail i { width: 6px; height: 6px; border-radius: 50%; }
+
+.notes { margin-top: 14px; }
+.notes textarea { width: 100%; min-height: 56px; background: var(--s1); color: var(--ink); border: 1px solid var(--hair); border-radius: 8px; padding: 10px 12px; font: 14px/1.45 var(--sans); resize: vertical; }
+.notes textarea:focus { outline: 2px solid var(--moss); outline-offset: 1px; border-color: transparent; }
+label.nl { display: block; font: 500 12px/1 var(--mono); color: var(--muted); margin-bottom: 6px; letter-spacing: 0.04em; }
+
+.bar { position: fixed; left: 0; right: 0; bottom: 0; background: var(--s3); border-top: 1px solid var(--outline2); padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); }
+.bar .in { max-width: 1120px; margin: 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.count { font: 500 13px/1 var(--mono); color: var(--muted); }
+.count b { color: var(--ink); font-weight: 600; }
+.btn { font: 600 13px/1 var(--sans); border-radius: 20px; padding: 10px 16px; border: 1px solid var(--outline); background: none; color: var(--ink); cursor: pointer; }
+.btn.primary { background: var(--moss); color: var(--on-moss); border-color: transparent; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+.record { display: none; margin-top: 28px; }
+.record.open { display: block; }
+.record pre { background: var(--s0); border: 1px solid var(--hair); border-radius: 8px; padding: 14px; font: 13px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+.record .rh { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.record .rh p { margin: 0; color: var(--muted); max-width: 60ch; }
+.toast { font: 500 12px/1 var(--mono); color: var(--moss); }
+@media (prefers-reduced-motion: no-preference) { .opt { transition: border-color 160ms cubic-bezier(.2,0,0,1), background 160ms; } }
+@media (max-width: 480px) { .qhead { grid-template-columns: 1fr; } .qwhy { grid-column: 1; } .toggle { margin-left: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <span class="raven" aria-hidden="true">(o&gt;</span>
+  <h1>huginn colour, round 7</h1>
+  <div class="toggle" role="group" aria-label="Scheme">
+    <button type="button" id="tDark" aria-pressed="true">dark</button>
+    <button type="button" id="tLight" aria-pressed="false">light</button>
+  </div>
+  <p class="sub">The four questions the Fold raised on 2026-10-13, each drawn on the screens it changes. Tokens from <code>color-04-moss-heather/tokens.json</code>; the rest of the palette is decided and stays.</p>
+</header>
+
+<p class="lede">Pick one card per question. Each card is the same screens in that option's colours, dark or light at the switch above. The record at the bottom writes the <b>Record of decisions</b> row for <b>BRAND.md</b> and the token changes that follow; copy it back to the session and the tokens freeze there.</p>
+
+<!-- Q1 -->
+<section class="q" id="q1" data-q="1">
+  <div class="qhead">
+    <div class="qnum">Q1</div>
+    <h2>Two greens: working is moss, and success is lime</h2>
+    <p class="qwhy">Working is the accent and stays moss. Success (a reachable route, a proven setup step, <code>+ ok</code> in the terminal) is a lime 68 degrees and 11 L* away. On the Fold they read as one family.</p>
+  </div>
+  <div class="opts">
+    <label class="opt" style="--c1: var(--success)"><input type="radio" name="q1" value="A">
+      <div class="oh"><span class="ol">A</span><span class="ot">Keep the lime</span></div>
+      <p class="od">As decided in round 4. Success keeps its own hue; the family resemblance is accepted.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>success</span></div>
+      <div class="screen" data-mock="q1"></div>
+    </label>
+    <label class="opt" style="--c1: var(--ink)"><input type="radio" name="q1" value="B">
+      <div class="oh"><span class="ol">B</span><span class="ot">Ok is quiet</span><span class="rec">recommended</span></div>
+      <p class="od">Success is the ink, not a colour: the dot and the word in <code>onSurface</code>, the <code>■</code> glyph carries it. Only needs-you and error stay loud, which is the brand's own rule. The terminal keeps brightGreen for <code>+ ok</code>; the apps drop <code>stateSuccess</code>.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>success</span></div>
+      <div class="screen" data-mock="q1"></div>
+    </label>
+    <label class="opt" style="--c1: #80CFC9"><input type="radio" name="q1" value="C">
+      <div class="oh"><span class="ol">C</span><span class="ot">Success turns teal</span></div>
+      <p class="od">Success moves to the brightCyan slot, cool against the moss. One more hue on screen, and the ANSI pin moves from brightGreen to brightCyan.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>success</span></div>
+      <div class="screen" data-mock="q1"></div>
+    </label>
+  </div>
+</section>
+
+<!-- Q2 -->
+<section class="q" id="q2" data-q="2">
+  <div class="qhead">
+    <div class="qnum">Q2</div>
+    <h2>Where heather lives</h2>
+    <p class="qwhy">Heather is the second voice: code, links, CLI headings. It never reaches a state, so the tray and the lists are moss and greys, and the only other hue in the apps is the info blue.</p>
+  </div>
+  <div class="opts">
+    <label class="opt" style="--c1: var(--info); --c2: var(--idle)"><input type="radio" name="q2" value="A">
+      <div class="oh"><span class="ol">A</span><span class="ot">As decided</span></div>
+      <p class="od">Heather stays out of the ladder. Info keeps the blue.</p>
+      <div class="sw"><span><i style="background:var(--heather)"></i>heather</span><span><i style="background:var(--c1)"></i>info</span><span><i style="background:var(--c2)"></i>idle</span></div>
+      <div class="screen" data-mock="q2"></div>
+    </label>
+    <label class="opt" style="--c1: var(--heather); --c2: var(--idle)"><input type="radio" name="q2" value="B">
+      <div class="oh"><span class="ol">B</span><span class="ot">Info is heather</span><span class="rec">recommended</span></div>
+      <p class="od">"Worth a look", the <code>▸</code> glyph and info notices take the heather. The blue leaves the palette: two hues plus the ramp, and the second voice reaches the lists and the Rounds. The ANSI pin for info moves to brightMagenta.</p>
+      <div class="sw"><span><i style="background:var(--heather)"></i>heather</span><span><i style="background:var(--c1)"></i>info</span><span><i style="background:var(--c2)"></i>idle</span></div>
+      <div class="screen" data-mock="q2"></div>
+    </label>
+    <label class="opt" style="--c1: var(--info); --c2: #908BA3"><input type="radio" name="q2" value="C">
+      <div class="oh"><span class="ol">C</span><span class="ot">Idle takes a heather tint</span></div>
+      <p class="od">The tray's idle tile and the waiting dots go heather-grey so the second voice reaches the tray. Idle stops being quiet, which is what idle is for.</p>
+      <div class="sw"><span><i style="background:var(--heather)"></i>heather</span><span><i style="background:var(--c1)"></i>info</span><span><i style="background:var(--c2)"></i>idle</span></div>
+      <div class="screen" data-mock="q2"></div>
+    </label>
+  </div>
+</section>
+
+<!-- Q3 -->
+<section class="q" id="q3" data-q="3">
+  <div class="qhead">
+    <div class="qnum">Q3</div>
+    <h2>The lit moss</h2>
+    <p class="qwhy">Needs-you is the accent lit up, a pale yellow-green at L* 89. Beside the lime it reads like a highlighter. Since the severity ramp, it is also every warning: disk at 88 %, the Fable week at 81 %.</p>
+  </div>
+  <div class="opts">
+    <label class="opt" style="--c1: var(--attn)"><input type="radio" name="q3" value="A">
+      <div class="oh"><span class="ol">A</span><span class="ot">Keep it</span><span class="rec">recommended with Q1 B</span></div>
+      <p class="od">The clash is with the lime. If success goes quiet, the lit moss stands alone and reads as what it is.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>needs you</span><span><i style="background:var(--success)"></i>lime, for comparison</span></div>
+      <div class="screen" data-mock="q3"></div>
+    </label>
+    <label class="opt" style="--c1: #E8D07E"><input type="radio" name="q3" value="B">
+      <div class="oh"><span class="ol">B</span><span class="ot">Warmer, toward gold</span></div>
+      <p class="od">Needs-you and warning lean amber, the colour people already read as "look here". It drifts from the moss family, so the ladder is no longer one hue at three steps.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>needs you</span><span><i style="background:var(--success)"></i>lime, for comparison</span></div>
+      <div class="screen" data-mock="q3"></div>
+    </label>
+    <label class="opt" style="--c1: #CDE3B5"><input type="radio" name="q3" value="C">
+      <div class="oh"><span class="ol">C</span><span class="ot">Paler, less yellow</span></div>
+      <p class="od">Closer to bone with the moss still in it. Quieter than the highlighter, but it sits near the ink and the monochrome tray loses some of its step.</p>
+      <div class="sw"><span><i style="background:var(--moss)"></i>working</span><span><i style="background:var(--c1)"></i>needs you</span><span><i style="background:var(--success)"></i>lime, for comparison</span></div>
+      <div class="screen" data-mock="q3"></div>
+    </label>
+  </div>
+</section>
+
+<!-- Q4 -->
+<section class="q" id="q4" data-q="4">
+  <div class="qnum" style="display:none"></div>
+  <div class="qhead">
+    <div class="qnum">Q4</div>
+    <h2>The active tab</h2>
+    <p class="qwhy">The bottom bar's selected item sits on Material's <code>secondaryContainer</code>, which the theme never defined, so it is the library's own violet. The brand says selection is the accent.</p>
+  </div>
+  <div class="opts">
+    <label class="opt" style="--c1: var(--moss-c); --c2: var(--on-moss-c)"><input type="radio" name="q4" value="A">
+      <div class="oh"><span class="ol">A</span><span class="ot">Moss pill</span><span class="rec">recommended</span></div>
+      <p class="od">The indicator is <code>primaryContainer</code>, the same tint a selected row takes. One meaning for one colour.</p>
+      <div class="screen" data-mock="q4"></div>
+    </label>
+    <label class="opt" style="--c1: var(--heather-c); --c2: var(--on-heather-c)"><input type="radio" name="q4" value="B">
+      <div class="oh"><span class="ol">B</span><span class="ot">Heather pill</span></div>
+      <p class="od">Define <code>secondaryContainer</code> from the tokens and keep Material's shape. The second voice marks navigation.</p>
+      <div class="screen" data-mock="q4"></div>
+    </label>
+    <label class="opt" style="--c1: transparent; --c2: var(--ink)"><input type="radio" name="q4" value="C">
+      <div class="oh"><span class="ol">C</span><span class="ot">No pill</span></div>
+      <p class="od">The filled icon and the bold label carry selection; nothing is tinted. The quietest bar, and the least Material.</p>
+      <div class="screen" data-mock="q4"></div>
+    </label>
+  </div>
+</section>
+
+<div class="notes">
+  <label class="nl" for="notes">notes for the session</label>
+  <textarea id="notes" placeholder="Anything the cards do not cover: a hue to try, a screen to re-shoot, a question to add."></textarea>
+</div>
+
+<div class="record" id="record">
+  <div class="rh">
+    <p>The row for BRAND.md's record, and the token changes it implies. Copy it into the session; nothing is sent from this page.</p>
+    <button class="btn" type="button" id="copy">Copy</button>
+    <span class="toast" id="toast"></span>
+  </div>
+  <pre id="out"></pre>
+</div>
+</div>
+
+<div class="bar">
+  <div class="in">
+    <span class="count"><b id="n">0</b> of 4 decided</span>
+    <button class="btn primary" type="button" id="make" disabled>Write the record</button>
+    <button class="btn" type="button" id="reset">Clear</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // --- the tray tile: RavenMark.tilePath, the raven cut out of a rounded square, 64 box ---
+  var BIRD = [54.79,19.428,47.23,16.572,35.89,10.86,28.33,10.86,20.77,13.716,17.79,18.219,25.863,39.567,17.971,51.493,16.009,50.195,23.237,39.273,16.527,21.528,9.43,53.7,24.55,53.7,35.89,47.988,39.67,47.988,43.45,36.564,43.45,25.14];
+  function tile(px, fill, badge) {
+    var d = 'M14 0h36a14 14 0 0 1 14 14v36a14 14 0 0 1-14 14H14A14 14 0 0 1 0 50V14A14 14 0 0 1 14 0z';
+    d += 'M' + BIRD[0] + ' ' + BIRD[1];
+    for (var i = 2; i < BIRD.length; i += 2) d += 'L' + BIRD[i] + ' ' + BIRD[i + 1];
+    d += 'zM32 16h4v4h-4z';
+    return '<svg width="' + px + '" height="' + px + '" viewBox="0 0 64 64" aria-hidden="true"><path d="' + d + '" fill="' + fill + '" fill-rule="evenodd"/>' +
+      (badge ? '<circle cx="53" cy="11" r="9" fill="var(--error)"/>' : '') + '</svg>';
+  }
+  function trayRow(idle, work, attn) {
+    var out = '<div class="tray">';
+    [[64, 'idle', idle, false], [64, 'working', work, false], [64, 'needs you', attn, true], [24, '24', attn, true], [16, '16', attn, true]].forEach(function (t) {
+      out += '<figure>' + tile(t[0], t[2], t[3]) + '<figcaption>' + t[1] + '</figcaption></figure>';
+    });
+    return out + '</div>';
+  }
+  var dot = function (c, q) { return '<i class="dot' + (q ? ' q' : '') + '" style="background:' + c + '"></i>'; };
+  var row = function (c, name, word, wc, meta, sub, q) {
+    return '<div class="row">' + dot(c, q) + '<div class="nm">' + name + '<small style="color:' + wc + '">' + word + '</small></div><div class="meta">' + meta + '</div>' + (sub ? '<div class="sub2">' + sub + '</div>' : '') + '</div>';
+  };
+
+  var MOCK = {
+    q1: function () {
+      return '<div class="ph">Sessions</div>' +
+        row('var(--moss)', 'huginndesign', 'working', 'var(--moss)', 'ctx 28%  now', 'Huginn frontend design overhaul') +
+        row('var(--idle)', 'btc15', 'waiting', 'var(--muted)', 'ctx 37%  46m', 'BTC 15min program review', true) +
+        '<div class="ph">Settings · Host &amp; sign-in · routes</div>' +
+        '<div class="row">' + dot('var(--c1)') + '<div class="nm">192.168.7.117<small style="color:var(--muted)">reachable · 41 ms</small></div><div class="meta">LAN</div></div>' +
+        '<div class="row">' + dot('var(--error)') + '<div class="nm">huginn.c.example.net<small style="color:var(--muted)">no answer</small></div><div class="meta">relay</div></div>' +
+        '<div class="ph">Setup</div><div class="rail">' +
+        '<div><i style="background:var(--c1)"></i><span style="color:var(--c1)">proven</span><span style="color:var(--muted)">· host answers on 8787</span></div>' +
+        '<div><i style="background:var(--attn)"></i><span style="color:var(--attn)">needs you</span><span style="color:var(--muted)">· paste the token</span></div>' +
+        '<div><i style="background:var(--outline)"></i><span style="color:var(--muted)">waiting · devices</span></div></div>' +
+        '<div class="term"><span class="h">(o&gt; huginn</span> - huginn\n  <span style="color:var(--c1)">+ ok</span>    appd 3.11.0, TLS\n  <span style="color:var(--moss)">* working</span>  2 sessions\n  <span style="color:var(--attn)">! needs you</span>  main</div>';
+    },
+    q2: function () {
+      return '<div class="ph">Rounds</div>' +
+        '<div class="card"><div class="t"><i style="background:var(--attn)"></i>btc15min checkin</div><div class="b">Did not finish: services+watchdog OK, no halt, 0 exec errors</div><div class="f"><b style="color:var(--attn)">Needs you</b> · 14h ago · 1 item</div></div>' +
+        '<div class="card"><div class="t"><i style="background:var(--c1)"></i>media pipeline check</div><div class="b">Arr pipeline still moving; 4 Prowlarr indexers down, 1 import stuck</div><div class="f"><b style="color:var(--c1)">Worth a look</b> · 2 days ago · 4 items</div></div>' +
+        '<div class="ph">Sessions</div>' +
+        row('var(--moss)', 'devstore', 'working', 'var(--moss)', 'now', '2 agents') +
+        row('var(--c2)', 'skills', 'waiting', 'var(--muted)', 'ctx 44%  9m', null, true) +
+        '<div class="ph">Desktop tray</div>' + trayRow('var(--c2)', 'var(--moss)', 'var(--attn)') +
+        '<div class="term"><span class="cm">// transcript code well</span>\n<span class="k">val</span> colour = <span class="fn">stateColor</span>(kind)\n<span class="h">docs/TLS.md</span>  <span style="color:var(--c1)">&#9656; info</span>  pinned by the token-bound proof</div>';
+    },
+    q3: function () {
+      return '<div class="ph">Sessions</div>' +
+        row('var(--moss)', 'huginndesign', 'working', 'var(--moss)', 'ctx 28%  now', 'Huginn frontend design overhaul') +
+        row('var(--c1)', 'main', 'needs you', 'var(--c1)', 'ctx 61%  2m', 'Allow Bash(git push)?  1. Yes  2. No') +
+        row('var(--idle)', 'btc15', 'waiting', 'var(--muted)', 'ctx 37%  46m', null, true) +
+        '<div class="ph">Status</div>' +
+        '<div class="kv"><span>Disk /</span><b style="color:var(--c1)">88% used, 12G free</b></div>' +
+        '<div class="meter"><div class="l"><span>Current week (Fable)</span><b style="color:var(--c1)">81%</b></div><div class="bar"><i style="width:81%;background:var(--c1)"></i></div></div>' +
+        '<div class="meter"><div class="l"><span>Current session</span><b style="color:var(--muted)">51%</b></div><div class="bar"><i style="width:51%;background:var(--outline)"></i></div></div>' +
+        '<div class="ph">Rounds · Settings</div>' +
+        '<div class="card"><div class="t"><i style="background:var(--c1)"></i>btc15min checkin</div><div class="f"><b style="color:var(--c1)">Needs you</b> · 14h ago · 1 item &nbsp; <b style="color:var(--success)">proven</b> <span>(the lime, beside it)</span></div></div>' +
+        '<div class="ph">Desktop tray</div>' + trayRow('var(--idle)', 'var(--moss)', 'var(--c1)');
+    },
+    q4: function () {
+      var ic = function (p) { return '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="' + p + '"/></svg>'; };
+      var chat = 'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z';
+      var term = 'M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM6 15l4-3-4-3v6zm6 1h6v-2h-6v2z';
+      var clock = 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7V7z';
+      var stat = 'M3 5h18v10H3V5zm2 2v6h14V7H5zm1 1l3 3 2-2 3 3 3-4v3l-3 4-3-3-2 2-3-3V8zM3 17h18v2H3v-2z';
+      var item = function (p, l, on) {
+        return '<div class="' + (on ? 'on' : '') + '"><div class="pill" style="' + (on ? 'background:var(--c1);color:var(--c2)' : '') + '">' + ic(p) + '</div>' + l + '</div>';
+      };
+      return '<div class="ph">Sessions</div>' +
+        row('var(--moss)', 'huginndesign', 'working', 'var(--moss)', 'ctx 28%  now', 'Huginn frontend design overhaul') +
+        '<div class="row" style="background:var(--moss-c)">' + dot('var(--attn)') + '<div class="nm" style="color:var(--on-moss-c);font-weight:600">main<small style="color:var(--attn)">needs you</small></div><div class="meta" style="color:var(--on-moss-c)">selected row</div></div>' +
+        row('var(--idle)', 'btc15', 'waiting', 'var(--muted)', 'ctx 37%  46m', null, true) +
+        '<div class="nav">' + item(chat, 'Chats', false) + item(term, 'Sessions', true) + item(clock, 'Rounds', false) + item(stat, 'Status', false) + '</div>';
+    }
+  };
+  document.querySelectorAll('[data-mock]').forEach(function (el) { el.innerHTML = MOCK[el.getAttribute('data-mock')](); });
+
+  // --- theme switch ---
+  var root = document.documentElement, tD = document.getElementById('tDark'), tL = document.getElementById('tLight');
+  function setTheme(t) { root.setAttribute('data-theme', t); tD.setAttribute('aria-pressed', String(t === 'dark')); tL.setAttribute('aria-pressed', String(t === 'light')); try { localStorage.setItem('r7.theme', t); } catch (e) {} }
+  tD.onclick = function () { setTheme('dark'); }; tL.onclick = function () { setTheme('light'); };
+  var savedT = null; try { savedT = localStorage.getItem('r7.theme'); } catch (e) {}
+  setTheme(savedT === 'light' ? 'light' : 'dark');
+
+  // --- picks ---
+  var TITLES = {
+    q1: { A: 'keep the lime for success', B: 'ok is quiet: success in the ink, the terminal keeps brightGreen', C: 'success turns teal (brightCyan pin)' },
+    q2: { A: 'heather stays out of the state ladder; info stays blue', B: 'info is heather (brightMagenta pin); the blue leaves', C: 'idle takes a heather tint' },
+    q3: { A: 'needs-you stays the lit moss #E4E2A8', B: 'needs-you warms to #E8D07E', C: 'needs-you pales to #CDE3B5' },
+    q4: { A: 'active tab on primaryContainer', B: 'active tab on a defined secondaryContainer', C: 'no indicator fill; filled icon + bold label' }
+  };
+  var TOKENS = {
+    q1: { A: '', B: 'stateSuccess: dark #E2E6E1 (onSurface) / light #191C1A; brightGreen stays #C4CF7A for the terminal', C: 'stateSuccess: dark #80CFC9 / light #176B66; pin brightCyan = stateSuccess' },
+    q2: { A: '', B: 'stateInfo: dark #B49CDB / light #5B3E8A; pin brightMagenta = stateInfo; brightBlue unpinned', C: 'stateIdle: dark #908BA3 / light #6B667A (tray + waiting dots)' },
+    q3: { A: '', B: 'stateAttention: dark #E8D07E / light #7A5A16; brightYellow = #E8D07E', C: 'stateAttention: dark #CDE3B5 / light #2F5E22; brightYellow = #CDE3B5' },
+    q4: { A: 'NavigationBar indicatorColor = primaryContainer (Theme.kt / MainActivity)', B: 'secondaryContainer: dark #352A52 / #E2D7F5, light #E6DCF5 / #2E1A52 (PaletteTest gate shrinks)', C: 'NavigationBar indicatorColor = Color.Transparent; selected = Filled icon + SemiBold label' }
+  };
+  var picks = {}; try { picks = JSON.parse(localStorage.getItem('r7.picks') || '{}'); } catch (e) { picks = {}; }
+  var notes = document.getElementById('notes'); try { notes.value = localStorage.getItem('r7.notes') || ''; } catch (e) {}
+  function save() { try { localStorage.setItem('r7.picks', JSON.stringify(picks)); localStorage.setItem('r7.notes', notes.value); } catch (e) {} }
+  function paint() {
+    document.querySelectorAll('.opt').forEach(function (o) { var i = o.querySelector('input'); o.classList.toggle('picked', picks[i.name] === i.value); i.checked = picks[i.name] === i.value; });
+    var n = ['q1', 'q2', 'q3', 'q4'].filter(function (k) { return picks[k]; }).length;
+    document.getElementById('n').textContent = n;
+    document.getElementById('make').disabled = n < 4;
+  }
+  document.querySelectorAll('.opt input').forEach(function (i) { i.addEventListener('change', function () { picks[i.name] = i.value; save(); paint(); }); });
+  notes.addEventListener('input', save);
+  paint();
+
+  var out = document.getElementById('out'), rec = document.getElementById('record');
+  function build() {
+    var d = new Date(), day = d.toISOString().slice(0, 10);
+    var lines = ['| 7 | ' + ['q1', 'q2', 'q3', 'q4'].map(function (k) { return TITLES[k][picks[k]]; }).join('; ') + ' (' + day + ', on the Fold) |', '', 'Token changes before the freeze:'];
+    var any = false;
+    ['q1', 'q2', 'q3', 'q4'].forEach(function (k) { var t = TOKENS[k][picks[k]]; if (t) { lines.push('- ' + k.toUpperCase() + ' ' + picks[k] + ': ' + t); any = true; } });
+    if (!any) lines.push('- none; the tokens freeze as they are');
+    if (notes.value.trim()) lines.push('', 'Notes: ' + notes.value.trim());
+    lines.push('', 'Then: edit explorations/color/build/spec.py, run palette.py (refuses on a contrast failure), regenerate tokens.json, Theme.kt, Ansi.kt, TrayIcons.kt; re-shoot Sessions, Rounds, Status and the tray.');
+    out.textContent = lines.join('\n');
+    rec.classList.add('open');
+    rec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  document.getElementById('make').onclick = build;
+  document.getElementById('copy').onclick = function () {
+    var t = document.getElementById('toast'), txt = out.textContent;
+    function sel() { var r = document.createRange(); r.selectNodeContents(out); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r); t.textContent = 'selected; copy it'; }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function () { t.textContent = 'copied'; }, sel); else sel();
+    setTimeout(function () { t.textContent = ''; }, 2500);
+  };
+  document.getElementById('reset').onclick = function () { picks = {}; notes.value = ''; save(); paint(); rec.classList.remove('open'); out.textContent = ''; };
+})();
+</script>
+</body>
+</html>
