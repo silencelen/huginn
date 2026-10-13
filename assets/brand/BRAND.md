@@ -5,7 +5,8 @@ the Android app, the Compose desktop app, the README, the installer, the tray
 and the notifications. Decided in six rounds of explorations under
 [`explorations/`](explorations/README.md); every file named here exists there
 and every number comes from its proofs. The rendered twin of this document, set
-in the brand, is the "Huginn Brand Book" page.
+in the brand, is the "Huginn Brand Book" page. The audit of the current UIs against
+these rules, with the plan to bring them in line, is [`UI-AUDIT.md`](UI-AUDIT.md).
 
 Contents: 1 The raven · 2 The small form · 3 Terminal art · 4 Colour · 5 Type ·
 6 Motion · 7 Surfaces · 8 Voice · 9 To build.
