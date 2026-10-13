@@ -174,7 +174,7 @@ fun chatStateTip(running: Boolean, pending: Int, turns: Int, updatedAt: Long, no
             "Running now · $pending message${plural(pending)} queued behind this turn"
         running -> "Running now"
         pending > 0 -> "$pending message${plural(pending)} queued"
-        else -> "Idle"
+        else -> "Waiting"
     }
     val parts = mutableListOf(head)
     if (turns > 0) parts += "$turns turn${plural(turns)}"

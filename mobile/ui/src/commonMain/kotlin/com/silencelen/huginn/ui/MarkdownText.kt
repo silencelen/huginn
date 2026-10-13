@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.withTimeoutOrNull
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
 import com.silencelen.huginn.ui.theme.LocalSyntaxColors
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * What Claude writes, rendered — on the phone and on the desktop, from here.
@@ -151,7 +152,7 @@ fun MarkdownText(
                 is MdBlock.Image -> PathImage(b.src, b.alt, viewer)
                 is MdBlock.Code ->
                     if (b.lang == ProjectRules.PROPOSAL_LANG) ProposalCard(b, onCopy) else CodeCard(b, onCopy)
-                MdBlock.Rule -> HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                MdBlock.Rule -> HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
             }
         }
         mentions.forEach { PathImage(it, it, viewer) }
@@ -232,7 +233,7 @@ private fun TableGrid(b: MdBlock.Table) {
     val widths = remember(b) { columnWidths(b.rows) }
     val total = remember(widths) { widths.fold(0.dp) { acc, w -> acc + w } }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -433,7 +434,7 @@ private fun ProposalCard(b: MdBlock.Code, onCopy: ((String) -> Unit)?) {
     }
     var open by remember(b.code) { mutableStateOf(false) }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -474,7 +475,7 @@ private fun ProposalCard(b: MdBlock.Code, onCopy: ((String) -> Unit)?) {
 @Composable
 private fun CodeCard(b: MdBlock.Code, onCopy: ((String) -> Unit)?) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerLowest,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {

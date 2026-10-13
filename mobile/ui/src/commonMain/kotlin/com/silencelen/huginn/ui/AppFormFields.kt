@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.AppForm
+import com.silencelen.huginn.ui.theme.huginnFilterChipColors
 
 /**
  * The fields both shells put inside their own dialog chrome, and what the
@@ -281,6 +282,7 @@ fun AppKindPicker(selected: String?, kinds: List<String>, onPick: (String) -> Un
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     rowOfKinds.forEach { kind ->
                         FilterChip(
+                            colors = huginnFilterChipColors(),
                             selected = kind == current,
                             onClick = { onPick(kind) },
                             label = { Text(kind, style = MaterialTheme.typography.labelSmall, maxLines = 1) },

@@ -115,7 +115,7 @@ fun AppsView(
             )
         } else {
             apps.forEach { a ->
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                 AppRow(
                     app = a,
                     nowMs = nowMs,
@@ -126,7 +126,7 @@ fun AppsView(
                     onCopyFix = onCopyFix,
                 )
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         }
         // ⚠ ONE LINE, AND ONLY DURING THE TRANSITION. The commands that would
         // clear it are on the rows; this says the job as a whole is outstanding
@@ -312,14 +312,16 @@ private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?) {
  * once per row, on a list that recycles.
  */
 @Composable
-private fun AppIcon(app: App) {
+private fun AppIcon(app: App, favicon: Boolean = false) {
     val loader = LocalAttachmentImages.current
     // ⚠ `iconStamp`, NOT `version`. The row's revision only moves when somebody
     // EDITS the row; the daemon re-fetches the favicon on probe, hourly, with
     // nobody touching it — so a site that changed its icon kept serving the old
     // picture until the app was restarted. See AttachmentImageLoader.loadIcon.
     var bitmap by remember(app.id, app.iconStamp) { mutableStateOf<ImageBitmap?>(null) }
-    val wanted = AppRules.hasIcon(app) && loader != null
+    // The list is monochrome (BRAND.md: nothing loud but needs-you); the site's
+    // own full-colour favicon is for the detail view only.
+    val wanted = favicon && AppRules.hasIcon(app) && loader != null
     LaunchedEffect(app.id, app.iconStamp, wanted) {
         bitmap = if (wanted) loader.loadIcon(app.id, app.iconStamp) else null
     }
@@ -405,7 +407,7 @@ fun AppsStatusCard(
                     .padding(start = 14.dp, end = 14.dp, top = 5.dp, bottom = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AppIcon(a)
+                AppIcon(a, favicon = true)
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(

@@ -96,7 +96,7 @@ private fun Section(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 20.dp, bottom = 6.dp),
     )
 }

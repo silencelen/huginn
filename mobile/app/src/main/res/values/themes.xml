@@ -4,6 +4,9 @@
         <item name="android:statusBarColor">@color/huginn_bg</item>
         <item name="android:navigationBarColor">@color/huginn_bg</item>
         <item name="android:windowBackground">@color/huginn_bg</item>
+        <!-- Light scheme: dark glyphs on the light bars (values-night turns these off). -->
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 
     <!-- The ask overlay (AskActivity): transparent window so the launcher stays

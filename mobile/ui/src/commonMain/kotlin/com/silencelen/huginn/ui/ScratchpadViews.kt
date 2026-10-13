@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The user's own pages: the list of them, the editor, and the composer control
@@ -83,7 +84,7 @@ fun ScratchpadListView(
             Text("Pages", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             TextButton(onClick = { naming = true }) { Text("New page") }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         if (pads.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -534,7 +535,7 @@ fun ScratchpadPickerItems(
         )
     }
     if (pads.any { it.id == selectedId }) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         DropdownMenuItem(
             text = { Text("No page", style = MaterialTheme.typography.bodyMedium) },
             onClick = { onPick(null) },

@@ -217,7 +217,7 @@ private fun SectionHeading(text: String) {
 @Composable
 fun AgentCard(a: AgentRun, nowSec: Long, modifier: Modifier = Modifier) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (a.active) 0.65f else 0.3f),
+        color = if (a.active) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(10.dp),
         modifier = modifier.fillMaxWidth(),
     ) {
@@ -239,7 +239,7 @@ fun AgentCard(a: AgentRun, nowSec: Long, modifier: Modifier = Modifier) {
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.weight(1f))

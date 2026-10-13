@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The strip above a session's conversation that chooses WHICH stream is being
@@ -238,7 +239,7 @@ private fun StreamOverflowSheet(
                     label = { Text(STREAM_SHEET_FILTER_LABEL) },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
                 )
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                 if (shown.none { !it.header }) {
                     Text(
                         "Nothing matches.",
@@ -366,7 +367,7 @@ private fun OverflowPill(item: StreamPicker.Item, expanded: Boolean, onToggle: (
             .clip(RoundedCornerShape(8.dp))
             .background(
                 if (expanded) scheme.surfaceContainerHigh
-                else scheme.surfaceVariant.copy(alpha = 0.45f),
+                else scheme.surfaceContainerHighest,
             )
             .clickable(onClick = onToggle)
             .padding(horizontal = 9.dp, vertical = 4.dp),
@@ -445,9 +446,9 @@ private fun StreamChip(
             .clip(RoundedCornerShape(8.dp))
             .background(
                 when {
-                    dim -> scheme.surfaceVariant.copy(alpha = 0.25f)
+                    dim -> scheme.surfaceContainerLow
                     selected -> scheme.surfaceContainerHigh
-                    else -> scheme.surfaceVariant.copy(alpha = 0.45f)
+                    else -> scheme.surfaceContainerHighest
                 },
             )
             .clickable(enabled = enabled, onClick = onPick)

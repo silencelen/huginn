@@ -188,7 +188,7 @@ fun SessionsScreen(
                         onRename = { renaming = s.name; renameTo = s.name },
                         modifier = mod,
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                 }
                 // ⚠ `animateItem` IS THE OTHER HALF OF P-02. When the list
                 // DOES re-sort — which it must, the moment nothing is open —
@@ -311,7 +311,7 @@ fun SessionsScreen(
             title = { ConfirmTitle(EndVerbs.HARD, name) },
             text = { Text("The session and anything running inside it are terminated. Unsaved work in that session is lost.") },
             confirmButton = {
-                TextButton(onClick = { confirmKill = null; onKill(name) }) { Text(EndVerbs.HARD) }
+                TextButton(onClick = { confirmKill = null; onKill(name) }) { Text(EndVerbs.HARD, color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmKill = null }) { Text("Cancel") } },
         )
@@ -329,7 +329,7 @@ fun SessionsScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { confirmArchive = null; onArchive(name) }) { Text("Archive") }
+                TextButton(onClick = { confirmArchive = null; onArchive(name) }) { Text("Archive", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmArchive = null }) { Text("Cancel") } },
         )
@@ -344,7 +344,7 @@ fun SessionsScreen(
             // going with it is the part worth a sentence.
             text = { Text("The row and the kept copy of its conversation are removed. This cannot be undone.") },
             confirmButton = {
-                TextButton(onClick = { val r = row; confirmDeleteArchive = null; onDeleteArchive(r) }) { Text("Forget") }
+                TextButton(onClick = { val r = row; confirmDeleteArchive = null; onDeleteArchive(r) }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmDeleteArchive = null }) { Text("Cancel") } },
         )

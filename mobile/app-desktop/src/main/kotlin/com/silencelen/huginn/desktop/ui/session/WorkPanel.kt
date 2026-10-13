@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The individual agents behind a fan-out, polled ONLY while somebody is looking.
@@ -165,7 +166,7 @@ fun WorkPanel(
     )
 
     Column(Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         WorkStrip(
             strip = strip,
             // A lingering strip must not go on breathing at work that has stopped.
@@ -189,7 +190,7 @@ fun WorkPanel(
                 onDispose { poll.close() }
             }
             val agents by poll.agents.collectAsState()
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
             Column(
                 Modifier.fillMaxWidth()
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)

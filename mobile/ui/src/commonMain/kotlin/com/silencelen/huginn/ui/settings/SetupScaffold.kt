@@ -335,7 +335,7 @@ fun SetupScaffold(
                 modifier = Modifier.padding(top = 4.dp),
             )
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
             Column(
@@ -408,7 +408,7 @@ fun SetupScaffold(
             }
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,

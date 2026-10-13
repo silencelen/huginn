@@ -264,7 +264,9 @@ fun NewestPill(onClick: () -> Unit) {
         horizontalArrangement = Arrangement.Center,
     ) {
         Surface(
-            color = MaterialTheme.colorScheme.primary,
+            // A routine pill, not the one filled button on the screen (that is Send).
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             shape = CircleShape,
             modifier = Modifier.clip(CircleShape).clickable(onClick = onClick),
         ) {
@@ -276,14 +278,14 @@ fun NewestPill(onClick: () -> Unit) {
                     Icons.Filled.ArrowDownward,
                     contentDescription = null,
                     modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary,
+                    tint = MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "New messages",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimary,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }

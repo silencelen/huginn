@@ -114,6 +114,7 @@ import com.silencelen.huginn.ui.tailRevision
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * One chat: the session's real Claude Code transcript, plus whatever the live run
@@ -321,7 +322,7 @@ fun ChatView(
             onTogglePadPanel = store?.takeIf { padsAvailable == true && panelFits }
                 ?.let { s -> { s.togglePadPanel() } },
         )
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
 
         notice?.let {
             Row(
@@ -432,7 +433,7 @@ fun ChatView(
             SuggestionChips(suggestions, onPick = setDraft)
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         Composer(
             // Same rule as the phone, read off the detail this view already holds.
             sealedRun = detail?.closed == true,

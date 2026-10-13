@@ -70,7 +70,7 @@ fun SessionControls(
     nowMs: Long = 0L,
     onAutoResume: (Boolean) -> Unit = {},
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
         EdgeFadeRow(
             // END PADDING INSIDE THE SCROLL, and larger than the start's: the
             // last chip is "resumes on reset", the widest thing in the row and
@@ -152,7 +152,7 @@ fun ChatOptionsBar(
     /** Present only on a LOCAL chat: hand this conversation to Claude, as a draft. */
     onEscalate: (() -> Unit)? = null,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
         EdgeFadeRow(
             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),

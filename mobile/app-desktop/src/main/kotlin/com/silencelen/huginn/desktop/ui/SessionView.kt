@@ -165,6 +165,7 @@ import com.silencelen.huginn.ui.theme.LocalMonoStyle
 import com.silencelen.huginn.desktop.TerminalLaunch
 import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
 import com.silencelen.huginn.desktop.ui.common.RowMenu
+import androidx.compose.material3.ButtonDefaults
 
 /**
  * One open session: the conversation Claude is having, and the pane it is having
@@ -377,7 +378,7 @@ fun SessionView(store: AppStore, name: String) {
                 }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
 
         // Weight on a plain Box, never on the scrolling container itself: handing
         // it straight to a SelectionContainer let the scroll area take the whole
@@ -1209,7 +1210,7 @@ private fun ScreenTab(controller: SessionController) {
                             cursor = null,
                             cursorColor = MaterialTheme.colorScheme.primary,
                         )
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                     }
                     TerminalCanvas(
                         grid = grid,
@@ -1242,7 +1243,15 @@ private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: (
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (live) {
-            Button(onClick = onToggleLive, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
+            // An outlined toggle like the pickers beside it; filled is for Send alone.
+            OutlinedButton(
+                onClick = onToggleLive,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            ) {
                 Text("Live", style = MaterialTheme.typography.labelMedium)
             }
         } else {
@@ -1385,7 +1394,7 @@ private fun Composer(
         if (files.isNotEmpty()) attachments.attachFiles(files)
     }
 
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
     Column(
         Modifier.fillMaxWidth()
             .attachmentDropTarget(
