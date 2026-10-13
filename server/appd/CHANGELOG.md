@@ -9,6 +9,39 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.11.0 — 2026-10-12
+
+### Security
+- **The daemon speaks TLS, on by default, with no setup and no certificate authority.** Before
+  this release the bearer token, which is root-equivalent on the host, crossed the network in
+  plain HTTP. That was only safe for people whose network was already encrypted (Tailscale, a mesh
+  VPN). appd now mints its own self-signed certificate on first start
+  (`$HUGINN_APPD_DATA/tls/`, P-256, key `0600`) and serves https and http on the same port, so
+  clients move to `https://` on the address they already have. Clients verify the certificate with
+  a proof bound to the token: `/v1/challenge` over TLS returns
+  `HMAC(token, "huginn-tls-v1:" + nonce + ":" + certificate fingerprint)`. A client checks it
+  against the fingerprint its own handshake saw, then pins it. Someone intercepting the connection
+  cannot produce that proof for their own certificate without the token. Full contract:
+  `docs/TLS.md`.
+- **Plain HTTP is honoured only from the host itself.** Under the new default
+  `HUGINN_APPD_PLAINTEXT=local`, a plain-HTTP request from any other address gets `426` and no
+  answer, the challenge included, so a client older than 3.11 can't prove the address in the clear
+  and then hand over its token. Hooks, host scripts and the CLI over ssh use loopback and are
+  unaffected. `HUGINN_APPD_PLAINTEXT=any` restores the old behaviour for a migration window and is
+  logged at every start while set.
+- To serve a CA-issued certificate instead, set `HUGINN_APPD_TLS_CERT` and `HUGINN_APPD_TLS_KEY`.
+  A certificate that cannot be loaded stops the daemon; it never falls back to plain HTTP.
+
+### Changed
+- `/v1/ping` reports `secure` for the connection it answered.
+- `deploy.sh` health-checks over loopback on both protocols. The old tailnet-address ping would
+  now get a `426`.
+
+### Upgrading
+Update the clients first (Android, desktop, CLI). They upgrade `http://` routes to `https://` on
+their own, or a 3.11 daemon refuses them. To deploy the daemon before every client has updated, set
+`HUGINN_APPD_PLAINTEXT=any` in a drop-in and remove it once they have.
+
 ## 3.10.3 — 2026-10-11
 
 ### Fixed
