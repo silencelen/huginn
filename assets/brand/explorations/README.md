@@ -32,10 +32,12 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | Round 2 | five refinements of that direction, each a system of mark, glyph and terminal art | [`round2/BRIEF.md`](round2/BRIEF.md) |
 | Round 2 pick | `r2-05-fold` for the mark; `r2-01-snapped`'s text art for the CLI; the glyph tile gains the wing fold | round-2 chooser, 2026-10-13 |
 | Round 3 | the fold raven redrawn upright on Snapped's lattice, three glyph constructions with the fold, Snapped's text art proved to be this bird's own raster | [`round3/fold-system/`](round3/fold-system/); the round-3 chooser records the pick |
+| **The mark, decided** | the upright fold raven, slimmed (`round3/fold-system/mark.svg`, 54 × 51); the glyph tile is `glyph-c.svg`, the whole mark in negative; the CLI art is Snapped's 24 × 8 (`ascii-7bit.txt` / `ascii-halfblock.txt`), the 48 × 16 fold art for the README and host splash | round-3 chooser, 2026-10-13: "approved, i like this version better" |
 
 Still open, in order: what attention means and which accent carries it; the
 palette ground; the type direction; the terminal letterform; the one-row
-raven's 7-bit twin; the motion set.
+raven's 7-bit twin; the motion set. All of these now build on
+`round3/fold-system/`.
 
 ## How to review
 
@@ -69,7 +71,7 @@ holds the upright fold raven and its masters, the perched round-2 bird for compa
 three glyph tiles that carry the wing fold (`glyph-a` full fold, `glyph-b` shoulder wedge,
 `glyph-c` the whole mark in negative; the README recommends c), Snapped's 24 by 8 text art
 byte-identical to round 2 plus the upright bird's own 24 by 8 and 48 by 16, and a
-`preview.png`. Open: approve or adjust the upright mark, pick the glyph, pick the CLI art.
+`preview.png`. **Decided:** the slimmer upright mark (revised once after the owner found the first upright draft too wide), `glyph-c`, Snapped's CLI art. The mark is settled; the next rounds build on these files.
 
 ## Round 2
 
