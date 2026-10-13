@@ -1015,6 +1015,26 @@ async function health(conf) {
 
 // -------------------------------------------------------------- enrolment
 
+/**
+ * The daemon url as it is stored: a remote http:// becomes https:// on the same
+ * host and port; loopback stays (docs/TLS.md rule 6).
+ *
+ * ⚠ THIS FILE NEVER DIALS appd. It hands the url to huginn-device, which does
+ * the proof and the pinning and would upgrade it anyway. The upgrade is here so
+ * local.json and the `→ <url>` this prints say what is actually dialled, and so
+ * the device.json written below is not rewritten on the runner's first load.
+ * Unparsable input passes through for the runner to refuse by name.
+ */
+function daemonUrl(u) {
+  if (!u) return u;
+  let p;
+  try { p = new URL(u); } catch { return u; }
+  const h = p.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (p.protocol !== 'http:' || h === 'localhost' || h === '::1' || /^127\.\d+\.\d+\.\d+$/.test(h)) return u;
+  p.protocol = 'https:';
+  return p.toString().replace(/\/$/, '');
+}
+
 function runnerPath() {
   const machine = P('bin', 'huginn-device.js');
   if (fs.existsSync(machine)) return machine;
@@ -1129,7 +1149,7 @@ async function cmdOn(flags) {
   const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 34) || 'machine';
   const conf = loadConf() || {};
   conf.deviceName = flags.name || conf.deviceName || `${hostname}-llm`;
-  conf.url = flags.url || conf.url;
+  conf.url = daemonUrl(flags.url || conf.url);
   if (!conf.url) { console.error('no daemon url — the shell wrapper passes --url (run: huginn local on)'); process.exit(2); }
 
   if (flags.adapter) {
@@ -1905,6 +1925,6 @@ if (require.main === module) {
     // neither systemd nor logind — see setRunner.
     setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
     persistenceVerdict, probeInstall, elevator, elevators, elevateOnce, updateElevationRefusal,
-    elevationArgv, unitFile, persistSteps, servicePlanLine,
+    elevationArgv, unitFile, persistSteps, servicePlanLine, daemonUrl,
   };
 }
