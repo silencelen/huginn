@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
+  <!-- Inverse: the same single path in bone on an ink ground; the raven is then the dark ground showing through. -->
+  <rect width="64" height="64" fill="#161310"/>
+  <path fill="#E8E2DA" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M57,32 L52,24 L30,16 L16,22 L12,64 L44,64 L47,50 L38,32 Z M28,24 h4 v4 h-4 Z"/>
+</svg>
