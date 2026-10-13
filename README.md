@@ -1,20 +1,11 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/raven-inverse.svg">
-  <img src="assets/brand/raven.svg" alt="The Huginn raven" width="120">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lockup-dark.svg">
+  <img src="assets/brand/lockup.svg" alt="huginn" width="360">
 </picture>
 
-<pre>
-██╗  ██╗██╗   ██╗ ██████╗ ██╗███╗   ██╗███╗   ██╗
-██║  ██║██║   ██║██╔════╝ ██║████╗  ██║████╗  ██║
-███████║██║   ██║██║  ███╗██║██╔██╗ ██║██╔██╗ ██║
-██╔══██║██║   ██║██║   ██║██║██║╚██╗██║██║╚██╗██║
-██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║ ╚████║
-╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝
-</pre>
-
-### 🐦‍⬛ Thought, on call from anywhere.
+### thought, on call from anywhere
 
 **One command to reach a persistent [Claude Code](https://docs.anthropic.com/en/docs/claude-code) session running on your own server — from your laptop, desktop, or phone.**
 **Plus native Android and desktop apps: chats, live session views, and permission prompts answered from your lock screen.**
@@ -52,7 +43,30 @@ PS C:\> huginn solo
 
 > 💡 **Want an animated demo?** A [VHS](https://github.com/charmbracelet/vhs) script lives at [`assets/demo.tape`](assets/demo.tape) — point it at your host and run `vhs assets/demo.tape` to render `docs/demo.gif`.
 
-## ✨ Why
+```text
+┌────────────────────────────────────────────────┐
+│                                                │
+│                 ▄▄██████▄                      │
+│               ▄██████▀▀████▄                   │
+│              ▄███████  ███████▄▄               │
+│               ███████▄▄████████▀               │
+│             ▄▄██████████████▀                  │
+│             ██ ████████████                    │
+│             ██▄▀███████████                    │
+│            ▄███ ███████████                    │
+│            █████▀██████████                    │
+│            █████ ██████████                    │
+│           ▄█████ █████████                     │
+│           █████ ██████████                     │
+│           ████ ██████████                      │
+│          ▄███ ███████▀                         │
+│          █████████▀                            │
+└────────────────────────────────────────────────┘
+```
+
+<sub>The raven is the terminal art: this is the mark's own raster, printed by `huginn status` on the host. Brand rules: [assets/brand/BRAND.md](assets/brand/BRAND.md).</sub>
+
+## Why
 
 > I found myself driving all my Claude Code sessions from my laptop, instead of from where I was actually working. It let me centralize my knowledge and session store in one place — but it bound me to that one machine. **Huginn is my solution.**
 
@@ -68,7 +82,7 @@ PS C:\> huginn solo
 | 📊 **Never silently capped** | *(with the daemon)* huginn watches the plan's usage windows: it warns a session before it runs out, steps it down a model **for that session only** (never rewriting your default), holds new subagent spawns while the account is tight, and resumes what stalled the moment the limit resets. `huginn headroom` shows the whole picture — [details](docs/USAGE.md#headroom-usage-limits). |
 | 🪶 **Tiny core** | The terminal path is a few shell scripts + a tmux config. The value is the *pattern*. |
 
-## 🚀 Quick start
+## Quick start
 
 **1. Provision a host** — a Proxmox LXC, a VM, a Raspberry Pi, or any always-on Debian/Ubuntu box. See [`provision/`](provision/).
 
@@ -101,7 +115,7 @@ huginn help          full reference
 
 **5. Optional — the apps:** deploy the daemon and build the Android / desktop clients — see [`mobile/README.md`](mobile/README.md) and [the apps](#-the-apps-optional) below.
 
-## ⌨️ In a session
+## In a session
 
 | Key | Action |
 |---|---|
@@ -111,7 +125,7 @@ huginn help          full reference
 
 The status bar shows these hints on the left. Full reference: [`docs/USAGE.md`](docs/USAGE.md).
 
-## 📱 The apps (optional)
+## The apps (optional)
 
 The terminal is the core; the apps are the comfortable way to live with it. One Kotlin
 codebase (`mobile/`) builds both an **Android app** and a **Windows/Linux desktop app**,
@@ -139,13 +153,13 @@ second root-equivalent credential and the docs treat it that way. There was an o
 Electron desktop client; it was retired and deleted on 2026-08-27 — the Compose one at
 `mobile/app-desktop` is the desktop client.
 
-## 🤔 Isn't this just `ssh` + `tmux`?
+## Isn't this just `ssh` + `tmux`?
 
 Yes — and that's the point. Huginn is `ssh` + `tmux` + `claude` with the sharp edges filed off: sensible multi-device tmux defaults (mirror, quick-detach, solo), a friendly one-word command with subcommands and tab-completion across PowerShell **and** bash/Termux, a container template, and a one-shot setup. The magic isn't new tech — it's the *packaging*.
 
 Being an `ssh` front end is also why the CLI drives **one** host: every verb that needs the daemon runs *on that host* against `127.0.0.1:8787`, reading `/etc/huginn-appd/token` there, so the bearer token never reaches your laptop and there is no client-side daemon address to point somewhere else. `HUGINN_HOST` chooses which box you ssh to, and that box's own daemon is the one you get. To drive a second host, ssh to it (`HUGINN_HOST=other huginn …`) — the phone and desktop apps are the clients that hold an address and a token of their own.
 
-## 🗂️ What's in here
+## What's in here
 
 | Path | What |
 |---|---|
@@ -156,14 +170,14 @@ Being an `ssh` front end is also why the CLI drives **one** host: every verb tha
 | [`mobile/`](mobile/) | the Kotlin clients and the code they share: `:core` (logic + HTTP), `:ui` (Compose), `:app` (Android — [changelog](mobile/CHANGELOG.md)), `:app-desktop` (Windows/Linux — [changelog](mobile/app-desktop/CHANGELOG.md)) |
 | [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [Adding a feature](docs/ADDING-A-FEATURE.md) · [Desktop migration](docs/DESKTOP-MIGRATION.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
 
-## 🧠 Memory (the other raven)
+## Memory (the other raven)
 
 Huginn is *thought*. Its companion is **Muninn** — *memory*: an optional MCP-backed memory layer so Claude remembers across sessions. That's out of scope here, but Claude Code's `claude mcp add ...` is the hook. See [Architecture → Extending it](docs/ARCHITECTURE.md#extending-it).
 
-## 🤝 Contributing
+## Contributing
 
 Issues and PRs welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md). Security reports: [`SECURITY.md`](SECURITY.md).
 
-## 📜 License
+## License
 
 [MIT](LICENSE) © silencelen

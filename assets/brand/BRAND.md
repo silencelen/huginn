@@ -250,28 +250,45 @@ and eye-scan indicators. They stay in the folder.
 - **Quiet.** The raven carries the character; the type and the colour carry
   the quality. One accent, one second voice, nothing loud but needs-you.
 
-## 9. To build
+## 9. Built, and still to build
 
-1. Cut `wordmark.svg`, `lockup.svg` and their dark twins from Plex Mono
-   SemiBold outlines with the decided raven as the cursor (the fontTools method
-   in `explorations/wordmark/type-01-schibsted/`), then the README header,
-   `wizard.bmp` and the About box from them.
-2. Replace `assets/brand/raven.svg`, `raven-tile.svg` and `raven-inverse.svg`
-   with the fold-system files, update `generate.sh` for the new ground and run
-   it: `icon.png`, `huginn.ico`, `wizard.bmp`, the Android foreground and the
-   status icon.
-3. `Theme.kt` from `color-04-moss-heather/tokens.json`, `Ansi.kt` from
-   `moss-heather.ansi.json`, `TrayIcons.kt` on the tile and the three state
-   tokens with the badge, `RavenMark.kt` on the new path; the Glance widgets on
-   the same scheme; bundle Plex. The full file-by-file list is the migration
-   table in `explorations/color/README.md`.
-4. Terminal: `huginn-status` and the attach banner print the 48 × 16 art, the
-   perch and the one-row bird; `server/tmux.conf` takes the snippet;
-   `cli-colors` into the clients; `huginn-claude-title` takes the glyph table;
-   the Telegram marks optional.
-5. Regenerate the tray sprite from the tile, move the blink lid to the decided
-   eye in the shipped SVG, keep the 7-bit terminal frames as they are.
-6. Refine the three colour trade-offs before freezing the tokens.
+Done on `claude/amazing-keller-uk2wd5`, 2026-10-13:
+
+- `wordmark.svg`, `lockup.svg` and their dark twins cut from Plex Mono SemiBold
+  with the raven as the cursor (`explorations/tools/cut_lockup.py`); the README
+  header and `wizard.bmp` use them.
+- `raven.svg`, `raven-tile.svg`, `raven-inverse.svg` are the fold-system files
+  in the Moss ink and bone; `generate.sh` takes the new ground and falls back to
+  the Playwright renderer; `icon.png`, `huginn.ico`, `huginn.png`, `wizard.bmp`
+  regenerated; the Android launcher foreground on the new path, the status icon
+  on the tile glyph, `colors.xml` on the new ground.
+- `Theme.kt` on the tokens with the tiers, outlines, containers, a
+  `HuginnColors` local for the state ladder, and the syntax colours; needs-you
+  dots take `stateAttention`; `Ansi.kt` on the brand ANSI-16; `TrayIcons.kt`
+  draws the tile tinted by state with the badge; `RavenMark.kt` carries the new
+  path and the tile. Not compiled in the authoring container (Gradle could not
+  resolve the Kotlin plugin there); build and run `PaletteTest` before merging.
+- `huginn-status` on the brand slot table with `(o>` in the first line;
+  `huginn-claude-title` defaults to `●` `▲` `○` with `*` `!` `o` off UTF-8;
+  `server/tmux.conf` status bar on the tokens with `(o>`; the client's
+  reconnect and give-up messages in warn and error on a TTY.
+- `raven-blink.svg` with the lid on the decided eye; the tray sprite spec
+  carries the tile geometry (revision 3).
+- README header and section headers.
+
+Still to build:
+
+1. Bundle IBM Plex Mono and Sans as Compose resources and fill
+   `HuginnTypography` and `LocalMonoStyle` from them (section 5).
+2. The host splash after attach: the 48 × 16 art and the hairline perch in
+   `huginn-status` / the attach banner; `cli-colors` tables as files the
+   clients inline.
+3. The attention pulse and the cursor breath in Compose from the specs; the
+   blink as the apps' idle state.
+4. The Glance widgets on the scheme; the libnotify icon PNG; the Telegram
+   marks (optional).
+5. Refine the three colour trade-offs before freezing the tokens; then
+   regenerate `tokens.json`, `Theme.kt` and `Ansi.kt` from the generator.
 
 ## Record of decisions
 
