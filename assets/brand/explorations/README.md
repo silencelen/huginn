@@ -35,11 +35,10 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | **The mark, decided** | the upright fold raven, slimmed (`round3/fold-system/mark.svg`, 54 × 51); the glyph tile is `glyph-c.svg`, the whole mark in negative; the CLI art is Snapped's 24 × 8 (`ascii-7bit.txt` / `ascii-halfblock.txt`), the 48 × 16 fold art for the README and host splash | round-3 chooser, 2026-10-13: "approved, i like this version better" |
 | **Colour, decided** | `color-04-moss-heather` (evergreen accent on dark grey, heather second voice; added at the owner's request and proved by the same rules); needs-you = the accent lit up (`stateAttention`, not error); tray needs-you = tinted tile + badge dot; needs-you glyph = `▲` / `!`, so error takes `×` / `x` | round-4 chooser, 2026-10-13 |
 | **Type, decided** | `type-02-plex-mono`: IBM Plex Mono for the wordmark (lowercase `huginn`), display, labels, terminal and code, IBM Plex Sans for titles and body; the raven-as-cursor lockup. Terminal letterform: the hairline, `word-10-perch` with the raven re-cut from the decided mark (`round5/perch-upright*.txt`), `word-09` where no bird fits, `word-06-pagga` under 34 columns. One-row raven: `(o>` with its state variants, 7-bit everywhere | round-5 chooser, 2026-10-13 |
+| **Hero, help header and motion, decided** | hero: the still cursor lockup as SVG outlines (README header with a dark twin, installer, About box, social cards); the client's help header keeps today's `(o)==-` bird; motion: the recommended set (blink, cursor breath, tray pulse; wingbeat spinner, landing and takeoff, 7-bit boot, tmux drift and attention) | round-6 chooser, 2026-10-13 |
 
-Still open: the hero form for README, splash and installer; the client's help
-header; the motion set. Then the brand book. Everything builds on
-`round3/fold-system/`, `color/color-04-moss-heather/`, `wordmark/type-02-plex-mono/`
-and `round5/`.
+The decision checklist is complete. The brand book is `../BRAND.md`; it names
+the shipped files and the composite work still to do.
 
 ## How to review
 
@@ -69,8 +68,8 @@ are single-width; one has to win.
 ## Round 6
 
 The last chooser, "The Raven in Motion": [`round6/README.md`](round6/README.md)
-asks the hero form, the client's help header and the motion set, with the
-recommendation. After it, the brand book.
+asked the hero form, the client's help header and the motion set. **Decided:**
+the still cursor lockup, today's help bird, the recommended motion set.
 
 ## Round 5
 
