@@ -12,9 +12,10 @@ case "${1:-}" in
   -h|--help)
     echo "usage: huginn-devices"
     echo "       huginn-devices watch <name-or-id> on|off"
-    echo "  The machines enrolled with this host: what each offers, and when it was last seen."
-    echo "  'watch' marks one the host should expect to be ALWAYS on: it then messages you (Telegram)"
-    echo "  when the machine has not checked in for ten minutes, and again when it is back."
+    echo "  The machines enrolled with this host: what each offers, and when it was"
+    echo "  last seen. 'watch' marks one the host should expect to be always on: it"
+    echo "  then messages you (Telegram) when the machine has not checked in for ten"
+    echo "  minutes, and again when it is back."
     exit 0 ;;
   '') ;;
   watch)
@@ -23,6 +24,14 @@ case "${1:-}" in
     [ -n "$WATCH_NAME" ] && [ -n "$WATCH_ON" ] || { echo "usage: huginn-devices watch <name-or-id> on|off" >&2; exit 1; } ;;
   *) echo "usage: huginn-devices [watch <name-or-id> on|off]" >&2; exit 1 ;;
 esac
+
+# The state table (server/lib/state-table.json, through its generated bash
+# reader): see huginn-rounds. Exported, so the python below reads os.environ.
+_lib="$(dirname "$(readlink -f "$0")")/../lib"
+[ -r "$_lib/state-table.sh" ] || _lib=/usr/local/lib/huginn
+# shellcheck source=../lib/state-table.sh
+. "$_lib/state-table.sh" 2>/dev/null \
+  || { echo "huginn-devices: missing $_lib/state-table.sh - re-run server/setup.sh" >&2; exit 1; }
 
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-devices: no appd token at $TOKEN_FILE" >&2; exit 1; }
@@ -52,7 +61,7 @@ print(hit[0]["id"])' "$WATCH_NAME" "$LIST")" || exit 1
 import json, sys
 d = json.loads(sys.argv[1])
 if d.get("watch"):
-    print("  %s is now WATCHED: you will be messaged when it has not checked in for 10 minutes, and when it is back." % d["name"])
+    print("  %s is now watched: you will be messaged when it has not checked in for 10 minutes, and when it is back." % d["name"])
 else:
     print("  %s is no longer watched." % d["name"])' "$OUT"
   exit 0
@@ -66,10 +75,13 @@ BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
 }
 
 python3 -c '
-import json, sys, time
+import json, os, sys, time
 
+E = os.environ
 d = json.loads(sys.argv[1])
 devs = d.get("devices", [])
+# The one line grammar (BRAND.md section 3): the one-row raven and the surface.
+print("(o> huginn - devices")
 if not devs:
     print()
     print("  No devices enrolled.")
@@ -100,7 +112,7 @@ def clean(v, n=0):
 
 def state_of(x, serving=False):
     if x.get("running"):
-        return "RUNNING a job"
+        return "%s on a job" % E["HUGINN_WORD_RUNNING"]
     if not x.get("online"):
         return "not reachable  (last seen %s)" % ago(x.get("lastSeen"))
     if x.get("queued"):
@@ -139,7 +151,15 @@ for k in order:
     # `or "?"`, not `.get(k, "?")`: the default only covers a MISSING key, and a
     # key that is present-but-null sails straight through it and prints "None".
     watched = any(x.get("watch") for x in rows)
-    print("  %-1s %s%s" % ("*" if any_on else " ", clean(head.get("name")) or "?",
+    # The state table: * a job is running, + reachable, o not reachable (waiting
+    # for it to check in again -- the same glyph the offline message leads with).
+    if any(x.get("running") for x in rows):
+        mark = E["HUGINN_MARK_RUNNING"]
+    elif any_on:
+        mark = E["HUGINN_MARK_OK"]
+    else:
+        mark = E["HUGINN_MARK_WAITING"]
+    print("  %s %s%s" % (mark, clean(head.get("name")) or "?",
                            "  (watched: expected always on)" if watched else ""))
     for x in claude:
         # Enrolled scope AND what it will do right now, when they differ: "own,
@@ -148,7 +168,7 @@ for k in order:
         scope = x.get("scope") or "?"
         eff = x.get("effectiveScope") or scope
         scope_txt = scope if scope == eff else "%s -> %s while locked" % (scope, eff)
-        print("      %s  .  %s  .  %s" % (clean(x.get("platform")) or "?", scope_txt, state_of(x)))
+        print("    %s  .  %s  .  %s" % (clean(x.get("platform")) or "?", scope_txt, state_of(x)))
         extra = []
         # A device names ITSELF: root and version are whatever the far machine
         # sent, capped at 300 and 40 bytes and never inspected.
@@ -165,7 +185,7 @@ for k in order:
         elif root:
             extra.append("work runs in the account home dir (--root %s applies at work scope)" % root)
         if extra:
-            print("      %s" % "  .  ".join(extra))
+            print("    %s" % "  .  ".join(extra))
     for x in serving:
         models = ", ".join(clean(m.get("display")) or clean(m.get("slug")) or "?"
                            for m in (x.get("models") or [])) or "?"
@@ -173,7 +193,7 @@ for k in order:
         ver = clean(x.get("version"), 40)
         if ver:
             bits.append("v%s" % ver)
-        print("      %s" % "  .  ".join(bits))
+        print("    %s" % "  .  ".join(bits))
     print()
 
 machines = len(order)

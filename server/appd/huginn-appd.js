@@ -36,6 +36,9 @@ const { readTranscript, liveActivity } = require('./lib/transcript');
 const tlsLib = require('./lib/tls');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
+// The brand state table (server/lib/state-table.json, generated into lib/): every
+// Telegram message leads with one of its glyphs, never an emoji (BRAND.md s. 8).
+const { GLYPH } = require('./lib/state-table');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const oauthRefresh = require('./lib/oauth-refresh');
 const oauthlock = require('./lib/oauthlock');
@@ -99,7 +102,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.11.0';
+const VERSION = '3.12.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -287,8 +290,8 @@ const SESSION_FRAME_RE = /\[Scratchpad "([^"\n]{1,60})" at [^\]\n]*\]\n*/g;
  */
 function humanizeUserText(t) {
   let s = String(t || '')
-    .replace(/\[Attached image at [^\]]+\]/g, '\u{1F4F7} photo')
-    .replace(/\[Attached file at [^\]]+\]/g, '\u{1F4CE} file');
+    .replace(/\[Attached image at [^\]]+\]/g, 'photo')
+    .replace(/\[Attached file at [^\]]+\]/g, 'file');
   // ⚠ BOTH MARKERS PRESENT BEFORE THE SCAN IS ATTEMPTED AT ALL. CHAT_FRAME_RE
   // holds a `[\s\S]*?` between two literals, so on text with many opening
   // markers and no closing one the engine restarts a walk to end-of-string at
@@ -297,11 +300,13 @@ function humanizeUserText(t) {
   // indexOf scans and changes nothing about what matches: neither pattern can
   // fire without the literal it is testing for.
   if (s.includes('[Scratchpad "')) {
-    if (s.includes('[End scratchpad')) s = s.replace(CHAT_FRAME_RE, '\u{1F4DD} $1\n');
-    s = s.replace(SESSION_FRAME_RE, '\u{1F4DD} $1\n');
+    if (s.includes('[End scratchpad')) s = s.replace(CHAT_FRAME_RE, 'page $1\n');
+    s = s.replace(SESSION_FRAME_RE, 'page $1\n');
   }
   s = s.trim();
-  return s || '\u{1F4F7} photo';
+  // Words, not emoji (BRAND.md section 8): a snippet reads "photo", "file" or
+  // "page <name>" where it used to carry a pictograph.
+  return s || 'photo';
 }
 
 const TOKEN = (() => {
@@ -5286,7 +5291,11 @@ function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
   }
 }
 
-const ROUND_MARK = { ok: '✅', attention: '⚠️', action: '🔴', unknown: '❓' };
+// The state table's glyph and the rounds vocabulary the apps and huginn-rounds
+// use: ok all clear, attention worth a look (info), action needs you, and an
+// unreadable report is info too - something to read, not something that failed.
+const ROUND_MARK = { ok: GLYPH.ok, attention: GLYPH.info, action: GLYPH.needsYou, unknown: GLYPH.info };
+const ROUND_WORD = { ok: 'all clear', attention: 'worth a look', action: 'needs you', unknown: 'unclear' };
 
 /**
  * Push first, Telegram only if the app did not get it.
@@ -5315,7 +5324,7 @@ async function deliverRoundReport(round, report, chatId) {
     log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
     return;
   }
-  const lines = [`${ROUND_MARK[status] || ROUND_MARK.unknown} ${round.title}`, text];
+  const lines = [`${ROUND_MARK[status] || ROUND_MARK.unknown} ${round.title} \u00b7 ${ROUND_WORD[status] || ROUND_WORD.unknown}`, text];
   // A handful of items, each with its next step. Statements only — there is no
   // reply path on that channel, so a question would arrive as noise.
   for (const it of report.items.slice(0, 5)) {
@@ -5818,7 +5827,7 @@ async function notifyRefreshWarning(rec) {
   const push = await deliverPush({
     kind: 'account_refresh', title: 'A saved Claude login is expiring', text, subject: rec.slug,
   });
-  if (!push.sent) await deliverTelegram(`\u{26A0} A saved Claude login is expiring\n${text}`);
+  if (!push.sent) await deliverTelegram(`${GLYPH.needsYou} a saved Claude login is expiring\n${text}`);
   return true;
 }
 
@@ -8419,7 +8428,7 @@ async function applyHeadroomAction(action, ctx) {
         + `now on ${d.toEmail || d.to} at ${d.toPercent}%. Running sessions keep the `
         + `old account until they restart.`;
       const push = await deliverPush({ kind: 'account_switch', title: 'Switched Claude account', text, subject: d.to });
-      if (!push.sent) await deliverTelegram(`\u{1F501} Switched Claude account\n${text}`);
+      if (!push.sent) await deliverTelegram(`${GLYPH.info} switched Claude account\n${text}`);
       log(`headroom: ${d.fromEmail} (${d.fromPercent}%) -> ${d.toEmail} (${d.toPercent}%)`);
       return;
     }
@@ -8517,7 +8526,7 @@ async function applyHeadroomAction(action, ctx) {
         options: ['Undo', 'OK'],
         payload: { session: action.name, to, from },
       });
-      if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${action.name} to ${to}\n${text}`);
+      if (!push.sent) await deliverTelegram(`${GLYPH.info} moved ${action.name} to ${to}\n${text}`);
       return;
     }
     case 'offer_ladder_up': {
@@ -8536,7 +8545,7 @@ async function applyHeadroomAction(action, ctx) {
         options: ['Back to Fable', 'Stay'],
         payload: { session: action.name, to: action.to },
       });
-      if (!push.sent) await deliverTelegram(`\u{1F199} Back to Fable?\n${text}`);
+      if (!push.sent) await deliverTelegram(`${GLYPH.info} back to Fable?\n${text}`);
       log(`headroom: offered ${action.name} a move back to fable`);
       return;
     }
@@ -8595,7 +8604,7 @@ function resolvePendingLadder(state, action, v) {
       options: ['Undo', 'OK'],
       payload: { session: name, to, from },
     }).then((push) => {
-      if (!push.sent) return deliverTelegram(`\u{1F4C9} Moved ${name} to ${to}\n${text}`);
+      if (!push.sent) return deliverTelegram(`${GLYPH.info} moved ${name} to ${to}\n${text}`);
       return null;
     }).catch((e) => log(`headroom: could not announce the queued ladder: ${e.message}`));
   }
@@ -8768,7 +8777,7 @@ async function noteStall(rec, s, settings, activeWindows, now) {
       resetsAt: found.resetsAt ? new Date(found.resetsAt).toISOString() : '',
     },
   });
-  if (!push.sent) await deliverTelegram(`\u{1F6D1} Usage limit reached\n${text}`);
+  if (!push.sent) await deliverTelegram(`${GLYPH.error} usage limit reached\n${text}`);
   return records;
 }
 
@@ -8840,7 +8849,7 @@ async function resumeSession(rec, s, settings, ctx) {
           subject: s.name,
           payload: { session: s.name, window: stall.window || '' },
         });
-        if (!push.sent) await deliverTelegram(`\u{1F6D1} Auto-resume gave up\n${text}`);
+        if (!push.sent) await deliverTelegram(`${GLYPH.error} auto-resume gave up\n${text}`);
       }
       return null;
     } else {
@@ -8971,7 +8980,7 @@ async function applyResumes(ctx) {
     subject: resumed.length === 1 && first ? first : 'headroom',
     payload: { sessions: resumed.map((l) => String(l).split(' ')[0]).join(',') },
   });
-  if (!push.sent) await deliverTelegram(`\u{1F504} Usage limit reset\n${text}`);
+  if (!push.sent) await deliverTelegram(`${GLYPH.ok} usage limit reset\n${text}`);
   log(`headroom: ${text}`);
 }
 
@@ -9300,7 +9309,7 @@ async function consentWatch(state, settings, sessions, now) {
       options: ['Undo', 'OK'],
       payload: { session: s.name, to: to || '', from: 'fable' },
     });
-    if (!push.sent) await deliverTelegram(`\u{1F4C9} Moved ${s.name} off Fable\n${text}`);
+    if (!push.sent) await deliverTelegram(`${GLYPH.info} moved ${s.name} off Fable\n${text}`);
   }
   for (const name of [...consentSeen.keys()]) if (!live.has(name)) consentSeen.delete(name);
 }

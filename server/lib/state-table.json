@@ -1,0 +1,12 @@
+{
+  "_comment": "THE state table (assets/brand/BRAND.md section 4 and 8). Seven words, one Unicode glyph and one 7-bit mark each, the one-row raven where a state has one, and the 16-colour slot (SGR number) and console colour it prints in. Every renderer reads this through a GENERATED reader: server/lib/state-table.sh (bash), state-table.py (python), state-table.js (node, plus the copy appd deploys as server/appd/lib/state-table.js). Edit here, then run: node scripts/gen-state-table.js. The 7-bit mark is what anything that can reach Windows PowerShell 5.1 prints; the glyph is for titles, tmux and Telegram. A mark means one thing everywhere.",
+  "states": [
+    { "key": "running",  "word": "working",   "glyph": "●", "mark": "*", "oneRow": "(o>", "sgr": 32, "console": "Green" },
+    { "key": "needsYou", "word": "needs you", "glyph": "▲", "mark": "!", "oneRow": "(!>", "sgr": 93, "console": "Yellow" },
+    { "key": "waiting",  "word": "waiting",   "glyph": "○", "mark": "o", "oneRow": "(->", "sgr": 90, "console": "DarkGray" },
+    { "key": "ok",       "word": "ok",        "glyph": "■", "mark": "+", "sgr": 96, "console": "Cyan" },
+    { "key": "error",    "word": "error",     "glyph": "×", "mark": "x", "sgr": 91, "console": "Red" },
+    { "key": "info",     "word": "info",      "glyph": "▸", "mark": ">", "sgr": 95, "console": "Magenta" },
+    { "key": "shell",    "word": "shell",     "glyph": "◦", "mark": "-", "sgr": 90, "console": "DarkGray" }
+  ]
+}

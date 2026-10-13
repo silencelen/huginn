@@ -34,6 +34,14 @@ case "${1:-}" in
     exit 0 ;;
 esac
 
+# The state table (server/lib/state-table.json, through its generated bash
+# reader): see huginn-rounds. Exported, so the python below reads os.environ.
+_lib="$(dirname "$(readlink -f "$0")")/../lib"
+[ -r "$_lib/state-table.sh" ] || _lib=/usr/local/lib/huginn
+# shellcheck source=../lib/state-table.sh
+. "$_lib/state-table.sh" 2>/dev/null \
+  || { echo "huginn-archive: missing $_lib/state-table.sh - re-run server/setup.sh" >&2; exit 1; }
+
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-archive: no appd token at $TOKEN_FILE" >&2; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
@@ -114,7 +122,7 @@ for r in rows:
         print(r.get("id")); sys.exit(0)
 print("")
 ' "$(cat "$BODY_FILE")" "$WHAT")"
-  [ -n "$ID" ] || { echo "huginn-archive: nothing archived under '$WHAT' — run 'huginn archive' for the list" >&2; exit 1; }
+  [ -n "$ID" ] || { echo "huginn-archive: nothing archived under '$WHAT' - run 'huginn archive' for the list" >&2; exit 1; }
 
   ST="$(call POST "/v1/archive/$ID/revive")" || down
   if [ "$ST" != "201" ]; then
@@ -133,7 +141,7 @@ print("")
   else
     # The failure this whole feature exists to prevent, said out loud rather than
     # left to be discovered at the prompt.
-    printf '  WITHOUT its conversation — nothing resumable was left on disk, so this\n'
+    printf '  without its conversation - nothing resumable was left on disk, so this\n'
     printf '  is a fresh Claude in the right directory.\n'
   fi
   printf '\n  attach it with:  huginn %s\n\n' "$NAME"
@@ -166,7 +174,7 @@ if [ -n "${1:-}" ]; then
     exit 1
   fi
   if [ "$(field archived)" = "True" ]; then
-    printf '\n  archived %s — it is ended, and on the list with its resume command.\n\n' "$NAME"
+    printf '\n  archived %s - it is ended, and on the list with its resume command.\n\n' "$NAME"
   else
     printf '\n  %s is winding down: sent the wrap-up phrase' "$NAME"
     [ "$(field queued)" = "True" ] && printf ' (queued behind the turn it is in)'
@@ -181,10 +189,13 @@ ST="$(call GET /v1/archive)" || down
 old_daemon "$ST"
 
 python3 -c '
-import json, sys, time
+import json, os, sys, time
 
+E = os.environ
 d = json.loads(sys.argv[1])
 rows = d.get("archives", [])
+# The one line grammar (BRAND.md section 3): the one-row raven and the surface.
+print("(o> huginn - archive")
 if not rows:
     print()
     print("  Nothing archived. Archiving a session ends it for good and keeps the")
@@ -228,9 +239,15 @@ for r in rows:
     live = bool(r.get("live"))
     kept = bool(r.get("transcriptPresent"))
     # The mark answers the only question this list is asked: can I have it back.
-    mark = ">" if live else ("-" if kept else "!")
+    # The state table: * running again, o kept and waiting to come back, x gone.
+    if live:
+        mark = E["HUGINN_MARK_RUNNING"]
+    elif kept:
+        mark = E["HUGINN_MARK_WAITING"]
+    else:
+        mark = E["HUGINN_MARK_ERROR"]
     name = clean(r.get("tmuxName")) or clean(r.get("id"), 8)
-    print("  %-2s %s" % (mark, clean(r.get("title")) or name))
+    print("  %s %s" % (mark, clean(r.get("title")) or name))
 
     bits = [ago(r.get("archivedAt")) or "archived"]
     if clean(r.get("tmuxName")) and clean(r.get("title")):
@@ -239,25 +256,25 @@ for r in rows:
         bits.append(clean(r.get("cwd")))
     if clean(r.get("model")):
         bits.append(clean(r.get("model")))
-    print("       %s" % "  .  ".join(bits))
+    print("    %s" % "  .  ".join(bits))
 
     if live:
         # Already back. Offering a revive here would start a SECOND Claude on one
         # transcript, which is the one thing this list must not invite.
-        print("       running again as %s" % (clean(r.get("revivedAs")) or name))
+        print("    running again as %s" % (clean(r.get("revivedAs")) or name))
     elif not kept:
         # The 21-day sweep took it and nothing was kept. Saying so is the whole
         # difference between a revive that disappoints and one nobody attempts.
-        print("       TRANSCRIPT GONE -- a revive would start fresh here")
+        print("    transcript gone - a revive would start fresh here")
     elif r.get("transcriptTruncated"):
-        print("       transcript kept, tail only (%s)" % (size(r.get("transcriptBytes")) or "clipped"))
+        print("    transcript kept, tail only (%s)" % (size(r.get("transcriptBytes")) or "clipped"))
 
     last = clean(r.get("lastMessage"), 88)
     if last:
-        print("       last: %s" % last)
+        print("    last: %s" % last)
     cmd = clean(r.get("resumeCommand"), 160)
     if cmd:
-        print("       %s" % cmd)
+        print("    %s" % cmd)
     print()
 
 n = len(rows)

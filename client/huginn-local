@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 1.7.0
+// Version: 1.8.0
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -894,7 +894,7 @@ function ensureLinger() {
     console.log(`  linger  enabled for ${user} — this install serves while you are logged out`);
     return true;
   }
-  console.log(`  linger  NOT enabled for ${user}${r.error ? ` (${r.error})` : ''}`);
+  console.log(`  linger  not enabled for ${user}${r.error ? ` (${r.error})` : ''}`);
   console.log('          this install STOPS when you log out — make it permanent: huginn local persist');
   return false;
 }
@@ -1410,7 +1410,7 @@ async function cmdOff(flags) {
   let failed = 0;
   const step = (name, fn) => {
     try { fn(); console.log(`  ok      ${name}`); }
-    catch (e) { failed += 1; console.error(`  FAILED  ${name}: ${e.message}`); }
+    catch (e) { failed += 1; console.error(`  failed  ${name}: ${e.message}`); }
   };
   // ⚠ ONLY THE SERVICES THIS TIER INSTALLED. In adapter mode the model server
   // belongs to somebody else — an externally installed llama-swap with its own
@@ -1505,7 +1505,7 @@ async function cmdOff(flags) {
     try { kept = fs.readdirSync(P('models')).length; } catch { /* none */ }
     if (kept) console.log(`off, not gone: ${kept} model file(s) remain at ${P('models')} — remove with: huginn local off --purge-models  (or --purge for everything)`);
   }
-  if (failed) { console.error(`\n${failed} step(s) failed — NOT fully off.`); process.exit(1); }
+  if (failed) { console.error(`\n${failed} step(s) failed - not fully off.`); process.exit(1); }
   console.log('\nOff.');
 }
 
@@ -1550,15 +1550,18 @@ async function statusInfo() {
 async function cmdStatus(flags) {
   const s = await statusInfo();
   if (flags.json) { process.stdout.write(JSON.stringify(s) + '\n'); return; }
-  if (!s.setup) { console.log('not set up — run: huginn local on'); return; }
+  if (!s.setup) { console.log('not set up - run: huginn local on'); return; }
+  // The one line grammar (BRAND.md section 3): the one-row raven and the surface,
+  // then one key column, twelve wide.
+  console.log('(o> huginn - local');
   console.log(`mode        ${s.mode}${s.adopted ? ` (adopted ${(s.adapter && s.adapter.kind) || 'engine'}, class ${s.class})` : ` (class ${s.class})`}`);
   console.log(`device      ${s.deviceName}${s.llmSlug ? ` (slug ${s.llmSlug})` : ''}`);
-  console.log(`services    llm: ${s.services.llm} · runner: ${s.services.runner}`);
+  console.log(`services    llm: ${s.services.llm}  .  runner: ${s.services.runner}`);
   console.log(`persistence ${persistenceLine({ systemUnits: s.systemUnits, linger: s.linger, persistent: s.persistent })}`);
-  console.log(`engine      ${s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'NOT ANSWERING'} at ${s.engine.base || '?'}`);
+  console.log(`engine      ${s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'not answering'} at ${s.engine.base || '?'}`);
   console.log(`shim        ${s.shimVersion || 'not installed'}`);
   console.log(`sessions    ${s.sessions} file(s)`);
-  if (s.installed) console.log(`pins        llama.cpp ${s.installed.llamaTag} · llama-swap ${s.installed.swapVersion} · manifest ${s.installed.manifestHash}`);
+  if (s.installed) console.log(`pins        llama.cpp ${s.installed.llamaTag}  .  llama-swap ${s.installed.swapVersion}  .  manifest ${s.installed.manifestHash}`);
 }
 
 // ---------------------------------------------------------------- update
@@ -1640,7 +1643,7 @@ async function cmdUpdate(flags) {
 function persistenceVerdict(s) {
   const line = persistenceLine({ systemUnits: s.systemUnits, linger: s.linger, persistent: s.persistent });
   if (s.persistent === true) return { level: 'ok', line };
-  if (s.persistent === false) return { level: 'FAIL', line };
+  if (s.persistent === false) return { level: 'fail', line };
   return { level: 'note', line };
 }
 
@@ -1656,9 +1659,9 @@ async function cmdDoctor() {
   const okShape = !!r && r.status === 0 && frames.length >= 3
     && frames[0].includes('"subtype":"init"') && frames[frames.length - 1].includes('"type":"result"');
   if (!okShape) failed += 1;
-  console.log(`  ${okShape ? 'ok    ' : 'FAIL  '}shim --contract-check (${frames.length} frames)`);
+  console.log(`  ${okShape ? 'ok    ' : 'fail  '}shim --contract-check (${frames.length} frames)`);
   const pv = persistenceVerdict(s);
-  if (pv.level === 'FAIL') failed += 1;
+  if (pv.level === 'fail') failed += 1;
   console.log(`  ${pv.level.padEnd(6)}persistence: ${pv.line}`);
   const gate = diskGate(0, freeBytes());
   console.log(`  ok    disk: ${gate.line}`);
@@ -1670,7 +1673,7 @@ async function cmdDoctor() {
     if (Array.isArray(list)) console.log(`  note  an existing ${kind} serves ${list.length} model(s) here — adapter mode can wrap it`);
   }
   if (failed) {
-    console.error(`\n${failed} check(s) FAILED — this install is not doing what it says.`);
+    console.error(`\n${failed} check(s) failed - this install is not doing what it says.`);
     process.exit(1);
   }
 }
@@ -1729,7 +1732,7 @@ async function cmdPersist(flags) {
   let failed = 0;
   const step = (name, fn) => {
     try { fn(); console.log(`  ok      ${name}`); }
-    catch (e) { failed += 1; console.error(`  FAILED  ${name}: ${e.message}`); }
+    catch (e) { failed += 1; console.error(`  failed  ${name}: ${e.message}`); }
   };
   const steps = persistSteps();
   const userHalf = steps.filter((x) => x.kind.endsWith('-user'));
@@ -1800,7 +1803,7 @@ async function cmdPersist(flags) {
 
   run(steps);
   console.log(`  persist ${persistenceLine(persistence(loadConf() || {}))}`);
-  if (failed) { console.error(`\n${failed} step(s) failed — NOT migrated.`); process.exit(1); }
+  if (failed) { console.error(`\n${failed} step(s) failed - not migrated.`); process.exit(1); }
   console.log('\nPersistent. This machine serves huginn with nobody logged in.');
 }
 

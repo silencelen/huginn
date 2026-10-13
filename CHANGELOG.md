@@ -8,6 +8,41 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.8.0] - 2026-10-13
+
+### Changed
+- **One state table, shipped as data.** `server/lib/state-table.json` holds the seven state words,
+  each with a Unicode glyph and a 7-bit mark: working `●`/`*`, needs you `▲`/`!`, waiting `○`/`o`,
+  ok `■`/`+`, error `×`/`x`, info `▸`/`>`, shell `◦`/`-`. `scripts/gen-state-table.js` generates a
+  reader for bash, python and node, and every renderer in `server/bin` reads from it, as does
+  `huginn-claude-title`. A mark now means the same thing everywhere. The rounds listing no
+  longer uses `!!` or `?`, and a live archived session is `*`, not `>`. `server/setup.sh`
+  installs the table to `/usr/local/lib/huginn/`.
+- **No shouting.** NEEDS YOU, RUNNING, DID NOT FINISH, TRANSCRIPT GONE, NOT reachable, MISSING,
+  WATCHED, OFF, EXHAUSTED, FAIL, EXCEEDED and RED are now lowercase across the renderers,
+  `huginn device status` and `huginn local status` / `doctor`. "needs you" still stands out by its
+  mark and its place in the line.
+- **One line grammar.** Each renderer's first line is `(o> huginn - <surface>`, followed by a
+  blank line, the rows at a 2-space indent with details at 4, `  .  ` between fields, `->` for
+  arrows, and a count line at the end. `huginn device status` puts its keys in one column.
+  `huginn-status` lists sessions with `-` (was `・`). Em-dashes in host output that reaches
+  PowerShell 5.1 became ` - `, and `huginn-projects --help` drops its ⚠. Both clients print
+  `(o>` on the version line.
+- **One help screen.** `client/help-table.txt` is the help for both clients. `scripts/gen-help.js`
+  splices it into `huginn.sh` and `huginn.ps1`, and `scripts/test-client.sh` fails if either copy
+  drifts. Both clients now list `devices watch` and word the device and local-AI rows the same
+  way. PowerShell prints a blank line after the banner like bash does, every line fits in 80
+  columns, the long `projects` rows put their description on the next line, and the footer says
+  "working / needs you / waiting".
+- **One colour guard.** In bash, `_huginn_color` checks the fd it writes to and NO_COLOR, and
+  `huginn update` now colours the same lines PowerShell does. In PowerShell, every coloured line
+  goes through `_Huginn-Say`, which checks `$script:HuginnColorOn` (NO_COLOR unset and output
+  not redirected); `install.ps1` uses the same rule. Colours are the brand's slot pins: error
+  brightRed, attention brightYellow, ok brightCyan (was green), muted brightBlack.
+  `huginn-status` takes its slots from the state table. `_Huginn-Fail` now writes the plain
+  message to stderr before it throws, so a refusal reads like bash's.
+- `server/tmux.conf` carries the 16-colour fallback status bar as a commented alternative.
+
 ## [1.7.0] - 2026-10-12
 
 ### Security
