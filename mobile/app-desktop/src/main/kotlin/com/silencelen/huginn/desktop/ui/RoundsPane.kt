@@ -37,6 +37,7 @@ import com.silencelen.huginn.ui.toDraft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.material3.OutlinedButton
+import com.silencelen.huginn.ui.system.HouseDialog
 
 /**
  * The Rounds destination: every scheduled job, what it last found, and now the
@@ -194,23 +195,22 @@ private fun RoundEditorPane(
     )
 
     if (confirmDelete && existing != null) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete ${existing.title}?") },
-            text = { Text("It stops running. The reports it has already written stay where they are, as chats.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmDelete = false
-                    saving = true
-                    scope.launch {
-                        val err = onDelete(existing.id)
-                        saving = false
-                        error = err
-                        if (err == null) onDone()
-                    }
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+        HouseDialog(
+            title = "Delete ${existing.title}?",
+            onDismiss = { confirmDelete = false },
+            confirmLabel = "Delete",
+            destructive = true,
+            onConfirm = {
+                confirmDelete = false
+                saving = true
+                scope.launch {
+                    val err = onDelete(existing.id)
+                    saving = false
+                    error = err
+                    if (err == null) onDone()
+                }
             },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+            text = { Text("It stops running. The reports it has already written stay where they are, as chats.") },
         )
     }
 }

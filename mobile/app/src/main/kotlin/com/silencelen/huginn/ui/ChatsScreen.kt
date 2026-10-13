@@ -54,6 +54,7 @@ import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material.icons.automirrored.outlined.Chat
+import com.silencelen.huginn.ui.system.LocalRowMetrics
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -324,11 +325,11 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
         Modifier
             .fillMaxWidth()
             .then(
-                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerLow)
                 else Modifier
             )
             .clickable(onClick = onOpen)
-            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            .padding(start = LocalRowMetrics.current.inset, end = 4.dp, top = LocalRowMetrics.current.vertical, bottom = LocalRowMetrics.current.vertical),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
