@@ -15,9 +15,15 @@ sheet). Edit the vertex lists there, not the files.
    raised, bill slightly up, the way `r2-03-watching` stands, but drawn with the fold raven's
    own head (flat crown, forehead step, the decurved culmen, the round eye hole) and body
    language (twelve straight edges, one hairline fold). It is the perched bird's head rotated up
-   about fifteen degrees and a body turned under it. Box 63 × 51 units, **1.24 : 1** (perched:
+   about fifteen degrees and a body turned under it. Box 54 × 51 units, **1.06 : 1** (perched:
    81 × 47.6, 1.7 : 1), so it fills a tile and the launcher circle instead of lying along their
    bottom. The perched drawing stays in the folder as `mark-perched.svg` for comparison.
+   **Revised after the round-3 chooser** (owner: "the upright position made the bird too fat, or
+   too wide horizontally"): the first upright bird was 63 × 51 (1.24 : 1) with the chest one
+   column behind the bill tip, a convex mass from bill to belly. The bill tip came in two
+   columns (19 → 17) and the culmen one row down (so the bill keeps its depth), the chest and
+   belly came in three columns (17 → 14, 16 → 13), the throat one; the back, tail and head are
+   unchanged. Width 14 → 12 columns, the body now a slender wedge under the same raven head.
 2. **Grid alignment, not a redraw.** Round 2's fold bird lived on its own lattice (cells
    4.5 × 3.25, rows from y 17) and so could not reproduce Snapped's 24 × 8 text art. Both birds
    here sit on **Snapped's lattice**: 24 columns × 16 half-rows, cell **4.5 × 3.4** units, column
@@ -52,37 +58,39 @@ Twelve lattice vertices, clockwise from the bill tip, (column, row) → units:
 
 | vertex | lattice | units | vertex | lattice | units |
 |---|---|---|---|---|---|
-| bill tip | (19, 4) | 85.5, 28 | tail tip | (5, 16) | 22.5, 68.8 |
-| culmen | (16, 2) | 72, 21.2 | tail bottom | (8, 16) | 36, 68.8 |
+| bill tip | (17, 4) | 76.5, 28 | tail tip | (5, 16) | 22.5, 68.8 |
+| culmen | (15, 3) | 67.5, 24.6 | tail bottom | (9, 16) | 40.5, 68.8 |
 | forehead | (12, 1) | 54, 17.8 | under-tail notch | (12, 13) | 54, 58.6 |
-| crown | (10, 1) | 45, 17.8 | belly | (16, 14) | 72, 62 |
-| back of head | (8, 2) | 36, 21.2 | chest | (17, 10) | 76.5, 48.4 |
-| nape / shoulder | (7, 4) | 31.5, 28 | throat | (15, 6) | 67.5, 34.8 |
+| crown | (10, 1) | 45, 17.8 | belly | (13, 14) | 58.5, 62 |
+| back of head | (8, 2) | 36, 21.2 | chest | (14, 10) | 63, 48.4 |
+| nape / shoulder | (7, 4) | 31.5, 28 | throat | (14, 6) | 63, 34.8 |
 
-- **Slopes.** Every edge is horizontal, vertical or p : q with p or q even (bill 3:2 and 4:1,
-  crown flat, back of head 2:1, neck 1:2, back 1:6, tail base flat, under-tail 4:3, belly 4:1,
-  chest 1:4 and 1:2, gonys 2:1), so no edge passes through a cell centre and the 24 × 16 raster
+- **Slopes.** Every edge is horizontal, vertical or p : q with p or q even (bill 2:1 and 3:2,
+  crown flat, back of head 2:1, neck 1:2, back 1:6, tail base flat, under-tail 3:2, belly flat,
+  chest 1:4, throat vertical, gonys 3:2), so no edge passes through a cell centre and the 24 × 16 raster
   has no cell between 42 % and 58 % coverage (the build asserts it). The back is the steep
   edge: two columns over twelve rows.
-- **Eye.** A circle r 3.2 at the centre of cell (12, 3) = (56.25, 26.3): 29 units behind the bill
-  tip, as in the perched bird, 5.3 units of brow under the forehead. One ground cell in the
+- **Eye.** A circle r 3.2 at the centre of cell (11, 3) = (51.75, 26.3): 25 units behind the bill
+  tip (29 in the perched bird; the bill is 4.5 shorter), 5.3 units of brow under the forehead. One ground cell in the
   raster, a 3 × 4 hole in the 2× grid.
-- **Fold.** Centreline shoulder (7, 4) → flap corner (10, 11) → wing tip (7, 15), i.e.
-  (31.5, 28) → (45, 51.8) → (31.5, 65.4), half-width 1 (a 2-unit slit), spliced into the ring at
+- **Fold.** Centreline shoulder (7, 4) → flap corner (9, 11) → wing tip (7, 15), i.e.
+  (31.5, 28) → (40.5, 51.8) → (31.5, 65.4), half-width 1 (a 2-unit slit), spliced into the ring at
   the shoulder so the mark is one 17-vertex ring plus the eye hole. The front edge of the flap
-  now runs at 60° from horizontal (the perched one at 75° on the other side of vertical, i.e.
+  now runs at 69° from horizontal (the perched one at 75° on the other side of vertical, i.e.
   the flap hangs rather than lies), the wing tip rests inside the tail wedge 3.4 units above the
   ground line. The fold is dropped at 32 px and below: `mark-32.svg` is the twelve-vertex solid.
-- **Bill slightly up.** The gonys rises 6.8 units over 18 (21°) from throat to tip, the culmen
-  drops 27°; the bill's axis is about 10° above horizontal. The chest sits 9 units behind the
-  bill tip, the belly 10 units below the chest.
-- **Box** x 22.5–85.5, y 17.8–68.8 of the path frame, inside the canon box x 10–95 / y 17–69.
+- **Bill slightly up.** The gonys rises 6.8 units over 13.5 (27°) from throat to tip, the culmen
+  drops 21°; the bill's axis is about 3° above horizontal, the lift now carried by the raised
+  head rather than the bill. The chest sits 13.5 units behind the bill tip, the belly 13.6
+  units below the chest and directly under the throat.
+- **Box** x 22.5–76.5, y 17.8–68.8 of the path frame, inside the canon box x 10–95 / y 17–69.
   Launcher (pivot 52,43, scale 0.72): farthest vertex 28.2 dp from centre, inside the
-  33 dp safe radius. `mark-tile.svg` scales the bird 1.3 about its box centre (x 13–95, 12 %
+  33 dp safe radius. `mark-tile.svg` scales the bird 1.4 about its box centre (x 16.2–91.8, 15 %
   side inset).
 - **Head drawing** (`mark-16.svg`, 16–22 px): the upright head's own nodes (tip, culmen,
-  forehead, crown, back of head, nape) scaled 1.6 about the bill tip, closed by a straight back
-  and the chest facet, eye hole r 6.5 at (58, 37.5); box x 14–105 / y 24–90. No fold.
+  forehead, crown, back of head, nape, throat, chest) scaled 1.8 about the bill tip, closed by
+  the ground line, eye hole r 6.5 at (60.4, 36.9); box x 14–105 / y 21.6–90. No fold. Derived
+  in `build.py` from the mark's vertices, so it follows any further change.
 
 ## The three glyph options
 
@@ -95,7 +103,7 @@ no coincident edges and no slivers in the corners.
 |---|---|---|---|---|---|
 | **a** `glyph-a.svg` **full fold** | the bird at 0.95 (head, chest, belly), eye cell x 28–32 / y 24–28; the tail leaves the tile through the bottom-left corner, so the breast cut-out continues down into the body and the folded wing | the mark's own 2-unit slit, scaled (1.9 units): an ink hairline inside the hole from the shoulder down the flap's front edge and back to the wing tip | the flap reads as a wing | a faint grey hairline; the bird reads, the wing is a hint | **fold gone** (0.5 px, antialiased away); a tile with a big bird-head hole |
 | **b** `glyph-b.svg` **shoulder wedge** | head, throat and chest at 0.78, eye cell x 32–36 / y 24–28, the breast open onto the bottom edge; the hole's back runs down the **fold line**, so the tile ink behind it is the folded wing; at the shoulder a 5-unit-wide, 18-unit-long sliver of hole peels off along the **back edge** and tapers to nothing: the wing's upper edge, the fold's mouth, nothing else | the sliver only | a small feather lifting off the shoulder; the fold is implied by the kinked back | a one-pixel tick | **fold gone**; the cleanest 16 of the three (head, bill, eye, chest) |
-| **c** `glyph-c.svg` **negative mark** | the whole upright mark with its fold at 0.78, centred (margins left 8, right 7, top 11, bottom 13), eye cell x 32–36 / y 16–20 | the slit widened to 2.8 units in the mark = 2.2 in the tile, so it survives 24 | the mark in negative, fold and all | a light seam along the wing: still a fold | **fold gone** (0.55 px); a tile with a standing bird, bill and tail legible |
+| **c** `glyph-c.svg` **negative mark** | the whole upright mark with its fold at 0.84 (up from 0.78 once the bird was slimmer), centred (margins left 9.4, right 9.2, top 10.9, bottom 10.3), eye cell x 32–36 / y 16–20 | the slit widened to 2.8 units in the mark = 2.35 in the tile, so it survives 24 | the mark in negative, fold and all | a light seam along the wing: still a fold | **fold gone** (0.55 px); a tile with a standing bird, bill and tail legible |
 
 **How they differ.** (a) is the biggest bird and the most literal fold, bought with no margin: the
 tail is cropped and the bird nearly touches the right wall, so at 16 it is a hole with a bill. (b)
@@ -152,7 +160,7 @@ columns in round 2, which is why the 24 × 8 files stay solid).
 
 | file | what |
 |---|---|
-| `mark.svg`, `mark-inverse.svg` | the upright fold raven, ink / bone, ONE evenodd path (17-vertex ring + eye hole), 108 viewBox, `translate(2,11)`, box x 22.5–85.5 / y 17.8–68.8 |
+| `mark.svg`, `mark-inverse.svg` | the upright fold raven, ink / bone, ONE evenodd path (17-vertex ring + eye hole), 108 viewBox, `translate(2,11)`, box x 22.5–76.5 / y 17.8–68.8 |
 | `mark-tile.svg` | app-icon master: the mark scaled 1.3 on the bone tile |
 | `mark-32.svg` | the upright silhouette without the fold (32 px and below); the source of `grid-upright.txt` |
 | `mark-16.svg` | the head drawing for 16–22 px |
