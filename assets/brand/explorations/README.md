@@ -64,6 +64,13 @@ are single-width; one has to win.
 - The apps' motion rule, a slow stepped pulse rather than a spinner, bounds
   every in-app animation.
 
+## Round 4
+
+Colour, on the decided mark: [`round4/README.md`](round4/README.md) lists the
+four questions (palette ground, what needs-you means, the tray cue, the state
+glyph) with the recommendation; the round-4 chooser "The Raven in Colour"
+shows the raven on each direction's real surfaces and records the picks.
+
 ## Round 3
 
 The chosen combination finished as one system: [`round3/fold-system/`](round3/fold-system/)
