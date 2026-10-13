@@ -257,7 +257,16 @@ function _Huginn-FetchFile {
 # link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
 # address THIS machine just reached the host at, which is better than choosing
 # on the device's behalf between a LAN address, a tailnet name and whatever
-# `hostname` happens to say.
+# `hostname` happens to say. Returns https://<authority>:8787 (http:// only for
+# the host's own loopback).
+#
+# ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/TLS.md). The
+# runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
+# request, and a device enrolled from here is usually on a flat LAN with no VPN
+# under it. The runner would upgrade a remote http:// on its own anyway (rule 6:
+# no setting re-enables cleartext to a remote host); building https:// here is
+# so what the person reads in `huginn device status` is what is actually dialled.
+# Loopback stays http://: the daemon answers plain HTTP from 127.0.0.0/8 only.
 #
 # ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL.
 # `http://fd00::1:8787` has no valid port, so `huginn device on` / `huginn local
@@ -297,11 +306,18 @@ function _Huginn-SrvUrl {
     $here = ''
     try { if (Test-Path '/etc/machine-id') { $here = (Get-Content '/etc/machine-id' -Raw).Trim() } } catch {}
     if ($there -and $here -and ($there -ceq $here)) { return 'http://127.0.0.1:8787' }
-  } elseif ($a -notmatch ':') { return "http://${a}:8787" }
+  } elseif ($a -like '127.*') {
+    # The host's own loopback (an alias pointing at this machine): plain HTTP
+    # is the one thing that stays, because it never leaves the box.
+    return "http://${a}:8787"
+  } elseif ($a -eq '::1') {
+    # 127.0.0.1, not [::1]: appd binds IPv4 (see the bracketing note above).
+    return 'http://127.0.0.1:8787'
+  } elseif ($a -notmatch ':') { return "https://${a}:8787" }
   $v4 = ((ssh -T $H "ip -4 -o addr show scope global 2>/dev/null | awk '{print `$4}' | cut -d/ -f1 | head -1") -join '').Trim()
-  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "http://${v4}:8787" }
+  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "https://${v4}:8787" }
   if (-not $a) { return $null }
-  return "http://[$a]:8787"
+  return "https://[$a]:8787"
 }
 
 # Did the caller already say where the daemon is? `huginn device on --url ...`
@@ -982,7 +998,7 @@ function huginn {
           else {
             _Huginn-Fail ("huginn device: could not work out how to reach $H's daemon`n" +
                           "               (no ssh address to go on, and $H named no global IPv4)`n" +
-                          "               say it yourself: huginn device on --url http://<host>:8787")
+                          "               say it yourself: huginn device on --url https://<host>:8787")
           }
         }
       }
@@ -1060,7 +1076,7 @@ function huginn {
       if (-not $srv) {
         _Huginn-Fail ("huginn local: could not work out how to reach $H's daemon`n" +
                       "              (no ssh address to go on, and $H named no global IPv4)`n" +
-                      "              say it yourself: huginn local on --url http://<host>:8787")
+                      "              say it yourself: huginn local on --url https://<host>:8787")
       }
       node $mgr on --url $srv @rest
     } elseif (Test-Path $mgr) {

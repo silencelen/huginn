@@ -560,18 +560,27 @@ url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IP
     eval "$1" ) 2>&1
 }
 U6=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
-grep -q -- '--url http://10.0.0.5:8787' <<<"$U6" \
+grep -q -- '--url https://10.0.0.5:8787' <<<"$U6" \
   && ok "sh: an IPv6 ssh path dials an IPv4 the host actually holds" \
   || bad "sh: device on over IPv6 passed: $U6"
 U6B=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
-grep -q -- '--url http://\[fd00::1\]:8787' <<<"$U6B" \
+grep -q -- '--url https://\[fd00::1\]:8787' <<<"$U6B" \
   && ok "sh: and with no IPv4 to be had, the v6 literal is BRACKETED" \
   || bad "sh: device on over IPv6 with no v4 passed: $U6B"
 U4=$(url_sh 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '10.0.0.5')
-grep -q -- '--url http://192.168.1.20:8787' <<<"$U4" \
+grep -q -- '--url https://192.168.1.20:8787' <<<"$U4" \
   && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
+# ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/TLS.md rule 6): the runner
+# carries the root-equivalent token, and the address is a LAN/mesh one. Only the
+# host's own loopback stays http://, because plain HTTP never leaves the box.
+ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
+grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB" \
+  && ok "sh: a loopback ssh path stays http:// (the one cleartext case)" || bad "sh: loopback passed: $ULB"
+ULB6=$(url_sh 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
+grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB6" \
+  && ok "sh: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "sh: ::1 passed: $ULB6"
 UL=$(url_sh 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
-grep -q -- '--url http://10.0.0.5:8787' <<<"$UL" \
+grep -q -- '--url https://10.0.0.5:8787' <<<"$UL" \
   && ok "sh: and huginn local on builds the same url" || bad "sh: local on passed: $UL"
 if command -v pwsh >/dev/null 2>&1; then
   url_ps () {
@@ -580,18 +589,24 @@ if command -v pwsh >/dev/null 2>&1; then
       PATH="$UT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
   }
   P6=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
-  grep -q -- '--url http://10.0.0.5:8787' <<<"$P6" \
+  grep -q -- '--url https://10.0.0.5:8787' <<<"$P6" \
     && ok "ps1: an IPv6 ssh path dials an IPv4 the host actually holds" \
     || bad "ps1: device on over IPv6 passed: $P6"
   P6B=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
-  grep -q -- '--url http://\[fd00::1\]:8787' <<<"$P6B" \
+  grep -q -- '--url https://\[fd00::1\]:8787' <<<"$P6B" \
     && ok "ps1: and with no IPv4 to be had, the v6 literal is BRACKETED" \
     || bad "ps1: device on over IPv6 with no v4 passed: $P6B"
   P4=$(url_ps 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '')
-  grep -q -- '--url http://192.168.1.20:8787' <<<"$P4" \
+  grep -q -- '--url https://192.168.1.20:8787' <<<"$P4" \
     && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
+  PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
+  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB" \
+    && ok "ps1: a loopback ssh path stays http:// (the one cleartext case)" || bad "ps1: loopback passed: $PLB"
+  PLB6=$(url_ps 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
+  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB6" \
+    && ok "ps1: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "ps1: ::1 passed: $PLB6"
   PL=$(url_ps 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
-  grep -q -- '--url http://10.0.0.5:8787' <<<"$PL" \
+  grep -q -- '--url https://10.0.0.5:8787' <<<"$PL" \
     && ok "ps1: and huginn local on builds the same url" || bad "ps1: local on passed: $PL"
 else
   skip "ps1 device-url checks (no pwsh)"
@@ -837,6 +852,22 @@ echo "[7/8] the headless runner (client/huginn-device)"
 # machine with NOBODY SITTING AT IT. That is the one place a misleading message
 # costs the most, because there is no human to notice the advice is useless.
 node --check client/huginn-device && ok "huginn-device parses" || bad "huginn-device does not parse"
+
+# ⚠ THE TLS PIN (appd 3.11, docs/TLS.md). The runner sends the root-equivalent
+# token on every request, from machines with no VPN under them. This suite holds
+# the shared vector, the impostor cases (proof over another cert, legacy-only
+# answer over https, an HTTP-only daemon), the url upgrade, pin rotation/cap/
+# token binding — and stands up a REAL appd from this tree plus a TLS relay in
+# front of it, asserting the relay never decrypts a single token byte. Captured,
+# never piped (pipefail); it kills its own daemon.
+DT_OUT=$(node --test scripts/test-device-tls.js 2>&1); DT_RC=$?
+DT_N=$(grep -oE '^# pass [0-9]+' <<<"$DT_OUT" | grep -oE '[0-9]+')
+if [ "$DT_RC" -eq 0 ] && [ "${DT_N:-0}" -ge 14 ]; then
+  ok "huginn-device proves and pins the daemon's certificate (${DT_N} tests, real appd + relay)"
+else
+  bad "device TLS gate FAILED (exit $DT_RC, ${DT_N:-0} passed):"
+  grep -E '^not ok|error:|appd did not start' <<<"$DT_OUT" | head -12 >&2
+fi
 
 DEV_V=$(grep -m1 "^const VERSION = " client/huginn-device | sed "s/.*'\(.*\)'.*/\1/")
 [ "$DEV_V" = "$SH_V" ] && ok "huginn-device says $DEV_V, same as the core" \

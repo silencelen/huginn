@@ -28,6 +28,9 @@ const os = require('os');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const tls = require('tls');
+const net = require('net');
+const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
@@ -135,6 +138,15 @@ function loadConf() {
   try { raw = JSON.parse(fs.readFileSync(CONF_FILE, 'utf8')); } catch { /* first run */ }
   const c = { ...DEFAULTS, ...raw };
   c.name = c.name || os.hostname().slice(0, 40) || 'this machine';
+  // ⚠ STORED UPGRADED, not just dialled upgraded (TLS rule 6): a machine
+  // enrolled before 3.11 holds http://<lan-ip>:8787, and `status` printing that
+  // after the runner has moved to https:// would be a lie about what is sent.
+  // Best effort — a read-only config still dials https:// through api().
+  const up = upgradeUrl(c.url);
+  if (up !== c.url) {
+    c.url = up;
+    if (raw.url) { try { saveConf({ ...raw, url: up }); } catch { /* dialled upgraded anyway */ } }
+  }
   return c;
 }
 
@@ -175,9 +187,22 @@ function parseFlags(args, allowed, bools = []) {
   return { flags };
 }
 
-function saveConf(c) {
+/**
+ * ⚠ THE PIN SET HAS ONE WRITER: addPin (`{ pins: true }`). Every other caller
+ * saves a conf it loaded EARLIER — enrol() holds one across the very request
+ * whose proof just pinned the daemon — and writing that back whole silently
+ * dropped the pin, so the next request proved again and a rotation lost the
+ * old pin. So the on-disk `tls` wins unless the caller is the one that owns it.
+ */
+function saveConf(c, { pins = false } = {}) {
   fs.mkdirSync(CONF_DIR, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CONF_FILE, JSON.stringify(c, null, 2) + '\n', { mode: 0o600 });
+  const out = { ...c };
+  if (!pins) {
+    let disk = {};
+    try { disk = JSON.parse(fs.readFileSync(CONF_FILE, 'utf8')); } catch { /* none yet */ }
+    if (disk.tls) out.tls = disk.tls; else delete out.tls;
+  }
+  fs.writeFileSync(CONF_FILE, JSON.stringify(out, null, 2) + '\n', { mode: 0o600 });
 }
 
 /**
@@ -519,12 +544,237 @@ const locked = () => false;
  */
 const gateLocked = (lock, actWhileLocked) => !!lock && actWhileLocked !== true;
 
+// --------------------------------------------------------------------- tls
+//
+// ⚠ THE TOKEN IS ROOT ON THE HOST, AND THIS RUNNER SENDS IT ON EVERY REQUEST.
+// Since appd 3.11 the daemon speaks https on its usual port with a certificate
+// it minted itself (docs/TLS.md is the contract; read it before changing any of
+// this). There is no CA to check a self-signed certificate against, so the
+// runner checks the DAEMON instead, with the token it already holds and never
+// sending it:
+//
+//   probe: TLS, any certificate, F = sha256(leaf DER); GET /v1/challenge?nonce=N
+//          with NO Authorization; accept iff tls.proof == HMAC(token, v1:N:F)
+//   pin:   F joins the pin set; every request that carries the token goes over
+//          a connection whose leaf is IN that set, or it does not go at all.
+//
+// This is a public project: the person running this may have no VPN under it,
+// on a flat LAN or hotel Wi-Fi. So none of this is optional — there is no
+// setting that re-enables cleartext to a remote host, and a failed proof never
+// falls back to anything.
+
+const TLS_PREFIX = 'huginn-tls-v1:';
+const MAX_PINS = 4;
+const INTERCEPTED = 'this address could not prove it is your huginn daemon; someone may be intercepting the connection';
+const OLD_DAEMON = 'the daemon is older than 3.11 and has no TLS; update it';
+
+/** The channel-bound proof, byte for byte what appd's lib/tls.js computes. */
+const boundProof = (tok, nonce, fp) =>
+  crypto.createHmac('sha256', tok).update(`${TLS_PREFIX}${nonce}:${fp}`, 'utf8').digest('hex');
+
+/** Constant-time compare of two hex strings; false for anything malformed. */
+function proofMatches(got, want) {
+  if (typeof got !== 'string' || !/^[0-9a-f]{64}$/i.test(got)) return false;
+  const a = Buffer.from(got.toLowerCase(), 'hex');
+  const b = Buffer.from(want, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Lower-case hex sha256 of the leaf this socket's handshake saw, or null. */
+function leafFp(sock) {
+  const c = sock.getPeerCertificate();
+  return c && c.fingerprint256 ? c.fingerprint256.replace(/:/g, '').toLowerCase() : null;
+}
+
+/** Loopback is the one place plain HTTP is allowed: it never leaves the box. */
+function isLoopbackHost(h) {
+  const x = String(h || '').toLowerCase().replace(/^\[|\]$/g, '');
+  return x === 'localhost' || x === '::1' || /^127\.\d+\.\d+\.\d+$/.test(x);
+}
+
+/**
+ * The url this runner actually dials: a remote http:// becomes https:// on the
+ * same host and port (rule 6). Unparsable input comes back untouched so
+ * urlRefusal still gets to name it.
+ *
+ * ⚠ AN UPGRADE, NOT A REFUSAL. Every `huginn device on` before 3.11 wrote
+ * http://<lan-ip>:8787, and those machines update the runner in place; refusing
+ * the stored url would strand every one of them, while upgrading reaches the
+ * same daemon on the same port (it sniffs the first byte for TLS).
+ */
+function upgradeUrl(u) {
+  let p;
+  try { p = new URL(u); } catch { return u; }
+  if (p.protocol !== 'http:' || isLoopbackHost(p.hostname)) return u;
+  p.protocol = 'https:';
+  return p.toString().replace(/\/$/, '');
+}
+
+/**
+ * Which token a pin set belongs to — keyed, so device.json (a file people edit
+ * and paste) never holds anything that helps recover the token itself.
+ *
+ * ⚠ PINS BELONG TO THE TOKEN, NOT THE ADDRESS (rule 7). One daemon has one
+ * certificate however it is reached; a DIFFERENT token is a different daemon
+ * (or a re-pair), and a pin proved by the old token proves nothing about it.
+ */
+const pinTag = (tok) => crypto.createHmac('sha256', tok).update(`${TLS_PREFIX}pinset`, 'utf8').digest('hex').slice(0, 16);
+
+function pinsFor(conf, tok) {
+  const t = conf.tls;
+  if (!t || t.token !== pinTag(tok) || !Array.isArray(t.pins)) return [];
+  return t.pins.filter((f) => /^[0-9a-f]{64}$/.test(f));
+}
+
+/** Newest first, at most four, and a token change starts the set over. */
+function addPin(tok, fp) {
+  const conf = loadConf();
+  const pins = [fp, ...pinsFor(conf, tok).filter((f) => f !== fp)].slice(0, MAX_PINS);
+  conf.tls = { token: pinTag(tok), pins };
+  saveConf(conf, { pins: true });
+  return pins;
+}
+
+const tlsError = (msg, flag) => Object.assign(new Error(msg), { [flag]: true });
+
+/**
+ * An agent that hands a socket to the HTTP layer only AFTER its certificate has
+ * been judged.
+ *
+ * ⚠ WHY NOT rejectUnauthorized:false + a 'secureConnect' listener on a normal
+ * request: http.ClientRequest writes its head (Authorization included) into the
+ * socket the moment it is assigned, TLSWrap queues that cleartext, and the
+ * native side flushes it as soon as the handshake finishes — which can be
+ * BEFORE any JS listener has looked at the certificate. A destroy() in the
+ * listener would then be too late. Agent.createConnection may instead answer
+ * through its callback, and the request has no socket at all until we call it:
+ * no socket, no bytes. So nothing the request carries can reach a peer whose
+ * leaf failed `judge`.
+ *
+ * `judge(fp)` returns null to accept or an Error to refuse. Session resumption
+ * is off (a resumed session skips nothing here — the fp is re-read either way
+ * — but a cache keyed by host is a cache across pin sets), and so is keepAlive:
+ * one connection per request, judged every time.
+ */
+class JudgedAgent extends https.Agent {
+  constructor(judge) {
+    super({ keepAlive: false, maxCachedSessions: 0 });
+    this.judge = judge;
+  }
+
+  createConnection(options, cb) {
+    let done = false;
+    const once = (e, s) => { if (!done) { done = true; cb(e, s); } };
+    const sock = tls.connect({
+      host: options.host,
+      port: options.port,
+      // SNI is not an IP literal (Node warns), and the cert is `huginn-appd`
+      // anyway — the pin replaces the hostname check (rule 4).
+      ...(net.isIP(options.host) ? {} : { servername: options.host }),
+      rejectUnauthorized: false,   // ⚠ ONLY because `judge` below is the check
+      ALPNProtocols: ['http/1.1'],
+    });
+    const onErr = (e) => once(e);
+    sock.once('error', onErr);
+    sock.once('secureConnect', () => {
+      const why = this.judge(leafFp(sock));
+      sock.removeListener('error', onErr);
+      if (why) { sock.destroy(); return once(why); }
+      once(null, sock);
+    });
+    return undefined;   // the socket arrives through cb, after the judgement
+  }
+}
+
+/**
+ * Send one request and collect the body. No token here: the caller puts it in
+ * `headers`, and only ever on a pinned agent.
+ */
+function rawRequest(mod, u, { method = 'GET', headers = {}, payload = null, timeoutMs = 20000, agent } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = mod.request(u, { method, headers, timeout: timeoutMs, ...(agent ? { agent } : {}) }, (res) => {
+      let out = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { out += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body: out }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timed out')));
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+/**
+ * Prove the daemon at `origin` holds `tok`, over a connection whose leaf we
+ * hash ourselves. Resolves to the proved fingerprint; rejects with a flagged
+ * error that says which way it failed.
+ *
+ * ⚠ THE PROBE NEVER CARRIES THE TOKEN AND IS NEVER REUSED (rule 3): its own
+ * agent, no Authorization header, closed after the answer.
+ * ⚠ THE FINGERPRINT IS THE ONE OUR HANDSHAKE SAW (rule 1). `tls.fp` in the body
+ * is whatever the far end wants us to believe; it is never read here.
+ * ⚠ AND THE LEGACY `proof` IS IGNORED (rule 2): it proves the daemon, not this
+ * channel, and a relay would forward it untouched.
+ */
+async function proveDaemon(origin, tok) {
+  const nonce = crypto.randomBytes(32).toString('hex');
+  let seen = null;
+  const agent = new JudgedAgent((fp) => { seen = fp; return fp ? null : new Error('no certificate'); });
+  let r;
+  try {
+    r = await rawRequest(https, new URL(`/v1/challenge?nonce=${nonce}`, origin), { agent, timeoutMs: 15000 });
+  } catch (e) {
+    // A pre-3.11 daemon's port speaks only HTTP: our ClientHello gets a plain
+    // "400 Bad Request" back, which OpenSSL reports as a protocol error.
+    if (/^ERR_SSL_|^EPROTO$/.test(String(e.code || ''))) throw tlsError(`${OLD_DAEMON} (${origin} did not answer TLS)`, 'tlsOldDaemon');
+    throw e;
+  }
+  if (r.status !== 200) throw new Error(`challenge at ${origin} answered ${r.status} ${r.body.slice(0, 200)}`);
+  let body;
+  try { body = JSON.parse(r.body); } catch { throw new Error(`challenge at ${origin} did not answer JSON`); }
+  const t = body && body.tls;
+  if (!t || typeof t !== 'object') throw tlsError(OLD_DAEMON, 'tlsOldDaemon');
+  if (!seen || !proofMatches(t.proof, boundProof(tok, nonce, seen))) {
+    throw tlsError(`${origin}: ${INTERCEPTED}`, 'tlsIntercepted');
+  }
+  return seen;
+}
+
+/**
+ * A token-carrying request over https, pinned. Proves first when there is no
+ * pin for this token; on a leaf that is not pinned, re-proves (rule 5) and
+ * retries ONCE with the new pin — a certificate that changes again between the
+ * proof and the retry is not a rotation anybody performed.
+ */
+async function pinnedRequest(u, tok, opts) {
+  const headers = { ...opts.headers, Authorization: `Bearer ${tok}` };
+  const go = (pins) => rawRequest(https, u, {
+    ...opts, headers,
+    agent: new JudgedAgent((fp) => (fp && pins.includes(fp)
+      ? null : tlsError(`certificate ${fp || '(none)'} is not pinned`, 'pinMismatch'))),
+  });
+  let pins = pinsFor(loadConf(), tok);
+  if (!pins.length) pins = addPin(tok, await proveDaemon(u.origin, tok));
+  try {
+    return await go(pins);
+  } catch (e) {
+    if (!e.pinMismatch) throw e;
+    const fp = await proveDaemon(u.origin, tok);
+    log(`daemon at ${u.origin} presented a new certificate and proved it (sha256 ${fp}); pinned`);
+    pins = addPin(tok, fp);
+    try { return await go(pins); } catch (e2) {
+      if (e2.pinMismatch) throw tlsError(`${u.origin}: ${INTERCEPTED}`, 'tlsIntercepted');
+      throw e2;
+    }
+  }
+}
+
 // -------------------------------------------------------------------- http
 
 function api(method, p, body, { timeoutMs = 20000 } = {}) {
   const conf = loadConf();
-  const u = new URL(p, conf.url);
-  const mod = u.protocol === 'https:' ? https : http;
+  const u = new URL(p, upgradeUrl(conf.url));
   const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
   const tok = token();
   if (!tok) {
@@ -534,30 +784,19 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     // the difference between a fix and an afternoon.
     return Promise.reject(noTokenError(tokenOrWhy().why || 'reason unknown'));
   }
-
-  return new Promise((resolve, reject) => {
-    const req = mod.request(u, {
-      method,
-      headers: {
-        Authorization: `Bearer ${tok}`,
-        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {}),
-      },
-      timeout: timeoutMs,
-    }, (res) => {
-      let out = '';
-      res.setEncoding('utf8');
-      res.on('data', (c) => { out += c; });
-      res.on('end', () => {
-        if (res.statusCode >= 400) {
-          return reject(new Error(`${method} ${u.pathname} → ${res.statusCode} ${out.slice(0, 200)}`));
-        }
-        try { resolve(out ? JSON.parse(out) : {}); } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', reject);
-    if (payload) req.write(payload);
-    req.end();
+  const opts = {
+    method, timeoutMs, payload,
+    headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
+  };
+  // ⚠ http: here is loopback and nothing else — upgradeUrl() has already turned
+  // every remote http:// into https://. Only the pinned path ever carries the
+  // token off this box.
+  const sent = u.protocol === 'https:'
+    ? pinnedRequest(u, tok, opts)
+    : rawRequest(http, u, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${tok}` } });
+  return sent.then(({ status, body: out }) => {
+    if (status >= 400) throw new Error(`${method} ${u.pathname} → ${status} ${out.slice(0, 200)}`);
+    return out ? JSON.parse(out) : {};
   });
 }
 
@@ -1097,6 +1336,12 @@ async function status() {
   // something they already have.
   const tk = tokenOrWhy();
   console.log(`    token       ${tk.token ? TOKEN_FILE : `MISSING — ${tk.why}`}`);
+  if (/^https:/.test(conf.url)) {
+    // The pin is the whole of what stands between the token and an impostor, so
+    // it is shown: "not proved yet" is normal before the first contact.
+    const pins = tk.token ? pinsFor(conf, tk.token) : [];
+    console.log(`    tls         ${pins.length ? `pinned sha256 ${pins[0]}${pins.length > 1 ? ` (+${pins.length - 1} older)` : ''}` : 'not proved yet (proved on first contact)'}`);
+  }
   if (!conf.id) {
     console.log('');
     // Its OWN name, not `huginn device on`. The CLI wrapper is a convenience a
@@ -1183,6 +1428,13 @@ async function main() {
       {
         const why = urlRefusal(conf.url);
         if (why) { console.error(`huginn-device on: ${why}`); process.exit(2); }
+        // Upgraded BEFORE it is written down, so device.json says https:// for
+        // any daemon that is not on this machine. See upgradeUrl.
+        const up = upgradeUrl(conf.url);
+        if (up !== conf.url) {
+          console.log(`  ${conf.url} is not this machine, so the token only travels over TLS: using ${up}`);
+          conf.url = up;
+        }
       }
       if (f.name !== undefined) conf.name = f.name.slice(0, 40);
       if (f.claude !== undefined) conf.claude = f.claude;
@@ -1428,5 +1680,7 @@ if (require.main === module) {
     locked, gateLocked,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
     permanent, authFailed, noTokenError, retryDelayMs,
+    boundProof, proofMatches, upgradeUrl, isLoopbackHost, pinsFor, addPin, pinTag, proveDaemon, api, loadConf,
+    MAX_PINS, INTERCEPTED, OLD_DAEMON,
   };
 }
