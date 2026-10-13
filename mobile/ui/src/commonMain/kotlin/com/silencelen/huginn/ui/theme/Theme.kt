@@ -18,58 +18,137 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.ui.VerbTone
 
-// Warm near-black with a parchment ink: a terminal that does not look like a
-// terminal emulator. Dark is the primary target (this app is read at night, on a
-// phone, next to a laptop running the same sessions) but light is fully styled
-// because Android will hand us either.
+// Moss & Heather: a dark grey ground with a breath of green in it, cool bone ink,
+// moss as the one accent, heather as the second voice. A terminal that does not
+// look like a terminal emulator. Dark is the primary target (this app is read at
+// night, on a phone, next to a laptop running the same sessions) but light is
+// fully styled because Android will hand us either.
 //
-// ONE declaration, for both clients. These eighteen colours previously existed
-// twice — once in app/ui/theme and once in app-desktop/desktop/theme — and the
-// second copy's own header said it would drift. Drift here is invisible until
-// someone puts a phone next to the laptop, which is the one comparison the whole
+// Every value here is a token from assets/brand/explorations/color/
+// color-04-moss-heather/tokens.json, proved by that folder's contrast.txt: text
+// >= 4.5:1 on every tier it sits on, UI >= 3:1, the state ladder 12 L* apart.
+// assets/brand/BRAND.md section 4 is the rule book; change the tokens there and
+// regenerate, never here first.
+//
+// ONE declaration, for both clients. These colours previously existed twice —
+// once in app/ui/theme and once in app-desktop/desktop/theme — and the second
+// copy's own header said it would drift. Drift here is invisible until someone
+// puts a phone next to the laptop, which is the one comparison the whole
 // migration exists to make favourable.
 
-private val Ink = Color(0xFFE8E2DA)
-private val Bg = Color(0xFF12100F)
-private val Surface1 = Color(0xFF1B1817)
-private val Surface2 = Color(0xFF241F1D)
-private val Accent = Color(0xFFC8A45C)      // rune-gold: huginn's one accent
-private val AccentInk = Color(0xFF241C09)
-private val Muted = Color(0xFF8A8177)
+private val Ink = Color(0xFFE2E6E1)          // onSurface
+private val Bg = Color(0xFF141615)           // background
+private val Surface0 = Color(0xFF0E100F)     // surfaceContainerLowest: code wells, the terminal block
+private val Surface1 = Color(0xFF1C1F1D)     // surfaceContainerLow: list rows, chat bubbles
+private val Surface2 = Color(0xFF242826)     // surfaceContainer: cards, sheets
+private val Surface3 = Color(0xFF2D3230)     // surfaceContainerHigh: dialogs, menus
+private val Surface4 = Color(0xFF383E3B)     // surfaceContainerHighest: chips, inputs on a dialog
+private val Accent = Color(0xFF7CB98E)       // moss: huginn's one accent
+private val AccentInk = Color(0xFF0B2316)
+private val Muted = Color(0xFFA2ABA5)        // onSurfaceVariant
 
 private val DarkColors = darkColorScheme(
     primary = Accent,
     onPrimary = AccentInk,
-    primaryContainer = Surface2,
-    onPrimaryContainer = Ink,
-    secondary = Color(0xFF7DAFEA),
-    onSecondary = Color(0xFF0B1622),
+    primaryContainer = Color(0xFF1F3D2C),
+    onPrimaryContainer = Color(0xFFC2E6CF),
+    secondary = Color(0xFFB49CDB),           // heather
+    onSecondary = Color(0xFF221640),
+    tertiary = Color(0xFFE6AEC6),            // the third voice: subagent markers, graph series
     background = Bg,
     onBackground = Ink,
     surface = Bg,
     onSurface = Ink,
     surfaceVariant = Surface1,
     onSurfaceVariant = Muted,
-    surfaceContainer = Surface1,
-    surfaceContainerHigh = Surface2,
-    outline = Color(0xFF3A3431),
-    outlineVariant = Color(0xFF2A2523),
-    error = Color(0xFFE8736D),
-    onError = Color(0xFF2A0E0C),
+    surfaceContainerLowest = Surface0,
+    surfaceContainerLow = Surface1,
+    surfaceContainer = Surface2,
+    surfaceContainerHigh = Surface3,
+    surfaceContainerHighest = Surface4,
+    outline = Color(0xFF747D77),             // 3:1 strokes
+    outlineVariant = Color(0xFF3A423E),      // decorative edges
+    error = Color(0xFFEE757D),
+    onError = Color(0xFF2B0C10),
+    errorContainer = Color(0xFF4C1C22),
+    onErrorContainer = Color(0xFFF8C5CA),
 )
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF7A5A16),
+    primary = Color(0xFF1F5A3A),             // evergreen
     onPrimary = Color(0xFFFFFFFF),
-    background = Color(0xFFFAF7F2),
-    onBackground = Color(0xFF1B1817),
-    surface = Color(0xFFFAF7F2),
-    onSurface = Color(0xFF1B1817),
-    surfaceVariant = Color(0xFFEFE9E0),
-    onSurfaceVariant = Color(0xFF5C544B),
-    outline = Color(0xFFD3CAC0),
-    error = Color(0xFFB3261E),
+    primaryContainer = Color(0xFFCDEAD6),
+    onPrimaryContainer = Color(0xFF0A3320),
+    secondary = Color(0xFF5B3E8A),
+    onSecondary = Color(0xFFFFFFFF),
+    tertiary = Color(0xFF6E3A7A),
+    background = Color(0xFFF4F6F3),
+    onBackground = Color(0xFF191C1A),
+    surface = Color(0xFFF4F6F3),
+    onSurface = Color(0xFF191C1A),
+    surfaceVariant = Color(0xFFEDF0EC),
+    onSurfaceVariant = Color(0xFF535B56),
+    surfaceContainerLowest = Color(0xFFFFFFFF),
+    surfaceContainerLow = Color(0xFFEDF0EC),
+    surfaceContainer = Color(0xFFE6EAE6),
+    surfaceContainerHigh = Color(0xFFDFE4DF),
+    surfaceContainerHighest = Color(0xFFD6DCD6),
+    outline = Color(0xFF78817B),
+    outlineVariant = Color(0xFFC6CDC8),
+    error = Color(0xFFB3262E),
+    onError = Color(0xFFFFFFFF),
+    errorContainer = Color(0xFFF9DBDC),
+    onErrorContainer = Color(0xFF5E1418),
 )
+
+/**
+ * The brand's own roles, the ones Material has no name for. Read through
+ * [LocalHuginnColors]; the theme provides the scheme's twin.
+ *
+ * The three tray/list states are one family at three lightness steps, 12 L*
+ * apart or more, so a monochrome tray and a colour-blind reader still tell them
+ * apart. `needs you` is the accent lit up, not the error red: a question is not
+ * a failure. Success, error and info are text semantics separated by hue.
+ */
+data class HuginnColors(
+    val stateIdle: Color,
+    val stateWorking: Color,
+    val stateAttention: Color,
+    val stateSuccess: Color,
+    val stateError: Color,
+    val stateInfo: Color,
+    /** Dividers between rows: a tier below `outlineVariant`. */
+    val outlineHairline: Color,
+    /** The raven on light grounds (icon ink) and the icon tile. */
+    val inkMark: Color,
+    val boneTile: Color,
+)
+
+val DarkHuginnColors = HuginnColors(
+    stateIdle = Color(0xFF848C87),
+    stateWorking = Accent,
+    stateAttention = Color(0xFFE4E2A8),
+    stateSuccess = Color(0xFFC4CF7A),
+    stateError = Color(0xFFEE757D),
+    stateInfo = Color(0xFF86B5E6),
+    outlineHairline = Color(0xFF2A302D),
+    inkMark = Color(0xFF141615),
+    boneTile = Color(0xFFE2E6E1),
+)
+
+val LightHuginnColors = HuginnColors(
+    stateIdle = Color(0xFF687069),
+    stateWorking = Color(0xFF1F5A3A),
+    stateAttention = Color(0xFF0F3320),
+    stateSuccess = Color(0xFF4E7A1C),
+    stateError = Color(0xFFB3262E),
+    stateInfo = Color(0xFF2A5FA5),
+    outlineHairline = Color(0xFFDDE2DE),
+    inkMark = Color(0xFF141615),
+    boneTile = Color(0xFFE2E6E1),
+)
+
+val LocalHuginnColors = staticCompositionLocalOf { DarkHuginnColors }
 
 /**
  * How much of the error red a verb that ends something gently gets.
@@ -80,10 +159,9 @@ private val LightColors = lightColorScheme(
  * the laptop running the same session.
  *
  * An alpha over [ColorScheme.error] rather than `errorContainer`: the container
- * roles are NOT defined in either scheme above (see PaletteTest — a role the
- * theme never chose is not a colour anyone picked), and a tint of the hard red
- * is also the honest description of what this means. It reads as the same red,
- * quieter, which is exactly the relationship "Wrap up" has to "Kill session".
+ * is a surface (a banner, a toast), and a tint of the hard red is also the
+ * honest description of what this means. It reads as the same red, quieter,
+ * which is exactly the relationship "Wrap up" has to "Kill session".
  */
 const val SOFT_VERB_ALPHA: Float = 0.7f
 
@@ -101,10 +179,11 @@ fun verbInk(tone: VerbTone, scheme: ColorScheme): Color = when (tone) {
 }
 
 /**
- * Syntax colours. Restrained on purpose: five hues that sit inside the app's warm
+ * Syntax colours. Restrained on purpose: a few hues that sit inside the brand's
  * palette rather than a rainbow, chosen so the classes that carry meaning
  * (comment, string, keyword, number) separate at a glance without the code block
- * turning into decoration.
+ * turning into decoration. Every one is >= 4.5:1 on the code ground
+ * (`surfaceContainerLowest`), by the same proof as the scheme.
  */
 data class SyntaxColors(
     val keyword: Color,
@@ -118,32 +197,34 @@ data class SyntaxColors(
 )
 
 val DarkSyntax = SyntaxColors(
-    keyword = Color(0xFFC495DC),
-    string = Color(0xFF8CCB7B),
-    number = Color(0xFFE3C169),
-    comment = Color(0xFF8A8177),
-    function = Color(0xFF7DAFEA),
-    meta = Color(0xFF6FC4C7),
-    added = Color(0xFF8CCB7B),
-    removed = Color(0xFFE8736D),
+    keyword = Color(0xFFC3A8E8),
+    string = Color(0xFF9FD3AD),
+    number = Color(0xFFE3C58A),
+    comment = Color(0xFF8C958F),
+    function = Color(0xFF86B5E6),
+    meta = Color(0xFF7FC9B8),
+    added = Color(0xFF9FD3AD),
+    removed = Color(0xFFEE757D),
 )
 
 val LightSyntax = SyntaxColors(
-    keyword = Color(0xFF7A3E96),
-    string = Color(0xFF2F6B33),
+    keyword = Color(0xFF5B3E8A),
+    string = Color(0xFF1F5A3A),
     number = Color(0xFF8A5A00),
-    comment = Color(0xFF7A7168),
-    function = Color(0xFF1F5FA8),
-    meta = Color(0xFF10666A),
-    added = Color(0xFF2F6B33),
-    removed = Color(0xFFB3261E),
+    comment = Color(0xFF6B746E),
+    function = Color(0xFF2A5FA5),
+    meta = Color(0xFF176B66),
+    added = Color(0xFF1F5A3A),
+    removed = Color(0xFFB3262E),
 )
 
 val LocalSyntaxColors = staticCompositionLocalOf { DarkSyntax }
 
 /**
  * Terminal + code text. `FontFamily.Monospace` resolves to whatever mono face the
- * platform has.
+ * platform has; the brand face is IBM Plex Mono (BRAND.md section 5), and
+ * bundling it as a Compose resource is the step that makes the phone and the
+ * laptop show the same glyphs. Until then the platform mono stands in.
  *
  * The two clients genuinely disagree about the SIZE and only about the size, so
  * it is a theme parameter rather than a second renderer: a phone is read at
@@ -184,6 +265,7 @@ fun HuginnTheme(
 ) {
     CompositionLocalProvider(
         LocalSyntaxColors provides if (darkTheme) DarkSyntax else LightSyntax,
+        LocalHuginnColors provides if (darkTheme) DarkHuginnColors else LightHuginnColors,
         LocalMonoStyle provides monoStyle,
     ) {
         MaterialTheme(

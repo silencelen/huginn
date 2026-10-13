@@ -25,6 +25,12 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 # file says why Node and not more shell). It is fetched on demand rather than
 # carried inside this one, because most devices are clients and never offer
 # themselves, and a client that never enrols should not be shipping a daemon.
+# Colour for the two messages a user must notice, by the brand's 16-colour table
+# (assets/brand/BRAND.md section 4): warn = brightYellow, error = brightRed. Slot
+# numbers only, so the user's terminal owns the hues; on a TTY only, and never
+# under NO_COLOR. 7-bit like the rest of this file.
+_huginn_color() { if [ -t 2 ] && [ -z "${NO_COLOR:-}" ]; then printf '\033[%sm' "$1"; fi; }
+
 _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 
 # The daemon URL this machine should be enrolled with, worked out from the ssh
@@ -807,14 +813,14 @@ _huginn_attach() {
     if [ "$elapsed" -lt 5 ]; then
       quick=$(( quick + 1 ))
       if [ "$quick" -ge 3 ]; then
-        printf '\nhuginn: %s is failing immediately (%s attempts, last exit %s) - giving up.\n  The remote error is printed above; fix it or run "huginn %s" again.\n' \
-          "$H" "$quick" "$rc" "$session" >&2
+        printf '\n%shuginn: %s is failing immediately (%s attempts, last exit %s) - giving up.%s\n  The remote error is printed above; fix it or run "huginn %s" again.\n' \
+          "$(_huginn_color 91)" "$H" "$quick" "$rc" "$(_huginn_color 0)" "$session" >&2
         break
       fi
     else
       quick=0
     fi
-    printf '\nhuginn: link to %s dropped (ssh exit %s) - reconnecting in %ss (Ctrl-C to stop)...\n' "$H" "$rc" "$delay" >&2
+    printf '\n%shuginn: link to %s dropped (ssh exit %s) - reconnecting in %ss (Ctrl-C to stop)...%s\n' "$(_huginn_color 93)" "$H" "$rc" "$delay" "$(_huginn_color 0)" >&2
     # Jittered sleep: every tab shares one tunnel, so an unjittered backoff makes
     # all of them re-handshake on the identical second after a single relay flap.
     sleep "$(awk -v d="$delay" 'BEGIN{srand();printf "%.1f", d*(0.75+rand()*0.5)}')" || { rc=130; break; }

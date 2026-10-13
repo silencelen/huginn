@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -119,7 +120,7 @@ fun QuestionLinkBar(
                 // vocabulary for "needs you" is how a legend becomes necessary.
                 Spacer(
                     Modifier.size(6.dp).clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.error),
+                        .background(LocalHuginnColors.current.stateAttention),
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
@@ -155,6 +156,6 @@ fun QuestionLinkBar(
 fun TabAttentionDot(show: Boolean, modifier: Modifier = Modifier) {
     if (!show) return
     Spacer(
-        modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.error),
+        modifier.size(6.dp).clip(CircleShape).background(LocalHuginnColors.current.stateAttention),
     )
 }
