@@ -13,6 +13,16 @@
 // that fires twice, or fires for something that did not happen, gets muted by its
 // reader and then the useful ones are gone too.
 
+// Telegram leads with the state table's glyph, never an emoji (BRAND.md section
+// 8): needs you, finished (ok), answered (working again); anything else is info.
+const { GLYPH } = require('./state-table');
+const ALERT_GLYPH = {
+  session_attention: GLYPH.needsYou,
+  session_finished: GLYPH.ok,
+  session_resolved: GLYPH.running,
+  chat_finished: GLYPH.ok,
+};
+
 /** Minimum gap before the same subject may alert again. */
 const REPEAT_MS = 30 * 60 * 1000;
 
@@ -286,8 +296,8 @@ function telegramText(a) {
   // A finished chat is titled by the chat itself, which reads correctly on a
   // phone (where the app supplies the context) and ambiguously here, where an
   // unadorned project name arriving out of nowhere could be anything.
-  if (a.kind === 'chat_finished') return `\u{1F514} Chat finished: ${a.label || a.title}\n${a.text}`;
-  const head = `\u{1F514} ${a.title}`;
+  if (a.kind === 'chat_finished') return `${GLYPH.ok} chat finished: ${a.label || a.title}\n${a.text}`;
+  const head = `${ALERT_GLYPH[a.kind] || GLYPH.info} ${a.title}`;
   if (a.kind !== 'session_attention' || !a.question) return `${head}\n${a.text}`;
   const opts = (a.options || []).map((o) => `${o.number}) ${o.label}`).join('\n');
   return [head, `Asked: ${a.question}`, opts].filter(Boolean).join('\n');

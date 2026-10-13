@@ -34,7 +34,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '1.7.0';
+const VERSION = '1.8.0';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -1334,30 +1334,34 @@ Get-Content ${q(logFile)} -Tail 3
 
 async function status() {
   const conf = loadConf();
+  // The one line grammar (BRAND.md section 3): the one-row raven and the surface,
+  // then ONE key column, as wide as its longest key ("act while locked").
+  const row = (k, v) => console.log(`    ${k.padEnd(16)}  ${v}`);
+  console.log('(o> huginn - device');
   console.log('');
   console.log(`  ${conf.name}  (${platform()})`);
-  console.log(`    offering    ${parseScope(conf.scope)}${parseScope(conf.scope) === 'own' ? '  — the whole machine, always: nothing here can tell when nobody is looking' : ''}`);
-  console.log(`    work runs in ${cwdFor(conf.scope, false, conf.root)} (not a sandbox)`);
-  console.log(`    huginn      ${conf.url}`);
-  console.log(`    claude      ${conf.claude}`);
+  row('offering', `${parseScope(conf.scope)}${parseScope(conf.scope) === 'own' ? '  - the whole machine, always: nothing here can tell when nobody is looking' : ''}`);
+  row('work runs in', `${cwdFor(conf.scope, false, conf.root)} (not a sandbox)`);
+  row('huginn', conf.url);
+  row('claude', conf.claude);
   // Printed BOTH ways, and with the reason it makes no difference here. A
   // setting that only appears when it is on is a setting somebody has to know
   // exists before they can check it — and this is the line that answers "why did
   // act run at 3am" on a machine whose owner has forgotten they said it could.
-  console.log(`    act while locked  ${conf.actWhileLocked === true ? 'yes' : 'no'}`
+  row('act while locked', `${conf.actWhileLocked === true ? 'yes' : 'no'}`
     + '  (no screen here to lock, so this machine never drops either way)');
-  console.log(`    config      ${CONF_FILE}`);
+  row('config', CONF_FILE);
   // ⚠ THE REASON HERE TOO. `status` is precisely where somebody looks when the
   // runner will not start, and printing MISSING for a file that is sitting right
   // there — unreadable, or holding a captured newline — sends them to re-create
   // something they already have.
   const tk = tokenOrWhy();
-  console.log(`    token       ${tk.token ? TOKEN_FILE : `MISSING — ${tk.why}`}`);
+  row('token', tk.token ? TOKEN_FILE : `missing - ${tk.why}`);
   if (/^https:/.test(conf.url)) {
     // The pin is the whole of what stands between the token and an impostor, so
     // it is shown: "not proved yet" is normal before the first contact.
     const pins = tk.token ? pinsFor(conf, tk.token) : [];
-    console.log(`    tls         ${pins.length ? `pinned sha256 ${pins[0]}${pins.length > 1 ? ` (+${pins.length - 1} older)` : ''}` : 'not proved yet (proved on first contact)'}`);
+    row('tls', `${pins.length ? `pinned sha256 ${pins[0]}${pins.length > 1 ? ` (+${pins.length - 1} older)` : ''}` : 'not proved yet (proved on first contact)'}`);
   }
   if (!conf.id) {
     console.log('');
@@ -1371,8 +1375,8 @@ async function status() {
   try {
     const d = await api('GET', `/v1/devices/${conf.id}`);
     console.log('');
-    console.log(`    huginn sees it as ${d.online ? 'reachable' : 'NOT reachable'}`
-      + `, scope ${d.scope}${d.scope === d.effectiveScope ? '' : ` (→ ${d.effectiveScope} right now)`}`
+    console.log(`    huginn sees it as ${d.online ? 'reachable' : 'not reachable'}`
+      + `, scope ${d.scope}${d.scope === d.effectiveScope ? '' : ` (-> ${d.effectiveScope} right now)`}`
       + `${d.running ? ', running a job' : d.queued ? `, ${d.queued} queued` : ''}`);
   } catch (e) {
     console.log('');

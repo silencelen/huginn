@@ -39,6 +39,20 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
+
+// The brand state table, through its generated node reader: one source
+// (server/lib/state-table.json) for every renderer's marks and words. Beside this
+// file in the tree; /usr/local/lib/huginn on a host (server/setup.sh installs it).
+const ST = (() => {
+  const here = path.dirname(fs.realpathSync(__filename));
+  for (const d of [path.join(here, '..', 'lib'), '/usr/local/lib/huginn']) {
+    const f = path.join(d, 'state-table.js');
+    if (fs.existsSync(f)) return require(f);
+  }
+  process.stderr.write('huginn-projects: missing state-table.js - re-run server/setup.sh\n');
+  process.exit(1);
+})();
 
 const TOKEN_FILE = '/etc/huginn-appd/token';
 // Overridable for the CLI gate, which stands a stub daemon up on a spare port
@@ -164,7 +178,7 @@ async function call(method, path, body, probe) {
   }
 
   if (res.status === 404 && probe) {
-    die('this huginn-appd has no projects — deploy a newer daemon', 3,
+    die('this huginn-appd has no projects - deploy a newer daemon', 3,
         '(huginn status shows its version; 3.4.0 is the first with /v1/projects)');
   }
   if (res.status === 401 || res.status === 403) {
@@ -191,10 +205,10 @@ function parse(text) {
 // on a permission dialog is "busy" to the process table and stopped to a person.
 function stateWords(m) {
   if (!m || typeof m !== 'object') return '';
-  if (m.needsYou === true || m.waitingOnHuman === true) return 'NEEDS YOU';
+  if (m.needsYou === true || m.waitingOnHuman === true) return ST.WORD.needsYou;
   const s = clean(m.state || m.status, 24).toLowerCase();
-  if (s === 'busy' || s === 'running' || s === 'working') return 'working';
-  if (s === 'attention' || s === 'waiting') return 'NEEDS YOU';
+  if (s === 'busy' || s === 'running' || s === 'working') return ST.WORD.running;
+  if (s === 'attention' || s === 'waiting') return ST.WORD.needsYou;
   if (s === 'idle') return 'idle';
   if (s === 'starting' || s === 'launching') return 'starting';
   // Unknown words pass THROUGH rather than being flattened to "?": a daemon
@@ -236,6 +250,8 @@ function renderList(d) {
   const rows = Array.isArray(d && d.projects) ? d.projects : [];
   const out = [];
   const p = (s) => out.push(s === undefined ? '' : s);
+  // The one line grammar (BRAND.md section 3): the one-row raven and the surface.
+  p('(o> huginn - projects');
   p('');
   if (!rows.length) {
     p('  No projects. A project is a cluster of sessions with roles and a lead');
@@ -250,8 +266,11 @@ function renderList(d) {
     waitingTotal += waiting;
     const ended = typeof r.endedAt === 'number' && r.endedAt > 0;
     // The mark answers the only question a list of clusters is asked: is any of
-    // this stopped waiting for me.
-    const mark = ended ? '-' : (waiting ? '!' : ' ');
+    // this stopped waiting for me. The state table: ! needs you, * the lead is
+    // working, o nothing is moving, and an ended project is done, so ok.
+    const mark = ended ? ST.MARK.ok
+      : waiting ? ST.MARK.needsYou
+        : stateWords(r.lead) === ST.WORD.running ? ST.MARK.running : ST.MARK.waiting;
     const bits = [];
     bits.push(mem.length ? `${mem.length} member${mem.length === 1 ? '' : 's'}` : 'no members yet');
     if (waiting) bits.push(`${waiting} needs you`);
@@ -286,13 +305,14 @@ function renderShow(d) {
   const live = rows.filter((m) => m && !m.endedAt);
   const out = [];
   const p = (s) => out.push(s === undefined ? '' : s);
+  p('(o> huginn - projects');
   p('');
   p(`  ${clean(proj.name, 60) || clean(proj.id, 8) || '?'}`);
   const head = [];
   if (clean(proj.cwd)) head.push(clean(proj.cwd, 120));
   if (ago(proj.createdAt)) head.push(`created ${ago(proj.createdAt)}`);
   if (ago(d && d.updatedAt)) head.push(`updated ${ago(d.updatedAt)}`);
-  if (typeof proj.endedAt === 'number' && proj.endedAt > 0) head.push(`ENDED ${ago(proj.endedAt)}`);
+  if (typeof proj.endedAt === 'number' && proj.endedAt > 0) head.push(`ended ${ago(proj.endedAt)}`);
   if (head.length) p(`  ${head.join('  .  ')}`);
   p('');
   if (!live.length) {
@@ -344,7 +364,7 @@ async function resolve(what) {
   // projects sharing a display name must stop the verb and be named, not have
   // one of them picked because it sorted first.
   if (byName.length > 1) {
-    die(`'${clean(want, 60)}' matches ${byName.length} projects — use the id`, 1,
+    die(`'${clean(want, 60)}' matches ${byName.length} projects - use the id`, 1,
         byName.map((r) => `  ${clean(r.id, 36)}  ${clean(r.name, 60)}`).join('\n'));
   }
   const bySlug = rows.filter((r) => r && clean(r.slug).toLowerCase() === lower);
@@ -392,8 +412,8 @@ const USAGE = `
   the project from; '-' reads it from stdin, so a file can be piped in.
   --kind is one of ${KINDS_HELP} (default: other).
 
-  ⚠ SPAWN TAKES NO MEMBER LIST. The LEAD proposes the members — roles, first
-  prompts, directories — and spawn is the owner approving that plan at the rev
+  ! spawn takes no member list. The lead proposes the members - roles, first
+  prompts, directories - and spawn is the owner approving that plan at the rev
   it is on. Talk to the lead in its own session to change it; 'show' says where
   it is up to.
 `;
@@ -471,7 +491,7 @@ async function main() {
     // lead with nothing to do. Said before the round trip because the sentence
     // has to name the flag that answers it, and the daemon cannot know it.
     if (brief === undefined || !String(brief).trim()) {
-      die('a project needs a brief — it is the whole first message the lead gets', 1,
+      die('a project needs a brief - it is the whole first message the lead gets', 1,
           '(--brief "size the firmware work", or --brief - to read it from stdin)');
     }
     // ⚠ NOT VALIDATED HERE BEYOND EMPTINESS. A display name is prose — the
@@ -486,7 +506,7 @@ async function main() {
       const lead = clean((p.lead && (p.lead.name || p.lead.tmuxName)) || '', 60);
       return `\n  started ${clean(p.name, 60) || name}` +
              (clean(p.cwd) ? `\n  in ${clean(p.cwd, 120)}` : '') +
-             (lead ? `\n  its lead session is ${lead} — attach it with:  huginn ${attachName(p.lead)}` : '') +
+             (lead ? `\n  its lead session is ${lead} - attach it with:  huginn ${attachName(p.lead)}` : '') +
              '\n  It sizes the work and proposes the members; when it has,' +
              '\n  approve them in the app or here:  huginn projects spawn ' +
              `${JSON.stringify(clean(p.name, 60) || name)}\n`;
@@ -512,7 +532,7 @@ async function main() {
     for (const a of rest.slice(1)) {
       const s = String(a);
       if (s === '--prompt' || (!s.startsWith('-') && /^[^:]+:[^:]+$/.test(s))) {
-        die('spawn approves the plan the LEAD proposed — it takes no members and no prompts', 1,
+        die('spawn approves the plan the lead proposed - it takes no members and no prompts', 1,
             '(talk to the lead in its own session to change the plan; ' +
             'huginn projects show <project> for where it is up to)');
       }
@@ -581,7 +601,7 @@ async function main() {
       // are real and the ones that did not have to be named. A summary line
       // saying "spawned" would hide half a cluster.
       if (failed.length) {
-        lines.push(`  DID NOT START:`);
+        lines.push(`  did not start:`);
         for (const f of failed) {
           lines.push(`    ${clean(f.role, 16) || '?'}  ${clean(f.reason, 120) || 'no reason given'}`);
         }
@@ -671,7 +691,7 @@ async function main() {
       // cannot be handed a wrap-up phrase), and this is the only client that
       // asked for the delete, so it is the only one that can say so.
       if (refused.length) {
-        lines.push('  DID NOT WIND DOWN, and are still running:');
+        lines.push('  did not wind down, and are still running:');
         for (const f of refused) {
           const n = clean(f && (f.name || f.claudeName), 60).replace(/\//g, '-');
           lines.push(`    ${n || '?'}  ${clean(f && f.why, 120) || 'no reason given'}`);

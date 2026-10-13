@@ -650,7 +650,7 @@ test('the chat TITLE collapses a tagged frame to the page name', async () => {
   const row = body.chats.find((c) => c.id === chat.id);
   // The trailing `\n*` on the pattern eats the blank line the frame was joined
   // with, so one newline separates the pill from what was actually typed.
-  assert.equal('\u{1F4DD} Pasted\nREF_TITLE what is this?'.slice(0, 60), row.title,
+  assert.equal('page Pasted\nREF_TITLE what is this?'.slice(0, 60), row.title,
     'the frame collapses to a pill and the question survives');
   assert.ok(!row.title.includes('End scratchpad'), 'no raw marker in a list row');
 });
@@ -664,7 +664,7 @@ test('an untagged frame still collapses, which is what the other three copies qu
   await waitForPrompt('REF_PLAINTITLE');
   const { body } = await api('/v1/chats');
   const row = body.chats.find((c) => c.id === chat.id);
-  assert.match(row.title, /^\u{1F4DD} Plain/u);
+  assert.match(row.title, /^page Plain/);
 });
 
 test('a message full of opening markers and no close is answered promptly', async () => {

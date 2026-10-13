@@ -9,6 +9,22 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.12.0 — 2026-10-13
+
+### Changed
+- **Telegram leads with the state table's glyphs, not emoji.** Every message the daemon sends
+  opens with one of the seven glyphs from `server/lib/state-table.json` (BRAND.md sections 4 and
+  8), and the head is lowercase: `▲ main needs you`, `× usage limit reached`,
+  `■ weekly audit · all clear`, `○ laptop offline`, `● laptop back`. A Round report now says its
+  verdict after the title (all clear, worth a look, needs you, unclear). The ✅ ⚠️ 🔴 ❓ 🔔 🛑 🔄 📉
+  🆙 🔁 that used to lead are gone. Only the words and the leading mark changed: what is sent,
+  when, to whom, and whether push wins over Telegram are as before.
+- **Chat titles and snippets use words for attachments.** `humanizeUserText` now writes `photo`,
+  `file` and `page <name>` where it wrote 📷 📎 📝. The apps' own attachment rendering
+  (`AttachmentText`, `ScratchpadRules`) is unchanged.
+- The table reaches the daemon as `lib/state-table.js`, generated from the JSON by
+  `scripts/gen-state-table.js`; `test/state-table.test.js` fails if the copy drifts.
+
 ## 3.11.0 — 2026-10-12
 
 ### Security

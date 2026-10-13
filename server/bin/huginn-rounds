@@ -23,6 +23,16 @@ case "${1:-}" in
   *) echo "usage: huginn-rounds" >&2; exit 1 ;;
 esac
 
+# The state table: marks and words come from server/lib/state-table.json, through
+# its generated bash reader, so a mark means the same thing here as in every other
+# renderer. Beside this file in the tree; /usr/local/lib/huginn on a host
+# (server/setup.sh installs it). Exported, so the python below reads os.environ.
+_lib="$(dirname "$(readlink -f "$0")")/../lib"
+[ -r "$_lib/state-table.sh" ] || _lib=/usr/local/lib/huginn
+# shellcheck source=../lib/state-table.sh
+. "$_lib/state-table.sh" 2>/dev/null \
+  || { echo "huginn-rounds: missing $_lib/state-table.sh - re-run server/setup.sh" >&2; exit 1; }
+
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-rounds: no appd token at $TOKEN_FILE" >&2; exit 1; }
 
@@ -36,10 +46,13 @@ BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
 # JSON in argv, not on stdin: this script may itself be fed from a pipe, and a
 # heredoc'd python competing for stdin is a bug that only shows up under ssh.
 python3 -c '
-import json, sys, time
+import json, os, sys, time
 
+E = os.environ
 d = json.loads(sys.argv[1])
 rounds = d.get("rounds", [])
+# The one line grammar (BRAND.md section 3): the one-row raven and the surface.
+print("(o> huginn - rounds")
 if not rounds:
     print()
     print("  No rounds yet. A round is work this host does on a schedule and")
@@ -48,10 +61,14 @@ if not rounds:
     sys.exit(0)
 
 # The same vocabulary the apps use, so a round does not mean one thing on a
-# screen and another in a terminal.
+# screen and another in a terminal. The marks are the state table: + all clear,
+# > worth a look (info), ! needs you, and an unreadable report is info too -- it
+# is something to read, not something that failed. "needs you" is the one that
+# stands out, by its mark and its place first in the line, not by capitals.
 WORD = {"ok": "all clear", "attention": "worth a look",
-        "action": "NEEDS YOU", "unknown": "unclear"}
-MARK = {"ok": " ", "attention": "!", "action": "!!", "unknown": "?"}
+        "action": E["HUGINN_WORD_NEEDS_YOU"], "unknown": "unclear"}
+MARK = {"ok": E["HUGINN_MARK_OK"], "attention": E["HUGINN_MARK_INFO"],
+        "action": E["HUGINN_MARK_NEEDS_YOU"], "unknown": E["HUGINN_MARK_INFO"]}
 
 # ONE definition, used on every string that reaches the screen.
 #
@@ -102,25 +119,31 @@ for r in rounds:
     # arrives un-acknowledged with no code to remember.
     ack = last.get("acknowledgedAt")
     acked = isinstance(ack, (int, float)) and ack > 0
-    mark = ("-" if acked else MARK.get(st, "-")) if last else "-"
-    # RUNNING first. A round that is executing at this moment is executing
+    # Read and dealt with is ok; never run yet is waiting; running wins over both.
+    if r.get("running"):
+        mark = E["HUGINN_MARK_RUNNING"]
+    elif not last:
+        mark = E["HUGINN_MARK_WAITING"]
+    else:
+        mark = E["HUGINN_MARK_OK"] if acked else MARK.get(st, E["HUGINN_MARK_INFO"])
+    # Running first. A round that is executing at this moment is executing
     # whatever its enabled flag says -- and disabling one mid-run is exactly how
     # you get here, so the state most worth seeing was the one being hidden.
     if r.get("running"):
-        state = "RUNNING"
+        state = E["HUGINN_WORD_RUNNING"]
     elif not r.get("enabled"):
         state = "paused"
     else:
         state = until(r.get("nextRunAt"))
 
-    print("  %-2s %s" % (mark, clean(r.get("title")) or "?"))
+    print("  %s %s" % (mark, clean(r.get("title")) or "?"))
     where = clean(r.get("hostName")) or "this host"
     # Same trap as huginn-devices: a present-but-null key defeats the default
     # argument of .get. NOTE: no apostrophes anywhere in this block — the whole
     # program is inside a single-quoted python3 -c, so one closes it and the
     # shell starts parsing python. Extracting this block to test it CANNOT
     # catch that; only running the real script can.
-    print("       %s  .  %s  .  %s  .  on %s"
+    print("    %s  .  %s  .  %s  .  on %s"
           % (clean(r.get("cadence")) or "?", state, clean(r.get("mode")) or "ask", where))
 
     if last:
@@ -141,22 +164,22 @@ for r in rounds:
         # An unmet goal is the one fact a cheerful headline can hide, so it is
         # said here rather than left to the reader to infer.
         if last.get("goalMet") is False:
-            bits.append("DID NOT FINISH")
+            bits.append("did not finish")
         elif last.get("goalMet") is True:
             bits.append("goal met")
         if last.get("malformed"):
             bits.append("no report block")
-        print("       %s" % "  .  ".join(b for b in bits if b))
+        print("    %s" % "  .  ".join(b for b in bits if b))
         head = clean(last.get("headline"), 100)
         if head:
-            print("       %s" % head)
+            print("    %s" % head)
         for it in (last.get("items") or [])[:5]:
-            print("         - %s" % clean(it.get("title"), 88))
+            print("      - %s" % clean(it.get("title"), 88))
             sug = clean(it.get("suggest"), 86)
             if sug:
-                print("           -> %s" % sug)
+                print("        -> %s" % sug)
     else:
-        print("       not run yet")
+        print("    not run yet")
     print()
 
 n = len(rounds)

@@ -26,10 +26,30 @@
 #   2  appd is not answering at all
 import json
 import os
+import runpy
 import sys
 import time
 import urllib.error
 import urllib.request
+
+
+def _state_table():
+    """The brand state table, through its generated python reader.
+
+    server/lib/state-table.py beside this file in the tree; /usr/local/lib/huginn
+    on a host (server/setup.sh installs it). One source for every renderer's
+    marks and words: server/lib/state-table.json.
+    """
+    here = os.path.dirname(os.path.realpath(__file__))
+    for d in (os.path.join(here, "..", "lib"), "/usr/local/lib/huginn"):
+        f = os.path.join(d, "state-table.py")
+        if os.path.isfile(f):
+            return runpy.run_path(f)
+    sys.stderr.write("huginn-headroom: missing state-table.py - re-run server/setup.sh\n")
+    sys.exit(1)
+
+
+ST = _state_table()
 
 TOKEN_FILE = "/etc/huginn-appd/token"
 BASE = os.environ.get("HUGINN_APPD_URL") or "http://127.0.0.1:8787"
@@ -164,7 +184,7 @@ def local_at(iso):
 
 # The same vocabulary the apps use, so a mode does not mean one thing on a screen
 # and another in a terminal.
-MODE_WORD = {"ok": "OK", "warn": "WARN", "red": "RED", "exhausted": "EXHAUSTED"}
+MODE_WORD = {"ok": "ok", "warn": "warn", "red": "red", "exhausted": "exhausted"}
 WINDOW_WORD = {"session": "session", "weekly_all": "this week",
                "weekly_fable": "this week (Fable)"}
 
@@ -183,7 +203,7 @@ def window_line(key, w):
     # "exceeded" are not the same sentence and the second one is the one that
     # stops work, so it is said out loud rather than left to the percentage.
     if (w.get("severity") or "") == "exceeded":
-        bits.append("EXCEEDED")
+        bits.append("exceeded")
     bits.append("resets " + local_at(w.get("resetsAt")))
     return "  .  ".join(bits)
 
@@ -209,11 +229,13 @@ def fullest(windows):
 def render(d):
     out = []
     p = out.append
+    # The one line grammar (BRAND.md section 3): the one-row raven and the surface.
+    p("(o> huginn - headroom")
     p("")
 
     mode = clean(d.get("mode")) or "unknown"
     worst = d.get("worst") or {}
-    head = "  Headroom: %s" % MODE_WORD.get(mode, mode.upper())
+    head = "  Headroom: %s" % MODE_WORD.get(mode, mode.lower())
     wp = pct_of(worst)
     if worst and wp is not None:
         head += "   (%s at %d%%, %s)" % (
@@ -235,19 +257,19 @@ def render(d):
         # old and `agedLimits` zeroes a window whose reset has passed, so a cold
         # row reading 0% is a guess, not a reading -- and an operator who cannot
         # tell the two apart will switch to an account that is actually full.
-        p("  %s %s" % ("*" if a.get("live") else " ", who))
+        p("  %s %s" % (ST["MARK"]["running"] if a.get("live") else " ", who))
         windows = a.get("windows") or {}
         fk, fw = fullest(windows)
         if fk:
-            p("      %s" % window_line(fk, fw))
+            p("    %s" % window_line(fk, fw))
         rest = ["%s %s" % (clean(w.get("label")) or WINDOW_WORD.get(k, k),
                            "%d%%" % round(pct_of(w)) if pct_of(w) is not None else "?%")
                 for k, w in windows.items() if k != fk and isinstance(w, dict)]
         if rest:
-            p("      %s" % "  .  ".join(rest))
+            p("    %s" % "  .  ".join(rest))
         state = "live" if a.get("live") else "saved login, not active"
         when = ago(a.get("readAt"))
-        p("      %s" % "  .  ".join(b for b in [state, ("read " + when) if when else ""] if b))
+        p("    %s" % "  .  ".join(b for b in [state, ("read " + when) if when else ""] if b))
         p("")
 
     # Sessions huginn itself moved. Only these: a session a person moved by hand
@@ -263,7 +285,7 @@ def render(d):
             when = ago(L.get("at"))
             if when:
                 note.append(when)
-            p("      %s: %s -> %s  (%s)" % (
+            p("    %s: %s -> %s  (%s)" % (
                 clean(s.get("name"), 40) or "?", clean(L.get("from")) or "?",
                 clean(L.get("to")) or "?", ", ".join(note)))
         p("")
@@ -271,8 +293,8 @@ def render(d):
         p("  Waiting on a reset")
         for s in stalled:
             bits = [clean(s.get("name"), 40) or "?"]
-            bits.append("auto-resume on" if s.get("autoResume") else "auto-resume OFF")
-            p("      %s" % "  .  ".join(bits))
+            bits.append("auto-resume on" if s.get("autoResume") else "auto-resume off")
+            p("    %s" % "  .  ".join(bits))
         p("")
 
     # Held spawns: the hook gate DELAYS agents while a sentinel is armed. Count
@@ -290,7 +312,7 @@ def render(d):
         oldest = min((h.get("since") or 0) for h in held)
         when = ago(oldest)
         if when:
-            p("      oldest held %s" % when)
+            p("    oldest held %s" % when)
         p("")
 
     sentinels = d.get("sentinels") or {}
@@ -305,7 +327,7 @@ def render(d):
             why = clean(v.get("reason"), 80)
             if why:
                 bits.append(why)
-            p("      %s" % "  .  ".join(bits))
+            p("    %s" % "  .  ".join(bits))
         p("")
     elif sentinels:
         p("  Sentinels: none armed - new agents start normally")
@@ -337,7 +359,7 @@ def render(d):
     # never "what did it do" but "why did it do NOTHING while I sat at 94%".
     why = clean(arb.get("why"), 240)
     if why:
-        p("      why: %s" % why)
+        p("    why: %s" % why)
     p("")
 
     s = d.get("settings") or {}
@@ -352,7 +374,7 @@ def render(d):
         ladder = [clean(x) for x in (s.get("ladder") or []) if clean(x)]
         if ladder:
             bits.append("ladder " + " -> ".join(ladder))
-        bits.append("auto-resume " + ("on" if s.get("autoResume") else "OFF"))
+        bits.append("auto-resume " + ("on" if s.get("autoResume") else "off"))
         if not s.get("autoResume"):
             # An OFF switch explains a stalled session that nothing picked up, and
             # that is the support question this line exists to answer in advance.
@@ -365,6 +387,10 @@ def render(d):
         p("  Settings: %s" % "  .  ".join(bits))
         p("")
 
+    # The count footer every renderer ends on.
+    n = sum(1 for a in accounts.values() if isinstance(a, dict))
+    p("  %d account%s" % (n, "" if n == 1 else "s"))
+    p("")
     return "\n".join(out)
 
 
