@@ -20,13 +20,21 @@ after(() => {
   }
 });
 
-let portSeq = 0;
+/** A port the kernel just handed out — never a computed one, which collides with
+ * the other routes-* files' daemons when the suite runs files in parallel. */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = require('node:net').createServer();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+}
 async function startDaemon({ bind = '127.0.0.1', env = {} } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-rtls-'));
   for (const d of ['state', 'data']) fs.mkdirSync(path.join(tmp, d));
   const token = crypto.randomBytes(32).toString('hex');
   fs.writeFileSync(path.join(tmp, 'token'), token, { mode: 0o600 });
-  const port = 10100 + (process.pid % 400) * 2 + (portSeq++);
+  const port = await freePort();
   const proc = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
