@@ -9,6 +9,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.Severity
+import com.silencelen.huginn.ui.theme.severityColor
+import com.silencelen.huginn.ui.theme.severityOf
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -119,8 +122,10 @@ fun StatusScreen(
             },
             valueColor = when (status.mempalace) {
                 "ok" -> null
-                "rebuilding" -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.error
+                // The severity ramp (ui/theme/StateColors.kt): a rebuild is a
+                // warning, not work in progress, so it is not the accent.
+                "rebuilding" -> severityColor(Severity.WARNING)
+                else -> severityColor(Severity.CRITICAL)
             },
         )
 
@@ -153,10 +158,11 @@ fun StatusScreen(
 @Composable
 private fun diskColor(usedPercent: String?): androidx.compose.ui.graphics.Color? {
     val pct = usedPercent?.removeSuffix("%")?.toIntOrNull() ?: return null
-    return when {
-        pct >= 90 -> MaterialTheme.colorScheme.error
-        pct >= 80 -> MaterialTheme.colorScheme.primary
-        else -> null
+    // The severity ramp (ui/theme/StateColors.kt): 80 % is the disk's own warning
+    // line, so the threshold is passed rather than the meters' default 70.
+    return when (val s = severityOf(null, pct.toDouble(), warnAt = 80.0)) {
+        Severity.NORMAL -> null
+        else -> severityColor(s)
     }
 }
 
