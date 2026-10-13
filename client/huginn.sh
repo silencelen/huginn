@@ -31,7 +31,16 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
 # address THIS machine just reached the host at, which is better than choosing on
 # the device's behalf between a LAN address, a tailnet name and whatever
-# `hostname` happens to say. $1 = the ssh alias; prints http://<authority>:8787.
+# `hostname` happens to say. $1 = the ssh alias; prints https://<authority>:8787
+# (http:// only for the host's own loopback).
+#
+# ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/TLS.md). The
+# runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
+# request, and a device enrolled from here is usually on a flat LAN with no VPN
+# under it. The runner would upgrade a remote http:// on its own anyway (rule 6:
+# no setting re-enables cleartext to a remote host); building https:// here is
+# so what the person reads in `huginn device status` is what is actually dialled.
+# Loopback stays http://: the daemon answers plain HTTP from 127.0.0.0/8 only.
 #
 # ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL. `http://fd00::1:8787`
 # has no valid port, so `huginn device on` / `huginn local on` from a machine
@@ -74,16 +83,21 @@ _huginn_srv_url() {
       if [ -n "$there" ] && [ "$there" = "$here" ]; then
         printf 'http://127.0.0.1:8787'; return 0
       fi ;;
+    # The host's own loopback (an alias pointing at this machine): plain HTTP
+    # is the one thing that stays, because it never leaves the box. ::1 maps to
+    # 127.0.0.1 because appd binds IPv4 (see the bracketing note above).
+    127.*) printf 'http://%s:8787' "$a"; return 0 ;;
+    ::1) printf 'http://127.0.0.1:8787'; return 0 ;;
     *:*) ;;
-    *) printf 'http://%s:8787' "$a"; return 0 ;;
+    *) printf 'https://%s:8787' "$a"; return 0 ;;
   esac
   v4="$(ssh -T "$H" "ip -4 -o addr show scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1" \
         2>/dev/null | tr -d '[:space:]')"
   case "$v4" in
-    [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'http://%s:8787' "$v4"; return 0 ;;
+    [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'https://%s:8787' "$v4"; return 0 ;;
   esac
   [ -n "$a" ] || return 1
-  printf 'http://[%s]:8787' "$a"
+  printf 'https://[%s]:8787' "$a"
 }
 
 # Did the caller already say where the daemon is? `huginn device on --url ...`
@@ -171,7 +185,7 @@ _huginn_device() {
         [ -n "$srv" ] || {
           echo "huginn device: could not work out how to reach $H's daemon" >&2
           echo "               (no ssh address to go on, and $H named no global IPv4)" >&2
-          echo "               say it yourself: huginn device on --url http://<host>:8787" >&2
+          echo "               say it yourself: huginn device on --url https://<host>:8787" >&2
           return 1; }
         node "$runner" on --url "$srv" "$@"
       fi
@@ -260,7 +274,7 @@ _huginn_local() {
         [ -n "$srv" ] || {
           echo "huginn local: could not work out how to reach $H's daemon" >&2
           echo "              (no ssh address to go on, and $H named no global IPv4)" >&2
-          echo "              say it yourself: huginn local on --url http://<host>:8787" >&2
+          echo "              say it yourself: huginn local on --url https://<host>:8787" >&2
           return 1; }
         HUGINN_LOCAL_DIR="$dir" node "$mgr" on --url "$srv" "$@"
       fi
