@@ -59,3 +59,11 @@ are single-width; one has to win.
 - Monochrome first: every mark works as one flat colour before colour is added.
 - The apps' motion rule, a slow stepped pulse rather than a spinner, bounds
   every in-app animation.
+
+## Round 2
+
+Five systems built on the chosen direction, each a faceted raven, the glyph
+tile cut from the same head, and terminal art exact from the mark's grid:
+[`round2/`](round2/) holds `r2-01-snapped` (the control), `r2-02-heavy`,
+`r2-03-watching`, `r2-04-isometric` and `r2-05-fold`, each with a
+`preview.png` and an honest README. The round-2 chooser records the pick.
