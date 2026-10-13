@@ -22,6 +22,19 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | 05 Colour | [`color/`](color/) | three palette directions with dark and light schemes, one state system mapped onto every surface, a terminal theme each, the migration list | [`color/README.md`](color/README.md) |
 | tools | [`tools/`](tools/) | the Chromium renderer, contact-sheet tiler, terminal-art checker and contrast calculator the sets were verified with | |
 
+## Decisions so far
+
+| decision | chosen | where |
+|---|---|---|
+| Primary mark | `mark-02-faceted`, the perched raven cut from straight edges | round-1 chooser, 2026-10-13; `compare/in-context.png` shows it on every surface |
+| Small form (tray, favicon, notification) | a glyph tile re-cut from the primary's head, tinted by state | same |
+| Terminal art | the logo is the terminal art: the facets are drawn to a grid so the half-block, braille and 7-bit renderings are exact | same |
+| Round 2 | five refinements of that direction, each a system of mark, glyph and terminal art | [`round2/BRIEF.md`](round2/BRIEF.md) |
+
+Still open, in order: what attention means and which accent carries it; the
+palette ground; the type direction; the terminal letterform; the one-row
+raven's 7-bit twin; the motion set.
+
 ## How to review
 
 1. Pick a mark first. Everything terminal and motion was built on today's path and
