@@ -19,7 +19,7 @@
 # and always exits 0 (a non-zero exit on UserPromptSubmit/Stop can block the turn). It
 # no-ops outside tmux, so headless `claude -p` / cron runs are unaffected.
 #
-# Icons are overridable via env (HUGINN_ICON_RUN / _NEEDYOU / _IDLE).
+# Icons are overridable via env (HUGINN_ICON_RUN / _NEEDYOU / _IDLE); the defaults are the brand's state glyphs.
 
 set -u
 
@@ -70,9 +70,16 @@ _nested_claude() {
 }
 _nested_claude && exit 0
 
-ICON_RUN="${HUGINN_ICON_RUN:-🔄}"
-ICON_NEEDYOU="${HUGINN_ICON_NEEDYOU:-✋}"
-ICON_IDLE="${HUGINN_ICON_IDLE:-✅}"
+# The brand's state glyphs (assets/brand/BRAND.md section 4): running ●, needs you
+# ▲, waiting ○; the 7-bit twins * ! o when the terminal is not UTF-8. Single-width
+# so a tab title never reflows; no emoji, so every terminal font has them.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) D_RUN='●'; D_NEEDYOU='▲'; D_IDLE='○' ;;
+  *)                                D_RUN='*'; D_NEEDYOU='!'; D_IDLE='o' ;;
+esac
+ICON_RUN="${HUGINN_ICON_RUN:-$D_RUN}"
+ICON_NEEDYOU="${HUGINN_ICON_NEEDYOU:-$D_NEEDYOU}"
+ICON_IDLE="${HUGINN_ICON_IDLE:-$D_IDLE}"
 
 event="${1:-}"
 payload="$(cat 2>/dev/null)"            # hook JSON on stdin (may be empty)
