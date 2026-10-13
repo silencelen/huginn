@@ -1,34 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <!-- Huginn brand mark: a raven, profile facing right. Odin's thought-raven.
-       Feathers-over-feet perched posture on purpose: legs turn to mud at 16px.
-       ONE path, clockwise from the bill tip; the eye is an evenodd hole so the
-       mark works on any background. Ink #161310, bone #E8E2DA.
-       Canonical source — every icon on every platform derives from this path.
-       Regenerate derived assets with generate.sh in this directory. -->
+  <!-- Huginn brand mark: the raven, upright, profile facing right, one hairline fold along
+       the folded wing. Odin's thought-raven. Twelve straight edges on a 24x16 lattice over the
+       108 box (x = 4.5i, y = 14.4 + 3.4j), so the terminal art is this path's own raster; the
+       eye is an evenodd hole so the mark works on any background; the fold is a 2-unit slit
+       spliced into the ring, so it is ONE path. Box x 22.5-76.5, y 17.8-68.8 (54 x 51).
+       Ink #141615, bone #E2E6E1 (Moss & Heather). Below 32 px use the solid (no fold): see
+       explorations/round3/fold-system/mark-32.svg; 16-22 px use mark-16.svg (the head).
+       Canonical source: every icon on every platform derives from this path; the vertex
+       list lives in explorations/round3/fold-system/build.py. Regenerate derived assets
+       with generate.sh in this directory; BRAND.md is the rule book. -->
   <g transform="translate(2,11)">
-    <path fill="#161310" fill-rule="evenodd" d="
-      M94,32
-      C87,27.5 80,25.8 74,25.5
-      C72.5,19.5 64,17 58.5,19.3
-      C54,21.3 51,24 48,27
-      C41,32.5 35,37.5 30,42
-      L10,60
-      L16,69
-      L37,54
-      C40,58.5 45,61.5 51,62.5
-      C58,63.3 64,60 67,55.5
-      C70.3,50.3 71.8,45.2 70,41
-      L67.8,40.2
-      L71.3,37.8
-      L68.8,36.2
-      L72,34.8
-      C79,34.6 86,34.2 93,33.6
-      C94.6,33 94.6,32.5 94,32
-      Z
-      M64.5,25.5
-      m-2,0
-      a2,2 0 1,0 4,0
-      a2,2 0 1,0 -4,0
-      Z"/>
+    <path fill="#141615" fill-rule="evenodd" d="M76.5,28 L67.5,24.6 L54,17.8 L45,17.8 L36,21.2 L32.18,26.972 L41.616,51.925 L32.334,65.952 L30.666,64.848 L39.384,51.675 L31.106,29.786 L22.5,68.8 L40.5,68.8 L54,62 L58.5,62 L63,48.4 L63,34.8 Z M48.55,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
   </g>
 </svg>
