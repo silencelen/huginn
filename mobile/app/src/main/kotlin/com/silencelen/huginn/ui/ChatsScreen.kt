@@ -1,5 +1,8 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
+import com.silencelen.huginn.ui.system.HouseMenuButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -323,7 +326,6 @@ private fun HostChoice(
  */
 @Composable
 private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
     // THE HOUSE ROW (UI-AUDIT section 3): dot · title · the last snippet · the
     // state word or age trailing, with the ⋮ last. Frame, inset and selection
     // are ListRow's; nothing here pads itself.
@@ -350,26 +352,24 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                 }
             }
         },
+        // Where it runs, when that is not here, and whether it holds tools, ride
+        // on the title line so the trailing column is only the time and the menu
+        // (a wide trailing column starved the title on the open Fold).
+        titleSuffix = {
+            val elsewhere = chat.host != null && chat.host != "local"
+            if (elsewhere) HostBadge(chat.host, chat.hostName)
+            if (chat.mode == "act") {
+                if (elsewhere) Spacer(Modifier.width(Scale.s4))
+                Icon(
+                    Icons.Filled.Bolt,
+                    contentDescription = "tools enabled",
+                    modifier = Modifier.size(Scale.icon),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
         trailing = {
             Column(horizontalAlignment = Alignment.End) {
-                // Where it runs, when that is not here, and whether it holds
-                // tools. "This is happening on another machine" is the bigger
-                // fact, so it comes first.
-                val elsewhere = chat.host != null && chat.host != "local"
-                if (elsewhere || chat.mode == "act") {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (elsewhere) HostBadge(chat.host, chat.hostName)
-                        if (chat.mode == "act") {
-                            if (elsewhere) Spacer(Modifier.width(Scale.s4))
-                            Icon(
-                                Icons.Filled.Bolt,
-                                contentDescription = "tools enabled",
-                                modifier = Modifier.size(Scale.icon),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
                 when {
                     chat.running -> {
                         Text(
@@ -403,18 +403,12 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                     )
                 }
             }
-            Box {
-                IconButton(onClick = { menu = true }) {
-                    Icon(Icons.Filled.MoreVert, contentDescription = "Chat actions")
-                }
-                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Delete") },
-                        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
-                        onClick = { menu = false; onDelete() },
-                    )
-                }
-            }
+            HouseMenuButton(
+                contentDescription = "Chat actions",
+                items = listOf(
+                    HouseMenuItem("Delete", icon = Icons.Filled.Delete, tone = VerbTone.DESTRUCTIVE, onClick = onDelete),
+                ),
+            )
         },
     )
 }

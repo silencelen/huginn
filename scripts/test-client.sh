@@ -690,7 +690,22 @@ RO=$(server/bin/huginn-headroom --help 2>/dev/null); RRC=$?
 LO=$(server/bin/huginn-llm --help 2>/dev/null)
 grep -qE '^(set -u|API=|TOKEN_FILE=)' <<<"$LO" \
   && bad "huginn-llm --help leaks its own source: $(grep -nE '^(set -u|API=|TOKEN_FILE=)' <<<"$LO")" \
-  || ok "huginn-llm --help prints the header and nothing below it"
+  || ok "huginn-llm --help prints its help and none of its source"
+# ⚠ AND IN THE RENDERERS' OWN LINE GRAMMAR. The client help fitted 80 columns
+# while the host renderers' --help ran to 90, led with an em-dash (PowerShell
+# 5.1 prints mojibake) and opened four different ways. Every one now opens
+# `(o> huginn - <surface>`, is 7-bit, and stops at column 79.
+for r in huginn-archive huginn-devices huginn-rounds huginn-status huginn-llm huginn-headroom huginn-projects; do
+  RO=$(server/bin/$r --help 2>/dev/null)
+  RLONG=$(awk 'length($0) > 79' <<<"$RO")
+  RHI=$(LC_ALL=C grep -P '[^\x00-\x7F]' <<<"$RO")
+  if [ "$(head -1 <<<"$RO")" = "(o> huginn - ${r#huginn-}" ] && [ -z "$(sed -n 2p <<<"$RO")" ] \
+     && [ -z "$RLONG" ] && [ -z "$RHI" ]; then
+    ok "$r --help: the (o> line, 7-bit, 80 columns"
+  else
+    bad "$r --help breaks the line grammar: $(head -1 <<<"$RO") | long: $(head -1 <<<"$RLONG") | non-ASCII: $(head -1 <<<"$RHI")"
+  fi
+done
 
 # ⚠ COLOUR IS FOR A TERMINAL. huginn-status set its ANSI colours
 # unconditionally, so `huginn status | cat`, a redirect and $(huginn status) all

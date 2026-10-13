@@ -1,5 +1,13 @@
 # Huginn Desktop changelog
 
+## 1.12.1
+
+### Fixes to the new skin
+- **The composer lines up**: the attach button and the Send / Interrupt circles sit on the
+  field's centre line at desk widths instead of 8 dp below it.
+- The chat top bar's menu is the house menu; its Delete is red like every other destructive
+  verb. Attachment and page markers read as words instead of emoji.
+
 ## 1.12.0
 
 ### The new skin

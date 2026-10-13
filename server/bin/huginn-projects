@@ -390,32 +390,39 @@ const KINDS_HELP = 'software, infra, hardware, docs, research, other';
 
 // ------------------------------------------------------------------ usage
 
-const USAGE = `
-  huginn-projects                          the projects on this host, one line each
-  huginn-projects list                     the same
-  huginn-projects show <id|name>           the project's members, and who is waiting
+// The renderers' line grammar (see huginn-archive): the (o> line, a blank line,
+// rows at 2, details at 4, 7-bit, nothing past column 79.
+const USAGE = `(o> huginn - projects
+
+  huginn-projects
+    The projects on this host, one line each.
+  huginn-projects list
+    The same.
+  huginn-projects show <id|name>
+    The project's members, and who is waiting.
   huginn-projects new <name> --brief TEXT|- [--kind KIND] [--cwd DIR]
-                                           start one: launches its lead session
-  huginn-projects spawn <project>          approve the lead's proposal: create its members
+    Start one: launches its lead session.
+  huginn-projects spawn <project>
+    Approve the lead's proposal: create its members.
   huginn-projects msg <project> <from> <to> <text>
-                                           one line from one member to another
+    One line from one member to another.
   huginn-projects end <project> [--now|--keep-sessions]
-                                           end the project AND wind its sessions down
-                                           (--now ends them outright; --keep-sessions
-                                           leaves them running and names them)
+    End the project AND wind its sessions down (--now ends them outright;
+    --keep-sessions leaves them running and names them).
 
   --json   print what the daemon said, unparsed, instead of rendering it
   --help   this
 
-  A <project> is an id or the project's name; the name is resolved on this host.
-  --brief is the WHOLE first message the lead gets, and it is what the lead sizes
-  the project from; '-' reads it from stdin, so a file can be piped in.
-  --kind is one of ${KINDS_HELP} (default: other).
+  A <project> is an id or the project's name; the name is resolved on this
+  host. --brief is the WHOLE first message the lead gets, and it is what the
+  lead sizes the project from; '-' reads it from stdin, so a file can be
+  piped in. --kind is one of ${KINDS_HELP}
+  (default: other).
 
   ! spawn takes no member list. The lead proposes the members - roles, first
-  prompts, directories - and spawn is the owner approving that plan at the rev
-  it is on. Talk to the lead in its own session to change it; 'show' says where
-  it is up to.
+  prompts, directories - and spawn is the owner approving that plan at the
+  rev it is on. Talk to the lead in its own session to change it; 'show'
+  says where it is up to.
 `;
 
 // ------------------------------------------------------------------- main

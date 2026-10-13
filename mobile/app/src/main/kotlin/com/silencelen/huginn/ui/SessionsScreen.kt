@@ -1,5 +1,7 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenuItem
+import com.silencelen.huginn.ui.system.HouseMenu
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -395,13 +397,20 @@ private fun SessionRow(
     ListRow(
         title = s.name,
         titleMono = true,
-        // "waiting" over a session running four background shells was a lie
-        // of omission — the list is where "looks stalled" started.
-        meta = if (s.state != "running" && backgroundWork) "background work" else stateLabel(s.state),
-        metaColor = when {
-            s.state == "attention" -> c.stateAttention
-            s.state == "running" || backgroundWork -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        // The state word sits beside the name on the title line (owner, 2026-10-13),
+        // not on a line of its own. "waiting" over a session running four background
+        // shells was a lie of omission — the list is where "looks stalled" started.
+        titleSuffix = {
+            Text(
+                if (s.state != "running" && backgroundWork) "background work" else stateLabel(s.state),
+                style = MaterialTheme.typography.labelSmall,
+                color = when {
+                    s.state == "attention" -> c.stateAttention
+                    s.state == "running" || backgroundWork -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+            )
         },
         selected = selected,
         onClick = onOpen,
@@ -434,59 +443,38 @@ private fun SessionRow(
                 IconButton(onClick = { onMenu(true) }) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "Session actions")
                 }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
-                    DropdownMenuItem(
-                        text = { Text("Rename") },
-                        leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
-                        onClick = { onMenu(false); onRename() },
-                    )
-                    // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. Both are drawn
-                    // in the destructive palette — the kill in the full `error` red,
-                    // the wrap-up in the lighter one — from `verbInk`, the single
-                    // token in `:ui`'s theme that the desktop's right-click menu also
-                    // draws from. Two shells picking their own lighter red is the
-                    // drift that makes a phone held up beside the laptop look like a
-                    // different product.
-                    DropdownMenuItem(
-                        text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
-                        // ⚠ AN ICON, BECAUSE THE OTHER THREE HAVE ONE. Without it the
-                        // label started in the icon COLUMN (x=754) while Rename,
-                        // Archive and Kill started at x=849, and a menu item that
-                        // hangs off the left of the others reads as a different class
-                        // of thing than it is. Tinted like its label, the way the kill
-                        // below is.
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.TaskAlt,
-                                contentDescription = null,
-                                tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
-                            )
-                        },
-                        onClick = { onMenu(false); onSoftEnd() },
-                    )
-                    // Between the wrap-up and the kill, where it belongs: it is a
-                    // wrap-up that leaves something behind. Neither red — ending a
-                    // session you can bring back is the least destructive of the
-                    // three.
-                    if (onArchive != null) {
-                        DropdownMenuItem(
-                            text = { Text("Archive…") },
-                            leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) },
-                            onClick = { onMenu(false); onArchive() },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(EndVerbs.hard(1), color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.Delete,
-                                contentDescription = null,
-                                tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                            )
-                        },
-                        onClick = { onMenu(false); onKill() },
-                    )
-                }
+                // The house menu (pr/03-row-system.md). Every verb carries a
+                // leading icon and its tone; HouseMenu inks label and icon alike
+                // from `verbInk`.
+                HouseMenu(
+                    expanded = menuOpen,
+                    onDismiss = { onMenu(false) },
+                    items = buildList {
+                        add(HouseMenuItem("Rename", icon = Icons.Filled.DriveFileRenameOutline, onClick = onRename))
+                        // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. The kill in
+                        // the full `error` red, the wrap-up in the soft tone — from
+                        // `verbInk`, the single token in `:ui`'s theme that the
+                        // desktop's right-click menu also draws from. Two shells
+                        // picking their own lighter red is the drift that makes a
+                        // phone held up beside the laptop look like a different
+                        // product.
+                        //
+                        // ⚠ AN ICON ON EVERY VERB (P-22). Without one the label
+                        // started in the icon COLUMN (x=754) while Rename, Archive
+                        // and Kill started at x=849, and a menu item that hangs off
+                        // the left of the others reads as a different class of
+                        // thing than it is.
+                        add(HouseMenuItem(EndVerbs.soft(1), icon = Icons.Filled.TaskAlt, tone = VerbTone.SOFT, onClick = onSoftEnd))
+                        // Between the wrap-up and the kill, where it belongs: it is a
+                        // wrap-up that leaves something behind. Neither red — ending a
+                        // session you can bring back is the least destructive of the
+                        // three.
+                        if (onArchive != null) {
+                            add(HouseMenuItem("Archive…", icon = Icons.Filled.Inventory2, onClick = onArchive))
+                        }
+                        add(HouseMenuItem(EndVerbs.hard(1), icon = Icons.Filled.Delete, tone = VerbTone.DESTRUCTIVE, onClick = onKill))
+                    },
+                )
             }
         },
         detail = {

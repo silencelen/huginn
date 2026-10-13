@@ -33,6 +33,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
 
 /**
  * One line the composer has to say about the message being written: the send
@@ -75,6 +84,7 @@ fun firstNotice(vararg notices: ComposerNotice?): ComposerNotice? = notices.firs
  *   passes its keyboard and navigation inset here, so everything above the row
  *   (notice, chips) stays above the keyboard.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Composer(
     value: String,
@@ -113,34 +123,70 @@ fun Composer(
                     content = row,
                 )
             }
+            // ONE HEIGHT FOR ONE LINE. The field is a plain BasicTextField in the
+            // outlined decoration with its padding set so a single line is exactly
+            // [COMPOSER_VERB] tall, the same as every circle beside it; the row
+            // aligns to the bottom, so on one line everything shares a centre and
+            // on more lines the controls stay anchored on the last one. Material's
+            // OutlinedTextField is 56 dp at minimum, which sat every 46 dp control
+            // 5 dp below the field's centre. One gap (Scale.s8) between everything.
+            val interaction = remember { MutableInteractionSource() }
             Row(
                 rowModifier
                     .fillMaxWidth()
-                    .padding(start = Scale.s12, end = Scale.s8, top = 6.dp, bottom = 6.dp),
+                    .padding(start = Scale.s8, end = Scale.s8, top = Scale.s8, bottom = Scale.s8),
                 verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(Scale.s8),
             ) {
                 leading()
-                OutlinedTextField(
+                BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = fieldModifier.weight(1f),
+                    modifier = fieldModifier.weight(1f).heightIn(min = COMPOSER_VERB),
                     enabled = enabled,
-                    placeholder = if (placeholder != null) {
-                        { Text(placeholder, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                    } else {
-                        null
-                    },
                     maxLines = maxLines,
-                    shape = RoundedCornerShape(Scale.s20),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = scheme.onSurface),
+                    cursorBrush = SolidColor(scheme.primary),
                     keyboardOptions = keyboardOptions,
                     keyboardActions = keyboardActions,
+                    interactionSource = interaction,
+                    decorationBox = { inner ->
+                        OutlinedTextFieldDefaults.DecorationBox(
+                            value = value,
+                            innerTextField = inner,
+                            enabled = enabled,
+                            singleLine = false,
+                            visualTransformation = VisualTransformation.None,
+                            interactionSource = interaction,
+                            placeholder = if (placeholder != null) {
+                                {
+                                    Text(
+                                        placeholder,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = scheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                    )
+                                }
+                            } else {
+                                null
+                            },
+                            contentPadding = PaddingValues(horizontal = Scale.s16, vertical = 11.dp),
+                            container = {
+                                OutlinedTextFieldDefaults.Container(
+                                    enabled = enabled,
+                                    isError = false,
+                                    interactionSource = interaction,
+                                    shape = RoundedCornerShape(Scale.s20),
+                                )
+                            },
+                        )
+                    },
                 )
-                Spacer(Modifier.width(6.dp))
                 trailing()
                 if (stopInstead) {
                     StopCircle(stopLabel, onStop)
                     if (sendAlongsideStop && canSend) {
-                        Spacer(Modifier.width(Scale.s4))
                         SendCircle(sendLabel, enabled && canSend, onSend)
                     }
                 } else {
@@ -167,6 +213,7 @@ fun SendCircle(label: String, enabled: Boolean, onClick: () -> Unit, size: Dp = 
             Icons.AutoMirrored.Outlined.Send,
             contentDescription = label,
             tint = if (enabled) scheme.onPrimary else scheme.onSurfaceVariant,
+            modifier = Modifier.size(Scale.iconLarge),
         )
     }
 }
@@ -182,7 +229,7 @@ fun StopCircle(label: String, onClick: () -> Unit, size: Dp = COMPOSER_VERB) {
             .clip(CircleShape)
             .border(1.dp, scheme.outline, CircleShape),
     ) {
-        Icon(Icons.Outlined.Stop, contentDescription = label, tint = scheme.onSurface)
+        Icon(Icons.Outlined.Stop, contentDescription = label, tint = scheme.onSurface, modifier = Modifier.size(Scale.iconLarge))
     }
 }
 

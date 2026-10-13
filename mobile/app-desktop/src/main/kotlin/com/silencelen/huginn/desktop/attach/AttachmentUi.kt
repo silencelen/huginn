@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.attach
 
+import com.silencelen.huginn.ui.system.HouseMenu
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.Box
@@ -32,9 +33,9 @@ import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.desktop.Composer
 import com.silencelen.huginn.desktop.ComposerLayout
 import com.silencelen.huginn.ui.AttachChooser
-import com.silencelen.huginn.ui.AttachChooserItems
+import com.silencelen.huginn.ui.attachChooserItems
 import com.silencelen.huginn.ui.AttachRow
-import com.silencelen.huginn.ui.ScratchpadPickerItems
+import com.silencelen.huginn.ui.scratchpadPickerItems
 import kotlinx.coroutines.CoroutineScope
 import java.awt.FileDialog
 import java.awt.Frame
@@ -150,12 +151,12 @@ fun AttachButton(
                 Icon(Icons.Filled.AttachFile, contentDescription = label)
             }
         }
-        DropdownMenu(expanded = chooser, onDismissRequest = { chooser = false }) {
-            AttachChooserItems(rows) { chooser = false; it.onPick() }
-        }
-        DropdownMenu(expanded = pagePicker, onDismissRequest = { pagePicker = false }) {
-            ScratchpadPickerItems(pads, padRefId) { pagePicker = false; onPadRef(it) }
-        }
+        HouseMenu(expanded = chooser, onDismiss = { chooser = false }, items = attachChooserItems(rows))
+        HouseMenu(
+            expanded = pagePicker,
+            onDismiss = { pagePicker = false },
+            items = scratchpadPickerItems(pads, padRefId, onPadRef),
+        )
     }
 }
 

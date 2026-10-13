@@ -1,5 +1,7 @@
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -610,11 +612,11 @@ private fun FamilyPicker(value: String?, onPick: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Column {
         PickerButton(value?.ifEmpty { "—" } ?: "—") { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            HeadroomForm.FAMILIES.forEach { f ->
-                DropdownMenuItem(text = { Text(f) }, onClick = { open = false; onPick(f) })
-            }
-        }
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = HeadroomForm.FAMILIES.map { f -> HouseMenuItem(f) { onPick(f) } },
+        )
     }
 }
 
@@ -628,10 +630,10 @@ private fun ModelPicker(value: String, models: List<ModelChoice>, onPick: (Strin
         PickerButton(
             options.firstOrNull { it.first == value }?.second ?: value.ifEmpty { "host default" },
         ) { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { (id, text) ->
-                DropdownMenuItem(text = { Text(text) }, onClick = { open = false; onPick(id) })
-            }
-        }
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = options.map { (id, text) -> HouseMenuItem(text) { onPick(id) } },
+        )
     }
 }

@@ -14,6 +14,8 @@
 
 package com.silencelen.huginn.ui
 
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -242,18 +244,14 @@ private fun PickerChip(
                 labelColor = MaterialTheme.colorScheme.onSurface,
             ),
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { (value, text) ->
-                // Tighter than Material's 48 dp row, not tight (owner, 10-01: the
-                // model/effort/mode lists were "loose"). 40 dp still takes a thumb.
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = { open = false; onPick(value) },
-                    modifier = Modifier.height(40.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                )
-            }
-        }
+        // Dense: tighter than Material's 48 dp row, not tight (owner, 10-01: the
+        // model/effort/mode lists were "loose"). 40 dp still takes a thumb.
+        HouseMenu(
+            expanded = open,
+            onDismiss = { open = false },
+            items = options.map { (value, text) -> HouseMenuItem(text) { onPick(value) } },
+            dense = true,
+        )
     }
 }
 

@@ -31,13 +31,31 @@ while [ $# -gt 0 ]; do
     --timeout) TIMEOUT="${2:?--timeout needs a value}"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help)
-      # ⚠ THE HEADER, NOT A LINE RANGE. This was `sed -n '2,20p'`, and line 20
-      # is `set -u` - so the help ended with a line of this file's own source,
-      # which is exactly the sort of thing that makes a person wonder what else
-      # leaked. A count drifts the moment anybody adds a sentence above; the
-      # comment BLOCK cannot, so the block is what is printed: from line 2 until
-      # the first line that is not a comment.
-      awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
+      # ⚠ ITS OWN TEXT, NOT THE FILE HEADER. This was first a line range
+      # (`sed -n '2,20p'`, which ended on `set -u` once the header grew) and
+      # then the comment block - which kept the header's em-dashes, its 81-
+      # column first line and its design notes in front of a person who asked
+      # how to call it. The renderers' line grammar (see huginn-archive): the
+      # (o> line, a blank line, rows at 2, details at 4, 7-bit, nothing past
+      # column 79.
+      cat <<'EOF'
+(o> huginn - llm
+
+  huginn-llm [--model <row-id>] [--timeout <s>] [--keep] "prompt"
+    One question to a serving machine's local model; the answer on stdout.
+    The default model is the first local row that is serving.
+  echo "text" | huginn-llm -
+    The prompt from stdin, e.g. to summarise a file.
+
+  --model <row-id>   pin one machine's local-model row
+  --timeout <s>      give up after this many seconds (default 120)
+  --keep             keep the chat afterwards, for debugging a bad answer
+
+  It rides the ordinary chat lane and removes the chat on success and on
+  failure. Refusals are the daemon's own words; an offline tier is exit 1
+  with the reason, never a hang.
+EOF
+      exit 0 ;;
     --*) echo "huginn-llm: unknown flag $1" >&2; exit 2 ;;
     *) PROMPT="${PROMPT:+$PROMPT }$1"; shift ;;
   esac

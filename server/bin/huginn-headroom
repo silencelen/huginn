@@ -394,10 +394,14 @@ def render(d):
     return "\n".join(out)
 
 
-USAGE = """usage: huginn-headroom [--json]
+# The renderers' line grammar (see huginn-archive): the (o> line, a blank
+# line, rows at 2, details at 4, nothing past column 79.
+USAGE = """(o> huginn - headroom
 
-  Usage left per account, what huginn moved or is holding, and why.
-  --json prints what the daemon said, unparsed, instead of rendering it.
+  huginn-headroom
+    Usage left per account, what huginn moved or is holding, and why.
+  huginn-headroom --json
+    What the daemon said, unparsed, instead of rendering it.
 """
 
 

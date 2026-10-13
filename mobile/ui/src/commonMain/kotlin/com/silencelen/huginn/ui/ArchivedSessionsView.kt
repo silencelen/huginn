@@ -39,6 +39,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.foundation.layout.size
 import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.system.HouseMenuButton
+import com.silencelen.huginn.ui.system.HouseMenuItem
 import com.silencelen.huginn.ui.system.LocalRowMetrics
 
 /**
@@ -145,7 +147,6 @@ private fun ArchivedSessionRow(
     onOpenLive: (String) -> Unit,
     onView: (() -> Unit)?,
 ) {
-    var menu by remember { mutableStateOf(false) }
     val live = ArchiveRules.liveName(row)
     Row(
         Modifier.fillMaxWidth().padding(start = LocalRowMetrics.current.inset, end = 4.dp, top = LocalRowMetrics.current.vertical, bottom = LocalRowMetrics.current.vertical),
@@ -224,17 +225,12 @@ private fun ArchivedSessionRow(
                 if (row.resumeCommand != null) RowAction(ARCHIVE_COPY_RESUME, onCopyResume)
             }
         }
-        Box {
-            IconButton(onClick = { menu = true }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "Archived session actions")
-            }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("Delete") },
-                    onClick = { menu = false; onDelete() },
-                )
-            }
-        }
+        // The house menu: Delete loses the archived transcript, so it lands in
+        // the destructive ink every other delete uses.
+        HouseMenuButton(
+            contentDescription = "Archived session actions",
+            items = listOf(HouseMenuItem("Delete", tone = VerbTone.DESTRUCTIVE, onClick = onDelete)),
+        )
     }
 }
 

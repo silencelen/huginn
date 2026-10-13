@@ -11,9 +11,14 @@
 # answered in the client, but this file is also run by hand over ssh.
 case "${1:-}" in
   -h|--help)
-    echo "usage: huginn-status"
-    echo "  This host's health: uptime, load, claude, auth, sessions, memory node, disk."
-    echo "  Colour when stdout is a terminal and NO_COLOR is unset."
+    # The line grammar: see huginn-archive.
+    cat <<'EOF'
+(o> huginn - status
+
+  huginn-status
+    This host's health: uptime, load, claude, auth, sessions, memory node,
+    disk. Colour when stdout is a terminal and NO_COLOR is unset.
+EOF
     exit 0 ;;
   '') ;;
   *) echo "usage: huginn-status" >&2; exit 1 ;;

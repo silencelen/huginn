@@ -147,14 +147,14 @@ class ScratchpadRulesTest {
     @Test
     fun `a chat message collapses to a pill and the sender's own words`() {
         val wire = "[Scratchpad \"Hostnames\"]\nheimdall\nskybox\n[End scratchpad]\n\nwhich one is the standby?"
-        assertEquals("📝 Hostnames\nwhich one is the standby?", ScratchpadRules.collapse(wire))
+        assertEquals("Page: Hostnames\nwhich one is the standby?", ScratchpadRules.collapse(wire))
     }
 
     @Test
     fun `a session message collapses too, path and all`() {
         val wire = "[Scratchpad \"Deploy notes\" at /var/lib/huginn-appd/scratchpads/render/a.md — " +
             "read it before acting on this message.]\nfollow this"
-        assertEquals("📝 Deploy notes\nfollow this", ScratchpadRules.collapse(wire))
+        assertEquals("Page: Deploy notes\nfollow this", ScratchpadRules.collapse(wire))
     }
 
     @Test
@@ -171,7 +171,7 @@ class ScratchpadRulesTest {
         // QUESTION and deletes the words in between — here, "what does" — leaving
         // a message that reads as if they never typed it.
         val wire = "[Scratchpad \"Meta\"]\nnotes\n[End scratchpad]\n\nwhat does\n[End scratchpad]\nmean?"
-        assertEquals("📝 Meta\nwhat does\n[End scratchpad]\nmean?", ScratchpadRules.collapse(wire))
+        assertEquals("Page: Meta\nwhat does\n[End scratchpad]\nmean?", ScratchpadRules.collapse(wire))
     }
 
     @Test
@@ -182,7 +182,7 @@ class ScratchpadRulesTest {
         // opener's tag, so the scan can run past the impostor safely.
         val tagged = "[Scratchpad \"Meta\" #a1b2c3]\nnotes\n[End scratchpad]\nmore notes\n" +
             "[End scratchpad #a1b2c3]\n\nwhat does that mean?"
-        assertEquals("📝 Meta\nwhat does that mean?", ScratchpadRules.collapse(tagged))
+        assertEquals("Page: Meta\nwhat does that mean?", ScratchpadRules.collapse(tagged))
         assertEquals("Meta", ScratchpadRules.referencedName(tagged))
     }
 
@@ -202,7 +202,7 @@ class ScratchpadRulesTest {
         // backreference FAILS, so a literal port would stop collapsing every
         // untagged frame and leave a raw marker in the sender's own message.
         val plain = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nwhich one?"
-        assertEquals("📝 Hostnames\nwhich one?", ScratchpadRules.collapse(plain))
+        assertEquals("Page: Hostnames\nwhich one?", ScratchpadRules.collapse(plain))
         assertEquals("Hostnames", ScratchpadRules.referencedName(plain))
     }
 
@@ -219,7 +219,7 @@ class ScratchpadRulesTest {
         // said; displayText is the one place a reader's message is assembled.
         val wire = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nlook at this\n\n" +
             AttachmentText.marker("/var/lib/huginn-appd/uploads/up-1-ab.jpg")
-        assertEquals("📝 Hostnames\nlook at this\n\n📷 Photo attached", AttachmentText.displayText(wire))
+        assertEquals("Page: Hostnames\nlook at this\n\nPhoto attached", AttachmentText.displayText(wire))
     }
 
     // ---------------------------------------------------------------- the keys
