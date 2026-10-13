@@ -21,3 +21,8 @@ Serve it from huginn with any static server on the explorations folder; the
 `../color/build/spec.py`, run `palette.py` (it refuses if a contrast rule
 fails), regenerate `tokens.json`, `Theme.kt`, `Ansi.kt` and `TrayIcons.kt`,
 re-shoot the four screens, and add the row to BRAND.md "Record of decisions".
+
+**Decided 2026-10-13 (owner, on the Fold):** Q1 C teal, Q2 B heather info, Q3 B gold, Q4 A moss pill.
+The generator refused two of the page's proposed light twins (needs-you `#7A5A16` was only 6.6 L*
+from working; tertiary collided with heather and then with idle/error) and settled on `#3D2B05` and
+`#5E1E3C`. Record row in BRAND.md; tokens frozen. The chooser is kept as the record of the round.

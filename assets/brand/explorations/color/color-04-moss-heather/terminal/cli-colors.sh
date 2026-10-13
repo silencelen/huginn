@@ -13,10 +13,10 @@
 # the minimum is 3:1, text in the apps and the Huginn scheme is 4.5:1):
 #  semantic slot          SGR  with the Huginn scheme                 conhost  powershell-5.1        campbell           xterm
 #  ok       brightGreen   92   #C4CF7A 10.9:1 on #141615       #00FF00 15.3:1  #00FF00 11.0:1   #16C60C 8.5:1  #00FF00 15.3:1
-#  warn     brightYellow  93   #E4E2A8 13.6:1 on #141615       #FFFF00 19.6:1  #FFFF00 14.1:1  #F9F1A5 16.9:1  #FFFF00 19.6:1
+#  warn     brightYellow  93   #E8D07E 11.9:1 on #141615       #FFFF00 19.6:1  #FFFF00 14.1:1  #F9F1A5 16.9:1  #FFFF00 19.6:1
 #  error    brightRed     91   #EE757D 6.5:1 on #141615         #FF0000 5.3:1   #FF0000 3.8:1   #E74856 5.1:1   #FF0000 5.3:1
 #  muted    brightBlack   90   #747D77 4.3:1 on #141615         #808080 5.3:1   #808080 3.8:1   #767676 4.3:1   #7F7F7F 5.2:1
-#  accent   brightMagenta 95   #C3A8E8 8.7:1 on #141615         #FF00FF 6.7:1   #FF00FF 4.8:1   #B4009E 3.2:1   #FF00FF 6.7:1
+#  accent   brightMagenta 95   #B49CDB 7.5:1 on #141615         #FF00FF 6.7:1   #FF00FF 4.8:1   #B4009E 3.2:1   #FF00FF 6.7:1
 #                              (ground of each legacy palette)         #000000         #012456         #0C0C0C         #000000
 #   (PowerShell 5.1's own console remaps DarkYellow to #EEEDF0 and uses #012456 as the
 #   ground, so an accent in slot 33 shows there as near-white: legible, not gold.)
@@ -25,7 +25,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   case "${COLORTERM:-}" in
     truecolor|24bit)
       H_OK=$(printf '\033[38;2;196;207;122m')   # #C4CF7A
-      H_WARN=$(printf '\033[38;2;228;226;168m')   # #E4E2A8
+      H_WARN=$(printf '\033[38;2;232;208;126m')   # #E8D07E
       H_ERROR=$(printf '\033[38;2;238;117;125m')   # #EE757D
       H_MUTED=$(printf '\033[38;2;116;125;119m')   # #747D77
       H_ACCENT=$(printf '\033[38;2;124;185;142m')   # #7CB98E

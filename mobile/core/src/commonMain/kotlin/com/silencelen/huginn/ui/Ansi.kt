@@ -13,16 +13,16 @@ object Ansi {
     val palette: List<Color> = buildList {
         // 0-15: the brand's ANSI-16, Moss & Heather
         // (assets/brand/explorations/color/color-04-moss-heather/terminal/moss-heather.ansi.json).
-        // Four slots ARE app tokens, by rule: brightRed = error, brightGreen =
-        // stateSuccess, brightYellow = stateAttention, brightBlue = stateInfo, so the
-        // terminal view and the app never show two reds. Every slot but black is
+        // Four slots ARE app tokens, by rule (round 7, 2026-10-13): brightRed = error,
+        // brightCyan = stateSuccess, brightYellow = stateAttention, brightMagenta =
+        // stateInfo, so the terminal view and the app never show two reds. Every slot but black is
         // >= 3:1 on the app ground (#141615); black is the outlineVariant.
         addAll(
             listOf(
                 Color(0xFF3A423E), Color(0xFFD65A62), Color(0xFF7CB98E), Color(0xFFD4B872),
                 Color(0xFF6C9BD6), Color(0xFFA98BD6), Color(0xFF5EB5B0), Color(0xFFC8CDC9),
-                Color(0xFF747D77), Color(0xFFEE757D), Color(0xFFC4CF7A), Color(0xFFE4E2A8),
-                Color(0xFF86B5E6), Color(0xFFC3A8E8), Color(0xFF80CFC9), Color(0xFFE2E6E1),
+                Color(0xFF747D77), Color(0xFFEE757D), Color(0xFFC4CF7A), Color(0xFFE8D07E),
+                Color(0xFF86B5E6), Color(0xFFB49CDB), Color(0xFF80CFC9), Color(0xFFE2E6E1),
             )
         )
         // 16-231: the 6x6x6 cube

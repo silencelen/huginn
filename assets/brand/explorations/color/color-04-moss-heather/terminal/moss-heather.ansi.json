@@ -17,9 +17,9 @@
     "brightBlack": "#747D77",
     "brightRed": "#EE757D",
     "brightGreen": "#C4CF7A",
-    "brightYellow": "#E4E2A8",
+    "brightYellow": "#E8D07E",
     "brightBlue": "#86B5E6",
-    "brightMagenta": "#C3A8E8",
+    "brightMagenta": "#B49CDB",
     "brightCyan": "#80CFC9",
     "brightWhite": "#E2E6E1"
   },
@@ -35,9 +35,9 @@
     "brightBlack": 4.28,
     "brightRed": 6.47,
     "brightGreen": 10.87,
-    "brightYellow": 13.63,
+    "brightYellow": 11.91,
     "brightBlue": 8.45,
-    "brightMagenta": 8.73,
+    "brightMagenta": 7.55,
     "brightCyan": 10.12,
     "brightWhite": 14.4
   },
@@ -53,9 +53,9 @@
     "brightBlack": 51.5,
     "brightRed": 63.7,
     "brightGreen": 80.6,
-    "brightYellow": 88.8,
+    "brightYellow": 83.8,
     "brightBlue": 72.1,
-    "brightMagenta": 73.2,
+    "brightMagenta": 68.5,
     "brightCyan": 78.1,
     "brightWhite": 90.9
   },
@@ -66,9 +66,9 @@
       "stateIdle": "brightBlack",
       "stateWorking": "green",
       "stateAttention": "brightYellow",
-      "stateSuccess": "brightGreen",
+      "stateSuccess": "brightCyan",
       "stateError": "brightRed",
-      "stateInfo": "brightBlue"
+      "stateInfo": "brightMagenta"
     },
     "cli": {
       "ok": "brightGreen",
@@ -79,14 +79,14 @@
     },
     "slotPins": {
       "brightRed": "error",
-      "brightGreen": "stateSuccess",
+      "brightCyan": "stateSuccess",
       "brightYellow": "stateAttention",
-      "brightBlue": "stateInfo"
+      "brightMagenta": "stateInfo"
     },
     "stateLadderLstar": {
       "brightBlack": 51.5,
       "green": 70.1,
-      "brightYellow": 88.8
+      "brightYellow": 83.8
     },
     "glyph": {
       "unicode": "\u25e2\u2586\u2588\u2580",
