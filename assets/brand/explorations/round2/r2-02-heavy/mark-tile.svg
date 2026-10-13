@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- App-icon master: ink mark on the square bone tile; the box x 15.5-96.5, y 28-79 of the 108 tile is a 10-14 % inset. Same polygon as mark.svg. -->
+  <rect width="108" height="108" fill="#E8E2DA"/>
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M94.5,37.4 L85.5,23.8 L54,17 L40.5,27.2 L13.5,57.8 L18,68 L40.5,57.8 L58.5,61.2 L76.5,51 L67.5,37.4 Z M65.25,28.9 m-3.5,0 a3.5,3.5 0 1,0 7,0 a3.5,3.5 0 1,0 -7,0 Z"/>
+  </g>
+</svg>
