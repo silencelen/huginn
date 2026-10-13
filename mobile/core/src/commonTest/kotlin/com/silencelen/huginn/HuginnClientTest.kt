@@ -3,7 +3,6 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.ByteStream
 import com.silencelen.huginn.data.DaemonChallenge
 import com.silencelen.huginn.data.HuginnClient
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
 import io.ktor.client.plugins.HttpTimeoutCapability
@@ -51,7 +50,7 @@ class HuginnClientTest {
     ) = HuginnClient(
         baseUrlProvider = { base },
         tokenProvider = { "test-token" },
-        engine = MockEngine { request -> seen += request; respond(request) },
+        transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
     private fun ok(json: String) = client { respond(json, HttpStatusCode.OK) }
@@ -69,18 +68,27 @@ class HuginnClientTest {
      * reaches this client has already been seen with its scheme spelled out.
      */
     @Test
-    fun `a base URL without a scheme is assumed to be plain http`() = runTest {
+    fun `a base URL without a scheme is judged as http and dialled as https`() = runTest {
         client(base = "192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
-        assertEquals("http://192.168.2.117:8787/v1/ping", seen.single().url.toString())
-        assertEquals("http://192.168.2.117:8787", RouteGuard.normalize("192.168.2.117:8787"))
-        assertFalse(RouteGuard.isAllowed("example.com:8787"), "a bare public name never gets the free upgrade")
+        assertEquals("https://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+        assertEquals("https://192.168.2.117:8787", RouteGuard.normalize("192.168.2.117:8787"))
+        // ⚠ Since 3.11 a bare public name is no longer refused: it is upgraded,
+        // and the token only follows it once the TLS proof has matched.
+        assertEquals("https://example.com:8787", RouteGuard.normalize("example.com:8787"))
     }
 
     /** A scheme is a scheme however it is spelled; `HTTP://` was stored by 2.x. */
     @Test
     fun `an upper-case scheme is not prepended to`() = runTest {
         client(base = "HTTP://192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
-        assertEquals("http://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+        assertEquals("https://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+    }
+
+    /** Loopback is the one place plain http survives (TLS.md rule 6). */
+    @Test
+    fun `a loopback base URL stays plain http`() = runTest {
+        client(base = "http://127.0.0.1:8787") { respond("""{"ok":true}""") }.ping()
+        assertEquals("http://127.0.0.1:8787/v1/ping", seen.single().url.toString())
     }
 
     /**
@@ -102,7 +110,7 @@ class HuginnClientTest {
     @Test
     fun `a trailing slash on the base URL does not become a double slash`() = runTest {
         client(base = "http://appd.test/") { respond("""{"ok":true}""") }.ping()
-        assertEquals("http://appd.test/v1/ping", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/ping", seen.single().url.toString())
     }
 
     // ------------------------------------------------------------ rounds
@@ -121,7 +129,7 @@ class HuginnClientTest {
         val r = ok("""{"id":"r1","title":"cap"}""").ackRound("r1", acknowledged = true)
         assertEquals("r1", r.id)
         val req = seen.single()
-        assertEquals("http://appd.test/v1/rounds/r1/ack", req.url.toString())
+        assertEquals("https://appd.test/v1/rounds/r1/ack", req.url.toString())
         assertEquals("POST", req.method.value)
         val body = req.body as TextContent
         assertEquals("application", body.contentType.contentType)
@@ -141,7 +149,7 @@ class HuginnClientTest {
     fun `softEndSession posts to the soft-end route and decodes the report`() = runTest {
         val r = ok("""{"ok":true,"phrase":"Finish up.","auto":true,"queued":false}""")
             .softEndSession("jtyper")
-        assertEquals("http://appd.test/v1/sessions/jtyper/soft-end", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/soft-end", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertTrue(r.auto)
@@ -153,7 +161,7 @@ class HuginnClientTest {
     fun `compactSession posts to the compact route and decodes queued`() = runTest {
         val r = ok("""{"ok":true,"sent":"/compact","queued":true}""")
             .compactSession("jtyper")
-        assertEquals("http://appd.test/v1/sessions/jtyper/compact", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/compact", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertTrue(r.queued)
@@ -164,7 +172,7 @@ class HuginnClientTest {
     fun `uploadBytes fetches by name, with auth, returning the raw bytes`() = runTest {
         val payload = byteArrayOf(1, 2, 3, 4)
         val got = client { respond(payload) }.uploadBytes("up-1-ab.jpg")
-        assertEquals("http://appd.test/v1/uploads/up-1-ab.jpg", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/uploads/up-1-ab.jpg", seen.single().url.toString())
         assertEquals("Bearer test-token", seen.single().headers[HttpHeaders.Authorization])
         assertTrue(payload.contentEquals(got))
     }
@@ -182,7 +190,7 @@ class HuginnClientTest {
         HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
-            engine = MockEngine { request -> seen += request; respond("""{"ok":true}""") },
+            transport = mockTransport { request -> seen += request; respond("""{"ok":true}""") },
         ).ping()
         assertNull(seen.last().headers["X-Huginn-Client"])
         assertNull(seen.last().headers["X-Huginn-Notify"])
@@ -192,7 +200,7 @@ class HuginnClientTest {
             tokenProvider = { "t" },
             clientIdProvider = { "install-1" },
             canNotifyProvider = { false },
-            engine = MockEngine { request -> seen += request; respond("""{"ok":true}""") },
+            transport = mockTransport { request -> seen += request; respond("""{"ok":true}""") },
         ).ping()
         assertEquals("install-1", seen.last().headers["X-Huginn-Client"])
         assertEquals("0", seen.last().headers["X-Huginn-Notify"], "a phone that cannot show a notification must say so")
@@ -300,7 +308,7 @@ class HuginnClientTest {
     @Test
     fun `a route probe gives up faster than a real call`() = runTest {
         val answered = client { respond("", HttpStatusCode.Unauthorized) }
-            .probe("http://192.168.2.117:8787")
+            .probe("http://127.0.0.1:8787")
         // A bare 401 with no body and no version header is NOT the daemon's
         // refusal — anything can say 401.
         assertFalse(answered)
@@ -321,19 +329,19 @@ class HuginnClientTest {
     @Test
     fun `a stranger answering HTTP is not a daemon`() = runTest {
         assertFalse(
-            client { respond("<html>NAS login</html>", HttpStatusCode.OK) }.probe("http://192.168.2.117:8787"),
+            client { respond("<html>NAS login</html>", HttpStatusCode.OK) }.probe("http://127.0.0.1:8787"),
             "a 200 of somebody else's web page is not huginn",
         )
         assertFalse(
-            client { respondError(HttpStatusCode.NotFound, "<html>404</html>") }.probe("http://192.168.2.117:8787"),
+            client { respondError(HttpStatusCode.NotFound, "<html>404</html>") }.probe("http://127.0.0.1:8787"),
             "nor is a 404 from whatever holds that address today",
         )
         assertFalse(
-            client { respondError(HttpStatusCode.Unauthorized, "Unauthorized") }.probe("http://192.168.2.117:8787"),
+            client { respondError(HttpStatusCode.Unauthorized, "Unauthorized") }.probe("http://127.0.0.1:8787"),
             "nor a 401 in somebody else's words",
         )
         assertFalse(
-            client { respond("", HttpStatusCode.OK) }.probeDaemon("http://192.168.2.117:8787").answered,
+            client { respond("", HttpStatusCode.OK) }.probeDaemon("http://127.0.0.1:8787").answered,
             "and an empty 200 is nobody at all",
         )
     }
@@ -348,8 +356,8 @@ class HuginnClientTest {
     @Test
     fun `the daemon's own refusal is a fingerprint, not adoption`() = runTest {
         val c = client { respondError(HttpStatusCode.Unauthorized, """{"error":"unauthorized"}""") }
-        assertFalse(c.probe("http://192.168.2.117:8787"), "a 401 nobody can attribute proves nothing")
-        val probe = c.probeDaemon("http://192.168.2.117:8787")
+        assertFalse(c.probe("http://127.0.0.1:8787"), "a 401 nobody can attribute proves nothing")
+        val probe = c.probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven)
         assertTrue(probe.answered, "but it is still huginn-shaped, and the reader is told so")
         assertNull(seen.last().headers[HttpHeaders.Authorization], "a probe must never carry the bearer")
@@ -364,11 +372,11 @@ class HuginnClientTest {
         val head = headersOf("X-Huginn-Appd", "3.3.0")
         // A thirty-line impostor prints exactly this. It must not win a route.
         assertFalse(
-            client { respond("", HttpStatusCode.Unauthorized, head) }.probe("http://192.168.2.117:8787"),
+            client { respond("", HttpStatusCode.Unauthorized, head) }.probe("http://127.0.0.1:8787"),
             "the header the daemon stamps on every response is free for anyone to print",
         )
         assertFalse(
-            client { respond("""{"ok":true}""", HttpStatusCode.OK, head) }.probe("http://192.168.2.117:8787"),
+            client { respond("""{"ok":true}""", HttpStatusCode.OK, head) }.probe("http://127.0.0.1:8787"),
             "and a 200 with the header is no better",
         )
         // The static rule that used to be the whole answer still exists, and
@@ -389,7 +397,7 @@ class HuginnClientTest {
         val c = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { token },
-            engine = MockEngine { request ->
+            transport = mockTransport(token) { request ->
                 seen += request
                 val nonce = request.url.parameters["nonce"] ?: ""
                 respond(
@@ -398,7 +406,7 @@ class HuginnClientTest {
                 )
             },
         )
-        val probe = c.probeDaemon("http://192.168.2.117:8787")
+        val probe = c.probeDaemon("http://127.0.0.1:8787")
         assertTrue(probe.proven)
         assertEquals("3.6.0", probe.version)
         assertEquals(1, seen.size, "one request in the happy path, not two")
@@ -409,7 +417,7 @@ class HuginnClientTest {
     @Test
     fun `a probe that throws is a route that is not there`() = runTest {
         val answered = client { throw kotlinx.io.IOException("no route to host") }
-            .probe("http://192.168.2.117:8787")
+            .probe("http://127.0.0.1:8787")
         assertFalse(answered)
     }
 
@@ -426,7 +434,7 @@ class HuginnClientTest {
     fun `a rename answers with the name the daemon actually used`() = runTest {
         val name = ok("""{"ok":true,"name":"my_session"}""").renameSession("old", "my.session")
         assertEquals("my_session", name)
-        assertEquals("http://appd.test/v1/sessions/old/rename", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/old/rename", seen.single().url.toString())
     }
 
     @Test
@@ -604,7 +612,7 @@ class HuginnClientTest {
         val r = ok("""{"polished":"Read the alerts and say what changed.","note":"Trimmed to 500 characters."}""")
             .polishRound(field = "prompt", title = "Telegram", prompt = "look at alerts", goal = "g", mode = "act")
 
-        assertEquals("http://appd.test/v1/rounds/polish", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/rounds/polish", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         // The whole draft, not just the field being rewritten: a goal only means
         // something beside its prompt, and both only mean something beside the mode
@@ -661,7 +669,7 @@ class HuginnClientTest {
     @Test
     fun `a session send carries the reference too`() = runTest {
         ok("""{"ok":true}""").sendKeys("jtyper", text = "follow this", scratchpadId = "pad-9")
-        assertEquals("http://appd.test/v1/sessions/jtyper/keys", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/keys", seen.single().url.toString())
         assertTrue("\"scratchpadId\":\"pad-9\"" in lastBody(), lastBody())
     }
 
@@ -726,7 +734,7 @@ class HuginnClientTest {
     @Test
     fun `the pages probe is a plain GET, so a 404 can mean 'no such feature'`() = runTest {
         val pads = ok("""{"pads":[{"id":"p1","name":"Main","main":true,"rev":3,"size":11}]}""").scratchpads()
-        assertEquals("http://appd.test/v1/scratchpads", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/scratchpads", seen.single().url.toString())
         assertEquals("GET", seen.single().method.value)
         assertEquals(1, pads.size)
         assertTrue(pads.single().main)
@@ -738,7 +746,7 @@ class HuginnClientTest {
     fun `undoLadder decodes what the undo actually did`() = runTest {
         val r = ok("""{"ok":true,"applied":false,"queued":true,"to":"fable","delivery":"queued"}""")
             .undoLadder("jtyper")
-        assertEquals("http://appd.test/v1/sessions/jtyper/headroom/undo", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/headroom/undo", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertFalse(r.applied, "mid-turn: the picker cannot be opened inside a running turn")
@@ -756,14 +764,14 @@ class HuginnClientTest {
     fun `agentTranscript sends the agent id exactly as the list gave it`() = runTest {
         ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "af7ca864cee1939de")
         assertEquals(
-            "http://appd.test/v1/sessions/jtyper/agents/af7ca864cee1939de/transcript?limit=400",
+            "https://appd.test/v1/sessions/jtyper/agents/af7ca864cee1939de/transcript?limit=400",
             seen.single().url.toString(),
         )
 
         seen.clear()
         ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "agent-3f9c1a")
         assertEquals(
-            "http://appd.test/v1/sessions/jtyper/agents/agent-3f9c1a/transcript?limit=400",
+            "https://appd.test/v1/sessions/jtyper/agents/agent-3f9c1a/transcript?limit=400",
             seen.single().url.toString(),
         )
     }
@@ -772,7 +780,7 @@ class HuginnClientTest {
     fun `typing status is a GET, and there is no cancel route to call`() = runTest {
         val t = ok("""{"queued":2,"delivering":false,"blockedBy":"turn","serverTime":1789460000}""")
             .typingStatus("jtyper")
-        assertEquals("http://appd.test/v1/sessions/jtyper/typing", seen.single().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/typing", seen.single().url.toString())
         assertEquals("GET", seen.single().method.value, "the daemon has never served anything else here")
         assertEquals(2, t.queued)
         assertEquals("turn", t.blockedBy)
@@ -794,7 +802,7 @@ class HuginnClientTest {
             .imageBytes("/tmp/claude-0/a shot.png")
         assertContentEquals(png, bytes)
         assertEquals(
-            "http://appd.test/v1/files/image?path=%2Ftmp%2Fclaude-0%2Fa%20shot.png",
+            "https://appd.test/v1/files/image?path=%2Ftmp%2Fclaude-0%2Fa%20shot.png",
             seen.single().url.toString(),
         )
         assertEquals("GET", seen.single().method.value)
@@ -805,7 +813,7 @@ class HuginnClientTest {
     fun `a session widens the daemon's search without widening the client's`() = runTest {
         client { respond(byteArrayOf(1), HttpStatusCode.OK) }.imageBytes("/w/out.png", session = "jtyper")
         assertEquals(
-            "http://appd.test/v1/files/image?path=%2Fw%2Fout.png&session=jtyper",
+            "https://appd.test/v1/files/image?path=%2Fw%2Fout.png&session=jtyper",
             seen.single().url.toString(),
         )
     }
@@ -1126,7 +1134,7 @@ class DaemonProbeTest {
     ) = HuginnClient(
         baseUrlProvider = { "http://appd.test" },
         tokenProvider = { "test-token" },
-        engine = MockEngine { request -> seen += request; respond(request) },
+        transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
     @Test
@@ -1141,7 +1149,7 @@ class DaemonProbeTest {
                 HttpStatusCode.Unauthorized,
                 headersOf(HuginnClient.APPD_HEADER, "3.4.0"),
             )
-        }.probeDaemon("http://192.168.2.117:8787")
+        }.probeDaemon("http://127.0.0.1:8787")
 
         assertFalse(probe.proven, "a fingerprint is not a proof")
         assertTrue(probe.answered)
@@ -1156,7 +1164,7 @@ class DaemonProbeTest {
     @Test
     fun `a daemon too old to stamp the header answers but proves nothing`() = runTest {
         val probe = client { respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized) }
-            .probeDaemon("http://192.168.2.117:8787")
+            .probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven)
         assertTrue(probe.answered, "the JSON error shape is the older marker and still identifies it")
         assertNull(probe.version)
@@ -1168,17 +1176,17 @@ class DaemonProbeTest {
         val probe = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "test-token" },
-            engine = MockEngine { request ->
+            transport = mockTransport("test-token") { request ->
                 seen += request
                 respond(
                     """{"proof":"${DaemonChallenge.proof("test-token", request.url.parameters["nonce"] ?: "")}","version":"3.6.0"}""",
                     HttpStatusCode.OK,
                 )
             },
-        ).probeDaemon("http://192.168.2.117:8787")
+        ).probeDaemon("http://127.0.0.1:8787")
         assertTrue(probe.proven)
         assertEquals(
-            "appd 3.6.0 answered at 192.168.2.117:8787, and proved it",
+            "appd 3.6.0 answered at 127.0.0.1:8787, and proved it",
             HuginnClient.probeWords(probe),
             "the step prints the world's own words, not a paraphrase",
         )
@@ -1187,7 +1195,7 @@ class DaemonProbeTest {
     @Test
     fun `a stranger at that address is not the daemon`() = runTest {
         val probe = client { respond("<html>NAS login</html>", HttpStatusCode.OK) }
-            .probeDaemon("http://192.168.2.117:8787")
+            .probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven, "a 200 of somebody else's web page is not huginn")
     }
 

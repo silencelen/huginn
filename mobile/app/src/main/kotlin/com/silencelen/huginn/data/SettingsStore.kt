@@ -101,6 +101,11 @@ class SettingsStore(private val context: Context) : HuginnSettings {
 
     init {
         salvageFrom.compareAndSet(null, context.applicationContext)
+        // ⚠ EVERY CLIENT IN THIS PROCESS READS ITS TLS PINS THROUGH HERE. The ten
+        // background call sites build a HuginnClient from bare lambdas and never
+        // see a settings object — but each builds one of these first, so this is
+        // the one place that reaches all of them. See PinBook.
+        PinBook.process.attach(this)
     }
 
     /** ⚠ EVERY READ IN THIS FILE GOES THROUGH HERE. See [orEmptyOnIoFailure]. */
@@ -185,6 +190,8 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         /** [RouteHealthSnapshot], verbatim. See [HuginnSettings.routeHealth]. */
         private val ROUTE_HEALTH = stringPreferencesKey("route_health")
         private val TOKEN = stringPreferencesKey("token")
+        /** [TlsPins], verbatim. See [HuginnSettings.tlsPins]. */
+        private val TLS_PINS = stringPreferencesKey("tls_pins")
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
         private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
@@ -475,8 +482,23 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         context.dataStore.edit { putRouteBook(it, book) }
     }
 
+    /**
+     * ⚠ A DIFFERENT TOKEN IS A DIFFERENT DAEMON (TLS.md rule 7), so its pins go
+     * in the SAME edit — never a window where the new token is stored beside the
+     * old daemon's certificates. Re-saving the same token keeps them.
+     */
     override suspend fun setToken(value: String) {
-        context.dataStore.edit { it[TOKEN] = value.trim() }
+        context.dataStore.edit {
+            val next = value.trim()
+            if ((it[TOKEN] ?: "") != next) it.remove(TLS_PINS)
+            it[TOKEN] = next
+        }
+    }
+
+    override val tlsPins: Flow<String> = prefs.map { it[TLS_PINS] ?: "" }
+
+    override suspend fun setTlsPins(value: String) {
+        context.dataStore.edit { if (value.isEmpty()) it.remove(TLS_PINS) else it[TLS_PINS] = value }
     }
 
     override suspend fun setFontScale(value: Float) {

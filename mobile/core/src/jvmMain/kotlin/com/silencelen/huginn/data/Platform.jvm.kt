@@ -8,6 +8,8 @@ import kotlinx.coroutines.Dispatchers
 
 actual fun huginnHttpEngine(): HttpClientEngine = OkHttp.create()
 
+actual fun huginnTransport(): DaemonTransport = OkHttpDaemonTransport()
+
 actual val huginnIoDispatcher: CoroutineDispatcher get() = Dispatchers.IO
 
 /**

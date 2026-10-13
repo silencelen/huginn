@@ -5,7 +5,6 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ReviveResult
 import com.silencelen.huginn.ui.ArchiveRules
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
 import io.ktor.client.request.HttpRequestData
@@ -181,7 +180,7 @@ class ArchiveTest {
         HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "test-token" },
-            engine = MockEngine { request -> seen += request; handler(request) },
+            transport = mockTransport("test-token") { request -> seen += request; handler(request) },
         )
 
     private val seen = mutableListOf<HttpRequestData>()
@@ -205,7 +204,7 @@ class ArchiveTest {
         val c = client { respond("""{"ok":true,"id":"x","archived":false,"pending":true}""",
             HttpStatusCode.Accepted, headersOf(HttpHeaders.ContentType, "application/json")) }
         c.archiveSession("jtyper")
-        assertEquals("http://appd.test/v1/sessions/jtyper/archive", seen.last().url.toString())
+        assertEquals("https://appd.test/v1/sessions/jtyper/archive", seen.last().url.toString())
         assertTrue((seen.last().body as TextContent).text.contains("\"graceful\""))
         c.archiveSession("jtyper", now = true)
         assertTrue((seen.last().body as TextContent).text.contains("\"now\""))
@@ -238,12 +237,12 @@ class ArchiveTest {
         val c = client { respond("""{"ok":true,"name":"jtyper2","resumed":true}""",
             HttpStatusCode.Created, headersOf(HttpHeaders.ContentType, "application/json")) }
         val r = c.reviveArchive("0123abcd-0000-4000-8000-00000000abcd")
-        assertEquals("http://appd.test/v1/archive/0123abcd-0000-4000-8000-00000000abcd/revive", seen.last().url.toString())
+        assertEquals("https://appd.test/v1/archive/0123abcd-0000-4000-8000-00000000abcd/revive", seen.last().url.toString())
         assertEquals("jtyper2", r.name)
 
         client { respond("""{"ok":true}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }
             .deleteArchive("0123abcd-0000-4000-8000-00000000abcd")
-        assertEquals("http://appd.test/v1/archive/0123abcd-0000-4000-8000-00000000abcd", seen.last().url.toString())
+        assertEquals("https://appd.test/v1/archive/0123abcd-0000-4000-8000-00000000abcd", seen.last().url.toString())
         assertEquals("DELETE", seen.last().method.value)
     }
 }

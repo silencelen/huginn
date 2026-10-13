@@ -1,9 +1,10 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -32,7 +33,7 @@ import kotlin.test.assertTrue
  */
 class OverviewMetaArrivalTest {
 
-    private val base = "http://h:1"
+    private val base = "https://h:1"
 
     private class Rig(
         val c: SessionController,
@@ -51,7 +52,7 @@ class OverviewMetaArrivalTest {
         val client = HuginnClient(
             baseUrlProvider = { base },
             tokenProvider = { "t" },
-            engine = MockEngine { request ->
+            transport = mockTransport { request ->
                 val p = request.url.toString().removePrefix(base)
                 seen += p
                 val (code, body) = when {

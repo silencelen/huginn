@@ -51,6 +51,17 @@ kotlin {
         jvmMain.dependencies {
             implementation(libs.ktor.client.okhttp)
         }
+        // ⚠ ONE SOURCE ROOT COMPILED INTO BOTH TARGETS: the TLS transport of
+        // docs/TLS.md (a pinning trust manager and a trust-anything probe). It is
+        // plain JSSE + OkHttp on the phone and the desktop alike, and the
+        // security-critical half of the scheme must not exist as two copies that
+        // can drift. An extra srcDir rather than an intermediate `jvmShared`
+        // source set because a set shared by android and jvm gets a metadata
+        // compilation of its own, and the JDK API surface in one of those has
+        // been a moving target across Kotlin releases; compiling the file once
+        // per target sidesteps it entirely.
+        androidMain { kotlin.srcDir("src/jvmShared/kotlin") }
+        jvmMain { kotlin.srcDir("src/jvmShared/kotlin") }
         commonTest.dependencies {
             // kotlin.test, not JUnit: commonTest must compile for every target.
             // NOTE the argument order differs from JUnit — see the header of

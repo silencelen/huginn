@@ -10,7 +10,6 @@ import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.ui.AppRules
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -120,7 +119,7 @@ class AppAddressModelTest {
     ) = HuginnClient(
         baseUrlProvider = { "http://appd.test" },
         tokenProvider = { "test-token" },
-        engine = MockEngine { request -> seen += request; respond(request) },
+        transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
     @Test

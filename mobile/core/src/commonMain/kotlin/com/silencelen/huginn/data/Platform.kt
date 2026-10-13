@@ -20,6 +20,23 @@ import kotlinx.coroutines.CoroutineDispatcher
 expect fun huginnHttpEngine(): HttpClientEngine
 
 /**
+ * The channels every [HuginnClient] talks to the daemon through — see
+ * [DaemonTransport] and `docs/TLS.md`.
+ *
+ * ⚠ NOT [huginnHttpEngine]. That one is the ordinary engine (system CAs,
+ * hostname verification) for talking to github.com; this one refuses every
+ * certificate that has not been proved to belong to the daemon, and is the
+ * only path a bearer is sent down. Both actuals are the same OkHttp
+ * implementation, compiled from `src/jvmShared` into each target, because a
+ * trust manager is a JVM API on both platforms and two copies of it would be
+ * two chances to get the security-critical half wrong.
+ *
+ * A fresh transport per client: each holds its own pinning trust manager, so
+ * a refusal is attributed to the client that saw it.
+ */
+expect fun huginnTransport(): DaemonTransport
+
+/**
  * Where the SSE readers parse.
  *
  * Ktor never blocks a thread on a socket, so this is not about avoiding a
