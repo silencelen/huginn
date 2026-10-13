@@ -105,7 +105,7 @@ fun HostPage(
     Text(
         "On huginn: cat /etc/huginn-appd/token",
         style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
+        fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 8.dp, top = 2.dp),
     )

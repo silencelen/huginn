@@ -626,7 +626,7 @@ private fun MapRow(
                 Text(
                     PlanFormat.compactTokens(node.tokens.written).removeSuffix(" tokens"),
                     style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
+                    fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -778,7 +778,7 @@ private fun GraphAgentCard(a: GraphAgent) {
                         // wf_b3db6247-567 → b3db6247: enough to tell runs apart.
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -787,7 +787,7 @@ private fun GraphAgentCard(a: GraphAgent) {
                     Text(
                         PlanFormat.compactTokens(a.tokens.written).removeSuffix(" tokens"),
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

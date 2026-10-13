@@ -1,14 +1,5 @@
 package com.silencelen.huginn.desktop.ui.session
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,13 +7,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.height
+import com.silencelen.huginn.desktop.ui.chat.OptionActionChip
+import com.silencelen.huginn.desktop.ui.chat.OptionPickerChip
 
 /**
  * Model, effort and permission mode for a live session.
@@ -47,37 +35,9 @@ fun ControlPicker(
     modifier: Modifier = Modifier,
     onPick: (String) -> Unit,
 ) {
-    var open by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Text(
-            "$label ▾",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            // NEVER WRAPS. These sit at the end of a header row that can lose
-            // 360dp to the pages panel between one frame and the next, and a
-            // two-word model name folding onto a second line does not just look
-            // wrong — it makes the whole header taller, which on the Screen tab is
-            // measured into rows and pushed to a real tmux window.
-            maxLines = 1,
-            softWrap = false,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { open = true }
-                .background(if (open) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { (value, text) ->
-                // The same 32 dp row as the chat's pickers (owner, 10-01).
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = { open = false; onPick(value) },
-                    modifier = Modifier.height(32.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                )
-            }
-        }
-    }
+    // The SAME chip the chat's options row draws (PR 4), where this used to be a
+    // bare "label ▾" in labelSmall: one picker vocabulary across the desktop.
+    OptionPickerChip(label = label, options = options, modifier = modifier, onPick = onPick)
 }
 
 /**
@@ -86,18 +46,7 @@ fun ControlPicker(
  */
 @Composable
 fun ControlAction(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Text(
-        label,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        // Single line, for the same reason as [ControlPicker] above.
-        maxLines = 1,
-        softWrap = false,
-        modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
+    OptionActionChip(label = label, modifier = modifier, onClick = onClick)
 }
 
 /**

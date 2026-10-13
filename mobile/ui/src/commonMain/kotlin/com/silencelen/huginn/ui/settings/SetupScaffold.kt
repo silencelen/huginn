@@ -30,7 +30,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import com.silencelen.huginn.settings.SetupFlow
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.Scale
 import com.silencelen.huginn.settings.SetupState
 import com.silencelen.huginn.settings.SetupStep
 import com.silencelen.huginn.settings.StepStatus
@@ -450,47 +454,47 @@ fun SetupScaffold(
 /** Every step at a glance, with the one being answered marked. */
 @Composable
 private fun SetupRail(state: SetupState, onOpenStep: (SetupStep) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         for (step in SetupFlow.STEPS) {
             val status = state.statusOf(step)
             val here = step == state.current
-            val tint = MaterialTheme.colorScheme.primary
-                .copy(alpha = if (here) SettingsRowStyle.HIGHLIGHT_ALPHA else 0f)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(tint)
-                    .clickable { onOpenStep(step) }
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SettingsStateDot(toneColour(SetupScaffoldRules.toneOf(status)))
-                Text(
-                    "${SetupFlow.number(step)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(end = 8.dp),
-                )
-                Text(
-                    SetupScaffoldRules.railLabel(step),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = if (here) FontWeight.SemiBold else FontWeight.Normal,
-                )
-                Spacer(Modifier.weight(1f))
-                // ⚠ IT WRAPS (D-16). Right-aligned so the column of state lines
-                // still reads as one edge, and capped in width so a long reason
-                // cannot push the step's own name off the other side.
-                Text(
-                    SetupScaffoldRules.stateWords(status),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = SetupScaffoldRules.RAIL_REASON_LINES,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier.widthIn(max = 320.dp),
-                )
-            }
+            val tone = SetupScaffoldRules.toneOf(status)
+            // THE HOUSE ROW (UI-AUDIT section 3): the step's state dot, its
+            // number and name, and the state words trailing. The step being
+            // answered is the house selection (Low tier plus SemiBold), not an
+            // accent tint.
+            ListRow(
+                title = "${SetupFlow.number(step)}  ${SetupScaffoldRules.railLabel(step)}",
+                selected = here,
+                onClick = { onOpenStep(step) },
+                modifier = Modifier.clip(RoundedCornerShape(Scale.radiusCard)),
+                leading = {
+                    // One dot column: the live 8 dp mark, and the quiet 6 dp one
+                    // for a step that is only waiting or was declined.
+                    val quiet = tone == SetupTone.WAITING || tone == SetupTone.DECLINED
+                    Box(Modifier.size(Scale.dot), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier.size(if (quiet) Scale.dotQuiet else Scale.dot)
+                                .clip(CircleShape)
+                                .background(toneColour(tone)),
+                        )
+                    }
+                },
+                trailing = {
+                    // ⚠ IT WRAPS (D-16). Right-aligned so the column of state lines
+                    // still reads as one edge, and capped in width so a long reason
+                    // cannot push the step's own name off the other side.
+                    Text(
+                        SetupScaffoldRules.stateWords(status),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = SetupScaffoldRules.RAIL_REASON_LINES,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.widthIn(max = 320.dp),
+                    )
+                },
+            )
         }
     }
 }

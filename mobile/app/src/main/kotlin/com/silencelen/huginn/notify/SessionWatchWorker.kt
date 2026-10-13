@@ -1,5 +1,7 @@
 package com.silencelen.huginn.notify
 
+import androidx.compose.ui.graphics.toArgb
+import com.silencelen.huginn.ui.theme.HuginnDarkColorScheme
 import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -104,17 +106,53 @@ class SessionWatchWorker(
          */
         const val EXTRA_PROJECT = "project"
 
-        /** Both channels, created together so either can be posted to at any time. */
+        /**
+         * Project proposals: a lead has sized the work and wants a yes. Their own
+         * channel (brand PR 5) rather than riding "Finished", because a proposal is
+         * neither news you asked for nor a session blocked on you, and the reader
+         * should be able to silence one kind without the other.
+         */
+        const val CHANNEL_PROPOSALS = "proposals"
+
+        /**
+         * The notification accent: primary moss (`#7CB98E`, BRAND.md section 4,
+         * "the notification accent is primary"). Read from the scheme so the token
+         * has one home; the small icon stays the white tile glyph.
+         */
+        val ACCENT: Int get() = HuginnDarkColorScheme.primary.toArgb()
+
+        /**
+         * Which channel a notification rides, by NATURE. A proposal (it carries
+         * the bounded Spawn/Discard buttons) is its own kind; a chat result and a
+         * finished session are news; everything else is a session waiting on you.
+         */
+        fun channelFor(replyChat: String?, isResult: Boolean, proposal: Boolean): String = when {
+            proposal -> CHANNEL_PROPOSALS
+            replyChat != null || isResult -> CHANNEL_CHATS
+            else -> CHANNEL
+        }
+
+        /**
+         * Every channel, created together so any can be posted to at any time.
+         * The display names are the brand's state words (BRAND.md section 8);
+         * re-creating an existing channel updates its name and description, and
+         * leaves the user's own importance setting alone.
+         */
         fun ensureChannels(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Sessions needing you", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                NotificationChannel(CHANNEL, "Needs you", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "A Claude Code session on huginn is waiting for an answer"
                 }
             )
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_CHATS, "Finished work", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                NotificationChannel(CHANNEL_CHATS, "Finished", NotificationManager.IMPORTANCE_DEFAULT).apply {
                     description = "A chat, or a long-running session, has finished on huginn"
+                }
+            )
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_PROPOSALS, "Proposals", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "A project lead has proposed the sessions to create"
                 }
             )
         }
@@ -260,7 +298,7 @@ class SessionWatchWorker(
             // stopped until you answer — while a chat result and a finished session
             // are both news you asked for. Splitting them that way is what lets the
             // chatty kind be silenced without silencing the kind that blocks.
-            val channel = if (replyChat != null || isResult) CHANNEL_CHATS else CHANNEL
+            val channel = channelFor(replyChat, isResult, proposal = projectActions.isNotEmpty())
             ensureChannels(context)
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -281,6 +319,7 @@ class SessionWatchWorker(
             val notificationId = notificationIdFor(key ?: session ?: replyChat?.let { "chat:$it" } ?: project)
             val builder = NotificationCompat.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_stat_huginn)
+                .setColor(ACCENT)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setAutoCancel(true)

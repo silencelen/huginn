@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -51,14 +50,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
-import androidx.compose.material.icons.automirrored.outlined.KeyboardTab
+import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import androidx.compose.material.icons.automirrored.outlined.Input
 
 /**
  * The live pane. Not a terminal emulator (there is no PTY here), but a real
@@ -132,8 +131,11 @@ fun TerminalScreen(
     // underlines, cursor, echo — lives in :ui and is the same code the desktop
     // client draws with; only the blit is per-platform, and it is passed in
     // rather than chosen by an expect/actual.
-    val painter = remember(fontScale, density) {
-        AndroidCellPainter(with(density) { fontScale.sp.toPx() })
+    // The face is the bundled Plex Mono (BRAND.md section 5), resolved from the
+    // theme's mono style, so the grid's box and block glyphs match the laptop's.
+    val face = com.silencelen.huginn.ui.rememberTerminalTypeface()
+    val painter = remember(fontScale, density, face) {
+        AndroidCellPainter(with(density) { fontScale.sp.toPx() }, face)
     }
 
     // The pinch gesture is keyed on Unit (it must not restart mid-gesture), so its
@@ -333,52 +335,44 @@ fun TerminalScreen(
                     )
                 }
             }
-        } else Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .imeAndSystemNavPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = onDraft,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type into $session") },
-                    maxLines = 5,
-                    shape = RoundedCornerShape(20.dp),
-                )
-                Spacer(Modifier.width(6.dp))
-                DictationMicButton(
-                    micGranted = micGranted,
-                    onRequestMic = onRequestMic,
-                    onText = { heard -> onDraft(appendDictation(draft, heard)) },
-                )
-                // Send-without-newline: Claude Code's composer takes multi-line
-                // input, so putting text in the box is a distinct action from
-                // submitting it.
-                IconButton(
-                    onClick = { if (draft.isNotEmpty()) onSendText(draft, false) },
-                    enabled = draft.isNotEmpty(),
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.KeyboardTab, contentDescription = "Type into the pane")
-                }
-                IconButton(
-                    onClick = {
-                        if (draft.isNotEmpty()) onSendText(draft, true) else onSendKeys(listOf("Enter"))
-                    },
-                    modifier = Modifier
-                        .size(46.dp)
-                        .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(23.dp)),
-                ) {
-                    Icon(
-                        Icons.Filled.KeyboardReturn,
-                        contentDescription = "Send and press Enter",
-                        tint = MaterialTheme.colorScheme.onPrimary,
+        } else {
+            // THE SHARED COMPOSER (ui/system/Composer.kt). Send is the filled circle
+            // and still means "type it and press Enter" — or, with nothing typed,
+            // just Enter, so it is always enabled here.
+            com.silencelen.huginn.ui.system.Composer(
+                value = draft,
+                onValueChange = onDraft,
+                onSend = {
+                    if (draft.isNotEmpty()) onSendText(draft, true) else onSendKeys(listOf("Enter"))
+                },
+                placeholder = "Type into $session",
+                canSend = true,
+                sendLabel = "Send and press Enter",
+                maxLines = 5,
+                rowModifier = Modifier.imeAndSystemNavPadding(),
+                leading = {
+                    DictationMicButton(
+                        micGranted = micGranted,
+                        onRequestMic = onRequestMic,
+                        onText = { heard -> onDraft(appendDictation(draft, heard)) },
                     )
-                }
-            }
+                },
+                trailing = {
+                    // Send-without-newline: Claude Code's composer takes multi-line
+                    // input, so putting text in the box is a distinct action from
+                    // submitting it. A plain icon now, not the "↦" glyph.
+                    IconButton(
+                        onClick = { if (draft.isNotEmpty()) onSendText(draft, false) },
+                        enabled = draft.isNotEmpty(),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.Input,
+                            contentDescription = "Type into the pane",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+            )
         }
     }
 }
@@ -475,7 +469,7 @@ private fun KeyRow(
                         Spacer(Modifier.width(4.dp))
                         Text(
                             "Live",
-                            fontSize = 12.sp,
+                            style = LocalMonoStyle.current,
                             color = if (liveTyping) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -503,7 +497,7 @@ private fun KeyRow(
 private fun KeyChip(label: String, onClick: () -> Unit) {
     AssistChip(
         onClick = onClick,
-        label = { Text(label, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+        label = { Text(label, fontFamily = LocalMonoStyle.current.fontFamily, fontSize = 12.sp) },
     )
 }
 

@@ -25,8 +25,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.silencelen.huginn.ui.system.Scale
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -546,7 +548,10 @@ private fun SessionHeader(
         val tight = maxWidth < HEADER_TIGHT
         val cramped = maxWidth < HEADER_CRAMPED
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            // 4 rather than 10 of vertical padding: the pickers are chips now (PR 4),
+            // and a chip already carries its own touch margin. The header is
+            // measured on the Screen tab, so its height is not free.
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The identity half takes what the controls do not: one weighted Row
@@ -642,16 +647,26 @@ private fun SessionHeader(
             }
             // Permission mode has no slash command that sets it; Shift+Tab cycles it,
             // which is exactly what the key bar sends.
-            ControlAction(mode?.replaceFirstChar { it.uppercase() } ?: "Mode", onClick = onCycleMode)
+            ControlAction(
+                mode?.replaceFirstChar { it.uppercase() } ?: "Mode",
+                Modifier.padding(start = 6.dp),
+                onClick = onCycleMode,
+            )
             // Effort is the first CONTROL to go, and the last thing to go at all:
             // it is the one of the three that is usually left where the host put it.
             // Its value is still on the Overview, and /effort still works by hand.
             if (!cramped) {
-                ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions()) { onCommand("/effort $it") }
+                ControlPicker(ModelLabels.effort(effort), ModelLabels.effortOptions(), Modifier.padding(start = 6.dp)) {
+                    onCommand("/effort $it")
+                }
             }
             // SESSION site: Claude rows only — this control types /model into a live
             // pane, where a local row could never work.
-            ControlPicker(ModelLabels.model(model), ModelLabels.options(models, ModelLabels.PickerSite.SESSION)) { onCommand("/model $it") }
+            ControlPicker(
+                ModelLabels.model(model),
+                ModelLabels.options(models, ModelLabels.PickerSite.SESSION),
+                Modifier.padding(start = 6.dp),
+            ) { onCommand("/model $it") }
         }
     }
 }
@@ -1252,13 +1267,15 @@ private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: (
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 ),
             ) {
-                Text("Live", style = MaterialTheme.typography.labelMedium)
+                Text("Live", style = LocalMonoStyle.current)
             }
         } else {
             OutlinedButton(onClick = onToggleLive, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)) {
-                Text("Live", style = MaterialTheme.typography.labelMedium)
+                Text("Live", style = LocalMonoStyle.current)
             }
         }
+        // Every key label in the house mono (LocalMonoStyle; UI-AUDIT.md section 3,
+        // "Composer"): these are keys, and the pad reads as a keyboard.
         // The phone's set, less the ones a desktop keyboard already sends itself
         // while live. Shift+Tab is BTab and it is what cycles Claude Code's
         // permission mode — leaving it out means the owner can only cycle forwards.
@@ -1271,7 +1288,7 @@ private fun KeyBar(controller: SessionController, live: Boolean, onToggleLive: (
             OutlinedButton(
                 onClick = { controller.sendKeys(listOf(keyName)) },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-            ) { Text(label, style = MaterialTheme.typography.labelMedium) }
+            ) { Text(label, style = LocalMonoStyle.current) }
         }
         if (live) Muted("typing goes straight to the pane", Modifier.padding(start = 6.dp))
     }
@@ -1445,6 +1462,51 @@ private fun Composer(
         val queueState by controller.sendQueue.collectAsState()
         val draftNotice by controller.draftNotice.collectAsState()
 
+        // ONE NOTICE LINE (PR 4), above the field, where three bands below it used
+        // to be. Most consequential first, and dismissing one uncovers the next:
+        //
+        // ⚠⚠ D-7 / DECISION 59. The draft hold has a ceiling, and when it is
+        // reached the message goes in ON TOP of text somebody was still typing —
+        // both submitted as one prompt. It stays until dismissed or the next send,
+        // because a reader who put the laptop down must still find it.
+        // ⚠ P-19. The daemon abandons an auto-end when the session asks a question
+        // and reports it only by dropping `softEnding` — which is also what a
+        // wrap-up that WORKED looks like.
+        // ⚠ WHAT HAPPENED TO THE MESSAGE. A send into a busy session is HELD by the
+        // daemon until the turn ends, and this composer empties on press — so with
+        // nothing said here the screen is identical to a message that was dropped.
+        // The sentence is [SendQueue.line], a pure function of the daemon's own
+        // answer, and it clears itself when the queue drains.
+        //
+        // In onSurfaceVariant whatever it says: the error ink is for failures, and
+        // none of these is one (UI-AUDIT.md section 3, "Accent").
+        val noticeText: String? = draftNotice ?: wrapUpNotice ?: SendQueue.line(queueState)
+        val noticeDismiss: (() -> Unit)? = when {
+            draftNotice != null -> controller::dismissDraftNotice
+            wrapUpNotice != null -> onDismissWrapUpNotice
+            else -> null
+        }
+        noticeText?.let { text ->
+            val dismiss = noticeDismiss
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (dismiss != null) {
+                    TextButton(onClick = dismiss) {
+                        Text("Dismiss", style = DeskType.rowMeta)
+                    }
+                }
+            }
+        }
         // The shape is [ComposerFrame], shared with the chat composer — including
         // the cap-before-fill that used to live on the line below, which is now one
         // decision for both boxes instead of two that had already disagreed.
@@ -1467,15 +1529,14 @@ private fun Composer(
                     ComposerAction(
                         layout,
                         "Interrupt",
-                        Icons.Filled.Stop,
+                        Icons.Outlined.Stop,
                         { controller.sendKeys(listOf("Escape")) },
-                        danger = true,
                     )
                 }
                 ComposerAction(
                     layout,
                     "Send",
-                    Icons.AutoMirrored.Filled.Send,
+                    Icons.AutoMirrored.Outlined.Send,
                     submit,
                     enabled = canSend,
                     prominent = true,
@@ -1550,72 +1611,9 @@ private fun Composer(
                     )
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
+                // The house field (ui/system/Composer.kt): the 20 dp outlined box.
+                shape = RoundedCornerShape(Scale.s20),
             )
-        }
-        // ⚠ WHAT HAPPENED TO THE MESSAGE. A send into a busy session is HELD by
-        // the daemon until the turn ends, and this composer empties on press — so
-        // with nothing said here the screen is identical to a message that was
-        // dropped, which is exactly how the owner read it ("it just disappears").
-        // The sentence is [SendQueue.line], a pure function of the daemon's own
-        // answer, and it clears itself when the queue drains.
-        SendQueue.line(queueState)?.let { note ->
-            Text(
-                note,
-                style = DeskType.rowMeta,
-                color = if (queueState.lastError.isNullOrBlank()) {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                } else {
-                    MaterialTheme.colorScheme.error
-                },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            )
-        }
-        // ⚠⚠ D-7 / DECISION 59. The draft hold has a ceiling, and when it is
-        // reached the message goes in ON TOP of text somebody was still typing —
-        // both submitted as one prompt. Until now this client's whole account of
-        // that was the queued line disappearing. It stays until dismissed or the
-        // next send, because a reader who put the laptop down must still find it.
-        // ⚠ P-19. The daemon abandons an auto-end when the session asks a question
-        // and reports it only by dropping `softEnding` — which is also what a
-        // wrap-up that WORKED looks like. Somebody who pressed Wrap up and walked
-        // away believed the session had ended.
-        wrapUpNotice?.let { note ->
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    note,
-                    style = DeskType.rowMeta,
-                    color = MaterialTheme.colorScheme.primary,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onDismissWrapUpNotice) {
-                    Text("Dismiss", style = DeskType.rowMeta)
-                }
-            }
-        }
-        draftNotice?.let { note ->
-            Row(
-                Modifier.fillMaxWidth().padding(top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    note,
-                    style = DeskType.rowMeta,
-                    color = MaterialTheme.colorScheme.error,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = { controller.dismissDraftNotice() }) {
-                    Text("Dismiss", style = DeskType.rowMeta)
-                }
-            }
         }
     }
 }

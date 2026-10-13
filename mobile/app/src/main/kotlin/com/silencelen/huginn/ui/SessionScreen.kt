@@ -19,7 +19,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.KeyboardReturn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.CircularProgressIndicator
@@ -448,18 +447,88 @@ private fun SessionConversation(
     val onLoadOlder = if (onAgent) onLoadEarlierAgent else onLoadEarlier
 
     Column(Modifier.fillMaxSize()) {
+        // What the session is doing RIGHT NOW, folded into the secondary row at the top. The
+        // transcript stays silent until whole blocks complete, so without this the
+        // conversation looked dead exactly when the most was happening — right
+        // after sending a message. The pane's own status line is the best source;
+        // the transcript's unresolved tool is the fallback; "working" is the floor.
+        // Shown while the turn runs, and ALSO while background work continues after
+        // it — a session blocked on a twenty-minute build used to read as stalled
+        // from here, with the truth visible only on the tmux screen.
+        // The transient per-tool row turns over constantly and vanishes between
+        // tools; shown from memory while the turn runs so the strip changes text
+        // in place instead of growing a line and losing it again on repeat.
+        var lastTransient by remember(name) { mutableStateOf<String?>(null) }
+        LaunchedEffect(transientLine, working) {
+            if (transientLine != null) lastTransient = transientLine
+            if (!working) lastTransient = null
+        }
+        var showWork by rememberSaveable(name) { mutableStateOf(false) }
+
+        // Pane-derived rows are trusted only while the session is actually
+        // working. The TUI keeps workflow and board rows in its persistent
+        // footer after the run ends — truthful on a terminal where they read as
+        // history, but mirrored into this strip they claimed a workflow was
+        // still running when it was long finished. The hook state knows better;
+        // background shells and agents are exempt because their liveness is
+        // already measured, not read off a screen.
+        val paneRows = if (working) statusLines else emptyList()
+        val paneSpinner = if (working) spinner else null
+        val bgWork = page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
+
+        val showWorkStrip = working || bgWork
+        // THE SECONDARY ROW (PR 4): the stream picker and the work strip, which
+        // used to be two strips at opposite ends of this tab, are one band under
+        // the context strip, and it exists only when there is something in it —
+        // streams to pick between, or work going on.
+        //
         // ABOVE everything else in this tab, including the empty states: a picked
         // agent that has written nothing yet must still offer the way back to
         // Main, and a strip that disappears with the content is a trap.
-        StreamPickerRow(
-            items = streamItems,
-            selected = selectedStream,
-            onPick = onSelectStream,
-            enabled = streamsSupported,
-            note = streamNote.takeIf { !streamsSupported },
-            expanded = streamsExpanded,
-            onToggleExpanded = onToggleStreamsExpanded,
-        )
+        val showStreams = streamItems.size > 1 || (!streamsSupported && streamNote != null)
+        if (showStreams || showWorkStrip) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                Column(Modifier.fillMaxWidth()) {
+                    StreamPickerRow(
+                        items = streamItems,
+                        selected = selectedStream,
+                        onPick = onSelectStream,
+                        enabled = streamsSupported,
+                        note = streamNote.takeIf { !streamsSupported },
+                        expanded = streamsExpanded,
+                        onToggleExpanded = onToggleStreamsExpanded,
+                    )
+                    if (showWorkStrip) {
+                        WorkStrip(
+                            spinner = paneSpinner,
+                            statusLines = paneRows,
+                            transient = if (working) lastTransient else null,
+                            activity = if (working) page?.activity else null,
+                            tasks = page?.tasks ?: emptyList(),
+                            bgAgents = page?.bgAgents ?: 0,
+                            onClick = { showWork = true },
+                        )
+                    }
+                }
+            }
+        }
+
+        if (showWork) {
+            WorkSheet(
+                name = name,
+                spinner = paneSpinner,
+                statusLines = paneRows,
+                tasks = page?.tasks ?: emptyList(),
+                agents = agents,
+                onOpen = onAgentsOpen,
+                onClose = onAgentsClose,
+                // Closing the sheet is a navigation decision; stopping the poll is
+                // bookkeeping and belongs to the sheet's lifetime, above.
+                onDismiss = { showWork = false },
+            )
+        }
+
+
         when {
             shownError != null && shown == null ->
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -569,62 +638,6 @@ private fun SessionConversation(
             JumpToNewest { scope.launch { listState.jumpToTail(rows.size + headerItems, animate = true) } }
         }
 
-        // What the session is doing RIGHT NOW, pinned above the composer. The
-        // transcript stays silent until whole blocks complete, so without this the
-        // conversation looked dead exactly when the most was happening — right
-        // after sending a message. The pane's own status line is the best source;
-        // the transcript's unresolved tool is the fallback; "working" is the floor.
-        // Shown while the turn runs, and ALSO while background work continues after
-        // it — a session blocked on a twenty-minute build used to read as stalled
-        // from here, with the truth visible only on the tmux screen.
-        // The transient per-tool row turns over constantly and vanishes between
-        // tools; shown from memory while the turn runs so the strip changes text
-        // in place instead of growing a line and losing it again on repeat.
-        var lastTransient by remember(name) { mutableStateOf<String?>(null) }
-        LaunchedEffect(transientLine, working) {
-            if (transientLine != null) lastTransient = transientLine
-            if (!working) lastTransient = null
-        }
-        var showWork by rememberSaveable(name) { mutableStateOf(false) }
-
-        // Pane-derived rows are trusted only while the session is actually
-        // working. The TUI keeps workflow and board rows in its persistent
-        // footer after the run ends — truthful on a terminal where they read as
-        // history, but mirrored into this strip they claimed a workflow was
-        // still running when it was long finished. The hook state knows better;
-        // background shells and agents are exempt because their liveness is
-        // already measured, not read off a screen.
-        val paneRows = if (working) statusLines else emptyList()
-        val paneSpinner = if (working) spinner else null
-        val bgWork = page?.tasks?.isNotEmpty() == true || (page?.bgAgents ?: 0) > 0
-
-        if (working || bgWork) {
-            WorkStrip(
-                spinner = paneSpinner,
-                statusLines = paneRows,
-                transient = if (working) lastTransient else null,
-                activity = if (working) page?.activity else null,
-                tasks = page?.tasks ?: emptyList(),
-                bgAgents = page?.bgAgents ?: 0,
-                onClick = { showWork = true },
-            )
-        }
-
-        if (showWork) {
-            WorkSheet(
-                name = name,
-                spinner = paneSpinner,
-                statusLines = paneRows,
-                tasks = page?.tasks ?: emptyList(),
-                agents = agents,
-                onOpen = onAgentsOpen,
-                onClose = onAgentsClose,
-                // Closing the sheet is a navigation decision; stopping the poll is
-                // bookkeeping and belongs to the sheet's lifetime, above.
-                onDismiss = { showWork = false },
-            )
-        }
-
         // Suggested next messages, at the turn boundary only. A live prompt's
         // buttons outrank them, typing dismisses them, and tapping one FILLS the
         // composer rather than sending — a suggestion is a draft, not a decision.
@@ -687,108 +700,58 @@ private fun SessionConversation(
             },
         )
 
-        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
-          Column {
-            // The page a session's Claude will be pointed at. It reaches the pane
-            // as a PATH — a page holds more than a pane accepts in one paste — so
-            // the run reads it rather than being handed it.
-            // ONLY when one is set — the invitation to attach moved into the
-            // attach button's chooser, which is where "attach" already lives.
-            pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-                ScratchpadRefBadge(
-                    pad = chosen,
-                    pads = pads,
-                    onSelect = onPadRef,
-                    modifier = Modifier.padding(start = 8.dp, top = 4.dp),
-                )
-            }
-            AttachChipRow(
-                attachments,
-                onRemoveAttachment,
-                Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
-            )
-            // PERSISTENT, and above the row rather than below it: the input row
-            // owns the keyboard AND navigation inset, so anything
-            // placed after it is laid out under the keyboard or behind the
-            // navigation bar — visible in a preview and gone on the phone.
-            queueNote?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp),
-                )
-            }
-            // ⚠⚠ THE MESSAGE THAT WENT IN ON TOP OF SOMEBODY'S DRAFT (D-7). Above
-            // the input row for the same reason the queue line is: the row owns
-            // the keyboard and navigation inset, so anything after it is laid out
-            // under the keyboard. In the error ink, because the thing that
-            // happened is that two people's sentences were submitted as one.
-            // ⚠ P-19, in the same slot and for the same reason: a fact about this
-            // session the reader has to be told, above the input row because the
-            // row owns the keyboard inset.
-            wrapUpNotice?.let {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
+        // A photo alone is a complete message here too; the send path builds the
+        // marker text when the draft is blank.
+        val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
+        // THE SHARED COMPOSER (ui/system/Composer.kt). The send contract is the one
+        // this screen always had: Send submits the draft with Enter, Interrupt is
+        // Esc and is offered only while working with nothing typed — and a staged
+        // attachment keeps Send reachable beside it.
+        com.silencelen.huginn.ui.system.Composer(
+            value = draft,
+            onValueChange = onDraft,
+            onSend = { if (canSend) onSendText(draft, true) },
+            placeholder = "Reply in $name",
+            canSend = canSend,
+            // Esc is how you stop Claude at the keyboard; with nothing typed that is
+            // the action this composer should offer.
+            stopInstead = working && draft.isBlank(),
+            onStop = onInterrupt,
+            stopLabel = "Interrupt with Esc",
+            sendAlongsideStop = true,
+            // ONE notice line, above the input row because the row owns the keyboard
+            // AND navigation inset — anything after it is laid out under the
+            // keyboard. Most consequential first: the message that went in on top of
+            // somebody's draft (D-7), then the held wrap-up (P-19), then the send
+            // queue. None is a failure, so none is in the error ink; dismissing one
+            // uncovers the next.
+            notice = com.silencelen.huginn.ui.system.firstNotice(
+                draftNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissDraftNotice) },
+                wrapUpNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissWrapUpNotice) },
+                queueNote?.let { com.silencelen.huginn.ui.system.ComposerNotice(it) },
+            ),
+            rowModifier = Modifier.imeAndSystemNavPadding(),
+            header = {
+                // The page a session's Claude will be pointed at. It reaches the pane
+                // as a PATH — a page holds more than a pane accepts in one paste — so
+                // the run reads it rather than being handed it.
+                // ONLY when one is set — the invitation to attach moved into the
+                // attach button's chooser, which is where "attach" already lives.
+                pads.firstOrNull { it.id == padRefId }?.let { chosen ->
+                    ScratchpadRefBadge(
+                        pad = chosen,
+                        pads = pads,
+                        onSelect = onPadRef,
+                        modifier = Modifier.padding(start = 8.dp, top = 4.dp),
                     )
-                    IconButton(onClick = onDismissWrapUpNotice, modifier = Modifier.size(36.dp)) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Dismiss the notice",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
                 }
-            }
-            draftNotice?.let {
-                Row(
-                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp, top = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    IconButton(onClick = onDismissDraftNotice, modifier = Modifier.size(36.dp)) {
-                        Icon(
-                            Icons.Filled.Close,
-                            contentDescription = "Dismiss the notice",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .imeAndSystemNavPadding()
-                    .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = onDraft,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Reply in $name") },
-                    maxLines = 6,
-                    shape = RoundedCornerShape(20.dp),
+                AttachChipRow(
+                    attachments,
+                    onRemoveAttachment,
+                    Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
                 )
-                Spacer(Modifier.width(6.dp))
+            },
+            leading = {
                 AttachButton(
                     onPickImages = onAttach,
                     onPickFiles = onAttachFile,
@@ -802,35 +765,8 @@ private fun SessionConversation(
                     onRequestMic = onRequestMic,
                     onText = { heard -> onDraft(appendDictation(draft, heard)) },
                 )
-                // Esc is how you stop Claude at the keyboard; with nothing typed
-                // that is the action this composer should offer.
-                if (working && draft.isBlank()) {
-                    IconButton(onClick = onInterrupt, modifier = Modifier.size(46.dp)) {
-                        Icon(
-                            Icons.Filled.Stop,
-                            contentDescription = "Interrupt with Esc",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                }
-                // A photo alone is a complete message here too; the send path
-                // builds the marker text when the draft is blank.
-                val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
-                IconButton(
-                    onClick = { if (canSend) onSendText(draft, true) },
-                    enabled = canSend,
-                    modifier = Modifier.size(46.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.KeyboardReturn,
-                        contentDescription = "Send",
-                        tint = if (canSend) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-          }
-        }
+            },
+        )
     }
 }
 
@@ -898,40 +834,46 @@ private fun WorkStrip(
         transient?.let { add(it) }
     }.take(3)
 
+    // ONE LINE (PR 4): the strip is half of the secondary row now, and a band
+    // that grows to four lines mid-turn is the pumping the transient slot was
+    // already built to avoid. The headline leads; the freshest detail follows on
+    // the same line; everything else is one tap away in the work sheet.
+    val detail = detailRows.lastOrNull()
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 7.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                PulsingDot(MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(9.dp))
+        Row(
+            Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PulsingDot(MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                headline,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = detail == null),
+            )
+            if (detail != null) {
                 Text(
-                    headline,
-                    style = MaterialTheme.typography.labelMedium,
+                    "  ·  $detail",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Icon(
-                    Icons.Filled.ExpandLess,
-                    contentDescription = "Open work details",
-                    modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
-            detailRows.forEach { line ->
-                Text(
-                    line,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 17.dp, top = 2.dp),
-                )
-            }
+            Icon(
+                Icons.Filled.ExpandLess,
+                contentDescription = "Open work details",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1098,7 +1040,7 @@ private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
                         // wf_b3db6247-567 → b3db6247: enough to tell runs apart.
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        fontFamily = com.silencelen.huginn.ui.theme.LocalMonoStyle.current.fontFamily,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -1126,9 +1068,8 @@ private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
                 Spacer(Modifier.size(3.dp))
                 Text(
                     last,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = if (last == a.summary) androidx.compose.ui.text.font.FontFamily.Default
-                    else androidx.compose.ui.text.font.FontFamily.Monospace,
+                    style = if (last == a.summary) MaterialTheme.typography.bodySmall
+                    else com.silencelen.huginn.ui.theme.LocalMonoStyle.current,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,

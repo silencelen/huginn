@@ -54,6 +54,8 @@ import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.ui.theme.verbInk
 import com.silencelen.huginn.ui.system.HouseDialog
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The live tmux sessions. Each row leads with what the session is actually doing
@@ -379,78 +381,117 @@ private fun SessionRow(
     onRename: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier
-            .fillMaxWidth()
-            .then(
-                if (selected) Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                else Modifier
-            )
-            .clickable(onClick = onOpen)
-            .padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(Modifier.weight(1f)) {
-            // ⚠ THE NAME GIVES WAY, NOT THE AGE. 2026-10-02 on the Fold at font
-            // scale 2.0: "now" vanished from one card and was 8 px wide and 252
-            // px tall on another, and "ctx 48%" took three lines. A Row measures
-            // its unweighted children in order, so the name took all it wanted
-            // and the trailing ctx and age wrapped per character into whatever
-            // was left. The name and state now sit in a weighted group (measured
-            // LAST, after ctx and age have their one line each). Inside it the
-            // name comes first and ellipsises only past the whole group's width;
-            // the state word, which the dot already says, gives way before it.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    if (s.state == "running" || s.bgShells > 0 || s.bgAgents > 0) {
-                        PulsingDot(
-                            if (s.state == "attention") LocalHuginnColors.current.stateAttention
-                            else MaterialTheme.colorScheme.primary
-                        )
-                    } else {
-                        StateDot(s.state)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        s.name,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+    val c = LocalHuginnColors.current
+    val backgroundWork = s.bgShells > 0 || s.bgAgents > 0
+    // THE HOUSE ROW (UI-AUDIT section 3): dot · mono name · one state line ·
+    // ctx, age and the menu trailing. The detail lines below ride ListRow's
+    // `detail` slot so the frame, the inset and the selection are the house ones.
+    //
+    // ⚠ THE NAME GIVES WAY, NOT THE AGE. 2026-10-02 on the Fold at font scale
+    // 2.0: "now" vanished from one card and was 8 px wide and 252 px tall on
+    // another, and "ctx 48%" took three lines. ListRow measures the trailing
+    // group first and gives the title column (weighted) what is left; the name
+    // ellipsises on one line there, and the trailing ctx and age never wrap.
+    ListRow(
+        title = s.name,
+        titleMono = true,
+        // "waiting" over a session running four background shells was a lie
+        // of omission — the list is where "looks stalled" started.
+        meta = if (s.state != "running" && backgroundWork) "background work" else stateLabel(s.state),
+        metaColor = when {
+            s.state == "attention" -> c.stateAttention
+            s.state == "running" || backgroundWork -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        selected = selected,
+        onClick = onOpen,
+        modifier = modifier,
+        leading = {
+            // One 8 dp dot column, so the quiet 6 dp waiting dot does not shift the name.
+            Box(Modifier.size(Scale.dot), contentAlignment = Alignment.Center) {
+                if (s.state == "running" || backgroundWork) {
+                    PulsingDot(
+                        if (s.state == "attention") c.stateAttention
+                        else MaterialTheme.colorScheme.primary
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        // "waiting" over a session running four background shells was
-                        // a lie of omission — the list is where "looks stalled" started.
-                        if (s.state != "running" && (s.bgShells > 0 || s.bgAgents > 0)) "background work"
-                        else stateLabel(s.state),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when {
-                            s.state == "attention" -> LocalHuginnColors.current.stateAttention
-                            s.state == "running" || s.bgShells > 0 || s.bgAgents > 0 ->
-                                MaterialTheme.colorScheme.primary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (s.compacting) {
-                        Spacer(Modifier.width(8.dp))
-                        CompactingChip()
-                    }
+                } else {
+                    // The shared state dot: 8 dp live, the quiet 6 dp for waiting.
+                    com.silencelen.huginn.ui.theme.StateDot(s.state)
                 }
-                Spacer(Modifier.width(8.dp))
-                // "ctx N%" next to the time; renders nothing when the host didn't report.
-                ContextBadge(s.contextPercent, Modifier.padding(end = 8.dp))
-                Text(
-                    relTime(s.activityAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    softWrap = false,
-                )
+            }
+        },
+        trailing = {
+            // "ctx N%" next to the time; renders nothing when the host didn't report.
+            ContextBadge(s.contextPercent, Modifier.padding(end = Scale.s8))
+            Text(
+                relTime(s.activityAt),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Box {
+                IconButton(onClick = { onMenu(true) }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = "Session actions")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
+                    DropdownMenuItem(
+                        text = { Text("Rename") },
+                        leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
+                        onClick = { onMenu(false); onRename() },
+                    )
+                    // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. Both are drawn
+                    // in the destructive palette — the kill in the full `error` red,
+                    // the wrap-up in the lighter one — from `verbInk`, the single
+                    // token in `:ui`'s theme that the desktop's right-click menu also
+                    // draws from. Two shells picking their own lighter red is the
+                    // drift that makes a phone held up beside the laptop look like a
+                    // different product.
+                    DropdownMenuItem(
+                        text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
+                        // ⚠ AN ICON, BECAUSE THE OTHER THREE HAVE ONE. Without it the
+                        // label started in the icon COLUMN (x=754) while Rename,
+                        // Archive and Kill started at x=849, and a menu item that
+                        // hangs off the left of the others reads as a different class
+                        // of thing than it is. Tinted like its label, the way the kill
+                        // below is.
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.TaskAlt,
+                                contentDescription = null,
+                                tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
+                            )
+                        },
+                        onClick = { onMenu(false); onSoftEnd() },
+                    )
+                    // Between the wrap-up and the kill, where it belongs: it is a
+                    // wrap-up that leaves something behind. Neither red — ending a
+                    // session you can bring back is the least destructive of the
+                    // three.
+                    if (onArchive != null) {
+                        DropdownMenuItem(
+                            text = { Text("Archive…") },
+                            leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) },
+                            onClick = { onMenu(false); onArchive() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text(EndVerbs.hard(1), color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = null,
+                                tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
+                            )
+                        },
+                        onClick = { onMenu(false); onKill() },
+                    )
+                }
+            }
+        },
+        detail = {
+            if (s.compacting) {
+                CompactingChip(Modifier.padding(top = Scale.s4))
             }
 
             // Bound to a local first: `s.title` is a public property of another
@@ -459,18 +500,17 @@ private fun SessionRow(
             // test and the read. A local is a snapshot and needs no assertion.
             val title = s.title
             if (!title.isNullOrBlank()) {
-                Spacer(Modifier.height(3.dp))
                 Text(
                     title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = Scale.s4),
                 )
             }
 
-            if (s.bgShells > 0 || s.bgAgents > 0) {
-                Spacer(Modifier.height(3.dp))
+            if (backgroundWork) {
                 Text(
                     buildList {
                         s.bgTask?.let { add("◦ $it") }
@@ -485,7 +525,6 @@ private fun SessionRow(
             }
 
             if (s.preview.isNotEmpty()) {
-                Spacer(Modifier.height(3.dp))
                 // ⚠ P-14. `❯ run sleep 10 in the background then say doneB` on a
                 // row nobody had typed into: Claude Code's dim inline SUGGESTION,
                 // drawn here in the same weight as output and reading as a
@@ -515,74 +554,16 @@ private fun SessionRow(
                 if (s.sizeLeased) add("fitted to phone")
             }
             if (meta.isNotEmpty()) {
-                Spacer(Modifier.height(3.dp))
                 Text(
                     meta.joinToString("  ·  "),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-
-        Box {
-            IconButton(onClick = { onMenu(true) }) {
-                Icon(Icons.Filled.MoreVert, contentDescription = "Session actions")
-            }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenu(false) }) {
-                DropdownMenuItem(
-                    text = { Text("Rename") },
-                    leadingIcon = { Icon(Icons.Filled.DriveFileRenameOutline, contentDescription = null) },
-                    onClick = { onMenu(false); onRename() },
-                )
-                // THE TWO ENDING VERBS, AND THEY READ AS A PAIR. Both are drawn
-                // in the destructive palette — the kill in the full `error` red,
-                // the wrap-up in the lighter one — from `verbInk`, the single
-                // token in `:ui`'s theme that the desktop's right-click menu also
-                // draws from. Two shells picking their own lighter red is the
-                // drift that makes a phone held up beside the laptop look like a
-                // different product.
-                DropdownMenuItem(
-                    text = { Text(EndVerbs.soft(1), color = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme)) },
-                    // ⚠ AN ICON, BECAUSE THE OTHER THREE HAVE ONE. Without it the
-                    // label started in the icon COLUMN (x=754) while Rename,
-                    // Archive and Kill started at x=849, and a menu item that
-                    // hangs off the left of the others reads as a different class
-                    // of thing than it is. Tinted like its label, the way the kill
-                    // below is.
-                    leadingIcon = {
-                        Icon(
-                            Icons.Filled.TaskAlt,
-                            contentDescription = null,
-                            tint = verbInk(VerbTone.SOFT, MaterialTheme.colorScheme),
-                        )
-                    },
-                    onClick = { onMenu(false); onSoftEnd() },
-                )
-                // Between the wrap-up and the kill, where it belongs: it is a
-                // wrap-up that leaves something behind. Neither red — ending a
-                // session you can bring back is the least destructive of the
-                // three.
-                if (onArchive != null) {
-                    DropdownMenuItem(
-                        text = { Text("Archive…") },
-                        leadingIcon = { Icon(Icons.Filled.Inventory2, contentDescription = null) },
-                        onClick = { onMenu(false); onArchive() },
-                    )
-                }
-                DropdownMenuItem(
-                    text = { Text(EndVerbs.hard(1), color = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme)) },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Filled.Delete,
-                            contentDescription = null,
-                            tint = verbInk(VerbTone.DESTRUCTIVE, MaterialTheme.colorScheme),
-                        )
-                    },
-                    onClick = { onMenu(false); onKill() },
-                )
-            }
-        }
-    }
+        },
+    )
 }
 
 

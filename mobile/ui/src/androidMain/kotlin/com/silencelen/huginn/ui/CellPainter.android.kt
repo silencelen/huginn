@@ -2,11 +2,16 @@ package com.silencelen.huginn.ui
 
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.text.font.FontFamily
+import com.silencelen.huginn.ui.theme.LocalMonoStyle
 
 /**
  * The phone's glyph blit: `android.graphics.Paint` straight onto the native
@@ -21,14 +26,27 @@ import androidx.compose.ui.graphics.toArgb
  * `Paint` rather than Compose's `TextMeasurer`: a full screen is a few hundred
  * runs per frame and TextMeasurer lays out (and caches only eight of) them.
  */
-class AndroidCellPainter(textSizePx: Float) : CellPainter {
+class AndroidCellPainter(
+    textSizePx: Float,
+    /**
+     * The face. [rememberTerminalTypeface] hands in the bundled IBM Plex Mono
+     * (BRAND.md section 5); the platform mono is only the default for a caller
+     * outside a composition.
+     */
+    face: Typeface = Typeface.MONOSPACE,
+) : CellPainter {
 
     private val paint: Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.MONOSPACE
+        typeface = face
         textSize = textSizePx
+        // No ligatures in a character grid: `Paint` shapes its runs, and a fused
+        // `->` or `fi` would straddle two cells. Plex Mono ships none of the
+        // programming kind, but the standard and contextual sets are switched
+        // off anyway so a fallback face cannot reintroduce them.
+        fontFeatureSettings = NO_LIGATURES
     }
     private val boldPaint: Paint = Paint(paint).apply {
-        typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        typeface = Typeface.create(face, Typeface.BOLD)
     }
 
     override val cellWidth: Float = paint.measureText("M")
@@ -57,5 +75,25 @@ class AndroidCellPainter(textSizePx: Float) : CellPainter {
     ) {
         val p = paintFor(bold, italic).apply { this.color = color.toArgb() }
         scope.drawIntoCanvas { it.nativeCanvas.drawText(text, x, baseline, p) }
+    }
+
+    private companion object {
+        const val NO_LIGATURES = "'liga' 0, 'clig' 0, 'calt' 0, 'dlig' 0"
+    }
+}
+
+/**
+ * The terminal's face as an `android.graphics.Typeface`: [LocalMonoStyle]'s
+ * family (the bundled Plex Mono inside a HuginnTheme), resolved through the same
+ * font resolver Compose's own `Text` uses. Resource fonts on Android are blocking
+ * asset fonts, so the resolution is synchronous; anything that does not come
+ * back as a Typeface falls back to the platform mono rather than failing.
+ */
+@Composable
+fun rememberTerminalTypeface(): Typeface {
+    val family = LocalMonoStyle.current.fontFamily ?: FontFamily.Monospace
+    val resolver = LocalFontFamilyResolver.current
+    return remember(family, resolver) {
+        runCatching { resolver.resolve(family).value as? Typeface }.getOrNull() ?: Typeface.MONOSPACE
     }
 }

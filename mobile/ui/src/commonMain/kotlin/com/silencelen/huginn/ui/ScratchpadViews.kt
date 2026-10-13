@@ -46,6 +46,9 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.ScratchpadSaver
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import com.silencelen.huginn.ui.system.ListHeader
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The user's own pages: the list of them, the editor, and the composer control
@@ -77,14 +80,10 @@ fun ScratchpadListView(
     var deleting by remember { mutableStateOf<Scratchpad?>(null) }
 
     Column(modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Pages", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+        // The house header: Title Case, its count, the list's one verb, a hairline.
+        ListHeader("Pages", count = pads.size, verb = {
             TextButton(onClick = { naming = true }) { Text("New page") }
-        }
-        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
+        })
         if (pads.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
@@ -146,34 +145,26 @@ private fun PadRow(
     onOpen: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            // Selection is a surface wash, never a left accent bar — house rule.
-            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent)
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                pad.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+    // THE HOUSE ROW (UI-AUDIT section 3): icon · name · size and age · the
+    // verb trailing. Selection is ListRow's surface wash plus SemiBold, never
+    // a left accent bar — house rule.
+    ListRow(
+        title = pad.name,
+        meta = padSubtitle(pad, nowMs),
+        selected = selected,
+        onClick = onOpen,
+        leading = {
+            Icon(
+                Icons.Outlined.EditNote,
+                contentDescription = null,
+                modifier = Modifier.size(Scale.iconLarge),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-                padSubtitle(pad, nowMs),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-        if (onDelete != null) {
-            TextButton(onClick = onDelete) { Text("Delete") }
-        }
-    }
+        },
+        trailing = if (onDelete == null) null else {
+            { TextButton(onClick = onDelete) { Text("Delete") } }
+        },
+    )
 }
 
 /**

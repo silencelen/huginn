@@ -44,6 +44,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.AppForm
+import com.silencelen.huginn.ui.system.ListHeader
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.LocalRowMetrics
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The things huginn makes and hosts itself, and how to open them.
@@ -95,21 +99,18 @@ fun AppsView(
     scroll: Boolean = false,
 ) {
     val scrollState = rememberScrollState()
+    val inset = LocalRowMetrics.current.inset
     Column(modifier.fillMaxWidth().let { if (scroll) it.verticalScroll(scrollState) else it }) {
         if (header != null) {
-            Text(
-                header,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, top = 6.dp, bottom = 2.dp),
-            )
+            // The house header; the rows below draw their own hairlines.
+            ListHeader(header, count = apps.size, hairline = false)
         }
         if (apps.isEmpty()) {
             Text(
                 APPS_EMPTY,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp),
+                modifier = Modifier.padding(start = inset, end = inset, top = Scale.s4, bottom = Scale.s12),
             )
         } else {
             apps.forEach { a ->
@@ -130,12 +131,12 @@ fun AppsView(
         // clear it are on the rows; this says the job as a whole is outstanding
         // and names the addresses the verdicts were measured against.
         note?.takeIf { it.isNotBlank() }?.let {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Scale.s8))
             Text(
                 it,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+                modifier = Modifier.padding(start = inset, end = inset, bottom = Scale.s12),
             )
         }
     }
@@ -164,56 +165,40 @@ fun AppRow(
     var open by remember(app.id) { mutableStateOf(false) }
     val expandable = AppRules.expandable(app)
     val openable = AppRules.openable(app)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(enabled = openable, onClick = onOpen)
-            // Height only: the desktop's list pane re-measures on every frame of
-            // a width animation. See DisclosureHeightOnlyTest.
-            .animateContentSize()
-            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AppIcon(app)
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    AppRules.label(app),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    AppRules.subtitle(app),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+    // THE HOUSE ROW (UI-AUDIT section 3): icon · name · what it is · the reach
+    // dot trailing. The reach words, the verbs and the fix ride ListRow's
+    // `detail` slot, so the frame and the inset are the house ones.
+    ListRow(
+        title = AppRules.label(app),
+        meta = AppRules.subtitle(app),
+        metaMaxLines = 2,
+        // A row whose address the rules refuse is not pressable at all.
+        onClick = if (openable) onOpen else null,
+        // Height only: the desktop's list pane re-measures on every frame of
+        // a width animation. See DisclosureHeightOnlyTest.
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        leading = { AppIcon(app) },
+        trailing = { ReachDot(app) },
+        detail = {
+            Text(
+                AppRules.rowWords(app, nowMs, retrofitApplied),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.Start) {
+                // ⚠ ONLY A ROW WITH SOMETHING TO SAY OPENS. On a row where
+                // everything answered this would be an empty drawer with a chevron on
+                // it — and the verb changes with the reason, because "Why" over an
+                // explanation of a check that never ran reads as an accusation.
+                if (expandable) RowVerb(if (open) "Hide" else AppRules.expandVerb(app)) { open = !open }
+                onProbe?.let { probe -> RowVerb("Check now") { probe(app) } }
+                onEdit?.let { edit -> RowVerb("Edit") { edit(app) } }
             }
-            ReachDot(app)
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(
-            AppRules.rowWords(app, nowMs, retrofitApplied),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(2.dp))
-        Row(horizontalArrangement = Arrangement.Start) {
-            // ⚠ ONLY A ROW WITH SOMETHING TO SAY OPENS. On a row where
-            // everything answered this would be an empty drawer with a chevron on
-            // it — and the verb changes with the reason, because "Why" over an
-            // explanation of a check that never ran reads as an accusation.
-            if (expandable) RowVerb(if (open) "Hide" else AppRules.expandVerb(app)) { open = !open }
-            onProbe?.let { probe -> RowVerb("Check now") { probe(app) } }
-            onEdit?.let { edit -> RowVerb("Edit") { edit(app) } }
-        }
-        if (expandable && open) AppFixPanel(app, onCopyFix)
-    }
+            if (expandable && open) AppFixPanel(app, onCopyFix)
+        },
+    )
 }
 
 /**
@@ -277,7 +262,7 @@ private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?) {
                 // and then typed.
                 Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     lines.forEach {
-                        Text(it, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text(it, style = com.silencelen.huginn.ui.theme.LocalMonoStyle.current)
                     }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -323,14 +308,14 @@ private fun AppIcon(app: App, favicon: Boolean = false) {
     LaunchedEffect(app.id, app.iconStamp, wanted) {
         bitmap = if (wanted) loader.loadIcon(app.id, app.iconStamp) else null
     }
-    val shape = RoundedCornerShape(6.dp)
+    val shape = RoundedCornerShape(Scale.radiusChip)
     val shot = bitmap
     if (shot != null) {
         Image(
             bitmap = shot,
             contentDescription = null,
             contentScale = ContentScale.Fit,
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(Scale.iconLarge),
         )
         return
     }
@@ -339,12 +324,12 @@ private fun AppIcon(app: App, favicon: Boolean = false) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHighest,
         shape = shape,
-        modifier = Modifier.size(24.dp),
+        modifier = Modifier.size(Scale.iconLarge),
     ) {
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Text(
                 AppRules.iconInitial(app),
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -373,55 +358,32 @@ fun AppsStatusCard(
 ) {
     if (apps.isEmpty()) return
     Column(modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Apps",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-            )
-            if (onSeeAll != null) {
-                TextButton(onClick = onSeeAll) {
-                    Text("All", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+        ListHeader(
+            "Apps",
+            hairline = false,
+            verb = if (onSeeAll == null) null else {
+                {
+                    TextButton(onClick = onSeeAll) {
+                        Text("All", style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    }
                 }
-            }
-        }
+            },
+        )
         Text(
             appsStatusWords(apps),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 2.dp),
+            modifier = Modifier.padding(start = LocalRowMetrics.current.inset, end = LocalRowMetrics.current.inset),
         )
         apps.forEach { a ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = AppRules.openable(a)) { onOpen(a) }
-                    .padding(start = 14.dp, end = 14.dp, top = 5.dp, bottom = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AppIcon(a, favicon = true)
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        AppRules.label(a),
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        AppRules.rowWords(a, nowMs, retrofitApplied),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                ReachDot(a)
-            }
+            ListRow(
+                title = AppRules.label(a),
+                meta = AppRules.rowWords(a, nowMs, retrofitApplied),
+                metaColor = MaterialTheme.colorScheme.outline,
+                onClick = if (AppRules.openable(a)) ({ onOpen(a) }) else null,
+                leading = { AppIcon(a, favicon = true) },
+                trailing = { ReachDot(a) },
+            )
         }
     }
 }
@@ -479,10 +441,10 @@ private fun ReachDot(app: App) {
         else -> null
     }
     if (colour == null) {
-        Spacer(Modifier.size(8.dp))
+        Spacer(Modifier.size(Scale.dot))
         return
     }
-    Surface(color = colour, shape = CircleShape, modifier = Modifier.size(8.dp)) {}
+    Surface(color = colour, shape = CircleShape, modifier = Modifier.size(Scale.dot)) {}
 }
 
 @Composable
