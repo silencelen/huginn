@@ -1,5 +1,15 @@
 # Huginn Desktop changelog
 
+## 1.11.0
+
+### Security
+- **The desktop client talks to appd over TLS, pinned by a token-bound proof (needs appd 3.11).**
+  It follows the same contract as the Android app (`docs/TLS.md`). Routes are upgraded to
+  `https://` on the same address, except loopback. The token goes out only over a pinned
+  certificate. The pins are saved in `settings.json`, cleared on a new token, and proved again
+  when the certificate changes. A connection that fails the proof gets a clear message about
+  possible interception, never a fallback to plain HTTP.
+
 ## 1.10.1
 
 - **A missing agent no longer switches the stream strip off.** The strip read every 404 from the

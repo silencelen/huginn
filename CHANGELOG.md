@@ -8,6 +8,24 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.7.0] - 2026-10-12
+
+### Security
+- **`huginn-device` talks to appd over TLS and pins its certificate (needs appd 3.11).** Before
+  this release a device runner sent the bearer token to a remote daemon in plain HTTP. It now
+  uses `https://` on the same address and port and checks the daemon's self-signed certificate
+  with the proof bound to the token (`docs/TLS.md`), without sending the token. Then it pins the
+  certificate in `device.json`. The token goes only over a connection presenting a pinned
+  certificate, and the check runs before the HTTP layer gets the socket at all. A changed
+  certificate is proved again before it is trusted. If the proof fails, the runner stops with
+  *"this address could not prove it is your huginn daemon; someone may be intercepting the
+  connection"* and never falls back to plain HTTP. A daemon older than 3.11 is reported as such.
+- **Remote `http://` addresses are upgraded to `https://`.** That covers the URL in an existing
+  `device.json` or `local.json` (rewritten on load), `huginn device on --url http://…`, and the
+  URLs `huginn device on` / `huginn local on` build from the ssh target. Loopback
+  (`127.0.0.0/8`, `::1`, `localhost`) stays plain HTTP, which the daemon still answers there.
+  `huginn device status` shows the pinned fingerprint.
+
 ## [1.6.2] - 2026-10-05
 
 ### Fixed
