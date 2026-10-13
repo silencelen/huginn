@@ -6,7 +6,16 @@ had no Android SDK and Gradle could not resolve the Kotlin plugin there, so
 pass `bash -n` and the CLI gate (`scripts/test-client.sh`: 178 ok; the only
 failures are the daemon-token tools, which need `/etc/huginn-appd/token`).
 
-## What is on `claude/amazing-keller-uk2wd5`
+## Where the work lives now
+
+The design branch `claude/amazing-keller-uk2wd5` forked from the pre-rewrite
+history (the 2026-10-12 identity scrub) and was deleted from GitHub on
+2026-10-13 after its 43 commits were replayed onto the rewritten `main` as
+`reskin` (clean rebase; 22 commits re-attributed to the noreply identity). The
+Kotlin on `reskin` compiles in all four modules; `RoundsTest` and `PaletteTest`
+pass. Work continues on `reskin`.
+
+## What was on `claude/amazing-keller-uk2wd5`
 
 In commit order, newest last:
 
@@ -54,11 +63,14 @@ that order, each with device screenshots (the audits could not take any). Each
 brief has the sites, the acceptance checks and what to screenshot. PRs 2 to 6
 are briefs only; they are sized at one to three days each.
 
-Versions and changelogs per component before a cut: client and server core
-1.6.2 → 1.7.0 (root `CHANGELOG.md`, `HUGINN_VERSION` in both clients), Android
-3.9.2 → 3.10.0 (`mobile/CHANGELOG.md`), desktop 1.10.1 → 1.11.0
-(`mobile/app-desktop/CHANGELOG.md`); the daemon only if the Telegram marks
-change (PR 6). Merging to `main` deploys the terminal client at once, because
+Versions and changelogs per component before a cut (corrected 2026-10-13 on
+the rebased `reskin` branch: 1.7.0 / 3.10.0 / 1.11.0 had already shipped on
+2026-10-12 for TLS): client and server core 1.7.0 → 1.8.0 (root `CHANGELOG.md`,
+`HUGINN_VERSION` in both clients), Android 3.10.0 → 3.11.0
+(`mobile/CHANGELOG.md`), desktop 1.11.0 → 1.12.0
+(`mobile/app-desktop/CHANGELOG.md`); the daemon (3.11.0) only if the Telegram
+marks change (PR 6). The owner decided (2026-10-13) on ONE coordinated release
+after all six PRs, not a release per PR. Merging to `main` deploys the terminal client at once, because
 `huginn update` pulls the client files from `main`.
 
 ## Decisions you should not relitigate
