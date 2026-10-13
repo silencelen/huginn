@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 3.10.0 — 2026-10-12
+
+### Security
+- **The app talks to appd over TLS, pinned by a token-bound proof (needs appd 3.11).** Every route
+  is now `https://` on the same address and port. Stored `http://` routes, the built-in LAN and
+  Yggdrasil routes, and anything typed in are upgraded, except loopback. The daemon's self-signed
+  certificate is checked with a proof bound to the pairing token (`docs/TLS.md`), and the token
+  never goes out until the certificate is pinned. The pins are saved next to the token, shared
+  across every route to the same daemon, and cleared when the token changes. A changed
+  certificate is proved again before it is trusted. A connection that can't prove itself shows
+  *"this address could not prove it is your huginn daemon; someone may be intercepting the
+  connection"*, and the app never falls back to plain HTTP. A daemon older than 3.11 is named as
+  such.
+- **Cleartext traffic is off app-wide** except to `localhost` and `127.0.0.1`. Previously it was
+  permitted everywhere, because the tailnet was assumed to be the trust boundary.
+
 ## 3.9.2 — 2026-10-05
 
 - **A missing agent no longer switches the stream strip off.** The strip read every 404 from the
