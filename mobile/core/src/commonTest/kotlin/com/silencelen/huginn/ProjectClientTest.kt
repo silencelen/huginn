@@ -1,7 +1,6 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.HuginnClient
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -36,7 +35,7 @@ class ProjectClientTest {
     ) = HuginnClient(
         baseUrlProvider = { "http://appd.test" },
         tokenProvider = { "test-token" },
-        engine = MockEngine { request -> seen += request; respond(request) },
+        transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
     /** The JSON this client actually put on the wire. The HuginnClientTest shape. */

@@ -1,8 +1,9 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PaneLease
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
@@ -33,15 +34,15 @@ import kotlin.test.assertTrue
 class PaneLeaseTest {
 
     /** A daemon that accepts the connection and never answers it. */
-    private fun blackHole() = MockEngine {
+    private fun blackHole() = mockTransport {
         delay(BLACK_HOLE_MS)
         respond("{}", HttpStatusCode.OK)
     }
 
-    private fun client(engine: MockEngine) = HuginnClient(
+    private fun client(transport: MockTransport) = HuginnClient(
         baseUrlProvider = { "http://127.0.0.1:1" },
         tokenProvider = { "t" },
-        engine = engine,
+        transport = transport,
     )
 
     @Test
@@ -101,7 +102,7 @@ class PaneLeaseTest {
     // ------------------------------------------- live view is what leases
 
     /** A daemon that answers instantly, recording the paths it was asked for. */
-    private fun recorder(into: MutableList<String>) = MockEngine { request ->
+    private fun recorder(into: MutableList<String>) = mockTransport { request ->
         into += "${request.method.value} ${request.url.encodedPath}"
         respond("{}", HttpStatusCode.OK)
     }

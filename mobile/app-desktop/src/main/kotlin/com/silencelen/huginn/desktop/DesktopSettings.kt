@@ -68,6 +68,11 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
          * pretending to encrypt in the meantime would be worse than saying so.
          */
         val token: String = "",
+        /**
+         * The daemon's proved TLS fingerprints, [com.silencelen.huginn.data.TlsPins]-
+         * encoded. ⚠ Cleared with the token — see [setToken] and docs/TLS.md.
+         */
+        val tlsPins: String = "",
         /** Pre-routes. Read once, to migrate; never written again. */
         val routePinned: Boolean = false,
         /**
@@ -317,9 +322,13 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _listWidth = MutableStateFlow(Splitter.clamp(stored.listWidth))
     private val _listCollapsed = MutableStateFlow(stored.listCollapsed)
 
+    private val _tlsPins = MutableStateFlow(stored.tlsPins)
+
     init {
         if (stored.clientId.isEmpty()) mutate { it.copy(clientId = "desktop-kt-${UUID.randomUUID()}") }
         if (stored.token.isEmpty()) bootstrapDevToken()
+        // The process's clients read their TLS pins through this store. See PinBook.
+        com.silencelen.huginn.data.PinBook.process.attach(this)
     }
 
     // ------------------------------------------------------ HuginnSettings
@@ -389,10 +398,23 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     /** The persisted health, synchronously — [AppStore] seeds its cache before it probes. */
     fun routeHealthNow(): Map<String, RouteHealth> = _routeHealth.value
 
+    /**
+     * ⚠ A DIFFERENT TOKEN IS A DIFFERENT DAEMON (TLS.md rule 7): its pins go in
+     * the same mutation. Re-saving the same token keeps them.
+     */
     override suspend fun setToken(value: String) {
         val next = value.trim()
+        val changed = _token.value != next
         _token.value = next
-        mutate { it.copy(token = next) }
+        if (changed) _tlsPins.value = ""
+        mutate { if (changed) it.copy(token = next, tlsPins = "") else it.copy(token = next) }
+    }
+
+    override val tlsPins: Flow<String> = _tlsPins.asStateFlow()
+
+    override suspend fun setTlsPins(value: String) {
+        _tlsPins.value = value
+        mutate { it.copy(tlsPins = value) }
     }
 
     private val _localOfferSeen = kotlinx.coroutines.flow.MutableStateFlow(stored.localOfferSeen)
@@ -581,6 +603,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
      */
     fun clearForRemoval() {
         _token.value = ""
+        _tlsPins.value = ""
         _drafts.value = emptyMap()
         _deviceEnabled.value = false
         _deviceUnenrolPending.value = false
@@ -591,6 +614,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         mutate {
             it.copy(
                 token = "",
+                tlsPins = "",
                 drafts = "",
                 deviceId = "",
                 deviceEnabled = false,

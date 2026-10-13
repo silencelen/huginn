@@ -1,8 +1,9 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.ui.StreamPicker
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -67,7 +68,7 @@ class SessionControllerTest {
         val client = HuginnClient(
             baseUrlProvider = { BASE },
             tokenProvider = { "t" },
-            engine = MockEngine { request ->
+            transport = mockTransport { request ->
                 seen += request
                 val (code, body) = handle(request.url.toString().removePrefix(BASE))
                 respond(body, code, io.ktor.http.headersOf("Content-Type", listOf("application/json")))

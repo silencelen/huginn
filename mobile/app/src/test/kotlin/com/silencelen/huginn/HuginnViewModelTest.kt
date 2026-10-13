@@ -38,7 +38,6 @@ import com.silencelen.huginn.ui.headroomPill
 import com.silencelen.huginn.ui.mergeTranscriptPage
 import com.silencelen.huginn.ui.saveQuickActions
 import com.silencelen.huginn.ui.statusHeadroomOf
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -292,6 +291,29 @@ class HuginnViewModelTest {
         )
     }
 
+    /**
+     * docs/TLS.md: the interception and too-old refusals are the contract's own
+     * sentences and reach the banner whole — the generic "ssl/certificate"
+     * mapping must not soften "someone may be intercepting" into "could not be
+     * set up".
+     */
+    @Test
+    fun `the TLS refusals reach the banner verbatim`() {
+        val intercepted = com.silencelen.huginn.data.DaemonTlsException(
+            com.silencelen.huginn.data.DaemonTlsException.Kind.INTERCEPTED,
+            com.silencelen.huginn.data.DaemonTls.INTERCEPTED,
+        )
+        assertEquals(
+            "This address could not prove it is your huginn daemon; someone may be intercepting the connection",
+            errorTextFor(intercepted),
+        )
+        val old = com.silencelen.huginn.data.DaemonTlsException(
+            com.silencelen.huginn.data.DaemonTlsException.Kind.TOO_OLD,
+            com.silencelen.huginn.data.DaemonTls.TOO_OLD,
+        )
+        assertEquals("The daemon is older than 3.11 and has no TLS; update it", errorTextFor(old))
+    }
+
     // --------------------------------------- #73 a teardown tears down its own chat
 
     @Test
@@ -390,7 +412,7 @@ class HuginnViewModelTest {
 
     private companion object {
         const val STRIP_NOW = 1_789_460_000L
-        const val BASE = "http://appd.test"
+        const val BASE = "https://appd.test"
     }
 
     private fun streamAgent(
@@ -417,7 +439,7 @@ class HuginnViewModelTest {
         val client = HuginnClient(
             baseUrlProvider = { BASE },
             tokenProvider = { "t" },
-            engine = MockEngine { request ->
+            transport = mockTransport { request ->
                 seen += request
                 respond(
                     """{"agents":[],"active":0,"serverTime":$STRIP_NOW}""",
@@ -451,7 +473,7 @@ class HuginnViewModelTest {
         val client = HuginnClient(
             baseUrlProvider = { BASE },
             tokenProvider = { "t" },
-            engine = MockEngine { request ->
+            transport = mockTransport { request ->
                 seen += request
                 respond(
                     """{"rev":8,"explain":"E {selection}","execute":"X {selection}",""" +

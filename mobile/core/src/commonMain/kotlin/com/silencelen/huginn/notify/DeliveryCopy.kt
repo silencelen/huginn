@@ -99,6 +99,13 @@ object DeliveryCopy {
         fun has(vararg needles: String) = needles.any { it in t }
         return when {
             raw.isBlank() -> ""
+            // ⚠ FIRST, AND VERBATIM: the two TLS refusals of docs/TLS.md are
+            // already household sentences, written to be shown as they are. The
+            // "ssl"/"certificate" branch below would otherwise swallow the
+            // interception one into a vague "could not be set up", which is the
+            // one failure where the reader must be told someone may be listening.
+            raw.startsWith(com.silencelen.huginn.data.DaemonTls.INTERCEPTED) ||
+                raw.startsWith(com.silencelen.huginn.data.DaemonTls.TOO_OLD) -> raw.trim()
             // ⚠ THE PHRASES ANDROID ACTUALLY PRODUCES. Ktor's own "Connect timeout
             // has expired" is only one of them: libcore raises ETIMEDOUT
             // ("Connection timed out"), the JDK says "Connect timed out", and each

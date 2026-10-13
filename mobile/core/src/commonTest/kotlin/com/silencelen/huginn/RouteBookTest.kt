@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
 /** The list, the names, the order, the cap — and the address every worker reads. */
 class RouteBookTest {
 
-    private val lan = "http://192.168.1.20:8787"
-    private val tailnet = "http://100.101.102.103:8787"
+    private val lan = "https://192.168.1.20:8787"
+    private val tailnet = "https://100.101.102.103:8787"
     private val local = "http://127.0.0.1:8787"
 
     private fun book(vararg urls: String): RouteBook =
@@ -62,7 +62,7 @@ class RouteBookTest {
         assertEquals(lan, b.activeUrl, "activate")
 
         b = b.setUrl("r1", "http://10.0.0.9:8787")
-        assertEquals("http://10.0.0.9:8787", b.activeUrl, "editing the active pin's address")
+        assertEquals("https://10.0.0.9:8787", b.activeUrl, "editing the active pin's address (stored upgraded)")
 
         b = b.remove("r1")
         assertEquals(tailnet, b.activeUrl, "removing the active pin falls back to the first")
@@ -136,8 +136,8 @@ class RouteBookTest {
     @Test
     fun `an address the guard refuses cannot be added or edited in`() {
         val b = book(lan)
-        assertEquals(RouteGuard.REFUSED, assertFailsWith<IllegalArgumentException> { b.add("Evil", "http://example.com", 1) }.message)
-        assertEquals(RouteGuard.REFUSED, assertFailsWith<IllegalArgumentException> { b.setUrl("r0", "http://1.2.3.4:8787") }.message)
+        assertEquals(RouteGuard.REFUSED, assertFailsWith<IllegalArgumentException> { b.add("Evil", "http://example.com/login", 1) }.message)
+        assertEquals(RouteGuard.REFUSED, assertFailsWith<IllegalArgumentException> { b.setUrl("r0", "http://me@1.2.3.4:8787") }.message)
         assertEquals(lan, b.routes.single().url, "and the book is unchanged")
     }
 
@@ -148,10 +148,13 @@ class RouteBookTest {
      * normalizing drops what the guard would refuse.
      */
     @Test
-    fun `a hand-edited store cannot smuggle a public http address into the list`() {
+    fun `a hand-edited store cannot smuggle a malformed address into the list`() {
+        // ⚠ Since 3.11 a public http address is not smuggling — it is stored and
+        // dialled as https and proved before the bearer follows. What a hand edit
+        // can still try is a SHAPE the guard refuses: a path, a credential.
         val smuggled = RouteBook(
             routes = listOf(
-                PinnedRoute("evil", "Totally fine", "http://attacker.example", RouteKind.LAN, 0, 0),
+                PinnedRoute("evil", "Totally fine", "http://attacker.example/steal", RouteKind.LAN, 0, 0),
                 PinnedRoute("real", "Home", lan, RouteKind.LAN, 1, 0),
             ),
             activeId = "evil",
@@ -159,7 +162,7 @@ class RouteBookTest {
         assertEquals(listOf("real"), smuggled.routes.map { it.id })
         assertEquals("real", smuggled.activeId, "and the connection falls back to one that is allowed")
         assertEquals(lan, smuggled.activeUrl)
-        assertEquals("http://attacker.example", smuggled.droppedUrl,
+        assertEquals("http://attacker.example/steal", smuggled.droppedUrl,
             "dropped, but no longer WITHOUT A WORD — a screen can now say which address went and why")
     }
 
@@ -189,7 +192,7 @@ class RouteBookTest {
         ).normalized()
         assertEquals(listOf("first"), b.routes.map { it.id })
         assertEquals("first", b.activeId, "the active pin follows the copy that survived")
-        assertEquals("http://10.0.0.5:8787", b.activeUrl)
+        assertEquals("https://10.0.0.5:8787", b.activeUrl)
     }
 
     @Test
@@ -198,7 +201,7 @@ class RouteBookTest {
             routes = listOf(PinnedRoute("r0", "Home", "HTTP://10.0.0.5:8787/", RouteKind.CUSTOM, 0, 0)),
             activeId = "r0",
         ).normalized()
-        assertEquals("http://10.0.0.5:8787", b.activeUrl)
+        assertEquals("https://10.0.0.5:8787", b.activeUrl)
         assertEquals(RouteKind.LAN, b.routes.single().kind, "and the badge follows the address it really is")
     }
 

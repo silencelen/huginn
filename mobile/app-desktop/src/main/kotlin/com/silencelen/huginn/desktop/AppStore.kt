@@ -50,7 +50,7 @@ import com.silencelen.huginn.data.Usage
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.data.WatchEvent
 import com.silencelen.huginn.desktop.update.DesktopUpdater
-import io.ktor.client.engine.okhttp.OkHttp
+import com.silencelen.huginn.data.OkHttpDaemonTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -176,7 +176,14 @@ class AppStore(
         // see a streamed body's headers the moment they land rather than when the
         // watch stream finally ends. It reads the response and returns it
         // untouched.
-        engine = OkHttp.create {
+        //
+        // ⚠ THROUGH THE TRANSPORT, NOT AS AN ENGINE (docs/TLS.md). This used to
+        // be a bare `OkHttp.create { … }` — an engine trusting the system CAs and
+        // nothing about huginn, which since 3.11 would carry the bearer to any
+        // certificate. The transport's hook runs before it installs the pinning
+        // trust manager, so the interceptor rides along without being able to
+        // weaken it.
+        transport = OkHttpDaemonTransport {
             addInterceptor { chain ->
                 val response = chain.proceed(chain.request())
                 noteRouteReached(chain.request().url.toString(), response.code)

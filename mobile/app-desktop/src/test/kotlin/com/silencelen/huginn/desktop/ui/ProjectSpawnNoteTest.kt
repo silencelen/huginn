@@ -1,11 +1,12 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ProjectMember
 import com.silencelen.huginn.data.SpawnFailure
 import com.silencelen.huginn.data.SpawnOutcome
 import com.silencelen.huginn.data.SpawnResult
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -42,7 +43,7 @@ class ProjectSpawnNoteTest {
     private fun client(status: HttpStatusCode, body: String): HuginnClient = HuginnClient(
         baseUrlProvider = { "http://stub" },
         tokenProvider = { "t" },
-        engine = MockEngine { respond(body, status, json) },
+        transport = mockTransport { respond(body, status, json) },
     )
 
     private fun member(role: String) = ProjectMember(

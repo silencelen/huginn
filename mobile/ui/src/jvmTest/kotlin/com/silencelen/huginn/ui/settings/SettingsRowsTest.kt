@@ -133,7 +133,7 @@ class SettingsRowsTest {
         // The rename is the casualty when this is two writes: the URL write was
         // computed on the book as it stood BEFORE the rename, and lands last.
         assertEquals("the mesh", r.name, "the new name must survive a same-Save address change")
-        assertEquals("http://100.64.0.9:8787", r.url, "and so must the new address")
+        assertEquals("https://100.64.0.9:8787", r.url, "and so must the new address (stored upgraded, docs/TLS.md)")
     }
 
     @Test
@@ -187,10 +187,13 @@ class SettingsRowsTest {
     @Test
     fun `an address the guard refuses is refused by the form, not by closing it`() {
         val b = book()
-        refuses(routeFormRefusal(b, null, "huginn.example.com:8787"))
+        // ⚠ Since 3.11 a bare public name is upgraded to https, not refused —
+        // what the form still refuses is a malformed SHAPE.
         refuses(routeFormRefusal(b, null, "http://huginn.local:8787/v1"))
-        refuses(routeFormRefusal(b, null, "example.com"))
+        refuses(routeFormRefusal(b, null, "http://me@example.com"))
+        refuses(routeFormRefusal(b, null, "ftp://example.com"))
         refuses(routeFormRefusal(b, null, "   "))
+        assertNull(routeFormRefusal(b, null, "huginn.example.com:8787"))
     }
 
     @Test

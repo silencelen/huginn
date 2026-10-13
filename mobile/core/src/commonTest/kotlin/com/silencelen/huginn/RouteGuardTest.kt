@@ -19,20 +19,29 @@ import kotlin.test.assertTrue
  * somebody could be talked into typing.
  *
  * Each case below is a CLASS of address, not an example, because the rule is
- * about shape: https anywhere, http only where the packet cannot leave a trusted
- * network.
+ * about shape: https anywhere, plain http only to loopback — and since appd 3.11
+ * (docs/TLS.md) every other http address is STORED AS https rather than refused,
+ * because the TLS proof is what now keeps the bearer from a stranger.
  */
 class RouteGuardTest {
 
     // -------------------------------------------------------------- allowed
 
     @Test
-    fun `plain http is allowed exactly where the packet cannot leave a trusted network`() {
-        val allowed = mapOf(
+    fun `plain http survives only to loopback, and every other http is upgraded`() {
+        val kept = mapOf(
             "http://127.0.0.1:8787" to RouteKind.LOCAL,
             "http://127.1.2.3:8787" to RouteKind.LOCAL,
             "http://localhost:8787" to RouteKind.LOCAL,
             "http://[::1]:8787" to RouteKind.LOCAL,
+        )
+        for ((url, kind) in kept) {
+            assertTrue(RouteGuard.isAllowed(url), url)
+            assertEquals(url, RouteGuard.normalize(url), "loopback keeps plain http: $url")
+            assertEquals(kind, RouteGuard.kindOf(url), "badge for $url")
+        }
+        // ⚠ The badge still says what KIND of path it is; only the scheme moved.
+        val upgraded = mapOf(
             "http://10.0.0.9:8787" to RouteKind.LAN,
             "http://192.168.1.20:8787" to RouteKind.LAN,
             "http://172.16.0.4:8787" to RouteKind.LAN,
@@ -43,9 +52,11 @@ class RouteGuardTest {
             "http://huginn.tailnet-1234.ts.net:8787" to RouteKind.TAILNET,
             "http://[fd00::1]:8787" to RouteKind.MESH,
             "http://[fc00::abcd]:8787" to RouteKind.MESH,
+            "http://app.localhost:8787" to RouteKind.LOCAL,
         )
-        for ((url, kind) in allowed) {
-            assertTrue(RouteGuard.isAllowed(url), "should be reachable over plain http: $url")
+        for ((url, kind) in upgraded) {
+            assertTrue(RouteGuard.isAllowed(url), url)
+            assertEquals("https://" + url.removePrefix("http://"), RouteGuard.normalize(url), "upgraded: $url")
             assertEquals(kind, RouteGuard.kindOf(url), "badge for $url")
         }
     }
@@ -60,9 +71,15 @@ class RouteGuardTest {
 
     // -------------------------------------------------------------- refused
 
+    /**
+     * ⚠ NO LONGER REFUSED, AND NEVER CLEARTEXT. Before 3.11 these were refused
+     * because a bearer in plain http to a public host is readable by everyone in
+     * between. Now they are dialled as https, and the bearer follows only after
+     * the far end proves the token behind the certificate this client saw.
+     */
     @Test
-    fun `plain http to anything public is refused`() {
-        val refused = listOf(
+    fun `plain http to anything public is upgraded, never sent in cleartext`() {
+        val public = listOf(
             "http://example.com:8787",           // an arbitrary DNS name
             "http://1.2.3.4:8787",               // a public literal
             "http://8.8.8.8",                    // ditto, no port
@@ -71,8 +88,8 @@ class RouteGuardTest {
             "http://[2001:db8::1]:8787",         // global unicast v6
             "http://huginn.ts.net.evil.com",     // the MagicDNS suffix as a prefix
         )
-        for (url in refused) {
-            assertFalse(RouteGuard.isAllowed(url), "should be refused: $url")
+        for (url in public) {
+            assertTrue(RouteGuard.normalize(url).startsWith("https://"), "upgraded: $url")
             assertEquals(RouteKind.CUSTOM, RouteGuard.kindOf(url))
         }
     }
@@ -86,10 +103,11 @@ class RouteGuardTest {
      */
     @Test
     fun `a bare address is judged as http and stored with the scheme spelled out`() {
-        assertFalse(RouteGuard.isAllowed("example.com:8787"), "bare public name must not slip through")
+        assertEquals("https://example.com:8787", RouteGuard.normalize("example.com:8787"), "a bare public name is upgraded, not trusted in clear")
         assertTrue(RouteGuard.isAllowed("192.168.1.20:8787"))
-        assertEquals("http://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
-        assertEquals("http://192.168.1.20:8787", RouteGuard.require(" 192.168.1.20:8787/ "))
+        assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
+        assertEquals("https://192.168.1.20:8787", RouteGuard.require(" 192.168.1.20:8787/ "))
+        assertEquals("http://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"))
     }
 
     @Test
@@ -136,12 +154,11 @@ class RouteGuardTest {
         // they just had taken off them by an upgrade (#45) is refused by this
         // exact sentence, with no way to learn why.
         assertEquals(
-            "refusing that server address — over plain http huginn only talks to a private address, " +
-                "localhost or a *.ts.net name; anything else needs https, and the address must be " +
-                "a bare host and port",
+            "refusing that server address — it must be a bare host and port, like 192.168.1.5:8787 " +
+                "or https://huginn.example.net:8787 (huginn always connects over https, except to this machine)",
             RouteGuard.REFUSED,
         )
-        val e = assertFailsWith<IllegalArgumentException> { RouteGuard.require("http://example.com") }
+        val e = assertFailsWith<IllegalArgumentException> { RouteGuard.require("http://example.com/admin") }
         assertEquals(RouteGuard.REFUSED, e.message)
     }
 

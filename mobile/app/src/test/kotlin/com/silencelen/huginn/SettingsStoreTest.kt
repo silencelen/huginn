@@ -153,21 +153,34 @@ class SettingsStoreRoutesTest {
         assertTrue("the built-ins are seeded", migrated.routes.isNotEmpty())
     }
 
+    /** docs/TLS.md rule 6: an install stored on plain http reads back as https. */
+    @Test
+    fun `a stored plain-http route reads back upgraded`() {
+        val p = mutablePreferencesOf()
+        p[stringPreferencesKey("base_url")] = "http://10.0.0.5:8787"
+        assertEquals("https://10.0.0.5:8787", SettingsStore.routeBookFrom(p).activeUrl)
+        val saved = mutablePreferencesOf()
+        SettingsStore.putRouteBook(saved, SettingsStore.routeBookFrom(p))
+        assertEquals("and is WRITTEN upgraded", "https://10.0.0.5:8787", saved[stringPreferencesKey("base_url")])
+    }
+
     @Test
     fun `THE MIGRATION IS UNTOUCHED - a refused address is still carried back, not pinned`() {
-        // The one row that is not behaviour-identical: a plain-http HOSTNAME the
-        // old free-text field accepted. It must come back as a notice with NO
+        // The one row that is not behaviour-identical: an address the old
+        // free-text field accepted and the guard refuses — since 3.11 that is a
+        // SHAPE refusal (here a path); a plain-http hostname is upgraded to
+        // https instead (docs/TLS.md). It must come back as a notice with NO
         // active route, and now it must still be there after a restart.
         val p = mutablePreferencesOf()
-        p[stringPreferencesKey("base_url")] = "http://huginn.lan:8787"
+        p[stringPreferencesKey("base_url")] = "http://huginn.lan:8787/api"
         val migrated = SettingsStore.routeBookFrom(p)
-        assertEquals("http://huginn.lan:8787", migrated.droppedUrl)
+        assertEquals("http://huginn.lan:8787/api", migrated.droppedUrl)
         assertNull(migrated.activeId)
 
         // ...and once it has been written down, the next read comes from the
         // book rather than from the migration, with the notice intact.
         val saved = mutablePreferencesOf()
         SettingsStore.putRouteBook(saved, migrated)
-        assertEquals("http://huginn.lan:8787", SettingsStore.routeBookFrom(saved).droppedUrl)
+        assertEquals("http://huginn.lan:8787/api", SettingsStore.routeBookFrom(saved).droppedUrl)
     }
 }

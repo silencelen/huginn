@@ -1,13 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  huginn-appd is reached over the tailnet by IP or MagicDNS name on plain HTTP
-  (the tailnet is the trust boundary, and every request also carries a bearer
-  token). Cleartext is permitted app-wide on purpose rather than via a host
-  allowlist: devstore shipped an allowlist and a base URL the allowlist did not
-  cover became a permanent dead end for the user with no in-app way out
-  (see devstore 0.6.1). The server URL here is user-configurable, so any
-  allowlist would reproduce that trap.
+  Since appd 3.11 huginn talks to its daemon over TLS only (docs/TLS.md), and
+  this file is the platform's half of "no setting re-enables cleartext to a
+  remote host": plain HTTP is refused app-wide by the OS, below anything the
+  app's own code could get wrong, with loopback the single exception.
+
+  Why loopback survives: a daemon on this same device (or reached through an
+  adb reverse / local port-forward) has no wire to read a bearer off, and the
+  client's URL rule keeps http:// for 127.0.0.0/8, ::1 and localhost alone.
+  Every other http:// address is upgraded to https:// before it is dialled.
+
+  Why there is no host allowlist for HTTPS and no trust anchors here: appd's
+  certificate is self-signed and is checked by the client's own pinning trust
+  manager (OkHttpDaemonTransport) against a fingerprint proved with the token.
+  A custom TrustManager bypasses these trust anchors by design; the system CAs
+  are not what vouches for the daemon, the token is. The base-config CAs below
+  still serve the GitHub update checks, which use ordinary validation.
+
+  History: this used to permit cleartext app-wide, because the tailnet was the
+  trust boundary and a host allowlist had trapped devstore users (0.6.1). The
+  first reason only ever held for owners running Tailscale; the second no
+  longer applies, since the allowlist below is loopback, which never changes.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
 </network-security-config>

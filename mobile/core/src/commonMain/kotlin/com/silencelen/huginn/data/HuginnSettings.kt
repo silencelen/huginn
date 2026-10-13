@@ -95,6 +95,21 @@ interface HuginnSettings {
     suspend fun setRouteHealth(value: Map<String, RouteHealth>, atMs: Long = 0) {}
 
     /**
+     * The daemon's proved certificate fingerprints, [TlsPins]-encoded — see
+     * `docs/TLS.md` and [PinBook].
+     *
+     * ⚠⚠ CLEARED WHENEVER THE TOKEN CHANGES (TLS.md rule 7). Each store's
+     * [setToken] does it; [TlsPins] also carries a tag of the token it was
+     * proved under, so a store that forgot would still read as empty rather
+     * than trusting a certificate proved for somebody else's daemon.
+     *
+     * DEFAULT members, like [routeHealth]: a store that does not persist them is
+     * exactly as safe — every pin is re-proved under the token — only slower.
+     */
+    val tlsPins: Flow<String> get() = kotlinx.coroutines.flow.flowOf("")
+    suspend fun setTlsPins(value: String) {}
+
+    /**
      * Stable id for this installation, minted once. Sent to the host so it can
      * record that this client is still checking in.
      */
@@ -215,7 +230,7 @@ interface HuginnSettings {
          * route field SUGGESTS and what [AppdRoutes.migrate] seeds an upgrade
          * with — not what an unconfigured client quietly points at.
          */
-        const val DEFAULT_BASE_URL: String = "http://192.168.10.20:8787"
+        const val DEFAULT_BASE_URL: String = "https://192.168.10.20:8787"
 
         /**
          * What the add-a-route field shows when it is EMPTY.
