@@ -326,8 +326,8 @@ def build_preview(g24):
                                             ('ascii-braille.txt', 'braille at 2x')], 33.22)), T('pre2'), [1400], BG)
 
     # ------------------------------------------------ compose
-    W = 1660
-    sheet = Image.new('RGB', (W, 1980), '#6F6A64')
+    W = 1700
+    sheet = Image.new('RGB', (W, 2100), '#6F6A64')
     d = ImageDraw.Draw(sheet)
     try:
         font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', 13)
@@ -344,76 +344,84 @@ def build_preview(g24):
             d.rectangle([x - 1, y - 1, x + img.width, y + img.height], outline=frame)
         sheet.paste(img, (x, y), img)
         if label:
-            d.text((x, y + img.height + 6), label, fill='#1B1817', font=font)
+            d.text((x, y + img.height + 6), label, fill='#F2ECE4', font=font)
         return img.width, img.height
 
     def title(x, y, s):
         d.text((x, y), s, fill='#F2ECE4', font=big)
 
-    title(24, 18, 'r2-05-fold  —  the faceted raven with one fold cut')
-    d.text((24, 44), 'mark 512 on bone and on #12100F  ·  mark 64 / 32 / 16 (32 and 16 are mark-32.svg, no fold)  ·  head 22 / 16  ·  glyph 48 / 24 / 16 tinted on the app ground',
-           fill='#D9D1C7', font=font)
-    # row 1: 512s
-    put(T('m-bone-512.png'), 24, 72, label='mark.svg  512 on bone')
-    put(T('m-dark-512.png'), 560, 72, label='mark-inverse.svg  512 on #12100F')
-    # column: small marks on bone and dark, 4x
-    x, y = 1100, 72
-    d.text((x, y), 'mark at 64 / 32 / 16, shown 4x (hard pixels)', fill='#F2ECE4', font=font)
+    def sub(x, y, s):
+        d.text((x, y), s, fill='#D9D1C7', font=font)
+
+    title(24, 18, 'r2-05-fold  -  the faceted raven with one fold cut')
+    sub(24, 44, 'A: mark 512 on bone and on #12100F; mark 64 / 32 / 16 and head 22 / 16 at 4x (hard pixels).  B: glyph tile tinted on the app ground.  C: the terminal renderings.  D: vector over grid.')
+
+    # A ---------------------------------------------------------------- marks
+    yA = 72
+    put(T('m-bone-512.png'), 24, yA, label='mark.svg  512 on bone')
+    put(T('m-dark-512.png'), 560, yA, label='mark-inverse.svg  512 on #12100F')
+    x, y = 1100, yA
+    sub(x, y, 'mark at 64 / 32 / 16, 4x')
     y += 22
-    for i, (nm, lbl) in enumerate((('m-bone-64', '64'), ('m32-bone-32', '32 (no fold)'), ('m32-bone-16', '16 (no fold)'))):
+    for nm, lbl in (('m-bone-64', '64 (mark.svg)'), ('m32-bone-32', '32 (mark-32.svg, no fold)'), ('m32-bone-16', '16 (mark-32.svg, no fold)')):
         w, h = put(T(nm + '.png'), x, y, 4, label=lbl, frame='#4A4541')
         put(T(nm.replace('bone', 'dark') + '.png'), x + w + 16, y, 4, frame='#4A4541')
-        y += h + 26
-    d.text((x, y + 4), 'head drawing mark-16.svg at 22 / 16, 4x', fill='#F2ECE4', font=font)
-    y += 26
+        y += h + 30
+    sub(x, y, 'head drawing mark-16.svg at 22 / 16, 4x')
+    y += 22
     xx = x
     for nm, lbl in (('h-bone-22', '22'), ('h-bone-16', '16')):
         w, h = put(T(nm + '.png'), xx, y, 4, label=lbl, frame='#4A4541')
         put(T(nm.replace('bone', 'dark') + '.png'), xx + w + 12, y, 4, frame='#4A4541')
-        xx += 2 * w + 40
-    y += 88 + 30
+        xx += 2 * w + 44
 
-    # row 2: glyph tinted on the app ground
-    y2 = 620
-    title(24, y2, 'glyph tile: 48 / 24 / 16 on the app ground, tinted idle #7B8794 · working #C8A45C · attention #F3D58F · bone  (shown 3x)')
-    panel = Image.new('RGB', (1040, 250), BG)
-    sheet.paste(panel, (24, y2 + 30))
+    # B ---------------------------------------------------------------- glyph
+    yB = 810
+    title(24, yB, 'glyph tile at 48 / 24 / 16 on the app ground, tinted idle #7B8794 / working #C8A45C / attention #F3D58F / bone, shown 3x; then 1x, 128, the launcher mask and the tile')
+    panel = Image.new('RGB', (W - 48, 330), BG)
+    sheet.paste(panel, (24, yB + 30))
     gx = 48
     for name in ('idle', 'working', 'attention', 'bone'):
         xx = gx
         for s in (48, 24, 16):
-            w, h = put(T(f'g-{name}-{s}.png'), xx, y2 + 60 + (48 - s) * 3 // 2, 3)
-            xx += w + 14
-        d.text((gx, y2 + 220), name, fill='#8A8177', font=font)
-        gx += 290
-    # glyph at 128 ink/bone + inverse, 1x; launcher mask
-    put(T('g-ink-128.png'), 1100, y2 + 30, label='glyph.svg 128')
-    put(T('g-inv-128.png'), 1250, y2 + 30, label='glyph-inverse.svg 128')
-    put(T('launch-192.png'), 1400, y2 + 30, label='launcher circle mask (safe ring)')
-    put(T('g-ink-16.png'), 1100, y2 + 190, 1, label='1x: 16', frame='#4A4541')
-    put(T('g-ink-24.png'), 1150, y2 + 190, 1, label='24', frame='#4A4541')
-    put(T('g-ink-48.png'), 1200, y2 + 190, 1, label='48', frame='#4A4541')
-    put(T('launch-48.png'), 1400, y2 + 236, 1, label='launcher 48', frame='#4A4541')
-    put(T('tile-128.png'), 1500, y2 + 200, label='mark-tile.svg 128')
+            w, h = put(T(f'g-{name}-{s}.png'), xx, yB + 60 + (48 - s) * 3 // 2, 3)
+            xx += w + 12
+        d.text((gx, yB + 215), name, fill='#8A8177', font=font)
+        gx += 300
+    # 1x row inside the panel
+    xx = 48
+    for name in ('idle', 'working', 'attention', 'bone'):
+        for s in (48, 24, 16):
+            w, h = put(T(f'g-{name}-{s}.png'), xx, yB + 250 + (48 - s))
+            xx += w + 8
+        xx += 40
+    d.text((48, yB + 335), '1x: 48 / 24 / 16 per state', fill='#8A8177', font=font)
+    # right side of the panel: 128s on their own grounds, launcher, tile
+    put(T('g-ink-128.png'), 1250, yB + 46, label='glyph.svg 128 on bone')
+    put(T('g-inv-128.png'), 1400, yB + 46, label='glyph-inverse.svg 128')
+    put(T('launch-192.png'), 1250, yB + 200, label='launcher mask d72 + safe ring r33 (mark at 0.72)')
+    put(T('tile-128.png'), 1460, yB + 200, label='mark-tile.svg 128')
+    put(T('launch-48.png'), 1460, yB + 265 + 70, 1, label='launcher 48', frame='#4A4541')
 
-    # row 3: text renderings
-    y3 = 930
-    title(24, y3, 'terminal renderings, exact from grid.txt — <pre>, DejaVu Sans Mono 16 px, line-height 1, on #12100F')
+    # C ---------------------------------------------------------------- text
+    yC = yB + 30 + 330 + 40
+    title(24, yC, 'terminal renderings, exact from grid.txt  -  <pre>, DejaVu Sans Mono 16.61 px (10 px advance), line-height 1, on #12100F; then the half-block and braille at a 2x cell')
     pre = Image.open(T('pre-1100.png')).convert('RGB')
     bbox = Image.eval(pre.convert('L'), lambda v: 255 if v > 24 else 0).getbbox()
     pre = pre.crop((0, 0, min(pre.width, bbox[2] + 30), min(pre.height, bbox[3] + 30)))
-    sheet.paste(pre, (24, y3 + 30))
+    sheet.paste(pre, (24, yC + 30))
     pre2 = Image.open(T('pre2-1400.png')).convert('RGB')
     bbox = Image.eval(pre2.convert('L'), lambda v: 255 if v > 24 else 0).getbbox()
     pre2 = pre2.crop((0, 0, min(pre2.width, bbox[2] + 30), min(pre2.height, bbox[3] + 30)))
-    sheet.paste(pre2, (24, y3 + 40 + pre.height))
+    sheet.paste(pre2, (24, yC + 40 + pre.height))
 
-    # row 4: overlay
-    y4 = y3 + 40 + pre.height
-    ox = 24 + pre2.width + 30
-    title(ox, y4 - 10, 'vector over its own grid')
-    put(T('overlay-512.png'), ox, y4 + 20, label='mark.svg (60 % ink + outline) over the fold24 cells (grey); lattice 4.5 x 3.25')
-    h_total = max(y4 + 20 + 512 + 40, y3 + 40 + pre.height + pre2.height + 40)
+    # D ---------------------------------------------------------------- overlay
+    ox = 24 + max(pre.width, pre2.width) + 30
+    yD = yC
+    title(ox, yD, 'vector over its own grid')
+    put(T('overlay-512.png'), ox, yD + 30, label='mark.svg (60 % ink + outline) over the fold24')
+    sub(ox, yD + 30 + 512 + 24, 'cells (grey); lattice 4.5 x 3.25 units')
+    h_total = max(yD + 30 + 512 + 60, yC + 40 + pre.height + pre2.height + 30)
     sheet = sheet.crop((0, 0, W, h_total))
     out = os.path.join(HERE, 'preview.png')
     sheet.save(out, optimize=True)
