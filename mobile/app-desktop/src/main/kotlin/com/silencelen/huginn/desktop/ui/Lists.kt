@@ -648,7 +648,8 @@ private fun RowFrame(
             .clickable(interactionSource = interaction, indication = null) {
                 onClick(mods.ctrl, mods.shift)
             }
-            .padding(horizontal = Space.wide, vertical = Space.tight),
+            // 12/6: the desktop row (ui/system/Scale.kt DesktopRowMetrics).
+            .padding(horizontal = Space.wide, vertical = 6.dp),
         content = content,
     )
 }
@@ -664,7 +665,7 @@ private class Mods {
 private fun RowRule() {
     HorizontalDivider(
         Modifier.padding(start = Space.wide),
-        color = MaterialTheme.colorScheme.outlineVariant,
+        color = LocalHuginnColors.current.outlineHairline,
     )
 }
 

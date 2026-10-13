@@ -267,10 +267,10 @@ fun formatUptime(sec: Long): String {
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    // Title Case, labelLarge, no tracking: the house header (ui/system/ListHeader.kt).
     Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = FontWeight.SemiBold,
+        text,
+        style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 6.dp),
     )
@@ -309,18 +309,8 @@ fun screenClock(periodMs: Long = 30_000L): Long {
 
 @Composable
 fun EmptyState(title: String, hint: String) {
-    Column(
-        Modifier.fillMaxWidth().padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(
-            hint,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
+    // The house empty state (ui/system/EmptyState.kt): left-aligned, one line.
+    com.silencelen.huginn.ui.system.EmptyState(title, hint)
 }
 
 @Composable

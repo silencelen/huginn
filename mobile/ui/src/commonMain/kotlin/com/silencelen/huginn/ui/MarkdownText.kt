@@ -61,6 +61,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
 import com.silencelen.huginn.ui.theme.LocalSyntaxColors
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 
 /**
  * What Claude writes, rendered — on the phone and on the desktop, from here.
@@ -134,11 +136,11 @@ fun MarkdownText(
                 }
                 // A left mark and nothing else. NOT an accent bar on a card — the
                 // house rule bans those; this is punctuation inside a paragraph.
-                is MdBlock.Quote -> Row(Modifier.fillMaxWidth()) {
+                is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
                     Box(
                         Modifier
                             .width(2.dp)
-                            .height(18.dp)
+                            .fillMaxHeight()
                             .background(MaterialTheme.colorScheme.outline)
                     )
                     Spacer(Modifier.width(8.dp))

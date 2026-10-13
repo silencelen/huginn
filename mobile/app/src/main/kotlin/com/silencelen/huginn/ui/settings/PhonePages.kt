@@ -51,8 +51,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsGroup(text: String, modifier: Modifier = Modifier) {
     Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
+        text,
+        style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier.padding(top = 14.dp, bottom = 2.dp, start = 8.dp),
     )

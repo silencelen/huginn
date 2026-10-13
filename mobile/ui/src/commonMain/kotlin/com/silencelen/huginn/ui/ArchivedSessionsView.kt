@@ -35,6 +35,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.foundation.layout.size
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The sessions that were ended on purpose, and the way back into each of them.
@@ -83,12 +87,11 @@ fun ArchivedSessionsSection(
                 .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // A triangle rather than an icon import: the section is a disclosure,
-            // and both shells already read this glyph the same way.
-            Text(
-                if (expanded) "▾" else "▸",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            Icon(
+                if (expanded) Icons.Outlined.ExpandMore else Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(Scale.iconLarge),
             )
             Spacer(Modifier.width(8.dp))
             Text(

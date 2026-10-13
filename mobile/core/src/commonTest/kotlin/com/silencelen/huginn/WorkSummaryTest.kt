@@ -90,7 +90,7 @@ class WorkSummaryTest {
             bgAgents = 3,
         )
         assertEquals(
-            listOf("◯ wave3  1/4 agents done", "⚙ gradle build · 1m", "Read src/Main.kt"),
+            listOf("◯ wave3  1/4 agents done", "◦ gradle build · 1m", "Read src/Main.kt"),
             s.details,
         )
     }
@@ -110,7 +110,7 @@ class WorkSummaryTest {
     @Test
     fun `a task with no elapsed time carries no dangling separator`() {
         val s = WorkSummary.strip(null, emptyList(), null, null, listOf(BgTask(command = "tail -f log")), 0)
-        assertEquals(listOf("⚙ tail -f log"), s.details)
+        assertEquals(listOf("◦ tail -f log"), s.details)
     }
 
     // ---------------------------------------------------------- trust rules

@@ -663,7 +663,7 @@ private fun AskCard(ev: TranscriptEvent) {
             if (!result.isNullOrBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "→ ${answeredSummary(result)}",
+                    "Answered · ${answeredSummary(result)}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
