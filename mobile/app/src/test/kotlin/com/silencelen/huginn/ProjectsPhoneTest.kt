@@ -10,7 +10,6 @@ import com.silencelen.huginn.ui.DashboardCursor
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.appEntries
 import com.silencelen.huginn.ui.projectEntries
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -76,7 +75,7 @@ class ProjectsPhoneTest {
         val client = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
-            engine = MockEngine { respond("not found", HttpStatusCode.NotFound) },
+            transport = mockTransport { respond("not found", HttpStatusCode.NotFound) },
         )
         assertNull("absent is null, never an empty list", client.projects())
         assertNull("and only after BOTH names have 404ed", client.apps())
@@ -146,7 +145,7 @@ class ProjectsPhoneTest {
         val client = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
-            engine = MockEngine {
+            transport = mockTransport {
                 respond(
                     """{"error":${json.encodeToString(kotlinx.serialization.json.JsonPrimitive.serializer(), kotlinx.serialization.json.JsonPrimitive(untrusted))}}""",
                     HttpStatusCode.Conflict,
@@ -166,7 +165,7 @@ class ProjectsPhoneTest {
         val client = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
-            engine = MockEngine {
+            transport = mockTransport {
                 respond(
                     """{"error":"$taken"}""",
                     HttpStatusCode.Conflict,
@@ -189,7 +188,7 @@ class ProjectsPhoneTest {
         val client = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
-            engine = MockEngine {
+            transport = mockTransport {
                 respond(
                     """{"error":"$stop"}""",
                     HttpStatusCode.Conflict,

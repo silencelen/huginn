@@ -1,12 +1,13 @@
 package com.silencelen.huginn.desktop.attach
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.ui.AttachBatch
 import com.silencelen.huginn.ui.AttachmentText
 import com.silencelen.huginn.ui.PANE_SEPARATOR
 import com.silencelen.huginn.ui.TakeResult
 import com.silencelen.huginn.ui.composeMessage
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
@@ -439,7 +440,7 @@ class AttachmentBatchTest {
             HuginnClient(
                 baseUrlProvider = { "http://h" },
                 tokenProvider = { "t" },
-                engine = MockEngine { request ->
+                transport = mockTransport { request ->
                     val name = request.url.parameters["name"].orEmpty()
                     gate(name).await()
                     if (name in failing) {

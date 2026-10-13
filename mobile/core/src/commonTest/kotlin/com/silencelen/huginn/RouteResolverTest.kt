@@ -1,6 +1,8 @@
 package com.silencelen.huginn
 
-import com.silencelen.huginn.data.DaemonChallenge
+import com.silencelen.huginn.data.DaemonTls
+import com.silencelen.huginn.data.PinBook
+import com.silencelen.huginn.data.TlsProbeReply
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteBook
@@ -8,10 +10,8 @@ import com.silencelen.huginn.data.RouteFailures
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteHealthSnapshot
 import com.silencelen.huginn.data.RouteResolver
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
-import io.ktor.http.headersOf
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -335,37 +335,31 @@ class RouteResolverTest {
     @Test
     fun `a forged X-Huginn-Appd header never wins the route`() = runTest {
         val token = "s".repeat(64)
-        val fake = "http://10.0.0.9:8787"
-        val real = "http://10.0.0.1:8787"
+        // ⚠ HTTPS SINCE 3.11 — the probe rides the TLS probe channel, so the
+        // fake is played by the transport's probe rather than by an engine.
+        val fake = "https://10.0.0.9:8787"
+        val real = "https://10.0.0.1:8787"
         val asked = mutableListOf<String>()
+        val transport = MockTransport(token = token) { respond("{}", HttpStatusCode.OK) }
+        transport.probeAnswer = { url ->
+            val path = url.substringAfter(":8787").substringBefore('?')
+            val host = url.substringBefore(":8787") + ":8787"
+            asked += "$host$path"
+            when {
+                // The fake: huginn's fingerprint on every path, and a 404 on
+                // the one route it cannot fake.
+                host == fake && path == "/v1/challenge" ->
+                    TlsProbeReply("cd".repeat(32), 404, """{"error":"not found"}""", "9.9.9")
+                host == fake ->
+                    TlsProbeReply("cd".repeat(32), 401, """{"error":"unauthorized"}""", "9.9.9")
+                else -> MockTransport.provenReply(url, token, MockTransport.TEST_FP)
+            }
+        }
         val client = HuginnClient(
             baseUrlProvider = { real },
             tokenProvider = { token },
-            engine = MockEngine { request ->
-                val url = request.url
-                val host = "http://${url.host}:${url.port}"
-                asked += "$host${url.encodedPath}"
-                when {
-                    // The fake: huginn's fingerprint on every path, and a 404 on
-                    // the one route it cannot fake.
-                    host == fake && url.encodedPath == "/v1/challenge" ->
-                        respond("""{"error":"not found"}""", HttpStatusCode.NotFound,
-                            headersOf(HuginnClient.APPD_HEADER, "9.9.9"))
-                    host == fake ->
-                        respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized,
-                            headersOf(HuginnClient.APPD_HEADER, "9.9.9"))
-                    url.encodedPath == "/v1/challenge" -> {
-                        val nonce = url.parameters["nonce"] ?: ""
-                        respond(
-                            """{"proof":"${DaemonChallenge.proof(token, nonce)}","version":"3.6.0"}""",
-                            HttpStatusCode.OK,
-                            headersOf(HuginnClient.APPD_HEADER, "3.6.0"),
-                        )
-                    }
-                    else -> respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized,
-                        headersOf(HuginnClient.APPD_HEADER, "3.6.0"))
-                }
-            },
+            transport = transport,
+            pins = PinBook(),
         )
 
         val out = RouteResolver.resolve(book(fake, real, active = 1), stale("r1"), NOW) {
@@ -387,23 +381,18 @@ class RouteResolverTest {
     @Test
     fun `a route that answers the challenge is adopted`() = runTest {
         val token = "t".repeat(64)
-        val dead = "http://10.0.0.8:8787"
-        val real = "http://10.0.0.1:8787"
+        val dead = "https://10.0.0.8:8787"
+        val real = "https://10.0.0.1:8787"
+        val transport = MockTransport(token = token) { respond("{}", HttpStatusCode.OK) }
+        transport.probeAnswer = { url ->
+            if ("10.0.0.8" in url) throw kotlinx.io.IOException("connection refused")
+            MockTransport.provenReply(url, token, MockTransport.TEST_FP)
+        }
         val client = HuginnClient(
             baseUrlProvider = { dead },
             tokenProvider = { token },
-            engine = MockEngine { request ->
-                val url = request.url
-                if (url.host == "10.0.0.8") throw kotlinx.io.IOException("connection refused")
-                if (url.encodedPath == "/v1/challenge") {
-                    respond(
-                        """{"proof":"${DaemonChallenge.proof(token, url.parameters["nonce"] ?: "")}","version":"3.6.0"}""",
-                        HttpStatusCode.OK,
-                    )
-                } else {
-                    respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized)
-                }
-            },
+            transport = transport,
+            pins = PinBook(),
         )
         val out = RouteResolver.resolve(book(dead, real, active = 0), stale("r0"), NOW) {
             client.probe(it.url)
@@ -415,19 +404,23 @@ class RouteResolverTest {
      * ⚠ A PROOF FOR SOMEBODY ELSE'S NONCE IS NOT A PROOF. The fake replays a
      * recording of one real exchange at every challenge it is asked; the client
      * mints a fresh nonce per probe, so the replay answers a question nobody
-     * asked.
+     * asked. Over TLS the recording is the BOUND proof, and it still fails.
      */
     @Test
     fun `a replayed proof is refused`() = runTest {
         val token = "u".repeat(64)
-        val recorded = DaemonChallenge.proof(token, "deadbeefdeadbeef")
-        val fake = "http://10.0.0.9:8787"
+        val fp = MockTransport.TEST_FP
+        val recorded = DaemonTls.proof(token, "deadbeefdeadbeef", fp)
+        val fake = "https://10.0.0.9:8787"
+        val transport = MockTransport(token = token) { respond("{}", HttpStatusCode.OK) }
+        transport.probeAnswer = {
+            TlsProbeReply(fp, 200, """{"version":"3.11.0","tls":{"v":1,"fp":"$fp","proof":"$recorded"}}""", "3.11.0")
+        }
         val client = HuginnClient(
             baseUrlProvider = { fake },
             tokenProvider = { token },
-            engine = MockEngine {
-                respond("""{"proof":"$recorded","version":"3.6.0"}""", HttpStatusCode.OK)
-            },
+            transport = transport,
+            pins = PinBook(),
         )
         assertTrue(!client.probe(fake))
     }

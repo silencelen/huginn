@@ -98,7 +98,8 @@ class AppdRoutesTest {
     fun `an install on the retired tailnet address is not carried forward`() {
         for (pinned in listOf(false, true)) {
             val book = AppdRoutes.migrate(RETIRED_TAILNET, routePinned = pinned)
-            assertEquals(RETIRED_TAILNET, book.droppedUrl, "named, so the person can see what went: pinned=$pinned")
+            // Named in its stored (canonical, so since 3.11 https) form.
+            assertEquals("https://100.97.198.90:8787", book.droppedUrl, "named, so the person can see what went: pinned=$pinned")
             assertNull(book.activeId, "and not chosen: pinned=$pinned")
             assertEquals("", book.activeUrl)
             assertEquals(listOf("lan", "yggdrasil"), book.routes.map { it.id }, "the live seeds are offered")
@@ -113,7 +114,7 @@ class AppdRoutesTest {
         assertEquals("10.0.0.9:8787", book.routes.first().name)
         assertEquals(RouteKind.LAN, book.routes.first().kind)
         assertEquals(AppdRoutes.MIGRATED_ID, book.activeId)
-        assertEquals("http://10.0.0.9:8787", book.activeUrl)
+        assertEquals("https://10.0.0.9:8787", book.activeUrl, "upgraded on the way in (TLS.md rule 6)")
     }
 
     @Test
@@ -150,7 +151,7 @@ class AppdRoutesTest {
     @Test
     fun `a migrated address is stored canonically, not verbatim`() {
         val book = AppdRoutes.migrate("10.0.0.9:8787/", routePinned = false)
-        assertEquals("http://10.0.0.9:8787", book.activeUrl, "the scheme is spelled out and the slash is gone")
+        assertEquals("https://10.0.0.9:8787", book.activeUrl, "the scheme is spelled out (and upgraded) and the slash is gone")
         assertEquals(RouteKind.LAN, book.routes.first().kind)
     }
 
@@ -193,11 +194,11 @@ class AppdRoutesTest {
      */
     @Test
     fun `a refused legacy address is named, and no built-in is adopted in its place`() {
+        // ⚠ Since 3.11 only the SHAPE refusals are left: a plain-http hostname
+        // is upgraded rather than dropped (see the next test).
         val refused = listOf(
-            "http://huginn.lan:8787",
-            "http://huginn:8787",
-            "http://203.0.113.9:8787",
             "http://192.168.2.117:8787/api",
+            "http://user@10.0.0.1:8787",
         )
         for (url in refused) for (pinned in listOf(false, true)) {
             val book = AppdRoutes.migrate(url, routePinned = pinned)
@@ -206,6 +207,22 @@ class AppdRoutesTest {
             assertEquals("", book.activeUrl, "and therefore no derived base URL: $url")
             assertEquals(listOf("lan", "yggdrasil"), book.routes.map { it.id },
                 "the built-ins are still offered, they are just not chosen: $url")
+        }
+    }
+
+    /**
+     * ⚠ THE ROW THAT CHANGED WITH TLS. A 2.x install pointed at a plain-http
+     * NAME used to lose it, because a bearer in cleartext to a name is exactly
+     * what the guard stopped. Over https the name stops mattering to the bearer
+     * (the TLS proof decides), so the owner's chosen address stays chosen —
+     * upgraded, never dialled in the clear.
+     */
+    @Test
+    fun `a plain-http hostname migrates as https and stays chosen`() {
+        for (url in listOf("http://huginn.lan:8787", "http://huginn:8787", "http://203.0.113.9:8787")) {
+            val book = AppdRoutes.migrate(url, routePinned = false)
+            assertNull(book.droppedUrl, url)
+            assertEquals("https://" + url.removePrefix("http://"), book.activeUrl)
         }
     }
 

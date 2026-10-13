@@ -1,7 +1,6 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.HuginnClient
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -39,7 +38,7 @@ class AppClientTest {
     ) = HuginnClient(
         baseUrlProvider = { "http://appd.test" },
         tokenProvider = { "test-token" },
-        engine = MockEngine { request -> seen += request; respond(request) },
+        transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
     /**

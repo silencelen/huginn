@@ -36,7 +36,7 @@ object AppdRoutes {
      * dial. It replaced the tailnet address as the first seed when Tailscale was
      * retired (see [RETIRED]).
      */
-    val LAN = AppdRoute(label = "LAN", url = "http://192.168.7.117:8787")
+    val LAN = AppdRoute(label = "LAN", url = "https://192.168.7.117:8787")
 
     /**
      * Addresses this app ONCE shipped with that no longer answer anything: the
@@ -48,14 +48,22 @@ object AppdRoutes {
      * offered with no active route, which is what lets the auto-switch pick one
      * that answers.
      */
-    val RETIRED: Set<String> = setOf("http://100.97.198.90:8787")
+    val RETIRED: Set<String> = setOf("https://100.97.198.90:8787")
+
+    /** Whether [url] is one of [RETIRED], however an older install spelled it. */
+    fun isRetired(url: String): Boolean = RouteGuard.normalize(url) in RETIRED
 
     /**
      * huginn's VLAN-2 address. Off-LAN devices reach it through the yggdrasil
-     * LAN gateway; the hop is encrypted by nebula, so plain HTTP here is no
-     * weaker than the tailnet route.
+     * LAN gateway.
+     *
+     * ⚠ HTTPS, like every seed since appd 3.11 (TLS.md). These were `http://`
+     * because the mesh hop was encrypted anyway; the LAN leg behind the gateway
+     * never was, and a public client cannot assume a mesh at all. An install
+     * that stored the http form is upgraded by [RouteGuard.normalize], and
+     * [match] compares normalized forms, so it still matches.
      */
-    val YGGDRASIL = AppdRoute(label = "Yggdrasil", url = "http://192.168.2.117:8787")
+    val YGGDRASIL = AppdRoute(label = "Yggdrasil", url = "https://192.168.2.117:8787")
 
     val ALL = listOf(LAN, YGGDRASIL)
 
@@ -83,8 +91,8 @@ object AppdRoutes {
 
     /** The predefined route matching [url], or null when it's a custom address. */
     fun match(url: String): AppdRoute? {
-        val n = normalize(url)
-        return ALL.firstOrNull { normalize(it.url) == n }
+        val n = RouteGuard.normalize(url)
+        return ALL.firstOrNull { RouteGuard.normalize(it.url) == n }
     }
 
     /**
@@ -152,7 +160,7 @@ object AppdRoutes {
         // `droppedUrl` and the book is left with NO active route.
         val builtIn = match(stored)?.let { seed(it, now) }
         // A RETIRED address is handled like a refused one — see RETIRED.
-        val first = builtIn ?: if (RouteGuard.isAllowed(stored) && stored !in RETIRED) {
+        val first = builtIn ?: if (RouteGuard.isAllowed(stored) && !isRetired(stored)) {
             PinnedRoute(
                 id = MIGRATED_ID,
                 name = RouteBook.defaultName(stored),
@@ -161,7 +169,7 @@ object AppdRoutes {
                 addedAt = now,
             )
         } else null
-        val rest = ALL.filter { normalize(it.url) != stored }.map { seed(it, now) }
+        val rest = ALL.filter { RouteGuard.normalize(it.url) != stored }.map { seed(it, now) }
         if (first == null) {
             return RouteBook(
                 routes = rest,

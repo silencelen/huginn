@@ -341,16 +341,16 @@ class DesktopSettingsTest {
             .add("Mesh", "http://192.168.2.117:8787", now = 2, id = "m")
 
         runBlocking { settings.setRouteBook(book) }
-        assertEquals("http://100.97.198.90:8787", settings.baseUrlNow())
-        assertTrue("\"baseUrl\": \"http://100.97.198.90:8787\"" in file.readText(), file.readText())
+        assertEquals("https://100.97.198.90:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"https://100.97.198.90:8787\"" in file.readText(), file.readText())
 
         runBlocking { settings.setRouteBook(book.activate("m")) }
-        assertEquals("http://192.168.2.117:8787", settings.baseUrlNow())
-        assertTrue("\"baseUrl\": \"http://192.168.2.117:8787\"" in file.readText(), file.readText())
+        assertEquals("https://192.168.2.117:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"https://192.168.2.117:8787\"" in file.readText(), file.readText())
 
         // And a relaunch reads it back the same way round.
         val relaunched = DesktopSettings(file)
-        assertEquals("http://192.168.2.117:8787", relaunched.baseUrlNow())
+        assertEquals("https://192.168.2.117:8787", relaunched.baseUrlNow())
         assertEquals("m", relaunched.routeBookNow().activeId)
     }
 
@@ -370,7 +370,7 @@ class DesktopSettingsTest {
         // The second seed is the LAN address since the tailnet one was retired (AppdRoutes.RETIRED).
         assertEquals(listOf("Yggdrasil", "LAN"), book.routes.map { it.name })
         assertEquals("yggdrasil", book.activeId)
-        assertEquals("http://192.168.2.117:8787", book.activeUrl)
+        assertEquals("https://192.168.2.117:8787", book.activeUrl, "the same address, upgraded (docs/TLS.md)")
         assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")
     }
 
@@ -385,12 +385,14 @@ class DesktopSettingsTest {
     fun `a dropped address is still named after a relaunch`() {
         val file = freshFile()
         file.parentFile.mkdirs()
-        // A plain-http HOSTNAME: what the old free-text Base URL happily stored
-        // and what RouteGuard refuses. The migration carries it back as a notice
-        // with NO active route rather than silently dialling a built-in.
-        file.writeText("{\"baseUrl\":\"http://huginn.lan:8787\",\"token\":\"t\",\"clientId\":\"desktop-kt-old\"}")
+        // An address WITH A PATH: what the old free-text Base URL happily stored
+        // and what RouteGuard refuses (a plain-http hostname used to be the
+        // example; since 3.11 that is upgraded to https instead). The migration
+        // carries it back as a notice with NO active route rather than silently
+        // dialling a built-in.
+        file.writeText("{\"baseUrl\":\"http://huginn.lan:8787/api\",\"token\":\"t\",\"clientId\":\"desktop-kt-old\"}")
         val migrated = DesktopSettings(file)
-        assertEquals("http://huginn.lan:8787", migrated.routeBookNow().droppedUrl)
+        assertEquals("http://huginn.lan:8787/api", migrated.routeBookNow().droppedUrl)
         assertEquals(null, migrated.routeBookNow().activeId)
 
         // Writing the book down is what used to lose it: `pinnedRoutes` is
@@ -398,7 +400,7 @@ class DesktopSettingsTest {
         // the book on disk had nowhere to carry the address.
         runBlocking { migrated.setRouteBook(migrated.routeBookNow()) }
         val relaunched = DesktopSettings(file)
-        assertEquals("http://huginn.lan:8787", relaunched.routeBookNow().droppedUrl)
+        assertEquals("http://huginn.lan:8787/api", relaunched.routeBookNow().droppedUrl)
         assertEquals(null, relaunched.routeBookNow().activeId, "and still unaddressed on purpose")
     }
 
@@ -473,17 +475,50 @@ class DesktopSettingsTest {
      * load, by the same `:core` guard both shells use.
      */
     @Test
-    fun `a hand-edited settings file cannot point this client at a public http host`() {
+    fun `a hand-edited settings file cannot point this client at a malformed address`() {
         val file = freshFile()
         file.parentFile.mkdirs()
         file.writeText(
-            """{"pinnedRoutes":"[{\"id\":\"evil\",\"name\":\"Home\",\"url\":\"http://attacker.example\",\"kind\":\"LAN\",\"order\":0,\"addedAt\":0}]","activeRouteId":"evil","token":"t"}""",
+            """{"pinnedRoutes":"[{\"id\":\"evil\",\"name\":\"Home\",\"url\":\"http://attacker.example/steal\",\"kind\":\"LAN\",\"order\":0,\"addedAt\":0}]","activeRouteId":"evil","token":"t"}""",
         )
         val settings = DesktopSettings(file)
         assertEquals(emptyList(), settings.routeBookNow().routes, "the refused address was dropped on load")
         assertEquals("", settings.baseUrlNow())
-        assertFalse(DesktopSettings.isAllowedBaseUrl("http://attacker.example"))
+        assertFalse(DesktopSettings.isAllowedBaseUrl("http://attacker.example/steal"))
         assertTrue(DesktopSettings.isAllowedBaseUrl("http://192.168.2.117:8787"))
+    }
+
+    /**
+     * ⚠ A plain-http public host in a hand-edited file is no longer dropped —
+     * it is read back as https, so nothing is ever dialled in the clear and the
+     * bearer waits for the TLS proof (docs/TLS.md rule 6).
+     */
+    @Test
+    fun `a hand-edited plain-http host is read back as https`() {
+        val file = freshFile()
+        file.parentFile.mkdirs()
+        file.writeText(
+            """{"pinnedRoutes":"[{\"id\":\"h\",\"name\":\"Home\",\"url\":\"http://10.0.0.5:8787\",\"kind\":\"LAN\",\"order\":0,\"addedAt\":0}]","activeRouteId":"h","token":"t"}""",
+        )
+        assertEquals("https://10.0.0.5:8787", DesktopSettings(file).baseUrlNow())
+    }
+
+    /** docs/TLS.md rule 7: pins survive a relaunch, and belong to the token. */
+    @Test
+    fun `TLS pins persist across a relaunch and are cleared by a new token`() {
+        val file = freshFile()
+        val settings = DesktopSettings(file)
+        runBlocking { settings.setToken("one") }
+        val pins = com.silencelen.huginn.data.TlsPins().withPin("one", "ab".repeat(32)).encode()
+        runBlocking { settings.setTlsPins(pins) }
+        assertEquals(pins, runBlocking { DesktopSettings(file).tlsPins.first() }, "read back after a relaunch")
+
+        runBlocking { settings.setToken("one") }
+        assertEquals(pins, runBlocking { settings.tlsPins.first() }, "re-saving the same token keeps them")
+
+        runBlocking { settings.setToken("two") }
+        assertEquals("", runBlocking { settings.tlsPins.first() })
+        assertEquals("", runBlocking { DesktopSettings(file).tlsPins.first() }, "and on disk")
     }
 
     @Test

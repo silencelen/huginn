@@ -1,8 +1,9 @@
 package com.silencelen.huginn.data
 
 import io.ktor.client.HttpClient
-import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.plugin
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.header
@@ -15,6 +16,7 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
+import io.ktor.http.URLProtocol
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -64,18 +67,29 @@ import kotlinx.serialization.json.jsonPrimitive
  * — an answer an impostor without the token cannot compute. **Adoption reads
  * `proven`. Nothing else may.**
  *
+ * Over https (appd 3.11+) `proven` means the CHANNEL-BOUND proof of
+ * `docs/TLS.md`: the token holder is behind the certificate this client's own
+ * handshake saw. The legacy proof only ever counts on a loopback http address.
+ *
  * @param version the daemon's own, from the header it stamps on every response
  *   including the 401, or from the challenge's body. Null on a daemon too old to
  *   stamp it.
  * @param answered something huginn-SHAPED is at that address. Useful to SAY
  *   (a pre-3.6 daemon 404s the challenge and is still a real daemon); never
  *   sufficient to adopt.
+ * @param secure the probe ran over TLS (every address but loopback, since 3.11).
+ * @param tooOld what answered is a daemon older than 3.11 — no TLS to prove over.
+ * @param intercepted a huginn-shaped answer whose bound proof FAILED under a real
+ *   token: TLS.md's interception case. Never adoptable, and said as such.
  */
 data class DaemonProbe(
     val proven: Boolean,
     val version: String?,
     val address: String,
     val answered: Boolean = proven,
+    val secure: Boolean = false,
+    val tooOld: Boolean = false,
+    val intercepted: Boolean = false,
 )
 
 class HuginnClient(
@@ -97,8 +111,24 @@ class HuginnClient(
      * listening app that cannot show anything must not claim to be a route.
      */
     private val canNotifyProvider: () -> Boolean? = { null },
-    /** Injected by tests (a mock engine); production takes the platform default. */
-    engine: HttpClientEngine = huginnHttpEngine(),
+    /**
+     * The two channels TLS.md asks for — a pinned one for every request that
+     * carries the bearer, and a trust-anything probe that carries nothing.
+     *
+     * ⚠⚠ THIS REPLACED AN `engine` PARAMETER, AND THE REPLACEMENT IS THE POINT.
+     * A bare engine argument was how the desktop added its route-witness
+     * interceptor, and it was also a door any caller could hand an ordinary
+     * OkHttp engine through — one that trusts the system CAs, verifies nothing
+     * about huginn, and would carry the bearer anywhere. Now the only way to
+     * reach the network is a [DaemonTransport], whose one production
+     * implementation builds the pinning trust manager itself; the desktop's
+     * interceptor goes in through that implementation's `configure` hook, which
+     * runs BEFORE the TLS settings are applied so it cannot undo them. Tests
+     * hand in a transport over a mock engine.
+     */
+    private val transport: DaemonTransport = huginnTransport(),
+    /** Where proved fingerprints live. The process's book unless a test isolates one. */
+    private val pins: PinBook = PinBook.process,
 ) {
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
@@ -243,6 +273,11 @@ class HuginnClient(
             val where = probe.address.removePrefix("https://").removePrefix("http://").trimEnd('/')
             val what = probe.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
             if (probe.proven) return "$what answered at $where, and proved it"
+            if (probe.tooOld) return "$what at $where has no TLS — update the daemon to 3.11 or newer"
+            if (probe.intercepted) return "$where could not prove it is your huginn daemon — someone may be intercepting the connection"
+            // Over TLS an unproved answer is a daemon asked before a token was
+            // given — the setup flow's address step — not an old one.
+            if (probe.answered && probe.secure) return "$what at $where ${DaemonChallenge.NOT_PROVEN}"
             if (probe.answered) return "$what at $where ${DaemonChallenge.NOT_PROVEN} — a daemon older than 3.6"
             return "nothing at $where answered as huginn"
         }
@@ -262,7 +297,7 @@ class HuginnClient(
      * `expectSuccess = false` because this client reads the server's own error
      * text out of a non-2xx body rather than letting the plugin throw over it.
      */
-    private val http = HttpClient(engine) {
+    private val http = HttpClient(transport.engine { pins.pinsFor(tokenProvider().trim()) }) {
         expectSuccess = false
         install(HttpTimeout) {
             connectTimeoutMillis = CONNECT_TIMEOUT_MS
@@ -270,6 +305,111 @@ class HuginnClient(
             // requestTimeoutMillis deliberately unset — infinite. Only the POLL
             // tier caps a whole call; a chat stream legitimately runs for as long
             // as Claude does.
+        }
+    }.also { client ->
+        // ⚠⚠ EVERY REQUEST PASSES HERE, so the TLS rules are applied ONCE rather
+        // than at each of the two dozen call sites below — the shape that let the
+        // desktop's route witness go stale (see AppStore). HttpSend is the hook
+        // because it may execute the same request twice, which is exactly what a
+        // re-proof needs: the handshake that refused an unpinned certificate
+        // fails before a byte of the body is written, so even a one-shot upload
+        // stream is still unread when it is retried.
+        client.plugin(HttpSend).intercept { request ->
+            if (request.url.protocol != URLProtocol.HTTPS) return@intercept execute(request)
+            val origin = originOf(request.url.host, request.url.port)
+            ensurePinned(origin)
+            try {
+                execute(request)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val unpinned = transport.unpinnedLeaf(e) ?: throw e
+                // TLS.md rule 5: a changed certificate is re-proved, never
+                // accepted on sight. A proof that fails throws INTERCEPTED out of
+                // here and the request is never sent.
+                reprove(origin, unpinned)
+                try {
+                    execute(request)
+                } catch (e2: CancellationException) {
+                    throw e2
+                } catch (e2: Throwable) {
+                    // Proved on the probe, refused again on the very next
+                    // connection: the address hands different certificates to
+                    // different connections. Never a third try, never a pin for
+                    // what was refused — the contract's sentence instead.
+                    if (transport.unpinnedLeaf(e2) == null) throw e2
+                    throw DaemonTlsException(DaemonTlsException.Kind.INTERCEPTED, DaemonTls.INTERCEPTED)
+                }
+            }
+        }
+    }
+
+    /** `https://host:port` with an IPv6 literal bracketed — where the proof is asked. */
+    private fun originOf(host: String, port: Int): String {
+        val h = if (':' in host && !host.startsWith("[")) "[$host]" else host
+        return "https://$h:$port"
+    }
+
+    /** The bearer, as the requests send it. */
+    private fun bearer(): String = tokenProvider().trim()
+
+    /**
+     * Makes sure there is a pin for the current token before anything carrying
+     * the bearer leaves the device (TLS.md rule 4: pin, then send).
+     *
+     * ⚠ A BLANK TOKEN PROVES NOTHING and sends nothing. The proof is an HMAC
+     * under the token, so with none every daemon on earth fails it — and the
+     * honest sentence for that state is the one a 401 already earns, not
+     * "someone may be intercepting the connection".
+     */
+    private suspend fun ensurePinned(origin: String) {
+        val token = bearer()
+        if (token.isEmpty()) throw HuginnException(401, "no token set")
+        pins.load()
+        if (pins.pinsFor(token).isNotEmpty()) return
+        pins.proving.withLock {
+            if (pins.pinsFor(token).isNotEmpty()) return
+            prove(origin, token, CONNECT_TIMEOUT_MS)
+        }
+    }
+
+    /**
+     * The pinned channel refused [unpinned]. Either another coroutine has
+     * already proved it (a cold start's parallel calls all hit the same rotated
+     * certificate), or this one proves it now.
+     */
+    private suspend fun reprove(origin: String, unpinned: String) {
+        val token = bearer()
+        pins.proving.withLock {
+            if (unpinned.lowercase() in pins.pinsFor(token)) return
+            // ⚠ THE PROBE'S CERTIFICATE IS WHAT GETS PROVED AND PINNED, NOT THE
+            // ONE THE FAILED HANDSHAKE SAW. If they differ the address is handing
+            // different certificates to different connections — a load balancer
+            // at best, a selective interceptor at worst — and the single retry
+            // either meets the proved pin or fails closed again. [unpinned] itself
+            // is never added: nothing proved it.
+            prove(origin, token, CONNECT_TIMEOUT_MS)
+        }
+    }
+
+    /**
+     * Runs the bound proof against [origin] on a fresh probe connection and pins
+     * what it proved. Returns the fingerprint pinned; throws [DaemonTlsException]
+     * when the address cannot prove it, [NotHuginnException] when it is not
+     * huginn-shaped at all, and the transport's own exception when nothing
+     * answered — each a different sentence for the reader.
+     */
+    private suspend fun prove(origin: String, token: String, timeoutMs: Long): String {
+        val nonce = DaemonChallenge.newNonce()
+        val reply = transport.probe("$origin${DaemonChallenge.PATH}?nonce=$nonce", timeoutMs)
+        return when (val v = DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls)) {
+            is DaemonTls.Verdict.Proven -> { pins.add(token, v.fp); v.fp }
+            is DaemonTls.Verdict.TooOld -> throw DaemonTlsException(DaemonTlsException.Kind.TOO_OLD, DaemonTls.TOO_OLD)
+            is DaemonTls.Verdict.Unproven -> throw DaemonTlsException(
+                DaemonTlsException.Kind.INTERCEPTED,
+                DaemonTls.INTERCEPTED + if (v.echoedOurFp) DaemonTls.TOKEN_HINT else "",
+            )
+            DaemonTls.Verdict.NotHuginn -> throw NotHuginnException()
         }
     }
 
@@ -317,7 +457,13 @@ class HuginnClient(
     private fun withScheme(base: String): String {
         val b = base.trim().trimEnd('/')
         val schemed = b.startsWith("http://", ignoreCase = true) || b.startsWith("https://", ignoreCase = true)
-        return if (schemed) b else "http://$b"
+        // ⚠⚠ AND UPGRADED, HERE, FOR EVERY CALLER (TLS.md rule 6). The stores
+        // already hold the https form, but ten background call sites hand this
+        // client whatever string they read, and an older settings file — or a
+        // rolled-back one — still says `http://192.168.x.y`. Upgrading at the
+        // last point before the socket means no path can put the bearer on the
+        // wire in cleartext to anything but this machine's own loopback.
+        return DaemonTls.secureUrl(if (schemed) b else "http://$b")
     }
 
     private enum class Tier { NORMAL, POLL, STREAM, WATCH }
@@ -454,6 +600,13 @@ class HuginnClient(
         val address = AppdRoutes.normalize(candidate)
         if (address.isBlank()) return DaemonProbe(proven = false, version = null, address = "")
         val root = withScheme(address)
+        // ⚠⚠ OVER HTTPS THE PROBE IS A DIFFERENT CONNECTION, NOT A DIFFERENT
+        // REQUEST. `http` below is the PINNED client: it refuses any certificate
+        // not yet proved, which is every certificate at a candidate this client
+        // has never talked to — and it is the channel the bearer rides, which a
+        // stranger must never see a handshake on. The TLS path asks on a fresh
+        // trust-anything probe connection and proves the channel (TLS.md).
+        if (root.startsWith("https://")) return probeTls(root, address)
 
         // ⚠ THE CHALLENGE FIRST, AND USUALLY THE ONLY REQUEST. A 3.6+ daemon
         // proves itself here and there is nothing left to ask; only the failing
@@ -508,6 +661,57 @@ class HuginnClient(
             address = address,
             answered = fingerprint.first,
         )
+    }
+
+    /**
+     * [probeDaemon] for an https address: the bound proof on a probe connection.
+     *
+     * ⚠ THE LEGACY PROOF IS NOT CONSULTED (TLS.md rule 2) — [DaemonTls.judge]
+     * never reads it. A daemon that can only produce the legacy proof is a
+     * daemon that cannot do TLS, and is reported as such rather than adopted.
+     *
+     * A proof that succeeds here pins its fingerprint straight away: it is the
+     * same proof the pinned channel would run before its first request, so
+     * auto-switch landing on this route costs no second round trip.
+     */
+    private suspend fun probeTls(root: String, address: String): DaemonProbe {
+        val token = bearer()
+        val nonce = DaemonChallenge.newNonce()
+        val reply = runCatching {
+            transport.probe(root + DaemonChallenge.PATH + "?nonce=" + nonce, PROBE_TIMEOUT_MS)
+        }.getOrElse { e ->
+            if (e is CancellationException) throw e
+            return DaemonProbe(proven = false, version = null, address = address, answered = false, secure = true)
+        }
+        val bodyVersion = if (reply.status in 200..299) {
+            runCatching { probeJson.decodeFromString<ChallengeAnswer>(reply.body).version }.getOrNull()
+        } else null
+        val version = bodyVersion?.takeIf { it.isNotBlank() } ?: reply.appdHeader
+        return when (val v = DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls)) {
+            is DaemonTls.Verdict.Proven -> {
+                pins.add(token, v.fp)
+                DaemonProbe(proven = true, version = version, address = address, answered = true, secure = true)
+            }
+            is DaemonTls.Verdict.TooOld -> DaemonProbe(
+                proven = false, version = v.version ?: version, address = address, answered = true,
+                secure = true, tooOld = true,
+            )
+            // With no token there was nothing to prove WITH: a real daemon read
+            // before the setup flow has asked for one. Only a proof that failed
+            // under a real token is the interception sentence.
+            is DaemonTls.Verdict.Unproven -> DaemonProbe(
+                proven = false, version = version, address = address, answered = true,
+                secure = true, intercepted = token.isNotEmpty(),
+            )
+            DaemonTls.Verdict.NotHuginn -> {
+                // What to SAY only, as on the http path: a huginn-shaped 401 on
+                // the ping, still with no bearer and still on a probe connection.
+                val ping = runCatching { transport.probe("$root/v1/ping", PROBE_TIMEOUT_MS) }.getOrNull()
+                val pv = ping?.appdHeader?.trim()?.takeIf { it.isNotEmpty() }
+                val answered = ping != null && answersLikeDaemon(pv, ping.status, ping.body)
+                DaemonProbe(proven = false, version = pv ?: version, address = address, answered = answered, secure = true)
+            }
+        }
     }
 
     /** The `GET /v1/challenge` body (appd 3.6.0). */

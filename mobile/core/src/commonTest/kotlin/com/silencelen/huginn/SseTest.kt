@@ -52,7 +52,7 @@ class SseTest {
         HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "test-token" },
-            engine = MockEngine { request -> seen += request; handler(request) },
+            transport = mockTransport("test-token") { request -> seen += request; handler(request) },
         )
 
     @Test

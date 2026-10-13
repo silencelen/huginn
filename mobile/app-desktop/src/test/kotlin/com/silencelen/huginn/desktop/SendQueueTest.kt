@@ -1,10 +1,11 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.MockTransport
+import com.silencelen.huginn.mockTransport
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.IntoDraft
 import com.silencelen.huginn.data.SendKeysResult
 import com.silencelen.huginn.data.TypingState
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.CoroutineScope
@@ -114,7 +115,7 @@ class SendQueueTest {
         val client = HuginnClient(
             baseUrlProvider = { BASE },
             tokenProvider = { "t" },
-            engine = MockEngine { request ->
+            transport = mockTransport { request ->
                 val path = request.url.toString().removePrefix(BASE)
                 val body = if ("/typing" in path) typing() else """{"ok":true}"""
                 respond(body, HttpStatusCode.OK, io.ktor.http.headersOf("Content-Type", listOf("application/json")))

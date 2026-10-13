@@ -1,7 +1,6 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.HuginnClient
-import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.HttpStatusCode
@@ -28,7 +27,7 @@ class PathSegmentTest {
     private val client = HuginnClient(
         baseUrlProvider = { "http://appd.test" },
         tokenProvider = { "t" },
-        engine = MockEngine { request -> seen += request; respond("{}", HttpStatusCode.OK) },
+        transport = mockTransport { request -> seen += request; respond("{}", HttpStatusCode.OK) },
     )
 
     private val evil = "x?y#z/../w"
