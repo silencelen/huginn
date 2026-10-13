@@ -19,6 +19,8 @@
 'use strict';
 
 const http = require('node:http');
+const https = require('node:https');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,6 +33,7 @@ const {
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity } = require('./lib/transcript');
+const tlsLib = require('./lib/tls');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
@@ -96,7 +99,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.10.3';
+const VERSION = '3.11.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -306,6 +309,26 @@ const TOKEN = (() => {
   catch { console.error(`FATAL: cannot read token file ${TOKEN_FILE} — run deploy.sh first`); process.exit(1); }
 })();
 if (TOKEN.length < 32) { console.error('FATAL: token too short (<32 chars)'); process.exit(1); }
+
+// TLS is on by default and needs no setup — see lib/tls.js for the trust model
+// (a self-signed certificate that clients pin through a token-bound proof).
+// Loaded before anything serves, and fatally: a daemon that silently fell back
+// to plain HTTP would put the token back on the wire, which is the thing 3.11
+// exists to stop.
+const PLAINTEXT = (() => {
+  try { return tlsLib.plaintextPolicy(process.env); }
+  catch (e) { console.error(`FATAL: ${e.message}`); process.exit(1); }
+})();
+const TLS = (() => {
+  try {
+    return tlsLib.loadOrCreate({
+      dataDir: DATA_DIR,
+      certFile: process.env.HUGINN_APPD_TLS_CERT || '',
+      keyFile: process.env.HUGINN_APPD_TLS_KEY || '',
+      log: (m) => console.log(m),
+    });
+  } catch (e) { console.error(`FATAL: tls: ${e.message}`); process.exit(1); }
+})();
 
 function authorized(req) {
   const h = req.headers['authorization'] || '';
@@ -9894,7 +9917,7 @@ function noTranscriptMessage(file) {
 
 // ---------------------------------------------------------------- routing
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   const t0 = Date.now();
   const u = new URL(req.url, 'http://x');
   const p = u.pathname.replace(/\/+$/, '') || '/';
@@ -9911,6 +9934,19 @@ const server = http.createServer(async (req, res) => {
   // `setHeader`, not writeHead: it then rides on every path out of this
   // function, streamed artifacts and the auth refusal included.
   res.setHeader('X-Huginn-Appd', VERSION);
+
+  // ⚠ BEFORE EVERYTHING ELSE, THE CHALLENGE INCLUDED. Plain HTTP from off this
+  // host is refused outright under the default policy: a bearer it carried has
+  // already crossed the network in the clear, and honouring it would teach the
+  // client that cleartext works. The 426 tells a current client to dial the
+  // same address as https:// (one port serves both, see createSniffingListener);
+  // the challenge is refused too, so an old client cannot prove this address
+  // over plaintext and then hand it the token.
+  if (!req.socket.encrypted && PLAINTEXT === 'local' && !tlsLib.isLoopback(req.socket.remoteAddress)) {
+    res.setHeader('Upgrade', 'TLS/1.3, HTTP/1.1');
+    res.setHeader('Connection', 'close');
+    return sendJson(res, 426, { error: 'this daemon requires https:// — update the client, which upgrades on its own', tls: true });
+  }
 
   /**
    * ⚠ BEFORE THE AUTH CHECK, AND THAT IS THE WHOLE POINT (decision 58). A client
@@ -9930,7 +9966,12 @@ const server = http.createServer(async (req, res) => {
     if (!nonce || !CHALLENGE_NONCE_RE.test(nonce)) {
       return sendErr(res, 400, 'nonce must be 16 to 64 hexadecimal characters');
     }
-    return sendJson(res, 200, { proof: challengeProof(nonce), version: VERSION });
+    // Over TLS, the proof that binds the token to THIS connection's certificate
+    // (lib/tls.js). The legacy proof stays for clients older than 3.11; it proves
+    // the daemon, not the channel, so a 3.11 client never accepts it over TLS.
+    const body = { proof: challengeProof(nonce), version: VERSION };
+    if (req.socket.encrypted) body.tls = { v: 1, fp: TLS.fp, proof: tlsLib.boundProof(TOKEN, nonce, TLS.fp) };
+    return sendJson(res, 200, body);
   }
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
@@ -9985,7 +10026,7 @@ const server = http.createServer(async (req, res) => {
       // no exemption. The unauthenticated route is /v1/challenge, which returns
       // before that check — see the block above.)
       const via = { addr: req.socket.localAddress || null, port: req.socket.localPort || null };
-      return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via });
+      return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via, secure: Boolean(req.socket.encrypted) });
     }
     if (req.method === 'GET' && p === '/v1/status') return sendJson(res, 200, await statusPayload());
 
@@ -13816,7 +13857,14 @@ const server = http.createServer(async (req, res) => {
     }
     try { res.end(); } catch { }
   }
-});
+}
+
+// The same handler behind both protocols. Neither server is listen()ed: the
+// sniffing listener (lib/tls.js) hands each connection to the one whose
+// protocol it opened with, on the one port clients already know.
+const server = http.createServer(handleRequest);
+const tlsServer = https.createServer({ cert: TLS.cert, key: TLS.key, minVersion: 'TLSv1.2' }, handleRequest);
+const listener = tlsLib.createSniffingListener(net, server, tlsServer);
 
 // SSE heartbeat so half-open phone connections die fast instead of lingering.
 // Also what makes the phone's 60s stream read timeout safe: silence longer than
@@ -13964,7 +14012,12 @@ resolveBind().then(async (bind) => {
   // contract defaults for one pass.
   try { seedHeadroomDefaults(); } catch (e) { log('headroom: could not seed settings', e.message); }
   warnIfGateDetached();
-  server.listen(PORT, bind, () => log(`huginn-appd ${VERSION} listening on ${bind}:${PORT}`));
+  listener.listen(PORT, bind, () => {
+    log(`huginn-appd ${VERSION} listening on ${bind}:${PORT} (https + http; tls sha256 ${TLS.fp})`);
+    if (PLAINTEXT === 'any') {
+      log('⚠ HUGINN_APPD_PLAINTEXT=any — plain HTTP is honoured from ANY address, so a token sent that way crosses the network in the clear. Meant for a migration window only; remove it once every client is 3.11 or newer.');
+    }
+  });
 }).catch((e) => { console.error('FATAL:', e.message); process.exit(1); });
 
 // Ordinary shutdown: hand every leased pane size back before exiting.
