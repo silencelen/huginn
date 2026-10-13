@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="512" height="512">
+  <title>Huginn raven, blinking</title>
+  <!-- The brand mark (raven.svg) with a lid that closes over the evenodd eye hole: the
+       apps' idle state (BRAND.md section 6; not the README hero, which is the still
+       lockup). The mark is the one <path id="raven">; swap its d to change the mark.
+       The lid is the only geometry that knows where the eye is: cx/cy/r on the
+       <circle class="lid"> (eye = hole centre 51.75,26.3 r 3.2, in the translate(2,11)
+       group). The lid is r 3.9, deliberately larger than the hole: it must cover the
+       hole's own anti-aliased rim (clipping it to the hole leaves a ring; measured in
+       explorations/anim-vector/anim-01-blink/README.md).
+       Timeline: 12 s loop. Blinks at 0.00 s, 3.90 s, and a double at 8.20 s + 8.58 s.
+       One blink = close 100 ms (ease-in) / hold 60 ms / open 160 ms (ease-out).
+       Resting state (no animation, reduced motion): the static mark. -->
+  <style>
+    svg { --ink: #141615; }
+    .ink { fill: var(--ink); }
+    .lid {
+      transform-box: fill-box;
+      transform-origin: 50% 0%;
+      transform: scaleY(0);
+      animation: huginn-blink 12s linear infinite;
+    }
+    @keyframes huginn-blink {
+      0%        { transform: scaleY(0); animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+      0.8333%   { transform: scaleY(1); animation-timing-function: linear; }
+      1.3333%   { transform: scaleY(1); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      2.6667%   { transform: scaleY(0); }
+      32.5%     { transform: scaleY(0); animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+      33.3333%  { transform: scaleY(1); animation-timing-function: linear; }
+      33.8333%  { transform: scaleY(1); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      35.1667%  { transform: scaleY(0); }
+      68.3333%  { transform: scaleY(0); animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+      69.1667%  { transform: scaleY(1); animation-timing-function: linear; }
+      69.6667%  { transform: scaleY(1); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      71%       { transform: scaleY(0); }
+      71.5%     { transform: scaleY(0); animation-timing-function: cubic-bezier(0.4, 0, 1, 1); }
+      72.3333%  { transform: scaleY(1); animation-timing-function: linear; }
+      72.8333%  { transform: scaleY(1); animation-timing-function: cubic-bezier(0.2, 0, 0, 1); }
+      74.1667%  { transform: scaleY(0); }
+      100%      { transform: scaleY(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .lid { animation: none; }
+    }
+  </style>
+  <defs>
+    <path id="raven" fill-rule="evenodd" d="M76.5,28 L67.5,24.6 L54,17.8 L45,17.8 L36,21.2 L32.18,26.972 L41.616,51.925 L32.334,65.952 L30.666,64.848 L39.384,51.675 L31.106,29.786 L22.5,68.8 L40.5,68.8 L54,62 L58.5,62 L63,48.4 L63,34.8 Z M48.55,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
+  </defs>
+  <g transform="translate(2,11)">
+    <use href="#raven" class="ink"/>
+    <circle class="ink lid" cx="51.75" cy="26.3" r="3.9"/>
+  </g>
+</svg>

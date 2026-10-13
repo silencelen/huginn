@@ -4,6 +4,17 @@
 This spec turns `anim-04-attention-pulse/anim.svg` into frames that code can draw with
 the same `RavenMark.draw` call, so nothing is shipped as a file.
 
+**Revision 3 (the brand book).** `TrayIcons.kt` now draws the brand's small form, the
+tile glyph (`round3/fold-system/glyph-c.svg` via `RavenMark.drawTile`), at the same
+64 px box in every state, tinted `stateIdle` / `stateWorking` / `stateAttention`
+with the badge (`Ellipse2D.Double(44.0, 2.0, 18.0, 18.0)`, the error red) on
+ATTENTION. So the slide below no longer applies: entering ATTENTION is the tint
+over 300 ms (`cubic-bezier(0.2, 0, 0, 1)`), then the badge pop (unchanged), then
+the ring, now centred on the tile (32, 34), r 17 → 27.2, stroke 4 → 1.5, drawn
+BEFORE the tile so it is first seen leaving the tile's edge. Everything else in
+this spec (easing, frame tables' timings, memory and behaviour rules) stands;
+regenerate the tables with `build.py --table` once it takes the tile geometry.
+
 **Revision 2.** The sequence now starts from the icon the tray is actually showing:
 `TrayIcons.kt` draws IDLE and WORKING with `RavenMark.draw(g, 2.0, 2.0, 60.0, 60.0)`
 and ATTENTION with `(0.0, 22.0, 50.0, 42.0)`, so the raven shrinks 17 % and drops 14 px
