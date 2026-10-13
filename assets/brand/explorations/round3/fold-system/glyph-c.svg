@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 64 64">
+  <!-- Glyph C "negative mark": the whole upright mark with its fold at 0.72 as a hole in the rounded square, so the tile is the mark in negative; the fold is a 2.2-unit ink hairline, the eye a 4x4 ink cell at x 36-40, y 20-24. ONE evenodd path. -->
+  <g>
+    <path fill="#161310" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M56.815,19.326 L46.285,14.022 L32.245,11.37 L25.225,11.37 L18.205,14.022 L15.371,18.304 L26.583,38.072 L15.47,49.267 L13.92,47.729 L23.867,37.708 L14.343,20.92 L7.675,51.15 L18.205,51.15 L32.245,43.194 L46.285,45.846 L49.795,35.238 L42.775,24.63 Z M32,16 h4 v4 h-4 Z"/>
+  </g>
+</svg>

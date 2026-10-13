@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- For comparison: the perched r2-05 fold raven re-snapped to r2-01-snapped's twelve vertices on its lattice (x = 4.5i, y = 14.4 + 3.4j), with the 2-unit fold slit spliced at the nape. Its solid silhouette is byte-for-byte Snapped's mark.svg polygon, so it rasterises to Snapped's grid.txt (the CLI art). Vertices (col,row): bill tip (21,6) culmen (19,3) forehead (16,1) crown (13,1) back of head (10,3) nape (9,5) tail tip (3,13) tail bottom (3,15) under-tail notch (8,13) belly (12,14) chest (15,10) throat (16,6). -->
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M94.5,34.8 L85.5,24.6 L72,17.8 L58.5,17.8 L45,24.6 L41.239,30.283 L46.183,48.962 L22.913,59.511 L22.087,57.689 L43.817,47.838 L39.683,32.223 L13.5,58.6 L13.5,65.4 L36,58.6 L54,62 L67.5,48.4 L72,34.8 Z M62.05,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>
+  </g>
+</svg>
