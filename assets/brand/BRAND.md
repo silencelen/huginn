@@ -66,8 +66,8 @@ needs-you adds the badge dot (`error`, r 9 at (53,11) of 64). Below 24 the fold
 antialiases away and the tile is "a tile with a bird"; from 24 up it is the fold
 raven.
 
-- States: idle `#848C87` · working `#7CB98E` · needs you `#E4E2A8` + badge
-  `#EE757D`. Adjacent steps are ≥ 12 L* apart (L* 57 / 70 / 89), so a template
+- States: idle `#848C87` · working `#7CB98E` · needs you `#E8D07E` + badge
+  `#EE757D`. Adjacent steps are ≥ 12 L* apart (L* 57 / 70 / 84), so a template
   tray that strips colour still tells them apart at onSurface 45 / 75 / 100 %.
 - Where: the desktop tray (`TrayIcons.kt` draws the tile and the dot), the
   Android status icon (white; the OS tints it), favicon-32 and -16, the title
@@ -127,34 +127,36 @@ conhost, PowerShell 5.1, Campbell and xterm. Source:
 | primaryContainer · onPrimaryContainer | `#1F3D2C` · `#C2E6CF` | `#CDEAD6` · `#0A3320` | selected row, accent chip |
 | secondary (heather) · onSecondary | `#B49CDB` · `#221640` | `#5B3E8A` · `#FFFFFF` | functions, links in code, CLI headings |
 | secondaryContainer · onSecondaryContainer | `#352A52` · `#E2D7F5` | `#E6DCF5` · `#2E1A52` | |
-| tertiary | `#E6AEC6` | `#6E3A7A` | subagent markers, graph series |
+| tertiary | `#E6AEC6` | `#5E1E3C` | subagent markers, graph series |
 | error · onError | `#EE757D` · `#2B0C10` | `#B3262E` · `#FFFFFF` | destructive verbs, failures |
 | errorContainer · onErrorContainer | `#4C1C22` · `#F8C5CA` | `#F9DBDC` · `#5E1418` | |
-| stateIdle / stateWorking / stateAttention | `#848C87` / `#7CB98E` / `#E4E2A8` | `#687069` / `#1F5A3A` / `#0F3320` | the tray ladder: L* 57 / 70 / 89 dark, 46 / 34 / 18 light |
-| stateSuccess / stateError / stateInfo | `#C4CF7A` / `#EE757D` / `#86B5E6` | `#4E7A1C` / `#B3262E` / `#2A5FA5` | text semantics by hue |
+| stateIdle / stateWorking / stateAttention | `#848C87` / `#7CB98E` / `#E8D07E` | `#687069` / `#1F5A3A` / `#3D2B05` | the tray ladder: L* 57 / 70 / 84 dark, 46 / 34 / 19 light |
+| stateSuccess / stateError / stateInfo | `#80CFC9` / `#EE757D` / `#B49CDB` | `#176B66` / `#B3262E` / `#5B3E8A` | text semantics by hue |
 | inkMark / boneTile | `#141615` / `#E2E6E1` | same | the raven on light grounds; the icon tile |
 
 ANSI-16 (`terminal/moss-heather.ansi.json`; ground `#141615`, foreground
 `#E2E6E1`, cursor `#7CB98E`, selection `#2C4035`): black `#3A423E` · red
 `#D65A62` · green `#7CB98E` · yellow `#D4B872` · blue `#6C9BD6` · magenta
 `#A98BD6` · cyan `#5EB5B0` · white `#C8CDC9` · brightBlack `#747D77` ·
-brightRed `#EE757D` · brightGreen `#C4CF7A` · brightYellow `#E4E2A8` ·
-brightBlue `#86B5E6` · brightMagenta `#C3A8E8` · brightCyan `#80CFC9` ·
+brightRed `#EE757D` · brightGreen `#C4CF7A` · brightYellow `#E8D07E` ·
+brightBlue `#86B5E6` · brightMagenta `#B49CDB` · brightCyan `#80CFC9` ·
 brightWhite `#E2E6E1`. The ladder brightBlack / green / brightYellow is
-L* 52 / 70 / 89.
+L* 52 / 70 / 84.
 
 Rules:
 
-- **Slot pins.** brightRed = error, brightGreen = stateSuccess, brightYellow =
-  stateAttention, brightBlue = stateInfo, so the CLI, tmux and the app never
-  show two reds. The CLI's 16-colour accent is brightMagenta (heather); moss is
+- **Slot pins.** brightRed = error, brightCyan = stateSuccess, brightYellow =
+  stateAttention, brightMagenta = stateInfo (round 7; brightGreen and brightBlue
+  are unpinned terminal colours), so the CLI, tmux and the app never show two
+  reds. The CLI's 16-colour accent is brightMagenta (heather); moss is
   the accent in truecolor and in the apps.
 - **Needs-you is the lit accent**, not error. The apps draw dots; the pulse
   breathes stateWorking at the `PulseDot` table; the tray shows the tinted tile
   plus the badge.
-- **Known trade-offs** to refine before the tokens are frozen: green means both
-  working (moss) and success (lime), 68 degrees and 11 L* apart; the heather
-  never reaches the tray; the lit moss reads as a highlighter beside the lime.
+- **Trade-offs, settled in round 7 (2026-10-13, on a foldable):** success left the
+  green family for teal, so working is the only green; heather reached the ladder
+  as the info voice and the blue left; needs-you warmed toward gold so the lit
+  step no longer reads as a highlighter beside a lime. The tokens are frozen.
 
 State glyph table (titles, tmux, host status, Telegram, the clients; the apps
 draw dots, not glyphs):
@@ -288,8 +290,9 @@ Still to build:
    blink as the apps' idle state.
 4. The Glance widgets on the scheme; the libnotify icon PNG; the Telegram
    marks (optional).
-5. Refine the three colour trade-offs before freezing the tokens; then
-   regenerate `tokens.json`, `Theme.kt` and `Ansi.kt` from the generator.
+5. ~~Refine the three colour trade-offs before freezing the tokens~~ done in
+   round 7 (2026-10-13); `tokens.json`, `Theme.kt`, `Ansi.kt`, `TrayIcons.kt`
+   regenerated.
 
 ## Record of decisions
 
@@ -301,3 +304,4 @@ Still to build:
 | 4 | Moss & Heather (added at the owner's request); needs-you = the lit accent; tint + badge; the triangle glyph (error takes the cross) |
 | 5 | Plex Mono-led type; the hairline perch with the raven re-cut; `(o>` as the one-row raven |
 | 6 | the still cursor lockup as the hero; today's help bird kept; the recommended motion set |
+| 7 | on a foldable, from the round-7 chooser (`explorations/round7-tradeoffs/`): success turns teal `#80CFC9` (brightCyan pin); info is heather `#B49CDB` (brightMagenta pin), the blue leaves the state ladder; needs-you warms to `#E8D07E`; the active tab sits on `primaryContainer` (2026-10-13). The generator set the light twins: needs-you `#3D2B05` (the light ladder steps darker) and tertiary `#5E1E3C` (heather now owns the purple hue) |

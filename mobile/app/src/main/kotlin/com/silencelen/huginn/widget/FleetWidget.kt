@@ -320,7 +320,7 @@ private fun SessionRows(snapshot: FleetSnapshot) {
  * from color-04-moss-heather/tokens.json) until the widget is on the scheme.
  */
 private fun attentionColor(): ColorProvider =
-    androidx.glance.color.ColorProvider(day = Color(0xFF0F3320), night = Color(0xFFE4E2A8))
+    androidx.glance.color.ColorProvider(day = Color(0xFF3D2B05), night = Color(0xFFE8D07E))
 
 @Composable
 private fun stateColor(state: String?): ColorProvider = when (state) {

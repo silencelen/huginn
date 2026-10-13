@@ -21,18 +21,18 @@ CLI, tmux and the app never show two different reds: the terminal's error is the
 | white | `#C8CDC9` | 11.28:1 | 82 | |
 | brightBlack | `#747D77` | 4.28:1 | 52 | |
 | brightRed | `#EE757D` | 6.47:1 | 64 | = `error` |
-| brightGreen | `#C4CF7A` | 10.87:1 | 81 | = `stateSuccess` |
-| brightYellow | `#E4E2A8` | 13.63:1 | 89 | = `stateAttention` |
-| brightBlue | `#86B5E6` | 8.45:1 | 72 | = `stateInfo` |
-| brightMagenta | `#C3A8E8` | 8.73:1 | 73 | |
-| brightCyan | `#80CFC9` | 10.12:1 | 78 | |
+| brightGreen | `#C4CF7A` | 10.87:1 | 81 | |
+| brightYellow | `#E8D07E` | 11.91:1 | 84 | = `stateAttention` |
+| brightBlue | `#86B5E6` | 8.45:1 | 72 | |
+| brightMagenta | `#B49CDB` | 7.55:1 | 68 | = `stateInfo` |
+| brightCyan | `#80CFC9` | 10.12:1 | 78 | = `stateSuccess` |
 | brightWhite | `#E2E6E1` | 14.40:1 | 91 | |
 
 cursor `#7CB98E` - selection `#2C4035`.
 
-States as ANSI slots: idle = brightBlack, working = green, attention = brightYellow, success = brightGreen, error = brightRed, info = brightBlue.
-The 16-colour state ladder is brightBlack L* 52 -> green L* 70 -> brightYellow L* 89
-(steps 19, 19; the rule is >= 12, checked by `build/check.py`).
+States as ANSI slots: idle = brightBlack, working = green, attention = brightYellow, success = brightCyan, error = brightRed, info = brightMagenta.
+The 16-colour state ladder is brightBlack L* 52 -> green L* 70 -> brightYellow L* 84
+(steps 19, 14; the rule is >= 12, checked by `build/check.py`).
 
 ## The CLI's five colours
 
@@ -45,10 +45,10 @@ the legacy palettes the branch must survive (minimum 3:1):
 | semantic | slot | SGR | ConsoleColor | Huginn scheme | conhost | powershell-5.1 | campbell | xterm |
 |---|---|---|---|---|---|---|---|---|
 | ok | brightGreen | 92 | Green | `#C4CF7A` 10.9:1 | `#00FF00` 15.3:1 | `#00FF00` 11.0:1 | `#16C60C` 8.5:1 | `#00FF00` 15.3:1 |
-| warn | brightYellow | 93 | Yellow | `#E4E2A8` 13.6:1 | `#FFFF00` 19.6:1 | `#FFFF00` 14.1:1 | `#F9F1A5` 16.9:1 | `#FFFF00` 19.6:1 |
+| warn | brightYellow | 93 | Yellow | `#E8D07E` 11.9:1 | `#FFFF00` 19.6:1 | `#FFFF00` 14.1:1 | `#F9F1A5` 16.9:1 | `#FFFF00` 19.6:1 |
 | error | brightRed | 91 | Red | `#EE757D` 6.5:1 | `#FF0000` 5.3:1 | `#FF0000` 3.8:1 | `#E74856` 5.1:1 | `#FF0000` 5.3:1 |
 | muted | brightBlack | 90 | DarkGray | `#747D77` 4.3:1 | `#808080` 5.3:1 | `#808080` 3.8:1 | `#767676` 4.3:1 | `#7F7F7F` 5.2:1 |
-| accent | brightMagenta | 95 | Magenta | `#C3A8E8` 8.7:1 | `#FF00FF` 6.7:1 | `#FF00FF` 4.8:1 | `#B4009E` 3.2:1 | `#FF00FF` 6.7:1 |
+| accent | brightMagenta | 95 | Magenta | `#B49CDB` 7.5:1 | `#FF00FF` 6.7:1 | `#FF00FF` 4.8:1 | `#B4009E` 3.2:1 | `#FF00FF` 6.7:1 |
 
 Grounds: conhost `#000000`, powershell-5.1 `#012456`, campbell `#0C0C0C`, xterm `#000000`. PowerShell 5.1's console
 remaps DarkYellow to `#EEEDF0`, so an accent in slot 33 shows there as near-white (legible, not

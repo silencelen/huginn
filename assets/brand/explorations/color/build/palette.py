@@ -189,7 +189,7 @@ def tokens_json(d):
                      'foreground': a['foreground'], 'background': a['background'],
                      'cursor': a['cursor'], 'selection': a['selection'],
                      'contrastOnGround': {k: round(contrast(a[k], a['background']), 2) for k in ANSI_KEYS},
-                     'slotPins': {slot: tok for slot, tok in SLOT_PINS}},
+                     'slotPins': {slot: tok for slot, tok in d.get('slot_pins', SLOT_PINS)}},
         'cli': {'slots': d['cli'], 'truecolor': {k: cli_truecolor_hex(d, k) for k in d['cli']},
                 'sgr16': {k: SGR[v] for k, v in d['cli'].items()},
                 'consoleColor': {k: CONSOLE_NAME[v] for k, v in d['cli'].items()}},
@@ -467,7 +467,7 @@ def mock_html(t, d, scheme):
 
 def ansi_strip(d):
     a = d['ansi']
-    pinned = {slot: tok for slot, tok in SLOT_PINS}
+    pinned = {slot: tok for slot, tok in d.get('slot_pins', SLOT_PINS)}
     cells = ''.join(
         f'<div style="background:{a[k]};color:{a["background"] if lstar(a[k]) > 50 else a["foreground"]}">'
         f'{k}<br><span class="mono">{a[k]}</span><br>{contrast(a[k], a["background"]):.1f}:1'
@@ -521,7 +521,7 @@ def ansi_json(d):
         'contrastOnGround': {k: round(contrast(a[k], a['background']), 2) for k in ANSI_KEYS},
         'lstar': {k: round(lstar(a[k]), 1) for k in ANSI_KEYS},
         'brand': {'accentSlot': d['accent_ansi'], 'accentTruecolor': d['dark']['accent'], 'states': d['state_ansi'],
-                  'cli': d['cli'], 'slotPins': {slot: tok for slot, tok in SLOT_PINS},
+                  'cli': d['cli'], 'slotPins': {slot: tok for slot, tok in d.get('slot_pins', SLOT_PINS)},
                   'stateLadderLstar': {k: round(L, 1) for k, _, L in ansi_ladder(d)}, 'glyph': GLYPH},
     }, indent=2) + '\n'
 
@@ -828,7 +828,7 @@ def terminal_mock_html(d):
 def terminal_readme(d):
     a, c = d['ansi'], d['cli']
     rows = '\n'.join(f'| {k} | `{a[k]}` | {contrast(a[k], a["background"]):.2f}:1 | {lstar(a[k]):.0f} |'
-                     + (f' = `{dict(SLOT_PINS)[k]}` |' if k in dict(SLOT_PINS) else ' |') for k in ANSI_KEYS)
+                     + (f' = `{dict(d.get("slot_pins", SLOT_PINS))[k]}` |' if k in dict(d.get('slot_pins', SLOT_PINS)) else ' |') for k in ANSI_KEYS)
     lad = ansi_ladder(d)
     names = list(LEGACY_PALETTES)
     leg_head = '| semantic | slot | SGR | ConsoleColor | Huginn scheme | ' + ' | '.join(names) + ' |\n|---|---|---|---|---|' + '---|' * len(names)

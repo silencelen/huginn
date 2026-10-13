@@ -25,7 +25,7 @@ object TrayIcons {
     private val COLORS: Map<TrayState, Color> = mapOf(
         TrayState.IDLE to Color(0x84, 0x8C, 0x87),       // stateIdle
         TrayState.WORKING to Color(0x7C, 0xB9, 0x8E),    // stateWorking, the moss accent
-        TrayState.ATTENTION to Color(0xE4, 0xE2, 0xA8),  // stateAttention, the moss lit up
+        TrayState.ATTENTION to Color(0xE8, 0xD0, 0x7E),  // stateAttention, warmed toward gold (round 7)
     )
     private val BADGE = Color(0xEE, 0x75, 0x7D)          // error
 

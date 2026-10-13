@@ -88,7 +88,7 @@ def check(d, verbose=False):
     for (ka, ha, la), (kb, hb, lb) in zip(lad, lad[1:]):
         dl = abs(lb - la)
         rule(dl >= ANSI_LADDER_MIN_DL, f'ansi  ladder {ka} {ha} L*={la:.1f} -> {kb} {hb} L*={lb:.1f} dL*={dl:.1f} (min {ANSI_LADDER_MIN_DL:.0f})', always=True)
-    for slot, tok in SLOT_PINS:
+    for slot, tok in d.get('slot_pins', SLOT_PINS):
         rule(a[slot] == d['dark'][tok], f'ansi  pin {slot} {a[slot]} == dark.{tok} {d["dark"][tok]}')
     for name, sem, slot, h, r in legacy_rows(d):
         rule(r >= LEGACY_MIN, f'cli16 {name:15} {sem:7} {slot:13} {h} {r:5.2f} on {LEGACY_PALETTES[name]["ground"]} (min {LEGACY_MIN})')
