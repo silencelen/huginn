@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * AN ARCHIVED CONVERSATION, READ ONLY — one composable, both shells.
@@ -72,7 +73,7 @@ fun ArchivedTranscriptView(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         }
         // ⚠ SAID ONCE, AT THE TOP (P-34/D-29). Everything about this view is a
         // conversation — the same rows, the same colours — and the ONLY thing

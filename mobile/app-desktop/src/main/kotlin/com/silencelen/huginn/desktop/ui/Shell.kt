@@ -403,7 +403,7 @@ fun Shell(store: AppStore) {
                         sessionUsage = SessionUsageFill.of(headroom, statusHeadroomOf(headroom) ?: status?.headroom),
                         onSelect = { store.openView(it) },
                     )
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
 
                     if (showsList) {
                         // TWO BOXES, and the inner one is the reason it slides rather
@@ -1344,7 +1344,7 @@ private fun StatusLine(
     val waiting = sessions.filter { it.state == "attention" }
     val working = sessions.count { it.state == "running" } + chats.count { it.running }
 
-    HorizontalDivider(color = scheme.outlineVariant)
+    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
     Row(
         Modifier.fillMaxWidth().height(Frame.statusHeight)
             .background(if (error != null) scheme.error.copy(alpha = 0.12f) else scheme.surfaceVariant)

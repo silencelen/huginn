@@ -384,8 +384,8 @@ class DesktopSurfaceTest {
         // The daemon omits stateSince on sessions it has not seen transition, and
         // a tooltip claiming "for 56 years" from a zero is worse than one that
         // says less.
-        assertEquals("Waiting on you", sessionStateTip("attention", null, 1_000_000))
-        assertEquals("Waiting on you", sessionStateTip("attention", 0, 1_000_000))
+        assertEquals("Needs you", sessionStateTip("attention", null, 1_000_000))
+        assertEquals("Needs you", sessionStateTip("attention", 0, 1_000_000))
         assertEquals("Working · for 5m", sessionStateTip("running", 999_700, 1_000_000))
         // The tooltip that started this: a state entered 50 seconds ago.
         assertEquals("Working · for 1m", sessionStateTip("running", 999_950, 1_000_000))
@@ -401,7 +401,7 @@ class DesktopSurfaceTest {
             "Running now · 2 messages queued behind this turn · 7 turns · last activity 1m ago",
             chatStateTip(running = true, pending = 2, turns = 7, updatedAt = 999_940, nowSec = 1_000_000),
         )
-        assertEquals("Idle", chatStateTip(false, 0, 0, 0, 1_000_000))
+        assertEquals("Waiting", chatStateTip(false, 0, 0, 0, 1_000_000))
         assertEquals(
             "1 message queued · 1 turn",
             chatStateTip(false, 1, 1, 0, 1_000_000),
@@ -481,7 +481,7 @@ class DesktopSurfaceTest {
     fun `a chat tip dates its last activity like every other row`() {
         val now = 1_000_000L
         assertEquals(
-            "Idle · 2 turns · last activity 3 days ago",
+            "Waiting · 2 turns · last activity 3 days ago",
             chatStateTip(false, 0, 2, now - 3 * 86_400, now),
         )
     }

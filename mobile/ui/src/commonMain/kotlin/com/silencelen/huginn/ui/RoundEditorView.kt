@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.PolishResult
 import com.silencelen.huginn.device.DevicePolicy
+import com.silencelen.huginn.ui.theme.huginnFilterChipColors
 
 /**
  * Writing a Round.
@@ -164,6 +165,7 @@ fun RoundEditor(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     ROUND_DAY_NAMES.forEachIndexed { i, name ->
                         FilterChip(
+                            colors = huginnFilterChipColors(),
                             selected = i in draft.days,
                             onClick = {
                                 val next = if (i in draft.days) draft.days - i else draft.days + i
@@ -226,11 +228,13 @@ fun RoundEditor(
         SectionLabel("WHAT IT MAY DO")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
+                colors = huginnFilterChipColors(),
                 selected = draft.mode == "ask",
                 onClick = { onDraft(draft.copy(mode = "ask")) },
                 label = { Text("Look and report") },
             )
             FilterChip(
+                colors = huginnFilterChipColors(),
                 selected = draft.mode == "act",
                 onClick = { onDraft(draft.copy(mode = "act")) },
                 label = { Text("Change things") },
@@ -257,6 +261,7 @@ fun RoundEditor(
             SectionLabel("WHERE IT RUNS")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
+                    colors = huginnFilterChipColors(),
                     selected = draft.host == "local",
                     onClick = { onDraft(draft.copy(host = "local")) },
                     label = { Text("Huginn") },
@@ -268,6 +273,7 @@ fun RoundEditor(
                 // a control's clothes.
                 devices.filter { it.scope != "generate" }.forEach { d ->
                     FilterChip(
+                        colors = huginnFilterChipColors(),
                         selected = draft.host == d.id,
                         onClick = { onDraft(draft.copy(host = d.id)) },
                         label = { Text(d.name) },
@@ -283,6 +289,7 @@ fun RoundEditor(
                 // the Round runs here.
                 if (pinnedElsewhere && devices.none { it.id == draft.host }) {
                     FilterChip(
+                        colors = huginnFilterChipColors(),
                         selected = true,
                         onClick = { },
                         label = { Text("a machine that is gone") },
@@ -439,6 +446,7 @@ private fun Polish(
 @Composable
 private fun Kind(label: String, kind: String, draft: RoundDraft, onDraft: (RoundDraft) -> Unit) {
     FilterChip(
+        colors = huginnFilterChipColors(),
         selected = draft.kind == kind,
         onClick = { onDraft(draft.copy(kind = kind)) },
         label = { Text(label) },
@@ -448,6 +456,7 @@ private fun Kind(label: String, kind: String, draft: RoundDraft, onDraft: (Round
 @Composable
 private fun Notify(label: String, value: String, draft: RoundDraft, onDraft: (RoundDraft) -> Unit) {
     FilterChip(
+        colors = huginnFilterChipColors(),
         selected = draft.notifyWhen == value,
         onClick = { onDraft(draft.copy(notifyWhen = value)) },
         label = { Text(label) },

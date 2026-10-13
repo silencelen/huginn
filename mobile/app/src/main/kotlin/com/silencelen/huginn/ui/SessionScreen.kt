@@ -687,7 +687,7 @@ private fun SessionConversation(
             },
         )
 
-        Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
           Column {
             // The page a session's Claude will be pointed at. It reaches the pane
             // as a PATH — a page holds more than a pane accepts in one paste — so
@@ -809,7 +809,7 @@ private fun SessionConversation(
                         Icon(
                             Icons.Filled.Stop,
                             contentDescription = "Interrupt with Esc",
-                            tint = MaterialTheme.colorScheme.error,
+                            tint = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
@@ -1072,7 +1072,7 @@ private fun WorkSheet(
 @Composable
 private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (a.active) 0.65f else 0.3f),
+        color = if (a.active) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -1099,7 +1099,7 @@ private fun AgentRow(a: com.silencelen.huginn.data.AgentRun) {
                         wf.removePrefix("wf_").substringBefore("-"),
                         style = MaterialTheme.typography.labelSmall,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.tertiary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.weight(1f))

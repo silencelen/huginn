@@ -705,7 +705,7 @@ internal fun ListHeader(title: String, count: Int, selected: Int, actions: @Comp
         }
         Row { actions() }
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
 }
 
 /** One "new chat" verb: its word, its glyph, what it does. */

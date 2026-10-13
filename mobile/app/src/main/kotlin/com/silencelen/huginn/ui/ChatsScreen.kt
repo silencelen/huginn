@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -131,7 +132,7 @@ fun ChatsScreen(
                         onOpen = { onOpen(chat.id) },
                         onDelete = { onDelete(chat.id) },
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                 }
             }
         }
@@ -337,7 +338,7 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                 } else if (chat.pending > 0) {
                     Box(
                         Modifier.size(8.dp).clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.tertiary)
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                     Spacer(Modifier.width(7.dp))
                 }
@@ -362,7 +363,7 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                         Icons.Filled.Bolt,
                         contentDescription = "tools enabled",
                         modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -394,14 +395,14 @@ private fun ChatRow(chat: Chat, selected: Boolean, onOpen: () -> Unit, onDelete:
                         Text(
                             "+${chat.pending} queued",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
                 chat.pending > 0 -> Text(
                     "+${chat.pending} queued",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 else -> Text(
                     relTime(chat.updatedAt),

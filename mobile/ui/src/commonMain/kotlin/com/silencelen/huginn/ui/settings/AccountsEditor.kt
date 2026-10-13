@@ -337,7 +337,7 @@ fun AccountsEditor(
             Text(
                 it,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp).widthIn(max = 760.dp),
             )
         }

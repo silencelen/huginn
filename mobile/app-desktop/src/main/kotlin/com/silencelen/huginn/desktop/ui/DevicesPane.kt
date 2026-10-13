@@ -121,7 +121,7 @@ fun DevicesPane(store: AppStore) {
                 TextButton(onClick = {
                     val t = g; forgetTarget = null
                     scope.launch { t.rows.forEach { store.forgetDevice(it.id) } }
-                }) { Text("Forget") }
+                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { forgetTarget = null }) { Text("Cancel") } },
         )

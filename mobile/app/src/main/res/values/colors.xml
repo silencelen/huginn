@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="huginn_bg">#141615</color>
-    <color name="huginn_ink">#E2E6E1</color>
+    <!-- The window ground and the system bars follow the scheme (Moss & Heather,
+         assets/brand/BRAND.md section 4): light here, dark in values-night. -->
+    <color name="huginn_bg">#F4F6F3</color>
+    <color name="huginn_ink">#191C1A</color>
     <!-- Launcher tile only. The brand mark is a DARK raven on a bone tile
-         (assets/brand/raven-tile.svg); the app chrome above stays dark. -->
+         (assets/brand/raven-tile.svg); the tile is the same in both schemes. -->
     <color name="huginn_tile">#E2E6E1</color>
 </resources>

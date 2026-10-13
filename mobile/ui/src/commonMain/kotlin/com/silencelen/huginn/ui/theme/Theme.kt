@@ -174,7 +174,10 @@ const val SOFT_VERB_ALPHA: Float = 0.7f
  */
 fun verbInk(tone: VerbTone, scheme: ColorScheme): Color = when (tone) {
     VerbTone.PLAIN -> scheme.onSurface
-    VerbTone.SOFT -> scheme.error.copy(alpha = SOFT_VERB_ALPHA)
+    // PR 2 (2026-10-13): a soft verb is quiet, not a lighter red (UI-AUDIT
+    // section 3, "Accent"). SOFT_VERB_ALPHA stays declared for the desktop menu's
+    // own tinting until Menus.kt moves to :ui.
+    VerbTone.SOFT -> scheme.onSurfaceVariant
     VerbTone.DESTRUCTIVE -> scheme.error
 }
 

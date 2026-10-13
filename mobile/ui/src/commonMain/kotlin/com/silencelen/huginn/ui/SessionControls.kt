@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The two headroom controls a live session carries, drawn the same on both
@@ -99,7 +100,7 @@ fun SessionStateMark(
     Text(
         words,
         style = MaterialTheme.typography.labelSmall,
-        color = if (stalled) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (stalled) LocalHuginnColors.current.stateAttention else MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         softWrap = false,
         modifier = modifier.padding(horizontal = 6.dp, vertical = 2.dp),

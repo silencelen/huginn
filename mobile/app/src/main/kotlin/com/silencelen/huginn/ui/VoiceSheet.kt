@@ -161,7 +161,7 @@ fun VoiceSheet(
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                androidx.compose.material3.Button(
+                androidx.compose.material3.OutlinedButton(
                     onClick = onRequestMic,
                     modifier = Modifier.padding(top = 14.dp),
                 ) { Text("Grant microphone access") }

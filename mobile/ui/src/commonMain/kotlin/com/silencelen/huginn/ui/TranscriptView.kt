@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.RelayProject
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The two measurements a transcript row cannot decide for itself, handed down by
@@ -304,14 +305,14 @@ private fun SubagentsCard(group: TranscriptGroups.Row.Subagents, onCopy: (String
                     Icons.Filled.AccountTree,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     "Subagent",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
@@ -462,7 +463,7 @@ private fun ThinkingBlock(text: String) {
         text.trim().lineSequence().firstOrNull { it.isNotBlank() }?.take(110).orEmpty()
     }
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth().clickable { open = !open },
     ) {
@@ -531,7 +532,7 @@ private fun ToolCard(ev: TranscriptEvent) {
     val detail = ev.detail
     val input = ev.input
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+        color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier
             .fillMaxWidth()
@@ -559,7 +560,7 @@ private fun ToolCard(ev: TranscriptEvent) {
                     Text(
                         detail,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
@@ -591,7 +592,7 @@ private fun ToolCard(ev: TranscriptEvent) {
             AnimatedVisibility(open && hasResult) {
                 Column {
                     Spacer(Modifier.height(6.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
                     Spacer(Modifier.height(6.dp))
                     Box(Modifier.horizontalScroll(rememberScrollState())) {
                         Text(
@@ -625,20 +626,22 @@ private fun AskCard(ev: TranscriptEvent) {
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
+        // An open question is needs-you (BRAND.md section 4); once answered it is quiet.
+        val askInk = if (result.isNullOrBlank()) LocalHuginnColors.current.stateAttention else MaterialTheme.colorScheme.onSurfaceVariant
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.AutoMirrored.Filled.HelpOutline,
                     contentDescription = null,
                     modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = askInk,
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
                     ask.questions.firstOrNull()?.header ?: "Question",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = askInk,
                 )
             }
             ask.questions.forEach { q ->
@@ -663,7 +666,7 @@ private fun AskCard(ev: TranscriptEvent) {
                     "→ ${answeredSummary(result)}",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             } else {
                 Spacer(Modifier.height(6.dp))
@@ -690,7 +693,7 @@ private fun ToolResultOrphan(ev: TranscriptEvent) {
     // A result whose call is above the loaded window. Shown plainly rather than
     // dropped, so a cold open at the tail is not silently missing output.
     Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        color = MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -715,7 +718,7 @@ private fun ToolResultOrphan(ev: TranscriptEvent) {
 private fun CommandNote(text: String, isResult: Boolean) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (isResult) 0.35f else 0.6f),
+            color = if (isResult) MaterialTheme.colorScheme.surfaceContainerLow else MaterialTheme.colorScheme.surfaceContainer,
             shape = RoundedCornerShape(8.dp),
         ) {
             Text(
@@ -787,8 +790,8 @@ private fun LimitNotice(ev: TranscriptEvent) {
     )
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
         Surface(
-            color = MaterialTheme.colorScheme.error.copy(alpha = 0.10f),
-            contentColor = MaterialTheme.colorScheme.error,
+            color = LocalHuginnColors.current.stateAttention.copy(alpha = 0.12f),
+            contentColor = LocalHuginnColors.current.stateAttention,
             shape = RoundedCornerShape(10.dp),
         ) {
             Column(
@@ -841,7 +844,7 @@ private fun ProjectRelayNote(ev: TranscriptEvent) {
             Text(
                 it,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth().padding(top = 2.dp),

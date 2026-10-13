@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ArchivedSession
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 /**
  * The sessions that were ended on purpose, and the way back into each of them.
@@ -74,7 +75,7 @@ fun ArchivedSessionsSection(
 ) {
     val ordered = remember(rows) { ArchiveRules.ordered(rows) }
     Column(modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         Row(
             Modifier
                 .fillMaxWidth()
@@ -125,7 +126,7 @@ fun ArchivedSessionsSection(
                 onOpenLive = onOpenLive,
                 onView = onView?.let { view -> { view(row) } },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
         }
     }
 }

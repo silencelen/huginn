@@ -137,6 +137,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.runtime.key
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
 class MainActivity : FragmentActivity() {
 
@@ -2353,7 +2354,7 @@ fun HuginnApp(
                             // opens, and the one the design asked for by name.
                             is Dest.Projects, is Dest.Project -> Row(Modifier.fillMaxSize()) {
                                 Box(Modifier.width(292.dp).fillMaxSize()) { projectsPane() }
-                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.Project
                                     if (open != null) projectPane(open.id)
@@ -2394,7 +2395,7 @@ fun HuginnApp(
                                         onDelete = { p -> vm.deleteScratchpad(p.id) },
                                     )
                                 }
-                                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
                                 Box(Modifier.weight(1f).fillMaxSize()) {
                                     val open = dest as? Dest.Scratchpad
                                     if (open != null) scratchpadPane(open.id)

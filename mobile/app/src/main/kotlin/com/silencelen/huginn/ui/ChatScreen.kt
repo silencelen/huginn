@@ -50,6 +50,7 @@ import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.TranscriptEvent
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.data.TranscriptPage
+import androidx.compose.foundation.border
 
 /**
  * A chat. The history is the session's real Claude Code transcript, rendered by
@@ -419,7 +420,7 @@ private fun Composer(
         SealedNote(Modifier.fillMaxWidth().systemNavPadding(), onContinue = onContinueRound)
         return
     }
-    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
       Column {
         // Above the box rather than inside the row: the reference is a fact about
         // the message being written, and the row below is already four controls
@@ -492,12 +493,13 @@ private fun Composer(
                 // Nothing typed: the useful action on a running turn is to stop it.
                 IconButton(
                     onClick = onCancel,
+                    // Plain and outlined: stopping is not a failure (BRAND.md; UI-AUDIT section 3).
                     modifier = Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(23.dp))
-                        .background(MaterialTheme.colorScheme.error),
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(23.dp)),
                 ) {
-                    Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onError)
+                    Icon(Icons.Filled.Stop, contentDescription = "Stop", tint = MaterialTheme.colorScheme.onSurface)
                 }
             } else {
                 val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
