@@ -36,6 +36,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.Icon
 import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.system.ListRow
+import com.silencelen.huginn.ui.system.LocalRowMetrics
 
 /**
  * The projects, each one folding open to the sessions it is made of.
@@ -179,7 +181,7 @@ private fun ProjectRowItem(
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onOpen)
-                .padding(start = 14.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+                .padding(start = LocalRowMetrics.current.inset, end = 10.dp, top = LocalRowMetrics.current.vertical, bottom = LocalRowMetrics.current.vertical),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // The triangle is the disclosure and has its own hit target: tapping
@@ -240,29 +242,21 @@ private fun ProjectRowItem(
 
 @Composable
 private fun MemberRow(member: ProjectLive, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick)
-            .padding(start = 34.dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        MemberDot(ProjectRules.stateWord(member))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            memberLabel(member),
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (member.lead) FontWeight.Medium else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            ProjectRules.memberWords(member),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-        )
-    }
+    // The house row, inset one step past the project it belongs to.
+    ListRow(
+        title = memberLabel(member),
+        onClick = onClick,
+        modifier = Modifier.padding(start = 18.dp),
+        leading = { MemberDot(ProjectRules.stateWord(member)) },
+        trailing = {
+            Text(
+                ProjectRules.memberWords(member),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        },
+    )
 }
 
 /**

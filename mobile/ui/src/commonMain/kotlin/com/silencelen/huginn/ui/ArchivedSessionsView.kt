@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.foundation.layout.size
 import com.silencelen.huginn.ui.system.Scale
+import com.silencelen.huginn.ui.system.LocalRowMetrics
 
 /**
  * The sessions that were ended on purpose, and the way back into each of them.
@@ -147,7 +148,7 @@ private fun ArchivedSessionRow(
     var menu by remember { mutableStateOf(false) }
     val live = ArchiveRules.liveName(row)
     Row(
-        Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+        Modifier.fillMaxWidth().padding(start = LocalRowMetrics.current.inset, end = 4.dp, top = LocalRowMetrics.current.vertical, bottom = LocalRowMetrics.current.vertical),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f)) {

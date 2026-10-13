@@ -15,19 +15,21 @@ import androidx.compose.runtime.Composable
  */
 @Composable
 fun HouseDialog(
-    title: String,
+    title: String?,
     onDismiss: () -> Unit,
     confirmLabel: String,
     onConfirm: () -> Unit,
     destructive: Boolean = false,
     confirmEnabled: Boolean = true,
     dismissLabel: String = "Cancel",
+    /** A composed title (the shells' ConfirmTitle) where a string will not do. */
+    titleContent: (@Composable () -> Unit)? = null,
     text: @Composable () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(Scale.radiusSheet),
-        title = { Text(title, style = MaterialTheme.typography.titleSmall) },
+        title = titleContent ?: { Text(title ?: "", style = MaterialTheme.typography.titleSmall) },
         text = text,
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = confirmEnabled) {
