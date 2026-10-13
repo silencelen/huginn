@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- App-icon master: ink mark on the bone tile; the box x 22-87 / y 28-80 of the 108 canvas gives the ~10-20% inset. Same path as mark.svg. -->
+  <rect width="108" height="108" fill="#E8E2DA"/>
+  <g transform="translate(2,11)">
+    <path fill="#161310" fill-rule="evenodd" d="M85,23.5 L68.75,30 L68.75,36.5 L75.25,46.25 L68.75,56 L55.75,59.25 L23.25,69 L42.75,46.25 L49.25,30 L42.75,23.5 L49.25,17 L62.25,17 L65.5,20.25 L78.5,20.25 Z M60.625,25.125 m-2.4375,0 a2.4375,2.4375 0 1,0 4.875,0 a2.4375,2.4375 0 1,0 -4.875,0 Z"/>
+  </g>
+</svg>

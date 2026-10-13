@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
+  <!-- App-icon master, r2-01-snapped: ink mark centred on the square bone tile, 10% inset (the mark's box is
+       scaled by 1.0667 to 86.4 wide and centred). Same polygon as mark.svg. -->
+  <rect width="108" height="108" fill="#E8E2DA"/>
+  <g transform="translate(-3.6,7.81) scale(1.0667)">
+    <path fill="#161310" fill-rule="evenodd" d="
+      M94.5,34.8
+      L85.5,24.6
+      L72,17.8
+      L54,17.8
+      L45,24.6
+      L40.5,31.4
+      L13.5,58.6
+      L18,68.8
+      L36,58.6
+      L54,62
+      L67.5,51.8
+      L72,34.8
+      Z
+      M65.25,26.3 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0 Z"/>
+  </g>
+</svg>
