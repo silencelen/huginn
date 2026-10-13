@@ -1,0 +1,142 @@
+# client/help-table.txt - THE help screen, for both clients.
+#
+# `huginn help` in client/huginn.sh and client/huginn.ps1 prints the body below,
+# and `huginn <verb> --help` prints one verb's rows out of it. Both clients carry
+# a GENERATED copy (each is one shipped file, read on machines that have no repo):
+#
+#   node scripts/gen-help.js            # write both bodies from this file
+#   node scripts/gen-help.js --check    # scripts/test-client.sh: fail on drift
+#
+# Rules the generator enforces: 7-bit only; no line over 79 columns once the
+# placeholders are expanded in EITHER client; a row is "  huginn <verb> ..." with
+# its description at column 30, and a command too long for that column puts its
+# description on the next line. Lines starting with '#' are comments; the body
+# starts at the first line that is not one (a blank line, on purpose: both
+# clients print the banner, then a blank line, then this).
+#
+# Placeholders (the only things that differ between the two languages):
+#   {REPO}           the GitHub repo this client updates from
+#   {UPDATE_HOST}    the pinned mirror `huginn update` falls back to
+#   {HOST_VAR}       how to spell the HUGINN_HOST variable in this shell
+#   {HOST_HERE}      ", which is <host> here" when HUGINN_HOST is set, else nothing
+#   {SET:NAME=VALUE} how to set an environment variable in this shell
+
+  huginn                      attach/create the live 'main' session
+                              (run claude inside)
+  huginn <name>               a separate named session
+  huginn attach <name>        that session even when its name is a verb
+                              (update, solo...)
+  huginn solo [name]          attach + detach all OTHER clients
+                              (resume solo / full screen)
+  huginn list | ls            list sessions + attach status
+  huginn status | st          health: uptime, auth, sessions, disk
+  huginn rename <old> <new>   rename a session (alias: mv)
+  huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
+                              (if auto-end is on) end it once it goes idle
+                              (--force: send it into a pane with no Claude
+                              state)
+  huginn rounds               what this host does on a schedule, and what it
+                              found
+  huginn headroom [--json]    usage left per account, what huginn moved or is
+                              holding, and why
+  huginn devices              machines that can run a chat in their own context
+  huginn devices watch <name> on|off
+                              tell the host this machine is always on: it
+                              messages you when the machine stops checking in,
+                              and when it is back
+  huginn projects [--json]    clusters of sessions with roles, and who is
+                              waiting
+  huginn projects show <name> a project's members, one line each
+  huginn projects new <name>  start one (launches its lead session)
+                              --brief "<the lead's whole first message>"|-
+                              [--kind software|infra|hardware|docs|research|
+                              other] [--cwd DIR]
+  huginn projects spawn <project>
+                              approve the lead's proposal: create its members
+  huginn projects msg <project> <from> <to> <text>
+                              one line from one member to another
+  huginn projects end <project>
+                              end it AND wind its sessions down
+                              [--now: end them outright | --keep-sessions:
+                              leave them running]
+  huginn device [status]      what THIS machine offers huginn, and what huginn
+                              sees
+  huginn device on            offer this machine
+                              [--scope look|work|own] [--root DIR]
+                              [--url URL: the daemon's address, when ssh
+                              cannot say]
+                              [--act-while-locked | --no-act-while-locked:
+                              whether a lock screen withdraws 'act' on this
+                              machine (default: it does)]
+  huginn device off           stop offering it
+  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device serve         the runner itself - what the service starts
+  huginn device unit          print what keeps the runner up: a systemd unit
+                              [--system], or on Windows a scheduled task that
+                              runs it as you with nobody signed in
+  huginn llm "prompt"         one question to the local tier (a serving
+                              machine answers, not Claude)
+                              [--model ROW] [--timeout S];
+                              'huginn llm -' reads stdin
+  huginn local [status]       what THIS machine serves as local AI, if anything
+  huginn local on             serve local models from this machine
+                              (optional, ~5 GB)
+  huginn local plan           what 'on' would install here, without installing
+                              anything
+  huginn local persist        make an existing install survive logout
+                              (system services, or linger)
+  huginn local doctor         exits nonzero when this install is not doing
+                              what it says
+  huginn local update         re-fetch the manager and the pinned runtime
+  huginn local unit           print the service definitions this tier installs
+                              [--system]
+  huginn local off            stop serving  [--purge-models] [--purge]
+  huginn kill <name>          hard end: stop the session now
+  huginn archive <name>       end it for good and keep the way back: the title,
+                              the cwd, a copy of the transcript and the exact
+                              'claude --resume' command  [--now: skip wrap-up]
+  huginn archive              what has been archived, and how to bring it back
+  huginn revive <id|name>     bring an archived session back to life
+  huginn -p "question"        one-shot headless query: reasoning + memory +
+                              web, and nothing that can change anything
+                              (Bash/Edit/Write are denied)
+  huginn -y "task"            one-shot that may use tools
+                              (bash/files/web + memory)
+  huginn usage [args]         Claude Code token/cost report (ccusage; default:
+                              daily), e.g. huginn usage monthly | session |
+                              blocks | blocks --live
+  huginn usage <when>         shortcut date range: today | yesterday | week |
+                              month, e.g. huginn usage today |
+                              huginn usage week session
+  huginn desktop              download links for the latest Huginn Desktop
+                              build
+  huginn desktop win|linux    just that platform's url, bare, for scripting
+  huginn update               self-update this client from the repo
+                              ({REPO}); without gh, from the
+                              PINNED {UPDATE_HOST} mirror, never from
+                              {HOST_VAR}{HOST_HERE}:
+                              the box you point at must not become a source
+                              of code this shell runs
+  huginn uninstall            unenrol this machine, then remove the client,
+                              the tokens, the local-AI tier and the profile
+                              line [--all also takes the SSH stanza + huginn's
+                              own key]
+  huginn version              show client version
+  huginn help | ? | /help     this help
+
+  Any verb takes --help for its own usage, answered here without touching the
+  host: 'huginn archive --help', 'huginn device --help'.
+  Session names are lowercase letters, digits, '_' and '-' (no dots, spaces
+  or *), up to 50 characters, and must start with a letter, digit or '_'.
+  Case-insensitive ('Test' and 'test' are the same session).
+  In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
+  Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.
+  Reattach from any device.
+  Host via the 'huginn' SSH alias; override with {HOST_VAR}.
+  Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during
+  the wait to stop. Disable with {SET:HUGINN_NO_RECONNECT=1}.
+  The terminal tab is named after the session (<name>) and the title that was
+  there before is put back when you leave; {SET:HUGINN_NO_TITLE=1} off.
+  A state mark leads the tab title while Claude runs: working / needs you /
+  waiting (set host-side by the claude hooks; needs the server's title hook
+  installed).

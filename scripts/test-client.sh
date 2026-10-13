@@ -714,6 +714,52 @@ else
     || ok "huginn-status honours NO_COLOR even on a terminal"
 fi
 
+echo "[5f2/8] one state table, one help screen, one colour guard, 7-bit clients"
+# ⚠ WHY (reskin PR 6): the marks meant different things per renderer (rounds'
+# "!!" and "?", archive's ">" for a LIVE session), the two help screens were two
+# hand-kept copies that had drifted, and huginn.ps1 coloured lines whatever
+# NO_COLOR said. Each of those is now ONE source with generated copies, and these
+# fail the moment a copy is edited by hand.
+node scripts/gen-state-table.js --check >/dev/null 2>&1 \
+  && ok "every state-table reader matches server/lib/state-table.json" \
+  || bad "a state-table reader drifted: node scripts/gen-state-table.js"
+node scripts/gen-help.js --check >/dev/null 2>&1 \
+  && ok "both clients' help bodies match client/help-table.txt" \
+  || bad "a client's help body drifted: node scripts/gen-help.js"
+ST_MISS=
+for r in huginn-rounds huginn-devices huginn-headroom huginn-archive huginn-projects huginn-claude-title huginn-status; do
+  grep -q 'state-table' "server/bin/$r" || ST_MISS="$ST_MISS $r"
+done
+[ -z "$ST_MISS" ] && ok "every state renderer in server/bin reads the state table" \
+  || bad "renderers that do not read the state table:$ST_MISS"
+# 7-BIT, in everything the clients PRINT. Windows PowerShell 5.1 reads a BOM-less
+# file as the ANSI code page, so one em-dash in a string is three wrong glyphs on
+# somebody's screen. Comments may still carry UTF-8 (they are never printed).
+for f in client/huginn.sh client/huginn.ps1 client/install.ps1 client/install.sh client/help-table.txt; do
+  HI=$(LC_ALL=C grep -nP '[^\x00-\x7F]' "$f" | LC_ALL=C grep -vP '^\d+:\s*#')
+  [ -z "$HI" ] && ok "$f prints 7-bit only" || bad "$f prints non-ASCII: $(head -2 <<<"$HI")"
+done
+HB=$(bash -c 'source client/huginn.sh; huginn help' 2>&1)
+LONG=$(awk 'length($0) > 79' <<<"$HB")
+[ -z "$LONG" ] && ok "sh: the help screen fits 80 columns" || bad "sh: help lines over 79 columns: $(head -2 <<<"$LONG")"
+grep -q 'huginn devices watch' <<<"$HB" && ok "sh: the help lists 'devices watch'" || bad "sh: no 'devices watch' in the help"
+# ONE COLOUR GUARD in PowerShell: _Huginn-Say is the only -ForegroundColor.
+FG=$(tr -d '\r' < client/huginn.ps1 | grep -v '^\s*#' | grep -c -- '-ForegroundColor')
+[ "$FG" = 1 ] && ok "ps1: every coloured line goes through the one guard (_Huginn-Say)" \
+  || bad "ps1: $FG -ForegroundColor uses outside comments (expected 1, inside _Huginn-Say)"
+if command -v pwsh >/dev/null 2>&1; then
+  HP=$(pwsh -NoProfile -Command '. ./client/huginn.ps1; huginn help' 2>&1 | tr -d '\r')
+  LONG=$(awk 'length($0) > 79' <<<"$HP")
+  [ -z "$LONG" ] && ok "ps1: the help screen fits 80 columns" || bad "ps1: help lines over 79 columns: $(head -2 <<<"$LONG")"
+  # The banner, a blank line, then the body - in both clients.
+  [ "$(sed -n 6p <<<"$HP")" = "" ] && [ "$(sed -n 6p <<<"$HB")" = "" ] \
+    && ok "both: a blank line after the help banner" || bad "a client runs the help body into its banner"
+else
+  skip "ps1 help width (no pwsh)"
+fi
+VS=$(bash -c 'source client/huginn.sh; huginn version' 2>&1)
+case "$VS" in "(o> huginn-cli "*) ok "sh: the version line leads with the one-row raven" ;; *) bad "sh: version line: $VS" ;; esac
+
 echo "[5g/8] the terminal tab title is PUT BACK, not overwritten"
 # ⚠ WHY: the attach ended with `printf '\033]0;%s\007' "${HOSTNAME:-shell}"` -
 # it set the title to the HOSTNAME, a string that was very probably never in
@@ -911,7 +957,7 @@ grep -q "whitespace" <<<"$(reason)" \
 : > "$TD/appd-token"
 grep -q "is empty" <<<"$(reason)" && ok "an empty token file says so" || bad "empty token: $(reason)"
 printf 'realtoken\n' > "$TD/appd-token"
-grep -qv "MISSING" <<<"$(reason)" && ok "a good token is not reported missing" || bad "good token: $(reason)"
+grep -qv "missing" <<<"$(reason)" && ok "a good token is not reported missing" || bad "good token: $(reason)"
 
 # `off` printed "Removed from huginn." and exited 0 when the DELETE failed, having
 # already thrown away conf.id — the only handle that could ever remove the row.
@@ -1536,7 +1582,7 @@ else
   # ⚠ THE ONE THING A ROW MUST NOT BE QUIET ABOUT. Claude Code deletes its own
   # transcripts after cleanupPeriodDays, and a revive past that comes back with
   # amnesia — so a row with nothing kept has to say so before somebody tries.
-  grep -q "TRANSCRIPT GONE" <<<"$AR_LIST" \
+  grep -q "transcript gone" <<<"$AR_LIST" \
     && ok "a row whose transcript is gone says so instead of offering a hollow revive" \
     || bad "archive list was silent about a missing transcript: $AR_LIST"
   # THE REFUSAL, VERBATIM. This is why the call is made on the host at all.
@@ -1801,7 +1847,7 @@ else
   grep -qE "lead (busy|working)" <<<"$PJ_LIST" \
     && ok "the lead's state rides the project line" || bad "no lead state in: $PJ_LIST"
   PJ_SHOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show "Sensor board" 2>&1)
-  grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "NEEDS YOU" <<<"$PJ_SHOW" \
+  grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "needs you" <<<"$PJ_SHOW" \
     && ok "show renders the member table with the waiting member marked" \
     || bad "projects show: $PJ_SHOW"
   # ⚠ THE ATTACH NAME IS NOT THE PEER NAME. A member is `<slug>/<role>` to its
@@ -2275,6 +2321,10 @@ check_deployed server/bin/huginn-devices /usr/local/bin/huginn-devices
 check_deployed server/bin/huginn-headroom /usr/local/bin/huginn-headroom
 check_deployed server/bin/huginn-archive  /usr/local/bin/huginn-archive
 check_deployed server/bin/huginn-projects /usr/local/bin/huginn-projects
+check_deployed server/lib/state-table.json /usr/local/lib/huginn/state-table.json
+check_deployed server/lib/state-table.sh   /usr/local/lib/huginn/state-table.sh
+check_deployed server/lib/state-table.py   /usr/local/lib/huginn/state-table.py
+check_deployed server/lib/state-table.js   /usr/local/lib/huginn/state-table.js
 [ "$DRIFT" -eq 0 ] || echo "       (install the ones above, or devices keep receiving the old file)" >&2
 
 echo

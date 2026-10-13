@@ -63,7 +63,7 @@ CHAT=$(curl -s -m 15 -X POST "$API/v1/chats" "${auth[@]}" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE")")
 CID=$(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('id',''))")
 if [ -z "$CID" ]; then
-  echo "huginn-llm: refused — $(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
   exit 1
 fi
 
@@ -88,7 +88,7 @@ trap cleanup EXIT
 SENT=$(curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" "${auth[@]}" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT")")
 printf '%s' "$SENT" | grep -q '"ok":true' || {
-  echo "huginn-llm: send refused — $(printf '%s' "$SENT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
   exit 1; }
 
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
@@ -108,5 +108,5 @@ print((a[-1].get('text') or '') if a else '')")
     exit 1
   fi
 done
-echo "huginn-llm: no answer within ${TIMEOUT}s — the machine may be loading the model; retry or raise --timeout" >&2
+echo "huginn-llm: no answer within ${TIMEOUT}s - the machine may be loading the model; retry or raise --timeout" >&2
 exit 1

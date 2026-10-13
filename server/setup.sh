@@ -44,17 +44,17 @@ fi
 # warning: `install` stamps the destination mtime, which would otherwise make
 # every installed file look "newer" forever.
 SKIPPED=
-install_script() {
+install_script() {   # $1 = src  $2 = dst  [$3 = mode, default 0755]
   local src="$1" dst="$2"
   if [ -e "$dst" ] && ! cmp -s "$src" "$dst"; then
     if [ "$dst" -nt "$src" ] && [ -z "${HUGINN_FORCE:-}" ]; then
-      echo "[huginn] SKIP $dst — the installed copy differs and is NEWER than $src" >&2
+      echo "[huginn] SKIP $dst - the installed copy differs and is NEWER than $src" >&2
       SKIPPED="$SKIPPED $dst"
       return 0
     fi
     echo "[huginn] replacing $dst (differs from $src)"
   fi
-  install -m 0755 "$src" "$dst"
+  install -m "${3:-0755}" "$src" "$dst"
 }
 install_script "$HERE/bin/cc"                  /usr/local/bin/cc
 install_script "$HERE/bin/huginn-status"       /usr/local/bin/huginn-status
@@ -73,6 +73,14 @@ install_script "$HERE/bin/huginn-archive"      /usr/local/bin/huginn-archive
 # bash+python of its siblings because it POSTs JSON built out of argv.
 install_script "$HERE/bin/huginn-projects"     /usr/local/bin/huginn-projects
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
+# The state table every renderer above reads its marks, words and colour slots
+# from: server/lib/state-table.json and the readers generated from it (bash,
+# python, node). Beside the renderers in the tree; here on a host, where they
+# look for it second. Data, not programs: 0644.
+install -d /usr/local/lib/huginn
+for f in state-table.json state-table.sh state-table.py state-table.js; do
+  install_script "$HERE/lib/$f" "/usr/local/lib/huginn/$f" 0644
+done
 
 # tmux config — installed for root by default; for a non-root login user, copy
 # server/tmux.conf to that user's ~/.tmux.conf instead. (Ships allow-passthrough on,
@@ -109,7 +117,7 @@ if command -v jq >/dev/null 2>&1; then
   ' "$SETTINGS" > "$SETTINGS.huginn-new" && mv "$SETTINGS.huginn-new" "$SETTINGS"
   rm -f "$SETTINGS.huginn-add"
 else
-  echo "[huginn] jq not found — skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
+  echo "[huginn] jq not found - skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
 fi
 
 echo

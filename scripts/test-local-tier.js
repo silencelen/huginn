@@ -167,7 +167,7 @@ test('the copy names the failure and the way out of it', () => {
 });
 
 test('doctor FAILS on a user unit with no linger — it does not note it', () => {
-  assert.equal(local.persistenceVerdict({ systemUnits: false, linger: false, persistent: false }).level, 'FAIL');
+  assert.equal(local.persistenceVerdict({ systemUnits: false, linger: false, persistent: false }).level, 'fail');
   assert.equal(local.persistenceVerdict({ systemUnits: true, linger: null, persistent: true }).level, 'ok');
   // Unknown is not a failure: a box with no logind to ask has done nothing wrong.
   assert.equal(local.persistenceVerdict({ systemUnits: false, linger: null, persistent: null }).level, 'note');
@@ -540,7 +540,7 @@ test('doctor exits nonzero on a user unit with no linger, and names it', () => {
     mode: 'managed', class: 'C', deviceName: 'box-llm', port: 1, systemUnits: false,
   }));
   const r = runMgr(['doctor'], { dir, bin, home: root });
-  assert.match(r.stdout, /FAIL {2}persistence/,
+  assert.match(r.stdout, /fail {2}persistence/,
     'a checkup whose only word for this is a note agrees with the machine\'s own wrong answer');
   assert.notEqual(r.status, 0, 'doctor must FAIL, not merely mention it');
 

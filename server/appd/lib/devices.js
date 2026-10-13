@@ -44,6 +44,9 @@
  * looks broken; the other looks dead. Both are silent.
  */
 const table = require('./device-policy-table');
+// The state table's glyphs lead a Telegram sentence (BRAND.md section 8): waiting
+// for a machine that stopped checking in, working again when it is back. No emoji.
+const { GLYPH } = require('./state-table');
 
 const SCOPES = table.SCOPES;
 
@@ -399,9 +402,9 @@ function watchText(kind, device, ms) {
   const dur = mins >= 120 ? `${Math.round(mins / 60)} h` : `${mins} min`;
   if (kind === 'down') {
     const seen = device.lastSeen ? new Date(device.lastSeen).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : 'never';
-    return `🔴 huginn device ${device.name} offline — the ${what} has not checked in for ${dur} (last seen ${seen}). It is marked always-on; if nobody restarted it, the machine needs looking at.`;
+    return `${GLYPH.waiting} ${device.name} offline — the ${what} has not checked in for ${dur} (last seen ${seen}). It is marked always-on; if nobody restarted it, the machine needs looking at.`;
   }
-  return `✅ huginn device ${device.name} back — the ${what} checked in again after ${dur} offline.`;
+  return `${GLYPH.running} ${device.name} back — the ${what} checked in again after ${dur} offline.`;
 }
 
 /** The client-facing view: the record plus what it would have to derive. */

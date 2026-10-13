@@ -56,7 +56,7 @@ test('a finished chat carries the answer, not just the fact that it ended', () =
   assert.strictEqual(alerts[0].text, 'Sonarr is on 4.0.10; nothing to do.');
   // Telegram has no app around it to supply the context, so it says the event too.
   const tg = telegramText(alerts[0]);
-  assert.ok(tg.startsWith('\u{1F514} Chat finished: Audit the arr stack'), tg);
+  assert.ok(tg.startsWith('\u25a0 chat finished: Audit the arr stack'), tg);
   assert.ok(tg.includes('Sonarr is on 4.0.10'), tg);
 });
 

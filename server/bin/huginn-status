@@ -29,12 +29,19 @@ esac
 # The two rules are the informal standard: no colour when stdout is not a TTY,
 # and no colour when NO_COLOR is set to anything at all (no-color.org - the
 # VALUE is not consulted, only whether it is set and non-empty).
-# The slots are the brand's 16-colour table (assets/brand/BRAND.md section 4):
-# headings in the accent slot (brightMagenta, heather in the brand palette and
-# readable on every stock palette), ok = brightGreen, error = brightRed,
-# warn = brightYellow. Slot numbers, never hex: the user's terminal owns the hues.
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-  C=$(printf '\033[95m'); G=$(printf '\033[92m'); R=$(printf '\033[91m'); Y=$(printf '\033[93m'); Z=$(printf '\033[0m')
+# The slots are the brand's (assets/brand/BRAND.md section 4), read from the state
+# table (server/lib/state-table.json, through its generated bash reader): headings
+# in the accent slot (brightMagenta, the info slot), ok = brightCyan, error =
+# brightRed, attention = brightYellow. Slot numbers, never hex: the user's terminal
+# owns the hues. No table, no colour - a status check never fails over a palette.
+_lib="$(dirname "$(readlink -f "$0")")/../lib"
+[ -r "$_lib/state-table.sh" ] || _lib=/usr/local/lib/huginn
+# shellcheck source=../lib/state-table.sh
+. "$_lib/state-table.sh" 2>/dev/null || HUGINN_SGR_INFO=
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ -n "${HUGINN_SGR_INFO:-}" ]; then
+  C=$(printf '\033[%sm' "$HUGINN_SGR_INFO"); G=$(printf '\033[%sm' "$HUGINN_SGR_OK")
+  R=$(printf '\033[%sm' "$HUGINN_SGR_ERROR"); Y=$(printf '\033[%sm' "$HUGINN_SGR_NEEDS_YOU")
+  Z=$(printf '\033[0m')
 else
   C=''; G=''; R=''; Y=''; Z=''
 fi
@@ -47,7 +54,7 @@ SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=3)
 
 # The one-row raven leads the first line (BRAND.md section 3): 7-bit, so it is the
 # same glyph here, in tmux and in the clients.
-echo "${C}(o> huginn${Z} — $(hostname)"
+echo "${C}(o> huginn${Z} - $(hostname)"
 echo "  uptime    : $(uptime -p | sed 's/^up //')"
 echo "  load      : $(cut -d' ' -f1-3 /proc/loadavg) (on $(nproc) cores)"
 echo "  claude    : $(claude --version 2>/dev/null | head -1)"
@@ -55,7 +62,7 @@ SUB=$(jq -r '.claudeAiOauth.subscriptionType // empty' "$HOME"/.claude/.credenti
 echo "  auth      : ${SUB:-api key / unknown} plan"
 N=$(tmux ls 2>/dev/null | wc -l)
 echo "  sessions  : ${N} running"
-tmux ls 2>/dev/null | sed 's/^/                ・ /'
+tmux ls 2>/dev/null | sed 's/^/    - /'
 
 # Memory node: reachability + write-path health, without touching any MCP server.
 if [ -n "$MEMPALACE_HOST" ]; then
@@ -66,8 +73,8 @@ if [ -n "$MEMPALACE_HOST" ]; then
   case "$MP" in
     daemon-active) echo "  mempalace : ${G}connected${Z}  ($MEMPALACE_HOST, write daemon active)" ;;
     rebuilding)    echo "  mempalace : ${Y}index rebuild in progress${Z} (vector search disabled until it finishes)" ;;
-    daemon-DOWN)   echo "  mempalace : ${R}reachable but write daemon DOWN${Z} — writes are failing" ;;
-    *)             echo "  mempalace : ${R}NOT reachable${Z} ($MEMPALACE_HOST)" ;;
+    daemon-DOWN)   echo "  mempalace : ${R}reachable but write daemon down${Z} - writes are failing" ;;
+    *)             echo "  mempalace : ${R}not reachable${Z} ($MEMPALACE_HOST)" ;;
   esac
 fi
 
