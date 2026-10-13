@@ -1,34 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Status-bar icon: silhouette only, single colour, as Android tints and
-     shrinks it to ~24dp. The brand raven (assets/brand/raven.svg) without the
-     eye hole — a 2-unit hole is sub-pixel at status-bar size, just noise. -->
+<!-- Status-bar icon: the brand's small form, the raven cut out of a rounded tile
+     (explorations/round3/fold-system/glyph-c.svg), single colour because Android
+     tints and shrinks it to ~24dp. The eye is a 4x4 cell on whole pixels so it is
+     exactly one pixel at 16 and the bird still reads as a bird in a tile. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
         android:width="24dp"
         android:height="24dp"
-        android:viewportWidth="108"
-        android:viewportHeight="108">
-    <group
-        android:translateX="2"
-        android:translateY="11">
-        <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M94,32
-                              C87,27.5 80,25.8 74,25.5
-                              C72.5,19.5 64,17 58.5,19.3
-                              C54,21.3 51,24 48,27
-                              C41,32.5 35,37.5 30,42
-                              L10,60
-                              L16,69
-                              L37,54
-                              C40,58.5 45,61.5 51,62.5
-                              C58,63.3 64,60 67,55.5
-                              C70.3,50.3 71.8,45.2 70,41
-                              L67.8,40.2
-                              L71.3,37.8
-                              L68.8,36.2
-                              L72,34.8
-                              C79,34.6 86,34.2 93,33.6
-                              C94.6,33 94.6,32.5 94,32
-                              Z" />
-    </group>
+        android:viewportWidth="64"
+        android:viewportHeight="64">
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M54.79,19.428 L47.23,16.572 L35.89,10.86 L28.33,10.86 L20.77,13.716 L17.79,18.219 L25.863,39.567 L17.971,51.493 L16.009,50.195 L23.237,39.273 L16.527,21.528 L9.43,53.7 L24.55,53.7 L35.89,47.988 L39.67,47.988 L43.45,36.564 L43.45,25.14 Z M32,16 h4 v4 h-4 Z" />
 </vector>
