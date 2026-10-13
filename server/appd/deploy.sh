@@ -161,14 +161,21 @@ node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-permission-hook"
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
 
 systemctl restart huginn-appd
-sleep 2
 TOKEN="$(cat "$TOKEN_FILE")"
 # Loopback, both protocols. Since 3.11 plain HTTP is honoured only from this host
 # (HUGINN_APPD_PLAINTEXT=local), so the old tailnet-address ping would get a 426;
 # and the https ping proves the TLS half came up too (-k is fine on loopback:
 # there is no network in between to be intercepted on).
 APPD_ADDR="${HUGINN_APPD_URL:-http://127.0.0.1:8787}"
-PING="$(curl -sf -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping")"
+# ⚠ POLLED, NOT `sleep 2`. The daemon restores sessions and sweeps state before
+# it listens, and a first 3.11 start mints its certificate too — 2.7 s on
+# 2026-10-13, which failed a healthy deploy at exactly the fixed sleep. Up to 30 s.
+PING=
+for _ in $(seq 1 60); do
+  PING="$(curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping" || true)"
+  [ -n "$PING" ] && break
+  sleep 0.5
+done
 echo "[deploy] $PING"
 grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back healthy" >&2; exit 1; }
 SPING="$(curl -sfk -H "Authorization: Bearer $TOKEN" "https://127.0.0.1:8787/v1/ping")"
