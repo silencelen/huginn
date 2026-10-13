@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.Screen
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.automirrored.outlined.KeyboardTab
 
 /**
  * The live pane. Not a terminal emulator (there is no PTY here), but a real
@@ -361,7 +362,7 @@ fun TerminalScreen(
                     onClick = { if (draft.isNotEmpty()) onSendText(draft, false) },
                     enabled = draft.isNotEmpty(),
                 ) {
-                    Text("↦", style = MaterialTheme.typography.titleLarge)
+                    Icon(Icons.AutoMirrored.Outlined.KeyboardTab, contentDescription = "Type into the pane")
                 }
                 IconButton(
                     onClick = {
@@ -482,7 +483,7 @@ private fun KeyRow(
                 )
             }
             KeyChip("Esc") { onSendKeys(listOf("Escape")) }
-            KeyChip("⇧Tab") { onSendKeys(listOf("BTab")) }
+            KeyChip("Shift+Tab") { onSendKeys(listOf("BTab")) }
             KeyChip("Tab") { onSendKeys(listOf("Tab")) }
             IconKeyChip(Icons.Filled.ArrowUpward, "Up") { onSendKeys(listOf("Up")) }
             IconKeyChip(Icons.Filled.ArrowDownward, "Down") { onSendKeys(listOf("Down")) }

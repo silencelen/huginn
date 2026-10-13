@@ -55,16 +55,14 @@ fun RoundsSection(
     /** "I have read this and dealt with it." Null hides it, same rule as [onEdit]. */
     onAcknowledge: ((Round, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
-    header: String? = "ROUNDS",
+    header: String? = "Rounds",
 ) {
     if (rounds.isEmpty()) return
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (header != null) {
             Text(
                 header,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.2.sp,
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 14.dp, top = 6.dp),
             )

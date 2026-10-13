@@ -482,7 +482,7 @@ private fun SessionRow(
                 Spacer(Modifier.height(3.dp))
                 Text(
                     buildList {
-                        s.bgTask?.let { add("⚙ $it") }
+                        s.bgTask?.let { add("◦ $it") }
                         if (s.bgShells > 1) add("+${s.bgShells - 1} more")
                         if (s.bgAgents > 0) add("${s.bgAgents} agent${if (s.bgAgents == 1) "" else "s"}")
                     }.joinToString("  ·  "),

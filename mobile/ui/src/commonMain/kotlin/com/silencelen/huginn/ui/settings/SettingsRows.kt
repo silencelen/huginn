@@ -42,6 +42,13 @@ import com.silencelen.huginn.ui.REMOVE_ROUTE_BODY
 import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.data.RouteHealth
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.Icon
+import com.silencelen.huginn.ui.system.Scale
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.ArrowDownward
 
 /**
  * The five shapes a settings row can be, drawn once for both shells.
@@ -266,11 +273,11 @@ fun SettingsNavRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                "›",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 8.dp),
+            Icon(
+                Icons.Outlined.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 8.dp).size(Scale.iconLarge),
             )
         }
     }
@@ -733,8 +740,8 @@ private fun RouteRow(
             // minimum, and three of them at full width spread one route's controls
             // across a third of the page — the arrows end up further from the row
             // they reorder than from each other.
-            TextButton(onClick = { actions.move(route.id, -1) }, enabled = !first, contentPadding = TIGHT) { Text("↑") }
-            TextButton(onClick = { actions.move(route.id, 1) }, enabled = !last, contentPadding = TIGHT) { Text("↓") }
+            TextButton(onClick = { actions.move(route.id, -1) }, enabled = !first, contentPadding = TIGHT) { Icon(Icons.Outlined.ArrowUpward, contentDescription = "Move up", modifier = Modifier.size(Scale.icon)) }
+            TextButton(onClick = { actions.move(route.id, 1) }, enabled = !last, contentPadding = TIGHT) { Icon(Icons.Outlined.ArrowDownward, contentDescription = "Move down", modifier = Modifier.size(Scale.icon)) }
             TextButton(onClick = onEdit, contentPadding = TIGHT) { Text(if (editing) "Done" else "Edit") }
         }
         Text(

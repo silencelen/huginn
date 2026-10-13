@@ -53,6 +53,7 @@ import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.automirrored.outlined.Chat
 
 /**
  * Home surface: every headless conversation with huginn, newest first. "Ask" runs
@@ -172,8 +173,8 @@ fun ChatsScreen(
                     // the one dialog every chat goes through.
                     if (devices.isNotEmpty()) {
                         Text(
-                            "WHERE IT RUNS",
-                            style = MaterialTheme.typography.labelSmall,
+                            "Where it runs",
+                            style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 10.dp),
                         )
@@ -261,7 +262,7 @@ fun ChatsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showNew = false; onNew("ask", newHost) }) {
-                    Icon(Icons.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Outlined.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
                     Text("Ask")
                 }

@@ -99,7 +99,7 @@ object WorkSummary {
         val details = buildList {
             addAll(statusLines)
             tasks.take(2).forEach { t ->
-                add("⚙ ${t.command}" + if (t.forSeconds > 0) " · ${agoShort(t.forSeconds)}" else "")
+                add("◦ ${t.command}" + if (t.forSeconds > 0) " · ${agoShort(t.forSeconds)}" else "")
             }
             // Only when no pane row already says it, or the same fan-out is
             // counted twice in three lines.

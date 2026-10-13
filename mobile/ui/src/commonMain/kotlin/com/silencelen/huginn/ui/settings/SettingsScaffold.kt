@@ -40,6 +40,12 @@ import com.silencelen.huginn.settings.SettingsProbe
 import com.silencelen.huginn.settings.SettingsSearch
 import com.silencelen.huginn.settings.Surface as SettingsSurface
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.Icon
+import androidx.compose.foundation.layout.size
+import com.silencelen.huginn.ui.system.Scale
 
 /**
  * The frame both Settings screens are drawn in: one search field, one category
@@ -307,10 +313,11 @@ fun SettingsCategoryList(
                         )
                     }
                 }
-                Text(
-                    "›",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Icon(
+                    Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Scale.iconLarge),
                 )
             }
         }
