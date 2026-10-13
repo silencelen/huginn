@@ -51,6 +51,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -959,7 +960,7 @@ private fun NavRail(
             count = sessions,
             active = current == View.SESSIONS,
             tip = railCountTip(nounFor(sessions, "session"), sessions, sessionsWaiting, "waiting on you"),
-            mark = if (sessionsWaiting > 0) MaterialTheme.colorScheme.error else null,
+            mark = if (sessionsWaiting > 0) LocalHuginnColors.current.stateAttention else null,
         ) { onSelect(View.SESSIONS) }
         if (View.PROJECTS in offered) {
             RailItem(
@@ -974,7 +975,7 @@ private fun NavRail(
                 // Same two colours as the rows, for the same reason a third
                 // would need a legend.
                 mark = when {
-                    projectsWaiting > 0 -> MaterialTheme.colorScheme.error
+                    projectsWaiting > 0 -> LocalHuginnColors.current.stateAttention
                     projectsBusy > 0 -> MaterialTheme.colorScheme.primary
                     else -> null
                 },
@@ -989,7 +990,7 @@ private fun NavRail(
             // The same two-colour vocabulary the rows above use, for the same
             // reason: a third meaning for a dot would need a legend.
             mark = when {
-                roundsWanting > 0 -> MaterialTheme.colorScheme.error
+                roundsWanting > 0 -> LocalHuginnColors.current.stateAttention
                 roundsRunning > 0 -> MaterialTheme.colorScheme.primary
                 else -> null
             },
@@ -1386,13 +1387,13 @@ private fun StatusLine(
                             ) { onOpenSession(waiting.first().name) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(Frame.markDot).clip(CircleShape).background(scheme.error))
+                        Box(Modifier.size(Frame.markDot).clip(CircleShape).background(LocalHuginnColors.current.stateAttention))
                         Spacer(Modifier.width(Space.tight))
                         Text(
                             if (waiting.size == 1) "${waiting.first().name} needs you"
                             else "${waiting.size} sessions need you",
                             style = DeskType.status,
-                            color = scheme.error,
+                            color = LocalHuginnColors.current.stateAttention,
                         )
                     }
                 }

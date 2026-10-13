@@ -214,7 +214,7 @@ private fun CountsLine(snapshot: FleetSnapshot) {
             Text(
                 "${snapshot.attention} need you",
                 style = TextStyle(
-                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else GlanceTheme.colors.error,
+                    color = if (stale) GlanceTheme.colors.onSurfaceVariant else attentionColor(),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                 ),
@@ -313,10 +313,18 @@ private fun SessionRows(snapshot: FleetSnapshot) {
     }
 }
 
-/** Same code the sessions list speaks: error = needs you, primary = working, muted = quiet. */
+/**
+ * Same code the sessions list speaks: needs you = the accent lit up, working =
+ * primary, muted = quiet. Glance cannot read the app's composition locals, so the
+ * needs-you colour is the brand token spelled out (light / dark stateAttention
+ * from color-04-moss-heather/tokens.json) until the widget is on the scheme.
+ */
+private fun attentionColor(): ColorProvider =
+    androidx.glance.color.ColorProvider(day = Color(0xFF0F3320), night = Color(0xFFE4E2A8))
+
 @Composable
 private fun stateColor(state: String?): ColorProvider = when (state) {
-    Fleet.ATTENTION -> GlanceTheme.colors.error
+    Fleet.ATTENTION -> attentionColor()
     Fleet.RUNNING -> GlanceTheme.colors.primary
     else -> GlanceTheme.colors.onSurfaceVariant
 }

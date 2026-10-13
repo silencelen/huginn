@@ -58,8 +58,11 @@ fun roundStatusLabel(s: RoundStatus, acknowledged: Boolean = false): String {
 fun roundStatusColorKey(s: RoundStatus, acknowledged: Boolean = false): String {
     if (acknowledged) return "muted"
     return when (s) {
-        RoundStatus.ACTION -> "error"
-        RoundStatus.ATTENTION -> "primary"
+        // "Needs you" is the accent lit up (the brand's stateAttention), not the
+        // error red: a question is not a failure. "Worth a look" is news, so it
+        // takes the info colour, not the working accent.
+        RoundStatus.ACTION -> "attention"
+        RoundStatus.ATTENTION -> "info"
         RoundStatus.OK -> "muted"
         RoundStatus.UNKNOWN -> "outline"
         RoundStatus.NEVER_RUN -> "outlineVariant"

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -165,7 +166,9 @@ private fun MachineCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Surface(
-                        color = if (group.online) MaterialTheme.colorScheme.primary
+                        // Reachable is not working: the quiet step of the ladder,
+                        // and the accent stays for a machine that is doing something.
+                        color = if (group.online) LocalHuginnColors.current.stateIdle
                         else MaterialTheme.colorScheme.outlineVariant,
                         shape = CircleShape,
                         modifier = Modifier.size(if (group.online) 8.dp else 6.dp),

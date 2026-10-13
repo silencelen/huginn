@@ -31,6 +31,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -412,7 +413,7 @@ private fun SessionRow(
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     if (s.state == "running" || s.bgShells > 0 || s.bgAgents > 0) {
                         PulsingDot(
-                            if (s.state == "attention") MaterialTheme.colorScheme.error
+                            if (s.state == "attention") LocalHuginnColors.current.stateAttention
                             else MaterialTheme.colorScheme.primary
                         )
                     } else {
@@ -435,7 +436,7 @@ private fun SessionRow(
                         else stateLabel(s.state),
                         style = MaterialTheme.typography.labelSmall,
                         color = when {
-                            s.state == "attention" -> MaterialTheme.colorScheme.error
+                            s.state == "attention" -> LocalHuginnColors.current.stateAttention
                             s.state == "running" || s.bgShells > 0 || s.bgAgents > 0 ->
                                 MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
