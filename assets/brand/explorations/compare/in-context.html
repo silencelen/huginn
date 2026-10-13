@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Huginn mark candidates in context</title>
+<meta name="description" content="Four candidate marks (01 refined, 02 faceted, 04 pixel, 05 glyph) mocked on the product's real surfaces at true pixel size, side by side.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #12100F; --s1: #1B1817; --s2: #241F1D; --bone: #E8E2DA; --ink: #161310;
+    --muted: #8A8177; --gold: #C8A45C; --err: #E8736D; --tray-idle: #7B8794;
+    --light: #FAF7F2; --light-ink: #1B1817; --mono: 'JetBrains Mono', 'DejaVu Sans Mono', monospace;
+    --sans: 'Segoe UI', Roboto, 'Liberation Sans', 'DejaVu Sans', sans-serif;
+    --colw: 562px; --gap: 24px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--bone); }
+  body { width: 2400px; font-family: var(--mono); font-size: 13px; line-height: 1.45; padding: 40px 40px 60px; }
+  h1 { font-size: 26px; font-weight: 700; margin: 0 0 6px; letter-spacing: 0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 32px; max-width: 1400px; }
+  .cols { display: grid; grid-template-columns: repeat(4, var(--colw)); gap: var(--gap); margin-bottom: 28px; }
+  .colhead { border-top: 2px solid var(--bone); padding-top: 10px; }
+  .colhead .id { font-size: 18px; font-weight: 700; }
+  .colhead .set { color: var(--muted); font-size: 12px; margin-left: 8px; }
+  .colhead .concept { color: var(--muted); font-size: 12.5px; margin-top: 6px; min-height: 36px; }
+  .row { margin-top: 30px; }
+  .rowlabel { display: flex; align-items: baseline; gap: 14px; border-top: 1px solid var(--s2); padding-top: 10px; margin: 0 0 12px; }
+  .rowlabel .n { color: var(--gold); font-weight: 700; font-size: 14px; }
+  .rowlabel .t { font-size: 14px; font-weight: 500; }
+  .rowlabel .px { color: var(--muted); font-size: 12.5px; }
+  .cells { display: grid; grid-template-columns: repeat(4, var(--colw)); gap: var(--gap); align-items: start; }
+  .cell { min-width: 0; }
+  .note { color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+  .sublabel { color: var(--muted); font-size: 11.5px; margin: 10px 0 4px; }
+  .m { -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain;
+       -webkit-mask-position: center; mask-position: center; flex: none; }
+  img { display: block; }
+
+  /* 1 README hero */
+  .hero { display: flex; align-items: center; gap: 18px; padding: 22px 20px; border-radius: 6px; }
+  .hero.dark { background: var(--bg); border: 1px solid var(--s2); }
+  .hero.light { background: var(--light); color: var(--light-ink); margin-top: 10px; }
+  .hero .box { width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .hero pre { margin: 0; font-family: 'Liberation Mono', 'DejaVu Sans Mono', monospace; font-size: 12px; line-height: 1.45; white-space: pre; }
+  .hero .tag { font-family: var(--sans); font-weight: 600; font-size: 17px; margin-top: 8px; }
+
+  /* 2 launcher */
+  .phone { background: var(--s1); border-radius: 10px; padding: 18px 16px 14px; display: flex; justify-content: space-around; align-items: flex-end; }
+  .phone + .phone { margin-top: 10px; }
+  .app { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .app .name { font-family: var(--sans); font-size: 12px; color: var(--bone); }
+  .app .bar { height: 8px; width: 44px; border-radius: 4px; background: #3A3430; }
+  .ph { background: #4A433E; border-radius: 22.5%; }
+  .circ { border-radius: 50%; overflow: hidden; background: var(--bone); position: relative; }
+  .circ > * { position: absolute; }
+
+  /* 3 tray */
+  .taskbar { background: #1B1817; display: flex; align-items: center; justify-content: flex-end; gap: 0; padding-right: 14px; }
+  .taskbar.h48 { height: 48px; }
+  .taskbar.h72 { height: 72px; margin-top: 8px; }
+  .taskbar .slot { display: flex; align-items: center; justify-content: center; }
+  .taskbar.h48 .slot { width: 32px; height: 48px; }
+  .taskbar.h72 .slot { width: 48px; height: 72px; }
+  .taskbar .clock { font-family: var(--sans); color: var(--bone); margin-left: 12px; text-align: right; line-height: 1.2; }
+  .taskbar.h48 .clock { font-size: 12px; }
+  .taskbar.h72 .clock { font-size: 18px; }
+  .taskbar .sep { width: 1px; height: 60%; background: #332E2A; margin: 0 6px; }
+  .tray { position: relative; }
+  .tray > .m { position: absolute; }
+  .tray .dot { position: absolute; border-radius: 50%; }
+
+  /* 4 favicon */
+  .tabstrip { display: flex; align-items: flex-end; height: 40px; padding: 0 10px; gap: 2px; }
+  .tabstrip.light { background: #DEE1E6; }
+  .tabstrip.dark { background: #202124; margin-top: 8px; }
+  .tab { height: 34px; border-radius: 8px 8px 0 0; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-family: var(--sans); font-size: 12px; }
+  .tabstrip.light .tab.on { background: #FFFFFF; color: #1F1F1F; }
+  .tabstrip.light .tab.off { color: #5F6368; }
+  .tabstrip.dark .tab.on { background: #35363A; color: #E8EAED; }
+  .tabstrip.dark .tab.off { color: #9AA0A6; }
+  .tab .fav { width: 16px; height: 16px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .tab .ghost { width: 16px; height: 16px; border-radius: 50%; }
+  .tabstrip.light .ghost { background: #BDC1C6; }
+  .tabstrip.dark .ghost { background: #5F6368; }
+
+  /* 5 notification */
+  .notif { background: #1F1C1A; border-radius: 28px; padding: 26px 32px 30px; width: 540px; font-family: var(--sans); }
+  .notif .head { display: flex; align-items: center; gap: 16px; color: #B8B1A8; font-size: 24px; }
+  .notif .icon { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .notif .title { font-size: 28px; font-weight: 600; color: #F2ECE4; margin-top: 10px; }
+  .notif .body { font-size: 28px; color: #CFC8BF; }
+
+  /* 6 title bar */
+  .titlebar { height: 32px; background: var(--s1); display: flex; align-items: center; padding: 0 0 0 10px; font-family: var(--sans); font-size: 12.5px; }
+  .titlebar .ico { width: 20px; height: 20px; margin-right: 10px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .titlebar .ttl { flex: 1; color: var(--bone); }
+  .titlebar .ctl { display: flex; }
+  .titlebar .ctl span { width: 46px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
+  .titlebar .ctl span.x { color: var(--bone); }
+  .tile20 { width: 20px; height: 20px; border-radius: 4.5px; background: var(--bone); display: flex; align-items: center; justify-content: center; }
+  .winbody { height: 64px; background: var(--bg); border: 1px solid var(--s2); border-top: 0; }
+
+  /* 7 installer */
+  .wizard { width: 164px; height: 314px; background: var(--bg); position: relative; outline: 1px solid var(--s2); }
+  .wizard .mark { position: absolute; left: 0; right: 0; top: 52px; display: flex; justify-content: center; }
+  .wizard .wm { position: absolute; left: 0; right: 0; top: 140px; text-align: center; font-family: 'Liberation Sans', Arial, sans-serif; font-size: 12px; color: #8A8177; line-height: 1; }
+  .wizrow { display: flex; gap: 20px; align-items: flex-start; }
+  .wizrow .side { color: var(--muted); font-size: 11.5px; max-width: 330px; }
+
+  /* 8 CLI */
+  .term { background: var(--bg); border: 1px solid var(--s2); border-radius: 6px; padding: 14px 16px; }
+  .term pre { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.25; color: var(--bone); white-space: pre; }
+  .term .prompt { color: var(--muted); }
+
+  /* 9 hero */
+  .bonebox { width: 512px; height: 512px; background: var(--bone); display: flex; align-items: center; justify-content: center; }
+</style>
+</head>
+<body>
+<h1>Huginn mark candidates, in context</h1>
+<p class="sub">Four candidate marks on the surfaces the brand carries today (see BRIEF.md), each at its true pixel size. Every row uses the candidate's own SVG files; where a candidate ships a dedicated small-size drawing it is used at the sizes its README names. Labels say what is shown. Regenerate with <code>node compare/shoot.mjs</code>.</p>
+
+<div class="cols" id="cols"></div>
+<div id="rows"></div>
+
+<script>
+const R = '../';
+const CANDS = [
+  { id: 'mark-01-refined', set: 'marks-a', kind: 'vector',
+    concept: 'The same bird the brand already has, redrawn with a raven\'s anatomy instead of a circle-and-wedge; ships a compact head-and-bill drawing (-16) for 16-22 px.',
+    dir: R + 'marks-a/mark-01-refined/',
+    files: { mark: 'mark-01-refined.svg', small: 'mark-01-refined-16.svg', status: 'mark-01-refined-status.svg', tile: 'mark-01-refined-tile.svg' },
+    bounds: { x: 12.5, y: 29.1, w: 84.1, h: 49.4 }, vb: 108 },
+  { id: 'mark-02-faceted', set: 'marks-a', kind: 'vector',
+    concept: 'The same perched raven cut from 12 straight edges and a circular eye hole: engineered, not drawn; ships a 9-edge head drawing (-16) for 16-22 px.',
+    dir: R + 'marks-a/mark-02-faceted/',
+    files: { mark: 'mark-02-faceted.svg', small: 'mark-02-faceted-16.svg', status: 'mark-02-faceted-status.svg', tile: 'mark-02-faceted-tile.svg' },
+    bounds: { x: 12.5, y: 29.5, w: 84.1, h: 49 }, vb: 108 },
+  { id: 'mark-04-pixel', set: 'marks-b', kind: 'pixel',
+    concept: 'One drawing, three outputs: the raven is designed on a coarse pixel grid and the vector, the terminal art and the animation frames are all generated from the same cells.',
+    dir: R + 'marks-b/mark-04-pixel/',
+    files: { m16: 'mark-04-pixel.svg', m32: 'mark-04-pixel-32.svg', tile: 'mark-04-pixel-tile.svg', fg216: 'png/adaptive-fg-216.png' } },
+  { id: 'mark-05-glyph', set: 'marks-b', kind: 'glyph',
+    concept: 'The container is the mark and the raven is the hole: a solid rounded square of ink with a raven head and breast cut out of it, the eye a pixel-aligned ink cell.',
+    dir: R + 'marks-b/mark-05-glyph/',
+    files: { mark: 'mark-05-glyph.svg', tile: 'mark-05-glyph-tile.svg' } },
+];
+
+const BONE = '#E8E2DA', INK = '#161310';
+
+// A single-colour mark via CSS mask of the candidate's own SVG (keeps the file as the source).
+function mask(url, w, h, color, extra = '') {
+  return `<div class="m" style="width:${w}px;height:${h}px;background:${color};-webkit-mask-image:url('${url}');mask-image:url('${url}');${extra}"></div>`;
+}
+// Pixel master at an integer scale: the whole SVG box, no interpolation (crispEdges in the file).
+function pix(c, master, k, color, extra = '') {
+  const n = master === 'm16' ? 16 : 32, s = n * k;
+  return mask(c.dir + c.files[master], s, s, color, `-webkit-mask-size:${s}px ${s}px;mask-size:${s}px ${s}px;image-rendering:pixelated;${extra}`);
+}
+function centred(inner, S, extra = '') {
+  return `<div style="width:${S}px;height:${S}px;display:flex;align-items:center;justify-content:center;flex:none;${extra}">${inner}</div>`;
+}
+// The full mark in an S x S box.
+function full(c, S, color) {
+  if (c.kind === 'pixel') {
+    if (S < 32) return centred(pix(c, 'm16', 1, color), S);
+    return centred(pix(c, 'm32', Math.floor(S / 32), color), S);
+  }
+  return mask(c.dir + c.files.mark, S, S, color);
+}
+// The candidate's small-size drawing in an S x S box (S = 16..24).
+function small(c, S, color) {
+  if (c.kind === 'pixel') return centred(pix(c, 'm16', 1, color), S);
+  if (c.kind === 'glyph') return mask(c.dir + c.files.mark, S, S, color);
+  return mask(c.dir + c.files.small, S, S, color);
+}
+// The monochrome status-bar icon in an S x S box (S = 48).
+function status(c, S, color) {
+  if (c.kind === 'pixel') return centred(pix(c, 'm16', Math.floor(S / 16), color), S);
+  if (c.kind === 'glyph') return mask(c.dir + c.files.mark, S, S, color);
+  return mask(c.dir + c.files.status, S, S, color);
+}
+// The mark trimmed to its bounding box and scaled to W px wide (generate.sh: -trim -resize 104x).
+function trimmed(c, W, color) {
+  if (c.kind === 'pixel') {
+    // m32 at 3x = 96 px (nearest integer multiple of the 32-wide bird); bird rows 4-27 trimmed.
+    return mask(c.dir + c.files.m32, 96, 72, color, `-webkit-mask-size:96px 96px;mask-size:96px 96px;-webkit-mask-position:0 -12px;mask-position:0 -12px;`);
+  }
+  if (c.kind === 'glyph') return mask(c.dir + c.files.mark, W, W, color);
+  const b = c.bounds, H = Math.round(W * b.h / b.w);
+  const mw = c.vb / b.w * W, mh = c.vb / b.h * H;
+  return mask(c.dir + c.files.mark, W, H, color,
+    `-webkit-mask-size:${mw}px ${mh}px;mask-size:${mw}px ${mh}px;-webkit-mask-position:${-b.x / b.w * W}px ${-b.y / b.h * H}px;mask-position:${-b.x / b.w * W}px ${-b.y / b.h * H}px;`);
+}
+// Android launcher: adaptive icon under a circle mask, D px = the 72 dp visible disc.
+function launcher(c, D) {
+  const canvas = D * 1.5, off = -D * 0.25;
+  let inner;
+  if (c.kind === 'vector') {
+    // ic_launcher_foreground.xml: the mark on the 108 canvas, scaled 0.72 about (54,54).
+    inner = `<img src="${c.dir + c.files.mark}" width="${canvas}" height="${canvas}" style="left:${off}px;top:${off}px;transform:scale(0.72);transform-origin:50% 50%">`;
+  } else if (c.kind === 'pixel') {
+    if (canvas % 54 === 0) {
+      inner = `<img src="${c.dir + c.files.tile}" width="${canvas}" height="${canvas}" style="left:${off}px;top:${off}px;image-rendering:pixelated">`;
+    } else {
+      // Not an integer multiple of the 54-cell canvas: what a launcher does, resample the exact xhdpi layer (216 px) to the slot.
+      inner = `<img src="${c.dir + c.files.fg216}" width="${canvas}" height="${canvas}" style="left:${off}px;top:${off}px">`;
+    }
+  } else {
+    // Glyph ships no adaptive-foreground layout; the tile (container inset 10%) is sized so the container's
+    // corners stay inside the 66 dp safe circle: tile 66.9 dp of the 72 dp disc.
+    const t = Math.round(D * 66.9 / 72), o = (D - t) / 2;
+    inner = `<img src="${c.dir + c.files.tile}" width="${t}" height="${t}" style="left:${o}px;top:${o}px">`;
+  }
+  return `<div class="circ" style="width:${D}px;height:${D}px">${inner}</div>`;
+}
+// Tray icon in TrayIcons.kt's composition. S = slot size (16 or 24).
+function tray(c, S, color, attention) {
+  if (!attention) {
+    if (c.kind === 'pixel') return `<div class="tray" style="width:${S}px;height:${S}px">${centred(pix(c, 'm16', 1, color), S, 'position:absolute;left:0;top:0')}</div>`;
+    const inset = S * 2 / 64, w = S * 60 / 64;
+    const src = c.kind === 'glyph' ? c.files.mark : c.files.small;
+    return `<div class="tray" style="width:${S}px;height:${S}px">${mask(c.dir + src, w, w, color, `left:${inset}px;top:${inset}px`)}</div>`;
+  }
+  // raven fitted to 50x42 at (0,22) of 64, dot 18 at (44,2)
+  const d = S * 18 / 64, dx = S * 44 / 64, dy = S * 2 / 64;
+  let raven;
+  if (c.kind === 'pixel') {
+    // 1x m16 (bird is 16 x 12, rows 2-13), pushed to the bottom-left of the slot; the top-right corner stays clear.
+    raven = pix(c, 'm16', 1, color, `position:absolute;left:0;top:${S - 16}px`);
+  } else {
+    const src = c.kind === 'glyph' ? c.files.mark : c.files.small;
+    raven = mask(c.dir + src, S * 50 / 64, S * 42 / 64, color, `left:0;top:${S * 22 / 64}px`);
+  }
+  return `<div class="tray" style="width:${S}px;height:${S}px">${raven}<div class="dot" style="width:${d}px;height:${d}px;left:${dx}px;top:${dy}px;background:${color}"></div></div>`;
+}
+
+const FIGLET = `██╗  ██╗██╗   ██╗ ██████╗ ██╗███╗   ██╗███╗   ██╗
+██║  ██║██║   ██║██╔════╝ ██║████╗  ██║████╗  ██║
+███████║██║   ██║██║  ███╗██║██╔██╗ ██║██╔██╗ ██║
+██╔══██║██║   ██║██║   ██║██║██║╚██╗██║██║╚██╗██║
+██║  ██║╚██████╔╝╚██████╔╝██║██║ ╚████║██║ ╚████║
+╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝`;
+
+const HELP = `        _
+       (o)=-   huginn - Thought, on call from anywhere.
+      //  \\    remote Claude Code node.  aliases: rclaude, rcc
+   =~/____/`;
+
+function heroSize(c) { return c.kind === 'pixel' ? 'm32 at 3x = 96 px in the 120 px slot' : (c.kind === 'glyph' ? 'primary, tinted' : 'the mark / inverse'); }
+
+const ROWS = [
+  { n: 1, t: 'README hero', px: 'mark 120 px beside the figlet HUGINN (README.md, ANSI Shadow, pre at 12 px / 1.45) and the tagline; dark #12100F, then the light README ground #FAF7F2 with the ink mark',
+    cell: c => `
+      <div class="hero dark"><div class="box">${full(c, 120, BONE)}</div><div><pre>${FIGLET}</pre><div class="tag">Thought, on call from anywhere.</div></div></div>
+      <div class="hero light"><div class="box">${full(c, 120, INK)}</div><div><pre>${FIGLET}</pre><div class="tag">Thought, on call from anywhere.</div></div></div>
+      <div class="note">${heroSize(c)}</div>` },
+  { n: 2, t: 'Android launcher', px: 'adaptive icon under a circle mask: 48 dp at xhdpi = 96 px, then 108 px; neighbours are neutral placeholder tiles',
+    cell: c => {
+      const ph = D => `<div class="app"><div class="ph" style="width:${D}px;height:${D}px"></div><div class="bar"></div></div>`;
+      const ours = D => `<div class="app">${launcher(c, D)}<div class="name">Huginn</div></div>`;
+      const note = c.kind === 'vector' ? 'foreground = ic_launcher_foreground.xml group: mark scaled 0.72 about the canvas centre'
+        : c.kind === 'pixel' ? '96 px: launcher resample of the exact 216 px layer (144 px canvas is not a multiple of 54 cells); 108 px: tile master at 3x, exact'
+        : 'no adaptive layout shipped: the tile sized so the container\'s corners sit inside the 66 dp safe circle';
+      return `<div class="phone">${ph(96)}${ours(96)}${ph(96)}</div><div class="phone">${ph(108)}${ours(108)}${ph(108)}</div><div class="note">${note}</div>`;
+    } },
+  { n: 3, t: 'Desktop tray', px: 'Windows-style taskbar #1B1817: 16 px at 100 % scaling, 24 px at 150 %; idle #7B8794, working #C8A45C (rune-gold), needs-you #E8736D with the badge dot (TrayIcons.kt composition); left to right in each strip: idle, working, needs you',
+    cell: c => {
+      const strip = (S, cls) => `<div class="taskbar ${cls}">
+        <div class="slot">${tray(c, S, '#7B8794', false)}</div>
+        <div class="slot">${tray(c, S, '#C8A45C', false)}</div>
+        <div class="slot">${tray(c, S, '#E8736D', true)}</div>
+        <div class="sep"></div><div class="clock">23:41<br>13/10/2026</div></div>`;
+      const note = c.kind === 'pixel' ? 'm16 at 1x in both slots (the 24 px slot pads, per the README\'s integer rule); needs-you: m16 pushed to the bottom-left, dot in the cleared corner'
+        : c.kind === 'glyph' ? 'the untiled primary, tinted; needs-you: container fitted to 50x42 of 64 at (0,22), dot 18 at (44,2)'
+        : 'the -16 head drawing fitted to 60x60 of 64; needs-you: fitted to 50x42 at (0,22), dot 18 at (44,2)';
+      return strip(16, 'h48') + strip(24, 'h72') + `<div class="note">${note}</div>`;
+    } },
+  { n: 4, t: 'Browser tab / favicon', px: '16 px beside the title "Huginn", on a light tab strip and a dark one (ink on light, bone on dark, as a prefers-color-scheme SVG favicon would give)',
+    cell: c => {
+      const strip = (cls, color) => `<div class="tabstrip ${cls}">
+        <div class="tab on"><div class="fav">${small(c, 16, color)}</div>Huginn</div>
+        <div class="tab off"><div class="ghost"></div>New tab</div></div>`;
+      return strip('light', INK) + strip('dark', BONE);
+    } },
+  { n: 5, t: 'Android notification', px: 'card at 2x density; the monochrome status icon at 24 dp = 48 px, white (ic_stat_huginn.xml: the -status silhouette for 01/02, m16 at 3x for 04, the primary for 05)',
+    cell: c => `<div class="notif">
+        <div class="head"><div class="icon">${status(c, 48, '#FFFFFF')}</div><div>Huginn <span style="color:#8A8177">&middot; now</span></div></div>
+        <div class="title">Needs you &middot; main</div><div class="body">Allow Bash: npm test?</div></div>` },
+  { n: 6, t: 'Desktop window title bar', px: 'mark at 20 px beside "Huginn" in a dark title bar (bone tile with the small drawing for 01/02/04, the primary tinted bone for 05)',
+    cell: c => {
+      let ico;
+      if (c.kind === 'glyph') ico = small(c, 20, BONE);
+      else ico = `<div class="tile20">${small(c, 16, INK)}</div>`;
+      return `<div class="titlebar"><div class="ico">${ico}</div><div class="ttl">Huginn</div><div class="ctl"><span>&#8211;</span><span>&#9633;</span><span class="x">&times;</span></div></div><div class="winbody"></div>`;
+    } },
+  { n: 7, t: 'Installer welcome panel', px: '164x314 (NSIS MUI_WELCOMEFINISHPAGE_BITMAP): bone mark trimmed to ~104 px wide at +52 from the top on #12100F, "Huginn Desktop" 12 pt Liberation Sans #8A8177 at +140 (generate.sh)',
+    cell: c => `<div class="wizrow"><div class="wizard"><div class="mark">${trimmed(c, 104, BONE)}</div><div class="wm">Huginn Desktop</div></div>
+      <div class="side">${c.kind === 'pixel' ? 'm32 at 3x: 96 px wide (104 is not an integer multiple of the 32-wide bird)' : c.kind === 'glyph' ? 'the container is 104 px square, so it runs into the wordmark line: the panel needs a smaller mark or a lower wordmark' : 'trimmed bounding box 104 px wide'}</div></div>` },
+  { n: 8, t: 'CLI help header', px: 'the pure 7-bit ASCII 4-line raven (ascii/ascii-04-lockups/help-header-ascii.txt) at 12 px; identical in every column',
+    cell: c => `<div class="term"><pre><span class="prompt">$ huginn --help</span>\n${HELP}</pre></div>
+      <div class="note">The same for all four: the terminal twin is derived from today's mark and does not change with the choice of vector mark.</div>` },
+  { n: 9, t: 'Hero', px: '512 px on bone (ink mark; pixel: m32 at 16x; glyph: the tile master)',
+    cell: c => {
+      let inner;
+      if (c.kind === 'glyph') inner = `<img src="${c.dir + c.files.tile}" width="512" height="512">`;
+      else inner = full(c, 512, INK);
+      return `<div class="bonebox">${inner}</div>`;
+    } },
+];
+
+document.getElementById('cols').innerHTML = CANDS.map(c =>
+  `<div class="colhead"><span class="id">${c.id}</span><span class="set">${c.set}</span><div class="concept">${c.concept}</div></div>`).join('');
+
+document.getElementById('rows').innerHTML = ROWS.map(r => {
+  const open = r.n === 3 ? '<div id="small-rows">' : '', close = r.n === 6 ? '</div>' : '';
+  return `${open}<section class="row" id="row-${r.n}"><h2 class="rowlabel"><span class="n">${r.n}</span><span class="t">${r.t}</span><span class="px">${r.px}</span></h2>
+    <div class="cells">${CANDS.map(c => `<div class="cell">${r.cell(c)}</div>`).join('')}</div></section>${close}`;
+}).join('');
+</script>
+</body>
+</html>
