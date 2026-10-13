@@ -268,6 +268,24 @@ test('MITM: a proof over a DIFFERENT certificate is refused, and the token never
   assert.deepEqual(dev.pinsFor(readConf(), TOKEN), [], 'nothing was pinned');
 });
 
+test('a peer that accepts TCP and never finishes TLS fails the request instead of hanging it (scan F1)', async () => {
+  // Already pinned, so api() goes straight to the pinned channel — the path the
+  // serve loop sits on. The listener accepts and then says nothing at all.
+  const held = [];
+  const silent = net.createServer((sock) => { held.push(sock); sock.on('error', () => { }); });
+  await new Promise((r) => silent.listen(0, '127.0.0.1', r));
+  try {
+    writeConf({ url: `https://127.0.0.1:${silent.address().port}` });
+    dev.addPin(TOKEN, 'a'.repeat(64));
+    const t0 = Date.now();
+    await assert.rejects(dev.api('GET', '/v1/ping', null, { timeoutMs: 600 }), /did not finish within 600 ms|timed out/);
+    assert.ok(Date.now() - t0 < 5000, `bounded by the request's timeout (took ${Date.now() - t0} ms)`);
+  } finally {
+    for (const s of held) s.destroy();
+    silent.close();
+  }
+});
+
 test('legacy-only answer over https (no tls object) is NOT a proof', async () => {
   const c = mintCert('legacy');
   const fake = await fakeDaemon(c, (n) => ({ proof: hmac(TOKEN, n), version: '3.10.3' }));

@@ -674,11 +674,28 @@ class JudgedAgent extends https.Agent {
       rejectUnauthorized: false,   // ⚠ ONLY because `judge` below is the check
       ALPNProtocols: ['http/1.1'],
     });
+    // ⚠ THE HANDSHAKE HAS A DEADLINE (security scan 2026-10-13, F1). The stock
+    // agent applies the request's `timeout` to the socket from the moment it
+    // exists; this one hands the socket over only after the judgement, so the
+    // http layer's timer cannot start until then. A peer that accepts TCP and
+    // never finishes TLS (or anyone on-path who diverts the port) would leave
+    // the request — and the serve loop awaiting it — pending forever. So the
+    // connect-plus-handshake phase is bounded here, and a socket that closes
+    // before it is judged fails the request instead of leaving it waiting.
+    const deadlineMs = Number(options.timeout) > 0 ? Number(options.timeout) : 20000;
+    const fail = (e) => { sock.destroy(); once(e); };
     const onErr = (e) => once(e);
+    const onTimeout = () => fail(new Error(`tls handshake with ${options.host}:${options.port} did not finish within ${deadlineMs} ms`));
+    const onClose = () => once(new Error(`the connection to ${options.host}:${options.port} closed before its certificate could be checked`));
+    sock.setTimeout(deadlineMs, onTimeout);
     sock.once('error', onErr);
+    sock.once('close', onClose);
     sock.once('secureConnect', () => {
-      const why = this.judge(leafFp(sock));
+      sock.setTimeout(0);
+      sock.removeListener('timeout', onTimeout);
       sock.removeListener('error', onErr);
+      sock.removeListener('close', onClose);
+      const why = this.judge(leafFp(sock));
       if (why) { sock.destroy(); return once(why); }
       once(null, sock);
     });
