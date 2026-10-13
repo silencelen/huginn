@@ -367,6 +367,7 @@ def build_preview(g24):
         w, h = put(T(nm + '.png'), x, y, 4, label=lbl, frame='#4A4541')
         put(T(nm.replace('bone', 'dark') + '.png'), x + w + 16, y, 4, frame='#4A4541')
         y += h + 30
+    x, y = 24, yA + 512 + 40
     sub(x, y, 'head drawing mark-16.svg at 22 / 16, 4x')
     y += 22
     xx = x
@@ -376,9 +377,9 @@ def build_preview(g24):
         xx += 2 * w + 44
 
     # B ---------------------------------------------------------------- glyph
-    yB = 810
-    title(24, yB, 'glyph tile at 48 / 24 / 16 on the app ground, tinted idle #7B8794 / working #C8A45C / attention #F3D58F / bone, shown 3x; then 1x, 128, the launcher mask and the tile')
-    panel = Image.new('RGB', (W - 48, 330), BG)
+    yB = 790
+    title(24, yB, 'B: glyph tile at 48 / 24 / 16 on the app ground, tinted idle #7B8794 / working #C8A45C / attention #F3D58F / bone; 3x, then 1x')
+    panel = Image.new('RGB', (W - 48, 430), BG)
     sheet.paste(panel, (24, yB + 30))
     gx = 48
     for name in ('idle', 'working', 'attention', 'bone'):
@@ -397,15 +398,15 @@ def build_preview(g24):
         xx += 40
     d.text((48, yB + 335), '1x: 48 / 24 / 16 per state', fill='#8A8177', font=font)
     # right side of the panel: 128s on their own grounds, launcher, tile
-    put(T('g-ink-128.png'), 1250, yB + 46, label='glyph.svg 128 on bone')
-    put(T('g-inv-128.png'), 1400, yB + 46, label='glyph-inverse.svg 128')
-    put(T('launch-192.png'), 1250, yB + 200, label='launcher mask d72 + safe ring r33 (mark at 0.72)')
-    put(T('tile-128.png'), 1460, yB + 200, label='mark-tile.svg 128')
-    put(T('launch-48.png'), 1460, yB + 265 + 70, 1, label='launcher 48', frame='#4A4541')
+    put(T('g-ink-128.png'), 1250, yB + 46, label='glyph 128')
+    put(T('g-inv-128.png'), 1420, yB + 46, label='glyph-inverse 128')
+    put(T('launch-192.png'), 1250, yB + 216, label='launcher: mask d72, safe ring r33')
+    put(T('tile-128.png'), 1470, yB + 216, label='mark-tile.svg 128')
+    put(T('launch-48.png'), 1620, yB + 216, 1, label='48', frame='#4A4541')
 
     # C ---------------------------------------------------------------- text
-    yC = yB + 30 + 330 + 40
-    title(24, yC, 'terminal renderings, exact from grid.txt  -  <pre>, DejaVu Sans Mono 16.61 px (10 px advance), line-height 1, on #12100F; then the half-block and braille at a 2x cell')
+    yC = yB + 30 + 430 + 40
+    title(24, yC, 'C: terminal renderings, exact from grid.txt: <pre>, DejaVu Sans Mono 16.61 px, line-height 1; 2x below')
     pre = Image.open(T('pre-1100.png')).convert('RGB')
     bbox = Image.eval(pre.convert('L'), lambda v: 255 if v > 24 else 0).getbbox()
     pre = pre.crop((0, 0, min(pre.width, bbox[2] + 30), min(pre.height, bbox[3] + 30)))
@@ -418,7 +419,7 @@ def build_preview(g24):
     # D ---------------------------------------------------------------- overlay
     ox = 24 + max(pre.width, pre2.width) + 30
     yD = yC
-    title(ox, yD, 'vector over its own grid')
+    title(ox, yD, 'D: vector over its own grid')
     put(T('overlay-512.png'), ox, yD + 30, label='mark.svg (60 % ink + outline) over the fold24')
     sub(ox, yD + 30 + 512 + 24, 'cells (grey); lattice 4.5 x 3.25 units')
     h_total = max(yD + 30 + 512 + 60, yC + 40 + pre.height + pre2.height + 30)
