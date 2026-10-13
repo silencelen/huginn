@@ -30,6 +30,8 @@ dimensions, top picks, three coherent bundles and the decision checklist.
 | Small form (tray, favicon, notification) | a glyph tile re-cut from the primary's head, tinted by state | same |
 | Terminal art | the logo is the terminal art: the facets are drawn to a grid so the half-block, braille and 7-bit renderings are exact | same |
 | Round 2 | five refinements of that direction, each a system of mark, glyph and terminal art | [`round2/BRIEF.md`](round2/BRIEF.md) |
+| Round 2 pick | `r2-05-fold` for the mark; `r2-01-snapped`'s text art for the CLI; the glyph tile gains the wing fold | round-2 chooser, 2026-10-13 |
+| Round 3 | the fold raven redrawn upright on Snapped's lattice, three glyph constructions with the fold, Snapped's text art proved to be this bird's own raster | [`round3/fold-system/`](round3/fold-system/); the round-3 chooser records the pick |
 
 Still open, in order: what attention means and which accent carries it; the
 palette ground; the type direction; the terminal letterform; the one-row
@@ -59,6 +61,15 @@ are single-width; one has to win.
 - Monochrome first: every mark works as one flat colour before colour is added.
 - The apps' motion rule, a slow stepped pulse rather than a spinner, bounds
   every in-app animation.
+
+## Round 3
+
+The chosen combination finished as one system: [`round3/fold-system/`](round3/fold-system/)
+holds the upright fold raven and its masters, the perched round-2 bird for comparison,
+three glyph tiles that carry the wing fold (`glyph-a` full fold, `glyph-b` shoulder wedge,
+`glyph-c` the whole mark in negative; the README recommends c), Snapped's 24 by 8 text art
+byte-identical to round 2 plus the upright bird's own 24 by 8 and 48 by 16, and a
+`preview.png`. Open: approve or adjust the upright mark, pick the glyph, pick the CLI art.
 
 ## Round 2
 
