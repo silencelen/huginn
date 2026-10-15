@@ -182,6 +182,7 @@ func TestEncodeConfigGolden(t *testing.T) {
 	want := `{
   "v": 1,
   "device": {
+    "enabled": false,
     "id": "x",
     "scope": "look",
     "actWhileLocked": false

@@ -11,11 +11,20 @@ import (
 	"github.com/silencelen/huginn/core/internal/policy"
 )
 
-// device dispatches `huginn device …`. Only print-argv lives here so far; the
-// enrolment verbs (on/off/status) join this switch.
+// device dispatches `huginn device …`.
 func device(args []string) int {
-	if len(args) > 0 && args[0] == "print-argv" {
+	if len(args) == 0 {
+		return deviceStatus()
+	}
+	switch args[0] {
+	case "print-argv":
 		return printArgv(args[1:], os.Stdout, os.Stderr)
+	case "on", "enrol", "enroll":
+		return deviceOn(args[1:])
+	case "off":
+		return deviceOff()
+	case "status":
+		return deviceStatus()
 	}
 	usage()
 	return 2
