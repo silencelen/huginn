@@ -339,3 +339,22 @@ func TestBeatsCarryLiveScope(t *testing.T) {
 		t.Fatalf("beat scopes %v", d.beatScopes)
 	}
 }
+
+// Ported from the desktop's UnenrolTest ("the five minutes of nothing"): the
+// backoff waits in the loop that watches the toggle, so a flat sleep meant
+// turning the device back on did nothing for up to five minutes. Kick must cut
+// any wait short; an unkicked wait must still wait.
+func TestKickCutsBackoff(t *testing.T) {
+	r := New(Hooks{Conf: func() Config { return Config{} }})
+	start := time.Now()
+	go func() { time.Sleep(50 * time.Millisecond); r.Kick() }()
+	r.waitOrWake(context.Background(), 5*time.Minute)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Kick took %s to wake a 5-minute wait", d)
+	}
+	start = time.Now()
+	r.waitOrWake(context.Background(), 150*time.Millisecond)
+	if d := time.Since(start); d < 140*time.Millisecond {
+		t.Fatalf("an unkicked wait returned after %s", d)
+	}
+}

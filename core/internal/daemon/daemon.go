@@ -44,6 +44,7 @@ type Daemon struct {
 	stopRun context.CancelFunc
 	runDone chan struct{}
 	migrate string // one line: what the first-start import did
+	last    runner.Status // newest status published, runner or not ("not paired" has no runner)
 }
 
 // Options for Run.
@@ -249,6 +250,9 @@ func (d *Daemon) clearOwe() {
 }
 
 func (d *Daemon) publishDevice(s runner.Status) {
+	d.mu.Lock()
+	d.last = s
+	d.mu.Unlock()
 	d.hub.Publish(ipc.Event{Name: "device", Data: d.deviceView(&s)})
 }
 
@@ -270,13 +274,12 @@ type DeviceSettings struct {
 
 func (d *Daemon) deviceView(s *runner.Status) DeviceView {
 	if s == nil {
+		// ⚠ THE LAST PUBLISHED STATUS, not "the runner's or nothing": while the
+		// core is unpaired there is no runner, and GET answered a blank note while
+		// the event stream said "not paired" (caught by CoreClientTest).
 		d.mu.Lock()
-		r := d.run
+		cur := d.last
 		d.mu.Unlock()
-		var cur runner.Status
-		if r != nil {
-			cur = r.Status()
-		}
 		s = &cur
 	}
 	cfg, _, _ := d.st.Load()
@@ -425,6 +428,29 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		v := d.deviceView(nil)
 		d.hub.Publish(ipc.Event{Name: "device", Data: v})
 		ipc.WriteJSON(w, 200, v)
+	})
+	// POST /core/unpair: Settings → Remove this computer. The GUI has already
+	// deleted this machine's rows on appd; the core stops its runner and forgets
+	// the token, the address, the pins and the device id, so nothing here can
+	// re-enrol with a credential the owner just took away.
+	mux.HandleFunc("POST /core/unpair", func(w http.ResponseWriter, r *http.Request) {
+		d.stopRunner()
+		if err := d.secrets.Delete(store.SecretToken); err != nil && !errors.Is(err, store.ErrNotFound) {
+			ipc.WriteJSON(w, 500, map[string]string{"error": "forgetting the token: " + err.Error()})
+			return
+		}
+		_, _, err := d.st.Update(func(c *store.Config) error {
+			c.Appd = store.Appd{}
+			c.Pins = nil
+			c.Device.ID, c.Device.Enabled, c.Device.UnenrolOwed = "", false, false
+			return nil
+		})
+		if err != nil {
+			ipc.WriteJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		d.restartRunner(d.ctx) // publishes "not paired"
+		ipc.WriteJSON(w, 200, map[string]string{"ok": "unpaired"})
 	})
 	mux.HandleFunc("POST /core/pair", func(w http.ResponseWriter, r *http.Request) {
 		var p Pair

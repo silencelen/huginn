@@ -542,6 +542,29 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         }
     }
 
+    /**
+     * Mirrors what `huginn core` says about this machine's device (P1: the core
+     * owns the runner, the enrolment and the unenrol debt; this app only shows
+     * them). Persisted as well, so settings.json never disagrees with the core
+     * — an older build launched on this file must not resurrect its own runner
+     * on a stale `deviceEnabled = true`. The debt flag is always cleared here:
+     * the core pays it now, and two payers would race the same DELETE.
+     */
+    fun mirrorDeviceFromCore(enabled: Boolean, id: String, scope: String, root: String, actWhileLocked: Boolean, claude: String) {
+        _deviceEnabled.value = enabled
+        _deviceUnenrolPending.value = false
+        _deviceScope.value = scope
+        _deviceRoot.value = root
+        _deviceActWhileLocked.value = actWhileLocked
+        _deviceClaudePath.value = claude
+        mutate {
+            it.copy(
+                deviceEnabled = enabled, deviceUnenrolPending = false, deviceId = id, deviceScope = scope,
+                deviceRoot = root, deviceActWhileLocked = actWhileLocked, deviceClaudePath = claude,
+            )
+        }
+    }
+
     /** The debt is settled: the daemon confirmed the row is gone (or never had one). */
     fun clearDeviceUnenrolPending() {
         _deviceUnenrolPending.value = false
