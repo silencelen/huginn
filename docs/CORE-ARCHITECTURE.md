@@ -127,18 +127,30 @@ offers to install the service (D8 asks once at install; this asks again at the m
 - **Linux:** `$XDG_RUNTIME_DIR/huginn/core.sock` (dir 0700, socket 0600). Fallback when there is no
   runtime dir (lingering service started before any login): systemd sets `XDG_RUNTIME_DIR` for user
   services, so this holds for both roles.
-- **Windows:** named pipe `\\.\pipe\huginn-core-<user SID>`, DACL = that SID only (plus SYSTEM), with
-  `PIPE_REJECT_REMOTE_CLIENTS`. The `run` role (session 0) creates it; the tray role and GUI (session 1+)
-  connect — same user, different session, which named pipes allow.
+- **Windows:** **AF_UNIX as well** (Windows 10 1803+; JDK 16+ and Go both support it), socket file in
+  `%LOCALAPPDATA%\huginn\run\core.sock` whose directory ACL is the user only. One transport on both
+  platforms, one Kotlin adapter. The named pipe `\\.\pipe\huginn-core-<user SID>` (DACL = that SID +
+  SYSTEM, `PIPE_REJECT_REMOTE_CLIENTS`) is the fallback **only if** the Windows probe (§11 Q1) shows
+  AF_UNIX failing across sessions (`run` in session 0, tray/GUI in session 1+).
 - **No TCP listener, ever.** Today's `SingleInstance` loopback socket needs a shared secret because
   loopback has no identity; a socket/pipe ACL'd to the user does not.
-- **Peer check:** Linux `SO_PEERCRED` uid must equal ours; Windows `GetNamedPipeClientProcessId` → token
-  user SID must equal ours. Belt and braces over the ACL.
+- **Peer check on every accept**, before the HTTP layer reads a byte: Linux `SO_PEERCRED` uid must equal
+  ours; Windows `SIO_AF_UNIX_GETPEERPID` → `OpenProcessToken` → user SID must equal ours. Belt and braces
+  over the file modes/ACL (`proto/ipc/server/peer_*.go`).
 
 ### 5.2 Protocol
 
-HTTP/1.1 over the socket/pipe (Go `net/http` serves it natively; OkHttp has a socket-factory hook for
-unix sockets and the pipe is a `RandomAccessFile`-style stream on Windows — prototype this first, §11 Q1).
+HTTP/1.1 over the socket (Go `net/http` serves it natively). The JVM side is `CoreSocket`
+(`proto/ipc/client/UnixSocketProbe.java`): a `java.net.Socket` over a **non-blocking**
+`SocketChannel(UNIX)`, handed to OkHttp through `socketFactory` + a fixed `dns`, and to Ktor through
+`engine { preconfigured = … }`. Three traps it exists to avoid, each of which hangs or kills the app
+rather than failing a call:
+1. `Channels.newInputStream/newOutputStream` share the channel's `blockingLock()` on JDK 17, so a blocked
+   read stops every write — the adapter reads/writes the channel directly.
+2. A blocking channel ignores `SO_TIMEOUT`, and OkHttp's pool health check reads with a 1 ms timeout —
+   the adapter is non-blocking and waits on a `Selector` for at most `soTimeout`.
+3. A close from another thread (Okio's timeout watchdog, `Call.cancel()`) surfaces as the UNCHECKED
+   `ClosedSelectorException` — the adapter translates it to `SocketException`.
 
 - Every request carries `X-Huginn-Core-Proto: <n>`; a mismatch is a loud `426` with both versions and the
   fix ("run `huginn update`"). Lockstep releases (D10) make this rare; the check makes it safe.
@@ -342,7 +354,7 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 
 | # | Question | Proposed answer |
 |---|---|---|
-| Q1 | Can the JVM GUI speak HTTP over a unix socket (Linux) and a named pipe (Windows) cleanly, including SSE? | Prototype first. Java 16+ has `UnixDomainSocketAddress`; OkHttp takes a custom `SocketFactory`. If the Windows pipe is painful, fall back to a loopback TCP port bound per-session with a secret in a user-ACL'd file — a fallback, not the plan. |
+| Q1 | Can the JVM GUI speak HTTP over a local socket, including SSE? | **Linux: PROVEN 2026-10-14** (`proto/ipc`, 11/11 on huginn and 10/10 on a Linux laptop inside the app's own jlink runtime, as the desktop user): JSON, 426 proto gate, SSE event-by-event, 64 MiB chunked upload, 256 MiB download, pool reuse through the health check, read timeout, cancel mid-stream, 16 parallel, `Authorization` stripped, other-uid peer dropped. **Windows: PENDING** — same probe + cross-session (session 0 server, session 1 client); kit in `proto/windows/`. |
 | Q2 | Windows boot task logon type: stored password or S4U? | Test both on PC01. S4U if outbound HTTPS + the secrets file work under it (no password to go stale). |
 | Q3 | Do the remote verbs keep using ssh, or go through appd? | Keep ssh in P3 (it works without a token and is the terminal path's whole point). Revisit only per verb. |
 | Q4 | Distro packages: system `/usr/bin/huginn` + `Depends`, as in §7.4? | Yes, with "one core per machine". |
@@ -350,5 +362,5 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 | Q6 | Pairing: today the token is copied by hand or over ssh (`cat /etc/huginn-appd/token`). | Keep the ssh path (`huginn setup` already has ssh); a pairing code/QR is a separate project (onboarding audit §A). |
 | Q7 | Adopting device ids: what if a machine has both a Node runner id and a desktop id today? | Prefer the one appd saw most recently; delete the other row through the API. |
 | Q8 | Manifest signing key: introduce now (P1) or later? | P1 — the first binary release is the moment the "parse check" disappears. |
-| Q9 | Go tray library | `fyne.io/systray` (SNI over D-Bus on Linux, Win32 on Windows, no CGo on either) — confirm on Omarchy waybar and Windows 11. |
-| Q10 | Idle/lock on Linux Wayland for the claim | logind `IdleHint`/`LockedHint` where set; `ext-idle-notify-v1` from the tray role otherwise; unknown ⇒ "not at the machine" (Telegram wins). |
+| Q9 | Go tray library | `fyne.io/systray` v1.12.2, `CGO_ENABLED=0`. **Linux: PROVEN 2026-10-14** on a Linux laptop (Omarchy: quickshell is the StatusNotifierWatcher) — item registered and cleanly deregistered. ⚠ The running desktop 1.13 registered **no** item there: today's AWT tray is invisible on Omarchy. **Windows: PENDING** (kit). |
+| Q10 | Idle/lock on Linux Wayland for the claim | **Measured on a Linux laptop 2026-10-14:** logind `IdleHint=no`, `IdleSinceHint=0` on the active Wayland session — nothing on Omarchy feeds logind idle, so it is useless there. The tray role must use `ext-idle-notify-v1` (Hyprland supports it); `LockedHint` is still read from logind for the lock fence. Unknown ⇒ "not at the machine" (Telegram wins). |
