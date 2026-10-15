@@ -13,3 +13,4 @@ type noNotifier struct{}
 func newNotifier(*log.Logger) Notifier         { return noNotifier{} }
 func (noNotifier) Post(traystate.Notice) error { return nil }
 func (noNotifier) Withdraw(string) error       { return nil }
+func (noNotifier) CanDeliver() bool            { return false }
