@@ -13,6 +13,9 @@ V="${1:?usage: core/build.sh <x.y.z> [outdir]}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${2:-$HERE/dist/$V}"
 mkdir -p "$OUT"
+# ABSOLUTE before the cd below: a relative outdir (release-desktop.sh passed one)
+# otherwise lands under core/ and the caller finds nothing (caught by the 2.0.0 cut).
+OUT="$(cd "$OUT" && pwd)"
 LDFLAGS="-s -w -buildid= -X github.com/silencelen/huginn/core/internal/version.Version=$V"
 
 # key           GOOS    GOARCH  file
