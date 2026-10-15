@@ -401,6 +401,72 @@ function _Huginn-DesktopRelease {
   try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
 }
 
+# --- huginn core ---
+# The Go core (docs/CORE-ARCHITECTURE.md): one binary per user that runs act
+# mode at boot, with nobody signed in. While it exists, `huginn device` is a
+# door to it and the Node runner is not used. The binary is NAMED huginn too, so
+# it is always run by its full path - a bare `huginn` here is this function.
+function _Huginn-CoreBin {
+  # No LOCALAPPDATA = not Windows (pwsh on Linux): no Windows core to find.
+  if (-not $env:LOCALAPPDATA) { return $null }
+  $p = Join-Path $env:LOCALAPPDATA 'huginn\bin\huginn.exe'
+  if (Test-Path $p) { return $p }
+  return $null
+}
+
+# Newest cli-v* (2.x+) release that carries core-manifest.json, semver-picked.
+function _Huginn-CoreRelease {
+  $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
+  if (-not $body) { return $null }
+  try { $releases = $body | ConvertFrom-Json } catch { return $null }
+  $tag = ($releases | Where-Object { $_.tag_name -match '^cli-v[0-9]+\.[0-9]+\.[0-9]+$' -and [int](($_.tag_name -replace '^cli-v','').Split('.')[0]) -ge 2 } |
+            Sort-Object { [version]($_.tag_name -replace '^cli-v','') } | Select-Object -Last 1).tag_name
+  if (-not $tag) { return $null }
+  $man = _Huginn-Get "https://github.com/$script:HUGINN_REPO/releases/download/$tag/core-manifest.json"
+  if (-not $man) { return $null }
+  try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
+}
+
+# Download, verify (sha256 from the release's own manifest) and self-install.
+# $env:HUGINN_CORE_FILE = a local huginn.exe skips the download (offline/tests);
+# it is still installed by `self-install`, never copied into place by hand.
+function _Huginn-CoreFetch {
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("huginn-core-" + [guid]::NewGuid().ToString('N') + '.exe')
+  try {
+    if ($env:HUGINN_CORE_FILE) {
+      Copy-Item $env:HUGINN_CORE_FILE $tmp -Force
+    } else {
+      $rel = _Huginn-CoreRelease
+      if (-not $rel) { _Huginn-Fail "huginn core: could not read the core release feed (offline, rate-limited, or no 2.x release yet)" }
+      $a = $rel.manifest.artifacts.'windows-x64'
+      if (-not $a -or ($a.file -notmatch '^huginn-[0-9][^\\/]*-windows-x64\.exe$')) { _Huginn-Fail "huginn core: $($rel.tag) names no usable Windows build - refused" }
+      if ($a.sha256 -notmatch '^[0-9a-f]{64}$') { _Huginn-Fail "huginn core: $($rel.tag) carries no usable sha256 - refused" }
+      Write-Host "  downloading $($a.file) ($($rel.tag)) ..."
+      try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+      Invoke-WebRequest -Uri "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$($a.file)" -OutFile $tmp -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+      # THE GATE: the only integrity check between GitHub and an executable
+      # in your profile.
+      $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+      if ($got -ne $a.sha256) { _Huginn-Fail "huginn core: $($a.file) did not match its sha256 - discarded, nothing installed" }
+    }
+    & $tmp core self-install
+    if ($LASTEXITCODE -ne 0) { _Huginn-Fail "huginn core: self-install failed" }
+  } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  return (_Huginn-CoreBin)
+}
+
+# Pair the core with the host this shell already reaches over ssh, if it is not
+# paired yet. The token travels ssh -> the pipeline -> stdin, never argv.
+function _Huginn-CorePair {
+  param([string]$Bin)
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  $st = (& $Bin core status 2>$null) -join "`n"
+  if ($st -notmatch 'not paired') { return }
+  $srv = _Huginn-SrvUrl $H
+  if (-not $srv) { _Huginn-Fail "huginn core: could not work out $H's daemon address - pair by hand: huginn core pair --url https://<host>:8787" }
+  ((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv
+}
+
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
 # flap) only severs the ssh client - the work keeps running. We re-run the attach
@@ -712,6 +778,11 @@ function _Huginn-HelpBody {
                               end it AND wind its sessions down
                               [--now: end them outright | --keep-sessions:
                               leave them running]
+  huginn core install         run huginn core at boot on this machine - as you,
+                              with nobody signed in - and pair it with the host
+                              [--logon s4u|password: Windows only]
+  huginn core status          is the core running and paired, what it offers
+  huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn
                               sees
   huginn device on            offer this machine
@@ -1012,6 +1083,36 @@ function huginn {
     } else {
       ssh -T $H huginn-projects
     }
+  } elseif ($args[0] -eq 'core') {
+    $sub = if ($args.Count -ge 2) { [string]$args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $bin = _Huginn-CoreBin
+    if ($sub -eq 'install') {
+      if (-not $bin -or $env:HUGINN_CORE_FILE) { $bin = _Huginn-CoreFetch }
+      # Registering a boot task needs an administrator token: re-run just that
+      # step elevated, behind ONE UAC prompt, as this same user.
+      $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+      if ($admin) { & $bin core install @rest } else {
+        $p = Start-Process -FilePath $bin -ArgumentList (@('core', 'install') + $rest) -Verb RunAs -Wait -PassThru
+        if ($p.ExitCode -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $($p.ExitCode))" }
+      }
+      for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
+      _Huginn-CorePair $bin
+      & $bin core status
+    } elseif (-not $bin) {
+      _Huginn-Fail "huginn core: not installed here - huginn core install"
+    } else {
+      & $bin core $sub @rest
+    }
+  } elseif ($args[0] -eq 'device' -and (_Huginn-CoreBin)) {
+    # With huginn core installed, THIS machine's device is the core's: the Node
+    # runner below is the pre-2.0 path and must not enrol a second row.
+    $bin = _Huginn-CoreBin
+    $sub = if ($args.Count -ge 2) { [string]$args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    if ($sub -eq 'on' -or $sub -eq 'enrol' -or $sub -eq 'enroll') { _Huginn-CorePair $bin; & $bin device on @rest }
+    elseif ($sub -eq 'off' -or $sub -eq 'status') { & $bin device $sub @rest }
+    else { _Huginn-Fail "huginn device ${sub}: not needed with huginn core (see: huginn core status)" }
   } elseif ($args[0] -eq 'device') {
     # Plural is the host's list of machines; SINGULAR is the one you are typing
     # on - offering it to Huginn as a place to run work, the way the desktop
@@ -1403,7 +1504,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
   # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
   # neither.
-  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
