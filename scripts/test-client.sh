@@ -1084,6 +1084,31 @@ else
   skip "ps1 desktop install answer (no pwsh)"
 fi
 
+echo "[6c/8] huginn core: the shell is a door to the Go binary, and device follows it"
+# A FAKE core binary in a scratch HOME: these checks are about what the client
+# hands the binary, not about the core (core/test/e2e.sh holds that).
+CT="$(mktemp -d)"
+mkdir -p "$CT/.local/bin"
+cat > "$CT/.local/bin/huginn" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/core-argv"
+case "$*" in "core status") echo "(o> huginn core 2.0.0  pid 1"; echo "  huginn:  https://h:8787" ;; esac
+FAKE
+chmod 755 "$CT/.local/bin/huginn"
+CORE_OUT="$(HOME="$CT" bash -c 'source client/huginn.sh; huginn core status; huginn device status; huginn device off; huginn device serve' 2>&1)"
+grep -qx 'core status' "$CT/core-argv" && ok "huginn core status goes to the core binary" || bad "core status not delegated: $(cat "$CT/core-argv" 2>/dev/null)"
+grep -qx 'device status' "$CT/core-argv" && grep -qx 'device off' "$CT/core-argv" \
+  && ok "device status/off go to the core when it is installed (no Node runner)" || bad "device not delegated: $(cat "$CT/core-argv")"
+grep -q 'not needed with huginn core' <<< "$CORE_OUT" && ! grep -q 'serve' "$CT/core-argv" \
+  && ok "Node-runner verbs (serve) are refused while the core owns the device" || bad "device serve with a core: $CORE_OUT"
+rm -f "$CT/.local/bin/huginn" "$CT/core-argv"
+NOCORE="$(HOME="$CT" bash -c 'source client/huginn.sh; huginn core status' 2>&1)"
+grep -q 'not installed here - huginn core install' <<< "$NOCORE" && ok "no core: says how to get one" || bad "no-core message: $NOCORE"
+grep -q "'core'" client/huginn.ps1 && grep -q '_Huginn-CoreBin' client/huginn.ps1 \
+  && ok "the PowerShell client has the same door" || bad "huginn.ps1 has no core verb"
+rm -rf "$CT"
+echo
+
 echo "[7/8] the headless runner (client/huginn-device)"
 # WHY THIS SECTION EXISTS: the runner had no gate at all, and every defect it
 # shipped had the same shape — it reported success, or the wrong reason, on a

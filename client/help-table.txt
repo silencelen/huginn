@@ -59,6 +59,11 @@
                               end it AND wind its sessions down
                               [--now: end them outright | --keep-sessions:
                               leave them running]
+  huginn core install         run huginn core at boot on this machine - as you,
+                              with nobody signed in - and pair it with the host
+                              [--logon s4u|password: Windows only]
+  huginn core status          is the core running and paired, what it offers
+  huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn
                               sees
   huginn device on            offer this machine
