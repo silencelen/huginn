@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased (2.1.0)
+## 2.1.0
 
 ### Changed
 - **While `huginn core tray` is running, the app stands its own tray and notifications down.**
@@ -9,6 +9,9 @@
   tray reopens it. Without a core tray, nothing changes.
 - The app tells the core which session or chat it is showing, so the core does not notify you
   about what is already on screen.
+- **Updating the app updates its core.** At launch, the app installs the core it carries when that
+  core is newer than the installed one. The running core restarts onto it (after any job it is
+  running), and on a machine set up with 2.0.0 the core's tray is added and started.
 - Kotlin 2.4.21, ktor 3.6.0, AGP 9.4.1 (Dependabot #18-#22).
 
 ## 2.0.0

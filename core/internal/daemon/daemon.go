@@ -463,6 +463,13 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		if r.URL.Query().Get("role") == "tray" {
 			// The GUI follows this to stand down while a core tray is attached:
 			// no second tray icon, no second copy of every notification.
+			// A tray that cannot show a notification (no notification server,
+			// no shortcut carrying the toast identity) is not a reason to take
+			// them away from Telegram (security review, 2.1.0).
+			if r.URL.Query().Get("deliver") != "0" {
+				d.watch.senders.Add(1)
+				defer d.watch.senders.Add(-1)
+			}
 			if d.watch.trays.Add(1) == 1 {
 				d.hub.Publish(ipc.Event{Name: traystate.EventCoreTray, Data: map[string]bool{"attached": true}})
 			}

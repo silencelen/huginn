@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/godbus/dbus/v5"
@@ -41,6 +42,39 @@ func newNotifier(l *log.Logger) Notifier {
 		}
 	}
 	return n
+}
+
+// bodyText escapes the body for servers that read it as markup (KDE, dunst,
+// mako, GNOME's subset). The body carries model output (a chat's last words):
+// unescaped, an <a href> in it is a clickable link in a trusted "huginn"
+// notification, opened by the server — around OpenURL's huginn://-only rule —
+// and an <img src> makes the server read a local file. The summary (title) is
+// plain text by the spec, so it is left as is. (Security review, 2.1.0.)
+func bodyText(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
+}
+
+// CanDeliver: a notification server owns the name, or the bus can start one.
+func (n *dbusNotifier) CanDeliver() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	c, err := n.bus()
+	if err != nil {
+		return false
+	}
+	var has bool
+	if c.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, fdoName).Store(&has) == nil && has {
+		return true
+	}
+	var names []string
+	if c.BusObject().Call("org.freedesktop.DBus.ListActivatableNames", 0).Store(&names) == nil {
+		for _, x := range names {
+			if x == fdoName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bus connects lazily: the tray can start before the notification server does.
@@ -97,7 +131,7 @@ func (n *dbusNotifier) Post(t traystate.Notice) error {
 	}
 	var id uint32
 	call := c.Object(fdoName, fdoPath).Call(fdoName+".Notify", 0,
-		"huginn", n.ids[t.Key], n.icon, t.Title, t.Body, actions, hints, timeout)
+		"huginn", n.ids[t.Key], n.icon, t.Title, bodyText(t.Body), actions, hints, timeout)
 	if call.Err != nil {
 		return call.Err
 	}

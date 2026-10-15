@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -72,6 +73,9 @@ func Run(o Options) {
 	}
 	r := &role{o: o}
 	if o.Lock != "" {
+		// The runtime dir is the core's to create; a tray at login can start
+		// before the core has ever run.
+		os.MkdirAll(filepath.Dir(o.Lock), 0o700)
 		// Wait out an outgoing tray: an update starts the new one as the old one
 		// quits, and the desktop or an updater may start one at the same moment.
 		deadline := time.Now().Add(15 * time.Second)
@@ -173,7 +177,31 @@ func (r *role) follow() {
 }
 
 func (r *role) stream(c *http.Client) error {
-	resp, err := ipc.Do(context.Background(), c, http.MethodGet, "/core/events?role=tray", nil)
+	// Whether this tray can show a notification, said on connect; a change
+	// (a notification server started, a shortcut removed) reconnects.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	can := r.notifier.CanDeliver()
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Minute):
+				if r.notifier.CanDeliver() != can {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	deliver := "0"
+	if can {
+		deliver = "1"
+	} else {
+		r.o.Logger.Printf("tray: notifications cannot be shown here right now; huginn keeps Telegram in charge")
+	}
+	resp, err := ipc.Do(ctx, c, http.MethodGet, "/core/events?role=tray&deliver="+deliver, nil)
 	if err != nil {
 		return err
 	}

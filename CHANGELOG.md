@@ -8,7 +8,9 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## Unreleased (2.1.0 - huginn core, phase 2: tray and notifications)
+## [2.1.0] - 2026-10-15
+
+huginn core, phase 2: the tray and notifications, and updating the core in place.
 
 ### Added
 - **`huginn core tray`: the core owns the tray icon and desktop notifications.** It starts at
@@ -23,8 +25,36 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 - **The core claims notifications from appd only while a tray is attached and the session is
   unlocked**, so the Telegram fallback stays in charge when nobody is at the machine.
 - `huginn core notify-test` posts one sample notification, to check delivery on a machine.
+- **`huginn core update` takes the newest core release.** `huginn update` now also brings the core
+  up to date, and so does `huginn core install` (and the one-line bootstrap) on a machine that
+  already has an older core. The download is checked against the release's sha256, as at install.
+  A prerelease such as 2.1.0-rc.1 counts as older than its release; a newer local build is left
+  alone.
+- **An update restarts the running core onto the new binary.** `huginn core self-install`, which
+  every update path ends in, asks the running core to restart (`POST /core/restart`). A running
+  device job finishes first. On Windows it then starts the scheduled task, and Task Scheduler's
+  5-minute retry covers a start it is not allowed to make. The device id is kept.
+- **A machine set up on 2.0.0 gets the tray when it updates.** The tray's login autostart is added
+  once. If you remove it later, updates leave it removed. The tray also starts straight away when the
+  update runs in your desktop session. It is never started from an elevated process.
+- **A tray that is running when its core updates hands over to the new version** by itself. Only
+  one tray runs per user.
+
+### Upgrading from 2.0.0
+- The 2.0.0 client cannot update the core by itself. Run `huginn update`, then **`huginn core
+  update`** in a new shell. Installing desktop 2.1.0 also updates the core.
+
+### Security
+- Linux notification bodies are escaped before they reach the notification server. A body carries
+  model output (a chat's last words), and servers that read markup (KDE, dunst, mako) would
+  otherwise turn an `<a href>` in it into a clickable link, or an `<img src>` into a local file read.
+- **A tray that cannot show a notification no longer takes notifications away from Telegram.** Two
+  examples are a Linux session with no notification server, and Windows with no shortcut carrying
+  the toast identity. The tray reports this when it connects and re-checks every minute.
 
 ### Fixed
+- A tray started at login before the core had ever run read the missing runtime directory as
+  "another tray is running", and left for the rest of the login.
 - `client/get.sh` exited silently with no terminal (automation), and `client/get.ps1` stopped at
   its host-trust check on Windows PowerShell 5.1. Both were found by running the published
   one-liners.

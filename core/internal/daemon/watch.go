@@ -28,6 +28,7 @@ import (
 type watcher struct {
 	d        *Daemon
 	trays    atomic.Int32 // tray roles attached to /core/events right now
+	senders  atomic.Int32 // of those, the ones that can show a notification
 	mu       sync.Mutex
 	baseline notify.Baseline // survives stream reconnects: a reconnect is not news
 	focused  string          // the GUI's current target key, while it is fresh
@@ -57,7 +58,7 @@ func (w *watcher) setFocus(key string) {
 // only while a tray role is attached AND the session is unlocked — somebody is
 // at the machine to see them. Otherwise appd keeps its Telegram fallback.
 func (w *watcher) claim() bool {
-	if w.trays.Load() == 0 {
+	if w.senders.Load() == 0 {
 		return false
 	}
 	lk := w.d.lock.read(context.Background())

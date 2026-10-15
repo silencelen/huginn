@@ -9,11 +9,13 @@ import (
 )
 
 // tryLock takes the one-tray-per-user lock without waiting. The lock dies with
-// the process, so a crashed tray never leaves a stale one.
+// the process, so a crashed tray never leaves a stale one. Only CONTENTION is
+// false: a lock file that cannot be opened at all runs the tray unlocked
+// rather than treating it as "another tray" and leaving for the whole login.
 func tryLock(path string) (*os.File, bool) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, false
+		return nil, true
 	}
 	if unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) != nil {
 		f.Close()
