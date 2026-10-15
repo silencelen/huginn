@@ -20,6 +20,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/policy"
 	"github.com/silencelen/huginn/core/internal/runner"
 	"github.com/silencelen/huginn/core/internal/store"
+	"github.com/silencelen/huginn/core/internal/traystate"
 	"github.com/silencelen/huginn/core/internal/version"
 )
 
@@ -29,23 +30,23 @@ func SocketPath(p store.Paths) string { return filepath.Join(p.Runtime, "core.so
 
 // Daemon is one running core.
 type Daemon struct {
-	paths   store.Paths
-	st      *store.Store
-	secrets store.Secrets
-	sel     store.Selection
-	hub     *ipc.Hub
-	logf    func(string, ...any)
-	lock    *lockReader
-	ctx     context.Context // the daemon's lifetime; runners restart under it
-	watch     *watcher // appd watch stream -> tray summary + notices
-	installID string   // X-Huginn-Client
+	paths     store.Paths
+	st        *store.Store
+	secrets   store.Secrets
+	sel       store.Selection
+	hub       *ipc.Hub
+	logf      func(string, ...any)
+	lock      *lockReader
+	ctx       context.Context // the daemon's lifetime; runners restart under it
+	watch     *watcher        // appd watch stream -> tray summary + notices
+	installID string          // X-Huginn-Client
 
 	mu      sync.Mutex
 	api     *appd.Client
 	run     *runner.Runner
 	stopRun context.CancelFunc
 	runDone chan struct{}
-	migrate string // one line: what the first-start import did
+	migrate string        // one line: what the first-start import did
 	last    runner.Status // newest status published, runner or not ("not paired" has no runner)
 }
 
@@ -416,8 +417,16 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		// A tray role identifies itself, so the core knows somebody can SEE a
 		// notification before it claims them from appd (D14).
 		if r.URL.Query().Get("role") == "tray" {
-			d.watch.trays.Add(1)
-			defer d.watch.trays.Add(-1)
+			// The GUI follows this to stand down while a core tray is attached:
+			// no second tray icon, no second copy of every notification.
+			if d.watch.trays.Add(1) == 1 {
+				d.hub.Publish(ipc.Event{Name: traystate.EventCoreTray, Data: map[string]bool{"attached": true}})
+			}
+			defer func() {
+				if d.watch.trays.Add(-1) == 0 {
+					d.hub.Publish(ipc.Event{Name: traystate.EventCoreTray, Data: map[string]bool{"attached": false}})
+				}
+			}()
 		}
 		d.hub.ServeHTTP(w, r)
 	})

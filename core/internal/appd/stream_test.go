@@ -17,7 +17,9 @@ func TestE2EStreamWatch(t *testing.T) {
 	tok := randToken(t)
 	a.start(tok)
 	c, err := New(Config{URL: a.url(), Tokens: StaticToken(tok), Pins: &MemoryPinStore{},
-		Headers: func() map[string]string { return map[string]string{"X-Huginn-Client": "core-test", "X-Huginn-Notify": "1"} }})
+		Headers: func() map[string]string {
+			return map[string]string{"X-Huginn-Client": "core-test", "X-Huginn-Notify": "1"}
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

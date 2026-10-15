@@ -58,6 +58,15 @@ func core(args []string) int {
 		tray.DetachConsole()
 		tray.Run(tray.Options{Socket: daemon.SocketPath(paths())})
 		return 0
+	case "notify-test":
+		// Hidden: one sample notification through the real notifier, then
+		// withdrawn. Proves delivery without going through appd.
+		if err := tray.NotifyTest(8 * time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, "huginn core notify-test: "+err.Error())
+			return 1
+		}
+		fmt.Println("posted and withdrew a test notification")
+		return 0
 	case "self-install":
 		if _, ok := selfInstall(); !ok {
 			return 1

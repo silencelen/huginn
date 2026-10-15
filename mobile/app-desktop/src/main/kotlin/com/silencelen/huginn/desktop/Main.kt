@@ -146,7 +146,10 @@ fun main(args: Array<String>) {
     // notification route when the chosen notifier can actually render one. Read
     // live (a FallbackNotifier's health can change), so a backend going dark
     // releases the claim and the Telegram fallback resumes.
-    store.canDeliver = { notifier.canDeliver() }
+    // While the core's tray is attached the CORE claims notifications (D14);
+    // this window claiming too would hold back appd's Telegram fallback for a
+    // second notifier that is standing down.
+    store.canDeliver = { !store.coreDevice.coreTray.value && notifier.canDeliver() }
 
     // ------------------------------------------------------------ first run
     //
@@ -213,13 +216,23 @@ fun main(args: Array<String>) {
 
     val router = NotifyRouter(
         scope = scope,
-        notifier = { notifier },
+        notifier = { if (store.coreDevice.coreTray.value) NoNotifier else notifier },
         // One-shot, no long poll: this runs on the notification path and a parked
         // request would hold the enrichment open past the moment it is worth.
         fetchPrompt = { name -> runCatching { store.client.screen(name).prompt }.getOrNull() },
         enabled = { settings.notifyEnabledNow() },
         focusedTarget = ::focusedTarget,
     )
+
+    // The core suppresses a toast for what this window is showing (its rules
+    // take the focused key): re-sent every 20 s, since the core forgets a report
+    // older than 45 s — a window that died must not mute notifications forever.
+    scope.launch {
+        while (isActive) {
+            store.coreDevice.reportPresence(focusedTarget()?.key)
+            delay(20_000)
+        }
+    }
 
     store.onDigest = { watch ->
         router.onDigest(watch)
@@ -475,7 +488,8 @@ fun main(args: Array<String>) {
             }.collect { presence.setVisible(it) }
         }
 
-        if (isTraySupported) {
+        val coreTray by store.coreDevice.coreTray.collectAsState()
+        if (isTraySupported && !coreTray) {
             Tray(
                 icon = TrayIcons.painter(summary.state),
                 state = trayState,
@@ -522,7 +536,10 @@ fun main(args: Array<String>) {
                 // tray summary all live on. With it off, closing the window really
                 // does mean quitting — an app that goes on running headless after
                 // its window is gone is one nothing can get rid of.
-                if (closeToTray && isTraySupported) windowVisible.value = false else quit()
+                // With the core's tray attached, closing QUITS (D6): the core keeps
+                // running, its tray relaunches this window, and a JVM idling behind
+                // a hidden window is exactly what the core exists to make unneeded.
+                if (closeToTray && isTraySupported && !coreTray) windowVisible.value = false else quit()
             },
             state = windowState,
             visible = visible,
@@ -572,7 +589,7 @@ fun main(args: Array<String>) {
                     // note at the foot of this file; it fires only while the
                     // window has focus, which makes it a hide and not a summon.
                     shortcut == Shortcut.HIDE_TO_TRAY -> {
-                        if (isTraySupported) windowVisible.value = false
+                        if (isTraySupported && !store.coreDevice.coreTray.value) windowVisible.value = false
                         true
                     }
                     shortcut == Shortcut.PALETTE -> { paletteOpen.value = true; true }
