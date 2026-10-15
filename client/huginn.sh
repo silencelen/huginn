@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 1.9.0
+# Version: 1.9.1
 
-HUGINN_VERSION='1.9.0'
+HUGINN_VERSION='1.9.1'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -1494,7 +1494,11 @@ EOF
           # and is the only Linux install the app can update by itself.
           printf '\n  install:  huginn desktop install    (per-user, no root, updates itself from the app)\n'
           if [ "$distro" = arch ] && [ -n "$arch_file" ] && command -v pacman >/dev/null 2>&1; then
-            printf '      or:  sudo pacman -U %s/%s\n' "$base" "$arch_file"
+            # ⚠ NEVER `pacman -U <url>`: for a remote URL pacman also fetches
+            # `<file>.sig` and aborts on its 404 (these packages are unsigned; the
+            # manifest's sha256 is the integrity check). A LOCAL file is judged by
+            # LocalFileSigLevel instead, which installs. Found on a Linux laptop 2026-10-14.
+            printf '      or:  curl -fLO %s/%s && sudo pacman -U ./%s\n' "$base" "$arch_file" "$arch_file"
           elif [ "$distro" = debian ] && [ -n "$deb_file" ] && command -v dpkg >/dev/null 2>&1; then
             printf '      or:  curl -fLO %s/%s && sudo apt install ./%s\n' "$base" "$deb_file" "$deb_file"
           fi ;;
