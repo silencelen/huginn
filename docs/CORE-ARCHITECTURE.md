@@ -1,6 +1,6 @@
 # Core architecture — `huginn` as the core, the desktop as a GUI on top
 
-Status: **DESIGN, decisions recorded 2026-10-14.** Nothing here is built yet. Branch `core`.
+Status: **P1 BUILT on branch `core` (2026-10-14), not released.** See §12 for what is done and what is left.
 
 This document is the plan and the decision record for re-shaping the huginn *client* side: the CLI
 becomes the core of every machine's install, and the Compose desktop becomes a graphical package on top
@@ -364,3 +364,36 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 | Q8 | Manifest signing key: introduce now (P1) or later? | P1 — the first binary release is the moment the "parse check" disappears. |
 | Q9 | Go tray library | `fyne.io/systray` v1.12.2, `CGO_ENABLED=0`. **Linux: PROVEN 2026-10-14** on a Linux laptop (Omarchy: quickshell is the StatusNotifierWatcher) — item registered and cleanly deregistered. ⚠ The running desktop 1.13 registered **no** item there: today's AWT tray is invisible on Omarchy. **Windows: PENDING** (kit). |
 | Q10 | Idle/lock on Linux Wayland for the claim | **Measured on a Linux laptop 2026-10-14:** logind `IdleHint=no`, `IdleSinceHint=0` on the active Wayland session — nothing on Omarchy feeds logind idle, so it is useless there. The tray role must use `ext-idle-notify-v1` (Hyprland supports it); `LockedHint` is still read from logind for the lock fence. Unknown ⇒ "not at the machine" (Telegram wins). |
+
+## 12. Progress (2026-10-14)
+
+**P1 built and tested on Linux** (branch `core`, nothing merged or released):
+
+| Piece | Where | Tests |
+|---|---|---|
+| Device policy, 6th generator output, `print-argv` | `core/internal/policy`, `scripts/gen-device-policy.js` | 144-case matrix against the Go binary (11/11), 704/707 byte-identical edge runs (the 3 are a Node `$&` replace quirk — Go matches Kotlin) |
+| appd client, TLS pin-by-proof | `core/internal/appd` | 22 tests incl. E2E vs a real appd behind a relay; mutation-checked |
+| IPC (AF_UNIX, peer check, 426 gate, SSE hub) | `core/internal/ipc` | 6 |
+| store (core.json, secrets, migration plan), service (systemd --user + linger; Windows task XML S4U/password; AUMID shortcut), lock probe | `core/internal/{store,service,lock}` | golden + flow tests |
+| Runner | `core/internal/runner` | 13 incl. fake appd + fake claude; mutation-checked |
+| Daemon + `huginn core run/install/uninstall/status/pair`, `huginn device on/off/status` | `core/internal/daemon`, `core/cmd/huginn` | `core/test/e2e.sh` 16/16 and `e2e-migrate.sh` 7/7 against a real appd |
+| Desktop: `CoreDevice` + `CoreSocket`/`CoreClient`; `DeviceRunner`/`LockProbe` deleted | `mobile/app-desktop/.../core/` | 652 desktop tests; `CoreClientTest` drives the real Go core from Kotlin |
+
+**Decisions made while building (owner to confirm):**
+- **D11 reversed for the boot service: the token lives in the 0600 file store by default**, keyring opt-in
+  (`HUGINN_SECRETS=keyring`) — a Linux login keyring is locked until a login, and Credential Manager is
+  likely unavailable to an S4U task, i.e. exactly when always-on matters.
+- **"No graphical session" is split by seat0 `CanGraphical`:** a headless box is unlocked (act-scope
+  servers keep working, as with the Node runner); a desktop at its login screen is locked (act needs
+  "keep act mode while locked", the RIG setting).
+- **Pin tags:** Node (`HMAC(token,"huginn-tls-v1:pinset")[:16]`) and Kotlin (`sha256("huginn-tls-pins:"+token)[:16]`)
+  disagree; the core follows Node. Migrated pins cost one re-proof. TLS.md should name one.
+- **Dropped ids are recorded, never auto-deleted** at import (a dropped id may be a live old runner).
+
+**Left for P1 before a release:**
+1. Windows: run `proto/windows` on PC01 (AF_UNIX same + cross session, S4U facts, tray) — decides Q2
+   and whether the named-pipe fallback is needed.
+2. Packaging: ship the Go binary in the .exe / .deb / .pkg.tar.zst / portable tarball and the bootstrap
+   scripts; `huginn device`/`core` in `huginn.sh`/`.ps1` dispatch to it; release assets + manifest (Q5, Q8).
+3. GUI: when no core answers, offer "Set up huginn core" (runs the bundled binary's `core install`).
+4. Node `$&` refusal-text quirk in `client/huginn-device` + the generator (use a replacer function).
