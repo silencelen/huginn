@@ -30,6 +30,6 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: huginn version
-       huginn core run | install [--logon s4u|password] | uninstall | status | pair --url URL
+       huginn core run | install [--logon s4u|password] | uninstall | status | pair --url URL | self-install
        huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status`)
 }
