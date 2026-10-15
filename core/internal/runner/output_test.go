@@ -2,6 +2,8 @@ package runner
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -112,10 +114,43 @@ func TestMachineKey(t *testing.T) {
 
 func TestExecForShim(t *testing.T) {
 	dir := t.TempDir()
-	if bin, argv := execFor(dir+"/claude.cmd", []string{"-p"}, "node"); bin != dir+"/claude.cmd" || argv[0] != "-p" {
-		t.Fatal("a .cmd with no cli.js beside it is spawned as given")
+	// F1: a .cmd/.bat with nothing to run it safely is REFUSED, never spawned.
+	for _, name := range []string{"claude.cmd", "CLAUDE.CMD", "claude.bat"} {
+		if _, _, ok := execFor(filepath.Join(dir, name), []string{"-p"}, "node"); ok {
+			t.Fatalf("%s with no cli.js beside it was accepted", name)
+		}
 	}
-	if bin, argv := execFor("/x/shim.js", []string{"-p"}, "node"); bin != "node" || argv[0] != "/x/shim.js" {
+	// ...and redirected to node + cli.js when the shim has one beside it.
+	cli := filepath.Join(dir, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+	os.MkdirAll(filepath.Dir(cli), 0o755)
+	os.WriteFile(cli, []byte("//"), 0o644)
+	if bin, argv, ok := execFor(filepath.Join(dir, "claude.cmd"), []string{"-p"}, "node"); !ok || bin != "node" || argv[0] != cli {
+		t.Fatalf("shim not redirected: %s %v %v", bin, argv, ok)
+	}
+	if bin, argv, ok := execFor("/x/shim.js", []string{"-p"}, "node"); !ok || bin != "node" || argv[0] != "/x/shim.js" {
 		t.Fatal(".js runs through node")
+	}
+}
+
+func TestRideAlongRefusal(t *testing.T) {
+	for _, m := range []string{"opus&calc.exe", "opus|x", "a b", "-x", "op%PATH%", `o"p`, "^x", strings.Repeat("a", 81)} {
+		if rideAlongRefusal(m, "") == "" {
+			t.Errorf("model %q accepted", m)
+		}
+	}
+	for _, m := range []string{"opus", "claude-opus-5-5", "sonnet", "local-rig-qwen3-8b", "fable.5"} {
+		if why := rideAlongRefusal(m, ""); why != "" {
+			t.Errorf("model %q refused: %s", m, why)
+		}
+	}
+	for _, e := range []string{"high&x", "HIGH", "extreme"} {
+		if rideAlongRefusal("", e) == "" {
+			t.Errorf("effort %q accepted", e)
+		}
+	}
+	for _, e := range []string{"low", "medium", "high", "xhigh", "max", ""} {
+		if rideAlongRefusal("", e) != "" {
+			t.Errorf("effort %q refused", e)
+		}
 	}
 }

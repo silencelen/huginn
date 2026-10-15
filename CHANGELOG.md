@@ -38,6 +38,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
   desktop that booted with nobody signed in withdraws act unless "keep act mode while locked" is
   on.
 
+### Security
+- **The core refuses work whose model or effort value is not well-formed, and won't run a `.cmd`/`.bat`
+  engine.** It allows effort only from appd's own levels, and model only as a plain identifier.
+  On Windows, Go runs a batch file through `cmd.exe`, so a model value such as `opus&calc.exe`
+  would have run a second command and gotten around read-only scope. That required a compromised
+  host or edited chat state (scan F1, medium). An npm `claude.cmd` still works through `node cli.js`
+  when `cli.js` sits beside it.
+- **Remove this computer fails, instead of reporting success, when an installed core does not
+  confirm it forgot its token** (scan F2). Press Remove again once the core answers.
+- **`huginn core install --logon password` no longer puts the password on a command line.** The
+  password reaches PowerShell on stdin, and the prompt does not echo it (scan F3).
+- Documented: plain loopback HTTP has no peer check (docs/TLS.md, scan F4).
+
 ### Fixed
 - **The device refusal text named the mode literally again.** Before this fix, a mode containing
   `$&` printed `{mode}`, because the Node runner and the policy generator used string

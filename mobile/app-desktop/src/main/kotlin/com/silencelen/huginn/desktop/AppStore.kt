@@ -1670,10 +1670,17 @@ class AppStore(
             }
         }
 
-        // The core holds its own copy of the pairing; it forgets it too. A core
-        // that does not answer is noted, not fatal: the rows are already gone,
-        // and its next enrolment would fail on the cleared token anyway.
-        coreDevice.unpair().onFailure { note(Faults.ACTION, it) }
+        // ⚠ THE CORE HOLDS ITS OWN COPY OF THE TOKEN, and a core that did not
+        // unpair keeps it, stays enabled, and enrols again at its next start —
+        // on a machine the owner was just told is removed (security scan F2,
+        // 2026-10-15). So a core that is installed but does not confirm is a
+        // FAILED removal: nothing local is cleared, the desktop keeps its token,
+        // and pressing Remove again finishes the job (the rows are already gone,
+        // so the retry is just this step). A machine with no core is unaffected.
+        coreDevice.unpair().onFailure {
+            note(Faults.ACTION, it)
+            return Result.failure(it)
+        }
         settings.clearForRemoval()
         _devices.value = emptyList()
         return Result.success(mine.size)

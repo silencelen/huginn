@@ -72,6 +72,10 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 		return
 	}
 
+	if why := rideAlongRefusal(deref(w.Model), deref(w.Effort)); why != "" {
+		refuse(why)
+		return
+	}
 	pw := policy.Work{Mode: w.Mode, Model: deref(w.Model), Effort: deref(w.Effort), ResumeSessionID: deref(w.ResumeSessionID)}
 	argv := policy.ArgvFor(pw, scope, gate, "")
 	cwd := policy.CwdFor(scope, gate, conf.Root, r.h.Home)
@@ -133,8 +137,12 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 	if node == "" {
 		node = "node"
 	}
-	bin, fullArgv := execFor(engineBin, argv, node)
+	bin, fullArgv, ok := execFor(resolveEngine(engineBin), argv, node)
 	label, _ := engine(w.Mode)
+	if !ok {
+		finish(batchRefusal(w.Mode, conf.Name), nil)
+		return
+	}
 
 	cmd := exec.Command(bin, fullArgv...)
 	cmd.Dir = cwd

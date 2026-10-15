@@ -97,6 +97,13 @@ fingerprint, so relaying it doesn't help.
 - **Android can't speak plain HTTP to `[::1]`.** The network security config
   allows cleartext only to `localhost` and `127.0.0.1`, and an IPv6 literal
   can't be listed reliably. Use `http://127.0.0.1:<port>` on the phone.
+- **Plain loopback HTTP has no peer check.** A client whose address is
+  `http://127.0.0.1:<port>` (the Node runner, or `huginn core` on the appd host
+  itself) sends the token to whatever is listening on that port. Another local
+  account that binds the port while appd is restarting could read it (security
+  scan F4, 2026-10-15). This only applies on the appd host; every remote
+  address is upgraded to HTTPS and proved. Where that matters, point the local
+  client at the host's own LAN address over HTTPS instead of loopback.
 
 ## Test vector
 

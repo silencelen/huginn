@@ -358,3 +358,29 @@ func TestKickCutsBackoff(t *testing.T) {
 		t.Fatalf("an unkicked wait returned after %s", d)
 	}
 }
+
+func TestHostileModelRefusedWithoutSpawning(t *testing.T) {
+	it := item("ask")
+	it["model"] = "opus&calc.exe"
+	d := &fakeDaemon{t: t, work: []map[string]any{it}}
+	marker := filepath.Join(t.TempDir(), "spawned")
+	run(t, d, Config{Enabled: true, Name: "box", Scope: "look", Claude: fakeClaude(t, "touch "+marker)}, Lock{Known: true})
+	end, _ := d.terminal(t)
+	if !strings.Contains(end.Error, "not a model name it accepts") {
+		t.Fatalf("ending %+v", end)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the engine was spawned for a hostile model value")
+	}
+}
+
+func TestBatchEngineRefused(t *testing.T) {
+	bat := filepath.Join(t.TempDir(), "claude.cmd")
+	os.WriteFile(bat, []byte("@echo off"), 0o755)
+	d := &fakeDaemon{t: t, work: []map[string]any{item("ask")}}
+	run(t, d, Config{Enabled: true, Name: "box", Scope: "look", Claude: bat}, Lock{Known: true})
+	end, _ := d.terminal(t)
+	if !strings.Contains(end.Error, ".cmd/.bat shim this machine will not run") {
+		t.Fatalf("ending %+v", end)
+	}
+}

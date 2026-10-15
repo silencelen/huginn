@@ -526,8 +526,12 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
                                     }
                                 }
                                 .onFailure {
-                                    outcome = "could not reach huginn (${it.message}) — " +
-                                        "nothing changed here; try again when it answers"
+                                    // The core's own sentence when it is the core that did
+                                    // not confirm: "could not reach huginn" would send the
+                                    // owner after the wrong machine.
+                                    outcome = it.message?.takeIf { m -> m.startsWith("huginn core") }
+                                        ?: ("could not reach huginn (${it.message}) — " +
+                                            "nothing changed here; try again when it answers")
                                 }
                             busy = false
                         }
