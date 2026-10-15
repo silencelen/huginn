@@ -129,46 +129,8 @@ class UnenrolTest {
         }
     }
 
-    // ----------------------------------------------- the wait around the backoff
-
-    @Test
-    fun `a long backoff still answers the toggle coming back on`() = runTest {
-        // ⚠ THE FIVE MINUTES OF NOTHING. The backoff runs INSIDE the loop that
-        // also watches the toggle, so a flat `delay(300_000)` meant turning the
-        // device back on did nothing at all for up to five minutes — Settings
-        // still reading "Off", no way to tell whether the click had registered,
-        // and nothing to do but wait it out or restart the app.
-        var enabled = false
-        val woke = async {
-            DeviceRunner.waitOrWake(Unenrol.backoffMs(20), sliceMs = 1_000) { enabled }
-        }
-        advanceTimeBy(30_000)
-        enabled = true
-        advanceTimeBy(1_500)
-        assertTrue(woke.await(), "the wait was still asleep with the toggle already back on")
-        assertTrue(
-            currentTime < 60_000,
-            "it woke after ${currentTime}ms; a slice is a second, so anything near the full backoff is the bug",
-        )
-    }
-
-    @Test
-    fun `a wait nobody interrupts still waits the whole time`() = runTest {
-        // The other half: slicing must not turn a five-minute backoff into a busy
-        // loop that retries the DELETE every second.
-        val woke = async { DeviceRunner.waitOrWake(20_000, sliceMs = 1_000) { false } }
-        advanceUntilIdle()
-        assertFalse(woke.await())
-        assertEquals(20_000L, currentTime)
-    }
-
-    @Test
-    fun `a toggle that came back during the last request is not slept on at all`() = runTest {
-        val woke = async { DeviceRunner.waitOrWake(300_000, sliceMs = 1_000) { true } }
-        advanceUntilIdle()
-        assertTrue(woke.await())
-        assertEquals(0L, currentTime, "it went to sleep on an answer it already had")
-    }
+    // The wait around the backoff (a toggle coming back on must cut a long
+    // backoff short) moved with the runner: core/internal/runner, TestKickCutsBackoff.
 
     // --------------------------------------------------------------- the line
 
