@@ -354,15 +354,15 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 
 | # | Question | Proposed answer |
 |---|---|---|
-| Q1 | Can the JVM GUI speak HTTP over a local socket, including SSE? | **Linux: PROVEN 2026-10-14** (`proto/ipc`, 11/11 on huginn and 10/10 on a Linux laptop inside the app's own jlink runtime, as the desktop user): JSON, 426 proto gate, SSE event-by-event, 64 MiB chunked upload, 256 MiB download, pool reuse through the health check, read timeout, cancel mid-stream, 16 parallel, `Authorization` stripped, other-uid peer dropped. **Windows: PENDING** — same probe + cross-session (session 0 server, session 1 client); kit in `proto/windows/`. |
-| Q2 | Windows boot task logon type: stored password or S4U? | Test both on PC01. S4U if outbound HTTPS + the secrets file work under it (no password to go stale). |
+| Q1 | Can the JVM GUI speak HTTP over a local socket, including SSE? | **PROVEN on Linux and Windows (2026-10-14).** Linux: 11/11 on huginn, 10/10 on a Linux laptop in the app's own jlink runtime. Windows (PC01, Win 11): 10/10 in-session AND **cross-session** — server in an S4U task (session 0), client in the signed-in desktop (session 1); peer check resolved `HOME\alex` by SID. **AF_UNIX on both platforms; no named-pipe fallback needed.** |
+| Q2 | Windows boot task logon type | **S4U, default (2026-10-14).** Measured from an S4U task on PC01: session 0, Credential Manager ok, DPAPI ok, HTTPS 200, profile + `~\.claude` present — no stored password needed. ⚠ A task does not START on battery unless `DisallowStartIfOnBatteries=false` (it sits "Queued"); the core's TaskXML already sets it. |
 | Q3 | Do the remote verbs keep using ssh, or go through appd? | Keep ssh in P3 (it works without a token and is the terminal path's whole point). Revisit only per verb. |
 | Q4 | Distro packages: system `/usr/bin/huginn` + `Depends`, as in §7.4? | Yes, with "one core per machine". |
 | Q5 | Tag/manifest namespace for the unified release (`huginn-v2.0.0`? keep `desktop-v*` for the GUI feed?). | One tag `huginn-v*`; old clients' `desktop-v*` feed gets a final release whose installer carries the core (the migration step). |
 | Q6 | Pairing: today the token is copied by hand or over ssh (`cat /etc/huginn-appd/token`). | Keep the ssh path (`huginn setup` already has ssh); a pairing code/QR is a separate project (onboarding audit §A). |
 | Q7 | Adopting device ids: what if a machine has both a Node runner id and a desktop id today? | Prefer the one appd saw most recently; delete the other row through the API. |
 | Q8 | Manifest signing key: introduce now (P1) or later? | P1 — the first binary release is the moment the "parse check" disappears. |
-| Q9 | Go tray library | `fyne.io/systray` v1.12.2, `CGO_ENABLED=0`. **Linux: PROVEN 2026-10-14** on a Linux laptop (Omarchy: quickshell is the StatusNotifierWatcher) — item registered and cleanly deregistered. ⚠ The running desktop 1.13 registered **no** item there: today's AWT tray is invisible on Omarchy. **Windows: PENDING** (kit). |
+| Q9 | Go tray library | `fyne.io/systray` v1.12.2, `CGO_ENABLED=0`. **Linux PROVEN** (a Linux laptop/quickshell SNI). **Windows: works** — the icon registers (`HKCU\Control Panel\NotifyIconSettings` entry) but Windows 11 puts every NEW icon in the `^` overflow (`IsPromoted` unset; the current desktop's icon is hidden the same way). P2: the tray role may set `IsPromoted=1` on its own entry at install. |
 | Q10 | Idle/lock on Linux Wayland for the claim | **Measured on a Linux laptop 2026-10-14:** logind `IdleHint=no`, `IdleSinceHint=0` on the active Wayland session — nothing on Omarchy feeds logind idle, so it is useless there. The tray role must use `ext-idle-notify-v1` (Hyprland supports it); `LockedHint` is still read from logind for the lock fence. Unknown ⇒ "not at the machine" (Telegram wins). |
 
 ## 12. Progress (2026-10-14)
@@ -408,8 +408,7 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
   and an act chat ran on it.
 
 **Left before a 2.0.0 cut:**
-1. Windows: `proto/windows` kit on PC01, then one real `huginn core install` there (S4U task,
-   AF_UNIX across sessions, toast/tray later in P2). Not verified at all yet: the NSIS `CORE_EXE`
-   section and the elevated `core install` path.
+1. Windows: kit DONE (Q1/Q2/Q9 above). Left: one real `huginn core install` on PC01; the NSIS
+   `CORE_EXE` section is verified only by the release build.
 2. A full `release-desktop.sh` run (it publishes, so it is a release decision).
 3. `cli-v2.0.0` release: `core/build.sh 2.0.0` → `scripts/github-release.sh core 2.0.0 core/dist/2.0.0/*`.
