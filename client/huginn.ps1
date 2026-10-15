@@ -455,6 +455,35 @@ function _Huginn-CoreFetch {
   return (_Huginn-CoreBin)
 }
 
+# Is release $Rel newer than the installed core $Cur? A prerelease (2.1.0-rc.1)
+# is older than its release (2.1.0); a newer local build is left alone.
+function _Huginn-CoreNewer {
+  param([string]$Cur, [string]$Rel)
+  if (-not $Cur) { return $true }
+  if ($Cur -eq $Rel) { return $false }
+  $base = ($Cur -split '-', 2)[0]
+  try { $b = [version]$base; $r = [version]$Rel } catch { return $true }
+  if ($b -eq $r) { return ($base -ne $Cur) }
+  return ($r -gt $b)
+}
+
+# Bring the installed core up to the newest release. Its self-install restarts
+# the running core onto it and adds the tray to a pre-tray (2.0.0) install.
+function _Huginn-CoreUpdate {
+  $bin = _Huginn-CoreBin
+  if (-not $bin) { _Huginn-Fail "huginn core: not installed here - huginn core install" }
+  $cur = ''
+  if (((& $bin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $cur = $Matches[1] }
+  if (-not $env:HUGINN_CORE_FILE) {
+    $rel = _Huginn-CoreRelease
+    if (-not $rel) { Write-Host "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept"; return }
+    $latest = $rel.tag -replace '^cli-v', ''
+    if (-not (_Huginn-CoreNewer $cur $latest)) { Write-Host "huginn core $cur is current (newest release $latest)"; return }
+    Write-Host "huginn core: $cur -> $latest"
+  }
+  $null = _Huginn-CoreFetch
+}
+
 # Pair the core with the host this shell already reaches over ssh, if it is not
 # paired yet. The token travels ssh -> the pipeline -> stdin, never argv.
 function _Huginn-CorePair {
@@ -782,6 +811,7 @@ function _Huginn-HelpBody {
                               with nobody signed in - and pair it with the host
                               [--logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
+  huginn core update          take the newest core release (restarts the core)
   huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn
                               sees
@@ -1030,6 +1060,11 @@ function huginn {
     # session - so we don't pretend to hot-reload. Tell the user to reload.
     if ($got) {
       _Huginn-Say "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." Yellow
+      # Lockstep (D10): the core this client drives follows it - run by the NEW
+      # client, in a child shell, since this session still holds the old one.
+      if (_Huginn-CoreBin) {
+        & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command ". '$($dest -replace "'", "''")'; huginn core update"
+      }
     } else { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
   } elseif ($args[0] -eq 'list' -or $args[0] -eq 'ls') {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
@@ -1087,8 +1122,11 @@ function huginn {
     $sub = if ($args.Count -ge 2) { [string]$args[1] } else { 'status' }
     $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
     $bin = _Huginn-CoreBin
-    if ($sub -eq 'install') {
+    if ($sub -eq 'update') {
+      _Huginn-CoreUpdate
+    } elseif ($sub -eq 'install') {
       if (-not $bin -or $env:HUGINN_CORE_FILE) { $bin = _Huginn-CoreFetch }
+      else { _Huginn-CoreUpdate }  # an installed core is brought up to date first
       # Registering a boot task needs an administrator token: re-run just that
       # step elevated, behind ONE UAC prompt, as this same user.
       $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -1097,6 +1135,9 @@ function huginn {
         if ($p.ExitCode -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $($p.ExitCode))" }
       }
       for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
+      # The elevated step does not start the tray (it would run as
+      # administrator); this unelevated self-install does, when none is up.
+      & $bin core self-install | Where-Object { $_ -match 'tray' }
       _Huginn-CorePair $bin
       & $bin core status
     } elseif (-not $bin) {

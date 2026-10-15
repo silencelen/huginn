@@ -332,27 +332,31 @@ func InstallWindows(o WindowsOptions) Report {
 			return Done, "ended the running instance; it restarts below"
 		}},
 		{"start task", func() (State, string) { return cmdStep(r, "schtasks", "/Run", "/TN", TaskName) }},
-		{"tray shortcut", func() (State, string) {
-			if o.NoTray {
-				return Skipped, "not requested"
-			}
-			lnk := o.StartupLnk()
-			res := r.Run("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-				"-EncodedCommand", EncodedCommand(ShortcutScript(lnk, o.Binary)))
-			if !res.OK() {
-				return Failed, res.Why()
-			}
-			if _, err := os.Stat(lnk); err != nil {
-				return Failed, "powershell reported success but nothing is at " + lnk
-			}
-			return Done, lnk
-		}},
+		{"tray shortcut", func() (State, string) { return EnsureTrayWindows(o) }},
 	}
 	rep := run("install", steps)
 	if rep.OK() && logon == LogonS4U {
 		rep.Notes = append(rep.Notes, "S4U task: it retries every 5 minutes, so a boot before the network (and the domain controller) is up costs minutes, not the day. The appd token lives in the user-only secrets file.")
 	}
 	return rep
+}
+
+// EnsureTrayWindows writes the tray role's Startup shortcut (install, and an
+// update from a core that predates the tray).
+func EnsureTrayWindows(o WindowsOptions) (State, string) {
+	if o.NoTray {
+		return Skipped, "not requested"
+	}
+	lnk := o.StartupLnk()
+	res := o.Runner.Run("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-EncodedCommand", EncodedCommand(ShortcutScript(lnk, o.Binary)))
+	if !res.OK() {
+		return Failed, res.Why()
+	}
+	if _, err := os.Stat(lnk); err != nil {
+		return Failed, "powershell reported success but nothing is at " + lnk
+	}
+	return Done, lnk
 }
 
 // UninstallWindows stops and deletes the task and removes the shortcut.
