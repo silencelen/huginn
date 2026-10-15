@@ -15,7 +15,7 @@
 ![Terminal: PowerShell | bash | Termux](https://img.shields.io/badge/terminal-PowerShell%20%7C%20bash%20%7C%20Termux-2ea44f)
 ![Apps: Android | Windows | Linux](https://img.shields.io/badge/apps-Android%20%7C%20Windows%20%7C%20Linux-3DDC84)
 ![Built for: Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-D97757)
-![Made with: bash + tmux](https://img.shields.io/badge/made%20with-bash%20%2B%20tmux-1f425f)
+![Made with: bash + tmux + Go](https://img.shields.io/badge/made%20with-bash%20%2B%20tmux%20%2B%20Go-1f425f)
 ![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
 [**Setup**](docs/SETUP.md) · [**Usage**](docs/USAGE.md) · [**Architecture**](docs/ARCHITECTURE.md) · [**FAQ**](docs/FAQ.md) · [**Security**](docs/SECURITY.md)
@@ -77,10 +77,11 @@ PS C:\> huginn solo
 | 🪞 **Mirror or solo** | Two devices mirror each other (fit the smaller screen); one keystroke (`Alt-o`) detaches the rest to go full-screen. An auto-reconnect picks the right mode for you. |
 | 🏷️ **Live status tabs** | `huginn costtracking` labels the terminal tab `costtracking` (Windows Terminal / iTerm / Termux) **with a live state icon** — 🔄 working · ✋ needs you (permission/input) · ✅ waiting for your next prompt — so you can tell at a glance, across tabs, which session wants you. The title that was there before is put back when you leave (on any terminal with a title stack — [which, and why](docs/USAGE.md#named-terminal-tabs)). |
 | 💸 **Subscription, not metered** | Log Claude Code into your **Max/Pro** plan — flat cost, no per-token billing. (API key works too.) |
-| 🔌 **No daemon, no ports** | Just SSH. Add Tailscale/WireGuard and it works from anywhere. (The apps below are the opt-in exception.) |
+| 🔌 **No open ports** | The terminal path is just SSH. Add Tailscale/WireGuard and it works from anywhere. The optional background core listens on nothing but a local socket only you can open; the apps' daemon is the opt-in exception. |
+| 🖥️ **Your machines, always on call** | *(optional)* `huginn core` keeps a laptop, desktop or server available to huginn as a place to run work — from boot, with nobody signed in — without the desktop app open. |
 | 📲 **Native apps, opt-in** | An Android app and a Windows/Linux desktop app (one shared Kotlin codebase) with streaming chats, structured session views, push notifications, and permission prompts as tappable buttons — [see below](#-the-apps-optional). |
 | 📊 **Never silently capped** | *(with the daemon)* huginn watches the plan's usage windows: it warns a session before it runs out, steps it down a model **for that session only** (never rewriting your default), holds new subagent spawns while the account is tight, and resumes what stalled the moment the limit resets. `huginn headroom` shows the whole picture — [details](docs/USAGE.md#headroom-usage-limits). |
-| 🪶 **Tiny core** | The terminal path is a few shell scripts + a tmux config. The value is the *pattern*. |
+| 🪶 **Small pieces** | The terminal path is a few shell scripts + a tmux config. The value is the *pattern*. |
 
 ## Quick start
 
@@ -93,13 +94,27 @@ sudo bash huginn/server/setup.sh
 claude        # log in once with your Max/Pro subscription (or set ANTHROPIC_API_KEY)
 ```
 
-**3. Install the command** (on each device):
+**3. Install on each device** — one line:
+
 ```bash
-# Windows (PowerShell)
-.\huginn\client\install.ps1 -HuginnHost <host-ip-or-name>
-# bash / Termux (phone)
-bash huginn/client/install.sh <host-ip-or-name>
+# Linux · macOS · Termux
+curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh -s -- <host-ip-or-name>
 ```
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1))) -HuginnHost <host-ip-or-name>
+```
+
+It installs the `huginn` command from the newest release, adds a `Host huginn` SSH alias, prints this
+machine's key for you to authorize on the host, then asks two questions:
+
+- **Keep huginn running in the background?** — installs [`huginn core`](#huginn-core-optional), so
+  this machine can run work for huginn from boot, signed out, window closed.
+- **Install the desktop app too?** — Windows and Linux.
+
+Answer up front for unattended installs: `HUGINN_BACKGROUND=y HUGINN_GUI=n` (shell) or
+`-Background y -Gui n` (PowerShell). From a clone, `client/install.sh` / `client/install.ps1`
+still install the command alone.
 
 **4. Go:**
 ```
@@ -114,6 +129,28 @@ huginn help          full reference
 ```
 
 **5. Optional — the apps:** deploy the daemon and build the Android / desktop clients — see [`mobile/README.md`](mobile/README.md) and [the apps](#-the-apps-optional) below.
+
+## huginn core (optional)
+
+The terminal client stays a thin SSH front end. **`huginn core`** is an optional, per-user
+background service — one Go binary — for machines that should also *do* work: it enrols the
+machine as a huginn device, runs the jobs huginn sends it (read-only *ask*, or *act* with tools, by
+the scope you set on that machine), and starts **at boot, as you, with nobody signed in**
+(a `systemd --user` unit with linger on Linux; a scheduled task on Windows).
+
+```
+huginn core install     start it at boot and pair it with the host (over the SSH you already have)
+huginn device on        offer this machine   [--scope look|work|own] [--root DIR]
+huginn core status      is it running, paired, and what it offers
+```
+
+What the host may do to the machine is decided **on the machine**, by its own policy, never by
+the request; a locked screen withdraws *act* unless you say otherwise. The desktop app is a
+window onto the core and every desktop install brings one. Design:
+[`docs/CORE-ARCHITECTURE.md`](docs/CORE-ARCHITECTURE.md).
+
+> Windows builds are Authenticode-signed. Until the publicly trusted certificate is in place,
+> Windows machines outside the author's own domain will show an unknown publisher.
 
 ## In a session
 
@@ -144,8 +181,10 @@ talking to `huginn-appd` — a zero-dependency Node daemon on the host — over 
   milliseconds into deep Doze), an alarm fallback, and optional Telegram from the host;
   stale alerts take themselves down when you answer elsewhere.
 - **Desktop niceties** — tray with live state, `Ctrl+K` palette, keyboard-first
-  navigation, self-updating installers for Windows and a `.deb` for Linux, all built on
-  a Linux host (Windows installer included — jpackage under wine, no Windows box needed).
+  navigation, self-updating installers for Windows, a `.deb`, a native Arch package and a
+  portable self-updating Linux build, all built on a Linux host (Windows installer
+  included — jpackage under wine, no Windows box needed). Every desktop install brings
+  [`huginn core`](#huginn-core-optional).
 
 Start at [`mobile/README.md`](mobile/README.md) for what they do and how to build them,
 and read [`docs/SECURITY.md`](docs/SECURITY.md) **before** deploying the daemon — it is a
@@ -166,9 +205,10 @@ Being an `ssh` front end is also why the CLI drives **one** host: every verb tha
 | [`provision/`](provision/) | Container template (Proxmox LXC) + a generic "any Debian/Ubuntu host" path |
 | [`server/`](server/) | `setup.sh`, the `cc` launcher, `huginn-status`, a tuned `tmux.conf` |
 | [`server/appd/`](server/appd/) | the phone daemon: sessions, chats, push, prompts-as-buttons over the tailnet |
-| [`client/`](client/) | `huginn.ps1` + `huginn.sh` + installers + an optional Termux detach button |
+| [`client/`](client/) | `huginn.ps1` + `huginn.sh` + the one-line installers (`get.sh`, `get.ps1`) + clone installers + an optional Termux detach button |
+| [`core/`](core/) | `huginn core` (Go): the per-user background service — device runner, local socket API, boot service, self-install |
 | [`mobile/`](mobile/) | the Kotlin clients and the code they share: `:core` (logic + HTTP), `:ui` (Compose), `:app` (Android — [changelog](mobile/CHANGELOG.md)), `:app-desktop` (Windows/Linux — [changelog](mobile/app-desktop/CHANGELOG.md)) |
-| [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [Adding a feature](docs/ADDING-A-FEATURE.md) · [Desktop migration](docs/DESKTOP-MIGRATION.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
+| [`docs/`](docs/) | [Setup](docs/SETUP.md) · [Usage](docs/USAGE.md) · [Architecture](docs/ARCHITECTURE.md) · [Core](docs/CORE-ARCHITECTURE.md) · [Adding a feature](docs/ADDING-A-FEATURE.md) · [Desktop migration](docs/DESKTOP-MIGRATION.md) · [FAQ](docs/FAQ.md) · [Security](docs/SECURITY.md) |
 
 ## Memory (the other raven)
 

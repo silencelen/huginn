@@ -36,10 +36,21 @@ try {
   if ($HuginnHost) { & (Join-Path $t 'install.ps1') -HuginnHost $HuginnHost } else { & (Join-Path $t 'install.ps1') }
 } finally { Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue }
 
-ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>$null
-if ($LASTEXITCODE -ne 0) { Read-Host 'Authorize the key above on the host, then press Enter' | Out-Null }
-ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>$null
-$trusted = ($LASTEXITCODE -eq 0)
+# Does the host trust this key yet? Judged by ssh's EXIT CODE only.
+# NOTE: under $ErrorActionPreference='Stop', Windows PowerShell 5.1 turns any native
+# stderr line into a terminating error - and `Host huginn` asks for a TTY, so
+# ssh says "Pseudo-terminal will not be allocated" even on success. -T, plus
+# 'Continue' for this one call, keeps a probe from ending the install.
+function Test-HuginnTrust {
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & ssh -T -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>&1 | Out-Null; return ($LASTEXITCODE -eq 0) }
+  finally { $ErrorActionPreference = $eap }
+}
+$trusted = Test-HuginnTrust
+if (-not $trusted -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+  Read-Host 'Authorize the key above on the host, then press Enter' | Out-Null
+  $trusted = Test-HuginnTrust
+}
 
 if (Ask 'Keep huginn running in the background (act mode and local AI with this PC signed out)?' $Background) {
   if (-not $trusted) { Write-Host '  skipped: the host does not trust this key yet. Later: huginn core install' }
