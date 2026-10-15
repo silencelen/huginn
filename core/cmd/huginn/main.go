@@ -20,6 +20,8 @@ func main() {
 		fmt.Printf("(o> huginn %s (core proto %s)\n", version.Version, version.Proto)
 	case "device":
 		os.Exit(device(os.Args[2:]))
+	case "core":
+		os.Exit(core(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -27,5 +29,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: huginn version | core <run|install|uninstall|status> | device <on|off|status>")
+	fmt.Fprintln(os.Stderr, `usage: huginn version
+       huginn core run | install [--logon s4u|password] | uninstall | status | pair --url URL
+       huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status`)
 }
