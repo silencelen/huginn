@@ -102,15 +102,15 @@ echo "   (log: $LOG)"
 # ------------------------------------------------------- 0. the huginn core
 # D9/D10: every desktop artifact carries the core binary at the SAME version.
 # Built once, reproducibly (core/build.sh), before either platform packages.
-CORE_DIST="$BUILD/core-dist/$VERSION"
+CORE_DIST="$PWD/$BUILD/core-dist/$VERSION"
 echo "[0/7] huginn core $VERSION"
 # Every Windows artifact of a release is signed, or the release stops (see
 # scripts/sign-windows.sh: Defender removes an unsigned core).
 export HUGINN_SIGN_REQUIRED=1
 "$REPO_ROOT/core/build.sh" "$VERSION" "$CORE_DIST" >> "$LOG" 2>&1 || {
   echo "REFUSING: core/build.sh $VERSION failed" >&2; exit 1; }
-CORE_LINUX="$PWD/$CORE_DIST/huginn-$VERSION-linux-x64"
-CORE_WIN="$PWD/$CORE_DIST/huginn-$VERSION-windows-x64.exe"
+CORE_LINUX="$CORE_DIST/huginn-$VERSION-linux-x64"
+CORE_WIN="$CORE_DIST/huginn-$VERSION-windows-x64.exe"
 for f in "$CORE_LINUX" "$CORE_WIN"; do [ -s "$f" ] || { echo "REFUSING: no core binary $f" >&2; exit 1; }; done
 "$CORE_LINUX" version | grep -qF "huginn $VERSION " || { echo "REFUSING: the core does not say it is $VERSION" >&2; exit 1; }
 
