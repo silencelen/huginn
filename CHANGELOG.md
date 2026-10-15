@@ -8,6 +8,40 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## Unreleased (2.0.0 - huginn core, phase 1)
+
+### Added
+- **`huginn core`: a Go binary that runs this machine's huginn work in the background.** It starts at
+  boot as you, with nobody signed in: a `systemd --user` unit plus linger on Linux, and a "Huginn
+  Core" scheduled task on Windows (S4U by default, or `--logon password`). `huginn core install`
+  downloads the binary from the newest `cli-v*` release, checks it against the release's
+  `core-manifest.json` sha256, installs it per-user, starts it and pairs it with the host using the
+  token read over ssh. Also `core status`, `core uninstall`, `core pair` and `core self-install`.
+  See `docs/CORE-ARCHITECTURE.md`.
+- **The device runner moved into the core.** With the core installed, `huginn device on|off|status`
+  go to it and the Node runner is not used, so a machine never enrols twice. On first start the
+  core adopts the device id from an existing Node runner or desktop install instead of creating a
+  second row, and keeps its scope, root and act-while-locked settings.
+- **One-line bootstrap:** `client/get.sh` (`curl … | sh -s -- <host>`) and `client/get.ps1`
+  install the client from the newest `cli-v*` tag. They then ask whether to keep huginn running in
+  the background and whether to install the desktop GUI.
+- Releases carry the core binaries (`linux-x64`, `linux-arm64`, `windows-x64`, `android-arm64`)
+  and `core-manifest.json`. They are built reproducibly by `core/build.sh`.
+
+### Changed
+- **The appd token is stored in a 0600 file by default, not the keyring.** A Linux login keyring
+  is locked until someone logs in, and Credential Manager is likely unavailable to an S4U task.
+  Both are exactly the moments a boot-time core needs the token. Set `HUGINN_SECRETS=keyring` to
+  opt in to the keyring.
+- **A headless machine counts as unlocked; a desktop at its login screen counts as locked.**
+  Machines with no graphical seat (servers, LXCs) keep act mode, as with the Node runner. A
+  desktop that booted with nobody signed in withdraws act unless "keep act mode while locked" is
+  on.
+
+### Fixed
+- **The device refusal text named the mode literally again.** Before this fix, a mode containing
+  `$&` printed `{mode}`, because the Node runner and the policy generator used string
+  replacement. They now match the Go and Kotlin runners byte for byte.
 ## [1.9.1] - 2026-10-14
 
 ### Fixed

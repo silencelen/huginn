@@ -1,5 +1,19 @@
 # Huginn Desktop changelog
 
+## Unreleased (2.0.0 - huginn core, phase 1)
+
+### Changed
+- **The app no longer runs work itself.** "Available to huginn" now drives `huginn core`, a
+  per-user background service that starts at boot. This machine stays available with the window
+  closed and nobody signed in, which is how RIG kept dropping off. The app's old built-in runner
+  and lock probe are removed. Settings shows the core's status and sends changes to it over a
+  local socket that only you can open.
+- **Every desktop build carries its core.** The Windows installer installs it per-user. The Linux
+  packages and portable build carry it in app-resources, and the app installs it at first launch.
+  If no core is running, Settings shows **Set up huginn core**, which starts it at boot (one UAC
+  prompt on Windows).
+- **Remove this computer** now also makes the core forget its pairing.
+
 ## 1.13.0
 
 ### Added
