@@ -17,6 +17,10 @@ client (bash, PowerShell, Termux), an Android app and a Compose desktop app.
 The visual identity is decided and written up; do not improvise colours, type
 or state words:
 
+- `assets/brand/design-card.html`: the design card, the one-page reference for
+  what ships (mark, tile, palette, states, type, scale, components, motion,
+  terminal, surfaces). Generated from the token, state and mark files by
+  `python3 assets/brand/design-card.py`; regenerate it after changing any of them.
 - `assets/brand/BRAND.md`: the rules (mark, tile, terminal art, tokens, type,
   motion, surfaces, voice). Every colour comes from
   `assets/brand/explorations/color/color-04-moss-heather/tokens.json`.
