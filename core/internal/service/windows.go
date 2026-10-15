@@ -59,10 +59,31 @@ func TaskXML(binary, user string, logon LogonType) string {
 	b.WriteString("    <Description>huginn core: keeps this machine available to huginn from boot, with nobody signed in. Written by `huginn core install`.</Description>\r\n")
 	b.WriteString(`    <URI>\` + xmlText(TaskName) + "</URI>\r\n")
 	b.WriteString("  </RegistrationInfo>\r\n")
+	// ⚠ THREE TRIGGERS, NOT ONE (measured on PRESTIGE 2026-10-14). A boot
+	// trigger alone fired 13 s after power-on, LogonUserS4U failed (0x80070057:
+	// S4U for a DOMAIN account needs a DC, and the network was not up yet), and
+	// Task Scheduler never tried again — the core stayed down even after a
+	// sign-in. So: boot (delayed), a repeat every 5 minutes for ever, and the
+	// user's own logon. IgnoreNew drops a start while one runs, and a second
+	// `core run` exits 0 when a core already serves the socket, so the repeat
+	// is a self-heal for every way the core can be down, not a duplicate.
 	b.WriteString("  <Triggers>\r\n")
 	b.WriteString("    <BootTrigger>\r\n")
 	b.WriteString("      <Enabled>true</Enabled>\r\n")
+	b.WriteString("      <Delay>PT30S</Delay>\r\n")
 	b.WriteString("    </BootTrigger>\r\n")
+	b.WriteString("    <TimeTrigger>\r\n")
+	b.WriteString("      <Repetition>\r\n")
+	b.WriteString("        <Interval>PT5M</Interval>\r\n")
+	b.WriteString("        <StopAtDurationEnd>false</StopAtDurationEnd>\r\n")
+	b.WriteString("      </Repetition>\r\n")
+	b.WriteString("      <StartBoundary>2026-01-01T00:00:00</StartBoundary>\r\n")
+	b.WriteString("      <Enabled>true</Enabled>\r\n")
+	b.WriteString("    </TimeTrigger>\r\n")
+	b.WriteString("    <LogonTrigger>\r\n")
+	b.WriteString("      <Enabled>true</Enabled>\r\n")
+	b.WriteString("      <UserId>" + xmlText(user) + "</UserId>\r\n")
+	b.WriteString("    </LogonTrigger>\r\n")
 	b.WriteString("  </Triggers>\r\n")
 	b.WriteString("  <Principals>\r\n")
 	b.WriteString(`    <Principal id="Author">` + "\r\n")
@@ -293,7 +314,7 @@ func InstallWindows(o WindowsOptions) Report {
 	}
 	rep := run("install", steps)
 	if rep.OK() && logon == LogonS4U {
-		rep.Notes = append(rep.Notes, "S4U task: no Credential Manager at boot, so the appd token lives in the user-only secrets file.")
+		rep.Notes = append(rep.Notes, "S4U task: it retries every 5 minutes, so a boot before the network (and the domain controller) is up costs minutes, not the day. The appd token lives in the user-only secrets file.")
 	}
 	return rep
 }
