@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.ui.Muted
+import com.silencelen.huginn.ui.settings.SettingsActionRow
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import kotlinx.coroutines.launch
 
@@ -129,6 +130,20 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
         },
         modifier = Modifier.padding(top = 10.dp),
     )
+
+    // No core answering: the one action that fixes every device setting below.
+    val setupNote by store.coreDevice.setup.collectAsState()
+    if (!status.coreReachable) {
+        SettingsActionRow(
+            id = "devices.core-setup",
+            title = "huginn core",
+            actionLabel = "Set up huginn core",
+            onAction = { store.coreDevice.setUp() },
+            enabled = setupNote?.endsWith("…") != true,
+            summary = setupNote ?: ("Runs this computer's huginn work in the background, starting at boot — " +
+                "so it stays available with this window closed and nobody signed in."),
+        )
+    }
 
     if (enabled) {
         FormHeader("What it may do")

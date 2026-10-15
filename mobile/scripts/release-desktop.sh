@@ -70,6 +70,7 @@ echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
   || { echo "REFUSING: app-desktop/version.txt is '$VERSION', not x.y.z" >&2; exit 1; }
 BUILD=app-desktop/build
 WIN=$BUILD/windows
+
 DIST=$BUILD/release
 EXE="Huginn-Desktop-Setup-$VERSION.exe"
 DEB="huginn-desktop-kt_${VERSION}-1_amd64.deb"
@@ -97,6 +98,18 @@ LOG=${TMPDIR:-/tmp}/huginn-desktop-kt-release.log
 
 echo "== releasing huginn-desktop-kt $VERSION =="
 echo "   (log: $LOG)"
+
+# ------------------------------------------------------- 0. the huginn core
+# D9/D10: every desktop artifact carries the core binary at the SAME version.
+# Built once, reproducibly (core/build.sh), before either platform packages.
+CORE_DIST="$BUILD/core-dist/$VERSION"
+echo "[0/7] huginn core $VERSION"
+"$REPO_ROOT/core/build.sh" "$VERSION" "$CORE_DIST" >> "$LOG" 2>&1 || {
+  echo "REFUSING: core/build.sh $VERSION failed" >&2; exit 1; }
+CORE_LINUX="$PWD/$CORE_DIST/huginn-$VERSION-linux-x64"
+CORE_WIN="$PWD/$CORE_DIST/huginn-$VERSION-windows-x64.exe"
+for f in "$CORE_LINUX" "$CORE_WIN"; do [ -s "$f" ] || { echo "REFUSING: no core binary $f" >&2; exit 1; }; done
+"$CORE_LINUX" version | grep -qF "huginn $VERSION " || { echo "REFUSING: the core does not say it is $VERSION" >&2; exit 1; }
 
 # ---------------------------------------------------------------- 1. gates
 echo "[1/7] gates"
@@ -359,7 +372,7 @@ fi
 
 # ------------------------------------------------------------- 2. linux build
 echo "[2/7] linux .deb"
-$GRADLE :app-desktop:packageDeb :app-desktop:createDistributable >> "$LOG" 2>&1 || {
+$GRADLE -PcoreBinary="$CORE_LINUX" :app-desktop:packageDeb :app-desktop:createDistributable >> "$LOG" 2>&1 || {
   tail -40 "$LOG"; echo "REFUSING: linux package failed (full log: $LOG)" >&2; exit 1; }
 DEB_SRC="$BUILD/compose/binaries/main/deb/$DEB"
 # ARTIFACTS, never exit codes: `packageMsi` on Linux exits 0 having produced
@@ -632,6 +645,7 @@ if [ "$LINUX_ONLY" = 0 ]; then
     -DOUT_FILE="$PWD/$WIN/out/$EXE" \
     -DPLUGIN_DIR="$PLUGIN_DIR" \
     -DICON_FILE="$PWD/app-desktop/packaging/huginn.ico" \
+    -DCORE_EXE="$CORE_WIN" \
     "$NSI" > "$LOG.nsis" 2>&1 || {
     cat "$LOG.nsis" >> "$LOG"; tail -40 "$LOG.nsis"
     echo "REFUSING: makensis failed (full log: $LOG)" >&2; exit 1; }
