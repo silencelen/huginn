@@ -1,13 +1,13 @@
 [versions]
-agp = "9.3.1"
+agp = "9.4.1"
 # FCM: the only push transport Google delivers into Doze.
 google-services = "4.4.2"
-firebase-bom = "33.7.0"
+firebase-bom = "35.0.0"
 biometric = "1.1.0"
 # Forced ABOVE the 1.2.5 that biometric drags in: that FragmentActivity rejects
 # the request codes the modern activity-result launcher generates.
-fragment = "1.8.5"
-kotlin = "2.4.10"
+fragment = "1.9.1"
+kotlin = "2.4.21"
 compose-bom = "2024.12.01"
 # Compose Multiplatform, used ONLY by :core so shared code can name
 # androidx.compose.ui types (Color, AnnotatedString) from commonMain. Pinned to
@@ -22,7 +22,7 @@ kotlinx-serialization = "1.7.3"
 # no Kotlin bump (same reasoning as compose-multiplatform above), and its OkHttp
 # engine pins okhttp 4.12.0 — the exact version this app shipped while it talked
 # to OkHttp directly, so nothing about the bytes on the wire changed with it.
-ktor = "3.5.2"
+ktor = "3.6.0"
 datastore = "1.1.1"
 work = "2.10.0"
 # The home-screen widget. Glance composes RemoteViews, so the widget is written
