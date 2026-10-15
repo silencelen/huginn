@@ -762,8 +762,12 @@ function _Huginn-HelpBody {
                               month, e.g. huginn usage today |
                               huginn usage week session
   huginn desktop              download links for the latest Huginn Desktop
-                              build
-  huginn desktop win|linux    just that platform's url, bare, for scripting
+                              build (Windows, Debian, Arch, portable)
+  huginn desktop win|linux|arch|portable
+                              just that build's url, bare, for scripting
+  huginn desktop install      Linux: install or repair the per-user,
+                              self-updating build (no root; any distro)
+  huginn desktop uninstall    Linux: remove that install (keeps settings)
   huginn update               self-update this client from the repo
                               ($script:HUGINN_REPO); without gh, from the
                               PINNED $(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }) mirror, never from
@@ -1148,13 +1152,22 @@ function huginn {
     _Huginn-Uninstall -Rest $rest
   } elseif ($args[0] -eq 'desktop') {
     $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
+    # install/uninstall are the bash client's per-user Linux install (huginn.sh,
+    # _huginn_desktop_install). Named here so the verb set matches, and so the
+    # answer on Windows is a pointer rather than "usage".
+    if ($arg -in 'install', 'uninstall', 'remove') {
+      _Huginn-Fail ("huginn: 'desktop $arg' is the Linux per-user install (the bash client: huginn.sh).`n" +
+                    "  On Windows the installer IS per-user and updates itself: huginn desktop windows")
+    }
     $want = switch ($arg) {
       { $_ -in '', 'both', 'all' }              { ''; break }
       { $_ -in 'win', 'windows', 'exe' }        { 'windows-x64'; break }
       { $_ -in 'linux', 'deb', 'debian', 'ubuntu' } { 'linux-x64'; break }
+      { $_ -in 'arch', 'pacman', 'pkg' }        { 'linux-x64-arch'; break }
+      { $_ -in 'portable', 'tar', 'tarball' }   { 'linux-x64-portable'; break }
       default { 'BAD' }
     }
-    if ($want -eq 'BAD') { _Huginn-Fail "usage: huginn desktop [windows|linux]" }
+    if ($want -eq 'BAD') { _Huginn-Fail "usage: huginn desktop [windows|linux|arch|portable|install|uninstall]" }
     $rel = _Huginn-DesktopRelease
     if (-not $rel) {
       _Huginn-Fail ("huginn: could not read the desktop release feed (offline, or GitHub rate-limited this IP).`n" +
@@ -1177,24 +1190,24 @@ function huginn {
     Write-Host ""
     Write-Host "  Huginn Desktop $($rel.manifest.version)   ($($rel.tag))"
     Write-Host ""
-    foreach ($p in @('windows-x64', 'linux-x64')) {
+    $labels = @{ 'windows-x64' = 'Windows '; 'linux-x64' = 'Debian  '; 'linux-x64-arch' = 'Arch    '; 'linux-x64-portable' = 'Portable' }
+    foreach ($p in @('windows-x64', 'linux-x64', 'linux-x64-arch', 'linux-x64-portable')) {
       $a = $arts.$p
       if (-not $a) { continue }
-      $label = if ($p -eq 'windows-x64') { 'Windows' } else { 'Linux  ' }
       $mark  = if ($p -eq $here) { '   <- this machine' } else { '' }
-      Write-Host "  $label  $base/$($a.file)$mark"
-      _Huginn-Say ("           {0,6:N1} MB   sha256 {1}..." -f ($a.size / 1MB), $a.sha256.Substring(0, 16)) DarkGray
+      Write-Host "  $($labels[$p])  $base/$($a.file)$mark"
+      _Huginn-Say ("            {0,6:N1} MB   sha256 {1}..." -f ($a.size / 1MB), $a.sha256.Substring(0, 16)) DarkGray
     }
     Write-Host ""
     if ($here -eq 'windows-x64') {
       Write-Host "  install:  run the .exe (per-user NSIS installer, no admin needed)"
     } elseif ($here -eq 'linux-x64') {
-      $deb = $arts.'linux-x64'.file
-      Write-Host "  install:  curl -fLO $base/$deb && sudo dpkg -i $deb"
+      # pwsh on Linux: the per-user install lives in the bash client.
+      Write-Host "  install:  huginn desktop install    (bash client; per-user, no root, updates itself)"
     } else {
       Write-Host "  (no desktop build for this machine - these links are for your laptop)"
     }
-    _Huginn-Say "  An installed client self-updates from this same feed." DarkGray
+    _Huginn-Say "  The Windows and portable installs update themselves from this same feed." DarkGray
     Write-Host ""
   } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
     # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn - keep this bare.
@@ -1404,7 +1417,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
     $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } elseif ($prev -eq 'desktop') {
-    $candidates = 'windows', 'linux', 'both'
+    $candidates = 'windows', 'linux', 'arch', 'portable', 'install', 'uninstall', 'both'
   } elseif ($prev -eq 'local') {
     $candidates = 'status', 'on', 'plan', 'persist', 'off', 'unit', 'update', 'doctor', '--help'
   } elseif ($prev -eq 'device') {
