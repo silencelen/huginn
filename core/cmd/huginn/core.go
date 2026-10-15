@@ -25,6 +25,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/service"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/version"
+	"golang.org/x/term"
 )
 
 // core dispatches `huginn core …`.
@@ -189,9 +190,21 @@ func coreInstall(args []string) int {
 			o.Logon = service.LogonS4U
 		case "password":
 			o.Logon = service.LogonPassword
+			// Not echoed (security scan F3): a password on screen is in scrollback
+			// and in every screen share. Piped stdin (automation) still works.
 			fmt.Printf("Windows password for %s (used once, kept by Task Scheduler): ", o.User)
-			pw, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-			o.Password = strings.TrimRight(pw, "\r\n")
+			if term.IsTerminal(int(os.Stdin.Fd())) {
+				b, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Println()
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "huginn core install: reading the password: "+err.Error())
+					return 1
+				}
+				o.Password = string(b)
+			} else {
+				pw, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+				o.Password = strings.TrimRight(pw, "\r\n")
+			}
 		default:
 			fmt.Fprintln(os.Stderr, "--logon must be s4u or password")
 			return 2

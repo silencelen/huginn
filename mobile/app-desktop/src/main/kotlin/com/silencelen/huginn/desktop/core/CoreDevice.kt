@@ -129,8 +129,23 @@ class CoreDevice internal constructor(
         }
     }
 
-    /** Settings → Remove this computer: the core forgets its pairing too. */
-    suspend fun unpair(): Result<Unit> = runCatching { (client ?: clientFor() ?: error(NOT_AVAILABLE)).unpair() }
+    /**
+     * Settings → Remove this computer: the core forgets its pairing too.
+     * Success when there is no core on this machine at all (nothing holds a
+     * token); a core that is INSTALLED but does not confirm is a failure the
+     * caller must not paper over (see AppStore.removeThisComputer).
+     */
+    suspend fun unpair(): Result<Unit> = runCatching {
+        val c = client ?: clientFor()
+        val present = CoreSetup.installedBinary() != null || c?.socketPresent() == true
+        if (!present) return@runCatching
+        (c ?: error(NOT_AVAILABLE)).runCatching { unpair() }.getOrElse {
+            throw IllegalStateException(
+                "huginn core is installed here but did not confirm it forgot this computer's token — start it " +
+                    "(`huginn core status`) or remove it (`huginn core uninstall`), then press Remove again", it,
+            )
+        }
+    }
 
     companion object {
         const val RECONNECT_MS = 3_000L
