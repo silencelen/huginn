@@ -109,8 +109,12 @@
                               month, e.g. huginn usage today |
                               huginn usage week session
   huginn desktop              download links for the latest Huginn Desktop
-                              build
-  huginn desktop win|linux    just that platform's url, bare, for scripting
+                              build (Windows, Debian, Arch, portable)
+  huginn desktop win|linux|arch|portable
+                              just that build's url, bare, for scripting
+  huginn desktop install      Linux: install or repair the per-user,
+                              self-updating build (no root; any distro)
+  huginn desktop uninstall    Linux: remove that install (keeps settings)
   huginn update               self-update this client from the repo
                               ({REPO}); without gh, from the
                               PINNED {UPDATE_HOST} mirror, never from

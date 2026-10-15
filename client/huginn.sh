@@ -756,6 +756,263 @@ _huginn_desktop_platform() {
   esac
 }
 
+# Which Linux family this is, from os-release ID + ID_LIKE: arch | debian | other.
+# Omarchy, EndeavourOS, Manjaro and CachyOS all say ID_LIKE=arch; Ubuntu and Mint
+# say debian. HUGINN_OS_RELEASE only exists so scripts/test-client.sh can play
+# every distro on one box - it names a file to READ, nothing more.
+_huginn_linux_distro() {
+  local f="${HUGINN_OS_RELEASE:-/etc/os-release}" ids
+  [ -r "$f" ] || f=/usr/lib/os-release
+  ids="$( { sed -n 's/^ID=//p; s/^ID_LIKE=//p' "$f" 2>/dev/null || true; } | tr -d "\"'" | tr 'A-Z' 'a-z' | tr '\n' ' ')"
+  case " $ids " in
+    *' arch '*|*' archlinux '*) echo arch ;;
+    *' debian '*|*' ubuntu '*)  echo debian ;;
+    *)                          echo other ;;
+  esac
+}
+
+# --- the portable, self-updating Linux install ---
+# Layout (the desktop app's PortableInstall.kt reads and rewrites exactly this, so
+# the two must agree - change one, change both):
+#   R=${XDG_DATA_HOME:-~/.local/share}/huginn-desktop
+#   R/.huginn-portable          marker: "huginn laid this out" (the app refuses to
+#                               self-update a tree without it)
+#   R/versions/<ver>/           one unpacked app-image per version
+#   R/current -> versions/<ver> RELATIVE link; the only thing an update changes
+#   ~/.local/bin/huginn-desktop -> R/current/bin/huginn-desktop-kt
+#   $XDG_DATA_HOME/applications/huginn-desktop-kt.desktop  (Exec = R/current/...)
+# Everything outside R names `current`, never a version, so an update - from here
+# or from the app's own "Install and restart" - never has to find and rewrite a
+# menu entry, the huginn:// handler or the autostart entry.
+#
+# ⚠ THE DESKTOP FILE IS huginn-desktop-kt.desktop, NOT A NEW NAME. The app's
+# SchemeRegistrar writes that same per-user file on every launch; a second name
+# would give the menu two Huginns and huginn:// two competing handlers. Its text
+# here matches SchemeRegistrar.linuxDesktopEntry byte for byte, so the app's
+# rewrite is a no-op.
+#
+# ⚠ NEVER sudo. A distro package of the old shape is NAMED with its removal
+# command and left alone: this client does not ask for, or run as, root.
+_huginn_desktop_root() { echo "${XDG_DATA_HOME:-$HOME/.local/share}/huginn-desktop"; }
+
+_huginn_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+
+# The listing check, BEFORE anything is unpacked: one top-level dir named $2, no
+# absolute names, no `..` component, symlinks only to places inside $2, hardlinks
+# only to entries inside $2, nothing but files/dirs/links. The same rules as the
+# app's PortableInstall.checkTar. Reads GNU tar's verbose listing; prints the
+# offending entry and returns 1 on refusal.
+_huginn_desktop_tar_ok() {
+  local listing
+  listing="$(LC_ALL=C tar --numeric-owner -tzvf "$1" 2>/dev/null)" || { echo "not a readable .tar.gz" >&2; return 1; }
+  [ -n "$listing" ] || { echo "the archive is empty" >&2; return 1; }
+  printf '%s\n' "$listing" | LC_ALL=C awk -v top="$2" '
+    function bad(why) { print why > "/dev/stderr"; failed = 1; exit 1 }
+    # Split a path into seg[], dropping "" and "."; returns -1 on any "..".
+    function split_path(p, seg,   n, i, raw, k) {
+      n = split(p, raw, "/"); k = 0
+      for (i = 1; i <= n; i++) {
+        if (raw[i] == "" || raw[i] == ".") continue
+        if (raw[i] == "..") return -1
+        seg[++k] = raw[i]
+      }
+      return k
+    }
+    {
+      type = substr($0, 1, 1)
+      # perms owner/group size date time NAME... - strip the five fixed columns.
+      rest = $0
+      if (!match(rest, /^[^ ]+ +[^ ]+ +[0-9,]+ +[0-9-]+ +[0-9:]+ /)) bad("unreadable listing line: " $0)
+      rest = substr(rest, RLENGTH + 1)
+      name = rest; target = ""
+      if (type == "l") { i = index(rest, " -> ");     if (!i) bad("unreadable symlink: " rest); name = substr(rest, 1, i - 1); target = substr(rest, i + 4) }
+      if (type == "h") { i = index(rest, " link to "); if (!i) bad("unreadable hardlink: " rest); name = substr(rest, 1, i - 1); target = substr(rest, i + 9) }
+      if (type != "-" && type != "d" && type != "l" && type != "h") bad("unsupported entry type " type ": " name)
+      if (substr(name, 1, 1) == "/") bad("absolute path: " name)
+      delete seg; k = split_path(name, seg)
+      if (k < 0) bad("path climbs out with ..: " name)
+      if (k == 0) bad("an entry names the archive root itself: " name)
+      if (seg[1] != top) bad("entry outside " top "/: " name)
+      if (k == 1 && type != "d") bad("the top-level entry is not a directory")
+      if (type == "l") {
+        if (target == "" || substr(target, 1, 1) == "/") bad("symlink " name " -> " target " is absolute or empty")
+        # Resolve from the link'"'"'s own directory, the way the kernel will.
+        depth = k - 1; n = split(target, raw, "/")
+        for (j = 1; j <= n; j++) {
+          if (raw[j] == "" || raw[j] == ".") continue
+          if (raw[j] == "..") { depth--; if (depth < 1) bad("symlink " name " -> " target " escapes " top "/") }
+          else depth++
+        }
+      }
+      if (type == "h") {
+        delete tseg; t = split_path(target, tseg)
+        if (t < 1 || tseg[1] != top || substr(target, 1, 1) == "/") bad("hardlink " name " -> " target " escapes " top "/")
+      }
+    }
+  '
+}
+
+_huginn_desktop_entry() {   # $1 = stable launcher; the same text as SchemeRegistrar.linuxDesktopEntry
+  local exe="$1" app
+  app="${exe%/bin/huginn-desktop-kt}"
+  printf '[Desktop Entry]\nType=Application\nName=Huginn\nComment=huginn desktop client\n'
+  printf 'Exec="%s" %%u\n' "$(printf '%s' "$exe" | sed 's/%/%%/g')"
+  printf 'Icon=%s/lib/huginn-desktop-kt.png\n' "$app"
+  printf 'Terminal=false\nCategories=Development;Utility;\nMimeType=x-scheme-handler/huginn;\n'
+}
+
+# A SUBSHELL body - ( ), not { } - so `exit` and the temp-dir trap stay inside it
+# and never touch the shell that sourced this file.
+_huginn_desktop_install() (
+  set -u
+  fail() { echo "huginn: $*" >&2; exit 1; }
+  case "$(uname -s 2>/dev/null)" in Linux*) ;; *) fail "desktop install is for Linux; on Windows run the installer from: huginn desktop windows" ;; esac
+  case "$(uname -o 2>/dev/null)" in Android*) fail "there is no desktop build for a phone" ;; esac
+  case "$(uname -m 2>/dev/null)" in x86_64|amd64) ;; *) fail "the desktop is only built for x86-64 (this is $(uname -m))" ;; esac
+  command -v tar >/dev/null 2>&1 || fail "tar is needed to unpack the app"
+
+  local rel tag man ver obj file sha base R L cur prev
+  rel="$(_huginn_desktop_release)" || fail "could not read the desktop release feed (offline, or GitHub rate-limited this IP)."
+  tag="${rel%%$'\n'*}"; man="${rel#*$'\n'}"
+  ver="$(_huginn_json_str "$man" version)"
+  printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "$tag carries an unreadable version '$ver'"
+  obj="$(_huginn_json_obj "$man" linux-x64-portable)"
+  file="$(_huginn_json_str "$obj" file)"; sha="$(_huginn_json_str "$obj" sha256)"
+  [ -n "$file" ] || fail "$tag has no portable Linux build (it predates them) - use: huginn desktop"
+  # A NAME, never a path: it is joined onto a temp dir below.
+  [ "$file" = "huginn-desktop-kt-$ver-linux-x64.tar.gz" ] || fail "$tag names an unexpected portable file '$file' - refused"
+  printf '%s' "$sha" | grep -qE '^[0-9a-f]{64}$' || fail "$tag's manifest carries no usable sha256 for $file - refused"
+  base="https://github.com/$HUGINN_REPO/releases/download/$tag"
+
+  R="$(_huginn_desktop_root)"
+  L="$R/current/bin/huginn-desktop-kt"
+  cur="$(readlink "$R/current" 2>/dev/null || true)"
+
+  if [ "$cur" = "versions/$ver" ] && [ -x "$R/versions/$ver/bin/huginn-desktop-kt" ]; then
+    echo "  Huginn Desktop $ver is already installed in $R - repairing the links."
+  else
+    local tmp
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop.XXXXXX")" || fail "could not make a temp dir"
+    trap 'rm -rf "$tmp"' EXIT
+    echo "  downloading $file ..."
+    if command -v curl >/dev/null 2>&1; then
+      curl -fL --max-time 900 -o "$tmp/$file" "$base/$file" || fail "download failed: $base/$file"
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$tmp/$file" --timeout=60 "$base/$file" || fail "download failed: $base/$file"
+    else
+      fail "needs curl or wget to download $file"
+    fi
+    # THE GATE. These builds are unsigned; the manifest's sha256 is the only
+    # integrity check between GitHub and an executable in your home directory.
+    local got
+    got="$(_huginn_sha256 "$tmp/$file")"
+    [ "$got" = "$sha" ] || fail "$file did not match its sha256 (got ${got:0:16}..., want ${sha:0:16}...) - discarded, nothing installed"
+    _huginn_desktop_tar_ok "$tmp/$file" "huginn-desktop-kt-$ver" || fail "refused $file: its listing would write outside huginn-desktop-kt-$ver/"
+
+    mkdir -p "$R/versions" || fail "could not create $R"
+    : > "$R/.huginn-portable"
+    local stage="$R/versions/.tmp-$ver"
+    rm -rf "$stage"; mkdir -p "$stage"
+    tar -xzf "$tmp/$file" -C "$stage" --no-same-owner || { rm -rf "$stage"; fail "unpacking $file failed"; }
+    # What actually LANDED, checked again: two readers of one archive can disagree.
+    local top="$stage/huginn-desktop-kt-$ver" lnk real topreal
+    topreal="$(cd "$top" 2>/dev/null && pwd -P)" || { rm -rf "$stage"; fail "$file did not unpack its directory"; }
+    while IFS= read -r lnk; do
+      real="$(readlink -f "$lnk" 2>/dev/null || true)"
+      case "$real" in "$topreal"/*) ;; *) rm -rf "$stage"; fail "unpacked link $lnk escapes the app dir" ;; esac
+    done < <(find "$top" -type l 2>/dev/null)
+    [ -x "$top/bin/huginn-desktop-kt" ] || { rm -rf "$stage"; fail "$file has no executable bin/huginn-desktop-kt"; }
+    rm -rf "$R/versions/$ver"
+    mv "$top" "$R/versions/$ver" || { rm -rf "$stage"; fail "could not move $ver into place"; }
+    rmdir "$stage" 2>/dev/null || rm -rf "$stage"
+
+    # THE SWAP: a new relative link renamed over the old one - atomic, so the
+    # menu entry never points at nothing, even mid-update.
+    ln -sfn "versions/$ver" "$R/.current.tmp.$$" && mv -Tf "$R/.current.tmp.$$" "$R/current" \
+      || { rm -f "$R/.current.tmp.$$"; fail "could not switch $R/current to $ver"; }
+    prev="${cur#versions/}"
+    # Keep the new version and the one it replaced (the rollback, and possibly
+    # still running). Anything else goes - except a version some process is still
+    # running from, which is pruned by a later install, never from under it.
+    local d v
+    for d in "$R"/versions/* "$R"/versions/.tmp-*; do
+      [ -e "$d" ] || continue
+      v="${d##*/}"
+      [ "$v" = "$ver" ] && continue
+      [ -n "$prev" ] && [ "$v" = "$prev" ] && continue
+      if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/$v/" >/dev/null 2>&1; then continue; fi
+      rm -rf "$d"
+    done
+    echo "  installed $ver into $R"
+  fi
+
+  # Links and menu entry - written on every run, which is what makes a re-run a repair.
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$L" "$HOME/.local/bin/huginn-desktop"
+  local apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$apps"
+  _huginn_desktop_entry "$L" > "$apps/huginn-desktop-kt.desktop"
+  command -v xdg-mime >/dev/null 2>&1 && xdg-mime default huginn-desktop-kt.desktop x-scheme-handler/huginn >/dev/null 2>&1
+  command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1
+  # An autostart entry from a /opt install would keep starting the package after
+  # it is removed. Repointed only if one exists - turning it ON is the app's
+  # setting, not this verb's.
+  local auto="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/huginn-desktop-kt.desktop"
+  if [ -f "$auto" ] && ! grep -qF "Exec=\"$L\"" "$auto"; then
+    sed -i "s|^Exec=.*|Exec=\"$L\"|" "$auto" && echo "  autostart entry now starts $L"
+  fi
+
+  echo "  launcher: $HOME/.local/bin/huginn-desktop   menu: $apps/huginn-desktop-kt.desktop"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  (add ~/.local/bin to PATH to run 'huginn-desktop' from a shell)" ;; esac
+  echo "  Settings in ${XDG_CONFIG_HOME:-$HOME/.config}/huginn-desktop-kt are untouched and carry over."
+  echo "  Updates now install from inside the app: Settings > Updates > Install and restart."
+  if command -v pacman >/dev/null 2>&1 && pacman -Q huginn-desktop-kt >/dev/null 2>&1; then
+    echo "  A pacman package of Huginn Desktop is also installed. Remove it so the menu has one Huginn:"
+    echo "      sudo pacman -R huginn-desktop-kt"
+  fi
+  if command -v dpkg >/dev/null 2>&1 && dpkg -s huginn-desktop-kt >/dev/null 2>&1; then
+    echo "  The .deb of Huginn Desktop is also installed. Remove it so the menu has one Huginn:"
+    echo "      sudo apt remove huginn-desktop-kt"
+  fi
+)
+
+_huginn_desktop_uninstall() (
+  set -u
+  local R apps auto
+  R="$(_huginn_desktop_root)"
+  apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications/huginn-desktop-kt.desktop"
+  auto="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/huginn-desktop-kt.desktop"
+  if [ ! -e "$R" ]; then
+    echo "  no portable install at $R - nothing to remove."
+  elif [ ! -f "$R/.huginn-portable" ]; then
+    # Not ours: someone else's directory under the same name is never rm -rf'd.
+    echo "huginn: $R has no .huginn-portable marker - not removing a tree this client did not lay out." >&2
+    exit 1
+  else
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/" >/dev/null 2>&1; then
+      echo "  (Huginn Desktop is still running from $R - quit it from the tray; it keeps running until then.)"
+    fi
+    rm -rf "$R"
+    echo "  removed $R"
+  fi
+  # Only links and entries that point INTO R: a .deb/pacman install's own entry
+  # under the same name is left alone.
+  if [ -L "$HOME/.local/bin/huginn-desktop" ]; then
+    case "$(readlink "$HOME/.local/bin/huginn-desktop")" in "$R"/*) rm -f "$HOME/.local/bin/huginn-desktop"; echo "  removed ~/.local/bin/huginn-desktop" ;; esac
+  fi
+  local f
+  for f in "$apps" "$auto"; do
+    [ -f "$f" ] && grep -qF "$R/" "$f" && rm -f "$f" && echo "  removed $f"
+  done
+  command -v update-desktop-database >/dev/null 2>&1 \
+    && update-desktop-database "${XDG_DATA_HOME:-$HOME/.local/share}/applications" >/dev/null 2>&1
+  echo "  Settings in ${XDG_CONFIG_HOME:-$HOME/.config}/huginn-desktop-kt were kept."
+  exit 0
+)
+
 # --- auto-reconnecting attach ---
 # The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
 # flap) only severs the ssh client - the work keeps running. We re-run the attach
@@ -952,8 +1209,12 @@ _huginn_help_body() {
                               month, e.g. huginn usage today |
                               huginn usage week session
   huginn desktop              download links for the latest Huginn Desktop
-                              build
-  huginn desktop win|linux    just that platform's url, bare, for scripting
+                              build (Windows, Debian, Arch, portable)
+  huginn desktop win|linux|arch|portable
+                              just that build's url, bare, for scripting
+  huginn desktop install      Linux: install or repair the per-user,
+                              self-updating build (no root; any distro)
+  huginn desktop uninstall    Linux: remove that install (keeps settings)
   huginn update               self-update this client from the repo
                               ($HUGINN_REPO); without gh, from the
                               PINNED ${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT} mirror, never from
@@ -1173,9 +1434,13 @@ EOF
       local want=''
       case "${2:-}" in
         ''|both|all)             want='' ;;
+        install)                 _huginn_desktop_install; return $? ;;
+        uninstall|remove)        _huginn_desktop_uninstall; return $? ;;
         win|windows|exe)         want='windows-x64' ;;
         linux|deb|debian|ubuntu) want='linux-x64' ;;
-        *) echo "usage: huginn desktop [windows|linux]" >&2; return 1 ;;
+        arch|pacman|pkg)         want='linux-x64-arch' ;;
+        portable|tar|tarball)    want='linux-x64-portable' ;;
+        *) echo "usage: huginn desktop [windows|linux|arch|portable|install|uninstall]" >&2; return 1 ;;
       esac
       local rel tag man
       rel="$(_huginn_desktop_release)" || {
@@ -1196,26 +1461,47 @@ EOF
         echo "$base/$file"
         return 0
       fi
-      local p label sz sha mark linux_file=''
+      # Which LINUX artifact is "this machine's": the distro's own package where
+      # there is one, the portable tarball everywhere else.
+      local distro='' mine="$here"
+      if [ "$here" = 'linux-x64' ]; then
+        distro="$(_huginn_linux_distro)"
+        case "$distro" in arch) mine='linux-x64-arch' ;; debian) mine='linux-x64' ;; *) mine='linux-x64-portable' ;; esac
+      fi
+      local p label sz sha mark deb_file='' arch_file=''
       printf '\n  Huginn Desktop %s   (%s)\n\n' "${ver:-?}" "$tag"
-      for p in windows-x64 linux-x64; do
+      for p in windows-x64 linux-x64 linux-x64-arch linux-x64-portable; do
         obj="$(_huginn_json_obj "$man" "$p")"
         file="$(_huginn_json_str "$obj" file)"
         [ -n "$file" ] || continue
-        [ "$p" = 'linux-x64' ] && linux_file="$file"
-        case "$p" in windows-x64) label='Windows' ;; *) label='Linux  ' ;; esac
-        [ "$p" = "$here" ] && mark='   <- this machine' || mark=''
+        [ "$p" = 'linux-x64' ] && deb_file="$file"
+        [ "$p" = 'linux-x64-arch' ] && arch_file="$file"
+        case "$p" in
+          windows-x64)        label='Windows ' ;;
+          linux-x64)          label='Debian  ' ;;
+          linux-x64-arch)     label='Arch    ' ;;
+          *)                  label='Portable' ;;
+        esac
+        [ "$p" = "$mine" ] && mark='   <- this machine' || mark=''
         sz="$(_huginn_json_num "$obj" size)"; sha="$(_huginn_json_str "$obj" sha256)"
         printf '  %s  %s%s\n' "$label" "$base/$file" "$mark"
-        printf '           %s   sha256 %s\n' \
+        printf '            %s   sha256 %s\n' \
           "$(awk -v b="${sz:-0}" 'BEGIN{printf "%6.1f MB", b/1048576}')" "${sha:0:16}..."
       done
       case "$here" in
-        linux-x64)   printf '\n  install:  curl -fLO %s/%s && sudo dpkg -i %s\n' "$base" "$linux_file" "$linux_file" ;;
+        linux-x64)
+          # The self-updating install first, on EVERY distro: it needs no root
+          # and is the only Linux install the app can update by itself.
+          printf '\n  install:  huginn desktop install    (per-user, no root, updates itself from the app)\n'
+          if [ "$distro" = arch ] && [ -n "$arch_file" ] && command -v pacman >/dev/null 2>&1; then
+            printf '      or:  sudo pacman -U %s/%s\n' "$base" "$arch_file"
+          elif [ "$distro" = debian ] && [ -n "$deb_file" ] && command -v dpkg >/dev/null 2>&1; then
+            printf '      or:  curl -fLO %s/%s && sudo apt install ./%s\n' "$base" "$deb_file" "$deb_file"
+          fi ;;
         windows-x64) printf '\n  install:  run the .exe (per-user NSIS installer, no admin needed)\n' ;;
         *)           printf '\n  (no desktop build for this machine - these links are for your laptop)\n' ;;
       esac
-      printf '  An installed client self-updates from this same feed.\n\n' ;;
+      printf '  The Windows and portable installs update themselves from this same feed.\n\n' ;;
     usage|cost|ccusage)
       shift                                         # ccusage report; default 'daily'. -tt for tables + --live.
       # Full history (back to 2026-01) is layered server-side by the /usr/local/bin/ccusage
@@ -1419,7 +1705,7 @@ _huginn_complete() {
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
       desktop)
-        mapfile -t COMPREPLY < <(compgen -W "windows linux both" -- "$cur") ;;
+        mapfile -t COMPREPLY < <(compgen -W "windows linux arch portable install uninstall both" -- "$cur") ;;
       device)
         mapfile -t COMPREPLY < <(compgen -W "status on off unit update serve --help" -- "$cur") ;;
       local)

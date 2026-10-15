@@ -907,6 +907,182 @@ else
 fi
 rm -rf "$T2"
 
+echo "[6b/8] desktop install/uninstall: the per-user Linux install, against a STUB feed"
+# Never the network: a stub `curl` first on PATH serves the GitHub API listing and
+# release assets out of a directory, so every refusal (sha mismatch, unsafe
+# tarball) can be staged on purpose. The layout asserted here is the one the app's
+# PortableInstall.kt rewrites on "Install and restart" - if these drift, the app
+# refuses to update a tree the CLI made.
+DT=$(mktemp -d); STUB_DIRS+=("$DT")
+mkdir -p "$DT/bin" "$DT/feed" "$DT/home"
+cat > "$DT/bin/curl" <<'STUB'
+#!/usr/bin/env bash
+out=''; url=''
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    --max-time) shift ;;
+    http*) url="$1" ;;
+  esac
+  shift
+done
+echo "$url" >> "$DT_FEED/curl.log"
+case "$url" in
+  https://api.github.com/repos/*/releases*) src="$DT_FEED/releases.json" ;;
+  https://github.com/*/releases/download/*) rest="${url#*/releases/download/}"; src="$DT_FEED/$rest" ;;
+  *) exit 6 ;;
+esac
+[ -f "$src" ] || exit 22
+if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi
+STUB
+for s in sudo xdg-mime update-desktop-database; do
+  printf '#!/usr/bin/env bash\necho "%s $*" >> "$DT_FEED/calls.log"\nexit 0\n' "$s" > "$DT/bin/$s"
+done
+# A pacman that reports the old distro package installed, so the removal hint shows.
+printf '#!/usr/bin/env bash\n[ "$1 $2" = "-Q huginn-desktop-kt" ] && { echo "huginn-desktop-kt 1.12.1-1"; exit 0; }\nexit 1\n' > "$DT/bin/pacman"
+chmod +x "$DT/bin/"*
+printf 'NAME="Omarchy"\nID=omarchy\nID_LIKE=arch\n' > "$DT/os-arch"
+printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n' > "$DT/os-deb"
+printf 'NAME="Fedora Linux"\nID=fedora\n' > "$DT/os-fedora"
+
+# publish <ver> [wrongsha|unsafe-link|unsafe-dotdot]: a release with a tiny fake
+# app-image tarball (a launcher that prints its version) and a manifest naming it.
+dt_publish () {
+  local v="$1" how="${2:-}" top="huginn-desktop-kt-$1" w tgz sha tags t
+  w=$(mktemp -d); mkdir -p "$w/$top/bin" "$w/$top/lib"
+  printf '#!/bin/sh\necho "huginn-desktop %s"\n' "$v" > "$w/$top/bin/huginn-desktop-kt"; chmod +x "$w/$top/bin/huginn-desktop-kt"
+  printf 'png' > "$w/$top/lib/huginn-desktop-kt.png"
+  local xf=()
+  case "$how" in
+    unsafe-link) ln -s ../../../../etc "$w/$top/lib/escape" ;;
+    unsafe-dotdot) echo evil > "$w/$top/evil"; xf=(--transform "s,^$top/evil,$top/../../evil,") ;;
+  esac
+  mkdir -p "$DT/feed/desktop-v$v"
+  tgz="$DT/feed/desktop-v$v/$top-linux-x64.tar.gz"
+  tar ${xf[@]+"${xf[@]}"} -C "$w" -czf "$tgz" "$top" 2>/dev/null
+  rm -rf "$w"
+  sha=$(sha256sum "$tgz" | cut -d' ' -f1)
+  [ "$how" = wrongsha ] && sha=$(printf '%064d' 0)
+  cat > "$DT/feed/desktop-v$v/manifest.json" <<JSON
+{"version":"$v","artifacts":{
+ "linux-x64":{"file":"huginn-desktop-kt_$v-1_amd64.deb","sha256":"$(printf '%064d' 1)","size":1},
+ "linux-x64-arch":{"file":"huginn-desktop-kt-$v-1-x86_64.pkg.tar.zst","sha256":"$(printf '%064d' 2)","size":2},
+ "linux-x64-portable":{"file":"$top-linux-x64.tar.gz","sha256":"$sha","size":$(stat -c %s "$tgz")},
+ "windows-x64":{"file":"Huginn-Desktop-Setup-$v.exe","sha256":"$(printf '%064d' 3)","size":3}}}
+JSON
+  tags=""; for t in "$DT"/feed/desktop-v*; do tags="$tags{\"tag_name\":\"${t##*/}\"},"; done
+  printf '[%s{"tag_name":"appd-v99.0.0"}]' "$tags" > "$DT/feed/releases.json"
+}
+# Runs a huginn command in a clean HOME with the stubs first on PATH.
+dt_run () {
+  : > "$DT/feed/curl.log"
+  ( export HOME="$DT/home" PATH="$DT/bin:$PATH" DT_FEED="$DT/feed" HUGINN_OS_RELEASE="${DT_OS:-$DT/os-arch}"
+    unset XDG_DATA_HOME XDG_CONFIG_HOME XDG_CACHE_HOME
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    eval "$1" ) >"$DT/out" 2>&1
+}
+DR="$DT/home/.local/share/huginn-desktop"
+mkdir -p "$DT/home/.config/huginn-desktop-kt"
+echo '{"token":"keep-me"}' > "$DT/home/.config/huginn-desktop-kt/settings.json"
+
+dt_publish 9.9.0
+dt_run 'huginn desktop install'; RC=$?
+[ "$RC" = 0 ] && [ "$(readlink "$DR/current")" = "versions/9.9.0" ] && [ -f "$DR/.huginn-portable" ] \
+  && ok "install: R/current -> versions/9.9.0 (relative), marker present" \
+  || bad "install failed (rc=$RC): $(cat "$DT/out")"
+[ "$("$DT/home/.local/bin/huginn-desktop" 2>&1)" = "huginn-desktop 9.9.0" ] \
+  && ok "install: ~/.local/bin/huginn-desktop runs the installed launcher" || bad "install: the launcher symlink does not run 9.9.0"
+DE="$DT/home/.local/share/applications/huginn-desktop-kt.desktop"
+grep -qxF "Exec=\"$DR/current/bin/huginn-desktop-kt\" %u" "$DE" 2>/dev/null && grep -qx 'MimeType=x-scheme-handler/huginn;' "$DE" \
+  && grep -qxF "Icon=$DR/current/lib/huginn-desktop-kt.png" "$DE" \
+  && ok "install: the menu entry points at current (never a version) and claims huginn://" \
+  || bad "install: desktop entry wrong: $(cat "$DE" 2>/dev/null)"
+grep -q 'xdg-mime default huginn-desktop-kt.desktop x-scheme-handler/huginn' "$DT/feed/calls.log" \
+  && ok "install: huginn:// handed to the entry with xdg-mime" || bad "install: xdg-mime was not called"
+grep -q 'sudo pacman -R huginn-desktop-kt' "$DT/out" \
+  && ok "install: names the distro package's removal command" || bad "install: no pacman removal hint: $(cat "$DT/out")"
+grep -q '^sudo' "$DT/feed/calls.log" && bad "install RAN sudo: $(grep '^sudo' "$DT/feed/calls.log")" || ok "install: never runs sudo"
+[ "$(cat "$DT/home/.config/huginn-desktop-kt/settings.json")" = '{"token":"keep-me"}' ] \
+  && ok "install: settings untouched" || bad "install: settings.json changed"
+
+dt_run 'huginn desktop install'
+grep -q 'already installed' "$DT/out" && ! grep -q 'linux-x64.tar.gz' "$DT/feed/curl.log" \
+  && ok "re-run: repairs the links without re-downloading" || bad "re-run: $(cat "$DT/out")"
+
+dt_publish 9.9.1; dt_run 'huginn desktop install'
+dt_publish 9.9.2; dt_run 'huginn desktop install'
+[ "$(readlink "$DR/current")" = "versions/9.9.2" ] && [ "$(ls "$DR/versions" | tr '\n' ' ')" = "9.9.1 9.9.2 " ] \
+  && ok "update: current swapped to 9.9.2, kept the previous 9.9.1, pruned 9.9.0" \
+  || bad "update: current=$(readlink "$DR/current") versions=$(ls -A "$DR/versions" | tr '\n' ' ')"
+
+dt_publish 9.9.3 wrongsha; dt_run 'huginn desktop install'; RC=$?
+[ "$RC" != 0 ] && grep -q 'did not match its sha256' "$DT/out" && [ "$(readlink "$DR/current")" = "versions/9.9.2" ] \
+  && [ ! -e "$DR/versions/9.9.3" ] \
+  && ok "sha mismatch: refused, nothing unpacked, current untouched" || bad "sha mismatch (rc=$RC): $(cat "$DT/out")"
+
+for how in unsafe-link unsafe-dotdot; do
+  rm -rf "$DT/feed/desktop-v9.9.4"; dt_publish 9.9.4 "$how"; dt_run 'huginn desktop install'; RC=$?
+  [ "$RC" != 0 ] && grep -q 'refused' "$DT/out" && [ "$(readlink "$DR/current")" = "versions/9.9.2" ] \
+    && [ ! -e "$DR/versions/9.9.4" ] && [ -z "$(ls -A "$DR/versions" | grep '^\.tmp')" ] \
+    && ok "unsafe tarball ($how): refused before unpacking, current untouched" \
+    || bad "unsafe tarball ($how) (rc=$RC): $(cat "$DT/out")"
+done
+rm -rf "$DT/feed/desktop-v9.9.4" "$DT/feed/desktop-v9.9.3"; dt_publish 9.9.2   # restore a sane newest
+
+# The listing, per distro: which build is "this machine", and which commands.
+DT_OS="$DT/os-arch" dt_run 'huginn desktop'
+grep -qE '^  Arch +https://.*pkg\.tar\.zst   <- this machine' "$DT/out" && grep -q 'huginn desktop install' "$DT/out" \
+  && grep -q 'sudo pacman -U https://github.com/.*/huginn-desktop-kt-9.9.2-1-x86_64.pkg.tar.zst' "$DT/out" \
+  && grep -qE '^  Portable +https://.*linux-x64\.tar\.gz' "$DT/out" && grep -qE '^  Debian +https://.*\.deb' "$DT/out" \
+  && ok "listing (arch): all builds shown, Arch marked, pacman -U + huginn desktop install" \
+  || bad "listing (arch): $(cat "$DT/out")"
+if command -v dpkg >/dev/null 2>&1; then
+  DT_OS="$DT/os-deb" dt_run 'huginn desktop'
+  grep -qE '^  Debian +https://.*\.deb   <- this machine' "$DT/out" && grep -q 'sudo apt install ./huginn-desktop-kt_9.9.2-1_amd64.deb' "$DT/out" \
+    && grep -q 'huginn desktop install' "$DT/out" && ! grep -q 'dpkg -i' "$DT/out" \
+    && ok "listing (debian): Debian marked, apt install ./deb + huginn desktop install" \
+    || bad "listing (debian): $(cat "$DT/out")"
+else
+  skip "listing (debian) (no dpkg here)"
+fi
+DT_OS="$DT/os-fedora" dt_run 'huginn desktop'
+grep -qE '^  Portable +https://.*   <- this machine' "$DT/out" && grep -q 'huginn desktop install' "$DT/out" \
+  && ! grep -qE 'sudo (apt|pacman)' "$DT/out" \
+  && ok "listing (other distro): the portable build is this machine's, no distro command" \
+  || bad "listing (other): $(cat "$DT/out")"
+dt_run 'huginn desktop arch'
+[ "$(cat "$DT/out")" = "https://github.com/silencelen/huginn/releases/download/desktop-v9.9.2/huginn-desktop-kt-9.9.2-1-x86_64.pkg.tar.zst" ] \
+  && ok "desktop arch: one bare url" || bad "desktop arch printed: $(cat "$DT/out")"
+dt_run 'huginn desktop portable'
+[ "$(cat "$DT/out")" = "https://github.com/silencelen/huginn/releases/download/desktop-v9.9.2/huginn-desktop-kt-9.9.2-linux-x64.tar.gz" ] \
+  && ok "desktop portable: one bare url" || bad "desktop portable printed: $(cat "$DT/out")"
+
+dt_run 'huginn desktop uninstall'; RC=$?
+[ "$RC" = 0 ] && [ ! -e "$DR" ] && [ ! -e "$DT/home/.local/bin/huginn-desktop" ] && [ ! -e "$DE" ] \
+  && [ "$(cat "$DT/home/.config/huginn-desktop-kt/settings.json")" = '{"token":"keep-me"}' ] \
+  && ok "uninstall: removes R, the launcher link and the menu entry; settings kept" \
+  || bad "uninstall (rc=$RC): $(cat "$DT/out"); left: $(ls -A "$DT/home/.local/share" "$DT/home/.local/bin" 2>&1 | tr '\n' ' ')"
+mkdir -p "$DR"; dt_run 'huginn desktop uninstall'; RC=$?
+[ "$RC" != 0 ] && [ -d "$DR" ] && grep -q 'no .huginn-portable marker' "$DT/out" \
+  && ok "uninstall: a directory without the marker is never removed" || bad "uninstall without marker (rc=$RC): $(cat "$DT/out")"
+rm -rf "$DR"
+
+# ps1 parity: the sub-verbs exist in both clients' desktop branch, and on the
+# PowerShell side install/uninstall answer with the Windows pointer.
+for sv in install uninstall arch portable; do
+  a=$(awk '/^    desktop\)/,/^    usage\|cost\|ccusage\)/' client/huginn.sh | grep -cE "^[[:space:]]+([a-z|]+\|)?$sv(\||\))")
+  b=$(grep -cE "'$sv'" client/huginn.ps1)
+  [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "desktop $sv in both clients" || bad "desktop $sv missing (sh=$a ps1=$b)"
+done
+if command -v pwsh >/dev/null 2>&1; then
+  PI=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn desktop install" 2>&1 | tr -d '\r')
+  grep -q 'Linux per-user install' <<<"$PI" && grep -q 'huginn desktop windows' <<<"$PI" \
+    && ok "ps1: desktop install answers that it is Linux-only, pointing at the Windows installer" \
+    || bad "ps1: desktop install said: $PI"
+else
+  skip "ps1 desktop install answer (no pwsh)"
+fi
+
 echo "[7/8] the headless runner (client/huginn-device)"
 # WHY THIS SECTION EXISTS: the runner had no gate at all, and every defect it
 # shipped had the same shape — it reported success, or the wrong reason, on a
