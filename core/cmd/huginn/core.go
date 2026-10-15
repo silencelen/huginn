@@ -24,6 +24,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/ipc"
 	"github.com/silencelen/huginn/core/internal/service"
 	"github.com/silencelen/huginn/core/internal/store"
+	"github.com/silencelen/huginn/core/internal/tray"
 	"github.com/silencelen/huginn/core/internal/version"
 	"golang.org/x/term"
 )
@@ -51,6 +52,12 @@ func core(args []string) int {
 		return coreStatus()
 	case "pair":
 		return corePair(args[1:])
+	case "tray":
+		// The tray role (docs/CORE-ARCHITECTURE.md §3.1): started at graphical
+		// login, draws the icon and posts notifications that `core run` decides.
+		tray.DetachConsole()
+		tray.Run(tray.Options{Socket: daemon.SocketPath(paths())})
+		return 0
 	case "self-install":
 		if _, ok := selfInstall(); !ok {
 			return 1
@@ -170,7 +177,6 @@ func coreInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		o.NoTray = true // the tray role arrives in P2; never autostart a verb that does not exist yet
 		retireNodeRunner()
 		rep, linger := service.InstallLinux(o)
 		fmt.Print(rep.String())
@@ -184,7 +190,6 @@ func coreInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		o.NoTray = true
 		switch *logon {
 		case "s4u":
 			o.Logon = service.LogonS4U

@@ -26,6 +26,10 @@ type Config struct {
 	Pins         map[string][]string `json:"pins,omitempty"`
 	Secrets      string              `json:"secretsBackend,omitempty"`
 	MigratedFrom *Migration          `json:"migratedFrom,omitempty"`
+	// InstallID is this core's X-Huginn-Client: how appd tells this install
+	// apart from the phone and the desktop app when it decides who is still
+	// listening for notifications. Minted once, kept for the life of the install.
+	InstallID string `json:"installId,omitempty"`
 }
 
 // Device is this machine's device row as the core minted or adopted it (D13).
