@@ -13,6 +13,8 @@
   If no core is running, Settings shows **Set up huginn core**, which starts it at boot (one UAC
   prompt on Windows).
 - **Remove this computer** now also makes the core forget its pairing.
+- **The Windows installer, the app launcher and the bundled core are Authenticode-signed** (jnet.ad
+  domain CA for now; see the CLI changelog for why).
 
 ## 1.13.0
 

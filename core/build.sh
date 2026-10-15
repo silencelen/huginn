@@ -28,6 +28,13 @@ for t in "${TARGETS[@]}"; do
   CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$file" ./cmd/huginn
 done
 
+# Authenticode-sign the Windows binary BEFORE the manifest hashes it, so the
+# published sha256 is the signed file's (scripts/sign-windows.sh says why).
+# Signing adds a timestamp, so the signed .exe is not bit-reproducible; the
+# unsigned build underneath still is. HUGINN_SIGN_REQUIRED=1 (releases) turns a
+# missing key into a failure.
+"$HERE/../scripts/sign-windows.sh" "$OUT/huginn-$V-windows-x64.exe"
+
 # The manifest. Keys are platform words the installers and the updater pick by;
 # never rename one without both.
 python3 - "$OUT" "$V" "${TARGETS[@]}" <<'PY'
