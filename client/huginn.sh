@@ -160,9 +160,18 @@ _huginn_device_fetch() {
 }
 
 _huginn_device() {
-  local H="${HUGINN_HOST:-huginn}" runner sub dir srv
+  local H="${HUGINN_HOST:-huginn}" runner sub dir srv core
   runner="$(_huginn_device_runner)"
   sub="${1:-status}"; [ $# -gt 0 ] && shift
+  # With huginn core installed, THIS machine's device is the core's: the Node
+  # runner below is the pre-2.0 path and must not enrol a second row.
+  if core="$(_huginn_core_bin)"; then
+    case "$sub" in
+      on|enrol|enroll) _huginn_core_pair "$core" || return 1; "$core" device on "$@"; return ;;
+      off|status) "$core" device "$sub" "$@"; return ;;
+      *) echo "huginn device $sub: not needed with huginn core (see: huginn core status)" >&2; return 1 ;;
+    esac
+  fi
   command -v node >/dev/null 2>&1 || {
     echo "huginn device: needs node - the NATIVE claude build ships without it; install" >&2
     echo "               Node.js LTS: nodejs.org (Windows: winget install OpenJS.NodeJS.LTS)" >&2
@@ -216,6 +225,114 @@ _huginn_device() {
 # install, enrol - and the same trust roots for the fetch. The manager carries
 # its own pinned runtime/model manifest, so what it may install is decided by
 # the release you are running, never by whatever an endpoint serves today.
+# --------------------------------------------------------------- huginn core
+# The Go core (docs/CORE-ARCHITECTURE.md): one binary per user that runs act
+# mode at boot, with nobody signed in. While it exists, `huginn device` is a
+# door to it and the Node runner is not used. The binary is NAMED huginn too, so
+# it is always run by PATH, never by bare name - inside this function a bare
+# `huginn` would be this function.
+
+# The installed core binary, or nothing.
+_huginn_core_bin() {
+  local p
+  for p in "$HOME/.local/bin/huginn" /usr/bin/huginn; do
+    [ -f "$p" ] && [ -x "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+# Which core build THIS machine runs: linux-x64 | linux-arm64 | android-arm64.
+_huginn_core_platform() {
+  case "$(uname -o 2>/dev/null)" in Android*) echo 'android-arm64'; return ;; esac
+  case "$(uname -s 2>/dev/null)/$(uname -m 2>/dev/null)" in
+    Linux*/x86_64|Linux*/amd64) echo 'linux-x64' ;;
+    Linux*/aarch64|Linux*/arm64) echo 'linux-arm64' ;;
+  esac
+}
+
+# Newest cli-v* release that carries core-manifest.json: <tag>\n<manifest>.
+# Semver, not feed order (see _huginn_desktop_release for why).
+_huginn_core_release() {
+  local ver json
+  ver="$(_huginn_get "https://api.github.com/repos/$HUGINN_REPO/releases?per_page=60" | tr -d '\n' \
+        | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"cli-v[0-9][^"]*"' \
+        | sed 's/.*"cli-v\([^"]*\)".*/\1/' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+        | sort -t. -k1,1n -k2,2n -k3,3n | awk -F. '$1>=2' | tail -1)"
+  [ -n "$ver" ] || return 1
+  json="$(_huginn_get "https://github.com/$HUGINN_REPO/releases/download/cli-v$ver/core-manifest.json" | tr -d '\n')"
+  [ -n "$json" ] || return 1
+  printf 'cli-v%s\n%s\n' "$ver" "$json"
+}
+
+# Download, verify and self-install the core. Prints the installed path.
+# HUGINN_CORE_FILE=<a local binary> skips the download (tests, offline installs)
+# - it is still run through `self-install`, never copied into place by hand.
+_huginn_core_fetch() (
+  set -u
+  fail() { echo "huginn: $*" >&2; exit 1; }
+  local key rel tag man obj file sha tmp got
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-core.XXXXXX")" || fail "could not make a temp dir"
+  trap 'rm -rf "$tmp"' EXIT
+  if [ -n "${HUGINN_CORE_FILE:-}" ]; then
+    cp "$HUGINN_CORE_FILE" "$tmp/huginn" && chmod 755 "$tmp/huginn" || fail "could not read $HUGINN_CORE_FILE"
+  else
+    key="$(_huginn_core_platform)"; [ -n "$key" ] || fail "there is no huginn core build for $(uname -s)/$(uname -m)"
+    rel="$(_huginn_core_release)" || fail "could not read the core release feed (offline, rate-limited, or no 2.x release yet)"
+    tag="${rel%%$'\n'*}"; man="${rel#*$'\n'}"
+    obj="$(_huginn_json_obj "$man" "$key")"
+    file="$(_huginn_json_str "$obj" file)"; sha="$(_huginn_json_str "$obj" sha256)"
+    case "$file" in huginn-*-"$key") ;; *) fail "$tag names an unexpected core file '$file' - refused" ;; esac
+    printf '%s' "$sha" | grep -qE '^[0-9a-f]{64}$' || fail "$tag carries no usable sha256 for $file - refused"
+    echo "  downloading $file ($tag) ..." >&2
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsL --max-time 300 -o "$tmp/huginn" "https://github.com/$HUGINN_REPO/releases/download/$tag/$file" || fail "download failed"
+    else
+      wget -qO "$tmp/huginn" --timeout=60 "https://github.com/$HUGINN_REPO/releases/download/$tag/$file" || fail "download failed"
+    fi
+    # THE GATE: the manifest's sha256 is the only integrity check between
+    # GitHub and an executable in your home directory.
+    got="$(_huginn_sha256 "$tmp/huginn")"
+    [ "$got" = "$sha" ] || fail "$file did not match its sha256 - discarded, nothing installed"
+    chmod 755 "$tmp/huginn"
+  fi
+  "$tmp/huginn" core self-install >&2 || fail "self-install failed"
+  _huginn_core_bin
+)
+
+# Pair the core with the host this shell already reaches over ssh, if it is not
+# paired yet. The token travels ssh -> stdin, never argv or a file in /tmp.
+_huginn_core_pair() {
+  local H="${HUGINN_HOST:-huginn}" bin="$1" srv
+  "$bin" core status 2>/dev/null | grep -q 'not paired' || return 0
+  srv="$(_huginn_srv_url "$H")"
+  [ -n "$srv" ] || { echo "huginn core: could not work out $H's daemon address - pair by hand: huginn core pair --url https://<host>:8787" >&2; return 1; }
+  ssh -T "$H" 'cat /etc/huginn-appd/token' 2>/dev/null | "$bin" core pair --url "$srv"
+}
+
+_huginn_core() {
+  local bin sub="${1:-status}" i
+  [ $# -gt 0 ] && shift
+  bin="$(_huginn_core_bin)" || bin=""
+  case "$sub" in
+    install)
+      if [ -z "$bin" ] || [ -n "${HUGINN_CORE_FILE:-}" ]; then
+        bin="$(_huginn_core_fetch)" || return 1
+      fi
+      "$bin" core install "$@" || return 1
+      # The service starts the core; wait for it to answer, then pair it.
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        "$bin" core status >/dev/null 2>&1 && break; sleep 1
+      done
+      _huginn_core_pair "$bin"
+      "$bin" core status
+      ;;
+    *)
+      [ -n "$bin" ] || { echo "huginn core: not installed here - huginn core install" >&2; return 1; }
+      "$bin" core "$sub" "$@"
+      ;;
+  esac
+}
+
 _huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
 
 _huginn_local_fetch() {
@@ -1159,6 +1276,11 @@ _huginn_help_body() {
                               end it AND wind its sessions down
                               [--now: end them outright | --keep-sessions:
                               leave them running]
+  huginn core install         run huginn core at boot on this machine - as you,
+                              with nobody signed in - and pair it with the host
+                              [--logon s4u|password: Windows only]
+  huginn core status          is the core running and paired, what it offers
+  huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn
                               sees
   huginn device on            offer this machine
@@ -1428,6 +1550,7 @@ EOF
     # on. Different question, different place it is answered - `devices` renders
     # on the host, `device` never leaves this machine.
     device) _huginn_device "${@:2}" ;;
+    core) _huginn_core "${@:2}" ;;
     local) _huginn_local "${@:2}" ;;
     uninstall) _huginn_uninstall "${@:2}" ;;
     desktop)
