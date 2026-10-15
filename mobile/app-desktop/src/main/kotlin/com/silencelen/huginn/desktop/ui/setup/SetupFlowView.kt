@@ -267,7 +267,7 @@ class DesktopSetupProbes(
             // person typed it themselves — overwriting their answer with the
             // same answer is noise, and with a different one is a surprise.
             if (store.settings.deviceClaudePathNow().isBlank() && found.path != DEFAULT_CLAUDE) {
-                store.settings.setDeviceClaudePath(found.path)
+                store.coreDevice.setClaudePath(found.path)
             }
             // A found binary is not a signed-in one, and the device step passed on
             // this before: the first job then failed with "check auth" on a machine
@@ -282,15 +282,15 @@ class DesktopSetupProbes(
     }
 
     override suspend fun device(): Result<String> = runCatching {
-        store.settings.setDeviceEnabled(true)
         store.syncDeviceRunner()
+        store.coreDevice.setEnabled(true)
         // Waits for the DAEMON to say so rather than for the toggle to look on.
         // The toggle has always been instant and meaningless; enrolment is a
         // round trip that can fail on a sleeping host or a rejected token.
         val enrolled = withTimeoutOrNull(ENROL_TIMEOUT_MS) {
-            store.deviceRunner.status.first { it.enrolled }
+            store.coreDevice.status.first { it.enrolled }
         }
-        checkNotNull(enrolled) { store.deviceRunner.status.value.note.ifBlank { "huginn did not confirm the enrolment" } }
+        checkNotNull(enrolled) { store.coreDevice.status.value.note.ifBlank { "huginn did not confirm the enrolment" } }
         enrolled.note.ifBlank { "enrolled, waiting for work" }
     }
 

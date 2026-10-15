@@ -88,8 +88,8 @@ fun DevicesPane(store: AppStore) {
             header = null,
             // The machine this window is running on, keyed the way the daemon
             // keys machines — its card says "(this device)".
-            thisMachine = com.silencelen.huginn.desktop.device.DeviceRunner.machineKey(
-                com.silencelen.huginn.desktop.device.DeviceRunner.defaultName(),
+            thisMachine = com.silencelen.huginn.desktop.core.CoreDevice.machineKey(
+                com.silencelen.huginn.desktop.core.CoreDevice.defaultName(),
             ),
             // Sampled per composition rather than ticked — the same reasoning as
             // the phone's Devices screen: the list repolls while it is open and

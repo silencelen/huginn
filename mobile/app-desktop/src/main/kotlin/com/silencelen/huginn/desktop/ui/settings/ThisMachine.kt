@@ -98,7 +98,7 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
     val scopeWire by settings.deviceScope.collectAsState()
     val root by settings.deviceRoot.collectAsState()
     val actWhileLocked by settings.deviceActWhileLocked.collectAsState()
-    val status by store.deviceRunner.status.collectAsState()
+    val status by store.coreDevice.status.collectAsState()
 
     if (intro) {
         FormHeader(DEVICE_SECTION_TITLE)
@@ -121,7 +121,7 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
         id = "devices.this-machine",
         title = "Available to huginn",
         checked = enabled,
-        onCheckedChange = { settings.setDeviceEnabled(it); store.syncDeviceRunner() },
+        onCheckedChange = { store.coreDevice.setEnabled(it) },
         summary = if (enabled) {
             status.note.ifBlank { "Enrolling…" }
         } else {
@@ -139,7 +139,7 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
             ) {
                 RadioButton(
                     selected = scopeWire == wire,
-                    onClick = { settings.setDeviceScope(wire) },
+                    onClick = { store.coreDevice.setScope(wire) },
                 )
                 Column(Modifier.padding(start = 6.dp)) {
                     Text(label, style = MaterialTheme.typography.bodyMedium)
@@ -159,7 +159,7 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
 
         OutlinedTextField(
             value = root,
-            onValueChange = { settings.setDeviceRoot(it) },
+            onValueChange = { store.coreDevice.setRoot(it) },
             label = { Text("Folder for Work runs") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -176,7 +176,7 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
             id = "devices.act-while-locked",
             title = "Keep act mode while locked",
             checked = actWhileLocked,
-            onCheckedChange = { settings.setDeviceActWhileLocked(it) },
+            onCheckedChange = { store.coreDevice.setActWhileLocked(it) },
             // ⚠ THE SUMMARY IS THE CONSENT. A switch labelled only "keep act
             // mode" hides what is being agreed to; this says the thing somebody
             // would want to have been told — that the scope above stays in force
@@ -269,7 +269,7 @@ internal fun ClaudePathField(store: AppStore) {
     val claudePath by settings.deviceClaudePath.collectAsState()
     OutlinedTextField(
         value = claudePath,
-        onValueChange = { settings.setDeviceClaudePath(it) },
+        onValueChange = { store.coreDevice.setClaudePath(it) },
         label = { Text("Path to claude (leave blank to use PATH)") },
         singleLine = true,
         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
