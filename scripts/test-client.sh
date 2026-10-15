@@ -1032,7 +1032,8 @@ rm -rf "$DT/feed/desktop-v9.9.4" "$DT/feed/desktop-v9.9.3"; dt_publish 9.9.2   #
 # The listing, per distro: which build is "this machine", and which commands.
 DT_OS="$DT/os-arch" dt_run 'huginn desktop'
 grep -qE '^  Arch +https://.*pkg\.tar\.zst   <- this machine' "$DT/out" && grep -q 'huginn desktop install' "$DT/out" \
-  && grep -q 'sudo pacman -U https://github.com/.*/huginn-desktop-kt-9.9.2-1-x86_64.pkg.tar.zst' "$DT/out" \
+  && grep -q 'curl -fLO https://github.com/.*/huginn-desktop-kt-9.9.2-1-x86_64.pkg.tar.zst && sudo pacman -U ./huginn-desktop-kt-9.9.2-1-x86_64.pkg.tar.zst' "$DT/out" \
+  && ! grep -q 'pacman -U https://' "$DT/out" \
   && grep -qE '^  Portable +https://.*linux-x64\.tar\.gz' "$DT/out" && grep -qE '^  Debian +https://.*\.deb' "$DT/out" \
   && ok "listing (arch): all builds shown, Arch marked, pacman -U + huginn desktop install" \
   || bad "listing (arch): $(cat "$DT/out")"
