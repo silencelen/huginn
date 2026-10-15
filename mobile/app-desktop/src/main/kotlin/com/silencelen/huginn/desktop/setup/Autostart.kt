@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop.setup
 
 import com.silencelen.huginn.desktop.DesktopSettings
+import com.silencelen.huginn.desktop.update.LinuxInstall
 import java.io.File
 
 /**
@@ -37,9 +38,11 @@ object Autostart {
      * The launcher to start. `jpackage` stamps this on every launcher it
      * generates and nothing else sets it, so its ABSENCE is "running from
      * Gradle" — and a from-source run has no installed launcher to point an
-     * autostart entry at.
+     * autostart entry at. ⚠ On a portable install this is `R/current/bin/…`, not
+     * the versioned path, so a login after an update starts the NEW version and
+     * the prune can never leave the entry pointing at a deleted dir.
      */
-    fun launcherPath(): String? = System.getProperty("jpackage.app-path")?.takeIf { it.isNotBlank() }
+    fun launcherPath(): String? = LinuxInstall.stableLauncherForThisProcess()
 
     /**
      * Where the entry lives.
@@ -231,7 +234,20 @@ object Autostart {
      */
     fun reconcile(settings: DesktopSettings): Result<String>? {
         val want = settings.autostartNow()
-        if (want == isEnabled()) return null
+        if (want == isEnabled()) {
+            // ⚠ PRESENT IS NOT ENOUGH ON LINUX. An entry written by a `.deb` or
+            // pacman install still names /opt/huginn-desktop-kt after the owner
+            // moves to the portable install and removes the package — present,
+            // "on", and starting nothing at login. The text is ours, so a stale
+            // one is rewritten. (Windows' .lnk is binary and not compared.)
+            if (want && !ClaudePath.isWindows()) {
+                val launcher = launcherPath() ?: return null
+                val target = location(false, System::getenv, System.getProperty("user.home")) ?: return null
+                val have = runCatching { target.readText() }.getOrNull()
+                if (have != null && have != desktopEntry(launcher)) return enable()
+            }
+            return null
+        }
         return if (want) enable() else disable()
     }
 }

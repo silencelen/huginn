@@ -91,8 +91,11 @@ like coverage.
 ## Releasing
 
 - **Phone**: `mobile/scripts/build.sh` then `ship.sh` (devstore).
-- **Desktop**: `mobile/scripts/release-desktop.sh` — builds the Linux `.deb` and
-  the Windows installer *on this box* (jpackage under wine, then `makensis`),
+- **Desktop**: `mobile/scripts/release-desktop.sh` — builds the Linux `.deb`, the
+  portable self-updating tarball and the native Arch `.pkg.tar.zst`
+  (`mobile/scripts/package-linux.sh`, runnable alone to build and check them
+  without publishing), and the Windows installer *on this box* (jpackage under
+  wine, then `makensis`),
   stages them into `/v1/desktop-kt`, and verifies both back through the wire.
   Installed clients pick it up themselves.
 
