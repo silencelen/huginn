@@ -412,3 +412,30 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
    `CORE_EXE` section is verified only by the release build.
 2. A full `release-desktop.sh` run (it publishes, so it is a release decision).
 3. `cli-v2.0.0` release: `core/build.sh 2.0.0` → `scripts/github-release.sh core 2.0.0 core/dist/2.0.0/*`.
+
+## 13. Phase 2 progress (2026-10-15)
+
+**Built and on main, NOT released:** the core owns the tray and notifications (§4 rows "Watch stream +
+claim", "Notify rules", "Toasts", "Tray icon + menu").
+- `core/internal/notify`: the desktop's NotifyRules + WatchCycle, all 33 test cases.
+- `core/internal/tray`: the tray role (`huginn core tray`); icons generated from the brand raven
+  (`icons/gen.sh`); notifications via D-Bus on Linux and WinRT toasts on Windows; `notify-test`.
+- `daemon/watch.go`: the appd watch stream → tray summary + notices. Claim = a tray attached AND
+  the session unlocked. Presence from the GUI suppresses the toast for whatever it is showing.
+- The GUI stands down while `coretray` is attached.
+- Proven: e2e 21/21 against a real appd. On PC01: the Startup shortcut, the tray in session 1,
+  the icon registered with the shell, a toast delivered under the app's identity (on the lock
+  screen, content shown as "Private").
+
+**Before cutting 2.1.0:**
+1. **Upgrade path from 2.0.0.** An updated binary does not restart a running core (Windows: the
+   5-minute trigger ignores a start while one runs), and 2.0.0 installs have no tray autostart.
+   Planned: `POST /core/restart` from `self-install` when the version differs; the core ensures the
+   tray autostart at startup; `self-install` launches the tray when a desktop session exists.
+2. The release security scan (owner-started).
+3. A real Linux desktop check of the tray: SNI and notifications on a Linux laptop.
+4. Windows: decide whether the tray should make itself visible (Windows 11 hides new tray icons
+   in the overflow menu).
+
+Not started in P2: the `/appd/*` proxy (the GUI still holds its token), the single updater, and
+local AI in the core.

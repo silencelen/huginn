@@ -8,6 +8,27 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## Unreleased (2.1.0 - huginn core, phase 2: tray and notifications)
+
+### Added
+- **`huginn core tray`: the core owns the tray icon and desktop notifications.** It starts at
+  graphical login (an XDG autostart entry on Linux; a Startup shortcut carrying the app's
+  notification identity on Windows). It shows the brand raven in three states (idle, working,
+  needs you), a menu listing sessions waiting on you, and notifications. Linux uses
+  `org.freedesktop.Notifications`; Windows uses toasts. Notifications work with the desktop window
+  closed or the app not installed at all.
+- The core follows appd's watch stream itself and decides what to notify. The rules are a port of
+  the desktop's (all 33 test cases), so "needs you", "finished", "hit the usage limit" and the
+  withdrawals behave the same.
+- **The core claims notifications from appd only while a tray is attached and the session is
+  unlocked**, so the Telegram fallback stays in charge when nobody is at the machine.
+- `huginn core notify-test` posts one sample notification, to check delivery on a machine.
+
+### Fixed
+- `client/get.sh` exited silently with no terminal (automation), and `client/get.ps1` stopped at
+  its host-trust check on Windows PowerShell 5.1. Both were found by running the published
+  one-liners.
+
 ## [2.0.0] - 2026-10-14
 
 ### Added
