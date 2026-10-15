@@ -35,15 +35,20 @@ sealed interface UpdateState {
     }
 
     /**
-     * Verified and on disk. [file] is an installer on Windows and a `.deb` on
-     * Linux; [installable] says whether this client can do anything with it
-     * beyond telling the user where it is.
+     * Verified and on disk. [file] is an installer on Windows; on Linux it is the
+     * app-image tarball for a portable install, else the distro package (`.deb`
+     * or Arch `.pkg.tar.zst`). [installable] says whether this client can do
+     * anything with it beyond telling the user where it is, and [hint] is that
+     * sentence when it cannot (blank when it can). [sha256] is the manifest's
+     * claim, kept so the file is re-hashed at the moment of use.
      */
     data class Ready(
         val version: String,
         val file: File,
         val notes: String,
         val installable: Boolean,
+        val hint: String = "",
+        val sha256: String = "",
     ) : UpdateState
 
     data class Error(val message: String) : UpdateState
@@ -76,7 +81,24 @@ class DesktopUpdater(
     private val isWindows: Boolean = System.getProperty("os.name").orEmpty().lowercase().startsWith("windows"),
     /** Injected so a test never spawns anything. Returns false when the launch failed. */
     private val launcher: (File) -> Boolean = ::launchInstaller,
+    /**
+     * How this copy was installed (Linux). A Gradle run — every unit test that
+     * does not pass one — reads as [LinuxInstall.Kind.DEV], which keeps the
+     * pre-portable behaviour: parked, not installable.
+     */
+    private val linux: LinuxInstall.Mode =
+        if (isWindows) LinuxInstall.Mode(LinuxInstall.Kind.DEV) else LinuxInstall.current(),
+    /** The portable apply; injected so a test can drive it on a temp tree. */
+    private val portableApply: (root: File, tarball: File, version: String, running: File?) -> Result<File> =
+        { r, t, v, run -> PortableInstall.apply(r, t, v, run) },
+    /** Starts the new version once this process has gone. Injected for the same reason as [launcher]. */
+    private val relauncher: (File) -> Boolean = { PortableInstall.relaunchAfterExit(it) },
 ) {
+
+    /** The manifest key this install looks up — see [UpdatePlatform.forInstall]. */
+    private val key: String? = UpdatePlatform.forInstall(platform, linux.kind)
+
+    private val portable: Boolean get() = !isWindows && linux.kind == LinuxInstall.Kind.PORTABLE && linux.root != null
 
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
@@ -118,7 +140,7 @@ class DesktopUpdater(
      * not restarted yet is the kind of thing nobody notices until the link bill.
      */
     suspend fun check(): UpdateState {
-        val plat = platform ?: return fail("no build for this platform")
+        val plat = key ?: return fail("no build for this platform")
 
         _state.value = UpdateState.Checking
         val releases = runCatching { feed.list() }
@@ -185,16 +207,23 @@ class DesktopUpdater(
         return settle(readyState(manifest, artifact, dest))
     }
 
-    private fun readyState(manifest: UpdateManifest, artifact: UpdateArtifact, dest: File) =
-        UpdateState.Ready(
+    private fun readyState(manifest: UpdateManifest, artifact: UpdateArtifact, dest: File): UpdateState.Ready {
+        // Windows runs its per-user installer; a PORTABLE Linux install applies
+        // its own tarball. A distro-packaged Linux install gets the package and a
+        // sentence: installing it needs root, and an app that asks for a password
+        // to update itself is an app teaching the owner to type one into
+        // whatever asks.
+        val installable = (isWindows && artifact.file.endsWith(".exe")) ||
+            (portable && artifact.file.endsWith(".tar.gz"))
+        return UpdateState.Ready(
             version = manifest.version,
             file = dest,
             notes = manifest.notes,
-            // Linux gets a .deb and a sentence: installing it needs root, and an
-            // app that asks for a password to update itself is an app teaching
-            // the owner to type one into whatever asks.
-            installable = isWindows && artifact.file.endsWith(".exe"),
+            installable = installable,
+            hint = if (installable) "" else LinuxInstall.manualHint(linux.kind, dest),
+            sha256 = artifact.sha256,
         )
+    }
 
     /**
      * Runs the parked installer and reports whether it started. THE CALLER MUST
@@ -215,7 +244,37 @@ class DesktopUpdater(
             _state.value = UpdateState.Error("the downloaded installer is gone")
             return false
         }
-        return launcher(ready.file)
+        if (!portable) return launcher(ready.file)
+        return installPortable(ready)
+    }
+
+    /**
+     * The Linux self-update: re-hash, unpack beside, swap `current`, prune, and
+     * arm a relaunch that waits for this process to exit. [installThenQuit] then
+     * quits. Every failure before the swap leaves `current` — and so the menu
+     * entry, the scheme handler and autostart — on the version that is running.
+     */
+    private fun installPortable(ready: UpdateState.Ready): Boolean {
+        val root = linux.root ?: return false
+        // Hashed AGAIN here, not only at download: this is the last moment before
+        // the bytes become the program the menu starts, and the cache it sat in
+        // is a plain user directory.
+        if (!Sha256.matches(ready.file, ready.sha256)) {
+            _state.value = UpdateState.Error("the downloaded update no longer matches its sha256 — not installed")
+            return false
+        }
+        val launcherFile = portableApply(root, ready.file, ready.version, linux.versionDir)
+            .getOrElse {
+                _state.value = UpdateState.Error("update not installed: ${it.message}")
+                return false
+            }
+        if (!relauncher(launcherFile)) {
+            // Installed, but nothing will bring the app back: say so and STAY.
+            // Quitting now would look exactly like an update that worked.
+            _state.value = UpdateState.Error("${ready.version} installed, but the app could not restart itself — quit and start it again")
+            return false
+        }
+        return true
     }
 
     private fun settle(s: UpdateState): UpdateState { _state.value = s; return s }

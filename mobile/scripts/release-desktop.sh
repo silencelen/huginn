@@ -5,7 +5,9 @@
 # Everything happens on THIS box. No Windows machine is involved and none is
 # needed: the Windows installer is built by running the WINDOWS jpackage.exe
 # under wine against a Windows jlink runtime, then wrapped by Linux makensis.
-# The Linux .deb comes from Compose's own packageDeb. Both are staged into
+# The Linux .deb comes from Compose's own packageDeb; the portable tarball and the
+# native Arch package are built from the same app-image by package-linux.sh. All
+# of them are staged into
 # DATA_DIR/desktop-kt by local moves and verified back through the wire with the
 # real Bearer token.
 #
@@ -71,6 +73,12 @@ WIN=$BUILD/windows
 DIST=$BUILD/release
 EXE="Huginn-Desktop-Setup-$VERSION.exe"
 DEB="huginn-desktop-kt_${VERSION}-1_amd64.deb"
+# ⚠ BOTH NAMES ARE MATCHED BY STEP 6's PRUNE REGEX — the tarball puts a '-' after
+# the version, which is why that regex accepts [-_.] there. Rename either and
+# check the prune still sees it, or old versions pile up in the channel forever.
+TGZ="huginn-desktop-kt-${VERSION}-linux-x64.tar.gz"
+ARCHPKG="huginn-desktop-kt-${VERSION}-1-x86_64.pkg.tar.zst"
+APPIMG=$BUILD/compose/binaries/main/app/huginn-desktop-kt
 # The installer, the plugin that stamps the notification identity, and the file
 # that holds the identity itself. Named once: two gates and the makensis
 # invocation all reach for them, and the plugin path is DERIVED from the .nsi
@@ -515,6 +523,21 @@ mv -f "$DEB_TMP/$DEB" "$DEB_SRC"
 rm -rf "$DEB_TMP"
 echo "  Recommends: nodejs (>= 16) + purge-time hygiene postrm injected ($(stat -c %s "$DEB_SRC") bytes repacked)"
 
+# ------------------------------------- 2b. portable tarball + native arch package
+#
+# Debian AND Arch in every standard cut (owner, 2026-10-14). Same app-image the
+# .deb wraps (createDistributable above), so the three Linux artifacts cannot
+# disagree about what they contain. package-linux.sh reads each one back and runs
+# the unpacked tarball under xvfb — see its header.
+echo "[2b/7] linux portable tarball + arch package"
+[ -x "$APPIMG/bin/huginn-desktop-kt" ] || { echo "REFUSING: no app-image at $APPIMG" >&2; exit 1; }
+LINUX_OUT="$BUILD/linux-extra"
+rm -rf "$LINUX_OUT"
+scripts/package-linux.sh "$APPIMG" "$DEB_SRC" "$VERSION" "$LINUX_OUT" 2>&1 | tee -a "$LOG"
+# ⚠ `| tee` hides the exit code, so the ARTIFACTS are the gate, never $?.
+[ -f "$LINUX_OUT/$TGZ" ] && [ -f "$LINUX_OUT/$ARCHPKG" ] || {
+  echo "REFUSING: package-linux.sh did not produce $TGZ and $ARCHPKG (full log: $LOG)" >&2; exit 1; }
+
 # ----------------------------------------------------------- 3. windows build
 if [ "$LINUX_ONLY" = 0 ]; then
   echo "[3/7] windows installer (jpackage.exe under wine -> linux makensis)"
@@ -743,11 +766,13 @@ fi
 echo "[4/7] checksums + manifest"
 rm -rf "$DIST"; mkdir -p "$DIST"
 cp "$DEB_SRC" "$DIST/$DEB"
+cp "$LINUX_OUT/$TGZ" "$DIST/$TGZ"
+cp "$LINUX_OUT/$ARCHPKG" "$DIST/$ARCHPKG"
 [ "$LINUX_ONLY" = 1 ] || cp "$WIN/out/$EXE" "$DIST/$EXE"
 
-node - "$VERSION" "$DIST" "$LINUX_ONLY" "$EXE" "$DEB" << 'EOF' > "$DIST/manifest.json"
+node - "$VERSION" "$DIST" "$LINUX_ONLY" "$EXE" "$DEB" "$TGZ" "$ARCHPKG" << 'EOF' > "$DIST/manifest.json"
 const fs = require('fs'), crypto = require('crypto'), path = require('path')
-const [version, dist, linuxOnly, exe, deb] = process.argv.slice(2)
+const [version, dist, linuxOnly, exe, deb, tgz, archpkg] = process.argv.slice(2)
 const entry = (name) => {
   const p = path.join(dist, name)
   return {
@@ -756,7 +781,14 @@ const entry = (name) => {
     size: fs.statSync(p).size,
   }
 }
-const man = { version, releasedAt: new Date().toISOString(), artifacts: { 'linux-x64': entry(deb) } }
+// ⚠ 'linux-x64' STAYS THE .deb FOREVER: every client before 1.13 looks that key
+// up. The portable tarball and the Arch package get keys of their own, which old
+// clients simply never ask for (UpdatePlatform.forInstall picks the new ones).
+const man = { version, releasedAt: new Date().toISOString(), artifacts: {
+  'linux-x64': entry(deb),
+  'linux-x64-portable': entry(tgz),
+  'linux-x64-arch': entry(archpkg),
+} }
 if (linuxOnly !== '1') man.artifacts['windows-x64'] = entry(exe)
 // The changelog section for THIS version, so the client can show what changed
 // without a second fetch.
@@ -770,6 +802,9 @@ node -e "const m=require('$PWD/$DIST/manifest.json');
   for (const [k,a] of Object.entries(m.artifacts)) {
     if (!/^[0-9a-f]{64}\$/.test(a.sha256)) { console.error('bad sha256 for '+k); process.exit(1) }
   }
+  for (const k of ['linux-x64','linux-x64-portable','linux-x64-arch']) {
+    if (!m.artifacts[k]) { console.error('manifest lacks '+k); process.exit(1) }
+  }
   console.log('  manifest:', Object.keys(m.artifacts).join(', '))"
 
 # ------------------------------------------------------------------ 5. stage
@@ -778,7 +813,7 @@ echo "[5/7] stage (artifacts first, manifest last, atomic)"
 # downloads a 404; every move is a rename within the same filesystem so a reader
 # sees the old file or the new one and never a partial.
 install -d -m 755 "$CHANNEL_DIR"
-for f in "$DIST/$DEB" "$DIST/$EXE"; do
+for f in "$DIST/$DEB" "$DIST/$TGZ" "$DIST/$ARCHPKG" "$DIST/$EXE"; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
   install -m 644 "$f" "$CHANNEL_DIR/$b.tmp"
@@ -796,8 +831,11 @@ node - "$CHANNEL_DIR" "$KEEP" << 'EOF'
 const fs = require('fs'), path = require('path')
 const [dir, keepStr] = process.argv.slice(2)
 const keep = Number(keepStr)
-// Both shapes: Huginn-Desktop-Setup-0.1.0.exe and huginn-desktop-kt_0.1.0-1_amd64.deb
-const VER = /[-_](\d+\.\d+\.\d+)(?:-\d+)?[_.]/
+// Every shape: Huginn-Desktop-Setup-0.1.0.exe, huginn-desktop-kt_0.1.0-1_amd64.deb,
+// huginn-desktop-kt-0.1.0-linux-x64.tar.gz and huginn-desktop-kt-0.1.0-1-x86_64.pkg.tar.zst.
+// ⚠ '-' after the version too: without it the tarball's version is invisible
+// here and its files are never pruned.
+const VER = /[-_](\d+\.\d+\.\d+)(?:-\d+)?[-_.]/
 // The version a file BELONGS TO, or null. Deciding by `name.includes(version)`
 // instead is a substring bug waiting for the first double-digit major: "1.0.0"
 // is a substring of "11.0.0", so pruning 1.0.0 would delete 11.0.0's installer
@@ -820,7 +858,7 @@ TOKEN=$(cat "$TOKEN_FILE")
 SERVED=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL$FEED/manifest" \
   | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
 [ "$SERVED" = "$VERSION" ] || { echo "FAIL: served manifest says '$SERVED'" >&2; exit 1; }
-for f in "$DIST/$DEB" "$DIST/$EXE"; do
+for f in "$DIST/$DEB" "$DIST/$TGZ" "$DIST/$ARCHPKG" "$DIST/$EXE"; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
   LEN=$(curl -sf -o /dev/null -w '%{size_download}' \
@@ -848,7 +886,9 @@ if [ "${HUGINN_NO_GH_RELEASE:-}" != 1 ]; then
   # unconditionally and github-release.sh refuses a missing artifact — so a
   # --linux-only run hard-failed HERE, after the live channel had already been updated.
   GH_ARTIFACTS=("$CHANNEL_DIR/manifest.json#Release manifest (per-artifact sha256)"
-                "$CHANNEL_DIR/$DEB#Linux .deb (amd64)")
+                "$CHANNEL_DIR/$DEB#Linux .deb (amd64)"
+                "$CHANNEL_DIR/$TGZ#Linux portable, self-updating (any distro: huginn desktop install)"
+                "$CHANNEL_DIR/$ARCHPKG#Arch Linux package (pacman -U)")
   [ "$LINUX_ONLY" = 1 ] || GH_ARTIFACTS+=("$CHANNEL_DIR/$EXE#Windows installer (NSIS, per-user)")
   ../scripts/github-release.sh desktop "$VERSION" "${GH_ARTIFACTS[@]}" \
     || { echo "FAIL: GitHub release desktop-v$VERSION did not publish — the updater fetches from it" >&2; exit 1; }
