@@ -37,6 +37,8 @@ type Daemon struct {
 	logf    func(string, ...any)
 	lock    *lockReader
 	ctx     context.Context // the daemon's lifetime; runners restart under it
+	watch     *watcher // appd watch stream -> tray summary + notices
+	installID string   // X-Huginn-Client
 
 	mu      sync.Mutex
 	api     *appd.Client
@@ -90,6 +92,8 @@ func Run(ctx context.Context, o Options) error {
 	logger.Printf("secrets: %s (%s)", sel.Backend, sel.Why)
 
 	d := &Daemon{paths: o.Paths, st: st, secrets: sec, sel: sel, hub: ipc.NewHub(), logf: logger.Printf, lock: newLockReader(), ctx: ctx}
+	d.watch = &watcher{d: d}
+	d.installID = installID(st)
 	if cfg.MigratedFrom == nil && cfg.Device.ID == "" && cfg.Appd.URL == "" {
 		d.migrate = d.firstStartImport(ctx)
 		logger.Printf("first start: %s", d.migrate)
@@ -168,7 +172,8 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "Not paired with huginn — run `huginn core pair`"})
 		return
 	}
-	api, err := appd.New(appd.Config{URL: cfg.Appd.URL, Tokens: tokenSource{d.secrets}, Pins: pinStore{d.st}, Logf: d.logf})
+	api, err := appd.New(appd.Config{URL: cfg.Appd.URL, Tokens: tokenSource{d.secrets}, Pins: pinStore{d.st}, Logf: d.logf,
+		Headers: d.watch.headers})
 	if err != nil {
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "The saved huginn address is refused: " + err.Error()})
 		return
@@ -189,7 +194,14 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 	d.mu.Lock()
 	d.api, d.run, d.stopRun, d.runDone = api, r, cancel, done
 	d.mu.Unlock()
-	go func() { defer close(done); r.Serve(rctx) }()
+	go func() {
+		defer close(done)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); r.Serve(rctx) }()
+		go func() { defer wg.Done(); d.watch.run(rctx, api) }()
+		wg.Wait()
+	}()
 }
 
 func (d *Daemon) stopRunner() {
@@ -400,7 +412,29 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 }
 
 func (d *Daemon) routes(mux *http.ServeMux) {
-	mux.Handle("GET /core/events", d.hub)
+	mux.HandleFunc("GET /core/events", func(w http.ResponseWriter, r *http.Request) {
+		// A tray role identifies itself, so the core knows somebody can SEE a
+		// notification before it claims them from appd (D14).
+		if r.URL.Query().Get("role") == "tray" {
+			d.watch.trays.Add(1)
+			defer d.watch.trays.Add(-1)
+		}
+		d.hub.ServeHTTP(w, r)
+	})
+	// POST /core/presence {"focused":"sess:<name>"|"chat:<id>"|""}: what the GUI
+	// shows, so its question is not also a toast. Repeated while visible; a
+	// report older than focusTTL is ignored.
+	mux.HandleFunc("POST /core/presence", func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			Focused string `json:"focused"`
+		}
+		if err := decode(r, &p); err != nil {
+			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		d.watch.setFocus(p.Focused)
+		ipc.WriteJSON(w, 200, map[string]bool{"claim": d.watch.claim()})
+	})
 	mux.HandleFunc("GET /core/status", func(w http.ResponseWriter, r *http.Request) {
 		cfg, _, _ := d.st.Load()
 		ipc.WriteJSON(w, 200, map[string]any{
@@ -408,6 +442,7 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			"paired": cfg.Appd.URL != "", "url": cfg.Appd.URL,
 			"secrets": d.sel.Backend, "secretsWhy": d.sel.Why,
 			"migratedFrom": cfg.MigratedFrom, "firstStart": d.migrate,
+			"tray": d.watch.trays.Load() > 0, "notifyClaim": d.watch.claim(),
 			"device": d.deviceView(nil),
 		})
 	})

@@ -78,6 +78,29 @@ for _ in $(seq 70); do
 done
 [ "$S" = look ] && ok "a scope change reached appd without a restart (E1)" || bad "scope still $S"
 
+# --- P2: the tray role's feed. A fake tray attaches to /core/events?role=tray;
+# a session that starts waiting must produce a "needs you" notice, and its end a
+# withdrawal — decided by the core from appd's watch stream, no GUI involved.
+SOCK="$XDG_RUNTIME_DIR/huginn/core.sock"
+curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events?role=tray' > "$T/events.log" 2>/dev/null &
+TRAY=$!
+for _ in $(seq 50); do grep -q '^event: tray' "$T/events.log" 2>/dev/null && break; sleep 0.1; done
+grep -q '"tray":true' <<< "$(curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' http://core/core/status)" \
+  && ok "core sees the tray role attached" || bad "core status does not show the tray"
+tmux -L "huginn-core-e2e-$$" new-session -d -s notifye2e 'sleep 600'
+sleep 2   # let a digest with the session in it seed the baseline first
+printf '{"state":"attention","ts":%s}' "$(date +%s%3N)" > "$T/appd/state/notifye2e"
+for _ in $(seq 100); do grep -q '"key":"sess:notifye2e"' "$T/events.log" && break; sleep 0.2; done
+grep '^data: .*"action":"post"' "$T/events.log" | grep -q '"title":"notifye2e needs you".*"urgent":true' \
+  && ok "a waiting session becomes an urgent 'needs you' notice for the tray" || { bad "no attention notice"; tail -5 "$T/events.log"; }
+grep '^data: ' "$T/events.log" | grep -q '"state":"attention".*"attention":\["notifye2e"\]' \
+  && ok "the tray summary turns to attention with the session in the menu" || bad "no attention summary"
+tmux -L "huginn-core-e2e-$$" kill-session -t =notifye2e
+for _ in $(seq 100); do grep -q '"action":"withdraw","key":"sess:notifye2e"' "$T/events.log" && break; sleep 0.2; done
+grep -q '"action":"withdraw","key":"sess:notifye2e"' "$T/events.log" \
+  && ok "the session ending withdraws the notice" || bad "no withdrawal"
+kill $TRAY 2>/dev/null
+
 kill "$CORE"; wait "$CORE" 2>/dev/null; start_core
 grep -q "id $ID" <<< "$("$T/huginn" device status)" && ok "a restarted core keeps its id (no second row)" || bad "id changed across restart"
 

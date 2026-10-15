@@ -53,6 +53,10 @@ type Config struct {
 	RequestTimeout time.Duration
 	// Logf, if set, hears the one event worth a log line: a re-pin.
 	Logf func(format string, args ...any)
+	// Headers, if set, adds headers to every request — the core's install id
+	// (X-Huginn-Client) and its notify claim (X-Huginn-Notify, D14). Called per
+	// request, so a claim that changes is sent as it is NOW.
+	Headers func() map[string]string
 }
 
 // Client talks to one daemon address. Safe for concurrent use.
@@ -64,6 +68,7 @@ type Client struct {
 	probeT time.Duration
 	reqT   time.Duration
 	logf   func(string, ...any)
+	hdrs   func() map[string]string
 
 	mu        sync.Mutex
 	pinnedKey string
@@ -91,7 +96,7 @@ func New(cfg Config) (*Client, error) {
 	c := &Client{
 		base: base, tokens: cfg.Tokens, pins: cfg.Pins,
 		hs: cfg.HandshakeTimeout, probeT: cfg.ProbeTimeout, reqT: cfg.RequestTimeout,
-		logf: cfg.Logf,
+		logf: cfg.Logf, hdrs: cfg.Headers,
 	}
 	if c.pins == nil {
 		c.pins = &MemoryPinStore{}
@@ -519,6 +524,7 @@ func (c *Client) send(ctx context.Context, t *http.Transport, tok, method string
 	if err != nil {
 		return nil, err
 	}
+	c.stamp(req)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
@@ -591,4 +597,91 @@ func sni(host string) string {
 		return ""
 	}
 	return host
+}
+
+// stamp adds the caller's headers. Authorization is set AFTER this, so a hook
+// can never replace or remove the token header.
+func (c *Client) stamp(req *http.Request) {
+	if c.hdrs == nil {
+		return
+	}
+	for k, v := range c.hdrs() {
+		if strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
+}
+
+// Stream opens a token-carrying GET and returns the response with its body
+// OPEN, for server-sent events (`/v1/watch?stream=1`). The same TLS rules as
+// Do: proved and pinned over https (re-proved once on a rotated leaf), plain
+// http for loopback only. No request timeout — the caller's ctx ends it, and
+// the caller closes the body. A status of 400 or above is returned as a
+// *StatusError with the body already closed.
+func (c *Client) Stream(ctx context.Context, path string) (*http.Response, error) {
+	target, err := c.resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	tok, err := ResolveToken(c.tokens)
+	if err != nil {
+		return nil, err
+	}
+	var t *http.Transport
+	switch target.Scheme {
+	case "https":
+		pins := c.loadPins(tok)
+		if len(pins) == 0 {
+			if pins, err = c.proveAndPin(ctx, tok, nil); err != nil {
+				return nil, err
+			}
+		}
+		res, err := c.openStream(ctx, c.pinnedTransport(tok, pins), tok, target)
+		var pm *PinMismatchError
+		if !errors.As(err, &pm) {
+			return res, err
+		}
+		if pins, err = c.proveAndPin(ctx, tok, pins); err != nil {
+			return nil, err
+		}
+		res, err = c.openStream(ctx, c.pinnedTransport(tok, pins), tok, target)
+		if errors.As(err, &pm) {
+			return nil, interceptedAt(c.origin(), fmt.Sprintf(" (certificate %s changed again after it was proved)", pm.FP))
+		}
+		return res, err
+	case "http":
+		if !IsLoopbackHost(target.Hostname()) {
+			return nil, fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", target.Host)
+		}
+		t = c.plainTransport()
+	default:
+		return nil, fmt.Errorf("%q is not an http(s) url", target.String())
+	}
+	return c.openStream(ctx, t, tok, target)
+}
+
+func (c *Client) openStream(ctx context.Context, t *http.Transport, tok string, target *url.URL) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.stamp(req)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "text/event-stream")
+	hc := &http.Client{Transport: t, CheckRedirect: noRedirect}
+	res, err := hc.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("GET %s: %w", target.Path, ue.Err)
+		}
+		return nil, err
+	}
+	if res.StatusCode >= 400 {
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 200))
+		res.Body.Close()
+		return nil, &StatusError{Method: http.MethodGet, Path: target.Path, Status: res.StatusCode, Body: string(b)}
+	}
+	return res, nil
 }

@@ -8,3 +8,5 @@ require (
 )
 
 require golang.org/x/term v0.45.0
+
+require fyne.io/systray v1.12.2

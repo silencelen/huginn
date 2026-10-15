@@ -44,6 +44,7 @@ namespace HuginnLnk {
       var link = (IShellLinkW)new CShellLink();
       link.SetPath(exe);
       link.SetArguments(args);
+      link.SetShowCmd(7); // SW_SHOWMINNOACTIVE: the console the tray role detaches from never takes focus
       link.SetWorkingDirectory(dir);
       link.SetDescription(desc);
       var store = (IPropertyStore)link;
