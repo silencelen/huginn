@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## Unreleased (2.1.0)
+
+### Changed
+- **While `huginn core tray` is running, the app stands its own tray and notifications down.**
+  It shows no second icon and posts no second copy of a notification. It stops claiming
+  notifications from appd, because the core does that. Closing the window quits, and the core's
+  tray reopens it. Without a core tray, nothing changes.
+- The app tells the core which session or chat it is showing, so the core does not notify you
+  about what is already on screen.
+- Kotlin 2.4.21, ktor 3.6.0, AGP 9.4.1 (Dependabot #18-#22).
+
 ## 2.0.0
 
 ### Changed
