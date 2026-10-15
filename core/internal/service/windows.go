@@ -285,17 +285,6 @@ func InstallWindows(o WindowsOptions) Report {
 			}
 			return Failed, fmt.Sprintf("unknown logon type %q", logon)
 		}},
-		{"stop a running core", func() (State, string) {
-			// ⚠ An UPDATE must end the running instance: self-install renamed its
-			// .exe aside, so without this the OLD version keeps serving (from
-			// huginn.exe.old) until the next reboot, while status reports the new
-			// one installed. Not running / no task yet is fine.
-			res := r.Run("schtasks", "/End", "/TN", TaskName)
-			if !res.OK() {
-				return Unchanged, "none running"
-			}
-			return Done, "ended the running instance; it restarts below"
-		}},
 		{"write task definition", func() (State, string) {
 			if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
 				return Failed, err.Error()
@@ -327,6 +316,19 @@ func InstallWindows(o WindowsOptions) Report {
 				return Failed, accessHint(res.Why())
 			}
 			return Done, string(logon)
+		}},
+		{"stop a running core", func() (State, string) {
+			// ⚠ An UPDATE must end the running instance: self-install renamed its
+			// .exe aside, so without this the OLD version keeps serving (from
+			// huginn.exe.old) until the next reboot, while status reports the new
+			// one installed. AFTER the registration on purpose: a registration
+			// that fails (no admin) must leave the running core alone, not stop
+			// it. Not running / no task yet is fine.
+			res := r.Run("schtasks", "/End", "/TN", TaskName)
+			if !res.OK() {
+				return Unchanged, "none running"
+			}
+			return Done, "ended the running instance; it restarts below"
 		}},
 		{"start task", func() (State, string) { return cmdStep(r, "schtasks", "/Run", "/TN", TaskName) }},
 		{"tray shortcut", func() (State, string) {
