@@ -87,6 +87,9 @@ TRAY=$!
 for _ in $(seq 50); do grep -q '^event: tray' "$T/events.log" 2>/dev/null && break; sleep 0.1; done
 grep -q '"tray":true' <<< "$(curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' http://core/core/status)" \
   && ok "core sees the tray role attached" || bad "core status does not show the tray"
+GUIVIEW="$(timeout 2 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events' 2>/dev/null || true)"
+grep -A1 '^event: coretray' <<< "$GUIVIEW" | grep -q '"attached":true' \
+  && ok "a GUI subscriber is told the core tray is attached (it stands its own down)" || bad "no coretray event for the GUI"
 tmux -L "huginn-core-e2e-$$" new-session -d -s notifye2e 'sleep 600'
 sleep 2   # let a digest with the session in it seed the baseline first
 printf '{"state":"attention","ts":%s}' "$(date +%s%3N)" > "$T/appd/state/notifye2e"

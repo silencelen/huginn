@@ -1,3 +1,5 @@
+//go:build (linux && !android) || windows
+
 // Package tray is the tray role: `huginn core tray`, started at graphical
 // login. It draws the icon and menu and posts OS notifications, all decided by
 // `huginn core run` and read from its /core/events stream — the role holds no
@@ -37,12 +39,6 @@ var iconWorking []byte
 
 //go:embed icons/attention.png
 var iconAttention []byte
-
-// Notifier posts and withdraws OS notifications. One per platform.
-type Notifier interface {
-	Post(n traystate.Notice) error
-	Withdraw(key string) error
-}
 
 // Options for Run.
 type Options struct {
@@ -239,4 +235,19 @@ func icoFromPNG(png []byte) []byte {
 	binary.Write(&b, binary.LittleEndian, []uint32{uint32(len(png)), 22})
 	b.Write(png)
 	return b.Bytes()
+}
+
+// NotifyTest posts one sample notice through this platform's real notifier,
+// waits, then withdraws it — `huginn core notify-test`, for proving delivery on
+// a machine without sending anything through appd (which would also reach the
+// phone). Returns the first error.
+func NotifyTest(hold time.Duration) error {
+	n := newNotifier(log.Default())
+	err := n.Post(traystate.Notice{Action: "post", Key: "test:notify", Urgent: true,
+		Title: "huginn notification test", Body: "If you can read this, huginn core can reach you here.", URL: "huginn://open"})
+	if err != nil {
+		return err
+	}
+	time.Sleep(hold)
+	return n.Withdraw("test:notify")
 }
