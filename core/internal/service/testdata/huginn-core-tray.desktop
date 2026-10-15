@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Huginn
+Comment=huginn tray: notifications and the window launcher
+Exec="/home/s/.local/bin/huginn" core tray
+Terminal=false
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
