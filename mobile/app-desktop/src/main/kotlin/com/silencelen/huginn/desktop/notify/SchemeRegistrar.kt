@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.notify
 
+import com.silencelen.huginn.desktop.update.LinuxInstall
 import java.io.File
 import java.nio.charset.Charset
 import java.util.concurrent.TimeUnit
@@ -51,8 +52,13 @@ import java.util.concurrent.TimeUnit
  */
 object SchemeRegistrar {
 
-    /** Whether a launcher path is known — false when running from Gradle. */
-    fun launcherPath(): String? = System.getProperty("jpackage.app-path")
+    /**
+     * Whether a launcher path is known — false when running from Gradle. ⚠ The
+     * STABLE one: a portable install's `R/current/bin/…`, never the versioned dir
+     * the kernel reports, or the scheme keeps opening the old version after an
+     * update and nothing at all once the prune deletes it.
+     */
+    fun launcherPath(): String? = LinuxInstall.stableLauncherForThisProcess()
 
     fun register(): String {
         val exe = launcherPath()
@@ -150,22 +156,10 @@ object SchemeRegistrar {
             System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.local/share",
             "applications",
         )
-        val name = "huginn-desktop-kt.desktop"
+        val name = LINUX_DESKTOP_FILE
         val written = runCatching {
             appsDir.mkdirs()
-            File(appsDir, name).writeText(
-                """
-                [Desktop Entry]
-                Type=Application
-                Name=Huginn
-                Comment=huginn desktop client
-                Exec=${exe.replace("%", "%%")} %u
-                Terminal=false
-                Categories=Development;Utility;
-                MimeType=x-scheme-handler/${Activations.SCHEME};
-
-                """.trimIndent()
-            )
+            File(appsDir, name).writeText(linuxDesktopEntry(exe))
             true
         }.getOrDefault(false)
         if (!written) return "scheme registration failed: could not write $appsDir/$name"
@@ -174,6 +168,33 @@ object SchemeRegistrar {
         run(listOf("update-desktop-database", appsDir.absolutePath))
         run(listOf("xdg-mime", "default", name, "x-scheme-handler/${Activations.SCHEME}"))
         return "scheme huginn:// registered via $appsDir/$name"
+    }
+
+    /**
+     * The per-user entry's name. ⚠ ONE NAME, SHARED WITH `huginn desktop install`
+     * (client/huginn.sh writes the same file at install time, before the first
+     * launch): two writers with two names would give the menu two Huginns and the
+     * scheme two competing handlers.
+     */
+    const val LINUX_DESKTOP_FILE: String = "huginn-desktop-kt.desktop"
+
+    /**
+     * The entry, entire. PURE — asserted in `SchemeRegistrarTest`. The icon comes
+     * from beside the launcher (`<app>/lib/huginn-desktop-kt.png`, where Compose's
+     * app-image puts it), so a portable install's icon follows `current` too.
+     * Exec is QUOTED: a portable install lives under `$HOME`, and a home with a
+     * space in it would otherwise launch a program that is not this one.
+     */
+    internal fun linuxDesktopEntry(exe: String): String = buildString {
+        appendLine("[Desktop Entry]")
+        appendLine("Type=Application")
+        appendLine("Name=Huginn")
+        appendLine("Comment=huginn desktop client")
+        appendLine("Exec=\"${exe.replace("%", "%%")}\" %u")
+        File(exe).parentFile?.parentFile?.let { app -> appendLine("Icon=${File(app, LinuxInstall.ICON_REL).path}") }
+        appendLine("Terminal=false")
+        appendLine("Categories=Development;Utility;")
+        appendLine("MimeType=x-scheme-handler/${Activations.SCHEME};")
     }
 
     private fun run(cmd: List<String>): Boolean = runCatching {

@@ -659,9 +659,9 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
     }
     (state as? UpdateState.Ready)?.takeIf { !it.installable }?.let {
         Muted(
-            "downloaded to ${it.file.absolutePath} — install it by hand on this platform",
+            it.hint.ifBlank { "downloaded to ${it.file.absolutePath} — install it by hand on this platform" },
             Modifier.padding(top = 4.dp, start = 8.dp),
-            maxLines = 2,
+            maxLines = 3,
         )
     }
 
