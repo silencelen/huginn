@@ -309,14 +309,49 @@ _huginn_core_pair() {
   ssh -T "$H" 'cat /etc/huginn-appd/token' 2>/dev/null | "$bin" core pair --url "$srv"
 }
 
+# Is release $2 newer than the installed core $1? A prerelease (2.1.0-rc.1)
+# is older than its release (2.1.0); a newer local build is left alone.
+_huginn_core_newer() {
+  local cur="$1" rel="$2" base="${1%%-*}"
+  [ -n "$cur" ] || return 0
+  [ "$cur" = "$rel" ] && return 1
+  [ "$base" = "$rel" ] && [ "$base" != "$cur" ] && return 0
+  [ "$(printf '%s\n%s\n' "$base" "$rel" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$rel" ] && [ "$base" != "$rel" ]
+}
+
+# Bring the installed core up to the newest release. Its self-install restarts
+# the running core onto it and adds the tray to a pre-tray (2.0.0) install.
+_huginn_core_update() {
+  local bin cur rel latest
+  bin="$(_huginn_core_bin)" || bin=""
+  [ -n "$bin" ] || { echo "huginn core: not installed here - huginn core install" >&2; return 1; }
+  cur="$("$bin" version 2>/dev/null | sed -n 's/^(o> huginn \([^ ]*\) .*/\1/p')"
+  if [ -z "${HUGINN_CORE_FILE:-}" ]; then
+    rel="$(_huginn_core_release)" || { echo "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept" >&2; return 1; }
+    latest="${rel%%$'\n'*}"; latest="${latest#cli-v}"
+    if ! _huginn_core_newer "$cur" "$latest"; then
+      echo "huginn core $cur is current (newest release $latest)"; return 0
+    fi
+    echo "huginn core: $cur -> $latest"
+  fi
+  _huginn_core_fetch >/dev/null
+}
+
 _huginn_core() {
   local bin sub="${1:-status}" i
   [ $# -gt 0 ] && shift
   bin="$(_huginn_core_bin)" || bin=""
   case "$sub" in
+    update)
+      _huginn_core_update
+      ;;
     install)
       if [ -z "$bin" ] || [ -n "${HUGINN_CORE_FILE:-}" ]; then
         bin="$(_huginn_core_fetch)" || return 1
+      else
+        # An installed core is brought up to date first (get.sh re-run on a
+        # machine from an older release); offline, the installed one is used.
+        _huginn_core_update || echo "  (keeping the installed core)" >&2
       fi
       "$bin" core install "$@" || return 1
       # The service starts the core; wait for it to answer, then pair it.
@@ -1280,6 +1315,7 @@ _huginn_help_body() {
                               with nobody signed in - and pair it with the host
                               [--logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
+  huginn core update          take the newest core release (restarts the core)
   huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn
                               sees
@@ -1492,6 +1528,8 @@ EOF
         # shellcheck disable=SC1090
         source "$dest"; huginn version
         echo "$(_huginn_color 90 1)  (previous version saved as $(basename "$dest").bak)$(_huginn_color 0 1)"
+        # Lockstep (D10): the core this client drives follows it.
+        if _huginn_core_bin >/dev/null 2>&1; then huginn core update || true; fi
       else
         rm -f "$tmp" 2>/dev/null
         echo "huginn: update failed (gh unavailable or errored, and the $uh mirror did not answer either)" >&2; return 1

@@ -9,10 +9,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/../.." && pwd)"
 T="$(mktemp -d)"; FAILS=0
 ok()  { echo "PASS  $*"; }
 bad() { echo "FAIL  $*"; FAILS=$((FAILS+1)); }
-cleanup() { kill "${CORE:-}" "${APPD:-}" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-e2e-$$" kill-server 2>/dev/null; rm -rf "$T"; }
+cleanup() { kill "${SUP:-}" 2>/dev/null; kill "${CORE:-}" "${APPD:-}" 2>/dev/null; pkill -f "$T/home/.local/share/huginn/versions/" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-e2e-$$" kill-server 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
 
-(cd "$REPO/core" && go build -o "$T/huginn" ./cmd/huginn) || { echo "build failed"; exit 99; }
+(cd "$REPO/core" && go build -o "$T/huginn" ./cmd/huginn \
+  && go build -ldflags "-X github.com/silencelen/huginn/core/internal/version.Version=1.99.0-e2eold" -o "$T/huginn-old" ./cmd/huginn) \
+  || { echo "build failed"; exit 99; }
 
 # --- appd ------------------------------------------------------------------
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
@@ -106,6 +108,28 @@ kill $TRAY 2>/dev/null
 
 kill "$CORE"; wait "$CORE" 2>/dev/null; start_core
 grep -q "id $ID" <<< "$("$T/huginn" device status)" && ok "a restarted core keeps its id (no second row)" || bad "id changed across restart"
+
+# --- P2 upgrade path: an older core under a supervisor (a stand-in for
+# systemd's Restart=always) is restarted onto the new binary by the new
+# binary's self-install, keeping its device id; a pre-tray install gets the
+# tray autostart once, and a removed autostart is not put back.
+kill "$CORE"; wait "$CORE" 2>/dev/null; CORE=
+mkdir -p "$XDG_CONFIG_HOME/systemd/user"; : > "$XDG_CONFIG_HOME/systemd/user/huginn-core.service"
+"$T/huginn-old" core self-install > "$T/up-old.log" 2>&1
+STABLE="$HOME/.local/bin/huginn"
+( while :; do "$STABLE" core run >> "$T/core.log" 2>&1; sleep 1; done ) & SUP=$!
+for _ in $(seq 50); do grep -q '1.99.0-e2eold' <<< "$("$T/huginn" core status 2>/dev/null)" && break; sleep 0.2; done
+grep -q 'huginn core 1.99.0-e2eold' <<< "$("$T/huginn" core status)" && ok "the old core runs from the stable path" || bad "old core not running"
+DISPLAY=:e2e "$T/huginn" core self-install > "$T/up.log" 2>&1
+grep -q "restarted huginn core: 1.99.0-e2eold -> " "$T/up.log" && ok "self-install restarted the running core onto the new binary" || { bad "no restart"; cat "$T/up.log"; }
+grep -q "huginn core 1.99.0-e2eold" <<< "$("$T/huginn" core status)" && bad "still the old core" || ok "core status reports the new version"
+grep -q "id $ID" <<< "$("$T/huginn" device status)" && ok "the upgraded core keeps the device id" || bad "id changed across the upgrade"
+[ -f "$XDG_CONFIG_HOME/autostart/huginn-core-tray.desktop" ] && [ -f "$XDG_STATE_HOME/huginn/tray-autostart" ] \
+  && ok "a pre-tray install got the tray autostart (once)" || { bad "no tray autostart after the upgrade"; cat "$T/up.log"; }
+rm -f "$XDG_CONFIG_HOME/autostart/huginn-core-tray.desktop"
+DISPLAY=:e2e "$T/huginn" core self-install > "$T/up2.log" 2>&1
+[ -f "$XDG_CONFIG_HOME/autostart/huginn-core-tray.desktop" ] && bad "a removed tray autostart came back" || ok "a removed tray autostart stays removed"
+grep -q restarted "$T/up2.log" && bad "a same-version self-install restarted the core" || ok "a same-version self-install leaves the core alone"
 
 "$T/huginn" device off >/dev/null
 GONE=""

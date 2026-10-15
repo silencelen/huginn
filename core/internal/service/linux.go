@@ -257,15 +257,7 @@ func InstallLinux(o LinuxOptions) (Report, Linger) {
 			}
 			return Warning, "refused (" + why + ") — huginn core runs only while you are logged in"
 		}},
-		{"tray autostart", func() (State, string) {
-			if o.NoTray {
-				return Skipped, "not requested"
-			}
-			if !o.Graphical && !o.ForceTray {
-				return Skipped, "no graphical session (DISPLAY/WAYLAND_DISPLAY unset); --tray forces it"
-			}
-			return writeIfChanged(o.TrayPath(), TrayDesktopEntry(o.Binary), 0o644)
-		}},
+		{"tray autostart", func() (State, string) { return EnsureTrayLinux(o) }},
 	}
 	rep := run("install", steps)
 	if rep.OK() && linger != LingerOn {
@@ -273,6 +265,18 @@ func InstallLinux(o LinuxOptions) (Report, Linger) {
 			"An administrator can run `loginctl enable-linger "+o.User+"`.")
 	}
 	return rep, linger
+}
+
+// EnsureTrayLinux writes the tray role's login autostart (install, and an
+// update from a core that predates the tray).
+func EnsureTrayLinux(o LinuxOptions) (State, string) {
+	if o.NoTray {
+		return Skipped, "not requested"
+	}
+	if !o.Graphical && !o.ForceTray {
+		return Skipped, "no graphical session (DISPLAY/WAYLAND_DISPLAY unset); --tray forces it"
+	}
+	return writeIfChanged(o.TrayPath(), TrayDesktopEntry(o.Binary), 0o644)
 }
 
 // UninstallLinux stops, disables and removes the unit and the tray entry.

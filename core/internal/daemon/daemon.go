@@ -48,7 +48,16 @@ type Daemon struct {
 	runDone chan struct{}
 	migrate string        // one line: what the first-start import did
 	last    runner.Status // newest status published, runner or not ("not paired" has no runner)
+
+	restartOnce sync.Once
+	restartNow  chan struct{} // closed when an update asked this core to exit and be restarted
 }
+
+// ErrRestart is what Run returns when POST /core/restart asked the core to
+// exit so its supervisor starts the binary now at the stable path (an update).
+// `core run` exits 0 on it: systemd's Restart=always restarts any exit, and on
+// Windows the updater starts the task itself (self-install).
+var ErrRestart = errors.New("restart requested")
 
 // Options for Run.
 type Options struct {
@@ -92,7 +101,8 @@ func Run(ctx context.Context, o Options) error {
 	sec, sel := OpenSecretsForService(o.Paths, cfg.Secrets)
 	logger.Printf("secrets: %s (%s)", sel.Backend, sel.Why)
 
-	d := &Daemon{paths: o.Paths, st: st, secrets: sec, sel: sel, hub: ipc.NewHub(), logf: logger.Printf, lock: newLockReader(), ctx: ctx}
+	d := &Daemon{paths: o.Paths, st: st, secrets: sec, sel: sel, hub: ipc.NewHub(), logf: logger.Printf, lock: newLockReader(), ctx: ctx,
+		restartNow: make(chan struct{})}
 	d.watch = &watcher{d: d}
 	d.installID = installID(st)
 	if cfg.MigratedFrom == nil && cfg.Device.ID == "" && cfg.Appd.URL == "" {
@@ -113,6 +123,9 @@ func Run(ctx context.Context, o Options) error {
 	select {
 	case <-ctx.Done():
 	case err = <-errc:
+	case <-d.restartNow:
+		logger.Printf("huginn core %s exiting for a restart onto the installed binary", version.Version)
+		err = ErrRestart
 	}
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -353,6 +366,37 @@ func ApplyDevice(c *store.Config, in DeviceSettings) error {
 	return nil
 }
 
+// busy: the runner is in the middle of a job.
+func (d *Daemon) busy() bool {
+	d.mu.Lock()
+	r := d.run
+	d.mu.Unlock()
+	return r != nil && r.Status().Busy
+}
+
+// requestRestart exits the core once no job is running, so an update never
+// kills remote work halfway: a job finishes under the binary that started it.
+func (d *Daemon) requestRestart() {
+	d.restartOnce.Do(func() {
+		go func() {
+			waited := false
+			for d.busy() {
+				if !waited {
+					d.logf("restart requested: waiting for the running job to finish")
+					waited = true
+				}
+				select {
+				case <-d.ctx.Done():
+					return
+				case <-time.After(5 * time.Second):
+				}
+			}
+			time.Sleep(200 * time.Millisecond) // let the 202 reach the caller
+			close(d.restartNow)
+		}()
+	})
+}
+
 func (d *Daemon) kick() {
 	d.mu.Lock()
 	r := d.run
@@ -454,6 +498,13 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			"tray": d.watch.trays.Load() > 0, "notifyClaim": d.watch.claim(),
 			"device": d.deviceView(nil),
 		})
+	})
+	// POST /core/restart: an update installed a different binary at the stable
+	// path; exit (after any running job) so the supervisor starts that one.
+	mux.HandleFunc("POST /core/restart", func(w http.ResponseWriter, r *http.Request) {
+		busy := d.busy()
+		ipc.WriteJSON(w, 202, map[string]any{"restarting": true, "afterJob": busy, "version": version.Version})
+		d.requestRestart()
 	})
 	mux.HandleFunc("GET /core/device", func(w http.ResponseWriter, r *http.Request) {
 		ipc.WriteJSON(w, 200, d.deviceView(nil))

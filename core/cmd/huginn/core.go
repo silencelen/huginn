@@ -56,7 +56,8 @@ func core(args []string) int {
 		// The tray role (docs/CORE-ARCHITECTURE.md §3.1): started at graphical
 		// login, draws the icon and posts notifications that `core run` decides.
 		tray.DetachConsole()
-		tray.Run(tray.Options{Socket: daemon.SocketPath(paths())})
+		p := paths()
+		tray.Run(tray.Options{Socket: daemon.SocketPath(p), Lock: filepath.Join(p.Runtime, "tray.lock")})
 		return 0
 	case "notify-test":
 		// Hidden: one sample notification through the real notifier, then
@@ -68,9 +69,11 @@ func core(args []string) int {
 		fmt.Println("posted and withdrew a test notification")
 		return 0
 	case "self-install":
-		if _, ok := selfInstall(); !ok {
+		bin, ok := selfInstall()
+		if !ok {
 			return 1
 		}
+		upgradeRunning(bin)
 		return 0
 	}
 	usage()
@@ -91,6 +94,9 @@ func coreRun() int {
 	defer stop()
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	if err := daemon.Run(ctx, daemon.Options{Paths: paths(), Logger: logger}); err != nil {
+		if errors.Is(err, daemon.ErrRestart) {
+			return 0 // the supervisor starts the installed binary (see self-install)
+		}
 		if errors.Is(err, ipc.ErrInUse) {
 			fmt.Fprintln(os.Stderr, "huginn: a core is already running for this user (`huginn core status`)")
 			return 0 // not a failure for a supervisor: the job is being done
@@ -192,6 +198,7 @@ func coreInstall(args []string) int {
 		if linger != service.LingerOn {
 			fmt.Println("Note: without linger the core starts at login, not at boot.")
 		}
+		afterServiceInstall(bin, fileExists(o.TrayPath()))
 		return exitFor(rep)
 	case "windows":
 		o, err := service.WindowsDefaults(bin)
@@ -225,6 +232,7 @@ func coreInstall(args []string) int {
 		}
 		rep := service.InstallWindows(o)
 		fmt.Print(rep.String())
+		afterServiceInstall(bin, fileExists(o.StartupLnk()))
 		return exitFor(rep)
 	}
 	fmt.Fprintln(os.Stderr, "huginn core install: not supported on "+runtime.GOOS)
@@ -257,6 +265,7 @@ func exitFor(r service.Report) int {
 
 func coreUninstall() int {
 	bin := stableBinary()
+	os.Remove(trayMarker()) // a reinstall offers the tray again
 	switch runtime.GOOS {
 	case "linux":
 		o, err := service.LinuxDefaults(bin)
