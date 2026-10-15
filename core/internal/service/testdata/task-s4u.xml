@@ -8,7 +8,20 @@
   <Triggers>
     <BootTrigger>
       <Enabled>true</Enabled>
+      <Delay>PT30S</Delay>
     </BootTrigger>
+    <TimeTrigger>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>HOME\alex</UserId>
+    </LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
