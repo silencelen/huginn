@@ -1,0 +1,594 @@
+package appd
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	DefaultHandshakeTimeout = 20 * time.Second
+	DefaultProbeTimeout     = 15 * time.Second
+	DefaultRequestTimeout   = 20 * time.Second
+
+	// maxBody bounds what one response may make us hold. Work items carry a
+	// prompt, never files, so this is generous.
+	maxBody = 32 << 20
+	// maxProbeBody: a challenge answer is a few hundred bytes; a host that
+	// sends more is not huginn.
+	maxProbeBody = 64 << 10
+)
+
+// Config is what a Client needs. Only URL is required.
+type Config struct {
+	// URL is the daemon's base url. It is normalised (NormalizeURL) and
+	// refused (URLRefusal) by New.
+	URL string
+	// Tokens is consulted on every request, after $HUGINN_APPD_TOKEN, so a
+	// token changed underneath a running client is picked up.
+	Tokens TokenSource
+	// Pins persists proved fingerprints. nil means a MemoryPinStore: safe, it
+	// only costs a re-proof per process.
+	Pins PinStore
+	// HandshakeTimeout bounds connect + TLS handshake on the pinned channel.
+	HandshakeTimeout time.Duration
+	// ProbeTimeout bounds the whole challenge exchange.
+	ProbeTimeout time.Duration
+	// RequestTimeout applies when the caller's context has no deadline.
+	RequestTimeout time.Duration
+	// Logf, if set, hears the one event worth a log line: a re-pin.
+	Logf func(format string, args ...any)
+}
+
+// Client talks to one daemon address. Safe for concurrent use.
+type Client struct {
+	base   *url.URL
+	tokens TokenSource
+	pins   PinStore
+	hs     time.Duration
+	probeT time.Duration
+	reqT   time.Duration
+	logf   func(string, ...any)
+
+	mu        sync.Mutex
+	pinnedKey string
+	pinned    *http.Transport
+	plain     *http.Transport
+
+	// proveMu serialises re-proofs: the beat, the poll and an events POST can
+	// all hit a rotated certificate at once, and one proof answers all three.
+	proveMu sync.Mutex
+}
+
+// Response is a status and the whole body.
+type Response struct {
+	Status int
+	Body   []byte
+}
+
+// New builds a client for cfg.URL.
+func New(cfg Config) (*Client, error) {
+	raw := NormalizeURL(cfg.URL)
+	if err := URLRefusal(raw); err != nil {
+		return nil, err
+	}
+	base, _ := url.Parse(raw)
+	c := &Client{
+		base: base, tokens: cfg.Tokens, pins: cfg.Pins,
+		hs: cfg.HandshakeTimeout, probeT: cfg.ProbeTimeout, reqT: cfg.RequestTimeout,
+		logf: cfg.Logf,
+	}
+	if c.pins == nil {
+		c.pins = &MemoryPinStore{}
+	}
+	if c.hs <= 0 {
+		c.hs = DefaultHandshakeTimeout
+	}
+	if c.probeT <= 0 {
+		c.probeT = DefaultProbeTimeout
+	}
+	if c.reqT <= 0 {
+		c.reqT = DefaultRequestTimeout
+	}
+	if c.logf == nil {
+		c.logf = func(string, ...any) {}
+	}
+	return c, nil
+}
+
+// URL is the normalised base url this client dials.
+func (c *Client) URL() string { return strings.TrimSuffix(c.base.String(), "/") }
+
+func (c *Client) origin() string { return c.base.Scheme + "://" + c.base.Host }
+
+// Close drops idle connections.
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pinned != nil {
+		c.pinned.CloseIdleConnections()
+	}
+	if c.plain != nil {
+		c.plain.CloseIdleConnections()
+	}
+}
+
+// Do sends one token-carrying request and reads the whole answer. body, when
+// non-nil, is sent as JSON. A status of 400 or above comes back as a
+// *StatusError together with the Response.
+func (c *Client) Do(ctx context.Context, method, path string, body any) (*Response, error) {
+	target, err := c.resolve(path)
+	if err != nil {
+		return nil, err
+	}
+	var payload []byte
+	if body != nil {
+		if payload, err = json.Marshal(body); err != nil {
+			return nil, fmt.Errorf("%s %s: encoding the body: %w", method, target.Path, err)
+		}
+	}
+	tok, err := ResolveToken(c.tokens)
+	if err != nil {
+		return nil, err
+	}
+	if _, has := ctx.Deadline(); !has {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.reqT)
+		defer cancel()
+	}
+
+	var resp *Response
+	switch target.Scheme {
+	case "https":
+		resp, err = c.pinnedRequest(ctx, tok, method, target, payload)
+	case "http":
+		// ⚠ LOOPBACK AND NOTHING ELSE. NormalizeURL already turned every remote
+		// http:// into https://; this re-check is so no future caller that
+		// builds a Client some other way can put the token on the wire.
+		if !IsLoopbackHost(target.Hostname()) {
+			return nil, fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", target.Host)
+		}
+		resp, err = c.send(ctx, c.plainTransport(), tok, method, target, payload)
+	default:
+		return nil, fmt.Errorf("%q is not an http(s) url", target.String())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if resp.Status >= 400 {
+		b := resp.Body
+		if len(b) > 200 {
+			b = b[:200]
+		}
+		return resp, &StatusError{Method: method, Path: target.Path, Status: resp.Status, Body: string(b)}
+	}
+	return resp, nil
+}
+
+// resolve joins an absolute path onto the base url.
+//
+// ⚠ THE PATH MAY NOT CHANGE THE ORIGIN. The core's /appd/* proxy forwards
+// paths that come from the GUI; "//evil/x" or "https://evil/x" resolved
+// naively would carry the bearer to another host.
+func (c *Client) resolve(path string) (*url.URL, error) {
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\\\r\n") {
+		return nil, fmt.Errorf("refusing request path %q: must be an absolute path on the daemon", path)
+	}
+	ref, err := url.Parse(path)
+	if err != nil {
+		return nil, fmt.Errorf("refusing request path %q: %v", path, err)
+	}
+	t := c.base.ResolveReference(ref)
+	if t.Scheme != c.base.Scheme || t.Host != c.base.Host || t.User != nil {
+		return nil, fmt.Errorf("refusing request path %q: it leaves %s", path, c.origin())
+	}
+	return t, nil
+}
+
+// pinnedRequest is a token-carrying request over https, pinned. Proves first
+// when there is no pin for this token; on a leaf that is not pinned, re-proves
+// (rule 5) and retries ONCE — a certificate that changes again between the
+// proof and the retry is not a rotation anybody performed.
+func (c *Client) pinnedRequest(ctx context.Context, tok, method string, target *url.URL, payload []byte) (*Response, error) {
+	pins := c.loadPins(tok)
+	if len(pins) == 0 {
+		var err error
+		if pins, err = c.proveAndPin(ctx, tok, nil); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := c.send(ctx, c.pinnedTransport(tok, pins), tok, method, target, payload)
+	var pm *PinMismatchError
+	if !errors.As(err, &pm) {
+		return resp, err
+	}
+	if pins, err = c.proveAndPin(ctx, tok, pins); err != nil {
+		return nil, err
+	}
+	resp, err = c.send(ctx, c.pinnedTransport(tok, pins), tok, method, target, payload)
+	if errors.As(err, &pm) {
+		return nil, interceptedAt(c.origin(), fmt.Sprintf(" (certificate %s changed again after it was proved)", pm.FP))
+	}
+	return resp, err
+}
+
+func (c *Client) loadPins(tok string) []string {
+	s, err := c.pins.LoadPins()
+	if err != nil {
+		// Unreadable reads as no pins: the cost is one proof, never a refusal.
+		c.logf("could not read the TLS pins (%v); proving the daemon again", err)
+		return nil
+	}
+	return s.For(tok)
+}
+
+// Prove runs the challenge against this address now and pins the result. It
+// is what `routes probe` and pairing call; Do proves on its own when needed.
+func (c *Client) Prove(ctx context.Context) (string, error) {
+	tok, err := ResolveToken(c.tokens)
+	if err != nil {
+		return "", err
+	}
+	if c.base.Scheme != "https" {
+		return "", fmt.Errorf("%s is loopback plain http; there is no certificate to prove", c.URL())
+	}
+	pins, err := c.proveAndPin(ctx, tok, c.loadPins(tok))
+	if err != nil {
+		return "", err
+	}
+	return pins[0], nil
+}
+
+// proveAndPin proves the daemon and adds the fingerprint. `tried` is the pin
+// set the caller was refused under (nil before the first proof): when the
+// store already holds something different, another goroutine or process
+// proved in the meantime and its answer is used instead of a second probe.
+func (c *Client) proveAndPin(ctx context.Context, tok string, tried []string) ([]string, error) {
+	c.proveMu.Lock()
+	defer c.proveMu.Unlock()
+	set, err := c.pins.LoadPins()
+	if err != nil {
+		set = PinSet{}
+	}
+	if cur := set.For(tok); len(cur) > 0 && !slices.Equal(cur, tried) {
+		return cur, nil
+	}
+	fp, err := c.probe(ctx, tok)
+	if err != nil {
+		return nil, err
+	}
+	if tried != nil {
+		c.logf("daemon at %s presented a new certificate and proved it (sha256 %s); pinned", c.origin(), fp)
+	}
+	set = set.With(tok, fp)
+	if err := c.pins.SavePins(set); err != nil {
+		// The proof stands for this request; the next process just proves again.
+		c.logf("could not save the TLS pin (%v); it holds for this process only", err)
+	}
+	return set.For(tok), nil
+}
+
+// probe proves the daemon at this address holds tok, over a connection whose
+// leaf we hash ourselves, and returns the proved fingerprint.
+//
+// ⚠ THE PROBE NEVER CARRIES THE TOKEN AND IS NEVER REUSED (rule 3): a raw
+// one-shot connection that accepts any certificate, one request written by
+// hand with no Authorization, closed after the answer. It never touches an
+// http.Transport, so it cannot end up in a pool a bearer request draws from.
+// ⚠ THE FINGERPRINT IS THE ONE OUR HANDSHAKE SAW (rule 1). `tls.fp` in the body
+// is whatever the far end wants us to believe; it is read for a hint only.
+// ⚠ AND THE LEGACY `proof` IS NOT EVEN DECODED (rule 2): it proves the daemon,
+// not this channel, and a relay would forward it untouched.
+func (c *Client) probe(ctx context.Context, tok string) (string, error) {
+	nb := make([]byte, 32)
+	if _, err := rand.Read(nb); err != nil {
+		return "", err
+	}
+	nonce := hex.EncodeToString(nb)
+
+	pctx, cancel := context.WithTimeout(ctx, c.probeT)
+	defer cancel()
+	addr := hostPort(c.base)
+	var d net.Dialer
+	raw, err := d.DialContext(pctx, "tcp", addr)
+	if err != nil {
+		return "", c.dialErr(pctx, ctx, addr, c.probeT, err)
+	}
+	tc := tls.Client(raw, &tls.Config{
+		InsecureSkipVerify: true, // ⚠ ONLY because the proof below is the check, and this channel carries nothing
+		ServerName:         sni(c.base.Hostname()),
+		NextProtos:         []string{"http/1.1"},
+		MinVersion:         tls.VersionTLS12,
+	})
+	defer tc.Close()
+	// The handshake and the exchange share one deadline; a peer that stalls
+	// anywhere fails the probe instead of holding the caller.
+	stop := context.AfterFunc(pctx, func() { tc.Close() })
+	defer stop()
+	if dl, ok := pctx.Deadline(); ok {
+		_ = tc.SetDeadline(dl)
+	}
+	if err := tc.HandshakeContext(pctx); err != nil {
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, true)
+	}
+	cs := tc.ConnectionState()
+	if len(cs.PeerCertificates) == 0 {
+		return "", interceptedAt(c.origin(), " (no certificate)")
+	}
+	seen := Fingerprint(cs.PeerCertificates[0].Raw)
+
+	u := *c.base
+	u.Path, u.RawPath, u.RawQuery, u.Fragment = "/v1/challenge", "", "nonce="+nonce, ""
+	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	req.Close = true
+	req.Header.Set("Accept", "application/json")
+	// No Authorization header, ever: this channel trusts anyone.
+	if err := req.Write(tc); err != nil {
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false)
+	}
+	res, err := http.ReadResponse(bufio.NewReader(tc), req)
+	if err != nil {
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false)
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxProbeBody))
+	res.Body.Close()
+	if err != nil {
+		return "", fmt.Errorf("challenge at %s: reading the answer: %w", c.origin(), err)
+	}
+	if res.StatusCode != http.StatusOK {
+		b := body
+		if len(b) > 200 {
+			b = b[:200]
+		}
+		return "", fmt.Errorf("challenge at %s answered %d %s", c.origin(), res.StatusCode, b)
+	}
+	var ans struct {
+		TLS json.RawMessage `json:"tls"`
+	}
+	if err := json.Unmarshal(body, &ans); err != nil {
+		return "", fmt.Errorf("challenge at %s did not answer JSON", c.origin())
+	}
+	t := bytes.TrimSpace(ans.TLS)
+	if len(t) == 0 || t[0] != '{' {
+		// A missing (or non-object) `tls` over https is NOT PROVED, full stop
+		// (rule 2): the legacy proof beside it is never a substitute.
+		return "", fmt.Errorf("%s: %w", c.origin(), ErrOldDaemon)
+	}
+	var tb struct {
+		V     int    `json:"v"`
+		FP    string `json:"fp"`
+		Proof string `json:"proof"`
+	}
+	if err := json.Unmarshal(t, &tb); err != nil {
+		return "", interceptedAt(c.origin(), "")
+	}
+	if tb.V != ProofVersion {
+		return "", fmt.Errorf("%s: %w (tls.v = %d)", c.origin(), ErrProofVersion, tb.V)
+	}
+	if !ProofMatches(lowerHex(tb.Proof), BoundProof(tok, nonce, seen)) {
+		hint := ""
+		if lowerHex(tb.FP) == seen {
+			hint = tokenHint
+		}
+		return "", interceptedAt(c.origin(), hint)
+	}
+	return seen, nil
+}
+
+// pinnedTransport is the transport for exactly this (token, pin set).
+//
+// ⚠ NO KEEP-ALIVE REUSE ACROSS A PIN CHANGE. A pooled connection was judged
+// against the pins of the moment it was opened; after a re-proof, and above
+// all after a token change (whose new token has proved NOTHING about that
+// peer), it must not carry another request. So the transport is keyed by the
+// token's tag and the exact set, and replaced — idle connections closed — the
+// moment either differs.
+func (c *Client) pinnedTransport(tok string, pins []string) *http.Transport {
+	key := PinTag(tok) + "|" + strings.Join(pins, ",")
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pinned != nil && c.pinnedKey == key {
+		return c.pinned
+	}
+	if c.pinned != nil {
+		c.pinned.CloseIdleConnections()
+	}
+	snapshot := slices.Clone(pins)
+	c.pinned = &http.Transport{
+		// ⚠ NO PROXY: $HTTPS_PROXY would hand the connection to somebody else's
+		// box. The pin would still hold, but nothing here should ever route
+		// through a third party.
+		Proxy:          nil,
+		DialTLSContext: c.dialPinned(snapshot),
+		// Only https goes through this transport; refuse rather than dial a
+		// cleartext connection if anything ever asks it to.
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("the pinned transport does not dial plain connections")
+		},
+		ForceAttemptHTTP2:   false,
+		MaxIdleConnsPerHost: 4,
+		IdleConnTimeout:     30 * time.Second,
+	}
+	c.pinnedKey = key
+	return c.pinned
+}
+
+// dialPinned opens a TLS connection whose leaf is in pins, or none at all.
+//
+// ⚠⚠ THE LEAF IS JUDGED INSIDE THE HANDSHAKE, BEFORE ANY REQUEST BYTE EXISTS
+// ON THIS CONNECTION. VerifyConnection runs while the handshake is still in
+// progress — before the client's Finished in TLS 1.3, before the key exchange
+// in TLS 1.2 — and an error aborts it with an alert. The transport gets the
+// conn only after HandshakeContext returns, so a refused peer never receives
+// one byte of application data: no headers, no Authorization. (This is what
+// Node's JudgedAgent had to build by hand; the test "before any byte" holds
+// it to that.) InsecureSkipVerify only turns off the CA/hostname check, which
+// the pin replaces (rule 4): the cert is named `huginn-appd` and dialled by IP.
+//
+// ⚠ THE HANDSHAKE HAS A DEADLINE (Node scan F1). A peer that accepts TCP and
+// never finishes TLS would otherwise hold the request — and the serve loop
+// waiting on it — for as long as the caller's context allows, which for a
+// background context is forever.
+func (c *Client) dialPinned(pins []string) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		hctx, cancel := context.WithTimeout(ctx, c.hs)
+		defer cancel()
+		var d net.Dialer
+		raw, err := d.DialContext(hctx, network, addr)
+		if err != nil {
+			return nil, c.dialErr(hctx, ctx, addr, c.hs, err)
+		}
+		host, _, _ := net.SplitHostPort(addr)
+		var refused *PinMismatchError
+		tc := tls.Client(raw, &tls.Config{
+			InsecureSkipVerify: true, // ⚠ ONLY because VerifyConnection below is the check
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					refused = &PinMismatchError{}
+					return refused
+				}
+				fp := Fingerprint(cs.PeerCertificates[0].Raw)
+				if slices.Contains(pins, fp) {
+					return nil
+				}
+				refused = &PinMismatchError{FP: fp}
+				return refused
+			},
+			ServerName: sni(host),
+			NextProtos: []string{"http/1.1"},
+			MinVersion: tls.VersionTLS12,
+			// No ClientSessionCache, so no resumption: a ticket cached under
+			// one pin set must never shortcut a handshake under another.
+		})
+		if err := tc.HandshakeContext(hctx); err != nil {
+			raw.Close()
+			if refused != nil {
+				return nil, refused
+			}
+			return nil, c.handshakeErr(hctx, ctx, addr, c.hs, err, true)
+		}
+		return tc, nil
+	}
+}
+
+func (c *Client) plainTransport() *http.Transport {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.plain == nil {
+		c.plain = &http.Transport{
+			Proxy:       nil, // loopback means loopback, not via a proxy
+			DialContext: (&net.Dialer{Timeout: c.hs}).DialContext,
+			DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("the loopback transport never dials TLS unpinned")
+			},
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     30 * time.Second,
+		}
+	}
+	return c.plain
+}
+
+// noRedirect: a redirect would send the request somewhere it did not ask
+// about. The daemon never redirects, so one is reported as-is.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+func (c *Client) send(ctx context.Context, t *http.Transport, tok, method string, target *url.URL, payload []byte) (*Response, error) {
+	var rd io.Reader
+	if payload != nil {
+		rd = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target.String(), rd)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	hc := &http.Client{Transport: t, CheckRedirect: noRedirect}
+	res, err := hc.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			// url.Error repeats the full URL; keep the cause, which carries
+			// our own typed errors through Unwrap.
+			return nil, fmt.Errorf("%s %s: %w", method, target.Path, ue.Err)
+		}
+		return nil, err
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s %s: reading the answer: %w", method, target.Path, err)
+	}
+	if len(body) > maxBody {
+		return nil, fmt.Errorf("%s %s: answer larger than %d bytes", method, target.Path, maxBody)
+	}
+	return &Response{Status: res.StatusCode, Body: body}, nil
+}
+
+// dialErr names a connect that ran out of time as such.
+func (c *Client) dialErr(hctx, parent context.Context, addr string, limit time.Duration, err error) error {
+	if hctx.Err() != nil && parent.Err() == nil {
+		return fmt.Errorf("connecting to %s did not finish within %v", addr, limit)
+	}
+	return err
+}
+
+// handshakeErr turns a failed handshake into something a person can act on.
+//
+// A pre-3.11 daemon's port speaks only HTTP: our ClientHello gets a plain
+// "400 Bad Request" back, which crypto/tls reports as a RecordHeaderError.
+// That is refused as an old daemon (rule 8) — never answered by retrying in
+// cleartext.
+func (c *Client) handshakeErr(hctx, parent context.Context, addr string, limit time.Duration, err error, inHandshake bool) error {
+	var rh tls.RecordHeaderError
+	if errors.As(err, &rh) {
+		return fmt.Errorf("%s: %w (%s did not answer TLS)", c.origin(), ErrOldDaemon, addr)
+	}
+	// Either clock may ring first: the context, or the conn deadline set from it.
+	if (hctx.Err() != nil || errors.Is(err, os.ErrDeadlineExceeded)) && parent.Err() == nil {
+		if inHandshake {
+			return fmt.Errorf("tls handshake with %s did not finish within %v", addr, limit)
+		}
+		return fmt.Errorf("challenge at %s did not answer within %v", addr, limit)
+	}
+	return err
+}
+
+func hostPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return net.JoinHostPort(u.Hostname(), p)
+	}
+	if u.Scheme == "http" {
+		return net.JoinHostPort(u.Hostname(), "80")
+	}
+	return net.JoinHostPort(u.Hostname(), "443")
+}
+
+// sni: an IP literal is not a server name (and Go would not send it anyway).
+func sni(host string) string {
+	if net.ParseIP(host) != nil {
+		return ""
+	}
+	return host
+}
