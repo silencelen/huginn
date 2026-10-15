@@ -57,6 +57,10 @@ class CoreDevice internal constructor(
     fun start() {
         if (job?.isActive == true) return
         job = scope.launch {
+            // D9: the core that ships inside this app is put in place at once,
+            // silently — copying a binary into the per-user layout needs no
+            // decision. Starting it at BOOT is the person's choice ([setUp]).
+            CoreSetup.ensureInstalled()
             while (isActive) {
                 val c = clientFor()
                 client = c
@@ -110,6 +114,20 @@ class CoreDevice internal constructor(
     fun setRoot(v: String) = patch(CoreDeviceSettings(root = v))
     fun setActWhileLocked(v: Boolean) = patch(CoreDeviceSettings(actWhileLocked = v))
     fun setClaudePath(v: String) = patch(CoreDeviceSettings(claude = v))
+
+    private val _setup = MutableStateFlow<String?>(null)
+    /** The last "Set up huginn core" outcome, for Settings to show. */
+    val setup: StateFlow<String?> = _setup.asStateFlow()
+
+    /** "Set up huginn core": start the core at boot, then reconnect to it. */
+    fun setUp() {
+        _setup.value = "Setting up huginn core…"
+        scope.launch {
+            CoreSetup.installService()
+                .onSuccess { _setup.value = "huginn core is set up to start at boot." }
+                .onFailure { _setup.value = "Not set up: ${it.message}" }
+        }
+    }
 
     /** Settings → Remove this computer: the core forgets its pairing too. */
     suspend fun unpair(): Result<Unit> = runCatching { (client ?: clientFor() ?: error(NOT_AVAILABLE)).unpair() }

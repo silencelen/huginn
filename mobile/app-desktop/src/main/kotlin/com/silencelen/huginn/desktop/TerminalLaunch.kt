@@ -68,7 +68,7 @@ object TerminalLaunch {
      */
     val CLI_VERBS: Set<String> = setOf(
         "help", "version", "update", "list", "ls", "status", "st", "rounds", "round",
-        "headroom", "devices", "projects", "project", "llm", "device", "local",
+        "headroom", "devices", "projects", "project", "llm", "device", "core", "local",
         "uninstall", "desktop", "usage", "cost", "ccusage", "solo", "rename", "mv",
         "kill", "end", "archive", "revive", "unarchive", "attach",
     )
