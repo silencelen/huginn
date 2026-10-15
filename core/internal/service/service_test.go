@@ -161,8 +161,16 @@ func TestParseLinger(t *testing.T) {
 // fake is a scripted Runner: the first rule whose prefix matches the joined
 // command line answers; everything else succeeds with empty output.
 type fake struct {
-	calls []string
-	rules []rule
+	calls  []string
+	rules  []rule
+	stdins []string
+}
+
+// RunInput records stdin separately from argv: the F3 test asserts a password
+// is in one and never in the other.
+func (f *fake) RunInput(stdin string, name string, args ...string) Result {
+	f.stdins = append(f.stdins, stdin)
+	return f.Run(name, args...)
 }
 
 type rule struct {
@@ -400,11 +408,24 @@ func TestInstallWindowsPassword(t *testing.T) {
 	if rep.OK() || rep.FailedStep() != "check logon type" || len(f.calls) != 0 {
 		t.Fatalf("%s", rep)
 	}
-	o.Password = "pw"
+	o.Password = "s3cret-pw"
 	o.NoTray = true
 	rep = InstallWindows(o)
-	if !rep.OK() || !strings.HasSuffix(f.calls[0], `/F /RU JNET\silence /RP pw`) {
+	if !rep.OK() {
 		t.Fatalf("%s %v", rep, f.calls)
+	}
+	// F3: the password is on stdin, and in NO argv of any command run.
+	for _, c := range f.calls {
+		if strings.Contains(c, "s3cret-pw") || strings.Contains(c, "/RP") {
+			t.Fatalf("password in argv: %s", c)
+		}
+	}
+	if len(f.stdins) != 1 || f.stdins[0] != "s3cret-pw\n" || !strings.HasPrefix(f.calls[0], "powershell ") {
+		t.Fatalf("stdins=%q calls=%v", f.stdins, f.calls)
+	}
+	script := PasswordRegisterScript(`C:\x\task.xml`, `JNET\silence`)
+	if strings.Contains(script, "s3cret") || !strings.Contains(script, "[Console]::In.ReadLine()") || !strings.Contains(script, "-User 'JNET\\silence'") {
+		t.Fatal(script)
 	}
 }
 

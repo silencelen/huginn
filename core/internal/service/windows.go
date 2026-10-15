@@ -126,6 +126,17 @@ func TaskXML(binary, user string, logon LogonType) string {
 	return b.String()
 }
 
+// PasswordRegisterScript registers the task from its XML with a stored password
+// read from STDIN — the password is never in this script, which travels in argv.
+// Pure.
+func PasswordRegisterScript(xmlPath, user string) string {
+	return "$ErrorActionPreference = 'Stop'\n" +
+		"$pw = [Console]::In.ReadLine()\n" +
+		"Register-ScheduledTask -TaskName " + psQuote(TaskName) +
+		" -Xml (Get-Content -Raw -LiteralPath " + psQuote(xmlPath) + ")" +
+		" -User " + psQuote(user) + " -Password $pw -Force | Out-Null\n"
+}
+
 // EncodeUTF16 is s as UTF-16LE with a BOM. Pure.
 func EncodeUTF16(s string) []byte {
 	u := utf16.Encode([]rune(s))
@@ -284,11 +295,22 @@ func InstallWindows(o WindowsOptions) Report {
 			return Done, xmlPath
 		}},
 		{"register task \"" + TaskName + "\"", func() (State, string) {
-			args := []string{"/Create", "/TN", TaskName, "/XML", xmlPath, "/F"}
+			var res Result
 			if logon == LogonPassword {
-				args = append(args, "/RU", o.User, "/RP", o.Password)
+				// ⚠ NEVER `schtasks /RP <password>`: argv is recorded by
+				// process-creation auditing and readable by other processes while
+				// it runs (security scan F3, 2026-10-15). The password goes to
+				// PowerShell on STDIN and into Register-ScheduledTask from there.
+				ir, ok := r.(InputRunner)
+				if !ok {
+					os.Remove(xmlPath)
+					return Failed, "this runner cannot pass a password on stdin"
+				}
+				res = ir.RunInput(o.Password+"\n", "powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+					"-EncodedCommand", EncodedCommand(PasswordRegisterScript(xmlPath, o.User)))
+			} else {
+				res = r.Run("schtasks", "/Create", "/TN", TaskName, "/XML", xmlPath, "/F")
 			}
-			res := r.Run("schtasks", args...)
 			os.Remove(xmlPath)
 			if !res.OK() {
 				return Failed, accessHint(res.Why())
