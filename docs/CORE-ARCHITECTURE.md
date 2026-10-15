@@ -415,7 +415,7 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 
 ## 13. Phase 2 progress (2026-10-15)
 
-**Released in 2.1.0 (2026-10-15):** the core owns the tray and notifications (§4 rows "Watch stream +
+**Released in CLI 2.1.0 / 2.1.1 and desktop 2.1.1 (2026-10-15):** the core owns the tray and notifications (§4 rows "Watch stream +
 claim", "Notify rules", "Toasts", "Tray icon + menu").
 - `core/internal/notify`: the desktop's NotifyRules + WatchCycle, all 33 test cases.
 - `core/internal/tray`: the tray role (`huginn core tray`); icons generated from the brand raven
@@ -436,7 +436,9 @@ and the desktop app at launch when the core it carries is newer (`CoreSetup.bund
   running job to finish, then `core run` exits 0. systemd's `Restart=always` brings it back in
   10 s. On Windows, `self-install` runs `schtasks /Run`; the task's 5-minute repeat covers a start
   it may not make. A 2.0.0 core has no `/core/restart`, so it is restarted with `systemctl --user
-  restart` or `schtasks /End` + `/Run`.
+  restart` or `schtasks /End` + `/Run`. If those cannot be reached (no user bus in an ssh shell; a
+  task this user may not end), the old core is stopped by its pid (2.1.1), unless it is running a
+  job. Proven against the published 2.0.0 binary.
 - adds the tray's login autostart once to a machine whose core service predates the tray. A
   marker in the state dir (`tray-autostart`) records that, so an autostart the person removed is
   not put back. Linux needs a graphical session for it, the same rule as install.

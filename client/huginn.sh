@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.1.0
+# Version: 2.1.1
 
-HUGINN_VERSION='2.1.0'
+HUGINN_VERSION='2.1.1'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -322,7 +322,7 @@ _huginn_core_newer() {
 # Bring the installed core up to the newest release. Its self-install restarts
 # the running core onto it and adds the tray to a pre-tray (2.0.0) install.
 _huginn_core_update() {
-  local bin cur rel latest
+  local bin cur rel latest run
   bin="$(_huginn_core_bin)" || bin=""
   [ -n "$bin" ] || { echo "huginn core: not installed here - huginn core install" >&2; return 1; }
   cur="$("$bin" version 2>/dev/null | sed -n 's/^(o> huginn \([^ ]*\) .*/\1/p')"
@@ -330,6 +330,12 @@ _huginn_core_update() {
     rel="$(_huginn_core_release)" || { echo "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept" >&2; return 1; }
     latest="${rel%%$'\n'*}"; latest="${latest#cli-v}"
     if ! _huginn_core_newer "$cur" "$latest"; then
+      run="$("$bin" core status 2>/dev/null | sed -n 's/^(o> huginn core \([^ ]*\) .*/\1/p')"
+      if [ -n "$run" ] && [ "$run" != "$cur" ]; then
+        # Installed but not running yet (an earlier restart could not be made).
+        echo "huginn core $cur is installed, but the running core is $run - restarting it"
+        "$bin" core self-install; return
+      fi
       echo "huginn core $cur is current (newest release $latest)"; return 0
     fi
     echo "huginn core: $cur -> $latest"

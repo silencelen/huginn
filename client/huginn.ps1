@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.1.0
+# Version: 2.1.1
 
-$script:HUGINN_VERSION = '2.1.0'
+$script:HUGINN_VERSION = '2.1.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -478,7 +478,16 @@ function _Huginn-CoreUpdate {
     $rel = _Huginn-CoreRelease
     if (-not $rel) { Write-Host "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept"; return }
     $latest = $rel.tag -replace '^cli-v', ''
-    if (-not (_Huginn-CoreNewer $cur $latest)) { Write-Host "huginn core $cur is current (newest release $latest)"; return }
+    if (-not (_Huginn-CoreNewer $cur $latest)) {
+      $run = ''
+      if (((& $bin core status 2>$null) -join "`n") -match '\(o> huginn core (\S+) ') { $run = $Matches[1] }
+      if ($run -and $run -ne $cur) {
+        # Installed but not running yet (an earlier restart could not be made).
+        Write-Host "huginn core $cur is installed, but the running core is $run - restarting it"
+        & $bin core self-install; return
+      }
+      Write-Host "huginn core $cur is current (newest release $latest)"; return
+    }
     Write-Host "huginn core: $cur -> $latest"
   }
   $null = _Huginn-CoreFetch

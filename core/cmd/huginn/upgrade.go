@@ -28,6 +28,12 @@ import (
 type coreSnapshot struct {
 	Version string `json:"version"`
 	Tray    bool   `json:"tray"`
+	Pid     int    `json:"pid"`
+	Device  struct {
+		Status struct {
+			Busy bool `json:"busy"`
+		} `json:"status"`
+	} `json:"device"`
 }
 
 // coreState asks this user's running core how it is, briefly.
@@ -66,7 +72,7 @@ func upgradeRunning(bin string) {
 		st, running = waitCore(15*time.Second, func(_ coreSnapshot, up bool) bool { return up })
 	}
 	if running && st.Version != version.Version {
-		st, running = restartCore(st.Version)
+		st, running = restartCore(st)
 	}
 	ensureTrayAutostart(bin, running)
 	if running {
@@ -89,14 +95,15 @@ func serviceInstalled(bin string) bool {
 
 // restartCore asks the running (older or newer) core to exit so its
 // supervisor starts the binary now installed, and says what happened.
-func restartCore(old string) (coreSnapshot, bool) {
+func restartCore(cur coreSnapshot) (coreSnapshot, bool) {
+	old := cur.Version
 	var out struct {
 		AfterJob bool `json:"afterJob"`
 	}
 	if _, err := call(http.MethodPost, "/core/restart", nil, &out); err != nil {
 		// A 2.0.0 core has no /core/restart.
 		fmt.Printf("  the running core (%s) could not be asked to restart (%v)\n", old, err)
-		return restartBySupervisor(old)
+		return restartBySupervisor(cur)
 	}
 	if out.AfterJob {
 		fmt.Printf("  the running core (%s) restarts onto %s when its current job finishes%s\n", old, version.Version, windowsRetryNote())
@@ -108,8 +115,12 @@ func restartCore(old string) (coreSnapshot, bool) {
 }
 
 // restartBySupervisor restarts a core that predates /core/restart through its
-// service manager — what `huginn core install` does on every run.
-func restartBySupervisor(old string) (coreSnapshot, bool) {
+// service manager — what `huginn core install` does on every run — and, when
+// that cannot be reached (no user bus in this shell; a task this user may not
+// end), stops the old core by its pid: it is this user's own process, and its
+// supervisor (Restart=always; the task's 5-minute repeat) starts the new one.
+func restartBySupervisor(cur coreSnapshot) (coreSnapshot, bool) {
+	old := cur.Version
 	switch runtime.GOOS {
 	case "linux":
 		if o, err := service.LinuxDefaults(stableBinary()); err == nil && fileExists(o.UnitPath()) {
@@ -120,6 +131,20 @@ func restartBySupervisor(old string) (coreSnapshot, bool) {
 	case "windows":
 		if b, err := exec.Command("schtasks", "/End", "/TN", service.TaskName).CombinedOutput(); err != nil {
 			fmt.Printf("  schtasks /End: %s\n", strings.TrimSpace(string(b)))
+		}
+	}
+	st, up := waitCore(5*time.Second, func(s coreSnapshot, up bool) bool { return !up || s.Version != old })
+	if up && st.Version == old && st.Device.Status.Busy {
+		// Never kill remote work halfway; the next restart picks the new binary.
+		fmt.Printf("  the old core (%s) is running a job — it runs %s after its next restart\n", old, version.Version)
+		return st, up
+	}
+	if up && st.Version == old && st.Pid > 0 {
+		if err := proc.Stop(st.Pid); err != nil {
+			fmt.Printf("  could not stop the old core (pid %d): %v\n", st.Pid, err)
+		} else {
+			fmt.Printf("  stopped the old core (pid %d)\n", st.Pid)
+			waitCore(10*time.Second, func(s coreSnapshot, up bool) bool { return !up || s.Version != old })
 		}
 	}
 	return startAndWait(old)

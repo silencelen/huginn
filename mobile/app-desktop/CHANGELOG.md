@@ -1,6 +1,10 @@
 # Huginn Desktop changelog
 
-## 2.1.0
+## 2.1.1
+
+The first desktop release of the 2.1 line. Desktop 2.1.0 was never published: its cut was stopped
+for the CLI 2.1.1 core fix, and this release carries core 2.1.1.
+
 
 ### Changed
 - **While `huginn core tray` is running, the app stands its own tray and notifications down.**

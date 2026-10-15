@@ -8,6 +8,18 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.1.1] - 2026-10-15
+
+### Fixed
+- **Updating from a 2.0.0 core restarts it even when its service manager cannot be reached.** A
+  2.0.0 core has no restart request. When `systemctl --user` has no user bus in the shell, or
+  Windows refuses `schtasks /End` to a non-administrator, the update now stops the old core by its
+  process id. It is your own process, and its service starts the new binary. A core running a
+  device job is left alone, and it picks up the new binary at its next restart. Found by updating a
+  real 2.0.0 core from the published releases: before this fix it stayed on 2.0.0.
+- `huginn core update` on a machine whose installed core is current but whose running core is
+  still older now restarts it. It used to report "current" and leave the old one running.
+
 ## [2.1.0] - 2026-10-15
 
 huginn core, phase 2: the tray and notifications, and updating the core in place.
