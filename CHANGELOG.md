@@ -50,6 +50,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 - **`huginn core install --logon password` no longer puts the password on a command line.** The
   password reaches PowerShell on stdin, and the prompt does not echo it (scan F3).
 - Documented: plain loopback HTTP has no peer check (docs/TLS.md, scan F4).
+- **The Windows core is Authenticode-signed** (`scripts/sign-windows.sh`, by `core/build.sh` and
+  `release-desktop.sh`, which refuses to release unsigned). Windows Defender's behaviour model
+  quarantined the unsigned core as `Behavior:Win32/Persistence.A!ml` when it re-registered its boot
+  task. The certificate is issued by the home.arpa domain CA, so domain-joined machines trust it; a
+  publicly trusted certificate is planned.
 
 ### Fixed
 - **The device refusal text named the mode literally again.** Before this fix, a mode containing
