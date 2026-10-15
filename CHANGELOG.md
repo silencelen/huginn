@@ -8,6 +8,15 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.9.1] - 2026-10-14
+
+### Fixed
+- **The Arch install hint from `huginn desktop` works.** It printed `sudo pacman -U <url>`, but for a
+  remote URL pacman also fetches `<file>.sig` and aborts on the 404. The packages are unsigned; the
+  release manifest's sha256 is their integrity check. The hint is now
+  `curl -fLO <url> && sudo pacman -U ./<file>`, because pacman installs a local file. Found while
+  installing desktop 1.13.0 on an Arch laptop.
+
 ## [1.9.0] - 2026-10-14
 
 ### Added
