@@ -20,15 +20,23 @@ import (
 	"time"
 
 	"github.com/silencelen/huginn/core/internal/daemon"
+	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/ipc"
 	"github.com/silencelen/huginn/core/internal/service"
 	"github.com/silencelen/huginn/core/internal/store"
+	"github.com/silencelen/huginn/core/internal/version"
 )
 
 // core dispatches `huginn core …`.
 func core(args []string) int {
 	if len(args) == 0 {
 		usage()
+		return 2
+	}
+	// Termux is a client only (D15): Android stops background processes, and the
+	// phone's presence is the Android app's job.
+	if runtime.GOOS == "android" && args[0] != "status" {
+		fmt.Fprintln(os.Stderr, "huginn core does not run on Android/Termux — on a phone the huginn app is the device. `huginn` here attaches and runs commands.")
 		return 2
 	}
 	switch args[0] {
@@ -42,6 +50,11 @@ func core(args []string) int {
 		return coreStatus()
 	case "pair":
 		return corePair(args[1:])
+	case "self-install":
+		if _, ok := selfInstall(); !ok {
+			return 1
+		}
+		return 0
 	}
 	usage()
 	return 2
@@ -71,24 +84,62 @@ func coreRun() int {
 	return 0
 }
 
-// stableBinary is the path a service should start. ⚠ Never a versioned
+// stableBinary is the path a service should start: the per-user install's
+// stable path when there is one, else this binary. ⚠ Never a versioned
 // directory: the updater swaps `current`, and a unit pinned to versions/2.0.0
 // would keep starting the old binary after every update.
 func stableBinary() string {
+	if l, err := install.DefaultLayout(); err == nil && fileExists(l.Binary()) {
+		return l.Binary()
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
-	}
-	if runtime.GOOS != "windows" {
-		home, _ := os.UserHomeDir()
-		if link := filepath.Join(home, ".local", "bin", "huginn"); fileExists(link) {
-			return link
-		}
 	}
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		return real
 	}
 	return exe
+}
+
+// selfInstall copies this binary into the per-user layout and says what it did.
+func selfInstall() (string, bool) {
+	l, err := install.DefaultLayout()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "huginn: "+err.Error())
+		return "", false
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "huginn: "+err.Error())
+		return "", false
+	}
+	r, err := install.Install(l, exe, version.Version)
+	for _, st := range r.Steps {
+		fmt.Println("  " + st)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "huginn core self-install: "+err.Error())
+		return "", false
+	}
+	return r.Binary, true
+}
+
+// packagedCore is a distro package's copy, when one exists and is not this
+// per-user install. One machine has ONE core (§7.4): two would enrol twice.
+func packagedCore(perUser string) string {
+	if runtime.GOOS != "linux" {
+		return ""
+	}
+	const sys = "/usr/bin/huginn"
+	fs, err := os.Stat(sys)
+	if err != nil {
+		return ""
+	}
+	if fu, err := os.Stat(perUser); err == nil && os.SameFile(fs, fu) {
+		return ""
+	}
+	return sys
 }
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
@@ -99,7 +150,17 @@ func coreInstall(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	bin := stableBinary()
+	// Install the binary first, so the service points at the stable per-user
+	// path rather than wherever this copy happens to be running from (a
+	// download folder, an app bundle).
+	bin, ok := selfInstall()
+	if !ok {
+		return 1
+	}
+	if sys := packagedCore(bin); sys != "" {
+		fmt.Fprintf(os.Stderr, "huginn core install: %s (a package) already provides huginn on this machine — one core per machine. Use that one (`%s core install`) or remove the package first.\n", sys, sys)
+		return 1
+	}
 	fmt.Println("Installing huginn core to start at boot, as " + currentUser() + " — " + bin)
 	switch runtime.GOOS {
 	case "linux":
