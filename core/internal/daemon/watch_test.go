@@ -57,22 +57,27 @@ func TestRender(t *testing.T) {
 	}
 }
 
-// D14: the core claims notifications only while a tray is attached AND the
-// session is known to be unlocked.
+// D14: the core claims notifications only while a tray that can SHOW them is
+// attached AND the session is known to be unlocked.
 func TestClaim(t *testing.T) {
 	for _, c := range []struct {
 		trays  int32
 		res    lock.Result
 		claims bool
+		mute   bool // the tray said deliver=0
 	}{
-		{0, lock.Result{Reading: lock.Unlocked}, false},
-		{1, lock.Result{Reading: lock.Unlocked}, true},
-		{1, lock.Result{Reading: lock.Locked}, false},
-		{1, lock.Result{Reading: lock.Unknown, Reason: "probe failed"}, false},
+		{0, lock.Result{Reading: lock.Unlocked}, false, false},
+		{1, lock.Result{Reading: lock.Unlocked}, true, false},
+		{1, lock.Result{Reading: lock.Unlocked}, false, true},
+		{1, lock.Result{Reading: lock.Locked}, false, false},
+		{1, lock.Result{Reading: lock.Unknown, Reason: "probe failed"}, false, false},
 	} {
 		d := &Daemon{lock: &lockReader{probe: func(context.Context) lock.Result { return c.res }, canGraphical: func(context.Context) (bool, bool) { return true, true }}}
 		w := &watcher{d: d}
 		w.trays.Store(c.trays)
+		if !c.mute {
+			w.senders.Store(c.trays)
+		}
 		if got := w.claim(); got != c.claims {
 			t.Errorf("trays=%d reading=%v: claim=%v, want %v", c.trays, c.res.Reading, got, c.claims)
 		}

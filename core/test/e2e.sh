@@ -84,6 +84,12 @@ done
 # a session that starts waiting must produce a "needs you" notice, and its end a
 # withdrawal — decided by the core from appd's watch stream, no GUI involved.
 SOCK="$XDG_RUNTIME_DIR/huginn/core.sock"
+curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events?role=tray&deliver=0' > /dev/null 2>&1 &
+MUTE=$!; sleep 0.5
+ST="$(curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' http://core/core/status)"
+grep -q '"tray":true' <<< "$ST" && grep -q '"notifyClaim":false' <<< "$ST" \
+  && ok "a tray that cannot show notifications leaves them with Telegram (no claim)" || bad "claim with a mute tray: $ST"
+kill $MUTE 2>/dev/null; wait $MUTE 2>/dev/null; sleep 0.3
 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events?role=tray' > "$T/events.log" 2>/dev/null &
 TRAY=$!
 for _ in $(seq 50); do grep -q '^event: tray' "$T/events.log" 2>/dev/null && break; sleep 0.1; done

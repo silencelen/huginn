@@ -117,3 +117,20 @@ func (t *toastNotifier) Post(n traystate.Notice) error {
 func (t *toastNotifier) Withdraw(key string) error {
 	return t.run("-Action", "remove", "-Aumid", AUMID, "-Tag", tagFor(key), "-Group", group)
 }
+
+// CanDeliver: Windows shows a toast for an AUMID only when a Start Menu or
+// Startup shortcut carries it (the core's Huginn.lnk, or the desktop app's
+// Start Menu entry). Without one, Show succeeds and nothing appears.
+func (t *toastNotifier) CanDeliver() bool {
+	base := filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Start Menu", "Programs")
+	for _, pat := range []string{
+		filepath.Join(base, "Startup", "Huginn*.lnk"),
+		filepath.Join(base, "Huginn*.lnk"),
+		filepath.Join(base, "*", "Huginn*.lnk"),
+	} {
+		if m, _ := filepath.Glob(pat); len(m) > 0 {
+			return true
+		}
+	}
+	return false
+}

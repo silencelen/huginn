@@ -415,7 +415,7 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 
 ## 13. Phase 2 progress (2026-10-15)
 
-**Built and on main, NOT released:** the core owns the tray and notifications (§4 rows "Watch stream +
+**Released in 2.1.0 (2026-10-15):** the core owns the tray and notifications (§4 rows "Watch stream +
 claim", "Notify rules", "Toasts", "Tray icon + menu").
 - `core/internal/notify`: the desktop's NotifyRules + WatchCycle, all 33 test cases.
 - `core/internal/tray`: the tray role (`huginn core tray`); icons generated from the brand raven
@@ -427,15 +427,46 @@ claim", "Notify rules", "Toasts", "Tray icon + menu").
   the icon registered with the shell, a toast delivered under the app's identity (on the lock
   screen, content shown as "Private").
 
-**Before cutting 2.1.0:**
-1. **Upgrade path from 2.0.0.** An updated binary does not restart a running core (Windows: the
-   5-minute trigger ignores a start while one runs), and 2.0.0 installs have no tray autostart.
-   Planned: `POST /core/restart` from `self-install` when the version differs; the core ensures the
-   tray autostart at startup; `self-install` launches the tray when a desktop session exists.
-2. The release security scan (owner-started).
-3. A real Linux desktop check of the tray: SNI and notifications on stigo.
-4. Windows: decide whether the tray should make itself visible (Windows 11 hides new tray icons
-   in the overflow menu).
+**Upgrade path (built 2026-10-15, e2e 29/29).** Every route by which a newer core reaches a
+machine ends in `huginn core self-install`, run by the new binary: `huginn core update`, `huginn
+update` (lockstep, D10), `huginn core install` and the bootstrap on a machine with an older core,
+and the desktop app at launch when the core it carries is newer (`CoreSetup.bundledIsNewer`).
+`self-install` then:
+- asks a running core of another version to restart (`POST /core/restart`). The core waits for a
+  running job to finish, then `core run` exits 0. systemd's `Restart=always` brings it back in
+  10 s. On Windows, `self-install` runs `schtasks /Run`; the task's 5-minute repeat covers a start
+  it may not make. A 2.0.0 core has no `/core/restart`, so it is restarted with `systemctl --user
+  restart` or `schtasks /End` + `/Run`.
+- adds the tray's login autostart once to a machine whose core service predates the tray. A
+  marker in the state dir (`tray-autostart`) records that, so an autostart the person removed is
+  not put back. Linux needs a graphical session for it, the same rule as install.
+- starts the tray now, when this process is in a desktop session (Windows: not session 0) and not
+  elevated, and no tray is attached. Windows `core install` runs elevated, so the PowerShell
+  client and the desktop app run an unelevated `self-install` afterwards to start the tray.
+- A running tray whose core restarted onto a newer version hands over by itself. It checks that
+  the stable binary reports the core's version, starts it as the tray, and quits. A lock file in
+  the runtime dir allows one tray per user; a second tray waits 15 s for an outgoing one, then
+  leaves.
+- ⚠ The 2.0.0 client cannot drive this: it has no `core update`. Upgrading from 2.0.0 means
+  `huginn update`, then `huginn core update` in a new shell, or installing desktop 2.1.0.
+
+**Windows 11 overflow (decided 2026-10-15): leave it to Windows.** New tray icons start in the `^`
+overflow menu, and the person pins one with a drag. No supported API promotes an icon; writing
+`IsPromoted` under `HKCU\Control Panel\NotifyIconSettings` is undocumented and is the kind of
+thing a user should decide. The notifications are not affected.
+
+**Shipped in 2.1.0 without a hardware check (the laptop was off):** the Windows upgrade steps
+(unelevated `schtasks /Run`, the tray handoff with the renamed `.exe`) and the Linux tray on a real
+desktop (stigo: SNI and notifications). Check them on the next boot of PRESTIGE and stigo.
+
+**Security review of the 2.1.0 range (2026-10-15): no HIGH or CRITICAL.** Fixed before the cut:
+Linux notification bodies are escaped (markup injection from model output); the core claims
+notifications only for a tray that can deliver (`deliver=0|1` on `/core/events`); a missing
+runtime dir no longer reads as "another tray". **Open:** `huginn core update` trusts the sha256 in
+the same release as the binary, so it catches corruption but not a substituted release (a stolen
+publish credential). An Authenticode check would refuse every machine outside jnet.ad today,
+because the signing CA is the domain's. Do it once Azure public trust is resumed, or sign
+`core-manifest.json` with a pinned key (minisign) and check it in both clients.
 
 Not started in P2: the `/appd/*` proxy (the GUI still holds its token), the single updater, and
 local AI in the core.
