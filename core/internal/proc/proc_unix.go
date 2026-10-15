@@ -22,3 +22,6 @@ func quiet(*exec.Cmd) {}
 
 // Elevated: running as root, where a tray must not be started from.
 func Elevated() bool { return os.Geteuid() == 0 }
+
+// Stop asks this user's process pid to exit (SIGTERM: the core shuts down cleanly).
+func Stop(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }

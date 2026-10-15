@@ -42,3 +42,14 @@ func quiet(cmd *exec.Cmd) {
 // Elevated: an administrator token ("Run as administrator", or an elevated
 // `core install`). A tray started from here would run elevated in the desktop.
 func Elevated() bool { return windows.GetCurrentProcessToken().IsElevated() }
+
+// Stop ends this user's process pid (Windows has no SIGTERM for a windowless
+// process; the core's state is written as it changes, so nothing is lost).
+func Stop(pid int) error {
+	h, err := windows.OpenProcess(windows.PROCESS_TERMINATE, false, uint32(pid))
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(h)
+	return windows.TerminateProcess(h, 1)
+}
