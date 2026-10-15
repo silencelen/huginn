@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## Unreleased (2.0.0 - huginn core, phase 1)
+## [2.0.0] - 2026-10-14
 
 ### Added
 - **`huginn core`: a Go binary that runs this machine's huginn work in the background.** It starts at
