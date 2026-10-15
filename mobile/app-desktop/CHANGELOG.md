@@ -1,5 +1,24 @@
 # Huginn Desktop changelog
 
+## 1.13.0
+
+### Added
+- **Arch Linux is a standard build.** Every release now ships a native
+  `huginn-desktop-kt-<ver>-1-x86_64.pkg.tar.zst` beside the Debian `.deb`, with the same paths
+  under `/opt/huginn-desktop-kt` and dependencies taken from the bundled runtime. A debtap-converted
+  install upgrades over it cleanly with `sudo pacman -U`.
+- **Linux can update from the app.** A per-user portable install (`huginn desktop install`, CLI
+  1.9.0) gets "Install and restart" like Windows. The update's sha256 is checked again right before
+  use, and the archive is checked for unsafe entries before anything is unpacked. It unpacks beside
+  the running version, swaps the `current` link atomically, keeps the previous version for
+  rollback, and relaunches once this process has exited. A failure leaves the running install
+  untouched. The menu entry, `huginn://` handler and autostart entry point at the stable `current`
+  path, so an update never breaks them.
+- A desktop installed as a distro package (`.deb` or Arch package under `/opt`) still can't update
+  itself, because that needs root and the app never asks for a password. Its update notice now
+  gives the exact command for its distro, plus `huginn desktop install` to switch to the
+  self-updating install.
+
 ## 1.12.1
 
 ### Fixes to the new skin

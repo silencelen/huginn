@@ -8,6 +8,26 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [1.9.0] - 2026-10-14
+
+### Added
+- **`huginn desktop install`: a self-updating desktop install on any Linux, no root needed.** It
+  downloads the portable build from the latest `desktop-v*` release and checks it against the
+  release manifest's sha256. It refuses archive entries that are absolute, climb out with `..`, or
+  link outside the app directory. It then installs per-user under
+  `~/.local/share/huginn-desktop/` (`versions/<ver>`, an atomically swapped `current` link) and
+  adds `~/.local/bin/huginn-desktop` and a menu entry that handles `huginn://`. Running it again
+  repairs the install. If the desktop is installed as a distro package, it prints the removal
+  command (`sudo pacman -R` / `sudo apt remove`) and never runs sudo itself. Settings in
+  `~/.config/huginn-desktop-kt` carry over.
+- **`huginn desktop uninstall`** removes that install, and only it. It refuses without the
+  install's marker and keeps settings.
+- **`huginn desktop` lists Debian, Arch and portable builds** and gives this machine's install
+  command, detected from `/etc/os-release`: `sudo apt install ./….deb` on Debian/Ubuntu,
+  `sudo pacman -U …` on Arch, and `huginn desktop install` everywhere. New bare-URL forms:
+  `huginn desktop arch` and `huginn desktop portable`. On Windows, `huginn.ps1` has the same verbs
+  and points to the installer.
+
 ## [1.8.0] - 2026-10-13
 
 ### Changed
