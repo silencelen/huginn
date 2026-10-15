@@ -394,10 +394,10 @@ func TestInstallWindowsHappy(t *testing.T) {
 	}
 	// An update ENDS the running core before re-registering it (else the old
 	// .exe keeps serving from huginn.exe.old until the next reboot).
-	if f.calls[0] != "schtasks /End /TN Huginn Core" {
+	if f.calls[0] != "schtasks /Create /TN Huginn Core /XML "+filepath.Join(o.StateDir, staleTaskFile)+" /F" {
 		t.Fatal(f.calls[0])
 	}
-	if f.calls[1] != "schtasks /Create /TN Huginn Core /XML "+filepath.Join(o.StateDir, staleTaskFile)+" /F" {
+	if f.calls[1] != "schtasks /End /TN Huginn Core" {
 		t.Fatal(f.calls[1])
 	}
 	if !strings.Contains(strings.Join(rep.Notes, " "), "S4U") {
@@ -425,7 +425,7 @@ func TestInstallWindowsPassword(t *testing.T) {
 			t.Fatalf("password in argv: %s", c)
 		}
 	}
-	if len(f.stdins) != 1 || f.stdins[0] != "s3cret-pw\n" || !strings.HasPrefix(f.calls[1], "powershell ") {
+	if len(f.stdins) != 1 || f.stdins[0] != "s3cret-pw\n" || !strings.HasPrefix(f.calls[0], "powershell ") {
 		t.Fatalf("stdins=%q calls=%v", f.stdins, f.calls)
 	}
 	script := PasswordRegisterScript(`C:\x\task.xml`, `JNET\silence`)
@@ -438,10 +438,11 @@ func TestInstallWindowsAccessDenied(t *testing.T) {
 	f := &fake{rules: []rule{{prefix: "schtasks /Create", res: Result{Code: 1, Stderr: "ERROR: Access is denied.\r\n"}}}}
 	o := winOpts(t, f)
 	rep := InstallWindows(o)
-	if rep.OK() || states(rep) != "done,done,done,done,FAILED,not done,not done" {
+	if rep.OK() || states(rep) != "done,done,done,FAILED,not done,not done,not done" {
 		t.Fatalf("%s", states(rep))
 	}
-	if !strings.Contains(rep.Steps[3].Detail, "administrator prompt") || f.called("schtasks /Run") || f.called("powershell") {
+	// A failed registration must leave a running core ALONE (no /End).
+	if !strings.Contains(rep.Steps[3].Detail, "administrator prompt") || f.called("schtasks /Run") || f.called("powershell") || f.called("schtasks /End") {
 		t.Fatalf("%s", rep)
 	}
 	if _, err := os.Stat(filepath.Join(o.StateDir, staleTaskFile)); err == nil {
