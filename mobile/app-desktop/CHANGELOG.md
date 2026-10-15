@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased (2.0.0 - huginn core, phase 1)
+## 2.0.0
 
 ### Changed
 - **The app no longer runs work itself.** "Available to huginn" now drives `huginn core`, a
