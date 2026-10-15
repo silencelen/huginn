@@ -303,6 +303,21 @@ Section "Huginn Desktop" SEC_CORE
   RMDir /r "$INSTDIR\runtime"
   File /r "${SRC_DIR}/*"
 
+!ifdef CORE_EXE
+  ; The huginn core (D9: a GUI install always brings its core). Shipped next to
+  ; the app, then copied into the per-user layout by the core itself
+  ; (%LOCALAPPDATA%\huginn\bin, which a running core may already occupy - its
+  ; self-install renames a running copy aside rather than failing). Starting it
+  ; at BOOT is not done here: that needs an administrator prompt, and the app
+  ; asks for it with "Set up huginn core" when the person chooses it.
+  RMDir /r "$INSTDIR\core"
+  SetOutPath "$INSTDIR\core"
+  File "/oname=huginn.exe" "${CORE_EXE}"
+  nsExec::ExecToLog '"$INSTDIR\core\huginn.exe" core self-install'
+  Pop $0
+  SetOutPath "$INSTDIR"
+!endif
+
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\${APP_ID}" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName"     "${APP_NAME}"

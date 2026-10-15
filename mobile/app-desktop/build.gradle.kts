@@ -230,8 +230,22 @@ val updaterProbe by tasks.registering(JavaExec::class) {
  * `compose.application.resources.dir`. Windows toasts keep the AUMID icon and get
  * nothing from here.
  */
+/**
+ * The huginn core binary rides the same Linux app-resources (D9: a GUI install
+ * must always bring its core). scripts/release-desktop.sh builds it with
+ * core/build.sh at the SAME version and passes `-PcoreBinary=<path>`; a dev
+ * build without the property bundles nothing, and the app then looks for an
+ * already-installed core. Windows gets it from the NSIS script instead (/DCORE_EXE).
+ */
+val coreBinary = providers.gradleProperty("coreBinary")
 val notifyIconResources by tasks.registering(Sync::class) {
     from(layout.projectDirectory.file("packaging/raven-notify.png"))
+    if (coreBinary.isPresent) {
+        from(coreBinary.get()) {
+            rename { "huginn" }
+            filePermissions { unix("rwxr-xr-x") }
+        }
+    }
     into(layout.buildDirectory.dir("notify-app-resources/linux"))
 }
 tasks.matching { it.name == "prepareAppResources" }.configureEach { dependsOn(notifyIconResources) }
