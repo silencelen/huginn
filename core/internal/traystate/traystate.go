@@ -8,6 +8,9 @@ package traystate
 const (
 	EventTray   = "tray"   // a Summary: what the icon and menu show now
 	EventNotice = "notice" // a Notice: post or withdraw one OS notification
+	// EventCoreTray is {"attached": bool}: whether a tray role is attached. The
+	// desktop GUI stands its own tray and notifier down while it is true.
+	EventCoreTray = "coretray"
 )
 
 // States of the icon, the brand's state ladder (BRAND.md §2).

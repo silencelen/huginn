@@ -95,6 +95,11 @@ internal class CoreClient(private val socket: Path) {
     suspend fun patchDevice(s: CoreDeviceSettings): CoreDeviceView =
         json.decodeFromString(call("PATCH", "/core/device", json.encodeToString(s)))
 
+    /** What the window shows ("sess:<name>", "chat:<id>", or null), so the core does not toast it. */
+    suspend fun presence(focused: String?) {
+        call("POST", "/core/presence", json.encodeToString(mapOf("focused" to (focused ?: ""))))
+    }
+
     /** Forget the pairing (Settings → Remove this computer). */
     suspend fun unpair() { call("POST", "/core/unpair", "{}") }
 

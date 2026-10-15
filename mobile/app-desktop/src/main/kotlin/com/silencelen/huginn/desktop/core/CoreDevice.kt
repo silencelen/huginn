@@ -50,6 +50,16 @@ class CoreDevice internal constructor(
     private val _status = MutableStateFlow(DeviceStatus(note = "Looking for huginn core…"))
     val status: StateFlow<DeviceStatus> = _status.asStateFlow()
 
+    private val _coreTray = MutableStateFlow(false)
+
+    /**
+     * True while `huginn core tray` is attached: the core then owns the tray and
+     * the notifications (docs/CORE-ARCHITECTURE.md D5), and this window stands
+     * its own down — no second icon, no second copy of every toast, no claim
+     * against appd, and closing the window quits (D6).
+     */
+    val coreTray: StateFlow<Boolean> = _coreTray.asStateFlow()
+
     @Volatile private var client: CoreClient? = null
     private var job: Job? = null
 
@@ -68,9 +78,15 @@ class CoreDevice internal constructor(
                     _status.value = DeviceStatus(note = NOT_AVAILABLE)
                 } else {
                     runCatching {
-                        c.events().collect { (event, data) -> if (event == "device") apply(data) }
+                        c.events().collect { (event, data) ->
+                            when (event) {
+                                "device" -> apply(data)
+                                "coretray" -> _coreTray.value = data.contains("\"attached\":true")
+                            }
+                        }
                     }
                     _status.value = DeviceStatus(note = if (c.socketPresent()) NOT_ANSWERING else NOT_RUNNING)
+                    _coreTray.value = false // no core, no core tray: this window takes the job back
                 }
                 delay(RECONNECT_MS)
             }
@@ -127,6 +143,12 @@ class CoreDevice internal constructor(
                 .onSuccess { _setup.value = "huginn core is set up to start at boot." }
                 .onFailure { _setup.value = "Not set up: ${it.message}" }
         }
+    }
+
+    /** Tells the core what this window shows. Best effort: a core that is down simply does not suppress. */
+    fun reportPresence(focusedKey: String?) {
+        val c = client ?: return
+        scope.launch { runCatching { c.presence(focusedKey) } }
     }
 
     /**
