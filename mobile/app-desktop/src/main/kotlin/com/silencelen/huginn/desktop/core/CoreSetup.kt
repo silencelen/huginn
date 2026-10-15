@@ -1,5 +1,7 @@
 package com.silencelen.huginn.desktop.core
 
+import com.silencelen.huginn.desktop.update.BuildInfo
+import com.silencelen.huginn.update.Semver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
@@ -61,8 +63,23 @@ internal object CoreSetup {
         return Ran(p.exitValue(), out.trim())
     }
 
+    /** The version an installed core reports (`huginn version`), or null. */
+    fun installedVersion(bin: Path): String? =
+        runCatching { VERSION_LINE.find(run(listOf(bin.toString(), "version"), timeoutS = 15).output)?.groupValues?.get(1) }.getOrNull()
+
+    private val VERSION_LINE = Regex("^\\(o> huginn (\\S+) ", RegexOption.MULTILINE)
+
     /**
-     * The installed core, installing the bundled one first when there is none.
+     * Whether the bundled core (this app's own version: lockstep, D10) should
+     * replace an installed core reporting [have]. Unreadable keeps what is there.
+     */
+    fun bundledIsNewer(have: String?, bundled: String = BuildInfo.VERSION): Boolean =
+        have != null && Semver.isNewer(bundled, have)
+
+    /**
+     * The installed core, installing the bundled one first when there is none
+     * or the bundled one is newer: an app update brings its core, and the
+     * core's self-install restarts the running core onto it and starts the tray.
      *
      * ⚠ RUN FROM A TEMP COPY, not in place: the Linux packager does not keep the
      * executable bit on app-resources (measured: 0644 inside the app image), and
@@ -70,8 +87,11 @@ internal object CoreSetup {
      */
     suspend fun ensureInstalled(): Result<Path> = withContext(Dispatchers.IO) {
         runCatching {
-            installedBinary()?.let { return@runCatching it }
-            val bundled = bundledBinary() ?: error("this build carries no huginn core — install it with `huginn core install`")
+            val found = bundledBinary()
+            installedBinary()?.let { inst ->
+                if (found == null || !bundledIsNewer(installedVersion(inst))) return@runCatching inst
+            }
+            val bundled = found ?: error("this build carries no huginn core — install it with `huginn core install`")
             val tmp = Files.createTempFile("huginn-core-", if (windows) ".exe" else "")
             try {
                 Files.copy(bundled, tmp, StandardCopyOption.REPLACE_EXISTING)
@@ -101,6 +121,10 @@ internal object CoreSetup {
                 run(listOf(bin.toString(), "core", "install"), timeoutS = 180)
             }
             check(r.exit == 0) { r.output.lines().lastOrNull { it.isNotBlank() } ?: "huginn core install failed (exit ${r.exit})" }
+            // The elevated step never starts the tray (it would run as
+            // administrator); this unelevated self-install does, once the task's
+            // core answers.
+            if (windows) run(listOf(bin.toString(), "core", "self-install"), timeoutS = 120)
             r.output.ifBlank { "huginn core installed" }
         }
     }

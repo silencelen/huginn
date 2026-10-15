@@ -11,6 +11,7 @@ import (
 // Options for Run.
 type Options struct {
 	Socket string
+	Lock   string
 	Logger *log.Logger
 }
 

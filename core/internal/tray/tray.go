@@ -20,6 +20,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -27,8 +28,11 @@ import (
 
 	"fyne.io/systray"
 
+	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/ipc"
+	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/traystate"
+	"github.com/silencelen/huginn/core/internal/version"
 )
 
 //go:embed icons/idle.png
@@ -43,12 +47,14 @@ var iconAttention []byte
 // Options for Run.
 type Options struct {
 	Socket string
+	Lock   string // one tray per user: a second `core tray` waits briefly, then leaves
 	Logger *log.Logger
 }
 
 type role struct {
 	o        Options
 	notifier Notifier
+	lock     *os.File
 
 	mu        sync.Mutex
 	open      *systray.MenuItem
@@ -64,7 +70,25 @@ func Run(o Options) {
 	if o.Logger == nil {
 		o.Logger = log.Default()
 	}
-	r := &role{o: o, notifier: newNotifier(o.Logger)}
+	r := &role{o: o}
+	if o.Lock != "" {
+		// Wait out an outgoing tray: an update starts the new one as the old one
+		// quits, and the desktop or an updater may start one at the same moment.
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			f, ok := tryLock(o.Lock)
+			if ok {
+				r.lock = f
+				break
+			}
+			if time.Now().After(deadline) {
+				o.Logger.Printf("tray: another huginn tray is running for this user — leaving it be")
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+	r.notifier = newNotifier(o.Logger)
 	systray.Run(r.ready, func() {})
 }
 
@@ -157,6 +181,9 @@ func (r *role) stream(c *http.Client) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("core answered %d", resp.StatusCode)
 	}
+	if r.handoff(c) {
+		return nil
+	}
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	event := ""
@@ -172,6 +199,52 @@ func (r *role) stream(c *http.Client) error {
 		}
 	}
 	return sc.Err()
+}
+
+// handoff: the core restarted onto a newer binary than this tray's (an
+// update). Start the tray from the stable path and quit, so the icon and the
+// notifier follow the core's version. Only when the stable binary IS the
+// core's version: a mismatch the swap cannot fix (a hand-run older core) must
+// not loop. (Asked of the binary itself, not compared by file: Windows renames
+// a running .exe aside, and this process's own path then names the new file.)
+func (r *role) handoff(c *http.Client) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := ipc.Do(ctx, c, http.MethodGet, "/core/status", nil)
+	if err != nil {
+		return false
+	}
+	var st struct {
+		Version string `json:"version"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&st)
+	resp.Body.Close()
+	if err != nil || st.Version == "" || st.Version == version.Version {
+		return false
+	}
+	l, err := install.DefaultLayout()
+	if err != nil {
+		return false
+	}
+	stable := l.Binary()
+	out, err := proc.Output(stable, "version")
+	if err != nil || !strings.Contains(out, " "+st.Version+" ") {
+		return false
+	}
+	r.o.Logger.Printf("tray: huginn core is %s, this tray %s — handing over to %s", st.Version, version.Version, stable)
+	if r.lock != nil {
+		r.lock.Close()
+		r.lock = nil
+	}
+	if err := proc.StartDetached(stable, "core", "tray"); err != nil {
+		r.o.Logger.Printf("tray: starting the new tray: %v (staying)", err)
+		if r.o.Lock != "" {
+			r.lock, _ = tryLock(r.o.Lock)
+		}
+		return false
+	}
+	systray.Quit()
+	return true
 }
 
 func (r *role) handle(event string, data []byte) {

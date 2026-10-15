@@ -16,6 +16,15 @@ import kotlin.test.assertTrue
  */
 class CoreSetupTest {
     @Test
+    fun `an app update brings its core, a same or newer installed core stays`() {
+        assertTrue(CoreSetup.bundledIsNewer("2.0.0", bundled = "2.1.0"))
+        assertTrue(CoreSetup.bundledIsNewer("2.1.0-rc.1", bundled = "2.1.0"))
+        assertTrue(!CoreSetup.bundledIsNewer("2.1.0", bundled = "2.1.0"))
+        assertTrue(!CoreSetup.bundledIsNewer("2.2.0", bundled = "2.1.0"))
+        assertTrue(!CoreSetup.bundledIsNewer(null, bundled = "2.1.0"), "an unreadable version keeps what is installed")
+    }
+
+    @Test
     fun `a bundled 0644 core self-installs into the per-user layout and runs`() = runBlocking {
         if (!System.getProperty("os.name").startsWith("Linux")) return@runBlocking
         var root: File? = File(System.getProperty("user.dir")).absoluteFile
