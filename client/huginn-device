@@ -378,7 +378,10 @@ function refusal(scope, locked, mode) {
   // names the scope, because the scope is what somebody would have to change.
   return (locked && allows(parseScope(scope), mode))
     ? POLICY.refusals.locked
-    : POLICY.refusals.scope.replace('{scope}', parseScope(scope)).replace('{mode}', mode);
+    // A replacer FUNCTION, not a string: a string replacement treats $& $' $` $$
+    // in the MODE as patterns, so mode '$&' printed "{mode}". Go and Kotlin
+    // substitute literally; this now does too.
+    : POLICY.refusals.scope.replace('{scope}', () => parseScope(scope)).replace('{mode}', () => mode);
 }
 
 /**
