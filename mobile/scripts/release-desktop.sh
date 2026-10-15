@@ -104,6 +104,9 @@ echo "   (log: $LOG)"
 # Built once, reproducibly (core/build.sh), before either platform packages.
 CORE_DIST="$BUILD/core-dist/$VERSION"
 echo "[0/7] huginn core $VERSION"
+# Every Windows artifact of a release is signed, or the release stops (see
+# scripts/sign-windows.sh: Defender removes an unsigned core).
+export HUGINN_SIGN_REQUIRED=1
 "$REPO_ROOT/core/build.sh" "$VERSION" "$CORE_DIST" >> "$LOG" 2>&1 || {
   echo "REFUSING: core/build.sh $VERSION failed" >&2; exit 1; }
 CORE_LINUX="$PWD/$CORE_DIST/huginn-$VERSION-linux-x64"
@@ -634,6 +637,10 @@ if [ "$LINUX_ONLY" = 0 ]; then
   file "$APP_IMAGE/huginn-desktop-kt.exe" | grep -q 'PE32+ executable' || {
     echo "REFUSING: the app-image launcher is not a Windows PE binary" >&2; exit 1; }
 
+  # The launcher jpackage made is what Start-menu shortcuts and the Startup
+  # entry run: signed BEFORE makensis packs it.
+  "$REPO_ROOT/scripts/sign-windows.sh" "$APP_IMAGE/huginn-desktop-kt.exe" >> "$LOG" 2>&1 || {
+    echo "REFUSING: could not sign the Windows launcher" >&2; exit 1; }
   # -V4 into a log of its own, not -V2 appended to the shared one. That is the
   # only verbosity that prints the RESOLVED plugin calls, and the assertion below
   # reads the stamped identity off the compiler instead of trusting the source it
@@ -651,6 +658,8 @@ if [ "$LINUX_ONLY" = 0 ]; then
     echo "REFUSING: makensis failed (full log: $LOG)" >&2; exit 1; }
   cat "$LOG.nsis" >> "$LOG"
   [ -f "$WIN/out/$EXE" ] || { echo "REFUSING: $EXE was not produced" >&2; exit 1; }
+  "$REPO_ROOT/scripts/sign-windows.sh" "$WIN/out/$EXE" >> "$LOG" 2>&1 || {
+    echo "REFUSING: could not sign $EXE" >&2; exit 1; }
   # PROVE it is what it claims to be, rather than trusting that makensis exited 0.
   file "$WIN/out/$EXE" | grep -q 'Nullsoft Installer self-extracting archive' || {
     file "$WIN/out/$EXE"; echo "REFUSING: $EXE is not an NSIS installer" >&2; exit 1; }
