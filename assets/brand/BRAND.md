@@ -8,6 +8,11 @@ and every number comes from its proofs. The rendered twin of this document, set
 in the brand, is the "Huginn Brand Book" page. The audit of the current UIs against
 these rules, with the plan to bring them in line, is [`UI-AUDIT.md`](UI-AUDIT.md).
 
+For what is decided and in place today, without the history, read
+[`design-card.html`](design-card.html): generated from the tokens, the state
+table and the mark files by `design-card.py`, so it cannot drift from the release.
+Sections 6, 7 and 9 below also list pieces that were specified but not built.
+
 Contents: 1 The raven · 2 The small form · 3 Terminal art · 4 Colour · 5 Type ·
 6 Motion · 7 Surfaces · 8 Voice · 9 To build.
 
