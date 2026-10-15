@@ -407,6 +407,8 @@ func (ch Choice) Apply(cfg *Config, sources []string, at time.Time) {
 	d := ch.Device
 	if d.Source != "" {
 		cfg.Device = Device{
+			// Only an enabled source is ever chosen, so the adopted row stays on.
+			Enabled:        true,
 			ID:             d.DeviceID,
 			Name:           d.Name,
 			Scope:          d.Scope,
@@ -414,6 +416,7 @@ func (ch Choice) Apply(cfg *Config, sources []string, at time.Time) {
 			ActWhileLocked: d.ActWhileLocked,
 			Claude:         d.Claude,
 			LLMSlug:        d.LLMSlug,
+			LLM:            d.LLM,
 		}
 	}
 	if d.URL != "" {

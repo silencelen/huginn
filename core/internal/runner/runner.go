@@ -89,9 +89,10 @@ type Runner struct {
 	h    Hooks
 	wake chan struct{}
 
-	mu     sync.Mutex
-	status Status
-	active func() // cancels the in-flight run, if any
+	mu         sync.Mutex
+	status     Status
+	active     func() // cancels the in-flight run, if any
+	pollCancel func() // cancels the in-flight long poll, if any
 }
 
 // New returns a runner; call Serve.
@@ -108,8 +109,20 @@ func New(h Hooks) *Runner {
 	return &Runner{h: h, wake: make(chan struct{}, 1)}
 }
 
-// Kick wakes the runner early after a settings change (on/off, scope).
+// Kick makes a settings change (on/off, scope, lock policy) take effect now.
+//
+// ⚠ IT MUST CUT THE LONG POLL. The loop re-reads its settings between polls, and
+// a poll is held open for up to 25 s — so without this, "turn off" and a scope
+// change waited for the next empty poll (caught by core/test/e2e.sh). Only the
+// POLL is cut, never a running job: a job finishes under the settings it started
+// with, and the next one sees the new ones.
 func (r *Runner) Kick() {
+	r.mu.Lock()
+	c := r.pollCancel
+	r.mu.Unlock()
+	if c != nil {
+		c()
+	}
 	select {
 	case r.wake <- struct{}{}:
 	default:
@@ -252,7 +265,25 @@ func (r *Runner) session(ctx context.Context, conf Config) error {
 			}
 		}
 		lk := r.h.Lock(sctx)
-		work, err := r.h.API.PollWork(sctx, id, lk.Locked)
+		pctx, pcancel := context.WithCancel(sctx)
+		r.mu.Lock()
+		r.pollCancel = pcancel
+		r.mu.Unlock()
+		work, err := r.h.API.PollWork(pctx, id, lk.Locked)
+		r.mu.Lock()
+		r.pollCancel = nil
+		r.mu.Unlock()
+		kicked := pctx.Err() != nil && sctx.Err() == nil
+		pcancel()
+		if kicked {
+			// Cut by Kick: not a failure. Drain the wake so Serve does not see it
+			// twice, then loop to re-read the settings.
+			select {
+			case <-r.wake:
+			default:
+			}
+			continue
+		}
 		if err != nil {
 			// A blip on one poll is not a reason to re-enrol; re-enrolling on every
 			// hiccup is what turns a flaky link into a stream of registrations.

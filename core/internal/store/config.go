@@ -30,6 +30,10 @@ type Config struct {
 
 // Device is this machine's device row as the core minted or adopted it (D13).
 type Device struct {
+	// Enabled: "Available to huginn". UnenrolOwed: turned off while a row was
+	// registered — the runner DELETEs it before forgetting the id (Unenrol.kt).
+	Enabled        bool   `json:"enabled"`
+	UnenrolOwed    bool   `json:"unenrolOwed,omitempty"`
 	ID             string `json:"id,omitempty"`
 	Name           string `json:"name,omitempty"`
 	Scope          string `json:"scope,omitempty"`
@@ -37,6 +41,8 @@ type Device struct {
 	ActWhileLocked bool   `json:"actWhileLocked"`
 	Claude         string `json:"claude,omitempty"`
 	LLMSlug        string `json:"llmSlug,omitempty"`
+	LLM            string `json:"llm,omitempty"`  // generate engine (huginn local writes it)
+	Node           string `json:"node,omitempty"` // node for .js engines / npm shims
 }
 
 // Appd is how the core reaches the daemon.
