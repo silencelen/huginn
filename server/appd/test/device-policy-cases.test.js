@@ -29,6 +29,16 @@ const CASES = JSON.parse(fs.readFileSync(path.join(REPO, 'shared/device-policy-c
 const RUNNER = path.join(REPO, 'client/huginn-device');
 const GEN = path.join(REPO, 'scripts/gen-device-policy.js');
 
+// HUGINN_DEVICE_BIN points the print-argv half of this file at another runner —
+// the Go core's `huginn device print-argv`, which keeps the same contract (§9.6
+// of docs/CORE-ARCHITECTURE.md) so this matrix can hold it to the table too.
+// Unset, it is the Node runner, as it always was. The tests that require() the
+// Node runner's internals stay about the Node runner either way.
+const BIN = process.env.HUGINN_DEVICE_BIN;
+const printArgv = (args) => JSON.parse(BIN
+  ? execFileSync(BIN, ['device', 'print-argv', ...args], { encoding: 'utf8' })
+  : execFileSync(process.execPath, [RUNNER, 'print-argv', ...args], { encoding: 'utf8' }));
+
 const devicesLib = require('../lib/devices');
 const table = require('../lib/device-policy-table');
 const POLICY = JSON.parse(fs.readFileSync(path.join(REPO, 'shared/device-policy.json'), 'utf8'));
@@ -44,13 +54,13 @@ test('the generated files still match the policy they came from', () => {
 test('the headless runner produces exactly the argv the matrix says', () => {
   assert.ok(CASES.cases.length >= 140, 'the matrix lost cases');
   for (const c of CASES.cases) {
-    const out = JSON.parse(execFileSync(
-      process.execPath, [RUNNER, 'print-argv', c.scope, String(c.locked), c.mode],
-      { encoding: 'utf8' },
-    ));
+    const out = printArgv([c.scope, String(c.locked), c.mode]);
     const where = `${c.scope}/locked=${c.locked}/${c.mode}`;
     assert.strictEqual(out.effectiveScope, c.effectiveScope, where);
     assert.strictEqual(out.refusal, c.refusal, where);
+    // No hasEngine was offered, so the engine fence must be up for generate and
+    // only for generate — the one per-runner rule, reachable from outside here.
+    assert.strictEqual(out.engineRefusal, c.mode === 'generate' ? POLICY.refusals.engine : null, where);
     assert.strictEqual(out.cwd, c.cwd, where);
     assert.deepStrictEqual(out.argv, c.argv, where);
   }
@@ -122,14 +132,10 @@ test('a scope nobody defined behaves exactly as scope generate', () => {
 });
 
 test('a generate argv sheds persona and effort even when offered', () => {
-  const drive = (scope, mode) => JSON.parse(execFileSync(
-    process.execPath,
-    [RUNNER, 'print-argv', scope, 'false', mode, JSON.stringify({
-      model: 'local-x-q', effort: 'high', persona: 'P',
-      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
-    })],
-    { encoding: 'utf8' },
-  ));
+  const drive = (scope, mode) => printArgv([scope, 'false', mode, JSON.stringify({
+    model: 'local-x-q', effort: 'high', persona: 'P',
+    resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+  })]);
   const gen = drive('generate', 'generate');
   assert.ok(!gen.argv.includes('--effort'), 'a local model has no effort knob');
   assert.ok(!gen.argv.includes('--append-system-prompt'), 'no context egress to a serving box');
