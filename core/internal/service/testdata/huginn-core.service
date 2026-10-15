@@ -1,0 +1,14 @@
+# Written by `huginn core install`; removed by `huginn core uninstall`.
+[Unit]
+Description=huginn core (device runner and appd link)
+Documentation=https://github.com/silencelen/huginn/blob/main/docs/CORE-ARCHITECTURE.md
+
+[Service]
+Type=simple
+ExecStart="/home/s/.local/bin/huginn" core run
+Restart=always
+RestartSec=10
+Environment="HOME=/home/s"
+
+[Install]
+WantedBy=default.target
