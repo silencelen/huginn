@@ -34,13 +34,27 @@ Each device needs three things — the installer does all three:
 2. a `Host huginn` SSH alias,
 3. the `huginn` command sourced in your shell profile.
 
-**Windows (PowerShell)** — laptop, desktop:
+**One line** (fetches the client from the newest release):
+
+```bash
+# Linux · macOS · Termux
+curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh -s -- <host-ip-or-name>
+```
+```powershell
+# Windows (PowerShell)
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1))) -HuginnHost <host-ip-or-name>
+```
+
+After the client it asks whether to keep huginn running in the background (`huginn core`) and
+whether to install the desktop app. Preset the answers for unattended installs with
+`HUGINN_BACKGROUND=y|n HUGINN_GUI=y|n` (shell) or `-Background y|n -Gui y|n` (PowerShell).
+`huginn core install` and `huginn desktop` do the same later.
+
+**From a clone** (the client alone):
 ```powershell
 git clone https://github.com/<you>/huginn.git
 .\huginn\client\install.ps1 -HuginnHost <host-ip-or-name>
 ```
-
-**bash / Termux (phone)**:
 ```bash
 git clone https://github.com/<you>/huginn.git
 bash huginn/client/install.sh <host-ip-or-name>

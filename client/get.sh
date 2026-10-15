@@ -16,8 +16,13 @@ REPO=silencelen/huginn
 HOST="${1:-}"
 
 say() { printf '%s\n' "$*"; }
+# A terminal we can actually OPEN. `[ -r /dev/tty ]` is true with no controlling
+# terminal at all (automation, CI): the file is readable, opening it fails.
+# ⚠ In a SUBSHELL: a failed redirection on a special built-in (`:`) makes a
+# non-interactive POSIX sh EXIT, which killed this whole script silently.
+has_tty() { ( : < /dev/tty ) 2>/dev/null; }
 ask() {   # $1 = question, $2 = preset answer (env), default no
-  if [ -n "$2" ]; then a="$2"; elif [ -r /dev/tty ]; then printf '%s [y/N] ' "$1" > /dev/tty; read -r a < /dev/tty || a=""; else a=""; fi
+  if [ -n "$2" ]; then a="$2"; elif has_tty; then printf '%s [y/N] ' "$1" > /dev/tty; read -r a < /dev/tty || a=""; else a=""; fi
   case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 get() { if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 60 "$1"; else wget -qO- --timeout=60 "$1"; fi; }
@@ -41,12 +46,12 @@ chmod 755 "$T/install.sh"
 say "Installing the huginn client from $TAG"
 # install.sh asks for the host when none was given; with no terminal at all
 # (automation) the host must be the argument.
-if [ -r /dev/tty ]; then IN=/dev/tty; else IN=/dev/null; [ -n "$HOST" ] || { say "huginn: no terminal to ask on - pass the host: sh -s -- <host>"; exit 1; }; fi
+if has_tty; then IN=/dev/tty; else IN=/dev/null; [ -n "$HOST" ] || { say "huginn: no terminal to ask on - pass the host: sh -s -- <host>"; exit 1; }; fi
 if [ -n "$HOST" ]; then bash "$T/install.sh" "$HOST" < "$IN"; else bash "$T/install.sh" < "$IN"; fi
 
 # Everything below needs the host to trust this machine's key.
 if ! ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null; then
-  if [ -r /dev/tty ]; then printf 'Authorize the key above on the host, then press Enter... ' > /dev/tty; read -r _ < /dev/tty || true; fi
+  if has_tty; then printf 'Authorize the key above on the host, then press Enter... ' > /dev/tty; read -r _ < /dev/tty || true; fi
 fi
 TRUSTED=""
 ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
