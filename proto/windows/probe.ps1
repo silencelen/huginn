@@ -21,9 +21,22 @@ Set-Content -Path $Out -Value "huginn core prototypes  $(Get-Date -Format s)  $e
 function Note([string]$t) { Write-Host $t; Add-Content -Path $Out -Value $t -Encoding ascii }
 
 # User-only run dir: the directory ACL is the Windows equivalent of 0700.
-if (Test-Path $Run) { Remove-Item -Recurse -Force $Run }
+if (Test-Path $Run) {
+  try { Remove-Item -Recurse -Force $Run -ErrorAction Stop } catch {
+    # An earlier run's ACL can shut even its owner out: take it back first.
+    & takeown /f (Split-Path -Parent $Run) /r /d y | Out-Null
+    & icacls (Split-Path -Parent $Run) /reset /t /q | Out-Null
+    Remove-Item -Recurse -Force $Run
+  }
+}
+Unregister-ScheduledTask -TaskName 'huginn-proto-s4u' -Confirm:$false -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Run | Out-Null
-& icacls $Run /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" /grant:r "SYSTEM:(OI)(CI)F" | Out-Null
+# BY SID, NEVER BY $env:USERNAME: on a domain-joined box with a leftover local
+# profile of the same name (PC01: local 'silence' vs HOME\alex) the bare
+# name resolves to the LOCAL account, and the run dir was locked against the
+# person running this. *S-1-... is icacls' SID syntax.
+$mySid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+& icacls $Run /inheritance:r /grant:r "*$($mySid):(OI)(CI)F" /grant:r "*S-1-5-18:(OI)(CI)F" | Out-Null
 Note "run dir ACL: $((& icacls $Run) -join ' | ')"
 
 function Wait-Sock([string]$p, [int]$secs) {
