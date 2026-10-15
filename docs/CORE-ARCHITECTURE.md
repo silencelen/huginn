@@ -379,7 +379,7 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
 | Daemon + `huginn core run/install/uninstall/status/pair`, `huginn device on/off/status` | `core/internal/daemon`, `core/cmd/huginn` | `core/test/e2e.sh` 16/16 and `e2e-migrate.sh` 7/7 against a real appd |
 | Desktop: `CoreDevice` + `CoreSocket`/`CoreClient`; `DeviceRunner`/`LockProbe` deleted | `mobile/app-desktop/.../core/` | 652 desktop tests; `CoreClientTest` drives the real Go core from Kotlin |
 
-**Decisions made while building (owner to confirm):**
+**Decisions made while building (owner APPROVED 2026-10-14):**
 - **D11 reversed for the boot service: the token lives in the 0600 file store by default**, keyring opt-in
   (`HUGINN_SECRETS=keyring`) — a Linux login keyring is locked until a login, and Credential Manager is
   likely unavailable to an S4U task, i.e. exactly when always-on matters.
@@ -390,10 +390,26 @@ and removed by `huginn core install` once the Go runner has enrolled under the s
   disagree; the core follows Node. Migrated pins cost one re-proof. TLS.md should name one.
 - **Dropped ids are recorded, never auto-deleted** at import (a dropped id may be a live old runner).
 
-**Left for P1 before a release:**
-1. Windows: run `proto/windows` on PRESTIGE (AF_UNIX same + cross session, S4U facts, tray) — decides Q2
-   and whether the named-pipe fallback is needed.
-2. Packaging: ship the Go binary in the .exe / .deb / .pkg.tar.zst / portable tarball and the bootstrap
-   scripts; `huginn device`/`core` in `huginn.sh`/`.ps1` dispatch to it; release assets + manifest (Q5, Q8).
-3. GUI: when no core answers, offer "Set up huginn core" (runs the bundled binary's `core install`).
-4. Node `$&` refusal-text quirk in `client/huginn-device` + the generator (use a replacer function).
+**Packaging + clients (done 2026-10-14, later the same day):**
+- `huginn core self-install` (per-user layout, atomic `current` swap, prune to 2, Windows PATH via the
+  registry) is the one install path; `core install` self-installs first and refuses beside a
+  package-owned `/usr/bin/huginn` (one core per machine).
+- `core/build.sh <ver>`: reproducible CGO-off builds for linux-x64/arm64, windows-x64, android-arm64
+  + `core-manifest.json` + `SHA256SUMS`. Tags stay `cli-v` / `desktop-v` (same version) in P1; Q5's
+  single tag is P2 with the updater.
+- `huginn.sh` / `huginn.ps1`: `huginn core install|status|uninstall|…` (fetch → sha256 → self-install
+  → pair over ssh); `huginn device` goes to the core when one is installed. `client/get.sh` /
+  `get.ps1` bootstrap with the background + GUI prompts.
+- Desktop: `release-desktop.sh` builds the core at the desktop's version; Gradle bundles it in
+  Linux app-resources (`-PcoreBinary`); NSIS installs `core\huginn.exe` and self-installs it; the app
+  self-installs a bundled core at launch and offers "Set up huginn core".
+- **Real-systemd proof on huginn (throwaway user, private appd, all removed after):** `core install`
+  → unit + linger; the user manager stopped and restarted with NO login session → same device id,
+  and an act chat ran on it.
+
+**Left before a 2.0.0 cut:**
+1. Windows: `proto/windows` kit on PRESTIGE, then one real `huginn core install` there (S4U task,
+   AF_UNIX across sessions, toast/tray later in P2). Not verified at all yet: the NSIS `CORE_EXE`
+   section and the elevated `core install` path.
+2. A full `release-desktop.sh` run (it publishes, so it is a release decision).
+3. `cli-v2.0.0` release: `core/build.sh 2.0.0` → `scripts/github-release.sh core 2.0.0 core/dist/2.0.0/*`.
