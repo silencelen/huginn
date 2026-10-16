@@ -140,6 +140,15 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val autostart: Boolean = false,
 
         /**
+         * The one-time hand-over of "start at sign-in" to huginn core's tray
+         * (owner, 2026-10-16). The core's tray is what runs at sign-in now and
+         * opens this app, so an install that had its own Startup entry gets it
+         * turned off ONCE; set afterwards, so a person who turns it back on is
+         * left alone. See [com.silencelen.huginn.desktop.setup.Autostart.handOverToCoreTray].
+         */
+        val autostartHandedToCore: Boolean = false,
+
+        /**
          * HOW FAR THROUGH FIRST-RUN SETUP THIS INSTALL GOT, as one
          * [com.silencelen.huginn.settings.SetupFlow]-encoded string.
          *
@@ -677,6 +686,10 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         _autostart.value = value
         mutate { it.copy(autostart = value) }
     }
+
+    fun autostartHandedToCore(): Boolean = synchronized(lock) { stored.autostartHandedToCore }
+
+    fun markAutostartHandedToCore() = mutate { it.copy(autostartHandedToCore = true) }
 
     /** The encoded flow, or empty for an install that has never run it. */
     fun setupProgressNow(): String = synchronized(lock) { stored.setupProgress }

@@ -374,8 +374,9 @@ func winOpts(t *testing.T, f *fake) WindowsOptions {
 func TestInstallWindowsHappy(t *testing.T) {
 	f := &fake{}
 	o := winOpts(t, f)
-	var xmlSeen []byte
+	var xmlSeen, trayXML []byte
 	f.rules = []rule{
+		{prefix: "schtasks /Create /TN Huginn Tray", do: func(args []string) { trayXML, _ = os.ReadFile(args[4]) }},
 		{prefix: "schtasks /Create", do: func(args []string) { xmlSeen, _ = os.ReadFile(args[4]) }},
 		{prefix: "powershell", do: func([]string) {
 			os.MkdirAll(filepath.Dir(o.StartupLnk()), 0o755)
@@ -388,6 +389,13 @@ func TestInstallWindowsHappy(t *testing.T) {
 	}
 	if string(xmlSeen) != string(EncodeUTF16(TaskXML(o.Binary, o.User, LogonS4U))) {
 		t.Fatal("staged XML")
+	}
+	// The tray also gets its logon task (the Startup folder runs minutes late).
+	if string(trayXML) != string(EncodeUTF16(TrayTaskXML(o.Binary, o.User))) {
+		t.Fatal("tray logon task XML not registered")
+	}
+	if _, err := os.Stat(filepath.Join(o.StateDir, "huginn-tray-task.xml")); err == nil {
+		t.Fatal("tray task XML left behind")
 	}
 	if _, err := os.Stat(filepath.Join(o.StateDir, staleTaskFile)); err == nil {
 		t.Fatal("staged XML left behind")
@@ -462,7 +470,7 @@ func TestUninstallWindows(t *testing.T) {
 	f := &fake{rules: []rule{{prefix: "schtasks /Query", res: Result{Code: 1, Stderr: "ERROR: The system cannot find the file specified."}}}}
 	o := winOpts(t, f)
 	rep := UninstallWindows(o)
-	if !rep.OK() || states(rep) != "skipped,skipped,skipped" {
+	if !rep.OK() || states(rep) != "skipped,skipped,skipped,skipped" {
 		t.Fatalf("%s", rep)
 	}
 	os.MkdirAll(filepath.Dir(o.StartupLnk()), 0o755)
@@ -472,7 +480,7 @@ func TestUninstallWindows(t *testing.T) {
 		{prefix: "schtasks /Delete", res: Result{Code: 1, Stderr: "ERROR: Access is denied."}},
 	}
 	rep = UninstallWindows(o)
-	if rep.OK() || states(rep) != "warning,FAILED,not done" {
+	if rep.OK() || states(rep) != "warning,FAILED,not done,not done" {
 		t.Fatalf("%s", rep)
 	}
 	if _, err := os.Stat(o.StartupLnk()); err != nil {
@@ -480,8 +488,21 @@ func TestUninstallWindows(t *testing.T) {
 	}
 	f.rules = f.rules[:1]
 	rep = UninstallWindows(o)
-	if !rep.OK() || states(rep) != "warning,done,done" {
+	if !rep.OK() || states(rep) != "warning,done,done,done" {
 		t.Fatalf("%s", rep)
+	}
+	if !f.called("schtasks /Delete /TN Huginn Tray") {
+		t.Fatal("uninstall left the tray's logon task")
+	}
+}
+
+func TestTrayTaskXML(t *testing.T) {
+	x := TrayTaskXML(`C:\Users\O'Brien\AppData\Local\huginn\bin\huginn.exe`, `HOME\o'brien`)
+	for _, want := range []string{"<LogonTrigger>", "<LogonType>InteractiveToken</LogonType>", "<Arguments>core tray</Arguments>",
+		"<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", "<UserId>HOME\\o&#39;brien</UserId>", "<Priority>5</Priority>"} {
+		if !strings.Contains(x, want) {
+			t.Errorf("tray task XML lacks %s:\n%s", want, x)
+		}
 	}
 }
 

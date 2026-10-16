@@ -8,6 +8,17 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.3] - 2026-10-16
+
+### Changed
+- **Windows: the tray appears seconds after sign-in.** Windows runs Startup-folder shortcuts only
+  after it has worked through every other app's startup entry one by one, each allowed up to
+  30 seconds. On PC01 the tray appeared 3.5 minutes after sign-in. huginn core now also
+  registers a per-user "Huginn Tray" task triggered at your logon and run in your session, with no
+  administrator prompt. The Startup shortcut stays as the fallback, and the one-tray lock keeps it
+  to one icon. Existing installs get the task on their next update, unless you removed the tray's
+  Startup shortcut. `huginn uninstall` removes it.
+
 ## [2.3.2] - 2026-10-16
 
 ### Fixed

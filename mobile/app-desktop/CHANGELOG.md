@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.3.3
+
+Carries core 2.3.3.
+
+### Changed
+- **huginn core's tray is what starts at sign-in, and it opens this app.** The installer's "Start the
+  Huginn window when you sign in" is now unticked by default. On a machine where the core's tray
+  already starts at login, an install that had the app's own Startup entry turns it off once.
+  Turn it back on in Settings and it stays on. While the core's tray was attached, the app's own
+  entry showed nothing and cost sign-in time.
+
 ## 2.3.2
 
 Carries core 2.3.2: on Windows, installing or updating the app no longer fails when a huginn window

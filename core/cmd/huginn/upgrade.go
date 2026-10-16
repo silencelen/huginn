@@ -78,6 +78,7 @@ func upgradeRunning(bin string) {
 		st, running = restartCore(st)
 	}
 	ensureTrayAutostart(bin, running)
+	ensureTrayTask(bin)
 	if running {
 		launchTray(bin, st)
 	}
@@ -276,6 +277,31 @@ func ensureTrayAutostart(bin string, running bool) {
 	default:
 		fmt.Println("  tray autostart could not be written: " + d)
 	}
+}
+
+// ensureTrayTask gives a Windows install from before 2.3.3 the tray's logon
+// task, once, when its tray starts at login at all (the Startup shortcut is
+// there): the shortcut alone ran 3.5 minutes after sign-in on PC01. A
+// shortcut the person removed means no tray at login, and no task either.
+func ensureTrayTask(bin string) {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	marker := filepath.Join(paths().State, "tray-task")
+	if fileExists(marker) {
+		return
+	}
+	o, err := service.WindowsDefaults(bin)
+	if err != nil || !fileExists(o.StartupLnk()) {
+		return
+	}
+	if !service.TrayTaskRegistered(o) {
+		st, d := service.EnsureTrayTaskWindows(o)
+		fmt.Println("  tray at sign-in: " + d)
+		_ = st
+	}
+	os.MkdirAll(filepath.Dir(marker), 0o700)
+	os.WriteFile(marker, []byte(version.Version+"\n"), 0o600)
 }
 
 // afterServiceInstall: `core install` wrote (or skipped) the autostart itself.
