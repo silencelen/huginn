@@ -475,6 +475,6 @@ func (s WindowsStatus) String() string {
 	if s.Tray {
 		tray = "yes"
 	}
-	b.WriteString("tray      " + tray + "\n")
+	b.WriteString("tray at login " + tray + "\n")
 	return b.String()
 }

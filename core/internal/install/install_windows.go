@@ -3,10 +3,12 @@
 package install
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -23,7 +25,7 @@ func installWindows(l Layout, src string) (Result, error) {
 	bin := filepath.Join(l.Root, "bin")
 	dst := filepath.Join(bin, "huginn.exe")
 	r.Binary = dst
-	os.Remove(dst + ".old") // best effort: last update's leftover
+	pruneAside(bin) // best effort: earlier updates' leftovers, unless still running
 	same, err := sameFile(src, dst)
 	if err != nil {
 		return r, err
@@ -33,7 +35,16 @@ func installWindows(l Layout, src string) (Result, error) {
 			return r, err
 		}
 		if _, err := os.Stat(dst); err == nil {
-			if err := os.Rename(dst, dst+".old"); err != nil {
+			// ⚠ The aside name must be FREE. A huginn.exe.old that an older
+			// process still runs from (a console window left open across two
+			// updates) cannot be deleted, and Windows refuses to rename over
+			// it: PRESTIGE's `huginn update` failed with "Access is denied"
+			// (2026-10-16). So a held .old gets a unique sibling instead.
+			aside := dst + ".old"
+			if _, err := os.Stat(aside); err == nil {
+				aside = fmt.Sprintf("%s.old-%d", dst, time.Now().UnixNano())
+			}
+			if err := os.Rename(dst, aside); err != nil {
 				return r, err
 			}
 		}
@@ -140,4 +151,13 @@ func RemoveUserPath(dir string) (bool, error) {
 	}
 	broadcastEnvChange()
 	return true, nil
+}
+
+// pruneAside removes huginn.exe.old and huginn.exe.old-* left by earlier
+// updates; a file a process still runs from is kept for the next run.
+func pruneAside(bin string) {
+	matches, _ := filepath.Glob(filepath.Join(bin, "huginn.exe.old*"))
+	for _, m := range matches {
+		os.Remove(m)
+	}
 }
