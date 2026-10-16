@@ -312,6 +312,9 @@ func localTierDir(home string) string {
 func retireDevice(t *tally, p store.Paths) {
 	t.spin("asking huginn core to retire this machine")
 	st, up := coreState(3 * time.Second)
+	if !up && !deviceEnrolled(p) {
+		return // nothing to retire, so no reason to start a core for it
+	}
 	if !up && serviceInstalled(stableBinary()) {
 		t.spin("starting huginn core, so it can retire this machine")
 		startService()
