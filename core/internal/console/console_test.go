@@ -66,7 +66,8 @@ func fakeCore(t *testing.T, paired bool) string {
 			"sentinels":{"STOP":null},"held":[],"arbiter":{"why":"under every threshold"}}`))
 		mux.HandleFunc("/appd/v1/chats", j(fmt.Sprintf(`{"chats":[
 			{"id":"c1","title":"Kalshi sizing","mode":"ask","running":false,"updatedAt":%d,"lastSnippet":"Half Kelly keeps the drawdown under 50%%.","turns":2},
-			{"id":"c2","title":"Restart the arr stack","mode":"act","running":true,"updatedAt":%d,"lastSnippet":"Restarting sonarr…"}]}`, now-540, now-20)))
+			{"id":"c2","title":"Restart the arr stack","mode":"act","running":true,"updatedAt":%d,"lastSnippet":"Restarting sonarr…"},
+			{"id":"c3","title":"Drive every volume","mode":"ask","updatedAt":%d,"lastSnippet":"All disks healthy."}]}`, now-540, now-20, now-7200)))
 		mux.HandleFunc("/appd/v1/chats/c1", j(`{"id":"c1","title":"Kalshi sizing","mode":"ask","seq":0,"messages":[
 			{"type":"user","text":"How big should each bet be?"},
 			{"type":"tool","name":"Read","input":"/srv/btc15m/config.yaml"},
@@ -334,6 +335,19 @@ func TestPalette(t *testing.T) {
 	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("attach widgets")...), "enter")...)
 	if !strings.Contains(got, "attaching needs SSH") {
 		t.Fatalf("attach without an ssh host must say why:\n%s", got)
+	}
+}
+
+func TestPaletteRanksSubstringsFirst(t *testing.T) {
+	sock := fakeCore(t, true)
+	got := render(t, sock, 100, 30, append([]string{":"}, keys("dev")...)...)
+	if !strings.Contains(got, "devices") || strings.Contains(got, "chat ") {
+		t.Fatalf("':dev' should show devices, not fuzzy chat hits:\n%s", got)
+	}
+	// A typo still lands through the fuzzy fallback.
+	got = render(t, sock, 100, 30, append([]string{":"}, keys("dvices")...)...)
+	if !strings.Contains(got, "devices") {
+		t.Fatalf("':dvices' should still find devices:\n%s", got)
 	}
 }
 

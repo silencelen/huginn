@@ -2,7 +2,7 @@
                                                                                                    
   > o Kalshi sizing                  ask  Half Kelly keeps the drawdown under 50%.         9m      
     * Restart the arr stack          act  Restarting sonarr…                               now     
-                                                                                                   
+    o Drive every volume             ask  All disks healthy.                               2h      
                                                                                                    
                                                                                                    
                                                                                                    
