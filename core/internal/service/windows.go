@@ -146,6 +146,11 @@ func TrayTaskXML(binary, user string) string {
 	b.WriteString("    <LogonTrigger>\r\n")
 	b.WriteString("      <Enabled>true</Enabled>\r\n")
 	b.WriteString("      <UserId>" + xmlText(user) + "</UserId>\r\n")
+	// ⚠ NOT AT THE INSTANT OF SIGN-IN: Explorer is still building the
+	// taskbar then, and a tray started in that second added a blank icon and
+	// never finished (PRESTIGE, 2026-10-16). Ten seconds is still minutes
+	// ahead of the Startup folder.
+	b.WriteString("      <Delay>PT10S</Delay>\r\n")
 	b.WriteString("    </LogonTrigger>\r\n")
 	b.WriteString("  </Triggers>\r\n")
 	b.WriteString("  <Principals>\r\n")
