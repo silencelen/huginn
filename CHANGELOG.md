@@ -8,6 +8,21 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.7] - 2026-10-16
+
+### Changed
+- **`huginn update` looks and reads like an installer:** one aligned line per component (client,
+  core, desktop, local AI), then the time it took.
+  - In a terminal, a step that is working shows the brand's wingbeat spinner, and every download
+    shows a bar with its percentage, size and speed. Both are redrawn in place and settle into the
+    final line.
+  - The lines use the brand's state marks: `■` done, `▲` needs a look, `×` failed, `◦` skipped.
+  - A step's own report is kept out of the way and shown only if the step fails.
+  - Piped or logged, only the final lines are written. `NO_COLOR`, `HUGINN_ASCII=1` (7-bit marks and
+    bars) and `HUGINN_REDUCED_MOTION=1` (a still frame) are honoured.
+  - The same bars and spinner appear in `huginn core install`, `huginn desktop install` and
+    `huginn desktop update`, in both the bash and PowerShell clients.
+
 ## [2.3.6] - 2026-10-16
 
 ### Fixed
