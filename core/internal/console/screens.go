@@ -157,11 +157,46 @@ func (m *model) sectionSummary(s screen) string {
 		}
 		return strings.Join(parts, "  ")
 	case scrChats:
-		return t.text.Render(fmt.Sprintf("%-3d", m.data.cnt.chats)) + t.dim.Render(" in the console in 2.4")
+		run := 0
+		for _, c := range m.data.lists.chats {
+			if c.Running {
+				run++
+			}
+		}
+		s := t.text.Render(fmt.Sprintf("%-3d", len(m.data.lists.chats)))
+		if run > 0 {
+			s += "  " + t.glyph(stWorking) + " " + t.dim.Render(fmt.Sprintf("%d answering", run))
+		}
+		return s
 	case scrProjects:
-		return t.text.Render(fmt.Sprintf("%-3d", m.data.cnt.projects)) + t.dim.Render(" in the console in 2.4")
+		s := t.text.Render(fmt.Sprintf("%-3d", len(m.data.lists.projects)))
+		for i, p := range m.data.lists.projects {
+			if i == 3 {
+				break
+			}
+			g := t.glyph(stWaiting)
+			if p.Busy > 0 {
+				g = t.glyph(stWorking)
+			}
+			s += "  " + g + " " + t.dim.Render(p.Name)
+		}
+		return s
 	case scrRounds:
-		return t.text.Render(fmt.Sprintf("%-3d", m.data.cnt.rounds)) + t.dim.Render(" in the console in 2.4")
+		s := t.text.Render(fmt.Sprintf("%-3d", len(m.data.lists.rounds)))
+		var next *round
+		for i, r := range m.data.lists.rounds {
+			if r.Enabled && r.NextRunAtSec != nil && (next == nil || *r.NextRunAtSec < *next.NextRunAtSec) {
+				next = &m.data.lists.rounds[i]
+			}
+		}
+		if next != nil {
+			s += "  " + t.dim.Render("next: "+next.Title+" "+untilSec(*next.NextRunAtSec))
+		}
+		return s
+	case scrArchive:
+		return t.text.Render(fmt.Sprintf("%-3d", len(m.data.lists.archive)))
+	case scrSettings:
+		return t.dim.Render("    this terminal, this machine, the core")
 	case scrDevices:
 		parts := []string{t.text.Render(fmt.Sprintf("%-3d", len(m.data.devices)))}
 		for i, d := range m.data.devices {

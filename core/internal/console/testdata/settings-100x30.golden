@@ -1,0 +1,30 @@
+ (!> huginn  >  settings                                            host huginn · core 2.3.0 · live
+                                                                                                   
+  this terminal                                                                                    
+   plain huginn opens        the console  HUGINN_CONSOLE=0 attaches to main instead                
+   art and symbols           7-bit  HUGINN_ASCII=1 forces 7-bit, =0 unicode                        
+   colour                    on                                                                    
+                                                                                                   
+  this machine                                                                                     
+   available to huginn       on  devices (5) changes it                                            
+   scope                     work  look · work · own                                               
+   tray                      attached  starts at login                                             
+                                                                                                   
+  huginn core                                                                                      
+   version                   2.3.0  core (9) updates it                                            
+   paired with               https://huginn.example.net:8787  huginn core pair re-pairs            
+                                                                                                   
+  Alerts, limits and the desktop's own settings live in the desktop and phone apps.                
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+ esc back  ? help  q quit                                                                          
+ same as: huginn core status                                                                       
