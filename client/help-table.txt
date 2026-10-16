@@ -129,7 +129,13 @@
   huginn desktop install      Linux: install or repair the per-user,
                               self-updating build (no root; any distro)
   huginn desktop uninstall    Linux: remove that install (keeps settings)
-  huginn update               self-update this client from the repo
+  huginn desktop update       update the installed desktop app to the newest
+                              release (Windows, the per-user Linux app, or
+                              the Debian/Arch package with sudo)
+  huginn update               update everything huginn on this machine: this
+                              client, huginn core, the desktop app and the
+                              local-AI tier (whichever are installed). The
+                              client comes from the repo
                               ({REPO}); without gh, from the
                               PINNED {UPDATE_HOST} mirror, never from
                               {HOST_VAR}{HOST_HERE}:

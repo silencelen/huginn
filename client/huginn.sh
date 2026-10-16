@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.3
+# Version: 2.3.4
 
-HUGINN_VERSION='2.3.3'
+HUGINN_VERSION='2.3.4'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -1147,6 +1147,76 @@ _huginn_desktop_install() (
   fi
 )
 
+# `huginn desktop update` (and the desktop step of `huginn update`): bring the
+# installed desktop app to the newest desktop-v release - the per-user app
+# through the same verified path as `huginn desktop install`, a Debian or Arch
+# package by downloading it, checking its sha256 against the release manifest
+# and handing it to the package manager with sudo (in a terminal; otherwise the
+# exact command is printed). Nothing installed: nothing to do, silently.
+_huginn_desktop_update() {
+  local R portable='' packaged='' rel tag man ver cur
+  R="$(_huginn_desktop_root)"
+  [ -f "$R/.huginn-portable" ] && portable=1
+  [ -d /opt/huginn-desktop-kt ] && packaged=1
+  [ -n "$portable$packaged" ] || return 0
+  rel="$(_huginn_desktop_release)" || { echo "huginn desktop: could not read the release feed - not updated" >&2; return 1; }
+  tag="${rel%%$'\n'*}"; man="${rel#*$'\n'}"
+  ver="$(_huginn_json_str "$man" version)"
+  printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "huginn desktop: $tag carries an unreadable version - not updated" >&2; return 1; }
+  if [ -n "$portable" ]; then
+    cur="$(readlink "$R/current" 2>/dev/null)"; cur="${cur#versions/}"
+    if [ -n "$cur" ] && ! _huginn_core_newer "$cur" "$ver"; then
+      echo "huginn desktop: $cur is current (the per-user app)"
+    else
+      echo "huginn desktop: ${cur:-?} -> $ver (the per-user app)"
+      _huginn_desktop_install || return 1
+      if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/" >/dev/null 2>&1; then
+        echo "  the app that is open runs ${cur:-the old version} until you quit it from its tray and open it again"
+      fi
+    fi
+  fi
+  if [ -n "$packaged" ]; then
+    local mgr='' have='' key='' obj file sha base tmp got
+    if command -v pacman >/dev/null 2>&1 && pacman -Qq huginn-desktop-kt >/dev/null 2>&1; then
+      mgr=pacman; key=linux-x64-arch; have="$(pacman -Q huginn-desktop-kt 2>/dev/null | awk '{print $2}')"
+    elif command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W -f='${Status}' huginn-desktop-kt 2>/dev/null | grep -q 'install ok installed'; then
+      mgr=apt; key=linux-x64; have="$(dpkg-query -W -f='${Version}' huginn-desktop-kt 2>/dev/null)"
+    fi
+    have="${have%-*}"
+    if [ -z "$mgr" ]; then
+      echo "huginn desktop: /opt/huginn-desktop-kt belongs to no package this can update - skipped" >&2
+    elif [ -n "$have" ] && ! _huginn_core_newer "$have" "$ver"; then
+      echo "huginn desktop: $have is current (the $mgr package)"
+    else
+      obj="$(_huginn_json_obj "$man" "$key")"
+      file="$(_huginn_json_str "$obj" file)"; sha="$(_huginn_json_str "$obj" sha256)"
+      base="https://github.com/$HUGINN_REPO/releases/download/$tag"
+      if [ -z "$file" ] || ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{64}$'; then
+        echo "huginn desktop: $tag has no usable $key package - skipped" >&2
+      elif ! { [ -t 0 ] && [ -t 1 ]; }; then
+        echo "huginn desktop: the $mgr package is ${have:-?}, $ver is out. To update it:"
+        if [ "$mgr" = pacman ]; then echo "  curl -fLO $base/$file && sudo pacman -U ./$file"; else echo "  curl -fLO $base/$file && sudo apt install ./$file"; fi
+      else
+        echo "huginn desktop: ${have:-?} -> $ver (the $mgr package; sudo asks for your password)"
+        tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop-pkg.XXXXXX")" || return 1
+        if ! curl -fL --max-time 900 -o "$tmp/$file" "$base/$file"; then
+          rm -rf "$tmp"; echo "huginn desktop: download failed: $base/$file" >&2; return 1
+        fi
+        got="$(_huginn_sha256 "$tmp/$file")"
+        if [ "$got" != "$sha" ]; then
+          rm -rf "$tmp"; echo "huginn desktop: $file did not match its sha256 - discarded, nothing installed" >&2; return 1
+        fi
+        # A local FILE, never a URL: pacman -U <url> also fetches a .sig that
+        # these releases do not publish, and aborts.
+        if [ "$mgr" = pacman ]; then sudo pacman -U --noconfirm "$tmp/$file"; else sudo apt-get install -y "$tmp/$file"; fi
+        local rc=$?; rm -rf "$tmp"
+        [ "$rc" = 0 ] || { echo "huginn desktop: the $mgr update did not finish" >&2; return 1; }
+      fi
+    fi
+  fi
+  return 0
+}
+
 _huginn_desktop_uninstall() (
   set -u
   local R apps auto
@@ -1397,7 +1467,13 @@ _huginn_help_body() {
   huginn desktop install      Linux: install or repair the per-user,
                               self-updating build (no root; any distro)
   huginn desktop uninstall    Linux: remove that install (keeps settings)
-  huginn update               self-update this client from the repo
+  huginn desktop update       update the installed desktop app to the newest
+                              release (Windows, the per-user Linux app, or
+                              the Debian/Arch package with sudo)
+  huginn update               update everything huginn on this machine: this
+                              client, huginn core, the desktop app and the
+                              local-AI tier (whichever are installed). The
+                              client comes from the repo
                               ($HUGINN_REPO); without gh, from the
                               PINNED ${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT} mirror, never from
                               \$HUGINN_HOST${HUGINN_HOST:+, which is $HUGINN_HOST here}:
@@ -1584,6 +1660,14 @@ EOF
         echo "$(_huginn_color 90 1)  (previous version saved as $(basename "$dest").bak)$(_huginn_color 0 1)"
         # Lockstep (D10): the core this client drives follows it.
         if _huginn_core_bin >/dev/null 2>&1; then huginn core update || true; fi
+        # Every huginn component on this machine, not only the CLI and the core
+        # (owner, 2026-10-16): the desktop app and the local-AI tier follow.
+        _huginn_desktop_update || true
+        if [ -d "${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}" ] && [ -s "$HOME/.huginn/huginn-local" ] && command -v node >/dev/null 2>&1; then
+          # It asks before it changes anything, so only where it can ask.
+          if [ -t 0 ]; then echo "huginn local: updating the local-AI tier"; huginn local update || true
+          else echo "huginn local: run 'huginn local update' in a terminal to update the local-AI tier"; fi
+        fi
       else
         rm -f "$tmp" 2>/dev/null
         echo "huginn: update failed (gh unavailable or errored, and the $uh mirror did not answer either)" >&2; return 1
@@ -1651,6 +1735,7 @@ EOF
         ''|both|all)             want='' ;;
         install)                 _huginn_desktop_install; return $? ;;
         uninstall|remove)        _huginn_desktop_uninstall; return $? ;;
+        update)                  _huginn_desktop_update; return $? ;;
         win|windows|exe)         want='windows-x64' ;;
         linux|deb|debian|ubuntu) want='linux-x64' ;;
         arch|pacman|pkg)         want='linux-x64-arch' ;;

@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.3
+# Version: 2.3.4
 
-$script:HUGINN_VERSION = '2.3.3'
+$script:HUGINN_VERSION = '2.3.4'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -399,6 +399,47 @@ function _Huginn-DesktopRelease {
   $man = _Huginn-Get "https://github.com/$script:HUGINN_REPO/releases/download/$tag/manifest.json"
   if (-not $man) { return $null }
   try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
+}
+
+# `huginn desktop update` (and the desktop step of `huginn update`): bring the
+# installed Huginn Desktop to the newest desktop-v release. The installer comes
+# from the release, is checked against the sha256 in that release's manifest,
+# and runs silently (it is per-user: no administrator). An app that was open is
+# opened again afterwards. Not installed: nothing to do, silently.
+function _Huginn-DesktopUpdate {
+  $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\huginn-desktop-kt'
+  $reg = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+  if (-not $reg) { return }
+  $have = "$($reg.DisplayVersion)"
+  $rel = _Huginn-DesktopRelease
+  if (-not $rel) { _Huginn-Say "huginn desktop: could not read the release feed - not updated" Yellow; return }
+  $ver = "$($rel.manifest.version)"
+  if ($ver -notmatch '^\d+\.\d+\.\d+$') { _Huginn-Say "huginn desktop: $($rel.tag) carries an unreadable version - not updated" Yellow; return }
+  if ($have -and -not (_Huginn-CoreNewer $have $ver)) { Write-Host "huginn desktop: $have is current"; return }
+  $a = $rel.manifest.artifacts.'windows-x64'
+  $file = "$($a.file)"; $sha = "$($a.sha256)".ToLower()
+  if ($file -ne "Huginn-Desktop-Setup-$ver.exe" -or $sha -notmatch '^[0-9a-f]{64}$') {
+    _Huginn-Say "huginn desktop: $($rel.tag) has no usable Windows installer in its manifest - not updated" Yellow; return
+  }
+  Write-Host "huginn desktop: $(if ($have) { $have } else { '?' }) -> $ver"
+  $exe = Join-Path ([IO.Path]::GetTempPath()) $file
+  try {
+    Write-Host "  downloading $file ..."
+    Invoke-WebRequest "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$file" -OutFile $exe -UseBasicParsing
+    $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
+    if ($got -ne $sha) { _Huginn-Say "huginn desktop: $file did not match its sha256 - discarded, nothing installed" Red; return }
+    $app = Join-Path (Split-Path -Parent "$($reg.UninstallString)".Trim('"')) 'huginn-desktop-kt.exe'
+    $wasOpen = [bool](Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)
+    $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+    if ($p.ExitCode -ne 0) { _Huginn-Say "huginn desktop: the installer exited $($p.ExitCode) - see Settings > Apps" Red; return }
+    $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
+    Write-Host "  installed Huginn Desktop $now"
+    if ($wasOpen -and (Test-Path $app)) { Start-Process -FilePath $app; Write-Host "  opened it again" }
+  } catch {
+    _Huginn-Say "huginn desktop: update failed: $($_.Exception.Message)" Red
+  } finally {
+    Remove-Item -Force $exe -ErrorAction SilentlyContinue
+  }
 }
 
 # --- huginn core ---
@@ -892,7 +933,13 @@ function _Huginn-HelpBody {
   huginn desktop install      Linux: install or repair the per-user,
                               self-updating build (no root; any distro)
   huginn desktop uninstall    Linux: remove that install (keeps settings)
-  huginn update               self-update this client from the repo
+  huginn desktop update       update the installed desktop app to the newest
+                              release (Windows, the per-user Linux app, or
+                              the Debian/Arch package with sudo)
+  huginn update               update everything huginn on this machine: this
+                              client, huginn core, the desktop app and the
+                              local-AI tier (whichever are installed). The
+                              client comes from the repo
                               ($script:HUGINN_REPO); without gh, from the
                               PINNED $(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }) mirror, never from
                               `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }):
@@ -1102,9 +1149,12 @@ function huginn {
       _Huginn-Say "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." Yellow
       # Lockstep (D10): the core this client drives follows it - run by the NEW
       # client, in a child shell, since this session still holds the old one.
-      if (_Huginn-CoreBin) {
-        & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command ". '$($dest -replace "'", "''")'; huginn core update"
-      }
+      # Every huginn component on this machine follows, not only the CLI and
+      # the core (owner, 2026-10-16): the desktop app too.
+      $chain = @()
+      if (_Huginn-CoreBin) { $chain += 'huginn core update' }
+      $chain += 'huginn desktop update'
+      & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command (". '$($dest -replace "'", "''")'; " + ($chain -join '; '))
     } else { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
   } elseif ($args[0] -eq 'list' -or $args[0] -eq 'ls') {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
@@ -1337,6 +1387,7 @@ function huginn {
     # install/uninstall are the bash client's per-user Linux install (huginn.sh,
     # _huginn_desktop_install). Named here so the verb set matches, and so the
     # answer on Windows is a pointer rather than "usage".
+    if ($arg -eq 'update') { _Huginn-DesktopUpdate; return }
     if ($arg -in 'install', 'uninstall', 'remove') {
       _Huginn-Fail ("huginn: 'desktop $arg' is the Linux per-user install (the bash client: huginn.sh).`n" +
                     "  On Windows the installer IS per-user and updates itself: huginn desktop windows")
@@ -1599,7 +1650,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
     $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } elseif ($prev -eq 'desktop') {
-    $candidates = 'windows', 'linux', 'arch', 'portable', 'install', 'uninstall', 'both'
+    $candidates = 'windows', 'linux', 'arch', 'portable', 'install', 'uninstall', 'update', 'both'
   } elseif ($prev -eq 'local') {
     $candidates = 'status', 'on', 'plan', 'persist', 'off', 'unit', 'update', 'doctor', '--help'
   } elseif ($prev -eq 'device') {
