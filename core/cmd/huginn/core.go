@@ -51,6 +51,8 @@ func core(args []string) int {
 		return coreUninstall()
 	case "status":
 		return coreStatus()
+	case "start":
+		return coreStart()
 	case "pair":
 		return corePair(args[1:])
 	case "tray":
@@ -414,5 +416,40 @@ func corePair(args []string) int {
 	} else {
 		fmt.Printf("paired with %s (loopback, plain http)\n", *url)
 	}
+	return 0
+}
+
+// coreStart starts an installed core that is not running: through its service,
+// and on Windows directly when Task Scheduler holds the task back. The desktop
+// app's and the console's "Start huginn core" are this.
+func coreStart() int {
+	if st, up := coreState(2 * time.Second); up {
+		fmt.Println("huginn core " + st.Version + " is already running")
+		return 0
+	}
+	if !serviceInstalled(stableBinary()) {
+		fmt.Fprintln(os.Stderr, "huginn core is not set up to start at boot: huginn core install")
+		return 1
+	}
+	switch runtime.GOOS {
+	case "windows":
+		exec.Command("schtasks", "/Run", "/TN", service.TaskName).Run()
+		if _, up := waitCore(8*time.Second, func(_ coreSnapshot, up bool) bool { return up }); !up {
+			if _, up := startDirectly(); !up {
+				return 1
+			}
+		}
+	default:
+		if out, err := exec.Command("systemctl", "--user", "start", service.UnitName).CombinedOutput(); err != nil {
+			fmt.Fprintln(os.Stderr, "systemctl --user start "+service.UnitName+": "+strings.TrimSpace(string(out)))
+			return 1
+		}
+		if _, up := waitCore(15*time.Second, func(_ coreSnapshot, up bool) bool { return up }); !up {
+			fmt.Fprintln(os.Stderr, "huginn core did not answer after starting: huginn core status says why")
+			return 1
+		}
+	}
+	st, _ := coreState(2 * time.Second)
+	fmt.Println("huginn core " + st.Version + " is running")
 	return 0
 }

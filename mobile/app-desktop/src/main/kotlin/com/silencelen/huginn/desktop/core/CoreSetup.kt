@@ -117,14 +117,16 @@ internal object CoreSetup {
         Files.isRegularFile(Path.of(cfg, "systemd", "user", "huginn-core.service"))
     }
 
-    /** Starts an installed core that is not running. No prompt on either platform. */
+    /**
+     * Starts an installed core that is not running: `huginn core start`, which
+     * uses the boot service and, on Windows, starts the core directly when Task
+     * Scheduler holds the task back (Energy Saver on battery queued every start
+     * on PC01, 2026-10-16). No prompt on either platform.
+     */
     suspend fun startService(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val r = if (windows) {
-                run(listOf("schtasks", "/Run", "/TN", "Huginn Core"), timeoutS = 30)
-            } else {
-                run(listOf("systemctl", "--user", "start", "huginn-core.service"), timeoutS = 30)
-            }
+            val bin = installedBinary() ?: error("huginn core is not installed")
+            val r = run(listOf(bin.toString(), "core", "start"), timeoutS = 60)
             check(r.exit == 0) { r.output.lines().lastOrNull { it.isNotBlank() } ?: "could not start huginn core (exit ${r.exit})" }
         }
     }

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -517,14 +516,11 @@ func (m *model) run(what string, args ...string) tea.Cmd {
 	})
 }
 
-func startCore() error {
-	var c *exec.Cmd
-	if runtime.GOOS == "windows" {
-		c = exec.Command("schtasks", "/Run", "/TN", "Huginn Core")
-	} else {
-		c = exec.Command("systemctl", "--user", "start", "huginn-core.service")
-	}
-	if out, err := c.CombinedOutput(); err != nil {
+// startCore is `huginn core start`: the service, and on Windows a direct
+// start when Task Scheduler holds the task back.
+func startCore(bin string) error {
+	out, err := exec.Command(bin, "core", "start").CombinedOutput()
+	if err != nil {
 		return errors.New(strings.TrimSpace(string(out)))
 	}
 	return nil

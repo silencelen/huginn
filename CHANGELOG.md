@@ -8,6 +8,19 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.1] - 2026-10-16
+
+### Fixed
+- **Windows: an update on battery no longer leaves huginn core stopped.** With Energy Saver on, which
+  Windows 11 switches on at 20% battery, Task Scheduler launched every start of the "Huginn Core" task
+  and then held it queued, so the restart an update asks for never happened. The core stayed down
+  until the laptop was charged (PC01, 2026-10-16). When the task has not started the core within
+  20 seconds, the update now starts it directly for this login. The queued task steps aside when it
+  finally runs, and the next boot is the task's again. The same happens when the domain controller
+  cannot be reached at wake.
+- **`huginn core start`** (new) starts a core that is set up but not running, with the same fallback
+  on Windows. The desktop app's and the console's "Start huginn core" now use it.
+
 ## [2.3.0] - 2026-10-15
 
 ### Added

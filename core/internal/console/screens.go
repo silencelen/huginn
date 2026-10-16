@@ -33,7 +33,8 @@ func (m *model) gateKey(s string) tea.Cmd {
 	switch s {
 	case "s":
 		m.say("starting huginn core…", true)
-		return m.act(func(context.Context) (string, error) { return "huginn core started", startCore() })
+		bin := m.o.Binary
+		return m.act(func(context.Context) (string, error) { return "huginn core started", startCore(bin) })
 	case "i":
 		return m.run("huginn core install", "core", "install")
 	case "a":

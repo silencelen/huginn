@@ -1,5 +1,14 @@
 # Huginn Desktop changelog
 
+## 2.3.1
+
+Carries core 2.3.1.
+
+### Fixed
+- **"Start huginn core" works on a Windows laptop on battery.** It runs `huginn core start`, which
+  starts the core directly when Windows' Energy Saver holds the boot task back. Updating the app
+  restarts its core the same way, instead of leaving it stopped until the laptop is charged.
+
 ## 2.3.0
 
 Carries core 2.3.0. The core now includes the huginn console, so plain `huginn` in a terminal on a
