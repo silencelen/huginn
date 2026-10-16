@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.6
+# Version: 2.3.7
 
-$script:HUGINN_VERSION = '2.3.6'
+$script:HUGINN_VERSION = '2.3.7'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -148,9 +148,102 @@ function _Huginn-AppdWhy {
 # of every `huginn` call, so NO_COLOR set later in the session is honoured.
 $script:HuginnColorOn = -not $env:NO_COLOR -and -not [Console]::IsOutputRedirected
 function _Huginn-Say {
-  param([string]$Text, [string]$Color)
-  if ($Color -and $script:HuginnColorOn) { Write-Host $Text -ForegroundColor $Color }
-  else { Write-Host $Text }
+  param([string]$Text, [string]$Color, [switch]$NoNewline)
+  if ($Color -and $script:HuginnColorOn) { Write-Host $Text -ForegroundColor $Color -NoNewline:$NoNewline }
+  else { Write-Host $Text -NoNewline:$NoNewline }
+}
+
+# --- installer-style progress (huginn.sh has the same block, same look) --------
+# One line per component, a turning wingbeat (BRAND.md section 6) while a step
+# runs and a bar with size and speed while something downloads, both redrawn in
+# place and settled into one final line. Redirected: only the final lines.
+# Glyphs are built from [char] codes so this file stays 7-bit (Windows
+# PowerShell 5.1 reads it in the ANSI code page); they are drawn only where the
+# console can show them (Windows Terminal, or a UTF-8 console), else 7-bit twins.
+function _Huginn-UiTty { (-not [Console]::IsOutputRedirected) -and ($env:TERM -ne 'dumb') }
+function _Huginn-UiUni {
+  if ($env:HUGINN_ASCII -eq '1') { return $false }
+  if ($env:HUGINN_ASCII -eq '0') { return $true }
+  return ([bool]$env:WT_SESSION -or ([Console]::OutputEncoding.CodePage -eq 65001))
+}
+function _Huginn-UiWidth { try { [Math]::Max(40, [Console]::WindowWidth - 1) } catch { 79 } }
+function _Huginn-UiClear { if (_Huginn-UiTty) { $w = _Huginn-UiWidth; [Console]::Write("`r" + (' ' * $w) + "`r") } }
+function _Huginn-UiLine {
+  param([string]$State, [string]$Comp, [string]$Text)
+  $u = _Huginn-UiUni
+  $g = switch ($State) {
+    'ok'    { if ($u) { [string][char]0x25A0 } else { '+' } }
+    'fail'  { if ($u) { [string][char]0x00D7 } else { 'x' } }
+    'warn'  { if ($u) { [string][char]0x25B2 } else { '!' } }
+    default { if ($u) { [string][char]0x25E6 } else { '-' } }
+  }
+  $c = switch ($State) { 'ok' { 'Cyan' } 'fail' { 'Red' } 'warn' { 'Yellow' } default { 'DarkGray' } }
+  _Huginn-UiClear
+  Write-Host '     ' -NoNewline
+  _Huginn-Say $g $c -NoNewline
+  Write-Host ('  ' + $Comp.PadRight(9) + ' ' + $Text)
+}
+function _Huginn-UiHead { param([string]$Text) _Huginn-Say '(o>' Magenta -NoNewline; Write-Host " $Text" }
+function _Huginn-UiFrames {
+  if (-not (_Huginn-UiUni)) { if ($env:HUGINN_REDUCED_MOTION) { return @('-_-') }; return @('-_-', '\_/', '-_-', "/'\") }
+  $a = "$([char]0x2500)$([char]0x2584)$([char]0x2500)"
+  if ($env:HUGINN_REDUCED_MOTION) { return @($a) }
+  return @($a, "$([char]0x2572)$([char]0x2584)$([char]0x2571)", $a, "$([char]0x2571)$([char]0x2580)$([char]0x2572)")
+}
+function _Huginn-UiLive {
+  param([string]$Frame, [string]$Comp, [string]$Text)
+  $w = _Huginn-UiWidth
+  $line = '    ' + $Frame + ' ' + $Comp.PadRight(9) + ' ' + $Text
+  if ($line.Length -gt $w) { $line = $line.Substring(0, $w) }
+  [Console]::Write("`r" + $line.PadRight($w))
+}
+# Runs $Exe with $Arguments, its output to $Log, turning the wingbeat while it
+# runs. Returns its exit code.
+function _Huginn-UiSpin {
+  param([string]$Comp, [string]$What, [string]$Exe, [string[]]$Arguments, [string]$Log)
+  $o = "$Log.out"; $e = "$Log.err"
+  $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e
+  $null = $p.Handle   # without it a redirected process reports no ExitCode
+  $fr = @(_Huginn-UiFrames); $i = 0
+  while (-not $p.HasExited) {
+    if (_Huginn-UiTty) { _Huginn-UiLive $fr[$i % $fr.Count] $Comp $What }
+    $i++; Start-Sleep -Milliseconds 125
+  }
+  $p.WaitForExit()
+  (@(Get-Content $o -ErrorAction SilentlyContinue) + @(Get-Content $e -ErrorAction SilentlyContinue)) | Set-Content $Log
+  Remove-Item $o, $e -Force -ErrorAction SilentlyContinue
+  _Huginn-UiClear
+  return $p.ExitCode
+}
+# Downloads $Url to $Out with a bar ($Size bytes; 0 = take the server's).
+function _Huginn-UiDownload {
+  param([string]$Url, [string]$Out, [long]$Size, [string]$Comp)
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  $req = [Net.HttpWebRequest]::Create($Url); $req.Timeout = 60000; $req.ReadWriteTimeout = 300000
+  $resp = $req.GetResponse()
+  if ($Size -le 0) { $Size = $resp.ContentLength }
+  $in = $resp.GetResponseStream(); $fs = [IO.File]::Create($Out)
+  $buf = New-Object byte[] 65536; $got = [long]0; $last = -1000
+  $sw = [Diagnostics.Stopwatch]::StartNew(); $fr = @(_Huginn-UiFrames); $i = 0
+  $on = if (_Huginn-UiUni) { [string][char]0x2588 } else { '#' }; $off = if (_Huginn-UiUni) { [string][char]0x2591 } else { '-' }
+  $tty = _Huginn-UiTty
+  try {
+    while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+      $fs.Write($buf, 0, $n); $got += $n
+      if ($tty -and ($sw.ElapsedMilliseconds - $last -ge 125)) {
+        $last = $sw.ElapsedMilliseconds
+        $mbps = ($got / 1MB) / [Math]::Max(0.1, $sw.Elapsed.TotalSeconds)
+        if ($Size -gt 0) {
+          $pct = [Math]::Min(100, [int][Math]::Floor($got * 100 / $Size)); $fill = [int][Math]::Floor($pct * 24 / 100)
+          $t = 'downloading  {0}{1} {2,3}%  {3:N1}/{4:N1} MB  {5:N1} MB/s' -f ($on * $fill), ($off * (24 - $fill)), $pct, ($got / 1MB), ($Size / 1MB), $mbps
+        } else {
+          $t = 'downloading  {0:N1} MB  {1:N1} MB/s' -f ($got / 1MB), $mbps
+        }
+        _Huginn-UiLive $fr[$i % $fr.Count] $Comp $t; $i++
+      }
+    }
+  } finally { $fs.Close(); $in.Close(); $resp.Close() }
+  _Huginn-UiClear
 }
 
 # ONE refusal path for the whole client, and the only thing here that a script
@@ -433,37 +526,44 @@ function _Huginn-DesktopAskQuit {
 function _Huginn-DesktopUpdate {
   $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\huginn-desktop-kt'
   $reg = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
-  if (-not $reg) { return }
+  if (-not $reg) { _Huginn-UiLine 'skip' 'desktop' 'not installed (huginn desktop)'; return }
   $have = "$($reg.DisplayVersion)"
   $rel = _Huginn-DesktopRelease
-  if (-not $rel) { _Huginn-Say "huginn desktop: could not read the release feed - not updated" Yellow; return }
+  if (-not $rel) { _Huginn-UiLine 'fail' 'desktop' 'could not read the release feed - not updated'; return }
   $ver = "$($rel.manifest.version)"
-  if ($ver -notmatch '^\d+\.\d+\.\d+$') { _Huginn-Say "huginn desktop: $($rel.tag) carries an unreadable version - not updated" Yellow; return }
-  if ($have -and -not (_Huginn-CoreNewer $have $ver)) { Write-Host "huginn desktop: $have is current"; return }
+  if ($ver -notmatch '^\d+\.\d+\.\d+$') { _Huginn-UiLine 'fail' 'desktop' "$($rel.tag) carries an unreadable version - not updated"; return }
+  if ($have -and -not (_Huginn-CoreNewer $have $ver)) { _Huginn-UiLine 'ok' 'desktop' "$have is current"; return }
   $a = $rel.manifest.artifacts.'windows-x64'
   $file = "$($a.file)"; $sha = "$($a.sha256)".ToLower()
   if ($file -ne "Huginn-Desktop-Setup-$ver.exe" -or $sha -notmatch '^[0-9a-f]{64}$') {
-    _Huginn-Say "huginn desktop: $($rel.tag) has no usable Windows installer in its manifest - not updated" Yellow; return
+    _Huginn-UiLine 'fail' 'desktop' "$($rel.tag) has no usable Windows installer in its manifest - not updated"; return
   }
-  Write-Host "huginn desktop: $(if ($have) { $have } else { '?' }) -> $ver"
+  $from = if ($have) { $have } else { '?' }
   $exe = Join-Path ([IO.Path]::GetTempPath()) $file
   try {
-    Write-Host "  downloading $file ..."
-    Invoke-WebRequest "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$file" -OutFile $exe -UseBasicParsing
+    _Huginn-UiDownload "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$file" $exe ([long]$a.size) 'desktop'
     $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
-    if ($got -ne $sha) { _Huginn-Say "huginn desktop: $file did not match its sha256 - discarded, nothing installed" Red; return }
+    if ($got -ne $sha) { _Huginn-UiLine 'fail' 'desktop' "$file did not match its sha256 - discarded, nothing installed"; return }
     $app = Join-Path (Split-Path -Parent "$($reg.UninstallString)".Trim('"')) 'huginn-desktop-kt.exe'
     $wasOpen = [bool](Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)
     # Ask it to quit the way its own tray menu does, before the installer has
     # to end it by force (a forced end left the launcher showing error dialogs).
-    if ($wasOpen -and (_Huginn-DesktopAskQuit)) { Write-Host "  closed the app" }
-    $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
-    if ($p.ExitCode -ne 0) { _Huginn-Say "huginn desktop: the installer exited $($p.ExitCode) - see Settings > Apps" Red; return }
+    if ($wasOpen) {
+      if (_Huginn-UiTty) { _Huginn-UiLive (@(_Huginn-UiFrames)[0]) 'desktop' 'closing the app' }
+      $null = _Huginn-DesktopAskQuit
+    }
+    $p = Start-Process -FilePath $exe -ArgumentList '/S' -PassThru
+    $null = $p.Handle
+    $fr = @(_Huginn-UiFrames); $i = 0
+    while (-not $p.HasExited) { if (_Huginn-UiTty) { _Huginn-UiLive $fr[$i % $fr.Count] 'desktop' "installing $ver" }; $i++; Start-Sleep -Milliseconds 125 }
+    $p.WaitForExit()
+    if ($p.ExitCode -ne 0) { _Huginn-UiLine 'fail' 'desktop' "the installer exited $($p.ExitCode) - see Settings > Apps"; return }
     $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
-    Write-Host "  installed Huginn Desktop $now"
-    if ($wasOpen -and (Test-Path $app)) { Start-Process -FilePath $app; Write-Host "  opened it again" }
+    $tail = ''
+    if ($wasOpen -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = ', reopened' }
+    _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail"
   } catch {
-    _Huginn-Say "huginn desktop: update failed: $($_.Exception.Message)" Red
+    _Huginn-UiLine 'fail' 'desktop' "update failed: $($_.Exception.Message)"
   } finally {
     Remove-Item -Force $exe -ErrorAction SilentlyContinue
   }
@@ -509,19 +609,31 @@ function _Huginn-CoreFetch {
       $a = $rel.manifest.artifacts.'windows-x64'
       if (-not $a -or ($a.file -notmatch '^huginn-[0-9][^\\/]*-windows-x64\.exe$')) { _Huginn-Fail "huginn core: $($rel.tag) names no usable Windows build - refused" }
       if ($a.sha256 -notmatch '^[0-9a-f]{64}$') { _Huginn-Fail "huginn core: $($rel.tag) carries no usable sha256 - refused" }
-      Write-Host "  downloading $($a.file) ($($rel.tag)) ..."
-      try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
-      Invoke-WebRequest -Uri "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$($a.file)" -OutFile $tmp -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+      _Huginn-UiDownload "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$($a.file)" $tmp ([long]$a.size) 'core'
       # THE GATE: the only integrity check between GitHub and an executable
       # in your profile.
       $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
       if ($got -ne $a.sha256) { _Huginn-Fail "huginn core: $($a.file) did not match its sha256 - discarded, nothing installed" }
     }
-    # To the screen: inside a function a native command's output is part of
-    # its RETURN value, and the caller's `$null = _Huginn-CoreFetch` threw
-    # away "restarted huginn core: X -> Y" with it.
-    & $tmp core self-install | Out-Host
-    if ($LASTEXITCODE -ne 0) { _Huginn-Fail "huginn core: self-install failed" }
+    # Under the wingbeat, its report to a log: one summary line here, the whole
+    # report on failure or when not compact (`huginn core install`). (Never as
+    # this function's output: that is its RETURN value, and the caller's
+    # `$null = _Huginn-CoreFetch` once threw the report away with it.)
+    $log = "$tmp.log"
+    $rc = _Huginn-UiSpin 'core' 'installing' $tmp @('core', 'self-install') $log
+    $report = @(Get-Content $log -ErrorAction SilentlyContinue); Remove-Item $log -Force -ErrorAction SilentlyContinue
+    if ($rc -ne 0) {
+      _Huginn-UiLine 'fail' 'core' 'self-install failed:'; $report | ForEach-Object { Write-Host "            $_" }
+      _Huginn-Fail "huginn core: self-install failed"
+    }
+    $now = ''; if (((& $tmp version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $now = $Matches[1] }
+    $how = 'installed'
+    if ($report -match 'restarted huginn core') { $how = 'installed, restarted' }
+    if ($report -match 'starting huginn core directly') { $how = 'installed, started directly (Windows held its task back)' }
+    if ($report -match 'has not come back yet') { $how = 'installed; the running core restarts onto it shortly' }
+    $from = if ($env:HUGINN_UI_FROM) { "$env:HUGINN_UI_FROM -> " } else { '' }
+    _Huginn-UiLine 'ok' 'core' "$from$now   $how"
+    if (-not $env:HUGINN_UI_COMPACT) { $report | ForEach-Object { Write-Host "            $_" } }
   } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
   return (_Huginn-CoreBin)
 }
@@ -547,21 +659,24 @@ function _Huginn-CoreUpdate {
   if (((& $bin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $cur = $Matches[1] }
   if (-not $env:HUGINN_CORE_FILE) {
     $rel = _Huginn-CoreRelease
-    if (-not $rel) { Write-Host "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept"; return }
+    if (-not $rel) { _Huginn-UiLine 'fail' 'core' "could not read the release feed (offline or rate-limited) - $cur kept"; return }
     $latest = $rel.tag -replace '^cli-v', ''
     if (-not (_Huginn-CoreNewer $cur $latest)) {
       $run = ''
       if (((& $bin core status 2>$null) -join "`n") -match '\(o> huginn core (\S+) ') { $run = $Matches[1] }
       if ($run -and $run -ne $cur) {
         # Installed but not running yet (an earlier restart could not be made).
-        Write-Host "huginn core $cur is installed, but the running core is $run - restarting it"
-        & $bin core self-install; return
+        $log = Join-Path ([IO.Path]::GetTempPath()) ("huginn-restart-" + [guid]::NewGuid().ToString('N') + '.log')
+        $rc = _Huginn-UiSpin 'core' "restarting $run onto $cur" $bin @('core', 'self-install') $log
+        if ($rc -eq 0) { _Huginn-UiLine 'ok' 'core' "$cur   restarted (it was still running $run)" }
+        else { _Huginn-UiLine 'fail' 'core' 'the restart failed:'; Get-Content $log | ForEach-Object { Write-Host "            $_" } }
+        Remove-Item $log -Force -ErrorAction SilentlyContinue; return
       }
-      Write-Host "huginn core $cur is current (newest release $latest)"; return
+      _Huginn-UiLine 'ok' 'core' "$cur is current"; return
     }
-    Write-Host "huginn core: $cur -> $latest"
   }
-  $null = _Huginn-CoreFetch
+  $env:HUGINN_UI_FROM = $cur
+  try { $null = _Huginn-CoreFetch } finally { Remove-Item Env:HUGINN_UI_FROM -ErrorAction SilentlyContinue }
 }
 
 # Pair the core with the host this shell already reaches over ssh, if it is not
@@ -1118,74 +1233,56 @@ function huginn {
   } elseif ($args[0] -eq 'update') {
     $dest = if ($PSCommandPath) { $PSCommandPath } else { "$HOME\.huginn\huginn.ps1" }
     $tmp  = "$dest.tmp"
-    $got  = $false
-    # ⚠ NAMED BEFORE THE FIRST MESSAGE THAT MENTIONS IT. The mirror host is
-    # PINNED and is never $HUGINN_HOST - this path downloads the file that is
-    # then loaded into the shell, so the host it comes from is a trust root and
-    # not a convenience - and both fallback lines said "falling back to the $H
-    # mirror", i.e. they named the one host this deliberately does not use, in
-    # the messages whose whole job is naming the one it does. A run could print
-    # "falling back to the rvhost mirror" and "pulled from huginn mirror" three
-    # lines apart.
+    $got  = $false; $src = ''
+    $t0 = [Diagnostics.Stopwatch]::StartNew()
     $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-    Write-Host "huginn: updating client -> $dest"
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
+    _Huginn-UiHead 'huginn update'
+    $gh = Get-Command gh -ErrorAction SilentlyContinue
+    if ($gh) {
+      # gh's answer to $tmp, its complaints to a separate file - never mixed.
+      $err = "$tmp.err"
       try {
-        # Set-Content -Encoding ascii, NOT Out-File -Encoding utf8: on PS 5.1 the
-        # latter writes a UTF-8 BOM, which is exactly the parse failure commit
-        # 691d602 ("pure ASCII") was written to eliminate. The client is ASCII.
-        gh api "repos/$script:HUGINN_REPO/contents/client/huginn.ps1" -H "Accept: application/vnd.github.raw" 2>$null |
-          Set-Content -Path $tmp -Encoding ascii
-        # try/catch cannot catch a native command's failure, so check the code.
-        # A non-empty ERROR BODY is still non-empty - length alone is not a gate.
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 2000) {
-          $got = $true; _Huginn-Say "  pulled from GitHub ($script:HUGINN_REPO) via gh" Cyan
-        } else {
-          _Huginn-Say "  (gh fetch failed - falling back to the pinned $uh mirror)" DarkGray
-        }
-      } catch { _Huginn-Say "  (gh threw - falling back to the pinned $uh mirror)" DarkGray }
-    } else {
-      _Huginn-Say "  (gh not installed - using the scp fallback)" DarkGray
+        $p = Start-Process -FilePath $gh.Source -ArgumentList @('api', "repos/$script:HUGINN_REPO/contents/client/huginn.ps1", '-H', '"Accept: application/vnd.github.raw"') `
+               -NoNewWindow -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $err
+        $null = $p.Handle; $fr = @(_Huginn-UiFrames); $i = 0
+        while (-not $p.HasExited) { if (_Huginn-UiTty) { _Huginn-UiLive $fr[$i % $fr.Count] 'client' 'fetching' }; $i++; Start-Sleep -Milliseconds 125 }
+        $p.WaitForExit(); _Huginn-UiClear
+        if ($p.ExitCode -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 2000) { $got = $true; $src = 'from GitHub' }
+      } catch {}
+      Remove-Item $err -Force -ErrorAction SilentlyContinue
     }
     if (-not $got) {
-      # BatchMode so a device without an authorized key fails instead of silently
-      # dropping into a password prompt mid-"update".
-      # The downloaded file is loaded into the shell, so the host it comes from is a
-      # trust root, not just a transport. Say which host is being trusted when it is
-      # not the pinned default.
-      if ($uh -ne $script:HUGINN_UPDATE_HOST_DEFAULT) {
-        _Huginn-Say "  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)" Yellow
-      }
-      scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn.ps1" $tmp
-      if ($LASTEXITCODE -eq 0) { $got = $true; _Huginn-Say "  pulled from $uh mirror via scp" Cyan }
+      if ($uh -ne $script:HUGINN_UPDATE_HOST_DEFAULT) { _Huginn-UiLine 'warn' 'client' "HUGINN_UPDATE_HOST is set: trusting $uh for this client's code" }
+      scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn.ps1" $tmp 2>$null
+      if ($LASTEXITCODE -eq 0) { $got = $true; $src = "from the $uh mirror" }
     }
-    # Validate before installing: a truncated download that overwrites the live
-    # client leaves every future shell broken, with no copy to fall back to.
     if ($got) {
       try {
-        $null = [ScriptBlock]::Create((Get-Content $tmp -Raw))
+        $raw = Get-Content $tmp -Raw
+        $null = [ScriptBlock]::Create($raw)
+        $newv = ''; if ($raw -match "script:HUGINN_VERSION = '([^']+)'") { $newv = $Matches[1] }
         if (Test-Path $dest) { Copy-Item -Force $dest "$dest.bak" -ErrorAction SilentlyContinue }
         Move-Item -Force $tmp $dest
-        _Huginn-Say "  (previous version saved as $(Split-Path -Leaf $dest).bak)" DarkGray
+        if ($newv -eq $script:HUGINN_VERSION) { _Huginn-UiLine 'ok' 'client' "$($script:HUGINN_VERSION) is current" }
+        else { _Huginn-UiLine 'ok' 'client' "$($script:HUGINN_VERSION) -> $newv   $src (new windows load it; this one: . `$PROFILE)" }
       } catch {
-        _Huginn-Say "huginn: downloaded client failed its syntax check - keeping the current version" Red
+        _Huginn-UiLine 'fail' 'client' "the downloaded client failed its syntax check - kept $($script:HUGINN_VERSION)"
         $got = $false
       }
     }
     if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-    # NOTE: dot-sourcing here would only update this function's local scope, not the global
-    # session - so we don't pretend to hot-reload. Tell the user to reload.
-    if ($got) {
-      _Huginn-Say "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." Yellow
-      # Lockstep (D10): the core this client drives follows it - run by the NEW
-      # client, in a child shell, since this session still holds the old one.
-      # Every huginn component on this machine follows, not only the CLI and
-      # the core (owner, 2026-10-16): the desktop app too.
-      $chain = @()
-      if (_Huginn-CoreBin) { $chain += 'huginn core update' }
-      $chain += 'huginn desktop update'
-      & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command (". '$($dest -replace "'", "''")'; " + ($chain -join '; '))
-    } else { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
+    if (-not $got) { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
+    # Every huginn component on this machine follows, not only the CLI (owner,
+    # 2026-10-16): run by the NEW client, in a child shell, since this session
+    # still holds the old one.
+    $chain = @("`$env:HUGINN_UI_COMPACT = '1'")
+    if (_Huginn-CoreBin) { $chain += 'huginn core update' } else { $chain += "_Huginn-UiLine 'skip' 'core' 'not installed (huginn core install)'" }
+    $chain += 'huginn desktop update'
+    & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command (". '$($dest -replace "'", "''")'; " + ($chain -join '; '))
+    $ld = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR } elseif ($env:ProgramData) { Join-Path $env:ProgramData 'huginn-local' } else { 'C:\ProgramData\huginn-local' }
+    if (Test-Path $ld) { _Huginn-UiLine 'warn' 'local AI' "update it with 'huginn local update' (it asks for administrator approval)" }
+    else { _Huginn-UiLine 'skip' 'local AI' 'not installed' }
+    _Huginn-Say ("    done in {0} s" -f [int]$t0.Elapsed.TotalSeconds) DarkGray
   } elseif ($args[0] -eq 'list' -or $args[0] -eq 'ls') {
     ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
   } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
