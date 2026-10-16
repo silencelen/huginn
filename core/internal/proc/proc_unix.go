@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 func detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} }
@@ -25,3 +26,15 @@ func Elevated() bool { return os.Geteuid() == 0 }
 
 // Stop asks this user's process pid to exit (SIGTERM: the core shuts down cleanly).
 func Stop(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
+
+// WaitExit waits up to timeout for pid to be gone; false if it is still there.
+func WaitExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return true
+}
