@@ -352,3 +352,17 @@ func NotifyTest(hold time.Duration) error {
 	time.Sleep(hold)
 	return n.Withdraw("test:notify")
 }
+
+// Held: another tray of this user holds the one-tray lock right now. An
+// updater asks before it starts one, so an update does not briefly show two
+// icons while the running tray hands itself over (seen on stigo, 2.3.0-rc).
+func Held(lock string) bool {
+	f, ok := tryLock(lock)
+	if !ok {
+		return true
+	}
+	if f != nil {
+		f.Close()
+	}
+	return false
+}

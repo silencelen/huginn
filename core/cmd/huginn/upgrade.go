@@ -16,6 +16,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/ipc"
 	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/service"
+	"github.com/silencelen/huginn/core/internal/tray"
 	"github.com/silencelen/huginn/core/internal/version"
 )
 
@@ -270,6 +271,11 @@ func afterServiceInstall(bin string, autostart bool) {
 // tray would run as administrator in the person's desktop.
 func launchTray(bin string, st coreSnapshot) {
 	if st.Tray || runtime.GOOS == "android" || !proc.InteractiveSession() || proc.Elevated() {
+		return
+	}
+	// A tray that is reconnecting to the restarted core (and handing itself to
+	// the new binary) is not attached for a moment, but it holds the lock.
+	if tray.Held(filepath.Join(paths().Runtime, "tray.lock")) {
 		return
 	}
 	if err := proc.StartDetached(bin, "core", "tray"); err != nil {

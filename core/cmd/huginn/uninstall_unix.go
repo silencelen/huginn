@@ -132,6 +132,28 @@ func removeService(t *tally) {
 		return
 	}
 	t.gone("the huginn-core boot service and the tray's login entry")
+	undoLinger(t)
+}
+
+// undoLinger: linger huginn turned on goes off again; linger that was on
+// before huginn is the person's, and is only mentioned.
+func undoLinger(t *tally) {
+	user := os.Getenv("USER")
+	if b, err := os.ReadFile(lingerMarker()); err == nil {
+		if u := strings.TrimSpace(string(b)); u != "" {
+			user = u
+		}
+		if out, err := exec.Command("loginctl", "disable-linger", user).CombinedOutput(); err != nil {
+			t.stays("linger for " + user + " - huginn turned it on, and turning it off failed: " + strings.TrimSpace(string(out)) + " (loginctl disable-linger " + user + ")")
+			return
+		}
+		os.Remove(lingerMarker())
+		t.gone("linger for " + user + " (huginn core had turned it on)")
+		return
+	}
+	if out, err := exec.Command("loginctl", "show-user", user, "--property=Linger").Output(); err == nil && strings.Contains(string(out), "Linger=yes") {
+		t.stays("linger for " + user + " - it was on before huginn, so it stays (loginctl disable-linger " + user + " turns it off)")
+	}
 }
 
 func startService() {

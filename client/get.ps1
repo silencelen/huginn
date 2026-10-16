@@ -4,10 +4,13 @@
 #
 # 1. installs the huginn client (install.ps1, from the newest cli-v release -
 #    never from a moving branch),
-# 2. asks: keep huginn running in the background?  -> huginn core install
-#    (one UAC prompt: the boot task needs an administrator token),
-# 3. asks: install the desktop GUI too?             -> the desktop installer
-# Answers can be given up front: -Background y|n -Gui y|n. ASCII only.
+# 2. installs huginn core (huginn core install): the product itself, which
+#    carries the CLI and runs at boot (one UAC prompt: the boot task needs an
+#    administrator token),
+# 3. asks: install the desktop app too?            -> the desktop installer
+# 4. says what it installed, what runs at boot, and the next command.
+# The question can be answered up front: -Gui y|n. (-Background is accepted
+# and ignored: the core is always installed since 2.3.0.) ASCII only.
 param([string]$HuginnHost, [string]$Background, [string]$Gui)
 $ErrorActionPreference = 'Stop'
 $repo = 'silencelen/huginn'
@@ -16,7 +19,11 @@ function Ask([string]$q, [string]$preset) {
   $a = if ($preset) { $preset } else { Read-Host "$q [y/N]" }
   return ($a -match '^(y|yes)$')
 }
-if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) { throw "huginn: needs the OpenSSH client (Settings > Optional features > OpenSSH Client)" }
+if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
+  throw ("huginn: needs Windows' OpenSSH client, which is not installed. Add it from Settings > System > Optional features > " +
+         "'OpenSSH Client', or in an administrator PowerShell: Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0 " +
+         "- then run this again.")
+}
 $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=60" -UseBasicParsing
 $tag = ($rel | Where-Object { $_.tag_name -match '^cli-v[0-9]+\.[0-9]+\.[0-9]+$' } |
           Sort-Object { [version]($_.tag_name -replace '^cli-v','') } | Select-Object -Last 1).tag_name
@@ -52,16 +59,36 @@ if (-not $trusted -and [Environment]::UserInteractive -and -not [Console]::IsInp
   $trusted = Test-HuginnTrust
 }
 
-if (Ask 'Keep huginn running in the background (act mode and local AI with this PC signed out)?' $Background) {
-  if (-not $trusted) { Write-Host '  skipped: the host does not trust this key yet. Later: huginn core install' }
-  else { huginn core install }
-}
-if (Ask 'Install the desktop GUI too?' $Gui) {
+# huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it,
+# and the console and the desktop app need it running. Installed, not offered.
+Write-Host ''
+Write-Host 'Installing huginn core (it runs at boot, as you, and carries the CLI). Windows asks for administrator approval once.'
+$core = $false
+try { huginn core install; $core = ($LASTEXITCODE -eq 0) } catch { Write-Host "  huginn core install did not finish: $($_.Exception.Message)" }
+if (-not $core) { Write-Host '  run it again to see why: huginn core install' }
+$gui = $false
+if ($core -and (Ask 'Install the desktop app too (a window and tray on top of huginn core)?' $Gui)) {
   $url = huginn desktop windows
   if ($url) {
     $exe = Join-Path ([IO.Path]::GetTempPath()) (Split-Path $url -Leaf)
     Invoke-WebRequest $url -OutFile $exe -UseBasicParsing
     Start-Process $exe -Wait
+    $gui = $true
   } else { Write-Host '  could not find the desktop installer - later: huginn desktop' }
 }
-Write-Host 'Done. Open a new terminal, then: huginn help'
+# What happened, in one place (the install's answer to uninstall's Removed / Left behind).
+Write-Host ''
+Write-Host 'huginn is installed:'
+Write-Host '  the CLI         ~\.huginn (loaded by your PowerShell profile; new windows have huginn)'
+if ($core) { Write-Host '  huginn core     %LOCALAPPDATA%\huginn\bin\huginn.exe, started at boot by the task "Huginn Core"' }
+if ($gui)  { Write-Host '  the desktop app Huginn Desktop (Start menu)' }
+if ($trusted) { Write-Host "  SSH             'Host huginn' in ~\.ssh\config (the host trusts this key)" }
+else {
+  Write-Host "  SSH             'Host huginn' in ~\.ssh\config - NOT trusted yet"
+  Write-Host ''
+  Write-Host 'To finish: authorize the key shown above on the host, then run: huginn core install'
+  Write-Host '(it pairs huginn core with the host; nothing else needs doing again)'
+}
+Write-Host ''
+Write-Host 'Open a new terminal and run: huginn    (the console; huginn help lists every command)'
+

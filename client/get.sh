@@ -5,9 +5,11 @@
 #
 # 1. installs the huginn client (the same install.sh a clone runs, from the
 #    newest cli-v release - never from a moving branch),
-# 2. asks: keep huginn running in the background?  -> huginn core install
-# 3. asks: install the desktop GUI too?             -> huginn desktop install
-# Every answer can be given up front: HUGINN_BACKGROUND=y|n HUGINN_GUI=y|n.
+# 2. installs huginn core (huginn core install): the product itself, which
+#    carries the CLI and runs at boot (not on Termux or macOS, where it cannot),
+# 3. asks: install the desktop app too?            -> huginn desktop install
+# 4. says what it installed, what runs at boot, and the next command.
+# The question can be answered up front: HUGINN_GUI=y|n.
 #
 # POSIX sh on purpose: it runs before anything else is known about the machine.
 # Questions are read from /dev/tty because stdin is this script.
@@ -55,17 +57,46 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null; then
 fi
 TRUSTED=""
 ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
-
-if ask "Keep huginn running in the background (act mode and local AI with this machine signed out)?" "${HUGINN_BACKGROUND:-}"; then
-  if [ -z "$TRUSTED" ]; then
-    say "  skipped: the host does not trust this key yet. Later: huginn core install"
-  else
-    bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install' || say "  huginn core install did not finish - run it again to see why"
-  fi
-fi
+# huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it,
+# the console and the desktop app need it running. So it is installed, not
+# offered — except where it cannot run: Termux (the phone app is the device
+# there) and macOS (no core build yet).
+CORE=""
+case "$(uname -s 2>/dev/null)/$(uname -o 2>/dev/null)" in
+  */Android*) say "  huginn core does not run on Termux: this phone uses the CLI only (the huginn app is the device)" ;;
+  Darwin/*)   say "  huginn core has no macOS build yet: this Mac uses the CLI only" ;;
+  *)
+    say ""
+    say "Installing huginn core (it runs at boot, as you, and carries the CLI)"
+    if bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install'; then CORE=1
+    else say "  huginn core install did not finish - run it again to see why: huginn core install"; fi ;;
+esac
+GUI=""
 case "$(uname -o 2>/dev/null)" in Android*) ;; *)
-  if ask "Install the desktop GUI too?" "${HUGINN_GUI:-}"; then
-    bash -c '. "$HOME/.huginn/huginn.sh"; huginn desktop install' || say "  the desktop install did not finish - run: huginn desktop install"
+  if [ -n "$CORE" ] && ask "Install the desktop app too (a window and tray on top of huginn core)?" "${HUGINN_GUI:-}"; then
+    if bash -c '. "$HOME/.huginn/huginn.sh"; huginn desktop install'; then GUI=1
+    else say "  the desktop install did not finish - run: huginn desktop install"; fi
   fi ;;
 esac
-say "Done. Open a new terminal, then: huginn help"
+
+# What happened, in one place (the install's answer to uninstall's Removed / Left behind).
+say ""
+say "huginn is installed:"
+say "  the CLI         ~/.huginn (loaded by your shell; new terminals have 'huginn')"
+[ -n "$CORE" ] && say "  huginn core     ~/.local/bin/huginn, started at boot by systemd (huginn-core.service)"
+[ -n "$GUI" ]  && say "  the desktop app ~/.local/share/huginn-desktop (in your app menu)"
+say "  SSH             'Host huginn' in ~/.ssh/config$( [ -n "$TRUSTED" ] && echo ' (the host trusts this key)' || echo ' - NOT trusted yet')"
+if [ -z "$TRUSTED" ]; then
+  say ""
+  say "To finish: authorize the key shown above on the host, then run: huginn core install"
+  say "(it pairs huginn core with the host; nothing else needs doing again)"
+fi
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
+  [ -n "$CORE" ] && say "" && say "Note: ~/.local/bin is not on your PATH in this shell; a new login shell adds it on most systems." ;;
+esac
+if command -v fish >/dev/null 2>&1; then
+  say ""
+  say "fish: 'huginn' works there too (through huginn core at ~/.local/bin/huginn)."
+fi
+say ""
+say "Open a new terminal and run: huginn    (the console; huginn help lists every command)"
