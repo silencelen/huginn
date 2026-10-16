@@ -70,7 +70,7 @@ object TerminalLaunch {
         "help", "version", "update", "list", "ls", "status", "st", "rounds", "round",
         "headroom", "devices", "projects", "project", "llm", "device", "core", "local",
         "uninstall", "desktop", "usage", "cost", "ccusage", "solo", "rename", "mv",
-        "kill", "end", "archive", "revive", "unarchive", "attach",
+        "kill", "end", "archive", "revive", "unarchive", "attach", "console", "setup",
     )
 
     /**
