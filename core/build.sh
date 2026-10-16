@@ -26,6 +26,20 @@ TARGETS=(
   "android-arm64 android arm64   huginn-$V-android-arm64"
 )
 cd "$HERE"
+# The core carries the CLI (internal/clientkit). Its copy must be the commit's
+# client/, and a release must carry the CLI of its own version: refuse rather
+# than copy, so the binary is always exactly what the commit says.
+for f in huginn.sh huginn.ps1 huginn-local huginn-llm-shim; do
+  cmp -s <(tr -d '\r' < "$HERE/../client/$f") "$HERE/internal/clientkit/files/$f.txt" || {
+    echo "REFUSING: core/internal/clientkit/files/$f.txt differs from client/$f." >&2
+    echo "  tr -d '\\r' < client/$f > core/internal/clientkit/files/$f.txt   and commit it" >&2
+    exit 1
+  }
+done
+if [[ "$V" != *-* ]]; then
+  grep -qx "HUGINN_VERSION='$V'" internal/clientkit/files/huginn.sh.txt \
+    || { echo "REFUSING: the CLI this core carries is not $V (client/huginn.sh HUGINN_VERSION)" >&2; exit 1; }
+fi
 for t in "${TARGETS[@]}"; do
   read -r key goos goarch file <<< "$t"
   CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$file" ./cmd/huginn

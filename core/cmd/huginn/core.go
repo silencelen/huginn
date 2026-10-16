@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/silencelen/huginn/core/internal/clientkit"
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/ipc"
@@ -144,6 +145,14 @@ func selfInstall() (string, bool) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "huginn core self-install: "+err.Error())
 		return "", false
+	}
+	// The core includes the CLI: the shell client this version carries.
+	steps, err := clientkit.Install(clientkit.DefaultEnv())
+	for _, st := range steps {
+		fmt.Println("  " + st)
+	}
+	if err != nil {
+		fmt.Println("  could not install the huginn CLI: " + err.Error())
 	}
 	return r.Binary, true
 }

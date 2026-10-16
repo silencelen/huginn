@@ -32,7 +32,6 @@ import com.silencelen.huginn.data.LoginState
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
-import com.silencelen.huginn.desktop.CliSync
 import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
 import androidx.compose.ui.window.isTraySupported
@@ -723,26 +722,6 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("updates.client-id", mark),
         modifier = revealMark("updates.client-id"),
     )
-    // What the launch-time CLI sync did, when it did anything: the CLI on this
-    // machine rides along with the app instead of aging in place.
-    CliSync.summary.collectAsState().value?.let {
-        SettingsReadOnlyRow(
-            id = "updates.cli-sync",
-            title = "CLI sync",
-            value = it,
-            highlighted = SettingsRowStyle.isHighlighted("updates.cli-sync", mark),
-            modifier = revealMark("updates.cli-sync"),
-            // ⚠ D-30. IT ENDED IN "huginn-l…" AND THAT WAS THE WHOLE ROW. This
-            // value names the files that were replaced on the reader's own
-            // machine, and at the default two lines the list was cut mid-name
-            // with no tooltip, no expand and nothing to copy — a report that
-            // cannot be read is not a report. Four lines, the same allowance the
-            // log path above it gets for the same reason, and the value goes to
-            // the clipboard whole whatever it wraps to.
-            maxLines = 4,
-            onCopy = { clipboard.setText(AnnotatedString(it)) },
-        )
-    }
 }
 
 // -------------------------------------------------------------------- about

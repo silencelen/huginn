@@ -113,24 +113,6 @@ class DeskLowFindingsTest {
         )
     }
 
-    // ------------------------------------------------------------------ D-30
-
-    /**
-     * ⚠ D-30. "CLI sync" ENDED IN "huginn-l…" AND THAT WAS THE WHOLE ROW.
-     *
-     * The value names the files this app replaced on the reader's own machine.
-     * At the default two lines it was cut mid-name with no tooltip, no expand and
-     * nothing to copy.
-     */
-    @Test
-    fun `the CLI sync report can be read and copied`() {
-        val row = source("ui", "settings", "SettingsPages.kt")
-            .substringAfter("id = \"updates.cli-sync\"")
-            .substringBefore("// -")
-        assertTrue(row.contains("maxLines = 4"), "a report that cannot be read is not a report")
-        assertTrue(row.contains("onCopy ="), "and these are paths, which belong in a paste buffer")
-    }
-
     // ------------------------------------------------------------------ D-22
 
     /**

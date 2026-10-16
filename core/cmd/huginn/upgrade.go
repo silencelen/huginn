@@ -31,7 +31,9 @@ type coreSnapshot struct {
 	Pid     int    `json:"pid"`
 	Device  struct {
 		Status struct {
-			Busy bool `json:"busy"`
+			Busy     bool   `json:"busy"`
+			Enrolled bool   `json:"enrolled"`
+			DeviceID string `json:"deviceId"`
 		} `json:"status"`
 	} `json:"device"`
 }

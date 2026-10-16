@@ -105,6 +105,30 @@ internal object CoreSetup {
         }
     }
 
+    /**
+     * The core's boot service is registered for this user (the path and the
+     * task name are core/internal/service's: UnitPath() and TaskName).
+     */
+    fun serviceInstalled(): Boolean = if (windows) {
+        runCatching { run(listOf("schtasks", "/Query", "/TN", "Huginn Core"), timeoutS = 15).exit == 0 }.getOrDefault(false)
+    } else {
+        val cfg = System.getenv("XDG_CONFIG_HOME")?.takeIf { it.startsWith("/") }
+            ?: (System.getProperty("user.home") + "/.config")
+        Files.isRegularFile(Path.of(cfg, "systemd", "user", "huginn-core.service"))
+    }
+
+    /** Starts an installed core that is not running. No prompt on either platform. */
+    suspend fun startService(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val r = if (windows) {
+                run(listOf("schtasks", "/Run", "/TN", "Huginn Core"), timeoutS = 30)
+            } else {
+                run(listOf("systemctl", "--user", "start", "huginn-core.service"), timeoutS = 30)
+            }
+            check(r.exit == 0) { r.output.lines().lastOrNull { it.isNotBlank() } ?: "could not start huginn core (exit ${r.exit})" }
+        }
+    }
+
     /** "Set up huginn core": install it to start at boot. Returns the core's own report. */
     suspend fun installService(): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
