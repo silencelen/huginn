@@ -287,7 +287,9 @@ func ensureTrayTask(bin string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	marker := filepath.Join(paths().State, "tray-task")
+	// "-2": 2.3.5 re-registers the task with its 10 s logon delay (2.3.3's
+	// fired before the taskbar was ready).
+	marker := filepath.Join(paths().State, "tray-task-2")
 	if fileExists(marker) {
 		return
 	}
@@ -295,11 +297,9 @@ func ensureTrayTask(bin string) {
 	if err != nil || !fileExists(o.StartupLnk()) {
 		return
 	}
-	if !service.TrayTaskRegistered(o) {
-		st, d := service.EnsureTrayTaskWindows(o)
-		fmt.Println("  tray at sign-in: " + d)
-		_ = st
-	}
+	_, d := service.EnsureTrayTaskWindows(o)
+	fmt.Println("  tray at sign-in: " + d)
+	os.Remove(filepath.Join(paths().State, "tray-task"))
 	os.MkdirAll(filepath.Dir(marker), 0o700)
 	os.WriteFile(marker, []byte(version.Version+"\n"), 0o600)
 }

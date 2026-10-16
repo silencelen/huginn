@@ -287,6 +287,7 @@ func coreUninstall() int {
 	bin := stableBinary()
 	os.Remove(trayMarker()) // a reinstall offers the tray again
 	os.Remove(filepath.Join(paths().State, "tray-task"))
+	os.Remove(filepath.Join(paths().State, "tray-task-2"))
 	switch runtime.GOOS {
 	case "linux":
 		o, err := service.LinuxDefaults(bin)

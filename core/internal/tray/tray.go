@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -63,6 +64,8 @@ type role struct {
 	rowTarget []string
 	working   *systray.MenuItem
 	last      string // icon state shown, to skip redundant SetIcon calls
+
+	readyDone atomic.Bool // the icon and menu are set up (see watchdog)
 }
 
 // Run shows the tray until the person quits it from the menu. It never returns
@@ -94,6 +97,7 @@ func Run(o Options) {
 	}
 	r.notifier = newNotifier(o.Logger)
 	waitForTaskbar()
+	go r.watchdog()
 	systray.Run(r.ready, func() {})
 }
 
@@ -137,6 +141,33 @@ func (r *role) ready() {
 		systray.Quit()
 	}()
 	go r.follow()
+	r.readyDone.Store(true)
+}
+
+// readyTimeout: how long the icon may take to be set up before the tray
+// starts over. A tray started at the instant of a Windows sign-in can add a
+// BLANK, unclickable icon and never finish setting it up — never connecting
+// to the core, while holding the one-tray lock so the Startup shortcut's tray
+// steps aside (PC01, 2026-10-16, twice). A fresh process a moment later,
+// with the taskbar up, works; so start one and leave. Once only
+// (HUGINN_TRAY_RETRY marks the second), so a tray that cannot work here does
+// not loop.
+const readyTimeout = 30 * time.Second
+
+func (r *role) watchdog() {
+	time.Sleep(readyTimeout)
+	if r.readyDone.Load() || os.Getenv("HUGINN_TRAY_RETRY") != "" {
+		return
+	}
+	r.o.Logger.Printf("tray: not set up after %s - starting a fresh tray", readyTimeout)
+	if exe, err := os.Executable(); err == nil {
+		os.Setenv("HUGINN_TRAY_RETRY", "1")
+		proc.StartDetached(exe, "core", "tray")
+	}
+	if r.lock != nil {
+		r.lock.Close()
+	}
+	os.Exit(0)
 }
 
 func (r *role) setIcon(state string) {

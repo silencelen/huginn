@@ -499,7 +499,7 @@ func TestUninstallWindows(t *testing.T) {
 func TestTrayTaskXML(t *testing.T) {
 	x := TrayTaskXML(`C:\Users\O'Brien\AppData\Local\huginn\bin\huginn.exe`, `HOME\o'brien`)
 	for _, want := range []string{"<LogonTrigger>", "<LogonType>InteractiveToken</LogonType>", "<Arguments>core tray</Arguments>",
-		"<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", "<UserId>HOME\\o&#39;brien</UserId>", "<Priority>5</Priority>"} {
+		"<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>", "<UserId>HOME\\o&#39;brien</UserId>", "<Priority>5</Priority>", "<Delay>PT10S</Delay>"} {
 		if !strings.Contains(x, want) {
 			t.Errorf("tray task XML lacks %s:\n%s", want, x)
 		}
