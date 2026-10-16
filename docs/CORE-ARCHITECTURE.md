@@ -463,10 +463,7 @@ session 1; the core claims notifications for that tray. **Found:** an unelevated
 could leave the core DOWN. The old core closes its socket before its process exits (shutdown waits
 up to 5 s on open event streams), Task Scheduler ignores `/Run` for a running instance, and the
 one `/Run` landed in that window. Fixed in 2.1.2: wait for the old pid, then repeat `/Run`
-until the new core answers (proven twice on PRESTIGE, 9 s each). **Not explained:** right after
-the owner's update the core reported `tray: true` with no tray process running (and no tray
-started at login since). A killed tray, and a killed raw client, both drop the count within 2 s,
-so this was not reproduced; watch for it. The owner saw SEVERAL huginn tray icons after the update and closed each one. Windows leaves a dead icon behind for a process that was killed rather than quit, and the desktop installer runs `taskkill /F /T` on the app. Lead: which trays existed during an app update, and which of them were killed. **stigo (Omarchy/Hyprland, 2026-10-15):** after the desktop's in-app update to 2.1.2 (bundled
+until the new core answers (proven twice on PRESTIGE, 9 s each). **Corrected (2026-10-16): there was no phantom tray.** The `tray      yes` line in `huginn core status` meant "the tray starts at login" (the Startup shortcut exists), not "a tray is attached"; the core's own `/core/status` said `"tray": false` throughout. What was true was simply that no tray was running (the owner had closed the icons). Since 2.3.2 the status says `tray: attached` / `not running` from the core, and the service line reads `tray at login`. **stigo (Omarchy/Hyprland, 2026-10-15):** after the desktop's in-app update to 2.1.2 (bundled
 core self-installed) and `huginn core install` (systemd user unit + linger), self-install from the
 graphical environment wrote the autostart and started the tray. The only StatusNotifierItem on the
 bus is the core tray's, so the desktop stood its own icon down. A D-Bus notification posts and

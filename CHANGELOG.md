@@ -8,6 +8,18 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.2] - 2026-10-16
+
+### Fixed
+- **Windows: `huginn update` no longer fails with "Access is denied" when an older huginn window is
+  still open.** An update sets the running `huginn.exe` aside as `huginn.exe.old`. A console window
+  left open across two updates still runs from the previous `.old`, which can then be neither deleted
+  nor replaced (PRESTIGE, 2026-10-16). The update now uses a unique name when `.old` is held, and
+  removes every leftover it can on later runs.
+- `huginn core status` says whether a tray is **attached** (the core's own answer), and the service
+  line now reads `tray at login`. The old `tray yes` line meant only that the tray starts at login,
+  and was read as "a tray is running" when none was.
+
 ## [2.3.1] - 2026-10-16
 
 ### Fixed
