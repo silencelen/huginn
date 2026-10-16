@@ -358,6 +358,6 @@ func (s LinuxStatus) String() string {
 	if s.Tray {
 		tray = "yes"
 	}
-	return fmt.Sprintf("service   %s\nenabled   %s\nactive    %s\nlinger    %s\ntray      %s\n",
+	return fmt.Sprintf("service   %s\nenabled   %s\nactive    %s\nlinger    %s\ntray at login %s\n",
 		inst, s.Enabled, s.Active, s.Linger, tray)
 }

@@ -1,5 +1,10 @@
 # Huginn Desktop changelog
 
+## 2.3.2
+
+Carries core 2.3.2: on Windows, installing or updating the app no longer fails when a huginn window
+from an older version is still open.
+
 ## 2.3.1
 
 Carries core 2.3.1.

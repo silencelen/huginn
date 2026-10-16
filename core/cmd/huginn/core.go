@@ -347,7 +347,7 @@ func coreStatus() int {
 	var st struct {
 		Version, Proto, URL, Secrets, SecretsWhy, FirstStart string
 		Pid                                                  int
-		Paired                                               bool
+		Paired, Tray                                         bool
 		Device                                               daemon.DeviceView
 	}
 	if _, err := call(http.MethodGet, "/core/status", nil, &st); err != nil {
@@ -366,6 +366,14 @@ func coreStatus() int {
 		fmt.Printf("  import:  %s\n", st.FirstStart)
 	}
 	printDevice(st.Device)
+	// Attached is the core's own answer; the service lines below say whether
+	// the tray STARTS AT LOGIN — two different questions (one was read as the
+	// other on PC01, 2026-10-15).
+	if st.Tray {
+		fmt.Println("  tray:    attached")
+	} else {
+		fmt.Println("  tray:    not running")
+	}
 	printServiceStatus()
 	return 0
 }
