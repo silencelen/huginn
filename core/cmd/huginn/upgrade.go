@@ -111,7 +111,7 @@ func restartCore(cur coreSnapshot) (coreSnapshot, bool) {
 	}
 	// Gone, or already back on the new binary.
 	waitCore(10*time.Second, func(s coreSnapshot, up bool) bool { return !up || s.Version == version.Version })
-	return startAndWait(old)
+	return startAndWait(cur)
 }
 
 // restartBySupervisor restarts a core that predates /core/restart through its
@@ -147,22 +147,39 @@ func restartBySupervisor(cur coreSnapshot) (coreSnapshot, bool) {
 			waitCore(10*time.Second, func(s coreSnapshot, up bool) bool { return !up || s.Version != old })
 		}
 	}
-	return startAndWait(old)
+	return startAndWait(cur)
 }
 
 // startAndWait starts the service where its manager will not do it by itself
 // (Windows: Task Scheduler does not restart a task that exited), then waits
 // for the new version to answer.
-func startAndWait(old string) (coreSnapshot, bool) {
-	if runtime.GOOS == "windows" {
-		if _, up := coreState(time.Second); !up {
-			if b, err := exec.Command("schtasks", "/Run", "/TN", service.TaskName).CombinedOutput(); err != nil {
+//
+// ⚠ Windows: the old core stops answering when it closes its socket, but its
+// task instance runs until the process exits (shutdown waits up to 5 s on open
+// event streams), and Task Scheduler ignores /Run for a running task. So wait
+// for the old pid to go, and repeat /Run while nothing answers (measured on
+// PC01, 2.1.1: one /Run in that window left the core down for minutes).
+func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
+	old := cur.Version
+	if runtime.GOOS == "windows" && cur.Pid > 0 {
+		proc.WaitExit(cur.Pid, 15*time.Second)
+	}
+	var lastRun time.Time
+	said := false
+	// systemd's RestartSec is 10 s.
+	st, up := waitCore(30*time.Second, func(s coreSnapshot, up bool) bool {
+		if up && s.Version == version.Version {
+			return true
+		}
+		if runtime.GOOS == "windows" && !up && time.Since(lastRun) >= 5*time.Second {
+			lastRun = time.Now()
+			if b, err := exec.Command("schtasks", "/Run", "/TN", service.TaskName).CombinedOutput(); err != nil && !said {
+				said = true
 				fmt.Printf("  schtasks /Run: %s%s\n", strings.TrimSpace(string(b)), windowsRetryNote())
 			}
 		}
-	}
-	// systemd's RestartSec is 10 s.
-	st, up := waitCore(30*time.Second, func(s coreSnapshot, up bool) bool { return up && s.Version == version.Version })
+		return false
+	})
 	switch {
 	case up && st.Version == version.Version:
 		fmt.Printf("  restarted huginn core: %s -> %s\n", old, st.Version)

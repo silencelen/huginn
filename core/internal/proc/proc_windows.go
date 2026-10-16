@@ -5,6 +5,7 @@ package proc
 import (
 	"os/exec"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -52,4 +53,17 @@ func Stop(pid int) error {
 	}
 	defer windows.CloseHandle(h)
 	return windows.TerminateProcess(h, 1)
+}
+
+// WaitExit waits up to timeout for pid to be gone; false if it is still there.
+// A core that stopped answering is still a running task instance until its
+// process exits, and Task Scheduler ignores /Run for a task that is running.
+func WaitExit(pid int, timeout time.Duration) bool {
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return true // gone (or never ours to wait on)
+	}
+	defer windows.CloseHandle(h)
+	ev, err := windows.WaitForSingleObject(h, uint32(timeout/time.Millisecond))
+	return err == nil && ev == windows.WAIT_OBJECT_0
 }
