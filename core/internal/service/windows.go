@@ -169,10 +169,15 @@ func TrayTaskXML(binary, user string) string {
 	b.WriteString("    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n")
 	b.WriteString("    <Priority>5</Priority>\r\n")
 	b.WriteString("  </Settings>\r\n")
+	// Through `conhost --headless`: huginn.exe is a console program (it is the
+	// CLI too), so started directly by the task it flashed a console window at
+	// every sign-in before the tray detached from it (PRESTIGE, 2026-10-16).
+	// A headless conhost gives it a console nobody sees; Windows has started
+	// every pseudo-console this way since 1809.
 	b.WriteString(`  <Actions Context="Author">` + "\r\n")
 	b.WriteString("    <Exec>\r\n")
-	b.WriteString("      <Command>" + xmlText(binary) + "</Command>\r\n")
-	b.WriteString("      <Arguments>core tray</Arguments>\r\n")
+	b.WriteString("      <Command>%SystemRoot%\\System32\\conhost.exe</Command>\r\n")
+	b.WriteString("      <Arguments>" + xmlText(`--headless "`+binary+`" core tray --at-login`) + "</Arguments>\r\n")
 	b.WriteString("      <WorkingDirectory>" + xmlText(windowsParent(binary)) + "</WorkingDirectory>\r\n")
 	b.WriteString("    </Exec>\r\n")
 	b.WriteString("  </Actions>\r\n")

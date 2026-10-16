@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -287,21 +289,37 @@ func ensureTrayTask(bin string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
-	// "-2": 2.3.5 re-registers the task with its 10 s logon delay (2.3.3's
-	// fired before the taskbar was ready).
-	marker := filepath.Join(paths().State, "tray-task-2")
-	if fileExists(marker) {
-		return
-	}
+	// The marker holds a hash of the task definition, so a release that
+	// changes it (2.3.5: the 10 s delay, then the headless console) re-registers
+	// it once, and an unchanged one costs nothing.
 	o, err := service.WindowsDefaults(bin)
-	if err != nil || !fileExists(o.StartupLnk()) {
+	if err != nil {
 		return
 	}
-	_, d := service.EnsureTrayTaskWindows(o)
+	marker := filepath.Join(paths().State, "tray-task")
+	// The tray at sign-in is ON while its Startup shortcut is there and enabled
+	// (Task Manager's Startup tab is where a person turns it off). Off: the
+	// logon task must not start it behind their back.
+	if !fileExists(o.StartupLnk()) || startupDisabled(service.TrayShortcut) {
+		if service.TrayTaskRegistered(o) {
+			o.Runner.Run("schtasks", "/Delete", "/TN", service.TrayTaskName, "/F")
+			fmt.Println("  tray at sign-in is off (its Startup entry is gone or disabled): removed the logon task too")
+		}
+		os.Remove(marker)
+		return
+	}
+	sum := sha256.Sum256([]byte(service.TrayTaskXML(o.Binary, o.User)))
+	want := hex.EncodeToString(sum[:])
+	if b, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(b)) == want && service.TrayTaskRegistered(o) {
+		return
+	}
+	st, d := service.EnsureTrayTaskWindows(o)
 	fmt.Println("  tray at sign-in: " + d)
-	os.Remove(filepath.Join(paths().State, "tray-task"))
-	os.MkdirAll(filepath.Dir(marker), 0o700)
-	os.WriteFile(marker, []byte(version.Version+"\n"), 0o600)
+	if st == service.Done {
+		os.MkdirAll(filepath.Dir(marker), 0o700)
+		os.WriteFile(marker, []byte(want+"\n"), 0o600)
+	}
+	os.Remove(filepath.Join(paths().State, "tray-task-2"))
 }
 
 // afterServiceInstall: `core install` wrote (or skipped) the autostart itself.

@@ -8,6 +8,25 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.5] - 2026-10-16
+
+### Fixed
+- **Windows: the tray comes up properly at sign-in.** In 2.3.3 the "Huginn Tray" logon task started
+  the tray in the same second as Explorer. The tray got a blank, unclickable icon in before the
+  taskbar was ready, never finished setting up, and never connected to the core. It also kept the
+  one-tray lock, so the Startup-shortcut fallback stepped aside and there was no working tray at
+  all (PRESTIGE, 2026-10-16). Three changes:
+  - the task now starts the tray 10 seconds after sign-in, still minutes ahead of the Startup
+    folder;
+  - the tray waits for the taskbar before adding its icon;
+  - a tray that has not finished setting up within 30 seconds starts a fresh one and exits, once.
+- **No console window flashes at sign-in.** `huginn.exe` is a console program, because it is also the
+  CLI, so the task now starts the tray through `conhost --headless`.
+- **The logon task follows the tray's Startup entry.** Delete that shortcut, or disable it in Task
+  Manager's Startup tab, and the task no longer starts the tray (it checks at sign-in). The next
+  update also removes the task. Changes to the task's definition reach existing installs on their
+  next update.
+
 ## [2.3.4] - 2026-10-16
 
 ### Changed
