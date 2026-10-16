@@ -8,6 +8,15 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.4.1] - 2026-10-16
+
+### Fixed
+- **The download bar printed "No such file or directory" while a download started**, once per
+  redraw until the first bytes arrived (seen on a first install from the published 2.4.0, slow to
+  start). The size probe's redirection failed before curl had created the file, and bash reports a
+  failed redirection before a `2>/dev/null` written after it takes effect. The bar has had this
+  since 2.3.7, in `huginn update` too; a fast link hid it. The PowerShell client was not affected.
+
 ## [2.4.0] - 2026-10-16
 
 ### Changed
