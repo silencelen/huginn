@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.4.0
+# Version: 2.4.1
 
-HUGINN_VERSION='2.4.0'
+HUGINN_VERSION='2.4.1'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -113,7 +113,10 @@ _huginn_ui_download() {
     local on=$'\xe2\x96\x88' off=$'\xe2\x96\x91'; _huginn_ui_uni || { on='#'; off='-'; }
     t0=$SECONDS
     while kill -0 "$pid" 2>/dev/null; do
-      cur=$(wc -c <"$out" 2>/dev/null || echo 0); cur=${cur// /}
+      # The redirection fails until curl has created the file, and bash
+      # reports a failed redirection BEFORE a `2>/dev/null` after it applies:
+      # the group's own stderr is what silences it.
+      cur=$( { wc -c <"$out"; } 2>/dev/null || echo 0); cur=${cur// /}
       el=$(( SECONDS - t0 )); [ "$el" -lt 1 ] && el=1
       sp=$(awk -v b="$cur" -v s="$el" 'BEGIN{printf "%.1f MB/s", b/s/1048576}')
       f="${frames[$((i % ${#frames[@]}))]}"; i=$((i + 1))
