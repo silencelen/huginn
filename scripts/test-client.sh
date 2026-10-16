@@ -1204,6 +1204,37 @@ NOCORE="$(HOME="$CT" bash -c 'source client/huginn.sh; huginn core status' 2>&1)
 grep -q 'not installed here - huginn core install' <<< "$NOCORE" && ok "no core: says how to get one" || bad "no-core message: $NOCORE"
 grep -q "'core'" client/huginn.ps1 && grep -q '_Huginn-CoreBin' client/huginn.ps1 \
   && ok "the PowerShell client has the same door" || bad "huginn.ps1 has no core verb"
+# `huginn core install` on a machine with no core: the VERIFIED download runs
+# `core install` itself (with the person's flags), then pairing reports, all
+# in one installer block. A fake core that "installs" by copying itself.
+cat > "$CT/fake-core" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HOME/core-argv"
+case "$*" in
+  version) echo "(o> huginn 9.9.9 linux/amd64" ;;
+  "core install"*) mkdir -p "$HOME/.local/bin"; cp "$0" "$HOME/.local/bin/huginn"; echo "     +  service   fake" >&2 ;;
+  "core status") echo "(o> huginn core 9.9.9  pid 1"; echo "  huginn:  https://h:8787" ;;
+esac
+FAKE
+chmod 755 "$CT/fake-core"
+CI_OUT="$(HOME="$CT" HUGINN_CORE_FILE="$CT/fake-core" bash -c 'source client/huginn.sh; huginn core install --no-tray' 2>&1)"; CI_RC=$?
+grep -qx 'core install --no-tray' "$CT/core-argv" && [ ! -e "$CT/.local/bin/huginn.selfinstall" ] \
+  && ok "core install: the download itself runs core install, with the flags" || bad "core install argv: $(cat "$CT/core-argv" 2>/dev/null)"
+! grep -q 'self-install' "$CT/core-argv" && ok "core install: no separate self-install first" || bad "core install self-installed first: $(cat "$CT/core-argv")"
+grep -q 'download  huginn 9.9.9 from' <<< "$CI_OUT" && grep -q 'paired    https://h:8787' <<< "$CI_OUT" && grep -q 'done in' <<< "$CI_OUT" \
+  && [ "$CI_RC" = 0 ] && ok "core install: one block - download, the core's lines, paired, done" || bad "core install (rc=$CI_RC) said: $CI_OUT"
+# Windows: the elevated `core install --report` step hands its lines back as
+# records (state, component, text); the client draws them in the person's own
+# window, adding "started now" to the tray's line when IT started the tray.
+if command -v pwsh >/dev/null 2>&1; then
+  printf 'ok\ttray\tstarts at sign-in\nwarn\tlinger\tx\nnote\t\tn1\nfail\tservice\ty\n' > "$CT/rec.txt"
+  RO="$(pwsh -NoProfile -Command ". ./client/huginn.ps1; _Huginn-UiRecords '$CT/rec.txt' 'started now'" 2>&1)"
+  grep -q 'tray      starts at sign-in; started now' <<< "$RO" && grep -q 'linger    x' <<< "$RO" \
+    && grep -q 'service   y' <<< "$RO" && grep -qE '^ {18}n1$' <<< "$RO" \
+    && ok "ps1: core install's elevated report is drawn as component lines" || bad "ps1 records drew: $RO"
+else
+  skip "ps1 core install records (no pwsh)"
+fi
 rm -rf "$CT"
 echo
 

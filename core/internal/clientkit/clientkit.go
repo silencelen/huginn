@@ -209,12 +209,16 @@ func Remove(e Env) (removed, left []string) {
 	}
 	for _, f := range files {
 		hit, other, err := dropLines(f, lines)
-		switch {
-		case err != nil:
+		if err != nil {
 			left = append(left, "the CLI line in "+f+" - could not rewrite it ("+err.Error()+")")
-		case hit:
+			continue
+		}
+		if hit {
 			removed = append(removed, "the CLI line in "+f)
-		case other:
+		}
+		// Both can be true: the installer's line went, a line of the
+		// person's own stays, and they must hear it does.
+		if other {
 			left = append(left, "a hand-edited huginn line in "+f+" - not the one the installer wrote, so it was left")
 		}
 	}

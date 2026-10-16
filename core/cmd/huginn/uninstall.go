@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ import (
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/store"
+	"github.com/silencelen/huginn/core/internal/ui"
+	"github.com/silencelen/huginn/core/internal/version"
 )
 
 // `huginn uninstall [--all] [--yes]` takes the whole stack off this machine,
@@ -32,10 +35,68 @@ import (
 // The shell clients hand `huginn uninstall` here whenever a core is installed;
 // their own copy remains only for platforms with no core (macOS, Termux).
 
-type tally struct{ removed, left []string }
+// tally is one component's outcome: what went, what stays on purpose, and
+// what could not be done (the only kind that fails the run).
+type tally struct {
+	comp, home string
+	u          *ui.Out
+	log        io.Writer
+	removed    []string
+	kept, left []string
+}
 
 func (t *tally) gone(s string)  { t.removed = append(t.removed, s) }
+func (t *tally) keep(s string)  { t.kept = append(t.kept, s) }
 func (t *tally) stays(s string) { t.left = append(t.left, s) }
+func (t *tally) spin(what string) {
+	t.u.Spin(t.comp, what)
+}
+func (t *tally) logf(format string, a ...any) { fmt.Fprintf(t.log, format+"\n", a...) }
+
+// settle prints the component's one line: done says what went, none what a
+// machine without it reads. Anything that could not be done follows as a
+// note, so the line a person scans is the line they act on.
+func (t *tally) settle(done, none string) {
+	fmt.Fprintf(t.log, "\n[%s]\n", t.comp)
+	for _, s := range t.removed {
+		fmt.Fprintln(t.log, "  removed  "+s)
+	}
+	for _, s := range t.kept {
+		fmt.Fprintln(t.log, "  kept     "+s)
+	}
+	for _, s := range t.left {
+		fmt.Fprintln(t.log, "  LEFT     "+s)
+	}
+	if len(t.removed)+len(t.kept)+len(t.left) == 0 {
+		fmt.Fprintln(t.log, "  nothing here")
+	}
+	switch {
+	case len(t.left) > 0 && len(t.removed) == 0:
+		t.u.Line(ui.Fail, t.comp, "could not be removed")
+	case len(t.left) > 0:
+		t.u.Line(ui.Warn, t.comp, "removed "+done+", but not all of it")
+	case len(t.removed) > 0:
+		t.u.Line(ui.OK, t.comp, "removed "+done)
+	case len(t.kept) > 0:
+		// Nothing went, on purpose: the reason is the line.
+		t.u.Line(ui.Skip, t.comp, "kept "+t.kept[0])
+		t.kept = t.kept[1:]
+	default:
+		t.u.Line(ui.Skip, t.comp, none)
+	}
+	short := func(s string) string {
+		if t.home == "" {
+			return s
+		}
+		return strings.ReplaceAll(s, t.home+string(filepath.Separator), "~"+string(filepath.Separator))
+	}
+	for _, s := range t.left {
+		t.u.Note(short(s))
+	}
+	for _, s := range t.kept {
+		t.u.Note("kept " + short(s))
+	}
+}
 
 func uninstall(args []string) int {
 	all, yes := false, false
@@ -67,98 +128,166 @@ func uninstall(args []string) int {
 	}
 	ce := clientkit.DefaultEnv()
 	ldir := localTierDir(home)
+	u := ui.New()
+	h := func(s string) string { return tilde(home, s) }
 
-	fmt.Println("huginn uninstall removes, from THIS machine, top down:")
-	fmt.Println("  the desktop app (Huginn Desktop) and its settings, which hold a copy of the appd token")
-	fmt.Println("  " + ldir)
-	fmt.Println("      the local-AI tier: models, sessions, runtime (can be several GB)")
-	fmt.Println("  this machine's device row on huginn (retired first, while the token still exists)")
-	fmt.Println("  huginn core: its boot service, the tray, " + l.Root + ", " + p.Config + ", " + p.State)
-	fmt.Println("  the huginn CLI: " + ce.Dir() + " and its line in your shell startup files")
-	if all {
-		fmt.Println("  --all: the 'Host huginn' SSH stanza, and its key IF it is huginn's own")
+	// The plan: what is here, what goes, in the order it goes.
+	u.Head("huginn uninstall")
+	u.Say("Takes huginn off this machine, top down:")
+	u.Say("")
+	row := func(here bool, comp, what, absent string) {
+		if here {
+			u.Say(fmt.Sprintf("  %-9s %s", comp, what))
+		} else {
+			u.Say(u.Dim(fmt.Sprintf("  %-9s %s", comp, absent)))
+		}
 	}
-	if runtime.GOOS == "windows" && serviceInstalled(stableBinary()) {
-		fmt.Println()
-		fmt.Println("Windows may ask for administrator approval once, to delete the boot task.")
+	svc := serviceInstalled(stableBinary())
+	row(desktopPresent(home), "desktop", "Huginn Desktop and its settings (they hold a copy of the appd token)", "not installed here")
+	row(dirExists(ldir), "local AI", h(ldir)+": models, sessions, runtime (can be several GB)", "not installed here")
+	row(deviceEnrolled(p), "device", "this machine's row on huginn, retired first, while the token exists", "none enrolled here")
+	coreWhat := h(l.Root) + ", " + h(p.Config) + ", " + h(p.State)
+	if svc {
+		coreWhat = "the boot service, the tray, " + coreWhat
 	}
-	fmt.Println()
+	row(svc || dirExists(l.Root), "core", coreWhat, "not installed here")
+	row(dirExists(ce.Dir()), "CLI", h(ce.Dir())+" and its line in your shell startup files", "not installed here")
+	switch {
+	case !sshStanzaPresent(home):
+		u.Say(u.Dim(fmt.Sprintf("  %-9s no 'Host huginn' stanza here", "ssh")))
+	case all:
+		u.Say(fmt.Sprintf("  %-9s %s", "ssh", "the 'Host huginn' stanza, and its key if it is huginn's own"))
+	default:
+		u.Say(u.Dim(fmt.Sprintf("  %-9s kept: 'Host huginn' and your key (--all removes them)", "ssh")))
+	}
+	if runtime.GOOS == "windows" && svc {
+		u.Say("")
+		u.Say("Windows asks for administrator approval once, to delete the boot task.")
+	}
+	u.Say("")
 	if !yes {
-		fmt.Print(`Type "uninstall" to continue: `)
+		u.Prompt(`Type "uninstall" to continue: `)
 		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 		if strings.TrimSpace(ans) != "uninstall" {
-			fmt.Println("Nothing was removed.")
+			u.Say("Nothing was removed.")
 			return 1
 		}
-		fmt.Println()
+		u.Say("")
 	}
-	var t tally
 
-	fmt.Println("==> desktop app")
-	removeDesktop(&t, home)
+	// Every path and every step's own output goes to a log outside what is
+	// being removed: the screen gets one line per component.
+	logPath := filepath.Join(os.TempDir(), "huginn-uninstall-"+time.Now().Format("20060102-150405")+".log")
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	var log io.Writer = io.Discard
+	if err == nil {
+		defer lf.Close()
+		log = lf
+		fmt.Fprintf(lf, "huginn uninstall %s - %s\n", version.Version, time.Now().Format(time.RFC3339))
+	} else {
+		logPath = ""
+	}
+	failed := false
+	part := func(comp string) *tally { return &tally{comp: comp, home: home, u: u, log: log} }
+	end := func(t *tally, done, none string) {
+		t.settle(done, none)
+		failed = failed || len(t.left) > 0
+	}
 
+	t := part("desktop")
+	removeDesktop(t, home)
+	end(t, "Huginn Desktop and its settings", "not installed")
+
+	t = part("local AI")
 	if dirExists(ldir) {
-		fmt.Println("==> local AI tier")
 		mgr := filepath.Join(ce.Dir(), "huginn-local")
 		node, nerr := exec.LookPath("node")
 		if nerr == nil && fileExists(mgr) {
+			t.spin("removing models, sessions and the runtime")
 			c := exec.Command(node, mgr, "off", "--purge", "--yes")
-			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			c.Stdout, c.Stderr = log, log
 			if c.Run() == nil {
 				t.gone(ldir)
 			} else {
-				t.stays(ldir + " - 'huginn local off --purge' did not finish; run it again when huginn is reachable")
+				t.stays(h(ldir) + " - 'huginn local off --purge' did not finish; run it again when huginn is reachable")
 			}
 		} else {
-			t.stays(ldir + " - no manager or no node here, so nothing could unenrol or remove it")
+			t.stays(h(ldir) + " - no manager or no node here, so nothing could unenrol or remove it")
 		}
 	}
+	end(t, "the local-AI tier", "not installed")
 
-	fmt.Println("==> device")
-	retireDevice(&t, p)
+	t = part("device")
+	retireDevice(t, p)
+	end(t, "this machine's device row on huginn", "none enrolled here")
 
-	fmt.Println("==> huginn core")
-	removeService(&t)
+	t = part("core")
+	removeService(t)
+	t.spin("stopping huginn and removing its files")
 	stopCoreProcesses(l.Root)
 	if st, err := store.Open(p); err == nil {
 		if cfg, _, err := st.Load(); err == nil {
 			if sec, sel := daemon.OpenSecretsForService(p, cfg.Secrets); sel.Backend != store.BackendFile {
 				if err := sec.Delete(store.SecretToken); err != nil {
 					t.stays("the appd token in the " + sel.Backend + " - " + err.Error())
+				} else {
+					t.gone("the appd token in the " + sel.Backend)
 				}
 			}
 		}
 	}
-	removeCoreFiles(&t, home, p, l)
+	removeCoreFiles(t, home, p, l)
+	coreDone := "the binary, its config and state"
+	if svc {
+		coreDone = "the boot service, the tray, " + coreDone
+	}
+	end(t, coreDone, "not installed")
 
-	fmt.Println("==> huginn CLI")
-	r, lf := clientkit.Remove(ce)
+	t = part("CLI")
+	r, lft := clientkit.Remove(ce)
 	t.removed = append(t.removed, r...)
-	t.left = append(t.left, lf...)
+	for _, s := range lft {
+		t.stays(s)
+	}
+	end(t, h(ce.Dir())+" and its shell startup line", "not installed")
 
-	sshStep(&t, home, all)
+	t = part("ssh")
+	sshStep(t, home, all)
+	end(t, "the 'Host huginn' stanza", "no 'Host huginn' stanza here")
 
-	fmt.Println()
-	fmt.Println("Removed:")
-	if len(t.removed) == 0 {
-		fmt.Println("  (nothing - was huginn installed here?)")
+	u.Say("")
+	if failed {
+		u.Say("huginn is off this machine, except what is marked above.")
+	} else {
+		u.Say("huginn is off this machine.")
 	}
-	for _, s := range t.removed {
-		fmt.Println("  " + s)
+	u.Say("Open a new terminal: this one still has the 'huginn' function loaded.")
+	if logPath != "" {
+		u.Say("Everything that was removed, path by path: " + logPath)
 	}
-	if len(t.left) > 0 {
-		fmt.Println()
-		fmt.Println("Left behind, on purpose or because it could not be done:")
-		for _, s := range t.left {
-			fmt.Println("  " + s)
-		}
-	}
-	fmt.Println()
-	fmt.Println("A shell that already loaded the CLI still has the 'huginn' function: open a new one.")
-	if len(t.left) > 0 {
+	u.Took("done")
+	if failed {
 		return 1
 	}
 	return 0
+}
+
+// tilde shortens a path under home for the screen (the log keeps it whole).
+func tilde(home, p string) string {
+	if home != "" && strings.HasPrefix(p, home+string(filepath.Separator)) {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
+// deviceEnrolled: this core's config names a device on huginn.
+func deviceEnrolled(p store.Paths) bool {
+	s, err := store.Open(p)
+	if err != nil {
+		return false
+	}
+	cfg, _, err := s.Load()
+	return err == nil && cfg.Device.ID != ""
 }
 
 func dirExists(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
@@ -181,8 +310,10 @@ func localTierDir(home string) string {
 // the row on appd, and waits for that to land: the core and its token are
 // about to go, and a row nobody can retire stays in `huginn devices` forever.
 func retireDevice(t *tally, p store.Paths) {
+	t.spin("asking huginn core to retire this machine")
 	st, up := coreState(3 * time.Second)
 	if !up && serviceInstalled(stableBinary()) {
+		t.spin("starting huginn core, so it can retire this machine")
 		startService()
 		st, up = waitCore(20*time.Second, func(_ coreSnapshot, up bool) bool { return up })
 	}
@@ -190,16 +321,15 @@ func retireDevice(t *tally, p store.Paths) {
 		if s, err := store.Open(p); err == nil {
 			if cfg, _, err := s.Load(); err == nil && cfg.Device.ID != "" {
 				t.stays("device " + cfg.Device.ID + " may still be enrolled on huginn (the core was not running to retire it) - remove it from `huginn devices`")
-				return
 			}
 		}
-		fmt.Println("  no device enrolled here")
 		return
 	}
 	if !st.Device.Status.Enrolled && st.Device.Status.DeviceID == "" {
-		fmt.Println("  no device enrolled here")
 		return
 	}
+	id := st.Device.Status.DeviceID
+	t.spin("retiring " + id + " on huginn")
 	off := false
 	if _, err := call(http.MethodPatch, "/core/device", daemon.DeviceSettings{Enabled: &off}, nil); err != nil {
 		t.stays("this machine's device row - turning it off failed: " + err.Error())
@@ -209,7 +339,7 @@ func retireDevice(t *tally, p store.Paths) {
 		return up && !s.Device.Status.Enrolled && s.Device.Status.DeviceID == ""
 	})
 	if ok && !end.Device.Status.Enrolled && end.Device.Status.DeviceID == "" {
-		t.gone("this machine's device row on huginn")
+		t.gone("device " + id + " on huginn")
 		return
 	}
 	t.stays("this machine's device row may still be on huginn (appd did not confirm in 20 s) - remove it from `huginn devices`")
@@ -249,6 +379,20 @@ func removeCoreFiles(t *tally, home string, p store.Paths, l install.Layout) {
 	rm(l.Root)
 }
 
+// sshStanzaPresent: ~/.ssh/config has a `Host huginn` block.
+func sshStanzaPresent(home string) bool {
+	b, err := os.ReadFile(filepath.Join(home, ".ssh", "config"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && strings.EqualFold(f[0], "host") && f[1] == "huginn" {
+			return true
+		}
+	}
+	return false
+}
+
 // sshStep: kept by default (the key is very likely the person's general one);
 // --all takes the `Host huginn` stanza, and the key only when it is marked as
 // huginn's (its name or its .pub comment says huginn).
@@ -286,7 +430,7 @@ func sshStep(t *tally, home string, all bool) {
 		}
 	}
 	if !all {
-		t.stays("the 'Host huginn' stanza in " + cfg + " and its key - kept (use 'huginn uninstall --all' to remove them)")
+		t.keep("'Host huginn' in " + tilde(home, cfg) + " and its key (huginn uninstall --all removes them)")
 		return
 	}
 	if err := store.WriteFileAtomic(cfg, []byte(strings.Join(out, "\n")), 0o600); err != nil {
@@ -300,6 +444,6 @@ func sshStep(t *tally, home string, all bool) {
 		os.Remove(key + ".pub")
 		t.gone(key + " and " + key + ".pub (huginn's own key)")
 	case key != "":
-		t.stays(key + " - NOT removed: nothing marks it as huginn's, and it is very likely your general SSH key")
+		t.keep(tilde(home, key) + ": nothing marks it as huginn's, and it is very likely your general SSH key")
 	}
 }

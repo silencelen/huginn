@@ -470,7 +470,7 @@ Rough edges:
    retires the device, deletes the "Huginn Core" task (**UAC prompt** when needed), stops the tray, removes the
    PATH entry, schedules removal of `%LOCALAPPDATA%\huginn` (the running exe lives there), and removes
    `~\.huginn` and the profile line.
-2. Reinstall: `& ([scriptblock]::Create((irm …/client/get.ps1))) -HuginnHost <host>`, or the desktop
+2. Reinstall: `irm …/client/get.ps1 | iex` (or `curl … get.sh | sh`), or the desktop
    installer `.exe`. The installer runs the bundled core's self-install. The gate screen asks to set it up
    (**one UAC prompt** to register the S4U task), then setup pairs.
 

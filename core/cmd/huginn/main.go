@@ -48,7 +48,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: huginn version
-       huginn core run | install [--logon s4u|password] | start | uninstall | status | pair --url URL | self-install
+       huginn core run | install [--tray|--no-tray] [--logon s4u|password] | start | uninstall | status | pair --url URL | self-install
        huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status
        huginn console                     the interactive console (plain "huginn" in a terminal opens it)
        huginn setup ssh [--host H] [--user U]   SSH to the huginn host, for attaching and the session verbs

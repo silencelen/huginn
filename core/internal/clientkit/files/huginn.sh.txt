@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.7
+# Version: 2.4.0
 
-HUGINN_VERSION='2.3.7'
+HUGINN_VERSION='2.4.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -365,10 +365,14 @@ _huginn_core_release() {
 # Download, verify and self-install the core. Prints the installed path.
 # HUGINN_CORE_FILE=<a local binary> skips the download (tests, offline installs)
 # - it is still run through `self-install`, never copied into place by hand.
+# `_huginn_core_fetch install [flags]`: the verified download runs `core
+# install` itself instead (the first install: it lays out the binary and the
+# CLI, so its lines say what really happened on this machine).
 _huginn_core_fetch() (
   set -u
-  fail() { echo "huginn: $*" >&2; exit 1; }
-  local key rel tag man obj file sha tmp got
+  fail() { _huginn_ui_line fail core "$*"; exit 1; }
+  local key rel tag man obj file sha tmp got mode="${1:-}"
+  [ $# -gt 0 ] && shift
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-core.XXXXXX")" || fail "could not make a temp dir"
   trap 'rm -rf "$tmp"' EXIT
   if [ -n "${HUGINN_CORE_FILE:-}" ]; then
@@ -389,6 +393,14 @@ _huginn_core_fetch() (
     [ "$got" = "$sha" ] || fail "$file did not match its sha256 - discarded, nothing installed"
     chmod 755 "$tmp/huginn"
   fi
+  if [ "$mode" = install ]; then
+    local v; v="$("$tmp/huginn" version 2>/dev/null | sed -n 's/^(o> huginn \([^ ]*\) .*/\1/p')"
+    if [ -n "${HUGINN_CORE_FILE:-}" ]; then _huginn_ui_line ok download "huginn ${v:-?} from $HUGINN_CORE_FILE"
+    else _huginn_ui_line ok download "huginn ${v:-?} for $key, sha256 verified"; fi
+    HUGINN_UI_COMPACT=1 "$tmp/huginn" core install "$@" >&2 || exit 1
+    _huginn_core_bin
+    exit 0
+  fi
   if ! _huginn_ui_spin core "installing" "$tmp/log" "$tmp/huginn" core self-install; then
     _huginn_ui_line fail core "self-install failed:"; sed 's/^/            /' "$tmp/log" >&2
     exit 1
@@ -407,12 +419,29 @@ _huginn_core_fetch() (
 
 # Pair the core with the host this shell already reaches over ssh, if it is not
 # paired yet. The token travels ssh -> stdin, never argv or a file in /tmp.
+# $2 = say: report an existing pairing too (`huginn core install`'s line).
 _huginn_core_pair() {
-  local H="${HUGINN_HOST:-huginn}" bin="$1" srv
-  "$bin" core status 2>/dev/null | grep -q 'not paired' || return 0
+  local H="${HUGINN_HOST:-huginn}" bin="$1" srv st out
+  st="$("$bin" core status 2>/dev/null)"
+  if ! grep -q 'not paired' <<< "$st"; then
+    [ "${2:-}" = say ] && _huginn_ui_line ok paired "$(sed -n 's/^  huginn: *//p' <<< "$st" | head -1)"
+    return 0
+  fi
   srv="$(_huginn_srv_url "$H")"
-  [ -n "$srv" ] || { echo "huginn core: could not work out $H's daemon address - pair by hand: huginn core pair --url https://<host>:8787" >&2; return 1; }
-  ssh -T "$H" 'cat /etc/huginn-appd/token' 2>/dev/null | "$bin" core pair --url "$srv"
+  if [ -z "$srv" ]; then
+    _huginn_ui_line fail paired "could not work out $H's daemon address"
+    printf '                  pair by hand: huginn core pair --url https://<host>:8787\n' >&2
+    return 1
+  fi
+  local log; log="$(mktemp)"
+  if _huginn_ui_spin paired "fetching the token over ssh and pairing with $srv" "$log" \
+       bash -c 'ssh -T "$1" "cat /etc/huginn-appd/token" 2>/dev/null | "$2" core pair --url "$3"' _ "$H" "$bin" "$srv"; then
+    out="$(head -1 "$log")"; _huginn_ui_line ok paired "${out#paired with }"
+  else
+    _huginn_ui_line fail paired "could not pair with $srv"; sed 's/^/                  /' "$log" >&2
+    rm -f "$log"; return 1
+  fi
+  rm -f "$log"
 }
 
 # Is release $2 newer than the installed core $1? A prerelease (2.1.0-rc.1)
@@ -433,7 +462,7 @@ _huginn_core_update() {
   [ -n "$bin" ] || { echo "huginn core: not installed here - huginn core install" >&2; return 1; }
   cur="$("$bin" version 2>/dev/null | sed -n 's/^(o> huginn \([^ ]*\) .*/\1/p')"
   if [ -z "${HUGINN_CORE_FILE:-}" ]; then
-    rel="$(_huginn_core_release)" || { echo "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept" >&2; return 1; }
+    rel="$(_huginn_core_release)" || { _huginn_ui_line warn core "could not read the release feed (offline or rate-limited); ${cur:-the installed core} kept"; return 1; }
     latest="${rel%%$'\n'*}"; latest="${latest#cli-v}"
     if ! _huginn_core_newer "$cur" "$latest"; then
       run="$("$bin" core status 2>/dev/null | sed -n 's/^(o> huginn core \([^ ]*\) .*/\1/p')"
@@ -462,20 +491,30 @@ _huginn_core() {
       _huginn_core_update
       ;;
     install)
+      # One block, as `huginn update` draws it: the download (or the update
+      # of the core already here), then the core's own lines, then pairing.
+      local t0=$SECONDS
+      [ -n "${HUGINN_UI_COMPACT:-}${HUGINN_SETUP:-}" ] || _huginn_ui_head "huginn core install"
       if [ -z "$bin" ] || [ -n "${HUGINN_CORE_FILE:-}" ]; then
-        bin="$(_huginn_core_fetch)" || return 1
+        bin="$(_huginn_core_fetch install "$@")" || return 1
       else
         # An installed core is brought up to date first (get.sh re-run on a
         # machine from an older release); offline, the installed one is used.
-        _huginn_core_update || echo "  (keeping the installed core)" >&2
+        HUGINN_UI_COMPACT=1 _huginn_core_update || true
+        HUGINN_UI_COMPACT=1 "$bin" core install "$@" || return 1
       fi
-      "$bin" core install "$@" || return 1
       # The service starts the core; wait for it to answer, then pair it.
       for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         "$bin" core status >/dev/null 2>&1 && break; sleep 1
       done
-      _huginn_core_pair "$bin"
-      "$bin" core status
+      if [ -n "${HUGINN_CORE_NOPAIR:-}" ]; then
+        # huginn setup: the host does not trust this computer yet, so there is
+        # no ssh to fetch the token over; the person re-runs this after.
+        _huginn_ui_line skip paired "not yet: the host does not trust this computer's key - huginn core install pairs it once it does"
+      else
+        _huginn_core_pair "$bin" say || return 1
+      fi
+      [ -n "${HUGINN_UI_COMPACT:-}${HUGINN_SETUP:-}" ] || printf '    %sdone in %s s%s\n' "$(_huginn_ui_c 90)" "$((SECONDS - t0))" "$(_huginn_ui_c 0)" >&2
       ;;
     *)
       [ -n "$bin" ] || { echo "huginn core: not installed here - huginn core install" >&2; return 1; }
@@ -1146,7 +1185,14 @@ _huginn_desktop_entry() {   # $1 = stable launcher; the same text as SchemeRegis
 # and never touch the shell that sourced this file.
 _huginn_desktop_install() (
   set -u
-  fail() { echo "huginn: $*" >&2; exit 1; }
+  # Three ways to be read: a person's `huginn desktop install` (a titled
+  # block of lines), a step of `huginn setup` (HUGINN_SETUP: lines, no title),
+  # and `huginn update`'s log (HUGINN_UI_COMPACT: plain text on stdout, which
+  # the update turns into its own line).
+  local t0=$SECONDS
+  fail() { _huginn_ui_line fail desktop "$*"; exit 1; }
+  msg() { if [ -n "${HUGINN_UI_COMPACT:-}" ]; then echo "  $*"; else printf '%18s%s%s%s\n' '' "$(_huginn_ui_c 90)" "$*" "$(_huginn_ui_c 0)" >&2; fi; }
+  [ -n "${HUGINN_UI_COMPACT:-}${HUGINN_SETUP:-}" ] || _huginn_ui_head "huginn desktop install"
   case "$(uname -s 2>/dev/null)" in Linux*) ;; *) fail "desktop install is for Linux; on Windows run the installer from: huginn desktop windows" ;; esac
   case "$(uname -o 2>/dev/null)" in Android*) fail "there is no desktop build for a phone" ;; esac
   case "$(uname -m 2>/dev/null)" in x86_64|amd64) ;; *) fail "the desktop is only built for x86-64 (this is $(uname -m))" ;; esac
@@ -1170,7 +1216,8 @@ _huginn_desktop_install() (
   cur="$(readlink "$R/current" 2>/dev/null || true)"
 
   if [ "$cur" = "versions/$ver" ] && [ -x "$R/versions/$ver/bin/huginn-desktop-kt" ]; then
-    echo "  Huginn Desktop $ver is already installed in $R - repairing the links."
+    if [ -n "${HUGINN_UI_COMPACT:-}" ]; then echo "  Huginn Desktop $ver is already installed in $R - repairing the links."
+    else _huginn_ui_line ok desktop "$ver is already installed in ${R/#$HOME/\~} - links repaired"; fi
   else
     local tmp
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop.XXXXXX")" || fail "could not make a temp dir"
@@ -1218,7 +1265,8 @@ _huginn_desktop_install() (
       if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/$v/" >/dev/null 2>&1; then continue; fi
       rm -rf "$d"
     done
-    echo "  installed $ver into $R"
+    if [ -n "${HUGINN_UI_COMPACT:-}" ]; then echo "  installed $ver into $R"
+    else _huginn_ui_line ok desktop "$ver installed in ${R/#$HOME/\~}"; fi
   fi
 
   # Links and menu entry - written on every run, which is what makes a re-run a repair.
@@ -1234,21 +1282,21 @@ _huginn_desktop_install() (
   # setting, not this verb's.
   local auto="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/huginn-desktop-kt.desktop"
   if [ -f "$auto" ] && ! grep -qF "Exec=\"$L\"" "$auto"; then
-    sed -i "s|^Exec=.*|Exec=\"$L\"|" "$auto" && echo "  autostart entry now starts $L"
+    sed -i "s|^Exec=.*|Exec=\"$L\"|" "$auto" && msg "autostart entry now starts $L"
   fi
 
-  echo "  launcher: $HOME/.local/bin/huginn-desktop   menu: $apps/huginn-desktop-kt.desktop"
-  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  (add ~/.local/bin to PATH to run 'huginn-desktop' from a shell)" ;; esac
-  echo "  Settings in ${XDG_CONFIG_HOME:-$HOME/.config}/huginn-desktop-kt are untouched and carry over."
-  echo "  Updates now install from inside the app: Settings > Updates > Install and restart."
+  msg "in your app menu, and from a shell: huginn-desktop (~/.local/bin)"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) msg "(add ~/.local/bin to PATH to run 'huginn-desktop' from a shell)" ;; esac
+  msg "settings in ${XDG_CONFIG_HOME:-$HOME/.config}/huginn-desktop-kt are kept; updates install from inside the app"
   if command -v pacman >/dev/null 2>&1 && pacman -Q huginn-desktop-kt >/dev/null 2>&1; then
-    echo "  A pacman package of Huginn Desktop is also installed. Remove it so the menu has one Huginn:"
-    echo "      sudo pacman -R huginn-desktop-kt"
+    _huginn_ui_line warn desktop "a pacman package of Huginn Desktop is also installed - remove it so the menu has one Huginn:"
+    msg "sudo pacman -R huginn-desktop-kt"
   fi
   if command -v dpkg >/dev/null 2>&1 && dpkg -s huginn-desktop-kt >/dev/null 2>&1; then
-    echo "  The .deb of Huginn Desktop is also installed. Remove it so the menu has one Huginn:"
-    echo "      sudo apt remove huginn-desktop-kt"
+    _huginn_ui_line warn desktop "the .deb of Huginn Desktop is also installed - remove it so the menu has one Huginn:"
+    msg "sudo apt remove huginn-desktop-kt"
   fi
+  [ -n "${HUGINN_UI_COMPACT:-}${HUGINN_SETUP:-}" ] || printf '    %sdone in %s s%s\n' "$(_huginn_ui_c 90)" "$((SECONDS - t0))" "$(_huginn_ui_c 0)" >&2
 )
 
 # `huginn desktop update` (and the desktop step of `huginn update`): bring the
@@ -1522,7 +1570,8 @@ _huginn_help_body() {
                               leave them running]
   huginn core install         run huginn core at boot on this machine - as you,
                               with nobody signed in - and pair it with the host
-                              [--logon s4u|password: Windows only]
+                              [--no-tray | --tray: even from an ssh shell
+                              (Linux) | --logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
   huginn core start           start it now if it is set up but not running
   huginn core update          take the newest core release (restarts the core)

@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.7
+# Version: 2.4.0
 
-$script:HUGINN_VERSION = '2.3.7'
+$script:HUGINN_VERSION = '2.4.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -196,6 +196,37 @@ function _Huginn-UiLive {
   $line = '    ' + $Frame + ' ' + $Comp.PadRight(9) + ' ' + $Text
   if ($line.Length -gt $w) { $line = $line.Substring(0, $w) }
   [Console]::Write("`r" + $line.PadRight($w))
+}
+function _Huginn-UiNote { param([string]$Text) _Huginn-Say ((' ' * 18) + $Text) DarkGray }
+# Waits for $P (a process started elsewhere, e.g. elevated) with the wingbeat.
+function _Huginn-UiWait {
+  param([System.Diagnostics.Process]$P, [string]$Comp, [string]$What)
+  $fr = @(_Huginn-UiFrames); $i = 0
+  while (-not $P.HasExited) {
+    if (_Huginn-UiTty) { _Huginn-UiLive $fr[$i % $fr.Count] $Comp $What }
+    $i++; Start-Sleep -Milliseconds 125
+  }
+  $P.WaitForExit()
+  _Huginn-UiClear
+}
+# Draws the lines `huginn core install --report` wrote (state, component, text,
+# tab separated): its elevated step runs in a window of its own, so it hands
+# its lines back to be drawn here. $Tray is appended to the tray's ok line.
+function _Huginn-UiRecords {
+  param([string]$Path, [string]$Tray)
+  foreach ($r in @(Get-Content $Path -ErrorAction SilentlyContinue)) {
+    $f = $r -split "`t", 3
+    if ($f.Count -lt 3) { continue }
+    switch ($f[0]) {
+      'note' { _Huginn-UiNote $f[2] }
+      'say'  { Write-Host ('    ' + $f[2]) }
+      default {
+        $t = $f[2]
+        if ($f[0] -eq 'ok' -and $f[1] -eq 'tray' -and $Tray) { $t = "$t; $Tray" }
+        _Huginn-UiLine $f[0] $f[1] $t
+      }
+    }
+  }
 }
 # Runs $Exe with $Arguments, its output to $Log, turning the wingbeat while it
 # runs. Returns its exit code.
@@ -659,7 +690,7 @@ function _Huginn-CoreUpdate {
   if (((& $bin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $cur = $Matches[1] }
   if (-not $env:HUGINN_CORE_FILE) {
     $rel = _Huginn-CoreRelease
-    if (-not $rel) { _Huginn-UiLine 'fail' 'core' "could not read the release feed (offline or rate-limited) - $cur kept"; return }
+    if (-not $rel) { _Huginn-UiLine 'warn' 'core' "could not read the release feed (offline or rate-limited); $cur kept"; return }
     $latest = $rel.tag -replace '^cli-v', ''
     if (-not (_Huginn-CoreNewer $cur $latest)) {
       $run = ''
@@ -681,14 +712,30 @@ function _Huginn-CoreUpdate {
 
 # Pair the core with the host this shell already reaches over ssh, if it is not
 # paired yet. The token travels ssh -> the pipeline -> stdin, never argv.
+# -Say: report an existing pairing too (`huginn core install`'s line).
 function _Huginn-CorePair {
-  param([string]$Bin)
+  param([string]$Bin, [switch]$Say)
   $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
   $st = (& $Bin core status 2>$null) -join "`n"
-  if ($st -notmatch 'not paired') { return }
+  if ($st -notmatch 'not paired') {
+    if ($Say -and $st -match '(?m)^  huginn:\s+(\S+)') { _Huginn-UiLine 'ok' 'paired' $Matches[1] }
+    return
+  }
   $srv = _Huginn-SrvUrl $H
-  if (-not $srv) { _Huginn-Fail "huginn core: could not work out $H's daemon address - pair by hand: huginn core pair --url https://<host>:8787" }
-  ((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv
+  if (-not $srv) {
+    _Huginn-UiLine 'fail' 'paired' "could not work out $H's daemon address"
+    _Huginn-UiNote 'pair by hand: huginn core pair --url https://<host>:8787'
+    _Huginn-Fail "huginn core: could not work out $H's daemon address"
+  }
+  if (_Huginn-UiTty) { _Huginn-UiLive (@(_Huginn-UiFrames)[0]) 'paired' "fetching the token over ssh and pairing with $srv" }
+  $out = @(((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv 2>&1)
+  $rc = $LASTEXITCODE
+  _Huginn-UiClear
+  if ($rc -eq 0) { _Huginn-UiLine 'ok' 'paired' (([string]$out[0]) -replace '^paired with ', '') }
+  else {
+    _Huginn-UiLine 'fail' 'paired' "could not pair with $srv"; $out | ForEach-Object { _Huginn-UiNote ([string]$_) }
+    _Huginn-Fail "huginn core: pairing with $srv failed"
+  }
 }
 
 # --- auto-reconnecting attach ---
@@ -1017,7 +1064,8 @@ function _Huginn-HelpBody {
                               leave them running]
   huginn core install         run huginn core at boot on this machine - as you,
                               with nobody signed in - and pair it with the host
-                              [--logon s4u|password: Windows only]
+                              [--no-tray | --tray: even from an ssh shell
+                              (Linux) | --logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
   huginn core start           start it now if it is set up but not running
   huginn core update          take the newest core release (restarts the core)
@@ -1342,21 +1390,58 @@ function huginn {
     if ($sub -eq 'update') {
       _Huginn-CoreUpdate
     } elseif ($sub -eq 'install') {
-      if (-not $bin -or $env:HUGINN_CORE_FILE) { $bin = _Huginn-CoreFetch }
-      else { _Huginn-CoreUpdate }  # an installed core is brought up to date first
+      # One block, as `huginn update` draws it: the download (or the update of
+      # the core already here), the core's own lines, then pairing.
+      $t0 = [Diagnostics.Stopwatch]::StartNew()
+      $inBlock = [bool]($env:HUGINN_UI_COMPACT -or $env:HUGINN_SETUP)   # huginn setup draws the title and the end
+      if (-not $inBlock) { _Huginn-UiHead 'huginn core install' }
+      $env:HUGINN_UI_COMPACT = '1'
+      try {
+        if (-not $bin -or $env:HUGINN_CORE_FILE) { $bin = _Huginn-CoreFetch }
+        else { _Huginn-CoreUpdate }  # an installed core is brought up to date first
+      } finally { Remove-Item Env:HUGINN_UI_COMPACT -ErrorAction SilentlyContinue }
       # Registering a boot task needs an administrator token: re-run just that
-      # step elevated, behind ONE UAC prompt, as this same user.
+      # step elevated, behind ONE UAC prompt, as this same user. Its window
+      # closes when it ends, so it writes its lines to a report drawn here.
       $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-      if ($admin) { & $bin core install @rest } else {
-        $p = Start-Process -FilePath $bin -ArgumentList (@('core', 'install') + $rest) -Verb RunAs -Wait -PassThru
-        if ($p.ExitCode -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $($p.ExitCode))" }
+      $rep = $null
+      if ($admin) {
+        $env:HUGINN_UI_COMPACT = '1'
+        try { & $bin core install @rest } finally { Remove-Item Env:HUGINN_UI_COMPACT -ErrorAction SilentlyContinue }
+        if ($LASTEXITCODE -ne 0) { _Huginn-Fail 'huginn core install did not finish (the lines above say where it stopped)' }
+      } else {
+        $rep = Join-Path ([IO.Path]::GetTempPath()) ('huginn-install-' + [guid]::NewGuid().ToString('N') + '.txt')
+        # Start-Process joins its arguments with spaces: the path is quoted.
+        $argv = @('core', 'install', '--report', ('"' + $rep + '"')) + $rest
+        # --logon password asks for the password in that window, so it shows.
+        $style = if ($rest -contains 'password') { 'Normal' } else { 'Hidden' }
+        try { $p = Start-Process -FilePath $bin -ArgumentList $argv -Verb RunAs -PassThru -WindowStyle $style }
+        catch {
+          _Huginn-UiLine 'fail' 'service' 'administrator approval was declined: no boot task was registered'
+          _Huginn-Fail 'huginn core install: the boot task needs administrator approval - run it again and approve the prompt'
+        }
+        $null = $p.Handle
+        _Huginn-UiWait $p 'service' 'registering the boot task (approve the administrator prompt)'
+        $elevRc = $p.ExitCode
       }
       for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
-      # The elevated step does not start the tray (it would run as
-      # administrator); this unelevated self-install does, when none is up.
-      & $bin core self-install | Where-Object { $_ -match 'tray' }
-      _Huginn-CorePair $bin
-      & $bin core status
+      if ($rep) {
+        # The elevated step does not start the tray (it would run as
+        # administrator); this unelevated self-install does, when none is up.
+        $log = "$rep.log"; $started = ''
+        $null = _Huginn-UiSpin 'tray' 'starting the tray' $bin @('core', 'self-install') $log
+        if (@(Get-Content $log -ErrorAction SilentlyContinue) -match 'started the tray') { $started = 'started now' }
+        Remove-Item $log -Force -ErrorAction SilentlyContinue
+        _Huginn-UiRecords $rep $started
+        Remove-Item $rep -Force -ErrorAction SilentlyContinue
+        if ($elevRc -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $elevRc)" }
+      }
+      if ($env:HUGINN_CORE_NOPAIR) {
+        # huginn setup: the host does not trust this computer yet, so there is
+        # no ssh to fetch the token over; the person re-runs this after.
+        _Huginn-UiLine 'skip' 'paired' "not yet: the host does not trust this computer's key - huginn core install pairs it once it does"
+      } else { _Huginn-CorePair $bin -Say }
+      if (-not $inBlock) { _Huginn-Say ("    done in {0} s" -f [int]$t0.Elapsed.TotalSeconds) DarkGray }
     } elseif (-not $bin) {
       _Huginn-Fail "huginn core: not installed here - huginn core install"
     } else {
