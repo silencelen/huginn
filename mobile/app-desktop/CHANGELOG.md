@@ -1,5 +1,15 @@
 # Huginn Desktop changelog
 
+## 2.1.2
+
+Carries core 2.1.2.
+
+### Fixed
+- **Windows: updating the app no longer leaves huginn core stopped.** The app's installer restarts
+  the running core onto the core it carries. That restart could be ignored by Task Scheduler while
+  the old core was still exiting, and the core then stayed down for up to five minutes. The core's
+  own fix is in the CLI 2.1.2 changelog.
+
 ## 2.1.1
 
 The first desktop release of the 2.1 line. Desktop 2.1.0 was never published: its cut was stopped

@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.1.2] - 2026-10-15
 
 ### Fixed
 - **Windows: an update no longer leaves the core stopped.** After a restart request the old core
