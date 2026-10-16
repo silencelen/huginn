@@ -1117,6 +1117,16 @@ for how in unsafe-link unsafe-dotdot; do
 done
 rm -rf "$DT/feed/desktop-v9.9.4" "$DT/feed/desktop-v9.9.3"; dt_publish 9.9.2   # restore a sane newest
 
+# `huginn desktop update` (and the desktop step of `huginn update`): current says
+# so and downloads nothing; a newer release goes through the verified install.
+dt_run 'huginn desktop update'; RC=$?
+[ "$RC" = 0 ] && grep -q 'huginn desktop: 9.9.2 is current' "$DT/out" && ! grep -q 'downloading' "$DT/out" \
+  && ok "desktop update: an up-to-date app says so and downloads nothing" || bad "desktop update when current (rc=$RC): $(cat "$DT/out")"
+dt_publish 9.9.5; dt_run 'huginn desktop update'; RC=$?
+[ "$RC" = 0 ] && [ "$(readlink "$DR/current")" = "versions/9.9.5" ] && grep -q '9.9.2 -> 9.9.5' "$DT/out" \
+  && ok "desktop update: 9.9.2 -> 9.9.5 through the verified per-user install" || bad "desktop update (rc=$RC): $(cat "$DT/out")"
+rm -rf "$DT/feed/desktop-v9.9.5"; dt_publish 9.9.2
+
 # The listing, per distro: which build is "this machine", and which commands.
 DT_OS="$DT/os-arch" dt_run 'huginn desktop'
 grep -qE '^  Arch +https://.*pkg\.tar\.zst   <- this machine' "$DT/out" && grep -q 'huginn desktop install' "$DT/out" \
@@ -1158,7 +1168,7 @@ rm -rf "$DR"
 
 # ps1 parity: the sub-verbs exist in both clients' desktop branch, and on the
 # PowerShell side install/uninstall answer with the Windows pointer.
-for sv in install uninstall arch portable; do
+for sv in install uninstall update arch portable; do
   a=$(awk '/^    desktop\)/,/^    usage\|cost\|ccusage\)/' client/huginn.sh | grep -cE "^[[:space:]]+([a-z|]+\|)?$sv(\||\))")
   b=$(grep -cE "'$sv'" client/huginn.ps1)
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "desktop $sv in both clients" || bad "desktop $sv missing (sh=$a ps1=$b)"
