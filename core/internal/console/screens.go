@@ -451,7 +451,7 @@ func (m *model) devicesView() string {
 		if d.Locked {
 			st += " · locked"
 		}
-		row := m.deviceGlyph(d) + " " + pad(t.text.Render(d.Name), 18) + " " + pad(t.dim.Render(d.Platform), 9) + " " + pad(t.dim.Render(d.Scope), 6) + " " + pad(t.dim.Render(d.Version), 8) + " " + t.dim.Render(st)
+		row := m.deviceGlyph(d) + " " + pad(t.text.Render(d.Name), 18) + " " + pad(t.dim.Render(d.Platform), 9) + " " + pad(t.dim.Render(d.Scope), 9) + " " + pad(t.dim.Render(d.Version), 11) + " " + t.dim.Render(st)
 		mark := "  "
 		if i == cur {
 			mark = t.key.Render(t.cursor()) + " "

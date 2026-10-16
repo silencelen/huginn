@@ -244,7 +244,26 @@ func (p *palette) refilter() {
 		p.shown = p.all
 		return
 	}
+	// What contains the text comes first (names that start with it, then the
+	// rest, in their own order); fuzzy matching only when nothing does, where
+	// it catches a typo instead of burying "devices" under every chat whose
+	// title happens to hold a d, an e and a v.
 	p.shown = nil
+	lq := strings.ToLower(q)
+	var starts, contains []candidate
+	for _, c := range p.all {
+		l := strings.ToLower(c.label)
+		switch {
+		case strings.HasPrefix(l, lq) || strings.Contains(l, " "+lq):
+			starts = append(starts, c)
+		case strings.Contains(l, lq):
+			contains = append(contains, c)
+		}
+	}
+	p.shown = append(starts, contains...)
+	if len(p.shown) > 0 {
+		return
+	}
 	for _, r := range fuzzy.FindFrom(q, labels(p.all)) {
 		p.shown = append(p.shown, p.all[r.Index])
 	}
