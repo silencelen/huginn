@@ -1,5 +1,15 @@
 # Huginn Desktop changelog
 
+## 2.3.6
+
+Carries core 2.3.6.
+
+### Fixed
+- **Updates close the app cleanly.** The app now accepts a "quit" request on its single-instance
+  channel (only from your own account, never from a link). The installer and `huginn desktop update`
+  send it first and wait for the app to close the way its tray's "Quit Huginn" does. Ending it by
+  force made the Windows launcher show error dialogs. The forced close remains the fallback.
+
 ## 2.3.5
 
 Carries core 2.3.5: on Windows the huginn tray now comes up properly at sign-in, without a console

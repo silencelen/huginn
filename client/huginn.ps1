@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.5
+# Version: 2.3.6
 
-$script:HUGINN_VERSION = '2.3.5'
+$script:HUGINN_VERSION = '2.3.6'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -401,6 +401,30 @@ function _Huginn-DesktopRelease {
   try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
 }
 
+# Asks a running Huginn Desktop to quit through its single-instance channel
+# (port and secret in instance.lock, readable by this user only), and waits for
+# it to go. True when it went. An app from before 2.3.6 does not know the
+# request; the installer then closes it as before.
+function _Huginn-DesktopAskQuit {
+  $base = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+  $lock = Join-Path $base 'huginn-desktop-kt\instance.lock'
+  if (-not (Test-Path $lock)) { return $false }
+  try {
+    $l = @(Get-Content $lock)
+    $c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]$l[0])
+    $st = $c.GetStream(); $st.ReadTimeout = 3000
+    $w = New-Object IO.StreamWriter($st); $w.NewLine = "`n"
+    $w.WriteLine($l[1]); $w.WriteLine('!quit'); $w.Flush()
+    $null = (New-Object IO.StreamReader($st)).ReadLine()
+    $c.Close()
+  } catch { return $false }
+  for ($i = 0; $i -lt 60; $i++) {
+    if (-not (Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)) { return $true }
+    Start-Sleep -Milliseconds 250
+  }
+  return $false
+}
+
 # `huginn desktop update` (and the desktop step of `huginn update`): bring the
 # installed Huginn Desktop to the newest desktop-v release. The installer comes
 # from the release, is checked against the sha256 in that release's manifest,
@@ -430,6 +454,9 @@ function _Huginn-DesktopUpdate {
     if ($got -ne $sha) { _Huginn-Say "huginn desktop: $file did not match its sha256 - discarded, nothing installed" Red; return }
     $app = Join-Path (Split-Path -Parent "$($reg.UninstallString)".Trim('"')) 'huginn-desktop-kt.exe'
     $wasOpen = [bool](Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)
+    # Ask it to quit the way its own tray menu does, before the installer has
+    # to end it by force (a forced end left the launcher showing error dialogs).
+    if ($wasOpen -and (_Huginn-DesktopAskQuit)) { Write-Host "  closed the app" }
     $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
     if ($p.ExitCode -ne 0) { _Huginn-Say "huginn desktop: the installer exited $($p.ExitCode) - see Settings > Apps" Red; return }
     $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
@@ -490,7 +517,10 @@ function _Huginn-CoreFetch {
       $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
       if ($got -ne $a.sha256) { _Huginn-Fail "huginn core: $($a.file) did not match its sha256 - discarded, nothing installed" }
     }
-    & $tmp core self-install
+    # To the screen: inside a function a native command's output is part of
+    # its RETURN value, and the caller's `$null = _Huginn-CoreFetch` threw
+    # away "restarted huginn core: X -> Y" with it.
+    & $tmp core self-install | Out-Host
     if ($LASTEXITCODE -ne 0) { _Huginn-Fail "huginn core: self-install failed" }
   } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
   return (_Huginn-CoreBin)
