@@ -93,6 +93,7 @@ func Run(o Options) {
 		}
 	}
 	r.notifier = newNotifier(o.Logger)
+	waitForTaskbar()
 	systray.Run(r.ready, func() {})
 }
 
