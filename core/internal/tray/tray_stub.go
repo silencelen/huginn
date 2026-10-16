@@ -26,3 +26,6 @@ func Run(o Options) {
 
 // NotifyTest is unsupported here.
 func NotifyTest(time.Duration) error { return errors.New("no notifications on this platform") }
+
+// Held: no tray on this platform.
+func Held(string) bool { return false }

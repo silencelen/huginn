@@ -45,10 +45,10 @@ curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.s
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1))) -HuginnHost <host-ip-or-name>
 ```
 
-After the client it asks whether to keep huginn running in the background (`huginn core`) and
-whether to install the desktop app. Preset the answers for unattended installs with
-`HUGINN_BACKGROUND=y|n HUGINN_GUI=y|n` (shell) or `-Background y|n -Gui y|n` (PowerShell).
-`huginn core install` and `huginn desktop` do the same later.
+After the client it installs huginn core, which carries the CLI and runs at boot (not on Termux or
+macOS, where it cannot run), then asks whether to install the desktop app, and ends by saying what
+it installed. Preset the one question for unattended installs with `HUGINN_GUI=y|n` (shell) or
+`-Gui y|n` (PowerShell). `huginn core install` and `huginn desktop` do the same later.
 
 **From a clone** (the client alone):
 ```powershell

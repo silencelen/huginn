@@ -78,6 +78,10 @@ func uninstall(args []string) int {
 	if all {
 		fmt.Println("  --all: the 'Host huginn' SSH stanza, and its key IF it is huginn's own")
 	}
+	if runtime.GOOS == "windows" && serviceInstalled(stableBinary()) {
+		fmt.Println()
+		fmt.Println("Windows may ask for administrator approval once, to delete the boot task.")
+	}
 	fmt.Println()
 	if !yes {
 		fmt.Print(`Type "uninstall" to continue: `)

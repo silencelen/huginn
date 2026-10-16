@@ -489,7 +489,7 @@ func (m *model) move(s string, n int) {
 
 func (m *model) attachTo(name string, solo bool) tea.Cmd {
 	if !hasSSHHost(m.o.Home, sshHost()) {
-		m.say("attaching needs SSH to the host: no 'Host "+sshHost()+"' in ~/.ssh/config (the installer one-liner sets it up)", false)
+		m.say("attaching needs SSH to the huginn host: run huginn setup ssh (or :setup ssh)", false)
 		return nil
 	}
 	a, err := newAttach(sshHost(), name, solo)

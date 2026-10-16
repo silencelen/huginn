@@ -106,14 +106,12 @@ curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.s
 ```
 
 It installs the `huginn` command from the newest release, adds a `Host huginn` SSH alias, prints this
-machine's key for you to authorize on the host, then asks two questions:
+machine's key for you to authorize on the host, installs `huginn core` (it carries the CLI and runs
+at boot; not on Termux or macOS), asks one question, and ends with what it installed:
 
-- **Keep huginn running in the background?** — installs [`huginn core`](#huginn-core-optional), so
-  this machine can run work for huginn from boot, signed out, window closed.
 - **Install the desktop app too?** — Windows and Linux.
 
-Answer up front for unattended installs: `HUGINN_BACKGROUND=y HUGINN_GUI=n` (shell) or
-`-Background y -Gui n` (PowerShell). From a clone, `client/install.sh` / `client/install.ps1`
+Answer up front for unattended installs: `HUGINN_GUI=n` (shell) or `-Gui n` (PowerShell). From a clone, `client/install.sh` / `client/install.ps1`
 still install the command alone.
 
 **4. Go:**
