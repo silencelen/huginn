@@ -1,0 +1,30 @@
+ (!> huginn  >  core                                                host huginn · core 2.3.0 · live
+                                                                                                   
+  huginn core                                                                                      
+   version         2.3.0                                                                           
+   paired with     https://huginn.example.net:8787                                                 
+   tray            attached                                                                        
+   this device     Waiting for work                                                                
+                                                                                                   
+  the host                                                                                         
+   host            huginn                                                                          
+   appd            3.12.0                                                                          
+   claude          2.1.300 (Claude Code)                                                           
+   up              9d 2h                                                                           
+   load            1.50                                                                            
+   disk            91% used, 9.3G free                                                             
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+ u update  R restart  i set up  esc back                                                           
+ same as: huginn core status                                                                       

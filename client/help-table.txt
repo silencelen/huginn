@@ -21,7 +21,11 @@
 #   {HOST_HERE}      ", which is <host> here" when HUGINN_HOST is set, else nothing
 #   {SET:NAME=VALUE} how to set an environment variable in this shell
 
-  huginn                      attach/create the live 'main' session
+  huginn                      the console: sessions, devices, usage and the
+                              core, with menus (in a terminal; set
+                              HUGINN_CONSOLE=0, or pipe it, for 'main')
+  huginn console              the console, by name
+  huginn main                 attach/create the live 'main' session
                               (run claude inside)
   huginn <name>               a separate named session
   huginn attach <name>        that session even when its name is a verb

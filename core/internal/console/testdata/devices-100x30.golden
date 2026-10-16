@@ -1,0 +1,30 @@
+ (!> huginn  >  devices                                             host huginn · core 2.3.0 · live
+                                                                                                   
+  this machine                                                                                     
+   available to huginn: on  · name stigo  · scope work                                             
+   Waiting for work                                                                                
+                                                                                                   
+  the fleet                                                                                        
+  > * PRESTIGE           windows   own    2.3.0    running a job                                   
+    o stigo              linux     work   2.3.0    online                                          
+    - brokkr             linux     work   1.8.0    last seen 2h                                    
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+                                                                                                   
+ o this machine on/off  c scope  esc back                                                          
+ same as: huginn devices                                                                           
