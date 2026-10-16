@@ -8,6 +8,17 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Windows: an update no longer leaves the core stopped.** After a restart request the old core
+  stops answering at once, but its process (and so its scheduled-task instance) can live a few more
+  seconds while it closes its event streams. Task Scheduler ignores a start request for a task that
+  is still running, so the one `schtasks /Run` sent in that window did nothing and the core stayed
+  down until the task's next repeat. The update now waits for the old process to exit and repeats
+  the start until the new core answers. Found on PRESTIGE: 2.1.1's own code left the core down; the
+  fix restarted it in 9 s, twice, with the tray handing itself over each time.
+
 ## [2.1.1] - 2026-10-15
 
 ### Fixed

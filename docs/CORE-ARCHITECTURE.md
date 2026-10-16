@@ -457,9 +457,17 @@ overflow menu, and the person pins one with a drag. No supported API promotes an
 `IsPromoted` under `HKCU\Control Panel\NotifyIconSettings` is undocumented and is the kind of
 thing a user should decide. The notifications are not affected.
 
-**Shipped in 2.1.0 without a hardware check (the laptop was off):** the Windows upgrade steps
-(unelevated `schtasks /Run`, the tray handoff with the renamed `.exe`) and the Linux tray on a real
-desktop (stigo: SNI and notifications). Check them on the next boot of PRESTIGE and stigo.
+**Hardware check, PRESTIGE (2026-10-15, after the owner updated it):** the tray handoff works
+(2.1.0 tray → 2.1.1 tray in about 20 s, counted by the core); a toast posts and withdraws in
+session 1; the core claims notifications for that tray. **Found:** an unelevated update restart
+could leave the core DOWN. The old core closes its socket before its process exits (shutdown waits
+up to 5 s on open event streams), Task Scheduler ignores `/Run` for a running instance, and the
+one `/Run` landed in that window. Fixed after 2.1.1: wait for the old pid, then repeat `/Run`
+until the new core answers (proven twice on PRESTIGE, 9 s each). **Not explained:** right after
+the owner's update the core reported `tray: true` with no tray process running (and no tray
+started at login since). A killed tray, and a killed raw client, both drop the count within 2 s,
+so this was not reproduced; watch for it. **Still unchecked:** the Linux tray on stigo (SNI and
+notifications).
 
 **Security review of the 2.1.0 range (2026-10-15): no HIGH or CRITICAL.** Fixed before the cut:
 Linux notification bodies are escaped (markup injection from model output); the core claims
