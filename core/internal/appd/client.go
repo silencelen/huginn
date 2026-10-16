@@ -137,15 +137,22 @@ func (c *Client) Close() {
 // non-nil, is sent as JSON. A status of 400 or above comes back as a
 // *StatusError together with the Response.
 func (c *Client) Do(ctx context.Context, method, path string, body any) (*Response, error) {
+	var payload []byte
+	if body != nil {
+		var err error
+		if payload, err = json.Marshal(body); err != nil {
+			return nil, fmt.Errorf("%s %s: encoding the body: %w", method, path, err)
+		}
+	}
+	return c.Raw(ctx, method, path, payload)
+}
+
+// Raw is Do with the body already encoded (JSON or nothing): the core's
+// /appd/* proxy forwards what the console or GUI sent, byte for byte.
+func (c *Client) Raw(ctx context.Context, method, path string, payload []byte) (*Response, error) {
 	target, err := c.resolve(path)
 	if err != nil {
 		return nil, err
-	}
-	var payload []byte
-	if body != nil {
-		if payload, err = json.Marshal(body); err != nil {
-			return nil, fmt.Errorf("%s %s: encoding the body: %w", method, target.Path, err)
-		}
 	}
 	tok, err := ResolveToken(c.tokens)
 	if err != nil {
