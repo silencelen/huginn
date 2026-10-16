@@ -5,9 +5,9 @@
    Waiting for work                                                                                
                                                                                                    
   the fleet                                                                                        
-  > * PC01           windows   own    2.3.0    running a job                                   
-    o a Linux laptop              linux     work   2.3.0    online                                          
-    - buildbox             linux     work   1.8.0    last seen 2h                                    
+  > * PC01           windows   own       2.3.0       running a job                             
+    o a Linux laptop              linux     work      2.3.0       online                                    
+    - buildbox             linux     work      1.8.0       last seen 2h                              
                                                                                                    
                                                                                                    
                                                                                                    
