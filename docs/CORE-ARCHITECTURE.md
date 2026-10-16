@@ -466,8 +466,14 @@ one `/Run` landed in that window. Fixed in 2.1.2: wait for the old pid, then rep
 until the new core answers (proven twice on PC01, 9 s each). **Not explained:** right after
 the owner's update the core reported `tray: true` with no tray process running (and no tray
 started at login since). A killed tray, and a killed raw client, both drop the count within 2 s,
-so this was not reproduced; watch for it. The owner saw SEVERAL huginn tray icons after the update and closed each one. Windows leaves a dead icon behind for a process that was killed rather than quit, and the desktop installer runs `taskkill /F /T` on the app. Lead: which trays existed during an app update, and which of them were killed. **Still unchecked:** the Linux tray on a Linux laptop (SNI and
-notifications).
+so this was not reproduced; watch for it. The owner saw SEVERAL huginn tray icons after the update and closed each one. Windows leaves a dead icon behind for a process that was killed rather than quit, and the desktop installer runs `taskkill /F /T` on the app. Lead: which trays existed during an app update, and which of them were killed. **a Linux laptop (Omarchy/Hyprland, 2026-10-15):** after the desktop's in-app update to 2.1.2 (bundled
+core self-installed) and `huginn core install` (systemd user unit + linger), self-install from the
+graphical environment wrote the autostart and started the tray. The only StatusNotifierItem on the
+bus is the core tray's, so the desktop stood its own icon down. A D-Bus notification posts and
+withdraws, and `notifyClaim` is true. **Found:** the core's `huginn` binary on PATH shadowed the
+shell client wherever the client is not a loaded function (fish, which Omarchy execs before
+`.bashrc` sources the client; cmd.exe; no-profile PowerShell). Fixed in 2.1.3: the binary hands
+every verb it does not own to `~/.huginn/huginn.{sh,ps1}` (`HUGINN_VIA_CORE` guards the loop).
 
 **Security review of the 2.1.0 range (2026-10-15): no HIGH or CRITICAL.** Fixed before the cut:
 Linux notification bodies are escaped (markup injection from model output); the core claims

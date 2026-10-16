@@ -8,6 +8,17 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.1.3] - 2026-10-15
+
+### Fixed
+- **`huginn ls`, `attach`, `projects` and every other session verb work again in any shell.** The
+  core installs a `huginn` binary on your PATH, and the binary knew only `version`, `core` and
+  `device`. Where the shell client is not loaded as a function, the binary answered with its usage.
+  That covers fish (Omarchy hands interactive terminals to fish before `.bashrc` loads the client),
+  `cmd.exe`, a PowerShell without your profile, and scripts. The binary now hands every verb it does
+  not own to the installed client (`~/.huginn/huginn.sh` through bash, `huginn.ps1` through
+  PowerShell), with the arguments unchanged. Found on a Linux laptop.
+
 ## [2.1.2] - 2026-10-15
 
 ### Fixed

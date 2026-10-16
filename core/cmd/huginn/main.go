@@ -12,6 +12,9 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
+		if code, ok := forwardToClient(nil); ok {
+			os.Exit(code)
+		}
 		usage()
 		os.Exit(2)
 	}
@@ -23,6 +26,9 @@ func main() {
 	case "core":
 		os.Exit(core(os.Args[2:]))
 	default:
+		if code, ok := forwardToClient(os.Args[1:]); ok {
+			os.Exit(code)
+		}
 		usage()
 		os.Exit(2)
 	}
@@ -31,5 +37,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage: huginn version
        huginn core run | install [--logon s4u|password] | uninstall | status | pair --url URL | self-install
-       huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status`)
+       huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status
+Every other verb (sessions, attach, projects, usage, update) is the shell client's:
+install it with the one-liner in the README, and the core hands those verbs to it.`)
 }
