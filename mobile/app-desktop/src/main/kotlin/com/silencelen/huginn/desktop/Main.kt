@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.collectAsState
 import com.silencelen.huginn.desktop.ui.settings.SettingsFacts
 import com.silencelen.huginn.desktop.ui.settings.desktopProbe
@@ -325,7 +326,10 @@ fun main(args: Array<String>) {
         }
     }
 
-    instance.listen { url -> handle(url) }
+    // An updater or the installer asking the app to quit (SingleInstance.QUIT):
+    // handed to the Compose side, where quit() lives.
+    val quitAsked = kotlinx.coroutines.flow.MutableStateFlow(false)
+    instance.listen(onUrl = { url -> handle(url) }, onQuit = { quitAsked.value = true })
 
     // RESUME FROM SLEEP. A suspend black-holes every socket at once; nothing
     // errors on wake, the connection simply hangs until an idle timeout fires —
@@ -466,6 +470,11 @@ fun main(args: Array<String>) {
             instance.close()
             notifier.close()
             exitApplication()
+        }
+
+        LaunchedEffect(Unit) {
+            quitAsked.first { it }
+            quit()
         }
 
         // The one way a screen can ask to be quit, and the only reason one does:

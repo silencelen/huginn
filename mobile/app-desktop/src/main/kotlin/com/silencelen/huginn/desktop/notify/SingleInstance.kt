@@ -48,7 +48,7 @@ class SingleInstance private constructor(
      * Starts accepting hand-offs. [onUrl] is called on a daemon thread for every
      * URL a second launch delivers.
      */
-    fun listen(onUrl: (String) -> Unit) {
+    fun listen(onUrl: (String) -> Unit, onQuit: () -> Unit = {}) {
         val socketServer = server ?: return
         val t = Thread({
             while (!stopped.get() && !socketServer.isClosed) {
@@ -58,19 +58,29 @@ class SingleInstance private constructor(
                     // way out; anything else and looping would spin a core.
                     break
                 }
-                socket.use { s -> runCatching { serve(s, onUrl) } }
+                socket.use { s -> runCatching { serve(s, onUrl, onQuit) } }
             }
         }, "huginn-single-instance")
         t.isDaemon = true
         t.start()
     }
 
-    private fun serve(s: Socket, onUrl: (String) -> Unit) {
+    private fun serve(s: Socket, onUrl: (String) -> Unit, onQuit: () -> Unit) {
         s.soTimeout = 3_000
         val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.UTF_8))
         if (reader.readLine() != secret) return
         val url = reader.readLine().orEmpty()
         OutputStreamWriter(s.getOutputStream(), Charsets.UTF_8).apply { write("ok\n"); flush() }
+        // QUIT, from an updater or the installer (`huginn desktop update`, the
+        // NSIS installer): the app's own Quit, so it closes the way the tray's
+        // "Quit Huginn" does instead of being killed — a forced kill of the JVM
+        // left the jpackage launcher showing error dialogs (PRESTIGE, 2026-10-16).
+        // Never a URL: a web page can launch huginn:// links, and only a holder of
+        // this file's secret (this user) can say this.
+        if (url == QUIT) {
+            onQuit()
+            return
+        }
         // Blank is a message too: a second launch with no URL means "someone
         // double-clicked the icon", and the right answer is to bring the window
         // forward rather than to ignore them.
@@ -84,6 +94,9 @@ class SingleInstance private constructor(
     }
 
     companion object {
+
+        /** The message that asks a running app to quit (see [serve]). */
+        const val QUIT = "!quit"
 
         /**
          * Claims the single-instance slot, or hands [url] to whoever already holds it.
