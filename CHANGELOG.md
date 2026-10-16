@@ -8,6 +8,18 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.6] - 2026-10-16
+
+### Fixed
+- **Updating the Windows desktop app closes it cleanly.** Before running the installer,
+  `huginn update` / `huginn desktop update` now ask the open app to quit through its single-instance
+  channel, the same way its tray's "Quit Huginn" does. The installer used to end it by force, and the
+  Java launcher then showed error dialogs on the way out. The request needs the secret in a file only
+  your account can read, and a web page cannot send it. An app from before 2.3.6 does not know the
+  request, so its last update still closes it by force.
+- `huginn core update` in PowerShell shows the core's own report again ("restarted huginn core:
+  X -> Y"). It was swallowed.
+
 ## [2.3.5] - 2026-10-16
 
 ### Fixed

@@ -226,7 +226,29 @@ Function ${UN}EnsureNotRunning
     Abort "Cancelled: ${APP_NAME} is still running."
 
   close:
-    ; Polite first: this posts WM_CLOSE, which a window without close-to-tray
+    ; Ask the app itself to quit first, through its single-instance channel
+    ; (instance.lock: port + secret, this user's only), exactly as its tray's
+    ; "Quit Huginn" does. Ending the runtime by force left the jpackage launcher
+    ; showing error dialogs (PRESTIGE, 2026-10-16). An app from before 2.3.6
+    ; ignores the request and the forced path below still applies.
+    InitPluginsDir
+    FileOpen $9 "$PLUGINSDIR\askquit.ps1" w
+    FileWrite $9 "$$ErrorActionPreference = 'Stop'$\r$\n"
+    FileWrite $9 "$$b = if ($$env:XDG_CONFIG_HOME) { $$env:XDG_CONFIG_HOME } else { Join-Path $$env:USERPROFILE '.config' }$\r$\n"
+    FileWrite $9 "$$f = Join-Path $$b 'huginn-desktop-kt\instance.lock'$\r$\n"
+    FileWrite $9 "if (-not (Test-Path $$f)) { exit 1 }$\r$\n"
+    FileWrite $9 "try { $$l = @(Get-Content $$f); $$c = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]$$l[0]); $$s = $$c.GetStream(); $$s.ReadTimeout = 3000$\r$\n"
+    FileWrite $9 "  $$w = New-Object IO.StreamWriter($$s); $$w.NewLine = [string][char]10; $$w.WriteLine($$l[1]); $$w.WriteLine('!quit'); $$w.Flush()$\r$\n"
+    FileWrite $9 "  $$null = (New-Object IO.StreamReader($$s)).ReadLine(); $$c.Close() } catch { exit 1 }$\r$\n"
+    FileWrite $9 "for ($$i = 0; $$i -lt 40; $$i++) { if (-not (Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)) { exit 0 }; Start-Sleep -Milliseconds 250 }$\r$\n"
+    FileWrite $9 "exit 2$\r$\n"
+    FileClose $9
+    nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\askquit.ps1"'
+    Pop $0
+    ${If} $0 == 0
+      Goto closed
+    ${EndIf}
+    ; Polite next: this posts WM_CLOSE, which a window without close-to-tray
     ; would honour.
     nsExec::ExecToLog 'taskkill /IM "${APP_EXE}"'
     Pop $0
@@ -241,6 +263,7 @@ Function ${UN}EnsureNotRunning
       Sleep 1500
     ${EndIf}
 
+  closed:
     ; Prove it, rather than assuming the kill worked. A locked file discovered
     ; halfway through the copy is a broken install with no message.
     nsExec::ExecToStack 'cmd /c tasklist /FI "IMAGENAME eq ${APP_EXE}" /NH | find /I "${APP_EXE}"'
