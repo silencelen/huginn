@@ -8,6 +8,46 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **The huginn console.** Plain `huginn` in a terminal now opens a full-screen console with menus for
+  everything huginn does. Home shows the raven, what needs you, and every section with live counts.
+  It has screens for Sessions, Chats, Projects, Rounds, Devices, Usage, Archive, Settings and the core.
+  - **Sessions:** Enter attaches over ssh, with the same reconnect behaviour as `huginn attach`.
+    `Ctrl-b d` brings you back to the same spot. You can also create, send a line, end gracefully,
+    rename and kill a session.
+  - **Chats:** the answer streams in as it is written.
+  - **Projects:** a dashboard of members; Enter attaches to one.
+  - **Rounds:** Enter opens the last run, and you can pause or resume.
+  - **Archive:** Enter revives a conversation and attaches to it.
+  - **`/` filters** any list as you type, and **`:` is a palette** that finds screens, sessions, chats,
+    projects, rounds and actions. Anything else typed there runs as `huginn <it>`.
+  - Each screen's footer names the one-shot command that does the same thing.
+  - Destructive actions ask you to type the name.
+  - Symbols, words and colours follow the brand, with plain-text versions for older terminals
+    (`HUGINN_ASCII=1`) and `NO_COLOR` honoured.
+  - **What keeps working:** piped or scripted use, `HUGINN_CONSOLE=0`, Termux, and a core too old to
+    have the console all keep the old behaviour of attaching to `main`, as does `huginn main`. Every
+    `huginn <verb>` works as before. `huginn console` opens it by name.
+- **`huginn setup ssh`** sets up the SSH side on a machine that got huginn from the desktop installer
+  or a package. It makes or reuses a key and writes `Host huginn` for the host the core is paired with.
+  It prints the exact line to run on the host, then checks the connection. It never edits an existing
+  stanza.
+- huginn core forwards requests to appd on the core's socket, with its own token and proven route
+  (`/appd/v1/...`; event streams pass straight through). This is how the console reaches huginn, and
+  the token never leaves the core.
+
+### Changed
+- **The installer one-liners always install huginn core**, which carries the CLI, except on Termux and
+  macOS, where the core cannot run. They used to ask. The only question left is the desktop app, and
+  the install ends with what it installed, what runs at boot, and the next command. `get.ps1` explains
+  how to add Windows' OpenSSH client when it is missing.
+- `huginn uninstall` turns linger off again when `huginn core install` had turned it on. Linger that was
+  on before huginn is left, and the summary says so. On Windows it says before you confirm that Windows
+  may ask for administrator approval.
+- An update no longer briefly starts a second tray while the running one hands itself over.
+
 ## [2.2.0] - 2026-10-15
 
 huginn core is the product, and it includes the CLI. The desktop app is a layer on top of it.
