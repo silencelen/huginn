@@ -108,4 +108,3 @@ func lockWords(locked, known bool) string {
 	}
 	return "unlocked"
 }
-
