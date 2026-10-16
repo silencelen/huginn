@@ -64,9 +64,30 @@ func fakeCore(t *testing.T, paired bool) string {
 			"session":{"percent":3,"resetsAt":"2099-01-01T00:00:00Z","label":"Current session"},
 			"weekly_all":{"percent":66,"resetsAt":"2099-01-01T00:00:00Z","label":"Current week, all models"}}}},
 			"sentinels":{"STOP":null},"held":[],"arbiter":{"why":"under every threshold"}}`))
-		mux.HandleFunc("/appd/v1/chats", j(`{"chats":[{},{},{}]}`))
-		mux.HandleFunc("/appd/v1/rounds", j(`{"rounds":[{},{}]}`))
-		mux.HandleFunc("/appd/v1/projects", j(`{"projects":[{}]}`))
+		mux.HandleFunc("/appd/v1/chats", j(fmt.Sprintf(`{"chats":[
+			{"id":"c1","title":"Kalshi sizing","mode":"ask","running":false,"updatedAt":%d,"lastSnippet":"Half Kelly keeps the drawdown under 50%%.","turns":2},
+			{"id":"c2","title":"Restart the arr stack","mode":"act","running":true,"updatedAt":%d,"lastSnippet":"Restarting sonarr…"}]}`, now-540, now-20)))
+		mux.HandleFunc("/appd/v1/chats/c1", j(`{"id":"c1","title":"Kalshi sizing","mode":"ask","seq":0,"messages":[
+			{"type":"user","text":"How big should each bet be?"},
+			{"type":"tool","name":"Read","input":"/srv/btc15m/config.yaml"},
+			{"type":"assistant","text":"Half Kelly keeps the drawdown under 50%, which matches your halt rule."},
+			{"type":"result","ok":true,"turns":2,"costUsd":0.04}]}`))
+		mux.HandleFunc("/appd/v1/chats/c1/messages", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(202)
+			fmt.Fprint(w, `{"ok":true,"running":true}`)
+		})
+		mux.HandleFunc("/appd/v1/chats/c1/stream", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: started\ndata: {}\n\nevent: tool_start\ndata: {\"name\":\"Bash\"}\n\nevent: delta\ndata: {\"text\":\"Streamed \"}\n\nevent: delta\ndata: {\"text\":\"answer.\"}\n\nevent: done\ndata: {}\n\n")
+		})
+		mux.HandleFunc("/appd/v1/rounds", j(fmt.Sprintf(`{"rounds":[
+			{"id":"r1","title":"Morning briefing","enabled":true,"mode":"ask","cadence":"Daily at 7:00 AM","nextRunAtSec":%d,"lastRun":{"at":%d,"chatId":"c1","status":"ok","headline":"All quiet: 0 alerts, backups green."}},
+			{"id":"r2","title":"Weekly capacity","enabled":false,"mode":"ask","cadence":"Weekly on Sunday at 8:00 AM"}]}`, now+3*3600, now-20*3600)))
+		mux.HandleFunc("/appd/v1/projects", j(`{"projects":[{"id":"p1","name":"widgetshub","kind":"software","status":"active","memberCount":3,"alive":3,"busy":1,"waiting":1,"manifestSummary":"Widgets for the Fold"}]}`))
+		mux.HandleFunc("/appd/v1/projects/p1/dashboard", j(`{"members":[
+			{"role":"lead","name":"widgetshub-lead","alive":true,"state":"attention","needsYou":true,"title":"Ship 0.8.0?","turns":40,"estCostUsd":3.2},
+			{"role":"member","name":"widgetshub-core","alive":true,"state":"running","turns":12,"estCostUsd":1.1}]}`))
+		mux.HandleFunc("/appd/v1/archive", j(fmt.Sprintf(`{"archives":[{"id":"a1","title":"Old router migration","model":"Opus 5.5","lastMessage":"Done; the VLANs are live.","archivedAt":%d}]}`, now-86400*9)))
 		mux.HandleFunc("/appd/v1/watch", func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	}
 	srv := &http.Server{Handler: mux}
@@ -96,7 +117,8 @@ func render(t *testing.T, sock string, w, h int, keys ...string) string {
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
-		m.Update(msg)
+		_, cmd := m.Update(msg)
+		drain(m, cmd)
 	}
 	return m.View()
 }
@@ -135,7 +157,13 @@ func TestScreens(t *testing.T) {
 		{"usage-100x30", 100, 30, []string{"6"}},
 		{"core-100x30", 100, 30, []string{"9"}},
 		{"help-80x24", 80, 24, []string{"?"}},
-		{"later-80x24", 80, 24, []string{"2"}},
+		{"chats-100x30", 100, 30, []string{"2"}},
+		{"chat-100x30", 100, 30, []string{"2", "enter"}},
+		{"projects-100x30", 100, 30, []string{"3"}},
+		{"project-100x30", 100, 30, []string{"3", "enter"}},
+		{"rounds-100x30", 100, 30, []string{"4"}},
+		{"archive-100x30", 100, 30, []string{"7"}},
+		{"settings-100x30", 100, 30, []string{"8"}},
 		{"too-small", 50, 12, nil},
 	}
 	for _, c := range cases {
@@ -189,4 +217,65 @@ func TestArtMatchesBrand(t *testing.T) {
 			t.Errorf("art/%s differs from assets/brand/explorations/round5/%s: copy it again", f, f)
 		}
 	}
+}
+
+// drain runs a command chain synchronously (loaders return a message; batches
+// and the background watch are skipped), so a key that opens a screen has its
+// data in the frame.
+func drain(m *model, cmd tea.Cmd) {
+	for i := 0; cmd != nil && i < 5; i++ {
+		done := make(chan tea.Msg, 1)
+		go func() { done <- cmd() }()
+		var msg tea.Msg
+		select {
+		case msg = <-done:
+		case <-time.After(2 * time.Second):
+			return
+		}
+		switch msg.(type) {
+		case nil, tea.BatchMsg:
+			return
+		}
+		_, cmd = m.Update(msg)
+	}
+}
+
+// Sending in a chat posts, follows the run's stream through the core, and
+// shows the answer as it arrives, then the transcript.
+func TestChatSendStreams(t *testing.T) {
+	sock := fakeCore(t, true)
+	os.Setenv("HUGINN_ASCII", "1")
+	lipgloss.SetColorProfile(termenv.Ascii)
+	m := newModel(context.Background(), Options{Socket: sock, Proto: "1", Version: "2.3.0", Home: t.TempDir()})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.Update(m.fetch()())
+	drain(m, m.openChat("c1"))
+	m.send("and the next one?")
+	sawLive := false
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		select {
+		case msg := <-m.events:
+			ev, ok := msg.(chatEvent)
+			if !ok {
+				continue
+			}
+			cmd := m.onChatEvent(ev)
+			if strings.Contains(m.View(), "Streamed answer.") {
+				sawLive = true
+			}
+			if ev.event == "done" {
+				drain(m, cmd)
+				if !sawLive {
+					t.Fatalf("the streamed answer never showed:\n%s", m.View())
+				}
+				if m.chat.busy {
+					t.Fatal("still busy after done")
+				}
+				return
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("no stream events")
+		}
+	}
+	t.Fatal("the run never finished")
 }
