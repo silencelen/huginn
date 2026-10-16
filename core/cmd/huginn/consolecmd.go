@@ -44,3 +44,5 @@ func runConsole(args []string) int {
 	}
 	return 0
 }
+
+func isTerminal(f *os.File) bool { return term.IsTerminal(int(f.Fd())) }

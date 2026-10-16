@@ -25,6 +25,9 @@
                               core, with menus (in a terminal; set
                               HUGINN_CONSOLE=0, or pipe it, for 'main')
   huginn console              the console, by name
+  huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
+                              for attaching and the session verbs, on a
+                              machine set up from the desktop or a package
   huginn main                 attach/create the live 'main' session
                               (run claude inside)
   huginn <name>               a separate named session

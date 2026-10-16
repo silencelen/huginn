@@ -788,6 +788,9 @@ function _Huginn-HelpBody {
                               core, with menus (in a terminal; set
                               HUGINN_CONSOLE=0, or pipe it, for 'main')
   huginn console              the console, by name
+  huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
+                              for attaching and the session verbs, on a
+                              machine set up from the desktop or a package
   huginn main                 attach/create the live 'main' session
                               (run claude inside)
   huginn <name>               a separate named session
@@ -1009,6 +1012,12 @@ function huginn {
     $tty = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
     if ($tty -and $env:HUGINN_CONSOLE -ne '0' -and $core) { & $core console --probe *> $null; $probe = $LASTEXITCODE } else { $probe = 1 }
     if ($probe -eq 0) { & $core console } else { _Huginn-Attach -H $H }
+  } elseif ($args[0] -eq 'setup') {
+    # The SSH side of the install, for a machine that got huginn from the
+    # desktop installer: the core does it (huginn setup ssh).
+    $core = _Huginn-CoreBin
+    if ($core) { & $core setup @($args | Select-Object -Skip 1) }
+    else { _Huginn-Fail "huginn setup needs huginn core: install it with huginn core install (or the one-liner in the README)" }
   } elseif ($args[0] -eq 'console') {
     $core = _Huginn-CoreBin
     if ($core) { & $core console --probe *> $null }
@@ -1575,7 +1584,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
   # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
   # neither.
-  $cmds = 'console', 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'console', 'setup', 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }

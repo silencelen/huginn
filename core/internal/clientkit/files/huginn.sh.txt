@@ -1293,6 +1293,9 @@ _huginn_help_body() {
                               core, with menus (in a terminal; set
                               HUGINN_CONSOLE=0, or pipe it, for 'main')
   huginn console              the console, by name
+  huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
+                              for attaching and the session verbs, on a
+                              machine set up from the desktop or a package
   huginn main                 attach/create the live 'main' session
                               (run claude inside)
   huginn <name>               a separate named session
@@ -1494,6 +1497,17 @@ huginn() {
         "$core" console
       else
         _huginn_attach "$H"
+      fi
+      ;;
+    setup)
+      # The SSH side of the install, for a machine that got huginn from the
+      # desktop installer or a package: the core does it (huginn setup ssh).
+      local core
+      if core="$(_huginn_core_bin)"; then
+        "$core" setup "${@:2}"
+      else
+        echo "huginn setup needs huginn core: install it with huginn core install (or the one-liner in the README)" >&2
+        return 1
       fi
       ;;
     console)
@@ -1898,7 +1912,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="console list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
+  cmds="console setup list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it)
     mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")

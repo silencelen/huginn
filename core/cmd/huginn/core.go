@@ -176,6 +176,9 @@ func packagedCore(perUser string) string {
 
 func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+// lingerMarker records that `core install` enabled linger (it was off before).
+func lingerMarker() string { return filepath.Join(paths().State, "linger-enabled") }
+
 func coreInstall(args []string) int {
 	fs := flag.NewFlagSet("core install", flag.ContinueOnError)
 	logon := fs.String("logon", "s4u", "Windows only: s4u (no stored password) or password")
@@ -202,7 +205,13 @@ func coreInstall(args []string) int {
 			return 1
 		}
 		retireNodeRunner()
+		before := service.ParseLinger(o.Runner.Run("loginctl", "show-user", o.User, "--property=Linger"))
 		rep, linger := service.InstallLinux(o)
+		if before == service.LingerOff && linger == service.LingerOn {
+			// huginn turned it on, so `huginn uninstall` turns it off again.
+			os.MkdirAll(paths().State, 0o700)
+			os.WriteFile(lingerMarker(), []byte(o.User+"\n"), 0o600)
+		}
 		fmt.Print(rep.String())
 		if linger != service.LingerOn {
 			fmt.Println("Note: without linger the core starts at login, not at boot.")
