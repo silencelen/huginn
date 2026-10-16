@@ -26,5 +26,5 @@
                                                                                                    
                                                                                                    
                                                                                                    
- esc back  ? help  q quit                                                                          
+ esc back  ? help  q quit  : go to / run                                                           
  same as: huginn core status                                                                       

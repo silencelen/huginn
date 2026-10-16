@@ -5,6 +5,8 @@
    enter       open, or attach to a session                                    
    esc         back                                                            
    1-9         jump to a section                                               
+   /           filter the list on screen (esc clears)                          
+   :           go to anything, attach, or run any huginn verb                  
    r           refresh now                                                     
    q           quit                                                            
                                                                                
@@ -17,8 +19,6 @@
    x error                                                                     
                                                                                
   Each screen names its one-shot command at the bottom; huginn help lists all. 
-  Plain huginn opens this console. HUGINN_CONSOLE=0 attaches to main instead.  
-  In a session, Ctrl-b d detaches and brings you back here.                    
                                                                                
- esc back  ? help  q quit                                                      
+ esc back  ? help  q quit  : go to / run                                       
  same as: huginn help                                                          

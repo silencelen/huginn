@@ -114,6 +114,8 @@ func render(t *testing.T, sock string, w, h int, keys ...string) string {
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		case "down":
 			msg = tea.KeyMsg{Type: tea.KeyDown}
+		case "up":
+			msg = tea.KeyMsg{Type: tea.KeyUp}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -164,6 +166,8 @@ func TestScreens(t *testing.T) {
 		{"rounds-100x30", 100, 30, []string{"4"}},
 		{"archive-100x30", 100, 30, []string{"7"}},
 		{"settings-100x30", 100, 30, []string{"8"}},
+		{"palette-100x30", 100, 30, []string{":"}},
+		{"palette-typed-80x24", 80, 24, []string{":", "d", "e", "v"}},
 		{"too-small", 50, 12, nil},
 	}
 	for _, c := range cases {
@@ -229,7 +233,7 @@ func drain(m *model, cmd tea.Cmd) {
 		var msg tea.Msg
 		select {
 		case msg = <-done:
-		case <-time.After(2 * time.Second):
+		case <-time.After(400 * time.Millisecond): // a cursor blink, not a loader
 			return
 		}
 		switch msg.(type) {
@@ -278,4 +282,65 @@ func TestChatSendStreams(t *testing.T) {
 		}
 	}
 	t.Fatal("the run never finished")
+}
+
+func keys(word string) []string {
+	var k []string
+	for _, r := range word {
+		k = append(k, string(r))
+	}
+	return k
+}
+
+func TestFilter(t *testing.T) {
+	sock := fakeCore(t, true)
+	got := render(t, sock, 100, 30, append([]string{"1", "/"}, keys("rele")...)...)
+	if !strings.Contains(got, "build") || strings.Contains(got, "widgets   ") || !strings.Contains(got, "/ rele") {
+		t.Fatalf("filtering sessions by 'rele' (build's title) while typing:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append(append([]string{"1", "/"}, keys("rele")...), "enter")...)
+	if !strings.Contains(got, "filter: rele") || strings.Contains(got, "! widgets") {
+		t.Fatalf("a kept filter is not shown, or does not hold:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append(append([]string{"1", "/"}, keys("rele")...), "enter", "esc")...)
+	if strings.Contains(got, "filter:") || !strings.Contains(got, "widgets") {
+		t.Fatalf("esc did not clear the filter:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append([]string{"1", "/"}, keys("zzz")...)...)
+	if !strings.Contains(got, "no session matches the filter") {
+		t.Fatalf("an empty filtered list must say so:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append([]string{"2", "/"}, keys("arr")...)...)
+	if !strings.Contains(got, "Restart the arr stack") || strings.Contains(got, "Kalshi") {
+		t.Fatalf("chats filter:\n%s", got)
+	}
+}
+
+func TestPalette(t *testing.T) {
+	sock := fakeCore(t, true)
+	got := render(t, sock, 100, 30, append([]string{":"}, keys("widg")...)...)
+	if !strings.Contains(got, "attach widgets") || !strings.Contains(got, "huginn widg") {
+		t.Fatalf("palette for 'widg' should offer the session and the verb fallback:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("rounds")...), "enter")...)
+	if !strings.Contains(got, "Morning briefing") {
+		t.Fatalf("':rounds' + enter should open Rounds:\n%s", got)
+	}
+	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("chat kalshi")...), "enter")...)
+	if !strings.Contains(got, "How big should each bet be?") {
+		t.Fatalf("':chat kalshi' + enter should open that chat:\n%s", got)
+	}
+	// No 'Host huginn' in this test home: attaching says how to set it up.
+	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("attach widgets")...), "enter")...)
+	if !strings.Contains(got, "attaching needs SSH") {
+		t.Fatalf("attach without an ssh host must say why:\n%s", got)
+	}
+}
+
+func TestSplitArgs(t *testing.T) {
+	got := splitArgs(`projects msg "osid lead" 'two words' plain`)
+	want := []string{"projects", "msg", "osid lead", "two words", "plain"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("splitArgs = %q", got)
+	}
 }

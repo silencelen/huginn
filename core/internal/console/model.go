@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -131,6 +132,10 @@ type model struct {
 	chat chatState
 	proj projState
 
+	filter    map[screen]string // kept `/` filters, per screen
+	filtering *textinput.Model  // the `/` field while it has focus
+	pal       *palette          // the `:` palette while open
+
 	input   *prompt
 	flash   string
 	flashOK bool
@@ -149,7 +154,7 @@ type prompt struct {
 func newModel(ctx context.Context, o Options) *model {
 	return &model{
 		o: o, b: newBackend(o.Socket, o.Proto), t: newTheme(), ctx: ctx,
-		cur: map[screen]int{}, events: make(chan tea.Msg, 16),
+		cur: map[screen]int{}, events: make(chan tea.Msg, 16), filter: map[screen]string{},
 	}
 }
 
@@ -331,8 +336,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.say("revived as "+msg.name, true)
 		return m, tea.Batch(m.fetch(), m.attachTo(msg.name, false))
 	case tea.KeyMsg:
-		if m.input != nil {
+		switch {
+		case m.input != nil:
 			return m, m.promptKey(msg)
+		case m.pal != nil:
+			return m, m.paletteKey(msg)
+		case m.filtering != nil:
+			return m, m.filterKey(msg)
 		}
 		return m, m.key(msg)
 	}
@@ -345,9 +355,10 @@ func (m *model) ask(label, value string, must string, submit func(string) tea.Cm
 	ti.SetValue(value)
 	ti.CharLimit = 2000
 	ti.Width = 50
+	ti.Cursor.SetMode(cursor.CursorStatic)
 	ti.Focus()
 	m.input = &prompt{label: label, ti: ti, submit: submit, must: must}
-	return textinput.Blink
+	return nil
 }
 
 func (m *model) promptKey(k tea.KeyMsg) tea.Cmd {
@@ -380,6 +391,11 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	case "ctrl+c", "q":
 		return tea.Quit
 	case "esc", "backspace", "h", "left":
+		if s == "esc" && m.filter[m.scr] != "" {
+			delete(m.filter, m.scr)
+			m.cur[m.scr] = 0
+			return nil
+		}
 		if !m.back() && s == "esc" {
 			m.say("q quits", true)
 		}
@@ -397,6 +413,12 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 	}
 	if m.data.coreErr != nil && m.loaded {
 		return m.gateKey(s)
+	}
+	switch s {
+	case ":":
+		return m.startPalette()
+	case "/":
+		return m.startFilter()
 	}
 	for _, x := range sections {
 		if s == x.key {
@@ -523,6 +545,8 @@ func (m *model) View() string {
 		body = m.t.dim.Render("  connecting to huginn core…")
 	case m.data.coreErr != nil:
 		body = m.gateView()
+	case m.pal != nil:
+		body = m.paletteView()
 	default:
 		switch m.scr {
 		case scrHome:
@@ -638,12 +662,21 @@ func (m *model) footer() string {
 	if m.input != nil {
 		return "\n " + t.key.Render(m.input.label) + " " + m.input.ti.View() + "\n " + t.dim.Render("⏎ ok · esc cancel")
 	}
+	if m.pal != nil {
+		return "\n " + t.key.Render(":") + " " + m.pal.ti.View() + "\n " + t.dim.Render("⏎ go · ↑↓ choose · esc close")
+	}
+	if m.filtering != nil {
+		return "\n " + t.key.Render("/") + " " + m.filtering.View() + "\n " + t.dim.Render("narrows as you type · ⏎ keep · esc clear")
+	}
 	keys := m.keysFor()
 	same := ""
 	if v := sectionFor(m.scr).verb; v != "" && m.scr != scrHome {
 		same = t.dim.Render("same as: " + v)
 	}
 	line2 := same
+	if f := m.filter[m.scr]; f != "" {
+		line2 = t.needs.Render("filter: "+f) + t.dim.Render("  · / edits · esc clears")
+	}
 	if m.flash != "" {
 		st := t.ok
 		if !m.flashOK {
@@ -683,6 +716,12 @@ func (m *model) keysFor() string {
 		parts = []string{k("⏎", "revive"), k("x", "forget"), k("esc", "back")}
 	default:
 		parts = []string{k("esc", "back"), k("?", "help"), k("q", "quit")}
+	}
+	if filterable[m.scr] && !(m.loaded && m.data.coreErr != nil) {
+		parts = append(parts, k("/", "filter"))
+	}
+	if !(m.loaded && m.data.coreErr != nil) {
+		parts = append(parts, k(":", "go to / run"))
 	}
 	if t.ascii {
 		for i := range parts {

@@ -206,7 +206,11 @@ func (m *model) chatsView() string {
 	t := m.t
 	var b strings.Builder
 	b.WriteString("\n")
-	rows := m.data.lists.chats
+	rows := m.chatRows()
+	if len(rows) == 0 && m.filter[scrChats] != "" {
+		b.WriteString("   " + t.dim.Render("nothing matches the filter (esc clears it)") + "\n")
+		return b.String()
+	}
 	if len(rows) == 0 {
 		b.WriteString("   " + t.dim.Render("no chats yet. n starts one (ask answers, act can change things)") + "\n")
 		return b.String()
@@ -259,7 +263,7 @@ func (m *model) listRows(b *strings.Builder, s screen, n int, row func(int) stri
 }
 
 func (m *model) chatsKey(s string) tea.Cmd {
-	rows := m.data.lists.chats
+	rows := m.chatRows()
 	sel := func() (chatRow, bool) {
 		c := m.cur[scrChats]
 		if c < 0 || c >= len(rows) {
@@ -525,7 +529,11 @@ func (m *model) projectsView() string {
 	t := m.t
 	var b strings.Builder
 	b.WriteString("\n")
-	rows := m.data.lists.projects
+	rows := m.projectRows()
+	if len(rows) == 0 && m.filter[scrProjects] != "" {
+		b.WriteString("   " + t.dim.Render("nothing matches the filter (esc clears it)") + "\n")
+		return b.String()
+	}
 	if len(rows) == 0 {
 		b.WriteString("   " + t.dim.Render("no projects. Start one from the desktop or: huginn projects new") + "\n")
 		return b.String()
@@ -545,7 +553,7 @@ func (m *model) projectsView() string {
 }
 
 func (m *model) projectsKey(s string) tea.Cmd {
-	rows := m.data.lists.projects
+	rows := m.projectRows()
 	c := m.cur[scrProjects]
 	switch s {
 	case "enter", "right", "l":
@@ -662,7 +670,11 @@ func (m *model) roundsView() string {
 	t := m.t
 	var b strings.Builder
 	b.WriteString("\n")
-	rows := m.data.lists.rounds
+	rows := m.roundRows()
+	if len(rows) == 0 && m.filter[scrRounds] != "" {
+		b.WriteString("   " + t.dim.Render("nothing matches the filter (esc clears it)") + "\n")
+		return b.String()
+	}
 	if len(rows) == 0 {
 		b.WriteString("   " + t.dim.Render("no rounds. Rounds are scheduled runs: create them in the desktop or phone app") + "\n")
 		return b.String()
@@ -694,7 +706,7 @@ func untilSec(sec int64) string {
 }
 
 func (m *model) roundsKey(s string) tea.Cmd {
-	rows := m.data.lists.rounds
+	rows := m.roundRows()
 	c := m.cur[scrRounds]
 	if c < 0 || c >= len(rows) {
 		m.move(s, len(rows))
@@ -735,7 +747,11 @@ func (m *model) archiveView() string {
 	t := m.t
 	var b strings.Builder
 	b.WriteString("\n")
-	rows := m.data.lists.archive
+	rows := m.archiveRows()
+	if len(rows) == 0 && m.filter[scrArchive] != "" {
+		b.WriteString("   " + t.dim.Render("nothing matches the filter (esc clears it)") + "\n")
+		return b.String()
+	}
 	if len(rows) == 0 {
 		b.WriteString("   " + t.dim.Render("the archive is empty: ended sessions land here, ready to revive") + "\n")
 		return b.String()
@@ -756,7 +772,7 @@ func (m *model) archiveView() string {
 }
 
 func (m *model) archiveKey(s string) tea.Cmd {
-	rows := m.data.lists.archive
+	rows := m.archiveRows()
 	c := m.cur[scrArchive]
 	if c < 0 || c >= len(rows) {
 		m.move(s, len(rows))

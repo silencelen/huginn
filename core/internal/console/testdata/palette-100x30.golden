@@ -1,0 +1,30 @@
+ (!> huginn                                                         host huginn · core 2.3.0 · live
+                                                                                                   
+  go to, attach, or run  type to narrow · anything else runs as huginn <it>                        
+                                                                                                   
+  > home                                 screen                                                    
+    sessions                             screen · 1                                                
+    chats                                screen · 2                                                
+    projects                             screen · 3                                                
+    rounds                               screen · 4                                                
+    devices                              screen · 5                                                
+    usage                                screen · 6                                                
+    archive                              screen · 7                                                
+    settings                             screen · 8                                                
+    core                                 screen · 9                                                
+    help                                 screen · ?                                                
+    attach main                          attach · waiting · Inbox triage                           
+    attach widgets                       attach · needs you · Ship 0.8.0 to the Fold?              
+    attach build                         attach · working · Release the desktop                    
+    attach scratch                       attach · shell                                            
+    attach osid-lead                     attach · waiting · lead                                   
+    chat Kalshi sizing                   open · ask                                                
+    chat Restart the arr stack           open · act                                                
+    project widgetshub                   dashboard · active                                        
+    round Morning briefing               rounds · Daily at 7:00 AM                                 
+    round Weekly capacity                rounds · Weekly on Sunday at 8:00 AM                      
+                                                                                                   
+                                                                                                   
+                                                                                                   
+ :                                                                                                 
+ ⏎ go · ↑↓ choose · esc close                                                                      
