@@ -235,6 +235,49 @@ STUB
     && ok "ps1: and it is still case-folded on the way" || bad "ps1: 'Build_Box' sent: $DU"
 fi
 
+echo "[4b/8] plain huginn in PowerShell: the console in a terminal, attach to main otherwise"
+if ! command -v pwsh >/dev/null 2>&1; then
+  skip "ps1 plain-huginn routing (no pwsh)"
+else
+  PR=$(mktemp -d); mkdir -p "$PR/la/huginn/bin" "$PR/bin"
+  cat > "$PR/la/huginn/bin/huginn.exe" <<'STUB'
+#!/bin/sh
+echo "core:$*" >> "$CALLS"
+[ "$1 $2" = "console --probe" ] && exit "${PROBE_RC:-0}"
+exit 0
+STUB
+  printf '#!/bin/sh\necho "ssh:$*" >> "$CALLS"\nexit 0\n' > "$PR/bin/ssh"
+  chmod +x "$PR/la/huginn/bin/huginn.exe" "$PR/bin/ssh"
+  printf '. %s/client/huginn.ps1\nhuginn\n' "$PWD" > "$PR/run.ps1"
+  psroute() {   # $1 = tty|pipe, then env assignments
+    local how="$1"; shift
+    : > "$PR/calls"
+    if [ "$how" = tty ]; then
+      env CALLS="$PR/calls" LOCALAPPDATA="$PR/la" PATH="$PR/bin:$PATH" "$@" script -qec "pwsh -NoProfile -File $PR/run.ps1" /dev/null >/dev/null 2>&1
+    else
+      env CALLS="$PR/calls" LOCALAPPDATA="$PR/la" PATH="$PR/bin:$PATH" "$@" pwsh -NoProfile -File "$PR/run.ps1" >/dev/null 2>&1 </dev/null
+    fi
+    cat "$PR/calls"
+  }
+  if command -v script >/dev/null 2>&1; then
+    C=$(psroute tty)
+    grep -qx 'core:console' <<<"$C" && ! grep -q '^ssh:' <<<"$C" \
+      && ok "ps1: plain huginn in a terminal opens the console" || bad "ps1: plain huginn in a terminal did: $C"
+    C=$(psroute tty HUGINN_CONSOLE=0)
+    grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+      && ok "ps1: HUGINN_CONSOLE=0 keeps attach-to-main" || bad "ps1: HUGINN_CONSOLE=0 did: $C"
+    C=$(psroute tty PROBE_RC=2)
+    grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+      && ok "ps1: a core without the console falls back to main" || bad "ps1: old core did: $C"
+  else
+    skip "ps1 terminal routing (no script(1))"
+  fi
+  C=$(psroute pipe)
+  grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+    && ok "ps1: plain huginn redirected attaches to main, as before" || bad "ps1: redirected plain huginn did: $C"
+  rm -rf "$PR"
+fi
+
 echo "[5/8] what the POSIX client actually SENDS"
 # huginn.sh is the client the 0.8.0 deny-list bug actually shipped to, and nothing
 # here exercised it — [4/6] drives only huginn.ps1. Same stub-ssh technique; huginn.sh

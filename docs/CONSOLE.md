@@ -9,8 +9,11 @@ Built: Home, Sessions (attach/return, new, send, end, rename, kill), Devices, Us
 core-down gate; goldens at 60×18/80×24/100×30, a fits-the-terminal test at four sizes, client routing
 tests (mutation-checked), and `core/test/e2e.sh` drives the console against a real core and appd.
 Not yet: Chats, Projects, Rounds, Archive, Settings, Scratchpads, Apps (the parity release), the
-command palette `:`, `/` filter, `--plain`, PowerShell routing tests, and appd's reserved session
-name `console`.
+`--plain`, and a Windows hardware run. Since built: the `:` palette, the `/` filter, the parity
+screens, and PowerShell routing tests. **Decided against:** reserving `console` in appd. appd's
+RESERVED set does not just refuse a name, it drops such sessions from the registry (mergeLive,
+restorePlan), and the CLI already resolves verb/name collisions with `huginn attach <name>` (as for
+update, list, solo); the palette reaches a session called `console` the same way.
 Owner request: "huginn cli harness … launched with the command `huginn` … ascii art and menus to navigate
 huginn's extensive features … the current `huginn *` commands remain functional."
 
@@ -100,10 +103,9 @@ installed. Everything else behaves exactly as today.*
 | `huginn main`, `huginn attach [name]`, `huginn <session>` | attach | attach (unchanged) |
 | every other `huginn <verb>` | unchanged | unchanged |
 
-⚠ **`console` is a new reserved word.** Today any unknown word is a session name, so a session literally
-called `console` would become unreachable via `huginn console`. appd already keeps a reserved-names list
-(`plan`, `ask`, …). Add `console` to it and to the clients' reserved list, and have `huginn attach
-console` still reach an existing one. (The earlier `update/solo/list/uninstall` session-name collision
+⚠ **`console` is a new verb.** Today any unknown word is a session name, so a session literally called
+`console` is no longer reached by `huginn console`; `huginn attach console` (and the palette) reach it,
+as for every other verb. Not added to appd's RESERVED set (see the status note above). (The earlier `update/solo/list/uninstall` session-name collision
 taught us this; see scripts/test-client.sh §"the daemon makes sessions called update…".)
 
 **Wiring:**
