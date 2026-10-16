@@ -62,5 +62,31 @@ check test ! -e "$TMP/s3/$SESS"
 run_hook "$TMP/s4" CLAUDECODE=1 HUGINN_CLAUDE_TITLE_NESTED=0
 check test -f "$TMP/s4/$SESS"
 
+# 5. Claude Code 2.1.300's bg-pty-host hands the hook NO $TMUX/$TMUX_PANE. The
+#    hook recovers them from the nearest ancestor that has them (this script's
+#    shell) because that pane's own process is one of its ancestors.
+run_hook "$TMP/s5" -u CLAUDECODE -u TMUX -u TMUX_PANE
+check test "$(jq -r .sessionId "$TMP/s5/$SESS" 2>/dev/null)" = "11111111-2222-test"
+
+# 6. ...but never from a pane that is NOT its own: an ancestor whose TMUX_PANE
+#    names another pane (a daemon that served someone else) writes nothing.
+OTHER="$(tmux new-window -d -P -F '#{pane_id}' 'sleep 30')"
+if [ -n "$OTHER" ]; then
+  env TMUX_PANE="$OTHER" HUGINN_CLAUDE_STATE_DIR="$TMP/s6" PAYLOAD="$PAYLOAD" HOOK="$HOOK" bash -c \
+    'env -u TMUX -u TMUX_PANE -u CLAUDECODE "$0/claude" -c "printf %s \"\$PAYLOAD\" | \"\$HOOK\" Stop"; true' "$TMP"
+  # (`; true` keeps that bash alive as the ancestor holding the other pane:
+  # a lone command would be exec'd in its place and the walk would never see it.)
+  check test ! -e "$TMP/s6"
+  tmux kill-pane -t "$OTHER" 2>/dev/null
+else
+  fail=$((fail + 1)); echo "  FAIL: could not open a second pane for case 6"
+fi
+
+# 7. The native binary runs as claude.exe: a nested one is still recognised.
+ln -s /bin/bash "$TMP/claude.exe"
+env CLAUDECODE=1 HUGINN_CLAUDE_STATE_DIR="$TMP/s7" PAYLOAD="$PAYLOAD" HOOK="$HOOK" \
+  "$TMP/claude.exe" -c 'printf "%s" "$PAYLOAD" | "$HOOK" Stop'
+check test ! -e "$TMP/s7"
+
 echo "test-claude-title: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

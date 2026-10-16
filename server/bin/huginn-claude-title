@@ -27,9 +27,49 @@
 
 set -u
 
+command -v tmux >/dev/null 2>&1 || exit 0
+
+# ⚠ CLAUDE CODE 2.1.300 CAN HOST A SESSION IN A BACKGROUND PTY: the pane runs
+# `claude`, which runs a transient `claude daemon`, which runs `claude
+# bg-pty-host`, which runs claude.exe — and the bg-pty-host leaves TMUX and
+# TMUX_PANE out of the environment it hands on. Every hook then exited on the
+# check below, so appd kept that session's old state and old session id, and the
+# desktop's Conversation tab froze on yesterday's transcript while Screen kept
+# streaming (huginnclient, 2026-10-16, after a compaction continued it in a
+# fork). So take them from the nearest ancestor that has them — and only when
+# that pane's own shell is one of OUR ancestors, so a daemon that served another
+# pane can never put this session's state on the wrong one (fail closed).
+_is_ancestor() {   # $1 = pid: is it one of this hook's ancestors?
+  local pid="$PPID" hops=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 24 ]; do
+    [ "$pid" = "$1" ] && return 0
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_ancestor_tmux() {
+  local pid="$PPID" hops=0 env t p panepid
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 16 ]; do
+    env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"
+    t="$(printf '%s\n' "$env" | sed -n 's/^TMUX=//p' | head -1)"
+    p="$(printf '%s\n' "$env" | sed -n 's/^TMUX_PANE=//p' | head -1)"
+    if [ -n "$t" ] && [ -n "$p" ]; then
+      panepid="$(TMUX="$t" tmux display-message -p -t "$p" '#{pane_pid}' 2>/dev/null)" || return 1
+      [ -n "$panepid" ] && _is_ancestor "$panepid" || return 1
+      TMUX="$t"; TMUX_PANE="$p"; export TMUX TMUX_PANE
+      return 0
+    fi
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
+  _ancestor_tmux || exit 0
+fi
 # Interactive tmux session only — headless runs have no $TMUX/$TMUX_PANE.
 [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || exit 0
-command -v tmux >/dev/null 2>&1 || exit 0
 
 # --- nested claude guard -----------------------------------------------------
 # A claude started by a Bash tool INSIDE a tmux Claude session (`claude -p` for a
@@ -56,6 +96,8 @@ _is_claude_proc() {   # $1 = pid
   cmd="$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)"
   case "$cmd" in
     claude\ *|*/claude\ *|*claude-code/cli.js*|*/claude/cli.js*) return 0 ;;
+    # The native binary (2.1.300) runs as .../claude-code/bin/claude.exe.
+    claude.exe\ *|*/claude.exe\ *|*/claude.exe) return 0 ;;
   esac
   return 1
 }
