@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.1.3
+# Version: 2.2.0
 
-HUGINN_VERSION='2.1.3'
+HUGINN_VERSION='2.2.0'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -502,6 +502,16 @@ _huginn_uninstall() {
   # into an absolute path at the filesystem root, so it is a refusal and not a
   # default.
   [ -n "$HOME" ] || { echo "huginn uninstall: HOME is not set - refusing to guess where anything lives" >&2; return 1; }
+
+  # With a core installed, the CORE owns the uninstall: the whole stack, top
+  # down - the desktop app, the local tier, the device, the core, this CLI
+  # (owner rule 2026-10-15: the core includes the CLI; the desktop sits on it).
+  # Everything below remains for platforms with no core (macOS, Termux).
+  local core
+  if [ "$(uname -o 2>/dev/null)" != Android ] && core="$(_huginn_core_bin)"; then
+    "$core" uninstall "$@"
+    return
+  fi
 
   local hdir="$HOME/.huginn"
   local ddir="${HUGINN_DEVICE_DIR:-$HOME/.config/huginn}"
@@ -1385,10 +1395,10 @@ _huginn_help_body() {
                               \$HUGINN_HOST${HUGINN_HOST:+, which is $HUGINN_HOST here}:
                               the box you point at must not become a source
                               of code this shell runs
-  huginn uninstall            unenrol this machine, then remove the client,
-                              the tokens, the local-AI tier and the profile
-                              line [--all also takes the SSH stanza + huginn's
-                              own key]
+  huginn uninstall            remove the whole stack, top down: the desktop
+                              app, the local-AI tier, this machine's device
+                              row, huginn core and this CLI [--all also takes
+                              the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 

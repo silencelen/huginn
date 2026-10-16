@@ -127,10 +127,10 @@
                               {HOST_VAR}{HOST_HERE}:
                               the box you point at must not become a source
                               of code this shell runs
-  huginn uninstall            unenrol this machine, then remove the client,
-                              the tokens, the local-AI tier and the profile
-                              line [--all also takes the SSH stanza + huginn's
-                              own key]
+  huginn uninstall            remove the whole stack, top down: the desktop
+                              app, the local-AI tier, this machine's device
+                              row, huginn core and this CLI [--all also takes
+                              the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 

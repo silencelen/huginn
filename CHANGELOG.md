@@ -8,6 +8,27 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.2.0] - 2026-10-15
+
+huginn core is the product, and it includes the CLI. The desktop app is a layer on top of it.
+
+### Changed
+- **The core carries the CLI.** Every way the core reaches a machine ends in `huginn core
+  self-install`: the one-liners, `huginn core update`, `huginn update`, and the desktop app's
+  bundled core. Self-install now also lays down the shell client (`~/.huginn/huginn.sh` or
+  `huginn.ps1`) and its line in your shell startup files, and refreshes the local-AI helpers where
+  they are installed. A machine with a core always has the CLI, at the core's own version. The
+  build refuses when the embedded copy and `client/` disagree.
+- **`huginn uninstall` removes the whole stack, top down.** In order: the desktop app (the
+  per-user install, the distro package through `sudo` when there is a terminal to ask on, and the
+  Windows app through its own uninstaller), the local-AI tier, this machine's device row (retired
+  first, while the token still exists), huginn core (boot service, tray, binary, config, secrets,
+  the PATH entry on Windows), then the CLI and its startup lines. `--all` still also takes the
+  `Host huginn` SSH stanza and huginn's own key. It used to remove the client and leave the core
+  and the desktop behind. The core owns this now; the shell clients hand it over whenever a core is
+  installed.
+- On Windows, deleting the boot task asks for administrator approval once when it needs it.
+
 ## [2.1.3] - 2026-10-15
 
 ### Fixed

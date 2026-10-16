@@ -530,77 +530,24 @@ Section "Uninstall"
   ; directory behind and the entry in Programs and Features.
   Call un.EnsureNotRunning
 
-  ; ------------------------------------------------------ 1. the server FIRST
+  ; ------------------------------------------------ what this uninstaller owns
   ;
-  ; ORDER IS THE WHOLE POINT, and it is the same order client/huginn-device
-  ; keeps: the device row this machine holds on the daemon can only be removed
-  ; with the bearer token sitting in the config file that is about to be
-  ; deleted. So the DELETE is attempted while the credential still exists. Wipe
-  ; first and that row is unremovable FROM HERE, forever — it stays in `huginn
-  ; devices` reading "not reachable", it goes on being offered work, and the one
-  ; handle that could have retired it left with the config.
+  ; THE DESKTOP ONLY (owner rule 2026-10-15: the core, which includes the CLI,
+  ; is the product; the desktop is a layer on top). The device row, the local-AI
+  ; tier and the CLI files in ~/.huginn belong to huginn core — the core adopted
+  ; this app's device id when it took over — so removing the app leaves them
+  ; working. `huginn uninstall` removes the whole stack, this app included.
   ;
-  ; BEST EFFORT, AND NEVER A GATE. `huginn-device off` refuses to destroy the id
-  ; when the DELETE fails, because it can be run again tomorrow. An uninstaller
-  ; cannot: the person has already decided, and a dialog about a sleeping host
-  ; would only teach them to click through it. A host that is asleep, a laptop
-  ; on hotel wi-fi and a stale url therefore cost one stale row and nothing
-  ; else. Short timeout, no prompt, no failure path.
-  ;
-  ; BOTH ROWS. A machine that also serves local models has a SECOND enrolment
-  ; (<host>-llm, scope generate) with its own id and its own copy of the token
-  ; under %ProgramData%. Removing one and not the other is how the fleet ends up
-  ; with a ghost that only ever appears in the model picker.
-  ;
-  ; PowerShell does the JSON and the HTTP because NSIS can do neither, and it is
-  ; written to $PLUGINSDIR — which NSIS deletes on exit by itself — rather than
-  ; folded into one enormous -Command: the same call the app already makes when
-  ; it drops huginn-toast.ps1 beside its own config.
-  ;
-  ; The two roots, read the way the programs that WROTE them read them.
-  ; $PROFILE and not $APPDATA: DesktopSettings.defaultFile() has no Windows
-  ; branch at all, so the settings take the XDG shape on every platform — which
-  ; means %XDG_CONFIG_HOME% FIRST and $PROFILE\.config only as its fallback,
-  ; exactly the order defaultFile() reads them in. Reading only the fallback is
-  ; not a smaller bug than reading the wrong variable: on a machine that sets it
-  ; (a dotfiles setup, a roaming or portable profile) the deletion below would
-  ; find an empty path and leave the plaintext token where the app put it.
-  ; %ProgramData% from the environment, the way huginn-local's localDir() does —
-  ; and with the literal fallback it uses, because everything below joins onto
-  ; this string and an empty one would aim them at the root of the system drive.
-  ReadEnvStr $R0 "ProgramData"
-  StrCmp $R0 "" 0 +2
-    StrCpy $R0 "C:\ProgramData"
+  ; The settings root, read the way DesktopSettings.defaultFile() reads it:
+  ; %XDG_CONFIG_HOME% FIRST and $PROFILE\.config only as its fallback. Reading
+  ; only the fallback would leave the plaintext token where the app put it on a
+  ; machine that sets the variable.
   ReadEnvStr $R3 "XDG_CONFIG_HOME"
   ${If} $R3 == ""
     StrCpy $R1 "$PROFILE\.config\huginn-desktop-kt"
   ${Else}
     StrCpy $R1 "$R3\huginn-desktop-kt"
   ${EndIf}
-  StrCpy $R2 "$R0\huginn-local"
-  InitPluginsDir
-  FileOpen $9 "$PLUGINSDIR\unenrol.ps1" w
-  FileWrite $9 "$$ErrorActionPreference = 'SilentlyContinue'$\r$\n"
-  FileWrite $9 "function Drop($$b, $$i, $$t) {$\r$\n"
-  FileWrite $9 "  if (-not $$b -or -not $$i -or -not $$t) { return }$\r$\n"
-  FileWrite $9 "  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}$\r$\n"
-  FileWrite $9 "  try { Invoke-WebRequest -Uri ($$b.TrimEnd('/') + '/v1/devices/' + $$i) -Method Delete -Headers @{ Authorization = 'Bearer ' + $$t } -UseBasicParsing -TimeoutSec 5 | Out-Null } catch {}$\r$\n"
-  FileWrite $9 "}$\r$\n"
-  FileWrite $9 "$$s = '$R1\settings.json'$\r$\n"
-  FileWrite $9 "if (Test-Path $$s) { try { $$j = Get-Content $$s -Raw | ConvertFrom-Json; Drop $$j.baseUrl $$j.deviceId $$j.token } catch {} }$\r$\n"
-  FileWrite $9 "$$d = '$R2\device\device.json'$\r$\n"
-  FileWrite $9 "$$k = '$R2\device\appd-token'$\r$\n"
-  FileWrite $9 "if ((Test-Path $$d) -and (Test-Path $$k)) { try { $$j = Get-Content $$d -Raw | ConvertFrom-Json; Drop $$j.url $$j.id ((Get-Content $$k -Raw).Trim()) } catch {} }$\r$\n"
-  FileClose $9
-  nsExec::ExecToLog 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\unenrol.ps1"'
-  Pop $0
-
-  ; ---------------------------------------- 2. the services, before their files
-  ; Runner first, so nothing re-enrols while the rest comes down — the order
-  ; `huginn local off` uses, for the same reason.
-  StrCpy $R4 "$R2\runtime\winsw"
-  !insertmacro UnLocalService "huginn-local-runner"
-  !insertmacro UnLocalService "huginn-local-llm"
 
   ; Unpin and de-register before deleting. A shortcut that is simply removed from
   ; disk leaves its pinned tile and its jump-list history behind, still bound to
@@ -628,6 +575,9 @@ Section "Uninstall"
   Delete "$INSTDIR\Uninstall.exe"
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
+  ; The core this app CARRIES (copied to the per-user core by self-install at
+  ; launch). The installed core is not touched.
+  RMDir /r "$INSTDIR\core"
   Delete "$INSTDIR\${APP_EXE}"
   RMDir "$INSTDIR"
   DeleteRegKey HKCU "${UNINST_KEY}"
@@ -656,10 +606,6 @@ Section "Uninstall"
   ${If} $R3 != ""
     RMDir /r "$R3\huginn-desktop-kt"
   ${EndIf}
-  ; The local tier: models, sessions, the runtime, and a SECOND copy of the
-  ; token under device\appd-token. Multi-GB, and invisible in Programs and
-  ; Features because nothing here installed it as a package.
-  RMDir /r "$R2"
   ; The url scheme this app registers so an Action Center toast can call back
   ; into it. Left behind, it points at an exe that no longer exists.
   DeleteRegKey HKCU "Software\Classes\huginn"
@@ -667,42 +613,4 @@ Section "Uninstall"
   ; there by design (Windows reads them asynchronously). Only ours.
   Delete "$TEMP\huginn-toast-*.xml"
 
-  ; The CLI copies the app keeps current for the user (CliSync). NAMED ONE BY
-  ; ONE, and the directory itself is only ever removed with a plain RMDir, which
-  ; refuses a non-empty one: ~/.huginn is ALSO where client/install.sh puts a
-  ; separately-installed base client, and that install is not ours to undo. A
-  ; wildcard here would take huginn.ps1 and huginn.ps1.bak with it and leave the
-  ; person's shell profile sourcing a file that no longer exists.
-  ;
-  ; The names come from CliSync.candidates() — every satellite the app WRITES
-  ; here, minus the base client it shares with install.sh — plus the siblings
-  ; CliSync leaves around one: the .bak of the copy it replaced and the two temp
-  ; names a validated download is staged under. A satellite added there and not
-  ; added here is a file the app keeps current and the uninstaller walks past —
-  ; which is exactly what happened to huginn-llm-shim: CliSync took it on in
-  ; 0.13.0 and this list was written in 0.14.0 without it.
-  Delete "$PROFILE\.huginn\huginn-device"
-  Delete "$PROFILE\.huginn\huginn-device.bak"
-  Delete "$PROFILE\.huginn\huginn-device.tmp.js"
-  Delete "$PROFILE\.huginn\huginn-device.appsync.tmp.js"
-  Delete "$PROFILE\.huginn\huginn-local"
-  Delete "$PROFILE\.huginn\huginn-local.bak"
-  Delete "$PROFILE\.huginn\huginn-local.tmp.js"
-  Delete "$PROFILE\.huginn\huginn-local.appsync.tmp.js"
-  Delete "$PROFILE\.huginn\huginn-llm-shim"
-  Delete "$PROFILE\.huginn\huginn-llm-shim.bak"
-  Delete "$PROFILE\.huginn\huginn-llm-shim.tmp.js"
-  Delete "$PROFILE\.huginn\huginn-llm-shim.appsync.tmp.js"
-  RMDir "$PROFILE\.huginn"
-
-  ; SAID, rather than assumed. %ProgramData%\huginn-local is written by a
-  ; LocalSystem service and this uninstaller runs as the user, so its removal
-  ; can be refused — and a person who has just uninstalled an app is owed the
-  ; truth about the 5 GB and the second token still on their disk, plus the one
-  ; command that finishes the job.
-  ${If} ${FileExists} "$R2\*.*"
-    MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "Huginn Desktop is uninstalled, but the local-AI files could not be removed:$\r$\n$\r$\n$R2$\r$\n$\r$\nThey belong to a LocalSystem service and need an Administrator terminal. To finish:$\r$\n$\r$\n    rmdir /s /q $\"$R2$\"" \
-      /SD IDOK
-  ${EndIf}
 SectionEnd

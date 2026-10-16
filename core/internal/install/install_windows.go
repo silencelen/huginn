@@ -100,3 +100,44 @@ func broadcastEnvChange() {
 	var res uintptr
 	send.Call(hwndBroadcast, wmSettingChange, 0, uintptr(unsafe.Pointer(env)), smtoAbortIfHung, 5000, uintptr(unsafe.Pointer(&res)))
 }
+
+// RemoveUserPath takes dir out of HKCU\Environment\Path (ensureUserPath's
+// inverse); false when it was not there.
+func RemoveUserPath(dir string) (bool, error) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Environment`, registry.QUERY_VALUE|registry.SET_VALUE)
+	if err != nil {
+		return false, err
+	}
+	defer k.Close()
+	cur, typ, err := k.GetStringValue("Path")
+	if err == registry.ErrNotExist {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	var keep []string
+	hit := false
+	for _, p := range strings.Split(cur, ";") {
+		if strings.EqualFold(strings.TrimRight(p, `\`), strings.TrimRight(dir, `\`)) {
+			hit = true
+			continue
+		}
+		if p != "" {
+			keep = append(keep, p)
+		}
+	}
+	if !hit {
+		return false, nil
+	}
+	next := strings.Join(keep, ";")
+	if typ == registry.EXPAND_SZ {
+		err = k.SetExpandStringValue("Path", next)
+	} else {
+		err = k.SetStringValue("Path", next)
+	}
+	if err != nil {
+		return false, err
+	}
+	broadcastEnvChange()
+	return true, nil
+}
