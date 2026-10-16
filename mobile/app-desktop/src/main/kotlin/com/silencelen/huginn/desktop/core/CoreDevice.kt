@@ -33,6 +33,13 @@ data class DeviceStatus(
 )
 
 /**
+ * Whether the app may run at all (owner rule 2026-10-15): the desktop is a
+ * layer on top of huginn core, which includes the CLI, and does not work
+ * without it. Anything but [READY] is a whole-window screen with one action.
+ */
+enum class CoreGate { CHECKING, READY, NOT_SET_UP, NOT_RUNNING }
+
+/**
  * "Available to huginn", driven by `huginn core` (docs/CORE-ARCHITECTURE.md P1).
  *
  * ⚠ THE APP NO LONGER RUNS WORK. Its old runner lived only while this window's
@@ -63,6 +70,27 @@ class CoreDevice internal constructor(
     @Volatile private var client: CoreClient? = null
     private var job: Job? = null
 
+    private val _gate = MutableStateFlow(CoreGate.CHECKING)
+    /** See [CoreGate]. A core that drops for a restart (an update) keeps READY for [GATE_GRACE_MS]. */
+    val gate: StateFlow<CoreGate> = _gate.asStateFlow()
+
+    @Volatile private var readyAt = System.currentTimeMillis() // launch counts: the core may be restarting onto the bundled one
+
+    private fun ready() {
+        readyAt = System.currentTimeMillis()
+        _gate.value = CoreGate.READY
+    }
+
+    private fun lost() {
+        // No service: nothing is restarting, so there is nothing to wait out.
+        if (!CoreSetup.serviceInstalled()) {
+            _gate.value = CoreGate.NOT_SET_UP
+            return
+        }
+        if (System.currentTimeMillis() - readyAt < GATE_GRACE_MS) return
+        _gate.value = CoreGate.NOT_RUNNING
+    }
+
     /** Idempotent: follows the core's event stream for the life of the app. */
     fun start() {
         if (job?.isActive == true) return
@@ -76,9 +104,11 @@ class CoreDevice internal constructor(
                 client = c
                 if (c == null) {
                     _status.value = DeviceStatus(note = NOT_AVAILABLE)
+                    lost()
                 } else {
                     runCatching {
                         c.events().collect { (event, data) ->
+                            ready()
                             when (event) {
                                 "device" -> apply(data)
                                 "coretray" -> _coreTray.value = data.contains("\"attached\":true")
@@ -87,6 +117,7 @@ class CoreDevice internal constructor(
                     }
                     _status.value = DeviceStatus(note = if (c.socketPresent()) NOT_ANSWERING else NOT_RUNNING)
                     _coreTray.value = false // no core, no core tray: this window takes the job back
+                    lost()
                 }
                 delay(RECONNECT_MS)
             }
@@ -145,6 +176,16 @@ class CoreDevice internal constructor(
         }
     }
 
+    /** "Start huginn core": an installed core that is not running. */
+    fun startCore() {
+        _setup.value = "Starting huginn core…"
+        scope.launch {
+            CoreSetup.startService()
+                .onSuccess { _setup.value = "Started — connecting…" }
+                .onFailure { _setup.value = "Not started: ${it.message}. `huginn core status` says why." }
+        }
+    }
+
     /** Tells the core what this window shows. Best effort: a core that is down simply does not suppress. */
     fun reportPresence(focusedKey: String?) {
         val c = client ?: return
@@ -171,6 +212,8 @@ class CoreDevice internal constructor(
 
     companion object {
         const val RECONNECT_MS = 3_000L
+        /** How long a core may be gone before the window is handed to the gate: an update restarts it. */
+        const val GATE_GRACE_MS = 20_000L
         const val NOT_RUNNING = "huginn core is not running on this computer — run `huginn core install` to start it at boot"
         const val NOT_ANSWERING = "huginn core is not answering — `huginn core status` says why"
         const val NOT_AVAILABLE = "huginn core is not available here (no runtime directory)"

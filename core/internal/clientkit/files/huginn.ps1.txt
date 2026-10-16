@@ -1,0 +1,1597 @@
+# huginn (PowerShell) - talk to your remote Claude Code node.
+# Install: source from your $PROFILE:
+#     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
+# Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
+# Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
+# Version: 2.2.0
+
+$script:HUGINN_VERSION = '2.2.0'
+$script:HUGINN_REPO    = 'silencelen/huginn'
+# Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
+# into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
+# "which box do I drive", and letting it also answer "whose code do I run" means a
+# typo, a second host or a test alias silently becomes a code source. Override needs
+# HUGINN_UPDATE_HOST set on purpose. (Ported from huginn.sh, where this shipped in
+# 0.6.1 -- the PowerShell client kept fetching from $HUGINN_HOST until 0.8.2.)
+$script:HUGINN_UPDATE_HOST_DEFAULT = 'huginn'
+
+# ONE session-name rule for the whole product: lowercase letters, digits, '_'
+# and '-', starting with a letter, digit or '_', at most 50 characters. Compared
+# case-folded, because names are case-insensitive here (see _Huginn-CanonName).
+# It still keeps a typo'd flag (e.g. 'huginn --hlp') from falling through to the
+# attach path and spawning a junk tmux session - a leading '-' is not a name -
+# and it still keeps names safe to pass through the remote shell. Enforced again
+# server-side in cc.
+#
+# The dash used to be REFUSED here, and the daemon has always accepted it: a
+# session named build-box was listed by `huginn ls`, openable from both GUI
+# clients, and refused by every verb of this one before any network. The dot is
+# banned everywhere on purpose - tmux silently rewrites '.' to '_', so a dotted
+# name is a name that comes back different from the one that was asked for.
+function _Huginn-ValidName {
+  param([string]$Name)
+  if (-not $Name) { return $false }
+  return ($Name.ToLower() -match '^[a-z0-9_][a-z0-9_-]{0,49}$')
+}
+# WHY A NAME WAS REFUSED, as the daemon would say it (nameProblem, server/appd/
+# huginn-appd.js), or '' when the shape is fine.
+#
+# ⚠ TWO OF THE THREE RULES WERE NEVER MENTIONED. Every refusal in this file said
+# "use lowercase letters, digits, _ and -; no dots, spaces or *" - so `huginn
+# kill -box` and a 51-character name were both told a sentence that describes a
+# name which is, by that text, perfectly valid, and the refusal read as a bug in
+# the client. The rule is ^[a-z0-9_][a-z0-9_-]{0,49}$: at most 50 characters, and
+# '-' may not lead.
+function _Huginn-NameProblem {
+  param([string]$Name)
+  if (-not $Name)          { return 'a session needs a name' }
+  if ($Name.Contains('.')) { return 'a "." is rewritten to "_" by tmux, so the name you asked for would not be the name you got' }
+  if ($Name -notmatch '^[A-Za-z0-9_]') { return "it starts with '$($Name.Substring(0,1))' - a name starts with a letter, digit or _" }
+  if ($Name.Length -gt 50) { return "it is $($Name.Length) characters long - a name is at most 50" }
+  return ''
+}
+# ONE refusal for a bad name, in both clients' words. Terminating, like every
+# other refusal here - see _Huginn-Fail.
+function _Huginn-BadName {
+  param([string]$Name, [string]$Noun = 'session name', [string]$Tail = '')
+  $lines = @("huginn: invalid $Noun '$Name'")
+  $why = _Huginn-NameProblem $Name
+  if ($why) { $lines += "        $why" }
+  $lines += "        (letters, digits, _ and -, starting with a letter, digit or _, up to 50"
+  $lines += "         characters; no dots, spaces or *. Case-insensitive.)"
+  if ($Tail) { $lines += "        $Tail" }
+  _Huginn-Fail ($lines -join "`n")
+}
+
+# Session names are case-INSENSITIVE: lowercase before touching tmux so 'Test' and
+# 'test' resolve to the same session (tmux itself is case-sensitive). Canonicalized
+# here for every tmux-facing path AND again server-side in cc as the backstop.
+function _Huginn-CanonName { param([string]$Name) return $Name.ToLower() }
+# tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
+# resolves silently, so 'huginn kill andvari' would destroy a session actually named
+# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jotter'.
+# Anchoring with '=' forces exact match (tmux(1) "exact-match").
+function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
+
+# Reach huginn-appd, which listens on the HOST's loopback. The bearer token is
+# root-only on the host, so the call runs THERE (over the ssh alias) and only the
+# result comes back - the token never touches a client device.
+# Base64 for the same reason as the -p/-y path below: PS 5.1 mangles embedded
+# double quotes when marshalling to a native exe, and this command carries both
+# quotes and a $(...) that must be evaluated on the host.
+#
+# NOT `curl -sf`, WHICH THREW THE ANSWER AWAY. -f discards the response BODY on
+# every HTTP >= 400, collapsing four different refusals into one failure: `huginn
+# end` printed "is huginn-appd running? is the session a live Claude pane?" -
+# naming two causes that are both fine - for the daemon's 409 "answer the waiting
+# question first", for the 409 "no Claude state recorded ... pass force", for a
+# 404, and for a 500 "tmux: ...". The Kotlin client sets expectSuccess = false
+# for exactly this reason.
+#
+# The status rides home on its own last line, so one ssh still answers both
+# questions. Returns @{ Reached; Code; Body; Ssh; Err }: Reached is $false only
+# when curl never CONNECTED (code 000) or ssh itself failed, and that is the
+# ONLY case in which a caller may fall back to raw tmux.
+#
+# ⚠ AND "NOT REACHED" IS TWO DIFFERENT FACTS. An unreachable HOST is a network
+# problem and a stopped daemon is a systemctl problem, and `huginn end` answered
+# the first with "could not reach huginn-appd on <host>" - blaming a daemon that
+# was never asked - while 2>$null threw away the sentence that named the real
+# fault. ssh's OWN failures exit 255 (ssh(1) "exit status"); any other non-zero
+# code is the REMOTE command's, i.e. the connection was made and curl is what
+# failed. `Ssh` is that discriminator and `Err` is whatever was said on stderr,
+# verbatim - captured by merging stream 2 and then separating the ErrorRecords
+# from the output, which is the one way that works on 5.1 and 7 alike.
+function _Huginn-Appd {
+  param([string]$H, [string]$Method, [string]$Path, [string]$Body)
+  $data = if ($Body) { " -H 'Content-Type: application/json' --data '" + $Body + "'" } else { '' }
+  $remote = 'curl -s -w "\n%{http_code}" -X ' + $Method + $data + ' -H "Authorization: Bearer $(cat /etc/huginn-appd/token 2>/dev/null)" "http://127.0.0.1:8787' + $Path + '"'
+  $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
+  $raw = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>&1
+  $rc = $LASTEXITCODE
+  $errLines = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } |
+                 ForEach-Object { $_.ToString() })
+  $out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } |
+             ForEach-Object { [string]$_ })
+  if ($rc -ne 0) {
+    return [pscustomobject]@{ Reached = $false; Code = ''; Body = '';
+                              Ssh = ($rc -eq 255); Err = ($errLines -join "`n") }
+  }
+  $lines = @($out)
+  $code = if ($lines.Count) { ([string]$lines[-1]).Trim() } else { '' }
+  $body = if ($lines.Count -gt 1) { ($lines[0..($lines.Count - 2)] -join '') } else { '' }
+  return [pscustomobject]@{ Reached = ($code -ne '000' -and $code -ne ''); Code = $code; Body = $body;
+                            Ssh = $false; Err = ($errLines -join "`n") }
+}
+# Why the last _Huginn-Appd call could not be made, on the error stream, indented
+# under the caller's own line. Nothing is invented: if ssh said something that is
+# what appears, and when only curl failed, the fact that the connection WAS made
+# is itself the answer - the daemon is the suspect and systemctl is the next
+# command.
+function _Huginn-AppdWhy {
+  param([string]$H, $R, [string]$Tail)
+  $head = if ($R.Ssh) { "huginn: could not reach the host '$H' over ssh - huginn-appd was never asked" }
+          else        { "huginn: $H answered, but huginn-appd did not" }
+  $lines = @($head)
+  if ($R.Err) { $lines += (($R.Err -split "`n") | ForEach-Object { '        ' + $_.TrimEnd() }) }
+  if (-not $R.Ssh) { $lines += "        (ssh $H systemctl status huginn-appd)" }
+  if ($Tail) { $lines += "        $Tail" }
+  _Huginn-Fail ($lines -join "`n")
+}
+# THE ONE COLOUR GUARD, the twin of huginn.sh's _huginn_color: colour only when
+# output is not redirected and NO_COLOR is unset (set to anything at all -
+# no-color.org). Every coloured line in this file goes through _Huginn-Say, which
+# reads it; nothing here passes -ForegroundColor on its own. The colours are the
+# brand's 16-colour slot pins (assets/brand/BRAND.md section 4) as console colour
+# NAMES, never hex, so the user's palette owns the hues: Red = error, Yellow =
+# attention, Cyan = ok, Magenta = the accent, DarkGray = muted. Re-read at the top
+# of every `huginn` call, so NO_COLOR set later in the session is honoured.
+$script:HuginnColorOn = -not $env:NO_COLOR -and -not [Console]::IsOutputRedirected
+function _Huginn-Say {
+  param([string]$Text, [string]$Color)
+  if ($Color -and $script:HuginnColorOn) { Write-Host $Text -ForegroundColor $Color }
+  else { Write-Host $Text }
+}
+
+# ONE refusal path for the whole client, and the only thing here that a script
+# can read.
+#
+# ⚠⚠ Write-Host IS NOT A FAILURE. Every refusal in this file used to be a
+# Write-Host and a bare `return`: `huginn kill 'bad name!'` and `huginn end
+# nosuchsession` both left $? True and $LASTEXITCODE 0, so a Windows script, a
+# CI step or a `&&` chain read every failure as a success - the gate-pipe
+# exit-code trap wearing the other client's clothes - while the bash twin
+# returned 1 for both. And Write-Host writes to the HOST stream, so `huginn end
+# x 2>$null` could not suppress the text and `$out = huginn end x` could not
+# capture it.
+#
+# `throw` is what a simple function has. $? is NOT set by Write-Error here: for
+# a non-advanced function PowerShell attributes the error to the function's
+# BODY, not to the call, and [CmdletBinding()] is not available to us - a
+# declared parameter set would make `huginn -p "q"` a parameter-binding failure
+# instead of a verb. So a refusal is a TERMINATING error: $? goes False, `&&`
+# short-circuits, try/catch can take it, and the sentence lands on the error
+# stream and in $Error. $LASTEXITCODE is set too, so a script that watches the
+# number a native command would have left behind still sees one.
+#
+# The sentence goes to stderr FIRST, plain, exactly as bash's twin prints it, so a
+# refusal reads the same in both clients; the throw that follows is what a script
+# branches on.
+function _Huginn-Fail {
+  param([string]$Message, [int]$Code = 1)
+  $global:LASTEXITCODE = $Code
+  [Console]::Error.WriteLine($Message)
+  throw $Message
+}
+# The daemon's own sentence out of an error body ({"error":"..."}), or ''.
+function _Huginn-AppdError {
+  param([string]$Body)
+  if (-not $Body) { return '' }
+  try { $j = $Body | ConvertFrom-Json; if ($j.error) { return [string]$j.error } } catch {}
+  $m = [regex]::Match($Body, '"error"\s*:\s*"([^"]*)"')
+  if ($m.Success) { return $m.Groups[1].Value }
+  return ''
+}
+
+# Fetch ONE client file: GitHub via gh, else the pinned mirror via scp, validated
+# before it is installed. $true when $Dest now holds the file.
+#
+# ⚠ THREE THINGS THIS GETS RIGHT THAT THE TWO INLINE COPIES DID NOT.
+#
+# (1) ORDER. `node --check` used to run AFTER the scp block, so a FAILED gh
+#     fetch whose error body happened to be non-empty set $got and SKIPPED the
+#     mirror entirely - `gh api` prints its error JSON to STDOUT (bad token =
+#     112 bytes, renamed path = 127 bytes, both exit 1). The check then cleared
+#     $got and the user was told "gh and the mirror both failed" about a mirror
+#     that was never contacted. Each source is now validated inside its own
+#     branch, so a bad body from one really does fall through to the other.
+#
+# (2) EXIT STATUS. try/catch cannot catch a native command's failure, so gh's
+#     $LASTEXITCODE is what decides. A non-empty ERROR BODY is still non-empty;
+#     length alone was never a gate. `huginn update` already knew this - these
+#     two branches regressed against their own sibling in this file.
+#
+# (3) ENCODING. `>` is Out-File, and its WINDOWS POWERSHELL 5.1 default is
+#     -Encoding unicode: UTF-16LE with a BOM, which node cannot parse. Combined
+#     with (1) that made `huginn device on|enrol|update` and `huginn local
+#     on|update|plan` fail 100% of the time on stock 5.1 with gh installed and
+#     authenticated, mirror never tried. Set-Content writes the bytes instead.
+#     UTF-8 and not -Encoding ascii (which `huginn update` may use, because
+#     huginn.ps1 IS pure ASCII): these runners are not - they carry ⚠ and → in
+#     strings a person reads - so the console is also asked to hand us UTF-8
+#     rather than the OEM code page. Node strips the BOM a 5.1 Set-Content adds.
+function _Huginn-FetchFile {
+  param([string]$RepoPath, [string]$MirrorPath, [string]$Dest, [string]$Label, [string]$UpdateHost)
+  $tmp = "$Dest.tmp.js"      # .js: modern node refuses to PARSE an unknown extension
+  $why = @()
+  $got = $false
+  if (Get-Command gh -ErrorAction SilentlyContinue) {
+    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+    $enc = $null
+    try { $enc = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
+    gh api "repos/$script:HUGINN_REPO/contents/$RepoPath" -H "Accept: application/vnd.github.raw" 2>$null |
+      Set-Content -Path $tmp -Encoding utf8
+    $rc = $LASTEXITCODE
+    if ($enc) { try { [Console]::OutputEncoding = $enc } catch {} }
+    if ($rc -ne 0) { $why += "gh exited $rc" }
+    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += 'gh returned nothing' }
+    else {
+      node --check $tmp 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += 'what gh returned is not valid JavaScript' }
+    }
+  } else { $why += 'gh is not installed' }
+  if (-not $got) {
+    # PINNED, exactly like `huginn update` and for the same reason: this
+    # downloads code a service will then run in a loop, so the host it comes
+    # from is a trust root, never $HUGINN_HOST.
+    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+    scp -o BatchMode=yes "${UpdateHost}:$MirrorPath" $tmp 2>$null | Out-Null
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { $why += "scp from $UpdateHost exited $rc" }
+    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += "the $UpdateHost mirror returned nothing" }
+    else {
+      node --check $tmp 2>$null | Out-Null
+      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += "what the $UpdateHost mirror returned is not valid JavaScript" }
+    }
+  }
+  if ($got) {
+    # Validated BEFORE installing: a truncated download that a service then
+    # restarts every ten seconds is worse than no runner at all.
+    Move-Item -Force $tmp $Dest
+    return $true
+  }
+  Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+  # ⚠ AND A FETCH THAT FAILED IS A FAILURE. This was the last Write-Host-and-
+  # return-normally path in the file (the rest went in 1.5.0): `huginn device
+  # update` with no gh and no mirror printed "could not fetch huginn-device" on
+  # the HOST stream and left $? True and $LASTEXITCODE 0, so a Windows script or
+  # a `&&` chain read "the runner was not installed" as "the runner is
+  # installed". The caller in `local` even tested the return value - and then
+  # `return`ed, which is also a success. One terminating refusal, same as every
+  # other one here; the sentence is unchanged, and now lands where 2>$null and
+  # $err can reach it.
+  _Huginn-Fail ("{0}: could not fetch {1} ({2})" -f $Label, (Split-Path -Leaf $RepoPath), ($why -join '; '))
+}
+
+# The daemon URL this machine should be enrolled with, worked out from the ssh
+# link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
+# address THIS machine just reached the host at, which is better than choosing
+# on the device's behalf between a LAN address, a tailnet name and whatever
+# `hostname` happens to say. Returns https://<authority>:8787 (http:// only for
+# the host's own loopback).
+#
+# ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/TLS.md). The
+# runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
+# request, and a device enrolled from here is usually on a flat LAN with no VPN
+# under it. The runner would upgrade a remote http:// on its own anyway (rule 6:
+# no setting re-enables cleartext to a remote host); building https:// here is
+# so what the person reads in `huginn device status` is what is actually dialled.
+# Loopback stays http://: the daemon answers plain HTTP from 127.0.0.0/8 only.
+#
+# ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL.
+# `http://fd00::1:8787` has no valid port, so `huginn device on` / `huginn local
+# on` from a machine whose ssh landed on IPv6 died with nothing but
+# "huginn-device: Invalid URL" - after the url had already been PERSISTED, so a
+# later flagless `on` repeated it and `serve` retried it every 15 seconds
+# forever.
+#
+# ⚠ AND BRACKETING ALONE WOULD ONLY CHANGE THE ERROR. appd binds an IPv4 address,
+# so a bracketed v6 url is a persisted ECONNREFUSED. On a v6 ssh path the host is
+# asked for an IPv4 it actually holds, and the bracketed literal is kept only as
+# the last answer - correct syntax, and an honest failure.
+#
+# ⚠ AND AN EMPTY $SSH_CONNECTION IS NOT A DEAD END ANY MORE. It used to be
+# `if (-not $a) { return $null }`, which the caller turned into "could not work
+# out how to reach huginn's daemon" with nothing to do about it - and the index
+# above threw outright when the probe came back with fewer than three fields.
+# It is empty in two ordinary situations: a shell running ON the host itself,
+# and an sshd whose ForceCommand/Match wrapper does not pass the variable on.
+# Both can be answered - ask the host for an address it actually holds, and use
+# loopback when the host IS this machine - and only when nothing can be learned
+# at all is it a refusal, with `--url` named.
+#
+# NOTE ON ROUTES: the apps pin a ROUTE BOOK (several addresses per daemon, tried
+# in order, with a witness). This client deliberately has none - it is an ssh
+# front end, so it has exactly one route, the alias - and the address below is
+# only ever handed to the local RUNNER, which is the piece that dials the daemon
+# directly.
+function _Huginn-SrvUrl {
+  param([string]$H)
+  $conn = @(((ssh -T $H 'echo $SSH_CONNECTION') -join ' ') -split '\s+' | Where-Object { $_ })
+  $a = if ($conn.Count -ge 3) { [string]$conn[2] } else { '' }
+  if (-not $a) {
+    # Nothing to learn from the link. Is the host this very machine? (No
+    # /etc/machine-id on Windows, where the answer is always no.)
+    $there = ((ssh -T $H 'cat /etc/machine-id 2>/dev/null') -join '').Trim()
+    $here = ''
+    try { if (Test-Path '/etc/machine-id') { $here = (Get-Content '/etc/machine-id' -Raw).Trim() } } catch {}
+    if ($there -and $here -and ($there -ceq $here)) { return 'http://127.0.0.1:8787' }
+  } elseif ($a -like '127.*') {
+    # The host's own loopback (an alias pointing at this machine): plain HTTP
+    # is the one thing that stays, because it never leaves the box.
+    return "http://${a}:8787"
+  } elseif ($a -eq '::1') {
+    # 127.0.0.1, not [::1]: appd binds IPv4 (see the bracketing note above).
+    return 'http://127.0.0.1:8787'
+  } elseif ($a -notmatch ':') { return "https://${a}:8787" }
+  $v4 = ((ssh -T $H "ip -4 -o addr show scope global 2>/dev/null | awk '{print `$4}' | cut -d/ -f1 | head -1") -join '').Trim()
+  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "https://${v4}:8787" }
+  if (-not $a) { return $null }
+  return "https://[$a]:8787"
+}
+
+# Did the caller already say where the daemon is? `huginn device on --url ...`
+# (and --url=...) is the out when neither the ssh link nor the host can answer,
+# and deriving one on top of it would put two --url flags on the runner's argv.
+function _Huginn-HasUrl {
+  param([object[]]$Rest)
+  foreach ($a in @($Rest)) { if (([string]$a) -eq '--url' -or ([string]$a).StartsWith('--url=')) { return $true } }
+  return $false
+}
+
+# --- desktop download links ---
+# The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
+# and that is also where the installed app's own self-updater fetches from - so the
+# link printed here is the real distribution source, not a mirror that can drift.
+# Deliberately NOT the daemon's /v1/desktop-kt: it serves the same bytes, but every
+# route on it needs the host's bearer token and a browser has no way to send one.
+# That also makes `desktop` the one verb that works from a machine which cannot
+# reach the host at all - it is a GitHub fetch, not an ssh.
+function _Huginn-Get {
+  param([string]$Url)
+  # PS 5.1 still negotiates TLS 1.0 by default on some Windows builds; GitHub
+  # requires 1.2, so the request fails with a bare "could not create SSL/TLS
+  # secure channel" that reads like an outage. Set it per call, not globally.
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  try {
+    # -UseBasicParsing: without it PS 5.1 hands the body to the IE engine, which
+    # throws on a machine where IE was never first-run.
+    $r = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+  } catch { return $null }
+  $c = $r.Content
+  # A release asset is served as application/octet-stream, and PS 5.1 hands back
+  # byte[] rather than a string for a non-text type - ConvertFrom-Json chokes on it.
+  if ($c -is [byte[]]) { $c = [Text.Encoding]::UTF8.GetString($c) }
+  return $c
+}
+
+# The newest desktop-v* release as @{ tag = ...; manifest = <object> }, or $null.
+# Filtered by TAG rather than read from /releases/latest, because four components
+# publish into this one feed (v*, app-v*, appd-v*, desktop-v*) and "latest" is
+# simply whichever shipped last - usually not the desktop.
+# Unauthenticated API, so 60 requests/hour per IP; this is one call per invocation.
+function _Huginn-DesktopRelease {
+  $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
+  if (-not $body) { return $null }
+  try { $releases = $body | ConvertFrom-Json } catch { return $null }
+  # NOTE: Highest SEMVER, not first in the feed. GitHub does not return releases
+  # newest-first - verified 2026-08-25 with desktop-v0.8.9 ahead of
+  # desktop-v0.8.13 in the same page - so this handed out an installer four
+  # versions stale while looking perfectly healthy, because the url was
+  # well-formed and did exist. The Kotlin updater already picked by semver.
+  $tag = ($releases | Where-Object { $_.tag_name -like 'desktop-v*' } |
+            Sort-Object { try { [version]($_.tag_name -replace '^desktop-v','') } catch { [version]'0.0.0' } } |
+            Select-Object -Last 1).tag_name
+  if (-not $tag) { return $null }
+  # manifest.json is a release ASSET (the same one the updater verifies sha256
+  # against), so the filenames come from the release itself - nothing here has to
+  # guess how jpackage or the NSIS step named an artifact.
+  $man = _Huginn-Get "https://github.com/$script:HUGINN_REPO/releases/download/$tag/manifest.json"
+  if (-not $man) { return $null }
+  try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
+}
+
+# --- huginn core ---
+# The Go core (docs/CORE-ARCHITECTURE.md): one binary per user that runs act
+# mode at boot, with nobody signed in. While it exists, `huginn device` is a
+# door to it and the Node runner is not used. The binary is NAMED huginn too, so
+# it is always run by its full path - a bare `huginn` here is this function.
+function _Huginn-CoreBin {
+  # No LOCALAPPDATA = not Windows (pwsh on Linux): no Windows core to find.
+  if (-not $env:LOCALAPPDATA) { return $null }
+  $p = Join-Path $env:LOCALAPPDATA 'huginn\bin\huginn.exe'
+  if (Test-Path $p) { return $p }
+  return $null
+}
+
+# Newest cli-v* (2.x+) release that carries core-manifest.json, semver-picked.
+function _Huginn-CoreRelease {
+  $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
+  if (-not $body) { return $null }
+  try { $releases = $body | ConvertFrom-Json } catch { return $null }
+  $tag = ($releases | Where-Object { $_.tag_name -match '^cli-v[0-9]+\.[0-9]+\.[0-9]+$' -and [int](($_.tag_name -replace '^cli-v','').Split('.')[0]) -ge 2 } |
+            Sort-Object { [version]($_.tag_name -replace '^cli-v','') } | Select-Object -Last 1).tag_name
+  if (-not $tag) { return $null }
+  $man = _Huginn-Get "https://github.com/$script:HUGINN_REPO/releases/download/$tag/core-manifest.json"
+  if (-not $man) { return $null }
+  try { return @{ tag = $tag; manifest = ($man | ConvertFrom-Json) } } catch { return $null }
+}
+
+# Download, verify (sha256 from the release's own manifest) and self-install.
+# $env:HUGINN_CORE_FILE = a local huginn.exe skips the download (offline/tests);
+# it is still installed by `self-install`, never copied into place by hand.
+function _Huginn-CoreFetch {
+  $tmp = Join-Path ([IO.Path]::GetTempPath()) ("huginn-core-" + [guid]::NewGuid().ToString('N') + '.exe')
+  try {
+    if ($env:HUGINN_CORE_FILE) {
+      Copy-Item $env:HUGINN_CORE_FILE $tmp -Force
+    } else {
+      $rel = _Huginn-CoreRelease
+      if (-not $rel) { _Huginn-Fail "huginn core: could not read the core release feed (offline, rate-limited, or no 2.x release yet)" }
+      $a = $rel.manifest.artifacts.'windows-x64'
+      if (-not $a -or ($a.file -notmatch '^huginn-[0-9][^\\/]*-windows-x64\.exe$')) { _Huginn-Fail "huginn core: $($rel.tag) names no usable Windows build - refused" }
+      if ($a.sha256 -notmatch '^[0-9a-f]{64}$') { _Huginn-Fail "huginn core: $($rel.tag) carries no usable sha256 - refused" }
+      Write-Host "  downloading $($a.file) ($($rel.tag)) ..."
+      try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+      Invoke-WebRequest -Uri "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$($a.file)" -OutFile $tmp -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+      # THE GATE: the only integrity check between GitHub and an executable
+      # in your profile.
+      $got = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+      if ($got -ne $a.sha256) { _Huginn-Fail "huginn core: $($a.file) did not match its sha256 - discarded, nothing installed" }
+    }
+    & $tmp core self-install
+    if ($LASTEXITCODE -ne 0) { _Huginn-Fail "huginn core: self-install failed" }
+  } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  return (_Huginn-CoreBin)
+}
+
+# Is release $Rel newer than the installed core $Cur? A prerelease (2.1.0-rc.1)
+# is older than its release (2.1.0); a newer local build is left alone.
+function _Huginn-CoreNewer {
+  param([string]$Cur, [string]$Rel)
+  if (-not $Cur) { return $true }
+  if ($Cur -eq $Rel) { return $false }
+  $base = ($Cur -split '-', 2)[0]
+  try { $b = [version]$base; $r = [version]$Rel } catch { return $true }
+  if ($b -eq $r) { return ($base -ne $Cur) }
+  return ($r -gt $b)
+}
+
+# Bring the installed core up to the newest release. Its self-install restarts
+# the running core onto it and adds the tray to a pre-tray (2.0.0) install.
+function _Huginn-CoreUpdate {
+  $bin = _Huginn-CoreBin
+  if (-not $bin) { _Huginn-Fail "huginn core: not installed here - huginn core install" }
+  $cur = ''
+  if (((& $bin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $cur = $Matches[1] }
+  if (-not $env:HUGINN_CORE_FILE) {
+    $rel = _Huginn-CoreRelease
+    if (-not $rel) { Write-Host "huginn core: could not read the core release feed (offline or rate-limited) - $cur kept"; return }
+    $latest = $rel.tag -replace '^cli-v', ''
+    if (-not (_Huginn-CoreNewer $cur $latest)) {
+      $run = ''
+      if (((& $bin core status 2>$null) -join "`n") -match '\(o> huginn core (\S+) ') { $run = $Matches[1] }
+      if ($run -and $run -ne $cur) {
+        # Installed but not running yet (an earlier restart could not be made).
+        Write-Host "huginn core $cur is installed, but the running core is $run - restarting it"
+        & $bin core self-install; return
+      }
+      Write-Host "huginn core $cur is current (newest release $latest)"; return
+    }
+    Write-Host "huginn core: $cur -> $latest"
+  }
+  $null = _Huginn-CoreFetch
+}
+
+# Pair the core with the host this shell already reaches over ssh, if it is not
+# paired yet. The token travels ssh -> the pipeline -> stdin, never argv.
+function _Huginn-CorePair {
+  param([string]$Bin)
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  $st = (& $Bin core status 2>$null) -join "`n"
+  if ($st -notmatch 'not paired') { return }
+  $srv = _Huginn-SrvUrl $H
+  if (-not $srv) { _Huginn-Fail "huginn core: could not work out $H's daemon address - pair by hand: huginn core pair --url https://<host>:8787" }
+  ((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv
+}
+
+# --- auto-reconnecting attach ---
+# The session lives in tmux ON the host, so a dropped link (laptop sleep, wifi
+# flap) only severs the ssh client - the work keeps running. We re-run the attach
+# whenever ssh exits non-zero (dropped link / transport failure - code varies by
+# OS, e.g. 255); a clean tmux detach (Alt-d / Ctrl-b d) or normal shell exit
+# returns 0 and ends the loop.
+# ServerAlive* makes a half-open socket (post-sleep) die in ~45s instead of
+# hanging. Reconnect is dynamic: mirror if another device is still attached, else
+# take it solo (full screen). Our own dead client (the ghost the dropped link
+# left attached) still counts server-side, so the test is >=2 clients (ghost + a
+# real other) -> mirror, just the ghost (or none) -> solo; the count + attach run
+# in ONE remote command. Opt out: $env:HUGINN_NO_RECONNECT = '1'
+#
+# Tab naming: the terminal tab/window is renamed to the session name, so
+# 'huginn costtracking' gives you a 'costtracking' tab in Windows
+# Terminal. tmux's set-titles defaults OFF, so the inner Claude TUI's own title
+# sequences are absorbed by tmux and never reach this terminal -> the title we set
+# here survives the whole session. Previous title restored on exit. Opt out:
+# $env:HUGINN_NO_TITLE = '1'
+function _Huginn-Attach {
+  param([string]$H, [string]$Session = 'main', [switch]$Solo)
+  $Session = _Huginn-CanonName $Session   # case-insensitive: 'Test' -> 'test'
+  $prevTitle = $null
+  try { $prevTitle = $Host.UI.RawUI.WindowTitle } catch {}
+  try {
+    if (-not $env:HUGINN_NO_TITLE) { try { $Host.UI.RawUI.WindowTitle = "$Session" } catch {} }
+    $delay  = 2
+    $quick  = 0
+    $tgt    = _Huginn-TmuxTarget $Session
+    $remote = "cc $Session" + $(if ($Solo) { ' solo' } else { '' })
+    while ($true) {
+      $t0 = Get-Date
+      ssh -tt -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 $H $remote
+      $rc = $LASTEXITCODE
+      $elapsed = ((Get-Date) - $t0).TotalSeconds
+      if ($rc -eq 0 -or $env:HUGINN_NO_RECONNECT) { return }
+      # Bound by DURATION, not exit code: real drops on Windows OpenSSH / Termux do
+      # not reliably return 255. Three sub-5s exits in a row means the remote is
+      # failing instantly (bad workdir, cc error) and retrying only hides the error.
+      if ($elapsed -lt 5) {
+        $quick++
+        if ($quick -ge 3) {
+          _Huginn-Say "`nhuginn: $H is failing immediately ($quick attempts, last exit $rc) - giving up.`n  The remote error is printed above; fix it or run 'huginn $Session' again." Red
+          return
+        }
+      } else { $quick = 0 }
+      _Huginn-Say "`nhuginn: link to $H dropped (ssh exit $rc) - reconnecting in ${delay}s (Ctrl-C to stop)..." Yellow
+      # Jitter: every tab shares one tunnel, so an unjittered backoff makes them all
+      # re-handshake on the identical second after a single relay flap.
+      Start-Sleep -Milliseconds ([int]($delay * 1000 * (0.75 + (Get-Random -Minimum 0.0 -Maximum 0.5))))
+      # Do NOT resurrect a session killed from another device (cc would fall through
+      # to new-session -A and spawn a second claude). Then: mirror if another client
+      # is attached, else solo (evicts the ghost).
+      # Single-quoted bash so $(...) is evaluated on the host, not by PowerShell.
+      $remote = 'tmux has-session -t ' + $tgt + ' 2>/dev/null || { echo "huginn: session ' + $Session + ' no longer exists on ' + $H + '"; exit 0; }; if [ "$(tmux list-clients -t ' + $tgt + ' 2>/dev/null | wc -l)" -ge 2 ]; then cc ' + $Session + '; else cc ' + $Session + ' solo; fi'
+      if ($delay -lt 15) { $delay = [Math]::Min($delay * 2, 15) }
+    }
+  } finally {
+    if (($null -ne $prevTitle) -and (-not $env:HUGINN_NO_TITLE)) { try { $Host.UI.RawUI.WindowTitle = $prevTitle } catch {} }
+  }
+}
+
+# --- uninstall -------------------------------------------------------------
+# `huginn uninstall` - put this machine back the way install.ps1 found it.
+#
+# THE ORDER IS THE POINT, and it is huginn-device's: THE SERVER FIRST, THE DISK
+# SECOND. Every enrolment this machine holds can only be retired with a token
+# that is about to be deleted, so each unenrol is attempted while its own
+# credentials still exist. Wipe first and those rows are unremovable from here
+# forever - they sit in `huginn devices` reading "not reachable" and go on being
+# offered work by a machine that no longer exists.
+#
+# AND AN UNINSTALLER DOES NOT GET A SECOND RUN, so a failed unenrol does not
+# stop it: the local files go anyway (`off --force`), and the row that was
+# stranded is named - by the runner, and again in the summary. That is the one
+# place the refuse-to-destroy-the-handle rule is deliberately inverted, because
+# "run it again tomorrow" is advice to somebody who will not be here tomorrow.
+#
+# WHAT IT LEAVES ON PURPOSE: the SSH key and the `Host huginn` stanza.
+# install.ps1 only CREATES a key when there is not one already, and afterwards
+# nothing can tell "the key install.ps1 generated" from "the key you have used
+# for five years" - id_ed25519 is the default name for both, and the wrong guess
+# locks somebody out of every host they have. So they stay, with a note. `--all`
+# takes them, and only then, when the key is huginn-specific by FILENAME or by
+# the comment in its .pub. Never by guess.
+#
+# Kept behaviourally identical to huginn.sh's _huginn_uninstall, verb for verb
+# and message for message: the two clients have already drifted over a single
+# version constant, and this one deletes things.
+function _Huginn-Uninstall {
+  param([string[]]$Rest = @())
+  $all = $false; $yes = $false
+  foreach ($a in $Rest) {
+    if     ($a -eq '--all') { $all = $true }
+    elseif ($a -eq '--yes') { $yes = $true }
+    else { _Huginn-Fail "usage: huginn uninstall [--all] [--yes]" }
+  }
+  # With a core installed, the CORE owns the uninstall: the whole stack, top
+  # down - the desktop app, the local tier, the device, the core, this CLI
+  # (owner rule 2026-10-15: the core includes the CLI; the desktop sits on it).
+  # Everything below remains for a machine with no core.
+  $core = _Huginn-CoreBin
+  if ($core) { & $core uninstall @Rest; return }
+  $hdir = Join-Path $HOME '.huginn'
+  # Both managers derive these from the same variables, so there is nothing to
+  # pass down - and nothing is written into $env: here, which would outlive the
+  # command and quietly repoint the next `huginn local`.
+  $ddir = if ($env:HUGINN_DEVICE_DIR) { $env:HUGINN_DEVICE_DIR } else { Join-Path $HOME '.config\huginn' }
+  # The literal fallback is huginn-local's own (localDir()), copied rather than
+  # improved on: with %ProgramData% unset, Join-Path is handed a null and THROWS,
+  # which took out the whole local-tier step in testing. The two must agree about
+  # where the tier lives or this deletes the wrong nothing.
+  $ldir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
+          elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
+          else                       { 'C:\ProgramData\huginn-local' }
+  $cfg  = Join-Path $HOME '.ssh\config'
+  # The EXACT line install.ps1 appends, single-quoted so $HOME stays literal the
+  # way the installer wrote it. Matched whole-line, so a profile somebody
+  # hand-wrote differently is reported rather than rewritten.
+  $line = 'if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }'
+  $havenode = [bool](Get-Command node -ErrorAction SilentlyContinue)
+  $removed = @(); $left = @()
+
+  Write-Host "huginn uninstall removes, from THIS machine:"
+  Write-Host "  $hdir"
+  Write-Host "      the client, the device runner, the local-AI manager"
+  Write-Host "  $ddir"
+  Write-Host "      this machine's device enrolment and its copy of the appd token"
+  Write-Host "  $ldir"
+  Write-Host "      the local-AI tier: models, sessions, runtime (can be several GB)"
+  Write-Host "  the huginn line in $PROFILE"
+  Write-Host ""
+  Write-Host "It unenrols this machine from huginn FIRST, while the tokens still exist."
+  if ($all) { Write-Host "--all: the 'Host huginn' SSH stanza goes too, and its key IF it is huginn's own." }
+  Write-Host ""
+  if (-not $yes) {
+    $answer = Read-Host 'Type "uninstall" to continue'
+    if ($answer -ne 'uninstall') { Write-Host "Nothing was removed."; return }
+    Write-Host ""
+  }
+
+  # 1. The local tier first: it owns a device row of its own (<host>-llm), two
+  #    services and the heaviest files, and its manager lives in $hdir - which
+  #    step 3 is about to delete, so this cannot be reordered after it.
+  if (Test-Path $ldir) {
+    Write-Host "==> local AI tier"
+    $mgr = Join-Path $hdir 'huginn-local'
+    if ($havenode -and (Test-Path $mgr)) {
+      node $mgr off --purge --yes
+      # Deliberately NOT forced. A failed unenrol here keeps the id that can
+      # still retire the row, and what is left behind is models - which the
+      # summary names, with the command that finishes the job.
+      if ($LASTEXITCODE -eq 0) { $removed += $ldir }
+      else { $left += "$ldir - 'huginn local off --purge' did not finish; run it again when huginn is reachable" }
+    } else {
+      $left += "$ldir - no manager or no node here, so nothing could unenrol or remove it"
+    }
+    Write-Host ""
+  }
+
+  # 2. This machine as a device.
+  if (Test-Path $ddir) {
+    Write-Host "==> device enrolment"
+    $runner = Join-Path $hdir 'huginn-device'
+    if ($havenode -and (Test-Path $runner)) {
+      node $runner off
+      if ($LASTEXITCODE -ne 0) {
+        node $runner off --force
+        $left += "a device row on huginn (named above) is still enrolled - retire it from the host"
+      }
+    } else {
+      $left += "this machine may still be enrolled - no runner or no node here to unenrol it"
+    }
+    # Named files only, and after the attempt above: a dir that was never
+    # enrolled can still hold the token `huginn device on` fetched into it.
+    foreach ($f in 'device.json', 'appd-token') {
+      Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $ddir $f)
+    }
+    if ((Test-Path $ddir) -and -not (Get-ChildItem -Force $ddir -ErrorAction SilentlyContinue)) {
+      Remove-Item -Force -ErrorAction SilentlyContinue $ddir
+    }
+    # Only report what actually went: the dir may still hold files this uninstall
+    # does not own, or the Remove-Item may have failed silently, and claiming a
+    # removal that did not happen sends the user looking in the wrong place.
+    if (-not (Test-Path $ddir)) { $removed += $ddir }
+    Write-Host ""
+  }
+
+  # 3. The client itself. The whole directory: install.ps1 created it and
+  #    everything in it is huginn's - unlike the desktop app's uninstaller,
+  #    which shares this directory and therefore names its files one by one.
+  if (Test-Path $hdir) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $hdir
+    $removed += $hdir
+  }
+
+  # 4. The profile line.
+  if ($PROFILE -and (Test-Path $PROFILE)) {
+    $plines = @(Get-Content $PROFILE)
+    if ($plines -contains $line) {
+      # UTF8 out, not Set-Content's 5.1 default (the system ANSI code page):
+      # $PROFILE is not one of the two files the pure-ASCII rule covers - nothing
+      # ever fetches it over scp - and re-encoding somebody's profile is how a
+      # non-English string already in it turns to mojibake.
+      Set-Content -Path $PROFILE -Value ($plines | Where-Object { $_ -ne $line }) -Encoding UTF8
+      $removed += "the huginn line in $PROFILE"
+    } elseif ($plines -match '\.huginn\\huginn\.ps1') {
+      $left += "a hand-edited '.huginn\huginn.ps1' line in $PROFILE - it is not the one the installer wrote, so it was left"
+    }
+  }
+
+  # 5. SSH. Left by default; see the note on this function.
+  $key = ''; $slines = @()
+  if (Test-Path $cfg) {
+    $slines = @(Get-Content $cfg)
+    $inH = $false
+    foreach ($l in $slines) {
+      $t = $l.Trim()
+      # -match is case-insensitive in PowerShell, which is also how ssh reads
+      # these keywords.
+      if ($t -match '^host\s+(.+)$') { $inH = ($matches[1].Trim() -eq 'huginn'); continue }
+      if ($inH -and ($t -match '^identityfile\s+(.+)$')) { $key = $matches[1].Trim(); break }
+    }
+  }
+  $ours = $false
+  if ($key) {
+    if ((Split-Path -Leaf $key) -like '*huginn*') { $ours = $true }
+    elseif ((Test-Path "$key.pub") -and ((Get-Content "$key.pub" -Raw) -match 'huginn')) { $ours = $true }
+  }
+  if ($all -and (Test-Path $cfg)) {
+    # Only a stanza that is EXACTLY `Host huginn`. `Host huginn build01` serves
+    # another alias too, and taking it out would break a host this never
+    # installed.
+    $keep = @(); $drop = $false
+    foreach ($l in $slines) {
+      $t = $l.Trim()
+      if ($t -match '^host\s+(.+)$') { $drop = ($matches[1].Trim() -eq 'huginn') }
+      if (-not $drop) { $keep += $l }
+    }
+    # ascii, and this one IS the encoding that matters: a BOM on the first line
+    # of ~/.ssh/config is a keyword OpenSSH does not recognise.
+    Set-Content -Path $cfg -Value $keep -Encoding ascii
+    $removed += "the 'Host huginn' stanza in $cfg"
+    if ($ours -and (Test-Path $key)) {
+      Remove-Item -Force -ErrorAction SilentlyContinue $key, "$key.pub"
+      $removed += "$key and $key.pub (huginn's own key)"
+    } elseif ($key) {
+      $left += "$key - NOT removed: nothing marks it as huginn's (no 'huginn' in the filename or the .pub comment), and it is very likely your general SSH key"
+    }
+  } elseif ($key) {
+    $left += "$key and the 'Host huginn' stanza in $cfg - kept (use 'huginn uninstall --all' to remove them)"
+  }
+
+  Write-Host "Removed:"
+  if ($removed.Count -eq 0) { Write-Host "  (nothing - was huginn installed here?)" }
+  foreach ($r in $removed) { Write-Host "  $r" }
+  if ($left.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Left behind, on purpose or because it could not be done:"
+    foreach ($r in $left) { Write-Host "  $r" }
+  }
+  Write-Host ""
+  # The function is still defined in THIS session - the file it came from is
+  # gone, but PowerShell does not forget what it has already dot-sourced.
+  _Huginn-Say "The 'huginn' command is still loaded in this session. Open a new PowerShell, or: Remove-Item Function:huginn" Yellow
+}
+
+# --- help -----------------------------------------------------------------
+# The ONE list of verbs, and the ONE place each one is described. `huginn help`
+# prints it whole; `huginn <verb> --help` prints the entry (and its continuation
+# lines) for that verb alone - see _Huginn-VerbHelp, which reads this rather than
+# carrying a second copy that would drift from it.
+#
+# Expandable here-string, for $script:HUGINN_REPO and the pinned mirror name;
+# every literal $ is backtick-escaped.
+function _Huginn-HelpBody {
+  # ---8<--- BEGIN GENERATED by scripts/gen-help.js from client/help-table.txt - DO NOT EDIT
+  return @"
+
+  huginn                      attach/create the live 'main' session
+                              (run claude inside)
+  huginn <name>               a separate named session
+  huginn attach <name>        that session even when its name is a verb
+                              (update, solo...)
+  huginn solo [name]          attach + detach all OTHER clients
+                              (resume solo / full screen)
+  huginn list | ls            list sessions + attach status
+  huginn status | st          health: uptime, auth, sessions, disk
+  huginn rename <old> <new>   rename a session (alias: mv)
+  huginn end <name> [--force] soft end: ask Claude to wrap up + commit, then
+                              (if auto-end is on) end it once it goes idle
+                              (--force: send it into a pane with no Claude
+                              state)
+  huginn rounds               what this host does on a schedule, and what it
+                              found
+  huginn headroom [--json]    usage left per account, what huginn moved or is
+                              holding, and why
+  huginn devices              machines that can run a chat in their own context
+  huginn devices watch <name> on|off
+                              tell the host this machine is always on: it
+                              messages you when the machine stops checking in,
+                              and when it is back
+  huginn projects [--json]    clusters of sessions with roles, and who is
+                              waiting
+  huginn projects show <name> a project's members, one line each
+  huginn projects new <name>  start one (launches its lead session)
+                              --brief "<the lead's whole first message>"|-
+                              [--kind software|infra|hardware|docs|research|
+                              other] [--cwd DIR]
+  huginn projects spawn <project>
+                              approve the lead's proposal: create its members
+  huginn projects msg <project> <from> <to> <text>
+                              one line from one member to another
+  huginn projects end <project>
+                              end it AND wind its sessions down
+                              [--now: end them outright | --keep-sessions:
+                              leave them running]
+  huginn core install         run huginn core at boot on this machine - as you,
+                              with nobody signed in - and pair it with the host
+                              [--logon s4u|password: Windows only]
+  huginn core status          is the core running and paired, what it offers
+  huginn core update          take the newest core release (restarts the core)
+  huginn core uninstall       stop starting it at boot
+  huginn device [status]      what THIS machine offers huginn, and what huginn
+                              sees
+  huginn device on            offer this machine
+                              [--scope look|work|own] [--root DIR]
+                              [--url URL: the daemon's address, when ssh
+                              cannot say]
+                              [--act-while-locked | --no-act-while-locked:
+                              whether a lock screen withdraws 'act' on this
+                              machine (default: it does)]
+  huginn device off           stop offering it
+  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device serve         the runner itself - what the service starts
+  huginn device unit          print what keeps the runner up: a systemd unit
+                              [--system], or on Windows a scheduled task that
+                              runs it as you with nobody signed in
+  huginn llm "prompt"         one question to the local tier (a serving
+                              machine answers, not Claude)
+                              [--model ROW] [--timeout S];
+                              'huginn llm -' reads stdin
+  huginn local [status]       what THIS machine serves as local AI, if anything
+  huginn local on             serve local models from this machine
+                              (optional, ~5 GB)
+  huginn local plan           what 'on' would install here, without installing
+                              anything
+  huginn local persist        make an existing install survive logout
+                              (system services, or linger)
+  huginn local doctor         exits nonzero when this install is not doing
+                              what it says
+  huginn local update         re-fetch the manager and the pinned runtime
+  huginn local unit           print the service definitions this tier installs
+                              [--system]
+  huginn local off            stop serving  [--purge-models] [--purge]
+  huginn kill <name>          hard end: stop the session now
+  huginn archive <name>       end it for good and keep the way back: the title,
+                              the cwd, a copy of the transcript and the exact
+                              'claude --resume' command  [--now: skip wrap-up]
+  huginn archive              what has been archived, and how to bring it back
+  huginn revive <id|name>     bring an archived session back to life
+  huginn -p "question"        one-shot headless query: reasoning + memory +
+                              web, and nothing that can change anything
+                              (Bash/Edit/Write are denied)
+  huginn -y "task"            one-shot that may use tools
+                              (bash/files/web + memory)
+  huginn usage [args]         Claude Code token/cost report (ccusage; default:
+                              daily), e.g. huginn usage monthly | session |
+                              blocks | blocks --live
+  huginn usage <when>         shortcut date range: today | yesterday | week |
+                              month, e.g. huginn usage today |
+                              huginn usage week session
+  huginn desktop              download links for the latest Huginn Desktop
+                              build (Windows, Debian, Arch, portable)
+  huginn desktop win|linux|arch|portable
+                              just that build's url, bare, for scripting
+  huginn desktop install      Linux: install or repair the per-user,
+                              self-updating build (no root; any distro)
+  huginn desktop uninstall    Linux: remove that install (keeps settings)
+  huginn update               self-update this client from the repo
+                              ($script:HUGINN_REPO); without gh, from the
+                              PINNED $(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }) mirror, never from
+                              `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }):
+                              the box you point at must not become a source
+                              of code this shell runs
+  huginn uninstall            remove the whole stack, top down: the desktop
+                              app, the local-AI tier, this machine's device
+                              row, huginn core and this CLI [--all also takes
+                              the SSH stanza + huginn's own key]
+  huginn version              show client version
+  huginn help | ? | /help     this help
+
+  Any verb takes --help for its own usage, answered here without touching the
+  host: 'huginn archive --help', 'huginn device --help'.
+  Session names are lowercase letters, digits, '_' and '-' (no dots, spaces
+  or *), up to 50 characters, and must start with a letter, digit or '_'.
+  Case-insensitive ('Test' and 'test' are the same session).
+  In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
+  Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.
+  Reattach from any device.
+  Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
+  Attach auto-reconnects after a dropped link (laptop sleep); Ctrl-C during
+  the wait to stop. Disable with `$env:HUGINN_NO_RECONNECT='1'.
+  The terminal tab is named after the session (<name>) and the title that was
+  there before is put back when you leave; `$env:HUGINN_NO_TITLE='1' off.
+  A state mark leads the tab title while Claude runs: working / needs you /
+  waiting (set host-side by the claude hooks; needs the server's title hook
+  installed).
+"@
+  # ---8<--- END GENERATED help body
+}
+
+# `huginn attach <name>`: attach to a session BY NAME, never by verb.
+#
+# ⚠ WHY IT EXISTS (desktop breaker, 2026-10-02): `huginn <word>` reads the word
+# as a verb first and a session only when it is not one, and the daemon makes
+# sessions called update, solo, list, uninstall. The desktop's "Open in
+# PowerShell" ran `huginn 'update'` for a session named update - replacing this
+# very file - and `huginn 'solo'` threw every other device off main. This is the
+# form that cannot dispatch. The desktop checks for THIS FUNCTION'S NAME
+# (`Get-Command _Huginn-AttachNamed`) to know a CLI has `attach`, so it is not
+# to be renamed.
+function _Huginn-AttachNamed {
+  param([string]$H, [string]$Name)
+  if (-not (_Huginn-ValidName $Name)) { _Huginn-BadName $Name }
+  _Huginn-Attach -H $H -Session $Name
+}
+
+# `huginn <verb> --help` - ONE convention, and it used to be four. `projects`
+# and `llm` printed their full help and exited 0; `headroom` printed a one-line
+# usage and exited 1; `archive` answered "invalid session name '--help'". A
+# person types --help when something has already surprised them, and two of
+# those made it look like a second mistake.
+#
+# ANSWERED HERE, NEVER OVER SSH: help that needs the network is help you cannot
+# read on a train, and it is not an error, so nothing is thrown and
+# $LASTEXITCODE stays 0.
+#
+# $true when the verb had an entry; $false when it had none, so the caller can
+# fall through to its normal dispatch.
+function _Huginn-VerbHelp {
+  param([string]$Verb)
+  # Aliases resolve to the spelling the help list uses, so `huginn st --help`
+  # and `huginn status --help` are the same answer.
+  $v = switch ($Verb) {
+    'ls'        { 'list' }
+    'st'        { 'status' }
+    'mv'        { 'rename' }
+    'round'     { 'rounds' }
+    'project'   { 'projects' }
+    'unarchive' { 'revive' }
+    'cost'      { 'usage' }
+    'ccusage'   { 'usage' }
+    'enrol'     { 'device' }
+    'enroll'    { 'device' }
+    default     { $Verb }
+  }
+  $keep = $false
+  $hit  = @()
+  foreach ($line in ((_Huginn-HelpBody) -split "`n")) {
+    $l = $line.TrimEnd()
+    if     ($l -match '^\s*$')        { $keep = $false }
+    elseif ($l -match '^  huginn(\s|$)') { $keep = (($l -split '\s+')[2] -ceq $v) }
+    elseif ($l -match '^  \S')         { $keep = $false }
+    if ($keep) { $hit += $l }
+  }
+  if (-not $hit.Count) { return $false }
+  Write-Host ($hit -join "`n")
+  Write-Host ""
+  Write-Host "  (huginn help for everything else)"
+  return $true
+}
+
+function huginn {
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  # ⚠ THE NUMBER IS RESET AT THE DOOR. A refusal sets $LASTEXITCODE = 1 (see
+  # _Huginn-Fail) and nothing ever cleared it, so the NEXT verb - a perfectly
+  # successful one - still left a 1 behind for a script to read as its own
+  # failure. Native commands this function runs (ssh, scp, node) overwrite it
+  # with their own code, which is exactly what a caller wants.
+  $global:LASTEXITCODE = 0
+  $script:HuginnColorOn = -not $env:NO_COLOR -and -not [Console]::IsOutputRedirected
+  # --help on a VERB, before anything is dispatched or sent: one convention for
+  # all of them, answered locally, no throw and no exit code. See
+  # _Huginn-VerbHelp. A verb with no entry is told so rather than falling
+  # through to the attach path, which would ssh to the host and open a session
+  # named after the typo while the person is standing there asking to be told
+  # something.
+  if ($args.Count -ge 2 -and ($args[1] -in '-h','--help')) {
+    if (_Huginn-VerbHelp ([string]$args[0])) { return }
+    _Huginn-Fail "huginn: no help for '$($args[0])' - run 'huginn help' for the list of verbs"
+  }
+  if ($args.Count -eq 0) {
+    _Huginn-Attach -H $H
+  } elseif ($args[0] -in '?','help','/help','-h','--help') {
+    # Banner in a SINGLE-quoted here-string: the art must reach the terminal
+    # verbatim, and in an expandable one PowerShell would treat its punctuation
+    # as escapes. The body (see _Huginn-HelpBody) stays expandable.
+    Write-Host @'
+
+        _
+       (o)==-   huginn - remote Claude Code node.  aliases: rclaude, rcc
+       //\
+    =~/_/
+'@
+    Write-Host (_Huginn-HelpBody)
+  } elseif ($args[0] -eq 'version' -or $args[0] -eq '--version' -or $args[0] -eq '-v') {
+    Write-Host "(o> huginn-cli $script:HUGINN_VERSION  (host: $H)"
+  } elseif ($args[0] -eq 'update') {
+    $dest = if ($PSCommandPath) { $PSCommandPath } else { "$HOME\.huginn\huginn.ps1" }
+    $tmp  = "$dest.tmp"
+    $got  = $false
+    # ⚠ NAMED BEFORE THE FIRST MESSAGE THAT MENTIONS IT. The mirror host is
+    # PINNED and is never $HUGINN_HOST - this path downloads the file that is
+    # then loaded into the shell, so the host it comes from is a trust root and
+    # not a convenience - and both fallback lines said "falling back to the $H
+    # mirror", i.e. they named the one host this deliberately does not use, in
+    # the messages whose whole job is naming the one it does. A run could print
+    # "falling back to the rvhost mirror" and "pulled from huginn mirror" three
+    # lines apart.
+    $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+    Write-Host "huginn: updating client -> $dest"
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+      try {
+        # Set-Content -Encoding ascii, NOT Out-File -Encoding utf8: on PS 5.1 the
+        # latter writes a UTF-8 BOM, which is exactly the parse failure commit
+        # 691d602 ("pure ASCII") was written to eliminate. The client is ASCII.
+        gh api "repos/$script:HUGINN_REPO/contents/client/huginn.ps1" -H "Accept: application/vnd.github.raw" 2>$null |
+          Set-Content -Path $tmp -Encoding ascii
+        # try/catch cannot catch a native command's failure, so check the code.
+        # A non-empty ERROR BODY is still non-empty - length alone is not a gate.
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 2000) {
+          $got = $true; _Huginn-Say "  pulled from GitHub ($script:HUGINN_REPO) via gh" Cyan
+        } else {
+          _Huginn-Say "  (gh fetch failed - falling back to the pinned $uh mirror)" DarkGray
+        }
+      } catch { _Huginn-Say "  (gh threw - falling back to the pinned $uh mirror)" DarkGray }
+    } else {
+      _Huginn-Say "  (gh not installed - using the scp fallback)" DarkGray
+    }
+    if (-not $got) {
+      # BatchMode so a device without an authorized key fails instead of silently
+      # dropping into a password prompt mid-"update".
+      # The downloaded file is loaded into the shell, so the host it comes from is a
+      # trust root, not just a transport. Say which host is being trusted when it is
+      # not the pinned default.
+      if ($uh -ne $script:HUGINN_UPDATE_HOST_DEFAULT) {
+        _Huginn-Say "  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)" Yellow
+      }
+      scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn.ps1" $tmp
+      if ($LASTEXITCODE -eq 0) { $got = $true; _Huginn-Say "  pulled from $uh mirror via scp" Cyan }
+    }
+    # Validate before installing: a truncated download that overwrites the live
+    # client leaves every future shell broken, with no copy to fall back to.
+    if ($got) {
+      try {
+        $null = [ScriptBlock]::Create((Get-Content $tmp -Raw))
+        if (Test-Path $dest) { Copy-Item -Force $dest "$dest.bak" -ErrorAction SilentlyContinue }
+        Move-Item -Force $tmp $dest
+        _Huginn-Say "  (previous version saved as $(Split-Path -Leaf $dest).bak)" DarkGray
+      } catch {
+        _Huginn-Say "huginn: downloaded client failed its syntax check - keeping the current version" Red
+        $got = $false
+      }
+    }
+    if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
+    # NOTE: dot-sourcing here would only update this function's local scope, not the global
+    # session - so we don't pretend to hot-reload. Tell the user to reload.
+    if ($got) {
+      _Huginn-Say "  client file updated. Open a new PowerShell (or run '. `$PROFILE') to load it into this session." Yellow
+      # Lockstep (D10): the core this client drives follows it - run by the NEW
+      # client, in a child shell, since this session still holds the old one.
+      if (_Huginn-CoreBin) {
+        & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -Command ". '$($dest -replace "'", "''")'; huginn core update"
+      }
+    } else { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
+  } elseif ($args[0] -eq 'list' -or $args[0] -eq 'ls') {
+    ssh -T $H "tmux ls 2>/dev/null || echo '(no sessions running)'"
+  } elseif ($args[0] -eq 'status' -or $args[0] -eq 'st') {
+    ssh -T $H huginn-status
+  } elseif ($args[0] -eq 'rounds' -or $args[0] -eq 'round') {
+    # Same host-side renderer the bash client calls; see huginn.sh.
+    ssh -T $H huginn-rounds
+  } elseif ($args[0] -eq 'headroom') {
+    # Host-side like rounds/devices, and for a third reason on top of theirs:
+    # headroom is read out of the daemon with the bearer token, so rendering it
+    # anywhere but on the host would mean teaching this machine that credential.
+    # Flags are single-quote marshalled like the llm branch below - what follows
+    # the host name is parsed by a shell on the far side, so an argument typed
+    # here is remote shell input. -T, not -tt: the attach paths force a PTY
+    # because tmux needs one, but a tty on the far end would turn this
+    # renderer's newlines into CRLF on their way into a pipe or a variable.
+    $hrArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($hrArgs.Count) {
+      $hrStr = ($hrArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-headroom $hrStr"
+    } else {
+      ssh -T $H huginn-headroom
+    }
+  } elseif ($args[0] -eq 'devices') {
+    # Arguments go through like headroom's: 'huginn devices watch <name> on|off'
+    # is parsed by the renderer on the host, so each one is remote shell input.
+    $dvArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($dvArgs.Count) {
+      $dvStr = ($dvArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-devices $dvStr"
+    } else {
+      ssh -T $H huginn-devices
+    }
+  } elseif ($args[0] -eq 'projects' -or $args[0] -eq 'project') {
+    # A PROJECT is a cluster of sessions with roles and a lead that sizes the
+    # work. Same host-side renderer the bash client calls (see huginn.sh): one
+    # implementation of the whole grammar - list/show/new/spawn/msg/end - rather
+    # than the same grammar written twice, in two languages, and drifting.
+    #
+    # Single-quote marshalled like the headroom/archive branches: what follows
+    # the host name is parsed by a shell on the far side, so an argument typed
+    # here is remote shell input, and a first prompt is prose full of quotes and
+    # $. Guarded on the count so a bare `huginn projects` sends a BARE renderer
+    # call and not one empty argument. -T, not -tt: this output is piped and
+    # captured, and a tty on the far end would turn its newlines into CRLF.
+    $pjArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    if ($pjArgs.Count) {
+      $pjStr = ($pjArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+      ssh -T $H "huginn-projects $pjStr"
+    } else {
+      ssh -T $H huginn-projects
+    }
+  } elseif ($args[0] -eq 'core') {
+    $sub = if ($args.Count -ge 2) { [string]$args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $bin = _Huginn-CoreBin
+    if ($sub -eq 'update') {
+      _Huginn-CoreUpdate
+    } elseif ($sub -eq 'install') {
+      if (-not $bin -or $env:HUGINN_CORE_FILE) { $bin = _Huginn-CoreFetch }
+      else { _Huginn-CoreUpdate }  # an installed core is brought up to date first
+      # Registering a boot task needs an administrator token: re-run just that
+      # step elevated, behind ONE UAC prompt, as this same user.
+      $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+      if ($admin) { & $bin core install @rest } else {
+        $p = Start-Process -FilePath $bin -ArgumentList (@('core', 'install') + $rest) -Verb RunAs -Wait -PassThru
+        if ($p.ExitCode -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $($p.ExitCode))" }
+      }
+      for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
+      # The elevated step does not start the tray (it would run as
+      # administrator); this unelevated self-install does, when none is up.
+      & $bin core self-install | Where-Object { $_ -match 'tray' }
+      _Huginn-CorePair $bin
+      & $bin core status
+    } elseif (-not $bin) {
+      _Huginn-Fail "huginn core: not installed here - huginn core install"
+    } else {
+      & $bin core $sub @rest
+    }
+  } elseif ($args[0] -eq 'device' -and (_Huginn-CoreBin)) {
+    # With huginn core installed, THIS machine's device is the core's: the Node
+    # runner below is the pre-2.0 path and must not enrol a second row.
+    $bin = _Huginn-CoreBin
+    $sub = if ($args.Count -ge 2) { [string]$args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    if ($sub -eq 'on' -or $sub -eq 'enrol' -or $sub -eq 'enroll') { _Huginn-CorePair $bin; & $bin device on @rest }
+    elseif ($sub -eq 'off' -or $sub -eq 'status') { & $bin device $sub @rest }
+    else { _Huginn-Fail "huginn device ${sub}: not needed with huginn core (see: huginn core status)" }
+  } elseif ($args[0] -eq 'device') {
+    # Plural is the host's list of machines; SINGULAR is the one you are typing
+    # on - offering it to Huginn as a place to run work, the way the desktop
+    # app's "Give Huginn access to this PC" toggle does. Different question, and
+    # answered in a different place: `devices` renders on the host, this never
+    # leaves the machine.
+    #
+    # The runner is a small Node program fetched on demand (client/huginn-device;
+    # that file says why Node and not more shell). Node is free here: claude is
+    # itself a Node program, so any machine that can do the work already has it.
+    $sub = if ($args.Count -ge 2) { $args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $runner = Join-Path $HOME '.huginn/huginn-device'
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      _Huginn-Fail "huginn device: needs node - install Node.js LTS: winget install OpenJS.NodeJS.LTS"
+    } elseif ($sub -eq 'on' -or $sub -eq 'enrol' -or $sub -eq 'enroll' -or $sub -eq 'update') {
+      $dir = Join-Path $HOME '.config/huginn'
+      New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+      if ($sub -eq 'update' -or -not (Test-Path $runner)) {
+        $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+        _Huginn-FetchFile -RepoPath 'client/huginn-device' `
+          -MirrorPath '/usr/local/share/huginn-cli/huginn-device' `
+          -Dest $runner -Label 'huginn device' -UpdateHost $uh | Out-Null
+      }
+      if ($sub -eq 'update') {
+        if (Test-Path $runner) { Write-Host "huginn device: runner is now $(node $runner version)" }
+      } elseif (Test-Path $runner) {
+        # The token and the address, both over the ssh link this machine has
+        # ALREADY been trusted on. Nothing is widened: anyone who can ssh to the
+        # host can read that file anyway. What it removes is a bearer token
+        # pasted by hand between two terminals.
+        $tokfile = Join-Path $dir 'appd-token'
+        if (-not (Test-Path $tokfile)) {
+          $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
+          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
+          else { _Huginn-Fail "huginn device: could not read the appd token from $H" }
+        }
+        # See _Huginn-SrvUrl: the address this machine just reached the host at,
+        # bracketed when it is an IPv6 literal.
+        # An explicit --url wins outright - it is the answer to this question,
+        # not an extra opinion.
+        if (_Huginn-HasUrl $rest) { node $runner on @rest }
+        else {
+          $srv = _Huginn-SrvUrl $H
+          if ($srv) { node $runner on --url $srv @rest }
+          else {
+            _Huginn-Fail ("huginn device: could not work out how to reach $H's daemon`n" +
+                          "               (no ssh address to go on, and $H named no global IPv4)`n" +
+                          "               say it yourself: huginn device on --url https://<host>:8787")
+          }
+        }
+      }
+    } elseif (Test-Path $runner) {
+      node $runner $sub @rest
+    } else {
+      _Huginn-Fail "huginn device: this machine is not set up as a device - run: huginn device on"
+    }
+  } elseif ($args[0] -eq 'llm') {
+    # One question to the LOCAL TIER - a serving machine's model answers, never
+    # Claude. Leading --flags pass as argv; the PROMPT rides base64 -> stdin
+    # ("huginn-llm -"), the same hardening the exec path uses, so double quotes,
+    # newlines, $ and backticks in the prompt survive both PowerShell and the
+    # remote shell. Single-quote marshalling mangled double-quoted prompts on
+    # Windows PowerShell 5.1.
+    $rest = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
+    $flags = @(); $i = 0
+    while ($i -lt $rest.Count -and ([string]$rest[$i]).StartsWith('--')) {
+      $flags += $rest[$i]
+      if (($rest[$i] -eq '--model' -or $rest[$i] -eq '--timeout') -and ($i + 1) -lt $rest.Count) {
+        $i++; $flags += $rest[$i]
+      }
+      $i++
+    }
+    $prompt = if ($i -lt $rest.Count) { ($rest[$i..($rest.Count - 1)]) -join ' ' } else { '' }
+    $flagStr = ($flags | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($prompt))
+    ssh -T $H "echo $b64 | base64 -d | huginn-llm $flagStr -"
+  } elseif ($args[0] -eq 'local') {
+    # THIS machine serves local AI models to huginn - the optional local tier.
+    # Same grammar as `huginn device`: consent, fetch pinned, validate, install,
+    # enrol - and the same trust roots for the fetch. The manager carries its
+    # own pinned runtime/model manifest; what it may install is decided by the
+    # release you run, never by whatever an endpoint serves today.
+    $sub = if ($args.Count -ge 2) { $args[1] } else { 'status' }
+    $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
+    $mgr = Join-Path $HOME '.huginn/huginn-local'
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      _Huginn-Fail "huginn local: needs node - install Node.js LTS: winget install OpenJS.NodeJS.LTS"
+    } elseif ($sub -eq 'on' -or $sub -eq 'update' -or $sub -eq 'plan') {
+      New-Item -ItemType Directory -Force -Path (Split-Path $mgr) | Out-Null
+      # huginn-device rides along: managed mode installs a runner SERVICE, and
+      # a machine that never enrolled as a claude device has no runner otherwise.
+      foreach ($f in 'huginn-local', 'huginn-llm-shim', 'huginn-device') {
+        $dest = Join-Path $HOME ".huginn/$f"
+        if ($sub -eq 'update' -or -not (Test-Path $dest)) {
+          $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
+          # Throws when it could not fetch (see _Huginn-FetchFile) - there is
+          # nothing left to test, and a `return` here used to turn that into a
+          # success.
+          _Huginn-FetchFile -RepoPath "client/$f" `
+            -MirrorPath "/usr/local/share/huginn-cli/$f" `
+            -Dest $dest -Label 'huginn local' -UpdateHost $uh | Out-Null
+        }
+      }
+      if ($sub -eq 'plan') { node $mgr plan @rest; return }
+      if ($sub -eq 'update') { if (Test-Path $mgr) { node $mgr update @rest }; return }
+      $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
+             elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
+             else                       { 'C:\ProgramData\huginn-local' }
+      New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
+      $tokfile = Join-Path $dir 'device/appd-token'
+      if (-not (Test-Path $tokfile)) {
+        $old = Join-Path $HOME '.config/huginn/appd-token'
+        if (Test-Path $old) { Copy-Item $old $tokfile }
+        else {
+          $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
+          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
+          else { _Huginn-Fail "huginn local: could not read the appd token from $H" }
+        }
+      }
+      $env:HUGINN_LOCAL_DIR = $dir
+      if (_Huginn-HasUrl $rest) { node $mgr on @rest; return }
+      $srv = _Huginn-SrvUrl $H
+      if (-not $srv) {
+        _Huginn-Fail ("huginn local: could not work out how to reach $H's daemon`n" +
+                      "              (no ssh address to go on, and $H named no global IPv4)`n" +
+                      "              say it yourself: huginn local on --url https://<host>:8787")
+      }
+      node $mgr on --url $srv @rest
+    } elseif (Test-Path $mgr) {
+      node $mgr $sub @rest
+    } else {
+      _Huginn-Fail "huginn local: this machine does not serve local models - run: huginn local on"
+    }
+  } elseif ($args[0] -eq 'uninstall') {
+    $rest = if ($args.Count -ge 2) { $args[1..($args.Count-1)] } else { @() }
+    _Huginn-Uninstall -Rest $rest
+  } elseif ($args[0] -eq 'desktop') {
+    $arg = if ($args.Count -gt 1) { "$($args[1])".ToLower() } else { '' }
+    # install/uninstall are the bash client's per-user Linux install (huginn.sh,
+    # _huginn_desktop_install). Named here so the verb set matches, and so the
+    # answer on Windows is a pointer rather than "usage".
+    if ($arg -in 'install', 'uninstall', 'remove') {
+      _Huginn-Fail ("huginn: 'desktop $arg' is the Linux per-user install (the bash client: huginn.sh).`n" +
+                    "  On Windows the installer IS per-user and updates itself: huginn desktop windows")
+    }
+    $want = switch ($arg) {
+      { $_ -in '', 'both', 'all' }              { ''; break }
+      { $_ -in 'win', 'windows', 'exe' }        { 'windows-x64'; break }
+      { $_ -in 'linux', 'deb', 'debian', 'ubuntu' } { 'linux-x64'; break }
+      { $_ -in 'arch', 'pacman', 'pkg' }        { 'linux-x64-arch'; break }
+      { $_ -in 'portable', 'tar', 'tarball' }   { 'linux-x64-portable'; break }
+      default { 'BAD' }
+    }
+    if ($want -eq 'BAD') { _Huginn-Fail "usage: huginn desktop [windows|linux|arch|portable|install|uninstall]" }
+    $rel = _Huginn-DesktopRelease
+    if (-not $rel) {
+      _Huginn-Fail ("huginn: could not read the desktop release feed (offline, or GitHub rate-limited this IP).`n" +
+                    "  Browse it: https://github.com/$script:HUGINN_REPO/releases")
+    }
+    $base = "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)"
+    $arts = $rel.manifest.artifacts
+    # PS 5.1 has no $IsWindows (it is PowerShell Core's), and it only runs on Windows.
+    $here = if ($null -eq $IsWindows) { 'windows-x64' }
+            elseif ($IsWindows) { 'windows-x64' }
+            elseif ($IsLinux)   { 'linux-x64' }
+            else { '' }   # macOS: no desktop build
+    # With a platform named, emit the BARE url down the pipeline and nothing else,
+    # so it composes:  curl -fLO (huginn desktop linux)
+    if ($want) {
+      $a = $arts.$want
+      if (-not $a) { _Huginn-Fail "huginn: $($rel.tag) has no $want build" }
+      return "$base/$($a.file)"
+    }
+    Write-Host ""
+    Write-Host "  Huginn Desktop $($rel.manifest.version)   ($($rel.tag))"
+    Write-Host ""
+    $labels = @{ 'windows-x64' = 'Windows '; 'linux-x64' = 'Debian  '; 'linux-x64-arch' = 'Arch    '; 'linux-x64-portable' = 'Portable' }
+    foreach ($p in @('windows-x64', 'linux-x64', 'linux-x64-arch', 'linux-x64-portable')) {
+      $a = $arts.$p
+      if (-not $a) { continue }
+      $mark  = if ($p -eq $here) { '   <- this machine' } else { '' }
+      Write-Host "  $($labels[$p])  $base/$($a.file)$mark"
+      _Huginn-Say ("            {0,6:N1} MB   sha256 {1}..." -f ($a.size / 1MB), $a.sha256.Substring(0, 16)) DarkGray
+    }
+    Write-Host ""
+    if ($here -eq 'windows-x64') {
+      Write-Host "  install:  run the .exe (per-user NSIS installer, no admin needed)"
+    } elseif ($here -eq 'linux-x64') {
+      # pwsh on Linux: the per-user install lives in the bash client.
+      Write-Host "  install:  huginn desktop install    (bash client; per-user, no root, updates itself)"
+    } else {
+      Write-Host "  (no desktop build for this machine - these links are for your laptop)"
+    }
+    _Huginn-Say "  The Windows and portable installs update themselves from this same feed." DarkGray
+    Write-Host ""
+  } elseif ($args[0] -eq 'usage' -or $args[0] -eq 'cost' -or $args[0] -eq 'ccusage') {
+    # Full history is layered server-side by the /usr/local/bin/ccusage wrapper on huginn - keep this bare.
+    $kw = if ($args.Count -gt 1) { $args[1] } else { $null }
+    if ($kw -in @('today', 'yesterday', 'week', 'month')) {
+      $idx = 2
+      $report = 'daily'
+      if ($args.Count -gt 2 -and ($args[2] -in @('daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'))) {
+        $report = $args[2]; $idx = 3
+      }
+      $rest = if ($args.Count -gt $idx) { $args[$idx..($args.Count - 1)] -join ' ' } else { '' }
+      # Date math runs server-side (guaranteed GNU date on the host) so this works
+      # the same regardless of client OS.
+      $dates = switch ($kw) {
+        'today'     { 'since=$(date +%Y%m%d); until=$since' }
+        'yesterday' { 'since=$(date -d yesterday +%Y%m%d); until=$since' }
+        'week'      { 'since=$(date -d "7 days ago" +%Y%m%d); until=$(date +%Y%m%d)' }
+        'month'     { 'since=$(date +%Y%m01); until=$(date +%Y%m%d)' }
+      }
+      ssh -tt $H "$dates; ccusage $report -s `$since -u `$until $rest"
+    } else {
+      $sub = if ($args.Count -gt 1) { $args[1..($args.Count - 1)] -join ' ' } else { 'daily' }
+      ssh -tt $H "ccusage $sub"   # default 'daily'. -tt for tables + --live.
+    }
+  } elseif ($args[0] -eq 'attach') {
+    # By name, never by verb - see _Huginn-AttachNamed. No default: a bare
+    # `attach` is a mistake, not a request for main.
+    if ($args.Count -ne 2) { _Huginn-Fail "usage: huginn attach <name>" }
+    _Huginn-AttachNamed -H $H -Name ([string]$args[1])
+  } elseif ($args[0] -eq 'solo') {
+    $name = if ($args.Count -gt 1) { $args[1] } else { 'main' }
+    if (-not (_Huginn-ValidName $name)) { _Huginn-BadName $name }
+    _Huginn-Attach -H $H -Session $name -Solo
+  } elseif ($args[0] -eq 'rename' -or $args[0] -eq 'mv') {
+    if ($args.Count -lt 3) { _Huginn-Fail "usage: huginn rename <old> <new>" }
+    if (-not (_Huginn-ValidName $args[2])) { _Huginn-BadName ([string]$args[2]) 'new name' }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
+    $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
+    ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
+  } elseif ($args[0] -eq 'kill') {
+    if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn kill <name>" }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
+    $kn = _Huginn-CanonName $args[1]
+    # Prefer the daemon's DELETE: it also removes the orphaned /run state file and
+    # releases the pane lease, which a bare tmux kill-session leaves behind (Claude's
+    # SessionEnd hook never fires on a kill). Fall back to tmux when the daemon is
+    # unreachable - kill must work even when appd is down.
+    # '=' anchor on the fallback: without it 'huginn kill andvari' kills 'andvariautofill'.
+    #
+    # THE FALLBACK IS FOR AN UNREACHABLE DAEMON, NOT AN HTTP STATUS. DELETE has no
+    # 409 guard, so the realistic failure is a GLOBAL 401 - an unreadable or rotated
+    # token - with the daemon perfectly healthy. Falling back there killed the
+    # session with raw tmux, skipping clearSessionState / registryRemove /
+    # releaseSize, so a deliberately killed session came back on the next reboot
+    # restore and nothing ever said why.
+    $kr = _Huginn-Appd -H $H -Method 'DELETE' -Path "/v1/sessions/$kn"
+    if (-not $kr.Reached) {
+      ssh -T $H "tmux kill-session -t '$(_Huginn-TmuxTarget $kn)' && echo 'killed: $kn'"
+    } elseif ($kr.Code -match '^2') {
+      Write-Host "killed: $kn"
+    } else {
+      $m = _Huginn-AppdError $kr.Body
+      if (-not $m) { $m = "huginn-appd answered HTTP $($kr.Code)" }
+      _Huginn-Fail "huginn: could not kill '$kn': $m"
+    }
+  } elseif ($args[0] -eq 'end') {
+    if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn end <name> [--force]" }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
+    $en = _Huginn-CanonName $args[1]
+    # --force is the answer to one specific refusal, and it used to be UNREACHABLE:
+    # neither client sent a request body and `end` parsed no flags, so the daemon's
+    # "pass force to send anyway" named something nobody could do.
+    $force = ''
+    if ($args.Count -ge 3) {
+      if ($args[2] -eq '--force') { $force = '{"force":true}' }
+      else { _Huginn-Fail "usage: huginn end <name> [--force]" }
+    }
+    # Soft end: ask Claude to wrap up (finish, commit, prepare to end) and - when
+    # auto-end is on for the host - end the session once it settles. This is a DAEMON
+    # feature (it types into the pane and watches state), so there is no tmux fallback;
+    # the phrase is whatever the host is configured to send.
+    $r = _Huginn-Appd -H $H -Method 'POST' -Path "/v1/sessions/$en/soft-end" -Body $force
+    if (-not $r.Reached) {
+      # ⚠ WHICH HALF FAILED. An unreachable HOST is not a stopped daemon, and
+      # this line used to say the second about the first - on a box ssh had just
+      # refused - with the transport error thrown away by 2>$null.
+      _Huginn-AppdWhy -H $H -R $r -Tail 'a soft-end is a daemon feature, so there is no tmux fallback'
+    }
+    if ($r.Code -notmatch '^2') {
+      $m = _Huginn-AppdError $r.Body
+      if (-not $m) { $m = "huginn-appd answered HTTP $($r.Code)" }
+      $msg = "huginn: could not end '$en': $m"
+      if ($m -match 'force') { $msg += "`n        send it anyway with: huginn end $en --force" }
+      _Huginn-Fail $msg
+    }
+    $phrase = 'wrap-up phrase'; $auto = ''
+    try {
+      $j = $r.Body | ConvertFrom-Json
+      if ($j.phrase) { $phrase = $j.phrase }
+      if ($j.auto)   { $auto = ' (auto-ends when it goes idle)' }
+    } catch {}
+    Write-Host "soft-ended '$en': sent `"$phrase`"$auto"
+  } elseif ($args[0] -eq 'archive') {
+    # Archive: end the session for good AND keep the way back into it — the
+    # title, the cwd, the last thing said, a COPY of the transcript, and the
+    # exact `claude --resume <uuid>`. Graceful by default like `end`; --now for a
+    # session with nothing left to wrap up. Bare `huginn archive` is the list.
+    #
+    # CALLED on the host, not just rendered there. The daemon refuses an archive
+    # in prose ("answer the waiting question first, then archive the session")
+    # and that sentence is the most useful thing this verb ever says, while
+    # _Huginn-Appd uses curl -sf and throws a 4xx body away.
+    if ($args.Count -lt 2) { ssh -T $H huginn-archive; return }
+    if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
+    $an = _Huginn-CanonName $args[1]
+    # Single-quote marshalled like the headroom/llm branches: what follows the
+    # host name is parsed by a shell on the far side, so an argument typed here
+    # is remote shell input.
+    $arArgs = @($an)
+    if ($args.Count -gt 2) { $arArgs += $args[2..($args.Count - 1)] }
+    $arStr = ($arArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
+    ssh -T $H "huginn-archive $arStr"
+  } elseif ($args[0] -eq 'revive' -or $args[0] -eq 'unarchive') {
+    # Takes the archive id OR the name it had; the name is resolved host-side,
+    # because resolving it here would mean parsing the list in two languages.
+    if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn revive <id|name>" }
+    # Wider than _Huginn-ValidName deliberately: an archive id is a uuid, and
+    # uuids have dashes. Still a strict allow-list — this reaches a remote shell.
+    if ($args[1] -notmatch '^[A-Za-z0-9_.-]{1,64}$') { _Huginn-Fail "huginn: '$($args[1])' is not an archive id or a session name" }
+    $rv = "'" + ($args[1] -replace "'", "'\''") + "'"
+    ssh -T $H "huginn-archive revive $rv"
+  } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
+    if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn $($args[0]) ""your prompt""" }
+    $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
+    # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
+    # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
+    # The DISALLOWED deny-list is the real fence - --allowedTools only auto-approves,
+    # so without it a -p query could still be granted Bash.
+    # The flag is assembled HERE and interpolated into the remote script, so its
+    # quoting is bash SYNTAX on the host. Assembling it in a remote variable and
+    # expanding that unquoted word-splits it into `'Bash` `Edit` `Write`
+    # `NotebookEdit'` - literal quotes, no valid tool name, nothing actually denied.
+    $tools = if ($args[0] -eq '-y') { "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace" } else { "Skill mcp__mempalace WebFetch WebSearch" }
+    $dflag = if ($args[0] -eq '-y') { '' } else { "--disallowedTools 'Bash Edit Write NotebookEdit'" }
+    # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
+    #
+    # The remote script is base64'd rather than passed as a quoted argument.
+    # Windows PowerShell 5.1 mangles embedded double quotes when marshalling
+    # arguments to a native executable, which silently corrupted P="$(cat ...)"
+    # into an unquoted assignment: the persona word-split, `[ -n $P ]` errored
+    # with "too many arguments", the else branch ran, and `huginn -y` degraded to
+    # a bare `claude -p` with NO persona and NO --allowedTools. Base64 puts only
+    # [A-Za-z0-9+/=] on the command line, so 5.1 and 7.x behave identically.
+    $remoteScript = @"
+cd "`${HUGINN_WORKDIR:-`$HOME}" 2>/dev/null || cd "`$HOME"
+P="`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)"
+if [ -n "`$P" ]; then
+  echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools' $dflag
+else
+  echo '$esc' | claude -p
+fi
+"@
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($remoteScript -replace "`r`n", "`n")))
+    ssh -T $H "echo $b64 | base64 -d | bash -s"
+  } else {
+    if (-not (_Huginn-ValidName $args[0])) { _Huginn-BadName ([string]$args[0]) 'session name' "Did you mean a subcommand? Try 'huginn help'." }
+    _Huginn-Attach -H $H -Session $args[0]
+  }
+}
+Set-Alias rclaude huginn
+Set-Alias rcc huginn
+
+# Live session names from the host (tmux ls), cached in-memory for a few seconds so
+# repeated Tab doesn't ssh every keystroke. BatchMode stops a missing key from hanging
+# the prompt; ConnectTimeout bounds a slow link.
+$script:HUGINN_SESS_CACHE = @()
+$script:HUGINN_SESS_TS    = [datetime]::MinValue
+function _Huginn-Sessions {
+  $H = if ($env:HUGINN_HOST) { $env:HUGINN_HOST } else { 'huginn' }
+  if (((Get-Date) - $script:HUGINN_SESS_TS).TotalSeconds -ge 5) {
+    $script:HUGINN_SESS_CACHE = @(ssh -T -o BatchMode=yes -o ConnectTimeout=2 $H "tmux ls -F '#S' 2>/dev/null" 2>$null)
+    $script:HUGINN_SESS_TS    = Get-Date
+  }
+  return $script:HUGINN_SESS_CACHE
+}
+Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
+  param($word, $ast, $pos)
+  # ⚠ EVERY VERB THAT TAKES SUB-VERBS HAS TO BE BELOW, and two were missing
+  # outright: `huginn projects <TAB>` completed to NOTHING in both clients - for
+  # the one verb whose whole grammar is arguments - and this completer had no
+  # `device` branch at all while the bash one did, so the PowerShell client
+  # could not complete the verb it shares its own name with. `local` was also a
+  # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
+  # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
+  # neither.
+  $cmds = 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
+  # tokens already typed after the command name, excluding the partial word being completed
+  $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
+  if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
+  $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
+  if ($typed.Count -eq 0) {
+    $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
+  } elseif ($prev -in 'kill', 'end', 'archive', 'solo', 'attach', 'rename', 'mv') {
+    $candidates = @(_Huginn-Sessions)                  # these take an existing session name
+  } elseif ($prev -in 'usage', 'cost', 'ccusage') {
+    $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
+  } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
+    $candidates = 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
+  } elseif ($prev -eq 'desktop') {
+    $candidates = 'windows', 'linux', 'arch', 'portable', 'install', 'uninstall', 'both'
+  } elseif ($prev -eq 'local') {
+    $candidates = 'status', 'on', 'plan', 'persist', 'off', 'unit', 'update', 'doctor', '--help'
+  } elseif ($prev -eq 'device') {
+    $candidates = 'status', 'on', 'off', 'unit', 'update', 'serve', '--help'
+  } elseif ($prev -in 'projects', 'project') {
+    $candidates = 'list', 'show', 'new', 'spawn', 'msg', 'end', '--json', '--help'
+  } elseif ($prev -eq 'headroom') {
+    $candidates = '--json', '--help'
+  } elseif ($prev -eq '--scope') {
+    $candidates = 'look', 'work', 'own'
+  } elseif ($prev -eq '--kind') {
+    $candidates = 'software', 'infra', 'hardware', 'docs', 'research', 'other'
+  } elseif ($prev -eq 'uninstall') {
+    $candidates = '--all', '--yes'
+  } else {
+    $candidates = @()
+  }
+  $candidates | Where-Object { $_ -like "$word*" } |
+    ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+}

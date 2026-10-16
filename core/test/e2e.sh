@@ -146,5 +146,23 @@ done
 python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));d=c['device'];assert not d.get('id') and not d.get('unenrolOwed') and not d['enabled'],d" \
   && ok "core.json: off, no id, no debt" || bad "core.json after off"
 
+# huginn uninstall: the whole stack, top down. Enrol again so there is a row
+# for it to retire while the core and its token still exist.
+"$T/huginn" device on --scope look >/dev/null
+ID2=""
+for _ in $(seq 100); do
+  ID2=$(python3 -c "import json;print(json.load(open('$XDG_CONFIG_HOME/huginn/core.json'))['device'].get('id') or '')" 2>/dev/null)
+  [ -n "$ID2" ] && break; sleep 0.1
+done
+[ -n "$ID2" ] && ok "re-enrolled for the uninstall check" || bad "no device id after device on"
+kill "$SUP" 2>/dev/null; SUP=   # the loop would start a removed binary; the core it started keeps running
+mkdir -p "$T/stub"; printf '#!/bin/sh\nexit 0\n' > "$T/stub/systemctl"; printf '#!/bin/sh\nexit 1\n' > "$T/stub/pkill"; chmod +x "$T/stub/"*
+PATH="$T/stub:$PATH" "$STABLE" uninstall --yes > "$T/un.log" 2>&1; UNRC=$?
+code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK" "$A/v1/devices/$ID2")
+[ "$code" = 404 ] && ok "huginn uninstall retired the device row on appd first" || { bad "row $ID2 still on appd after uninstall ($code)"; cat "$T/un.log"; }
+[ ! -e "$HOME/.local/share/huginn" ] && [ ! -e "$STABLE" ] && [ ! -e "$XDG_CONFIG_HOME/huginn" ] && [ ! -e "$HOME/.huginn" ] \
+  && ok "huginn uninstall removed the core, its config and the CLI" || { bad "files left after uninstall"; cat "$T/un.log"; }
+[ "$UNRC" = 0 ] && ok "huginn uninstall left nothing behind" || { bad "uninstall exit $UNRC"; cat "$T/un.log"; }
+
 echo; [ "$FAILS" = 0 ] && echo "ALL PASS" || { echo "$FAILS FAILED"; echo "--- core.log"; tail -30 "$T/core.log"; }
 exit "$FAILS"

@@ -1,5 +1,21 @@
 # Huginn Desktop changelog
 
+## 2.2.0
+
+Carries core 2.2.0. The desktop is now a layer on top of huginn core, which includes the CLI.
+
+### Changed
+- **The app needs huginn core running.** Until the core answers, the window shows one screen with
+  the action that fixes it: "Set up huginn core" when it has no boot service yet (Windows asks for
+  administrator approval once), or "Start huginn core" when it is set up but stopped. A core that
+  restarts for an update keeps the window for 20 seconds.
+- **Uninstalling the app removes only the app.** Its settings (which hold a copy of the appd
+  token), cache, shortcuts and bundled core copy go. The device row, the local-AI tier and the CLI
+  belong to huginn core and stay working. They used to be removed with the app, and the device
+  row they retired was the core's own. To remove everything, run `huginn uninstall`.
+- The app no longer keeps the CLI files in `~/.huginn` current itself (that came from the
+  repository's newest commit rather than a release). The core lays down the CLI of its own version.
+
 ## 2.1.2
 
 Carries core 2.1.2.

@@ -2454,34 +2454,29 @@ HOME="$UD2" bash -c 'source "$HOME/.huginn/huginn.sh"; huginn uninstall --all --
   || bad "--all kept a key that is provably huginn's"
 rm -rf "$UD" "$UD2"
 
-# The OTHER uninstaller for the same directory. `huginn uninstall` takes
-# ~/.huginn whole because install.sh made it; the desktop's NSIS uninstaller
-# SHARES that directory with a separately-installed base client, so it names its
-# files one by one — and a hand-kept list drifts. huginn-llm-shim joined
-# CliSync.candidates() in desktop 0.13.0 and the list, written in 0.14.0, went
-# out without it: the app kept a file current and the uninstaller walked past it.
-# So the list is asserted against its source, not read for plausibility.
+# The desktop is a layer on top of huginn core, which includes the CLI (owner
+# rule 2026-10-15). So the desktop's uninstallers remove the DESKTOP and nothing
+# the core owns: not the CLI in ~/.huginn, not the device row (the core adopted
+# the app's device id), not the local-AI tier. They once did all three, and
+# uninstalling the app retired the core's own device.
 NSI=mobile/app-desktop/packaging/huginn-desktop-kt.nsi
-CLISYNC=mobile/app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/CliSync.kt
-if [ -f "$NSI" ] && [ -f "$CLISYNC" ]; then
-  # Only the satellites: the base client (huginn.sh / huginn.ps1) is
-  # install.sh's and is deliberately NOT in the uninstaller's list.
-  NSI_MISS=
-  for f in $(grep -oE '^        add\("huginn-[a-z-]+"\)' "$CLISYNC" | sed 's/.*"\(.*\)".*/\1/'); do
-    for s in "" .bak .tmp.js .appsync.tmp.js; do
-      grep -qF "Delete \"\$PROFILE\\.huginn\\$f$s\"" "$NSI" || NSI_MISS="$NSI_MISS $f$s"
-    done
+REL=mobile/scripts/release-desktop.sh
+if [ -f "$NSI" ] && [ -f "$REL" ]; then
+  UNSEC=$(awk '/^Section "Uninstall"/{on=1} on{print} /^SectionEnd/{if(on)exit}' "$NSI" | tr -d '\r' | grep -v '^[[:space:]]*;')
+  HYG=$(awk '/BEGIN huginn-uninstall-hygiene/{on=1} on{print} /END huginn-uninstall-hygiene/{exit}' "$REL" | grep -v '^[[:space:]]*#')
+  BAD=
+  for pat in '.huginn' 'v1/devices' 'huginn-local' 'UnLocalService' 'systemd/user'; do
+    printf '%s' "$UNSEC" | grep -qF -- "$pat" && BAD="$BAD nsi:$pat"
+    printf '%s' "$HYG" | grep -qF -- "$pat" && BAD="$BAD deb:$pat"
   done
-  [ -z "$NSI_MISS" ] \
-    && ok "the desktop uninstaller names every CliSync satellite in ~/.huginn" \
-    || bad "the desktop uninstaller would leave behind:$NSI_MISS"
-  # The other half of the rule, and the reason the list exists at all: a
-  # wildcard or an RMDir /r here would take a base client this never installed.
-  grep -q 'RMDir "\$PROFILE\\.huginn"' "$NSI" \
-    && ok "and takes ~/.huginn itself only when it is empty" \
-    || bad "the desktop uninstaller no longer removes ~/.huginn with a plain RMDir"
+  [ -z "$BAD" ] \
+    && ok "the desktop uninstallers leave the core, the CLI, the device and the local tier alone" \
+    || bad "a desktop uninstaller touches what huginn core owns:$BAD"
+  printf '%s' "$UNSEC" | grep -qF 'RMDir /r "$R1"' && printf '%s' "$HYG" | grep -qF 'rm -rf "$h/.config/huginn-desktop-kt"' \
+    && ok "and both still remove the app's settings (the plaintext token)" \
+    || bad "a desktop uninstaller no longer removes the app's settings"
 else
-  skip "desktop uninstaller file list (no $NSI in this tree)"
+  skip "desktop uninstaller scope (no $NSI in this tree)"
 fi
 
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"

@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.1.3
+# Version: 2.2.0
 
-$script:HUGINN_VERSION = '2.1.3'
+$script:HUGINN_VERSION = '2.2.0'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -602,6 +602,12 @@ function _Huginn-Uninstall {
     elseif ($a -eq '--yes') { $yes = $true }
     else { _Huginn-Fail "usage: huginn uninstall [--all] [--yes]" }
   }
+  # With a core installed, the CORE owns the uninstall: the whole stack, top
+  # down - the desktop app, the local tier, the device, the core, this CLI
+  # (owner rule 2026-10-15: the core includes the CLI; the desktop sits on it).
+  # Everything below remains for a machine with no core.
+  $core = _Huginn-CoreBin
+  if ($core) { & $core uninstall @Rest; return }
   $hdir = Join-Path $HOME '.huginn'
   # Both managers derive these from the same variables, so there is nothing to
   # pass down - and nothing is written into $env: here, which would outlive the
@@ -884,10 +890,10 @@ function _Huginn-HelpBody {
                               `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }):
                               the box you point at must not become a source
                               of code this shell runs
-  huginn uninstall            unenrol this machine, then remove the client,
-                              the tokens, the local-AI tier and the profile
-                              line [--all also takes the SSH stanza + huginn's
-                              own key]
+  huginn uninstall            remove the whole stack, top down: the desktop
+                              app, the local-AI tier, this machine's device
+                              row, huginn core and this CLI [--all also takes
+                              the SSH stanza + huginn's own key]
   huginn version              show client version
   huginn help | ? | /help     this help
 

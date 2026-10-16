@@ -172,6 +172,18 @@ fun Shell(store: AppStore) {
         return
     }
 
+    // ⚠ NO CORE, NO APP (owner rule 2026-10-15). The desktop is a layer on top
+    // of huginn core, which includes the CLI; while the core does not answer,
+    // the window is the one screen that fixes that. First run stays above this
+    // (pairing is the app's), and an update's core restart keeps the window for
+    // CoreDevice.GATE_GRACE_MS.
+    LaunchedEffect(Unit) { store.coreDevice.start() }
+    val coreGate by store.coreDevice.gate.collectAsState()
+    if (coreGate != com.silencelen.huginn.desktop.core.CoreGate.READY) {
+        WithHuginnMenus { CoreGateView(store, coreGate) }
+        return
+    }
+
     val view by store.view.collectAsState()
     val chats by store.chats.collectAsState()
     val sessions by store.sessions.collectAsState()

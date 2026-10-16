@@ -475,6 +475,18 @@ shell client wherever the client is not a loaded function (fish, which Omarchy e
 `.bashrc` sources the client; cmd.exe; no-profile PowerShell). Fixed in 2.1.3: the binary hands
 every verb it does not own to `~/.huginn/huginn.{sh,ps1}` (`HUGINN_VIA_CORE` guards the loop).
 
+**The core is the product (owner rule 2026-10-15, shipped in 2.2.0).** "The CLI should be the core,
+with the desktop as an option on top", and "the desktop can't function without the core (which
+includes the CLI)". So: (1) `internal/clientkit` embeds `client/huginn.{sh,ps1}` plus the local-AI
+helpers, and `core self-install` lays them down with the shell startup lines; `core/build.sh`
+refuses when the copy and `client/` drift or the version disagrees. (2) `huginn uninstall` is the
+core's, top down: desktop → local tier → device row → core → CLI (→ SSH with `--all`); the shell
+clients delegate whenever a core exists. (3) The desktop shows only a "Set up / Start huginn core"
+screen while the core does not answer (`CoreGate`, 20 s grace for update restarts). (4) The
+desktop's uninstallers (NSIS, deb purge) remove only the desktop; `scripts/test-client.sh` asserts
+they never touch `~/.huginn`, the device row, the local tier or user units. `CliSync` (the app
+pulling CLI files from `main`) is retired.
+
 **Security review of the 2.1.0 range (2026-10-15): no HIGH or CRITICAL.** Fixed before the cut:
 Linux notification bodies are escaped (markup injection from model output); the core claims
 notifications only for a tray that can deliver (`deliver=0|1` on `/core/events`); a missing
