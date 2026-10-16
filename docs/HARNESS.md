@@ -123,6 +123,18 @@ pane-only path.
 
 ## Verification log
 
+- **2026-10-16** — 2.1.300 **hosts a session in a background PTY** after a compaction continues it in a
+  fork (`claude` in the pane → transient `claude daemon run` → `claude bg-pty-host` → `claude.exe
+  --session-id <new> --fork-session --resume <old>.jsonl`). The bg-pty-host leaves **TMUX and
+  TMUX_PANE out** of the environment it hands on, so `huginn-claude-title` exited on its first check
+  for every hook: appd kept the session's pre-fork id and state, and the desktop's Conversation tab
+  froze on the old transcript while Screen kept streaming (huginnclient). Fixed in the hook: it
+  recovers TMUX/TMUX_PANE from the nearest ancestor, accepted only when that pane's own shell is one
+  of the hook's ancestors; and the nested-claude guard now matches the native `claude.exe` (it
+  matched only `claude …` and `cli.js`, so a nested `claude -p` could have written over the parent's
+  state again). New fragility point: **the hook depends on the pane's process tree containing the
+  claude that fires it.** (`scripts/test-claude-title.sh` cases 5–7, in an isolated tmux server.)
+
 - **2026-10-10** — 2.1.280 → **2.1.296** (auto-update was dead in tmux; updated via `systemd-run … claude update`).
   Live captures on an isolated tmux socket with `--setting-sources ''` + a logging settings file
   (fixtures `*-v2-80.txt`, `switch-model-confirm-80.txt`, `trust-dialog-unnumbered-80.txt`).
