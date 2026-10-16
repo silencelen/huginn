@@ -78,6 +78,24 @@ func TestInstallAndRemoveUnix(t *testing.T) {
 	if len(removed) != 3 || len(left) != 1 {
 		t.Fatalf("removed %q left %q", removed, left)
 	}
+
+	// The installer's line AND a hand-written one in the same file: the
+	// first goes, the second is still reported.
+	Install(e)
+	rc := filepath.Join(home, ".bashrc")
+	b, _ := os.ReadFile(rc)
+	os.WriteFile(rc, append(b, []byte("[ -f ~/.huginn/huginn.sh ] && . ~/.huginn/huginn.sh  # mine\n")...), 0o644)
+	removed, left = Remove(e)
+	if b, _ := os.ReadFile(rc); strings.Contains(string(b), RCLine+"\n") || !strings.Contains(string(b), "# mine") {
+		t.Fatalf(".bashrc after remove = %q", b)
+	}
+	found := false
+	for _, l := range left {
+		found = found || strings.Contains(l, "hand-edited huginn line in "+rc)
+	}
+	if !found {
+		t.Fatalf("hand-written line beside the installer's not reported: removed %q left %q", removed, left)
+	}
 }
 
 func TestInstallWindowsProfiles(t *testing.T) {

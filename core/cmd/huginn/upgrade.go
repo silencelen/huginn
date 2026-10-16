@@ -18,7 +18,6 @@ import (
 	"github.com/silencelen/huginn/core/internal/ipc"
 	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/service"
-	"github.com/silencelen/huginn/core/internal/tray"
 	"github.com/silencelen/huginn/core/internal/version"
 )
 
@@ -322,33 +321,16 @@ func ensureTrayTask(bin string) {
 	os.Remove(filepath.Join(paths().State, "tray-task-2"))
 }
 
-// afterServiceInstall: `core install` wrote (or skipped) the autostart itself.
-func afterServiceInstall(bin string, autostart bool) {
-	if autostart {
-		markTray()
-	}
-	st, running := waitCore(15*time.Second, func(_ coreSnapshot, up bool) bool { return up })
-	if running {
-		launchTray(bin, st)
-	}
-}
-
 // launchTray starts the tray now, in this login, when none is attached — so an
 // install or an update shows the icon without waiting for the next sign-in.
 // Never from an elevated process (Windows `core install` runs elevated): that
 // tray would run as administrator in the person's desktop.
 func launchTray(bin string, st coreSnapshot) {
-	if st.Tray || runtime.GOOS == "android" || !proc.InteractiveSession() || proc.Elevated() {
-		return
+	started, why := startTrayNow(bin, st)
+	switch {
+	case started:
+		fmt.Println("  started the tray")
+	case why != "":
+		fmt.Println("  tray: " + why)
 	}
-	// A tray that is reconnecting to the restarted core (and handing itself to
-	// the new binary) is not attached for a moment, but it holds the lock.
-	if tray.Held(filepath.Join(paths().Runtime, "tray.lock")) {
-		return
-	}
-	if err := proc.StartDetached(bin, "core", "tray"); err != nil {
-		fmt.Println("  could not start the tray now: " + err.Error() + " (it starts at your next sign-in)")
-		return
-	}
-	fmt.Println("  started the tray")
 }

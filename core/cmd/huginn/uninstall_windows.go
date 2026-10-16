@@ -26,16 +26,10 @@ const desktopUninstKey = `Software\Microsoft\Windows\CurrentVersion\Uninstall\hu
 func removeDesktop(t *tally, home string) {
 	k, err := registry.OpenKey(registry.CURRENT_USER, desktopUninstKey, registry.QUERY_VALUE)
 	if err != nil {
-		cfg := filepath.Join(home, ".config", "huginn-desktop-kt")
-		if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
-			cfg = filepath.Join(x, "huginn-desktop-kt")
-		}
-		if dirExists(cfg) {
+		if cfg := desktopSettingsDir(home); dirExists(cfg) {
 			os.RemoveAll(cfg)
 			t.gone(cfg + " (settings left by an earlier uninstall)")
-			return
 		}
-		fmt.Println("  no desktop app here")
 		return
 	}
 	us, _, err := k.GetStringValue("UninstallString")
@@ -47,7 +41,9 @@ func removeDesktop(t *tally, home string) {
 		return
 	}
 	// _?= runs the uninstaller in place and makes NSIS wait for it (without
-	// it, the uninstaller copies itself to %TEMP% and returns at once).
+	// it, the uninstaller copies itself to %TEMP% and returns at once). It
+	// asks a running app to quit first (the '!quit' request, 2.3.6).
+	t.spin("running Huginn Desktop's uninstaller")
 	if err := exec.Command(exe, "/S", "_?="+dir).Run(); err != nil {
 		t.stays("Huginn Desktop - its uninstaller failed (" + err.Error() + "); remove it from Settings > Apps")
 		return
@@ -56,6 +52,22 @@ func removeDesktop(t *tally, home string) {
 	os.RemoveAll(dir)
 	registry.DeleteKey(registry.CURRENT_USER, desktopUninstKey)
 	t.gone("Huginn Desktop (" + dir + ") and its settings")
+}
+
+func desktopSettingsDir(home string) string {
+	if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+		return filepath.Join(x, "huginn-desktop-kt")
+	}
+	return filepath.Join(home, ".config", "huginn-desktop-kt")
+}
+
+// desktopPresent: the app is registered, or its settings outlived it.
+func desktopPresent(home string) bool {
+	if k, err := registry.OpenKey(registry.CURRENT_USER, desktopUninstKey, registry.QUERY_VALUE); err == nil {
+		k.Close()
+		return true
+	}
+	return dirExists(desktopSettingsDir(home))
 }
 
 // removeService deletes the boot task. Deleting a task registered elevated
@@ -74,21 +86,24 @@ func removeService(t *tally) {
 			os.Remove(o.StartupLnk())
 			t.gone(o.StartupLnk())
 		}
-		fmt.Println("  no boot task")
 		return
 	}
-	if coreUninstall() == 0 {
-		t.gone(`the "` + service.TaskName + `" boot task and the tray's Startup shortcut`)
-		return
+	t.spin("deleting the boot task")
+	if rep, err := coreUninstallReport(); err == nil {
+		t.logf("%s", strings.TrimRight(rep.String(), "\n"))
+		if rep.OK() {
+			t.gone(`the "` + service.TaskName + `" boot task and the tray's Startup shortcut`)
+			return
+		}
 	}
-	fmt.Println("  deleting the boot task needs an administrator: approve the prompt")
+	t.spin("waiting for administrator approval, to delete the boot task")
 	ps := "$p = Start-Process -FilePath '" + strings.ReplaceAll(bin, "'", "''") + "' -ArgumentList 'core','uninstall' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 	if exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).Run() != nil || service.StatusWindows(o).Registered {
 		t.stays(`the "` + service.TaskName + `" boot task - run "huginn core uninstall" from an administrator terminal`)
 		return
 	}
 	os.Remove(o.StartupLnk())
-	t.gone(`the "` + service.TaskName + `" boot task and the tray's Startup shortcut`)
+	t.gone(`the "` + service.TaskName + `" boot task and the tray's Startup shortcut (as administrator)`)
 }
 
 func startService() {

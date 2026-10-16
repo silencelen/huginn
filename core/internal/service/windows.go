@@ -190,7 +190,7 @@ func TrayTaskXML(binary, user string) string {
 // the Startup shortcut still starts the tray, only later.
 func EnsureTrayTaskWindows(o WindowsOptions) (State, string) {
 	if o.NoTray {
-		return Skipped, "not requested"
+		return Skipped, "skipped (--no-tray)"
 	}
 	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
 		return Warning, err.Error()
@@ -431,7 +431,7 @@ func InstallWindows(o WindowsOptions) Report {
 // update from a core that predates the tray).
 func EnsureTrayWindows(o WindowsOptions) (State, string) {
 	if o.NoTray {
-		return Skipped, "not requested"
+		return Skipped, "skipped (--no-tray)"
 	}
 	lnk := o.StartupLnk()
 	res := o.Runner.Run("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",

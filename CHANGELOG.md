@@ -8,6 +8,59 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.4.0] - 2026-10-16
+
+### Changed
+- **Setting huginn up and taking it off read like an installer**, as `huginn update` does since
+  2.3.7: one aligned line per component with the brand's state marks, the wingbeat on a step
+  that is working, and detail only where something needs a look.
+  - `huginn uninstall` first shows what is on this machine and what goes, top down, and asks once.
+    Then it prints one line per component: desktop, local AI, device, core, CLI, ssh. Anything left
+    behind is a note under its line. The full path-by-path list goes to a log in the temp folder,
+    named at the end.
+  - `huginn core install` folds its service report into lines: binary, CLI, service, linger, tray
+    and paired.
+  - On Windows the elevated step of `core install` runs in a window of its own that closes when it
+    ends. It now hands its lines back, so they are drawn in your own terminal, and that window
+    stays hidden.
+  - The one-line installers (`get.sh`, `get.ps1`) and the clone installers draw one `huginn setup`
+    block: release, key, ssh, CLI and trust, then the core's lines, then the desktop question.
+  - `huginn setup ssh` draws the same lines.
+- **Windows installs with one line: `irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1 | iex`.**
+  - It asks for the host, or reads `$env:HUGINN_HOST` (and `$env:HUGINN_GUI` for the desktop
+    question).
+  - It runs in its own scope, so your session keeps none of the installer's variables, functions
+    or `$ErrorActionPreference = 'Stop'`.
+  - The `& ([scriptblock]::Create(...)) -HuginnHost` form still works. The Linux line no longer
+    needs the host either.
+- **Trust in the host is reported as it is.**
+  - A host that does not know this computer's key says so, with the exact `authorized_keys` line
+    to paste.
+  - An unreachable host gives ssh's reason.
+  - A host key that CHANGED is a stop, never something to paste past.
+  - A host key new to this computer is ssh's own question, with its fingerprint: the installers
+    never accept one on your behalf.
+- `huginn core install --tray` and `--no-tray`. The tray's "skipped" message named a `--tray` flag
+  that did not exist.
+
+### Fixed
+- **A first install on Windows never installed the core.** `get.ps1` called `huginn core install`
+  in a scope where the `huginn` function did not exist. It printed "did not finish: The term
+  'huginn' is not recognized", then carried on as if the core were there.
+- **Every `huginn` command queried the terminal.**
+  - On every command, the terminal went into raw mode for up to 5 s for a background-colour
+    request (OSC 11) and a cursor report. bubbletea's package init does this, and the console is
+    linked into every command.
+  - A terminal that does not answer stalled for 5 s and lost type-ahead, including the "uninstall"
+    typed at `huginn uninstall`'s prompt.
+  - The core now carries bubbletea 1.3.10 without that init (`core/third_party/bubbletea/HUGINN-PATCH.md`).
+    The console asks for the colour itself, just before it starts.
+- `huginn uninstall` exited 1 on every ordinary run: the `Host huginn` stanza it keeps by default
+  counted as "left behind". Things kept on purpose are now notes, not failures.
+- When a shell file held both the installer's line and a hand-edited huginn line, uninstall removed
+  the installer's line and kept the hand-edited one without saying so. It is now reported.
+- `huginn uninstall`'s plan named a boot service and a tray on machines that had neither.
+
 ## [2.3.7] - 2026-10-16
 
 ### Changed

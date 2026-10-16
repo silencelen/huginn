@@ -3,7 +3,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,16 +22,16 @@ func removeDesktop(t *tally, home string) {
 	conf := xdg("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	cache := xdg("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	// A running app keeps its files open and would put its settings back.
-	if pk, err := exec.LookPath("pkill"); err == nil {
+	if pk, err := exec.LookPath("pkill"); err == nil && desktopPresent(home) {
 		if exec.Command(pk, "-u", strconv.Itoa(os.Getuid()), "-f", "huginn-desktop-kt").Run() == nil {
-			fmt.Println("  quit the running app")
+			t.spin("closing the running app")
+			t.logf("quit the running app")
 			time.Sleep(2 * time.Second)
 		}
 	}
-	any := false
 	root := filepath.Join(data, "huginn-desktop")
 	if fileExists(filepath.Join(root, ".huginn-portable")) {
-		any = true
+		t.spin("removing the app")
 		if err := os.RemoveAll(root); err != nil {
 			t.stays(root + " - " + err.Error())
 		} else {
@@ -47,15 +46,13 @@ func removeDesktop(t *tally, home string) {
 			os.Remove(entry)
 		}
 	} else if dirExists(root) {
-		t.stays(root + " - no .huginn-portable marker, so it was not laid out by huginn and was not removed")
+		t.keep(tilde(home, root) + ": no .huginn-portable marker, so huginn did not lay it out")
 	}
 	if dirExists("/opt/huginn-desktop-kt") {
-		any = true
 		removePackagedDesktop(t)
 	}
 	for _, d := range []string{filepath.Join(conf, "huginn-desktop-kt"), filepath.Join(cache, "huginn-desktop-kt")} {
 		if dirExists(d) {
-			any = true
 			if err := os.RemoveAll(d); err != nil {
 				t.stays(d + " - " + err.Error())
 			} else {
@@ -67,9 +64,14 @@ func removeDesktop(t *tally, home string) {
 		os.Remove(a)
 		t.gone(a)
 	}
-	if !any {
-		fmt.Println("  no desktop app here")
-	}
+}
+
+// desktopPresent: any part of Huginn Desktop is on this machine.
+func desktopPresent(home string) bool {
+	data := xdg("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	conf := xdg("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	return dirExists(filepath.Join(data, "huginn-desktop")) || dirExists("/opt/huginn-desktop-kt") ||
+		dirExists(filepath.Join(conf, "huginn-desktop-kt")) || fileExists(filepath.Join(conf, "autostart", "huginn-desktop-kt.desktop"))
 }
 
 func xdg(env, def string) string {
@@ -97,12 +99,25 @@ func removePackagedDesktop(t *tally) {
 	}
 	cmdline := strings.Join(argv, " ")
 	if fi, err := os.Stdin.Stat(); os.Geteuid() != 0 && (err != nil || fi.Mode()&os.ModeCharDevice == 0) {
-		t.stays("the Huginn Desktop package - it is root's; run: " + cmdline)
+		t.stays("the Huginn Desktop package is root's to remove; run: " + cmdline)
 		return
 	}
-	fmt.Println("  removing the Huginn Desktop package: " + cmdline)
+	if os.Geteuid() != 0 {
+		// sudo asks first, with nothing turning over its prompt; the removal
+		// itself then runs under the spinner, its output in the log.
+		t.u.Stop()
+		t.u.Say("Huginn Desktop is a system package: sudo asks for your password to remove it.")
+		v := exec.Command("sudo", "-v")
+		v.Stdin, v.Stdout, v.Stderr = os.Stdin, os.Stderr, os.Stderr
+		if v.Run() != nil {
+			t.stays("the Huginn Desktop package - sudo was refused; run: " + cmdline)
+			return
+		}
+	}
+	t.spin("removing the Huginn Desktop package")
+	t.logf("$ %s", cmdline)
 	c := exec.Command(argv[0], argv[1:]...)
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Stdout, c.Stderr = t.log, t.log
 	if err := c.Run(); err != nil {
 		t.stays("the Huginn Desktop package - removal failed; run: " + cmdline)
 		return
@@ -124,11 +139,17 @@ func removeService(t *tally) {
 			os.Remove(o.TrayPath())
 			t.gone(o.TrayPath())
 		}
-		fmt.Println("  no boot service")
 		return
 	}
-	if coreUninstall() != 0 {
-		t.stays("the huginn-core user service - `huginn core uninstall` reported a failed step (above)")
+	t.spin("removing the boot service")
+	rep, err := coreUninstallReport()
+	if err != nil {
+		t.stays("the huginn-core user service - " + err.Error())
+		return
+	}
+	t.logf("%s", strings.TrimRight(rep.String(), "\n"))
+	if !rep.OK() {
+		t.stays("the huginn-core user service - stopped at " + strconv.Quote(rep.FailedStep()) + " (the log has each step); run: huginn core uninstall")
 		return
 	}
 	t.gone("the huginn-core boot service and the tray's login entry")
@@ -152,7 +173,7 @@ func undoLinger(t *tally) {
 		return
 	}
 	if out, err := exec.Command("loginctl", "show-user", user, "--property=Linger").Output(); err == nil && strings.Contains(string(out), "Linger=yes") {
-		t.stays("linger for " + user + " - it was on before huginn, so it stays (loginctl disable-linger " + user + " turns it off)")
+		t.keep("linger for " + user + ": it was on before huginn (loginctl disable-linger " + user + " turns it off)")
 	}
 }
 
