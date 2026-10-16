@@ -112,7 +112,7 @@ grep -q 'scp .*\${H}:' client/huginn.ps1 && bad "huginn.ps1 still scps from \$HU
 echo "[3/8] both clients expose the same verbs (parity by verb)"
 # huginn.sh writes cases as alternations (`list|ls)`, `status|st)`), so match the
 # verb as a case ALTERNATIVE, not as a bare `verb)`.
-for v in end kill archive revive solo rename list status rounds headroom devices device local projects desktop usage update uninstall version help attach; do
+for v in end kill archive revive solo rename list status rounds headroom devices device local projects desktop usage update uninstall version help attach console; do
   # Match the DISPATCH, not a mention: huginn.ps1 lists every verb in its
   # completion array too, so grepping "'$v'" passes even with the branch deleted
   # (verified by removing the `end` branch: still 2 matches, still green).
@@ -124,6 +124,51 @@ for v in end kill archive revive solo rename list status rounds headroom devices
   b=$(grep -cE "\\\$args\[0\] -(eq|in) [^;]*'$v'" client/huginn.ps1)
   [ "$a" -gt 0 ] && [ "$b" -gt 0 ] && ok "verb $v" || bad "verb $v missing (sh=$a ps1=$b)"
 done
+
+echo "[3c/8] plain huginn: the console in a terminal, attach to main otherwise"
+# A stub core that records how it was called (and answers --probe with
+# $PROBE_RC), a stub ssh, and a pty from script(1) for the "in a terminal" case.
+RT=$(mktemp -d); mkdir -p "$RT/home/.local/bin" "$RT/bin"
+cat > "$RT/home/.local/bin/huginn" <<'STUB'
+#!/bin/sh
+echo "core:$*" >> "$HOME/calls"
+[ "$1 $2" = "console --probe" ] && exit "${PROBE_RC:-0}"
+exit 0
+STUB
+printf '#!/bin/sh\necho "ssh:$*" >> "$HOME/calls"\nexit 0\n' > "$RT/bin/ssh"
+chmod +x "$RT/home/.local/bin/huginn" "$RT/bin/ssh"
+cat > "$RT/run.sh" <<RUN
+export HOME="$RT/home" PATH="$RT/bin:\$PATH" TERM=xterm
+. "$PWD/client/huginn.sh" >/dev/null 2>&1
+huginn
+RUN
+route() {   # $1 = tty|pipe, then env assignments
+  local how="$1"; shift
+  : > "$RT/home/calls"
+  if [ "$how" = tty ]; then
+    env "$@" script -qec "bash $RT/run.sh" /dev/null >/dev/null 2>&1
+  else
+    env "$@" bash "$RT/run.sh" >/dev/null 2>&1 </dev/null
+  fi
+  cat "$RT/home/calls"
+}
+if command -v script >/dev/null 2>&1; then
+  C=$(route tty)
+  grep -qx 'core:console' <<<"$C" && ! grep -q '^ssh:' <<<"$C" \
+    && ok "sh: plain huginn in a terminal opens the console" || bad "sh: plain huginn in a terminal did: $C"
+  C=$(route tty HUGINN_CONSOLE=0)
+  grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+    && ok "sh: HUGINN_CONSOLE=0 keeps attach-to-main" || bad "sh: HUGINN_CONSOLE=0 did: $C"
+  C=$(route tty PROBE_RC=2)
+  grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+    && ok "sh: a core without the console falls back to main" || bad "sh: old core did: $C"
+else
+  skip "plain-huginn terminal routing (no script(1))"
+fi
+C=$(route pipe)
+grep -q '^ssh:.*cc main' <<<"$C" && ! grep -qx 'core:console' <<<"$C" \
+  && ok "sh: plain huginn piped or scripted attaches to main, as before" || bad "sh: piped plain huginn did: $C"
+rm -rf "$RT"
 
 echo "[4/8] what the PowerShell client actually SENDS"
 if ! command -v pwsh >/dev/null 2>&1; then

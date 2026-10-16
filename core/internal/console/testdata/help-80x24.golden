@@ -1,0 +1,24 @@
+ (!> huginn  >  help                            host huginn · core 2.3.0 · live
+                                                                               
+  keys                                                                         
+   up/dn j k   move                                                            
+   enter       open, or attach to a session                                    
+   esc         back                                                            
+   1-9         jump to a section                                               
+   r           refresh now                                                     
+   q           quit                                                            
+                                                                               
+  states                                                                       
+   * working                                                                   
+   ! needs you                                                                 
+   o waiting                                                                   
+   - shell                                                                     
+   + ok                                                                        
+   x error                                                                     
+                                                                               
+  Each screen names its one-shot command at the bottom; huginn help lists all. 
+  Plain huginn opens this console. HUGINN_CONSOLE=0 attaches to main instead.  
+  In a session, Ctrl-b d detaches and brings you back here.                    
+                                                                               
+ esc back  ? help  q quit                                                      
+ same as: huginn help                                                          

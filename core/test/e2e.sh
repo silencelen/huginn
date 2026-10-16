@@ -53,6 +53,26 @@ HUGINN_APPD_TOKEN="$TOK" "$T/huginn" core pair --url "$A" && ok "paired" || bad 
 [ "$(stat -c %a "$XDG_CONFIG_HOME/huginn/secrets/appd-token" 2>/dev/null)" = 600 ] && ok "token file 0600" || bad "token file mode"
 grep -q "$TOK" "$XDG_CONFIG_HOME/huginn/core.json" && bad "token leaked into core.json" || ok "core.json holds no token"
 
+# /appd/* — the front ends' way to appd, with the core's token (D12).
+SOCK="$XDG_RUNTIME_DIR/huginn/core.sock"
+px() { curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' "$@"; }
+for _ in $(seq 50); do px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && break; sleep 0.1; done
+px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && ok "/appd/v1/status answers through the core" || bad "/appd proxy GET"
+[ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/core/status)" = 404 ] && ok "/appd forwards /v1/ only" || bad "/appd forwarded a non-/v1 path"
+[ "$(px -o /dev/null -w '%{http_code}' 'http://huginn-core/appd//evil/v1/x')" != 200 ] && ok "/appd refuses an origin-changing path" || bad "/appd //evil"
+[ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/v1/chats/00000000-0000-0000-0000-000000000000)" = 404 ] && ok "/appd passes appd's own refusal through" || bad "/appd error passthrough"
+timeout 3 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://huginn-core/appd/v1/watch?stream=1' > "$T/watch.out" 2>/dev/null
+grep -q '^event:\|^data:' "$T/watch.out" && ok "/appd streams the watch feed" || { bad "/appd stream"; head -c 300 "$T/watch.out"; }
+
+# huginn console against the real core and appd, in a pty (script(1)): it
+# draws Home from live data and quits on q.
+if command -v script >/dev/null 2>&1; then
+  CON=$( (sleep 3; printf 'q') | timeout 15 script -qec "stty cols 100 rows 30; HUGINN_ASCII=1 NO_COLOR=1 $T/huginn console" /dev/null 2>&1 \
+        | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' )
+  grep -q 'needs you' <<<"$CON" && grep -q '1 sessions' <<<"$CON" && grep -q 'live' <<<"$CON" \
+    && ok "huginn console draws Home from the real core and appd" || { bad "console home"; printf '%s\n' "$CON" | tail -c 1500; }
+fi
+
 "$T/huginn" device on --scope own --name e2e-box >/dev/null || bad "device on"
 ID=""
 for _ in $(seq 100); do

@@ -457,6 +457,7 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 }
 
 func (d *Daemon) routes(mux *http.ServeMux) {
+	mux.HandleFunc("/appd/", d.proxy)
 	mux.HandleFunc("GET /core/events", func(w http.ResponseWriter, r *http.Request) {
 		// A tray role identifies itself, so the core knows somebody can SEE a
 		// notification before it claims them from appd (D14).
