@@ -98,21 +98,23 @@ claude        # log in once with your Max/Pro subscription (or set ANTHROPIC_API
 
 ```bash
 # Linux · macOS · Termux
-curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh -s -- <host-ip-or-name>
+curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh
 ```
 ```powershell
-# Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1))) -HuginnHost <host-ip-or-name>
+# Windows (PowerShell 5.1 or 7)
+irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1 | iex
 ```
 
-It installs the `huginn` command from the newest release, adds a `Host huginn` SSH alias, prints this
-machine's key for you to authorize on the host, installs `huginn core` (it carries the CLI and runs
-at boot; not on Termux or macOS), asks one question, and ends with what it installed:
+It asks for the host, installs the `huginn` command from the newest release, adds a `Host huginn`
+SSH alias, shows the one line to paste on the host so it trusts this machine's key, installs
+`huginn core` (it carries the CLI, runs at boot and pairs with the host; not on Termux or macOS),
+asks one question, and ends with what it set up:
 
 - **Install the desktop app too?** — Windows and Linux.
 
-Answer up front for unattended installs: `HUGINN_GUI=n` (shell) or `-Gui n` (PowerShell). From a clone, `client/install.sh` / `client/install.ps1`
-still install the command alone.
+Answer up front for unattended installs: name the host (`| sh -s -- <host>`, or `$env:HUGINN_HOST`
+in PowerShell) and the question (`HUGINN_GUI=y|n`, `$env:HUGINN_GUI`). From a clone,
+`client/install.sh` / `client/install.ps1` still install the command alone.
 
 **4. Go:**
 ```

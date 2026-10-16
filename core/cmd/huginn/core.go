@@ -26,6 +26,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/service"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/tray"
+	"github.com/silencelen/huginn/core/internal/ui"
 	"github.com/silencelen/huginn/core/internal/version"
 	"golang.org/x/term"
 )
@@ -195,29 +196,52 @@ func lingerMarker() string { return filepath.Join(paths().State, "linger-enabled
 func coreInstall(args []string) int {
 	fs := flag.NewFlagSet("core install", flag.ContinueOnError)
 	logon := fs.String("logon", "s4u", "Windows only: s4u (no stored password) or password")
+	trayOn := fs.Bool("tray", false, "Linux: start the tray at login even when this shell has no graphical session (an ssh shell)")
+	noTray := fs.Bool("no-tray", false, "do not start the tray at login")
+	report := fs.String("report", "", "write the outcome as records to this file instead of the terminal (the PowerShell client's elevated step)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	u := ui.New()
+	if *report != "" {
+		f, err := os.OpenFile(*report, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "huginn core install: "+err.Error())
+			return 1
+		}
+		defer f.Close()
+		u = ui.Records(f)
+	}
+	// compact: part of a bigger block (the shell client's `huginn core
+	// install` drew the title and the download), so no title and no timing.
+	compact := os.Getenv("HUGINN_UI_COMPACT") != "" || *report != ""
+	if !compact {
+		u.Head("huginn core install")
 	}
 	// Install the binary first, so the service points at the stable per-user
 	// path rather than wherever this copy happens to be running from (a
 	// download folder, an app bundle).
-	bin, ok := selfInstall()
+	bin, ok := installBinaryUI(u, compact)
 	if !ok {
 		return 1
 	}
 	if sys := packagedCore(bin); sys != "" {
-		fmt.Fprintf(os.Stderr, "huginn core install: %s (a package) already provides huginn on this machine — one core per machine. Use that one (`%s core install`) or remove the package first.\n", sys, sys)
+		u.Line(ui.Fail, "service", sys+" (a package) already provides huginn on this machine - one core per machine")
+		u.Note("Use that one (" + sys + " core install), or remove the package first.")
 		return 1
 	}
-	fmt.Println("Installing huginn core to start at boot, as " + currentUser() + " — " + bin)
+	user := currentUser()
+	rc := 1
 	switch runtime.GOOS {
 	case "linux":
 		o, err := service.LinuxDefaults(bin)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			u.Line(ui.Fail, "service", err.Error())
 			return 1
 		}
-		retireNodeRunner()
+		o.ForceTray, o.NoTray = *trayOn, *noTray
+		retireNodeRunner(u)
+		u.Spin("service", "installing "+service.UnitName+" and starting it")
 		before := service.ParseLinger(o.Runner.Run("loginctl", "show-user", o.User, "--property=Linger"))
 		rep, linger := service.InstallLinux(o)
 		if before == service.LingerOff && linger == service.LingerOn {
@@ -225,31 +249,46 @@ func coreInstall(args []string) int {
 			os.MkdirAll(paths().State, 0o700)
 			os.WriteFile(lingerMarker(), []byte(o.User+"\n"), 0o600)
 		}
-		fmt.Print(rep.String())
-		if linger != service.LingerOn {
-			fmt.Println("Note: without linger the core starts at login, not at boot.")
+		trayC := renderServiceReport(u, rep, func(c compResult) string {
+			switch c.comp {
+			case "service":
+				return service.UnitName + " enabled and running, as " + user
+			case "linger":
+				return lingerText(c)
+			}
+			return ""
+		})
+		if rep.OK() {
+			afterServiceInstallUI(u, bin, fileExists(o.TrayPath()), trayC)
+		} else if trayC != nil {
+			settleComp(u, *trayC, "")
 		}
-		afterServiceInstall(bin, fileExists(o.TrayPath()))
-		return exitFor(rep)
+		rc = exitFor(rep)
 	case "windows":
 		o, err := service.WindowsDefaults(bin)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			u.Line(ui.Fail, "service", err.Error())
 			return 1
 		}
+		o.NoTray = *noTray
+		how := "S4U, so no password is stored"
 		switch *logon {
 		case "s4u":
 			o.Logon = service.LogonS4U
 		case "password":
 			o.Logon = service.LogonPassword
+			how = "with your password, kept by Task Scheduler"
 			// Not echoed (security scan F3): a password on screen is in scrollback
 			// and in every screen share. Piped stdin (automation) still works.
-			fmt.Printf("Windows password for %s (used once, kept by Task Scheduler): ", o.User)
+			// To this window's own stderr even with --report: the person types
+			// it here.
+			u.Stop()
+			fmt.Fprintf(os.Stderr, "Windows password for %s (used once, kept by Task Scheduler): ", o.User)
 			if term.IsTerminal(int(os.Stdin.Fd())) {
 				b, err := term.ReadPassword(int(os.Stdin.Fd()))
-				fmt.Println()
+				fmt.Fprintln(os.Stderr)
 				if err != nil {
-					fmt.Fprintln(os.Stderr, "huginn core install: reading the password: "+err.Error())
+					u.Line(ui.Fail, "service", "reading the password: "+err.Error())
 					return 1
 				}
 				o.Password = string(b)
@@ -261,19 +300,34 @@ func coreInstall(args []string) int {
 			fmt.Fprintln(os.Stderr, "--logon must be s4u or password")
 			return 2
 		}
+		u.Spin("service", `registering the "`+service.TaskName+`" task and starting it`)
 		rep := service.InstallWindows(o)
-		fmt.Print(rep.String())
-		afterServiceInstall(bin, fileExists(o.StartupLnk()))
-		return exitFor(rep)
+		trayC := renderServiceReport(u, rep, func(c compResult) string {
+			if c.comp == "service" {
+				return `"` + service.TaskName + `" task: starts at boot as ` + user + ` (` + how + `)`
+			}
+			return ""
+		})
+		if rep.OK() {
+			afterServiceInstallUI(u, bin, fileExists(o.StartupLnk()), trayC)
+		} else if trayC != nil {
+			settleComp(u, *trayC, "")
+		}
+		rc = exitFor(rep)
+	default:
+		u.Line(ui.Fail, "service", "huginn core install is not supported on "+runtime.GOOS)
+		return 1
 	}
-	fmt.Fprintln(os.Stderr, "huginn core install: not supported on "+runtime.GOOS)
-	return 1
+	if !compact {
+		u.Took("done")
+	}
+	return rc
 }
 
-// retireNodeRunner stops the Node runner's user service so two runners never
-// beat under one adopted id. The unit file is left in place (and said so): the
-// Node runner's `off` is still the way to remove it, and stopping is enough.
-func retireNodeRunner() {
+// retireNodeRunner: the pre-core Node runner (huginn-device.service) is
+// stopped for good, so the core and it never both run; the core adopts its
+// device id.
+func retireNodeRunner(u *ui.Out) {
 	home, _ := os.UserHomeDir()
 	unit := filepath.Join(home, ".config", "systemd", "user", "huginn-device.service")
 	if !fileExists(unit) {
@@ -281,10 +335,11 @@ func retireNodeRunner() {
 	}
 	out, err := exec.Command("systemctl", "--user", "disable", "--now", "huginn-device.service").CombinedOutput()
 	if err != nil {
-		fmt.Printf("  the Node runner (huginn-device.service) could NOT be stopped: %s — stop it before the core enrols, or both will run\n", strings.TrimSpace(string(out)))
+		u.Line(ui.Warn, "runner", "the old Node runner (huginn-device.service) could NOT be stopped - stop it before the core enrols, or both will run")
+		u.Note(strings.TrimSpace(string(out)))
 		return
 	}
-	fmt.Println("  stopped and disabled the Node runner (huginn-device.service); the core adopts its device id")
+	u.Line(ui.OK, "runner", "stopped the old Node runner (huginn-device.service); the core adopts its device id")
 }
 
 func exitFor(r service.Report) int {
@@ -295,6 +350,19 @@ func exitFor(r service.Report) int {
 }
 
 func coreUninstall() int {
+	rep, err := coreUninstallReport()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Print(rep.String())
+	return exitFor(rep)
+}
+
+// coreUninstallReport removes the boot service and the tray's autostart and
+// returns what each step did, for `huginn core uninstall` to print and for
+// `huginn uninstall` to fold into one line.
+func coreUninstallReport() (service.Report, error) {
 	bin := stableBinary()
 	os.Remove(trayMarker()) // a reinstall offers the tray again
 	os.Remove(filepath.Join(paths().State, "tray-task"))
@@ -303,23 +371,17 @@ func coreUninstall() int {
 	case "linux":
 		o, err := service.LinuxDefaults(bin)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return service.Report{}, err
 		}
-		rep := service.UninstallLinux(o)
-		fmt.Print(rep.String())
-		return exitFor(rep)
+		return service.UninstallLinux(o), nil
 	case "windows":
 		o, err := service.WindowsDefaults(bin)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
+			return service.Report{}, err
 		}
-		rep := service.UninstallWindows(o)
-		fmt.Print(rep.String())
-		return exitFor(rep)
+		return service.UninstallWindows(o), nil
 	}
-	return 1
+	return service.Report{}, fmt.Errorf("huginn core uninstall: not supported on %s", runtime.GOOS)
 }
 
 func currentUser() string {

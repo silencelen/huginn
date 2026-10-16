@@ -272,10 +272,10 @@ func InstallLinux(o LinuxOptions) (Report, Linger) {
 // update from a core that predates the tray).
 func EnsureTrayLinux(o LinuxOptions) (State, string) {
 	if o.NoTray {
-		return Skipped, "not requested"
+		return Skipped, "skipped (--no-tray)"
 	}
 	if !o.Graphical && !o.ForceTray {
-		return Skipped, "no graphical session (DISPLAY/WAYLAND_DISPLAY unset); --tray forces it"
+		return Skipped, "not set up: this shell has no graphical session (an ssh shell?) - huginn core install --tray adds it anyway"
 	}
 	return writeIfChanged(o.TrayPath(), TrayDesktopEntry(o.Binary), 0o644)
 }

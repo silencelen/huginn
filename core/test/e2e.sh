@@ -75,7 +75,7 @@ fi
 
 # huginn setup ssh: the SSH side for a machine set up some other way. The host
 # comes from the core's pairing; ssh itself is a stub that refuses (no key on
-# the host yet), so the check says "not yet". A separate HOME keeps ~/.ssh out
+# the host yet), so the check says the host does not know the key. A separate HOME keeps ~/.ssh out
 # of the uninstall check below.
 if command -v ssh-keygen >/dev/null 2>&1; then
   mkdir -p "$T/sshstub" "$T/sshhome"; printf '#!/bin/sh\necho "Permission denied (publickey)." >&2\nexit 255\n' > "$T/sshstub/ssh"; chmod +x "$T/sshstub/ssh"
@@ -84,7 +84,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
     && [ -f "$T/sshhome/.ssh/id_ed25519.pub" ] && grep -q 'authorized_keys' <<<"$SU" \
     && ok "huginn setup ssh: key, 'Host huginn' -> the paired host, and the line to authorize it" || { bad "setup ssh"; printf '%s\n' "$SU"; }
   SU2=$(HOME="$T/sshhome" PATH="$T/sshstub:$PATH" "$T/huginn" setup ssh </dev/null 2>&1); SURC=$?
-  grep -q 'already set up' <<<"$SU2" && grep -q 'not yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
+  grep -q "is already in" <<<"$SU2" && grep -q 'does not know this key yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
 fi
 

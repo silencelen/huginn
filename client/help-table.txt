@@ -68,7 +68,8 @@
                               leave them running]
   huginn core install         run huginn core at boot on this machine - as you,
                               with nobody signed in - and pair it with the host
-                              [--logon s4u|password: Windows only]
+                              [--no-tray | --tray: even from an ssh shell
+                              (Linux) | --logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
   huginn core start           start it now if it is set up but not running
   huginn core update          take the newest core release (restarts the core)

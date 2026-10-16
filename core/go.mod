@@ -36,3 +36,7 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
+
+// bubbletea's package init queries the terminal on every command (see
+// third_party/bubbletea/HUGINN-PATCH.md); this copy leaves that init out.
+replace github.com/charmbracelet/bubbletea => ./third_party/bubbletea

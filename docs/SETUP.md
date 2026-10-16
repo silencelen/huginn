@@ -38,17 +38,19 @@ Each device needs three things — the installer does all three:
 
 ```bash
 # Linux · macOS · Termux
-curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh -s -- <host-ip-or-name>
+curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh
 ```
 ```powershell
-# Windows (PowerShell)
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1))) -HuginnHost <host-ip-or-name>
+# Windows (PowerShell 5.1 or 7)
+irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1 | iex
 ```
 
 After the client it installs huginn core, which carries the CLI and runs at boot (not on Termux or
 macOS, where it cannot run), then asks whether to install the desktop app, and ends by saying what
-it installed. Preset the one question for unattended installs with `HUGINN_GUI=y|n` (shell) or
-`-Gui y|n` (PowerShell). `huginn core install` and `huginn desktop` do the same later.
+it set up. For unattended installs, name the host (`| sh -s -- <host>`, or `$env:HUGINN_HOST = '<host>'`
+before the PowerShell line) and preset the one question with `HUGINN_GUI=y|n` (`$env:HUGINN_GUI`).
+`huginn core install` and `huginn desktop` do the same later. The older PowerShell form,
+`& ([scriptblock]::Create((irm …/client/get.ps1))) -HuginnHost <host> -Gui n`, still works.
 
 **From a clone** (the client alone):
 ```powershell
