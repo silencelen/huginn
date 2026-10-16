@@ -249,10 +249,14 @@ func firstLine(s session) string {
 
 func (m *model) sessionsView() string {
 	t := m.t
-	vis, inProj := m.visibleSessions()
+	vis, inProj := m.sessionRows()
 	var b strings.Builder
 	b.WriteString("\n")
 	if len(vis) == 0 {
+		if m.filter[scrSessions] != "" {
+			b.WriteString("   " + t.dim.Render("no session matches the filter (esc clears it)") + "\n")
+			return b.String()
+		}
 		b.WriteString("   " + t.dim.Render("no sessions yet. n starts one, or: huginn <name>") + "\n")
 		return b.String()
 	}
@@ -316,7 +320,7 @@ func (m *model) sessionsView() string {
 }
 
 func (m *model) selectedSession() (session, bool) {
-	vis, _ := m.visibleSessions()
+	vis, _ := m.sessionRows()
 	c := m.cur[scrSessions]
 	if c < 0 || c >= len(vis) {
 		return session{}, false
@@ -325,7 +329,7 @@ func (m *model) selectedSession() (session, bool) {
 }
 
 func (m *model) sessionsKey(s string) tea.Cmd {
-	vis, _ := m.visibleSessions()
+	vis, _ := m.sessionRows()
 	sel, ok := m.selectedSession()
 	switch s {
 	case "enter", "a", "right", "l":
@@ -430,14 +434,10 @@ func (m *model) devicesView() string {
 	}
 	b.WriteString("\n   " + t.dim.Render(c.Status.Note) + "\n")
 	b.WriteString("\n  " + t.heading.Render("the fleet") + "\n")
-	devs := append([]device(nil), m.data.devices...)
-	sort.SliceStable(devs, func(i, j int) bool {
-		if devs[i].Online != devs[j].Online {
-			return devs[i].Online
-		}
-		return devs[i].Name < devs[j].Name
-	})
-	if len(devs) == 0 {
+	devs := m.deviceRows()
+	if len(devs) == 0 && m.filter[scrDevices] != "" {
+		b.WriteString("   " + t.dim.Render("no device matches the filter (esc clears it)") + "\n")
+	} else if len(devs) == 0 {
 		b.WriteString("   " + t.dim.Render("no devices. o makes this machine one, or: huginn device on") + "\n")
 	}
 	cur := m.cur[scrDevices]
@@ -489,8 +489,25 @@ func (m *model) devicesKey(s string) tea.Cmd {
 			})
 		})
 	}
-	m.move(s, len(m.data.devices))
+	m.move(s, len(m.deviceRows()))
 	return nil
+}
+
+// deviceRows: online first, then by name, through the `/` filter.
+func (m *model) deviceRows() []device {
+	var devs []device
+	for _, d := range m.data.devices {
+		if m.matches(scrDevices, d.Name, d.Platform, d.Scope, d.Version) {
+			devs = append(devs, d)
+		}
+	}
+	sort.SliceStable(devs, func(i, j int) bool {
+		if devs[i].Online != devs[j].Online {
+			return devs[i].Online
+		}
+		return devs[i].Name < devs[j].Name
+	})
+	return devs
 }
 
 // ---- usage ------------------------------------------------------------------------
@@ -644,6 +661,8 @@ func (m *model) helpView() string {
 	b.WriteString(k(enter, "open, or attach to a session"))
 	b.WriteString(k("esc", "back"))
 	b.WriteString(k("1-9", "jump to a section"))
+	b.WriteString(k("/", "filter the list on screen (esc clears)"))
+	b.WriteString(k(":", "go to anything, attach, or run any huginn verb"))
 	b.WriteString(k("r", "refresh now"))
 	b.WriteString(k("q", "quit"))
 	b.WriteString("\n  " + t.heading.Render("states") + "\n")
