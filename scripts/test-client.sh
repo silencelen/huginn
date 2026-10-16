@@ -1120,7 +1120,7 @@ rm -rf "$DT/feed/desktop-v9.9.4" "$DT/feed/desktop-v9.9.3"; dt_publish 9.9.2   #
 # `huginn desktop update` (and the desktop step of `huginn update`): current says
 # so and downloads nothing; a newer release goes through the verified install.
 dt_run 'huginn desktop update'; RC=$?
-[ "$RC" = 0 ] && grep -q 'huginn desktop: 9.9.2 is current' "$DT/out" && ! grep -q 'downloading' "$DT/out" \
+[ "$RC" = 0 ] && grep -q 'desktop *9.9.2 is current' "$DT/out" && ! grep -q 'downloading' "$DT/out" \
   && ok "desktop update: an up-to-date app says so and downloads nothing" || bad "desktop update when current (rc=$RC): $(cat "$DT/out")"
 dt_publish 9.9.5; dt_run 'huginn desktop update'; RC=$?
 [ "$RC" = 0 ] && [ "$(readlink "$DR/current")" = "versions/9.9.5" ] && grep -q '9.9.2 -> 9.9.5' "$DT/out" \

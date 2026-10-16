@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.6
+# Version: 2.3.7
 
-HUGINN_VERSION='2.3.6'
+HUGINN_VERSION='2.3.7'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -35,6 +35,104 @@ HUGINN_UPDATE_HOST_DEFAULT='huginn'
 #   $1 = the SGR slot   $2 = the fd the line goes to (default 2: most coloured
 #   lines are messages on stderr; `update` reports on stdout and passes 1)
 _huginn_color() { if [ -t "${2:-2}" ] && [ -z "${NO_COLOR:-}" ]; then printf '\033[%sm' "$1"; fi; }
+
+# --- installer-style progress -----------------------------------------------
+# What `huginn update` and the core/desktop installs look like (owner, 2026-10-16:
+# "professional cli installer looking, with animations where needed"):
+#
+#     (o> huginn update
+#         ■  client    2.3.6 -> 2.3.7   from GitHub
+#        ╲▄╱ core      downloading   ██████████░░░░░░░░   56%   5.7/10.1 MB   4.2 MB/s
+#         ■  core      2.3.6 -> 2.3.7   installed, restarted
+#         ◦  local AI  not installed
+#         done in 38 s
+#
+# A busy step turns the brand's wingbeat (BRAND.md §6: 4 frames at 8 fps, with
+# a 7-bit twin) and a download draws a bar with its size and speed; both are
+# redrawn in place on stderr and settle into one final line. Not a terminal
+# (piped, logged, a script): only the final lines. NO_COLOR, HUGINN_ASCII=1,
+# HUGINN_REDUCED_MOTION=1 (a still frame) are honoured.
+_huginn_ui_tty() { [ -t 2 ] && [ "${TERM:-}" != dumb ]; }
+_huginn_ui_uni() {
+  case "${HUGINN_ASCII:-}" in 1) return 1 ;; 0) return 0 ;; esac
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;; esac
+  return 1
+}
+_huginn_ui_c() { _huginn_ui_tty && [ -z "${NO_COLOR:-}" ] && printf '\033[%sm' "$1"; return 0; }
+# The final line for one component. $1 = ok|fail|skip|warn  $2 = component  $3 = text
+_huginn_ui_line() {
+  local g c
+  if _huginn_ui_uni; then
+    # The brand's state marks, built from bytes so this file stays 7-bit
+    # (the rule in test-client.sh [5f]): ■ ok, × error, ▲ needs a look, ◦ skipped.
+    case "$1" in ok) g=$'\xe2\x96\xa0' ;; fail) g=$'\xc3\x97' ;; warn) g=$'\xe2\x96\xb2' ;; *) g=$'\xe2\x97\xa6' ;; esac
+  else
+    case "$1" in ok) g='+' ;; fail) g='x' ;; warn) g='!' ;; *) g='-' ;; esac
+  fi
+  case "$1" in ok) c=96 ;; fail) c=91 ;; warn) c=93 ;; *) c=90 ;; esac
+  _huginn_ui_tty && printf '\r\033[K' >&2
+  # Glyph at column 5, the component at 8: the spinner's three cells are
+  # centred over the glyph's one, so the line does not move when it settles.
+  printf '     %s%s%s  %-9s %s\n' "$(_huginn_ui_c "$c")" "$g" "$(_huginn_ui_c 0)" "$2" "$3" >&2
+}
+_huginn_ui_head() { printf '%s(o>%s %s\n' "$(_huginn_ui_c 95)" "$(_huginn_ui_c 0)" "$1" >&2; }
+_huginn_ui_frames() {
+  if [ -n "${HUGINN_REDUCED_MOTION:-}" ]; then
+    _huginn_ui_uni && echo $'\xe2\x94\x80\xe2\x96\x84\xe2\x94\x80' || echo '-_-'
+  elif _huginn_ui_uni; then printf '%s\n' $'\xe2\x94\x80\xe2\x96\x84\xe2\x94\x80' $'\xe2\x95\xb2\xe2\x96\x84\xe2\x95\xb1' $'\xe2\x94\x80\xe2\x96\x84\xe2\x94\x80' $'\xe2\x95\xb1\xe2\x96\x80\xe2\x95\xb2'
+  else printf '%s\n' '-_-' '\_/' '-_-' "/'\\"; fi
+}
+# Runs "$@" with its output in $3 (a log), turning the wingbeat on stderr while
+# it runs. $1 = component  $2 = what it is doing  $3 = log file. Returns its rc.
+_huginn_ui_spin() {
+  local comp="$1" what="$2" log="$3" pid i=0 f
+  shift 3
+  "$@" >"$log" 2>&1 &
+  pid=$!
+  if _huginn_ui_tty; then
+    local frames=(); mapfile -t frames < <(_huginn_ui_frames)
+    while kill -0 "$pid" 2>/dev/null; do
+      f="${frames[$((i % ${#frames[@]}))]}"; i=$((i + 1))
+      printf '\r\033[K    %s%s%s %-9s %s' "$(_huginn_ui_c 92)" "$f" "$(_huginn_ui_c 0)" "$comp" "$what" >&2
+      sleep 0.125
+    done
+  fi
+  wait "$pid"
+}
+# Downloads $1 to $2 (expected size $3 bytes, 0 = unknown) with a bar.
+# $4 = component. Returns curl's rc; prints nothing on success.
+_huginn_ui_download() {
+  local url="$1" out="$2" size="${3:-0}" comp="$4" pid i=0 f cur t0 now el sp pct bar n w=24
+  if ! command -v curl >/dev/null 2>&1; then
+    wget -qO "$out" --timeout=60 "$url"; return
+  fi
+  curl -fsL --max-time 900 -o "$out" "$url" &
+  pid=$!
+  if _huginn_ui_tty; then
+    local frames=(); mapfile -t frames < <(_huginn_ui_frames)
+    local on=$'\xe2\x96\x88' off=$'\xe2\x96\x91'; _huginn_ui_uni || { on='#'; off='-'; }
+    t0=$SECONDS
+    while kill -0 "$pid" 2>/dev/null; do
+      cur=$(wc -c <"$out" 2>/dev/null || echo 0); cur=${cur// /}
+      el=$(( SECONDS - t0 )); [ "$el" -lt 1 ] && el=1
+      sp=$(awk -v b="$cur" -v s="$el" 'BEGIN{printf "%.1f MB/s", b/s/1048576}')
+      f="${frames[$((i % ${#frames[@]}))]}"; i=$((i + 1))
+      if [ "$size" -gt 0 ] 2>/dev/null; then
+        pct=$(( cur * 100 / size )); [ "$pct" -gt 100 ] && pct=100
+        n=$(( pct * w / 100 )); bar="$(printf "%${n}s" '' | sed "s/ /$on/g")$(printf "%$((w - n))s" '' | sed "s/ /$off/g")"
+        printf '\r\033[K    %s%s%s %-9s downloading  %s%s%s %3d%%  %s  %s' "$(_huginn_ui_c 92)" "$f" "$(_huginn_ui_c 0)" "$comp" \
+          "$(_huginn_ui_c 92)" "$bar" "$(_huginn_ui_c 0)" "$pct" \
+          "$(awk -v a="$cur" -v b="$size" 'BEGIN{printf "%.1f/%.1f MB", a/1048576, b/1048576}')" "$sp" >&2
+      else
+        printf '\r\033[K    %s%s%s %-9s downloading  %s  %s' "$(_huginn_ui_c 92)" "$f" "$(_huginn_ui_c 0)" "$comp" \
+          "$(awk -v a="$cur" 'BEGIN{printf "%.1f MB", a/1048576}')" "$sp" >&2
+      fi
+      sleep 0.125
+    done
+    printf '\r\033[K' >&2
+  fi
+  wait "$pid"
+}
 
 _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 
@@ -283,19 +381,27 @@ _huginn_core_fetch() (
     file="$(_huginn_json_str "$obj" file)"; sha="$(_huginn_json_str "$obj" sha256)"
     case "$file" in huginn-*-"$key") ;; *) fail "$tag names an unexpected core file '$file' - refused" ;; esac
     printf '%s' "$sha" | grep -qE '^[0-9a-f]{64}$' || fail "$tag carries no usable sha256 for $file - refused"
-    echo "  downloading $file ($tag) ..." >&2
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsL --max-time 300 -o "$tmp/huginn" "https://github.com/$HUGINN_REPO/releases/download/$tag/$file" || fail "download failed"
-    else
-      wget -qO "$tmp/huginn" --timeout=60 "https://github.com/$HUGINN_REPO/releases/download/$tag/$file" || fail "download failed"
-    fi
+    _huginn_ui_download "https://github.com/$HUGINN_REPO/releases/download/$tag/$file" "$tmp/huginn" \
+      "$(_huginn_json_num "$obj" size)" core || fail "download failed: $file ($tag)"
     # THE GATE: the manifest's sha256 is the only integrity check between
     # GitHub and an executable in your home directory.
     got="$(_huginn_sha256 "$tmp/huginn")"
     [ "$got" = "$sha" ] || fail "$file did not match its sha256 - discarded, nothing installed"
     chmod 755 "$tmp/huginn"
   fi
-  "$tmp/huginn" core self-install >&2 || fail "self-install failed"
+  if ! _huginn_ui_spin core "installing" "$tmp/log" "$tmp/huginn" core self-install; then
+    _huginn_ui_line fail core "self-install failed:"; sed 's/^/            /' "$tmp/log" >&2
+    exit 1
+  fi
+  # One line from the core's own report; the whole report when asked for it
+  # (`huginn core install`), and never lost: the log is what a failure shows.
+  local now restart
+  now="$("$tmp/huginn" version 2>/dev/null | sed -n 's/^(o> huginn \([^ ]*\) .*/\1/p')"
+  restart="installed"
+  grep -q 'restarted huginn core' "$tmp/log" && restart="installed, restarted"
+  grep -q 'has not come back yet' "$tmp/log" && restart="installed; the running core restarts onto it shortly"
+  _huginn_ui_line ok core "${HUGINN_UI_FROM:+$HUGINN_UI_FROM -> }${now:-?}   $restart"
+  [ -n "${HUGINN_UI_COMPACT:-}" ] || sed 's/^/            /' "$tmp/log" >&2
   _huginn_core_bin
 )
 
@@ -333,14 +439,18 @@ _huginn_core_update() {
       run="$("$bin" core status 2>/dev/null | sed -n 's/^(o> huginn core \([^ ]*\) .*/\1/p')"
       if [ -n "$run" ] && [ "$run" != "$cur" ]; then
         # Installed but not running yet (an earlier restart could not be made).
-        echo "huginn core $cur is installed, but the running core is $run - restarting it"
-        "$bin" core self-install; return
+        local log; log="$(mktemp)"
+        if _huginn_ui_spin core "restarting $run onto $cur" "$log" "$bin" core self-install; then
+          _huginn_ui_line ok core "$cur   restarted (it was still running $run)"
+        else
+          _huginn_ui_line fail core "the restart failed:"; sed 's/^/            /' "$log" >&2
+        fi
+        rm -f "$log"; return
       fi
-      echo "huginn core $cur is current (newest release $latest)"; return 0
+      _huginn_ui_line ok core "$cur is current"; return 0
     fi
-    echo "huginn core: $cur -> $latest"
   fi
-  _huginn_core_fetch >/dev/null
+  HUGINN_UI_FROM="$cur" _huginn_core_fetch >/dev/null
 }
 
 _huginn_core() {
@@ -1065,14 +1175,8 @@ _huginn_desktop_install() (
     local tmp
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop.XXXXXX")" || fail "could not make a temp dir"
     trap 'rm -rf "$tmp"' EXIT
-    echo "  downloading $file ..."
-    if command -v curl >/dev/null 2>&1; then
-      curl -fL --max-time 900 -o "$tmp/$file" "$base/$file" || fail "download failed: $base/$file"
-    elif command -v wget >/dev/null 2>&1; then
-      wget -qO "$tmp/$file" --timeout=60 "$base/$file" || fail "download failed: $base/$file"
-    else
-      fail "needs curl or wget to download $file"
-    fi
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail "needs curl or wget to download $file"
+    _huginn_ui_download "$base/$file" "$tmp/$file" "$(_huginn_json_num "$obj" size)" desktop || fail "download failed: $base/$file"
     # THE GATE. These builds are unsigned; the manifest's sha256 is the only
     # integrity check between GitHub and an executable in your home directory.
     local got
@@ -1158,20 +1262,31 @@ _huginn_desktop_update() {
   R="$(_huginn_desktop_root)"
   [ -f "$R/.huginn-portable" ] && portable=1
   [ -d /opt/huginn-desktop-kt ] && packaged=1
-  [ -n "$portable$packaged" ] || return 0
-  rel="$(_huginn_desktop_release)" || { echo "huginn desktop: could not read the release feed - not updated" >&2; return 1; }
+  if [ -z "$portable$packaged" ]; then
+    # In `huginn update` every component gets its line; alone, nothing to say.
+    [ -n "${HUGINN_UI_COMPACT:-}" ] && _huginn_ui_line skip desktop "not installed (huginn desktop install)"
+    return 0
+  fi
+  rel="$(_huginn_desktop_release)" || { _huginn_ui_line fail desktop "could not read the release feed - not updated"; return 1; }
   tag="${rel%%$'\n'*}"; man="${rel#*$'\n'}"
   ver="$(_huginn_json_str "$man" version)"
-  printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "huginn desktop: $tag carries an unreadable version - not updated" >&2; return 1; }
+  printf '%s' "$ver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { _huginn_ui_line fail desktop "$tag carries an unreadable version - not updated"; return 1; }
   if [ -n "$portable" ]; then
     cur="$(readlink "$R/current" 2>/dev/null)"; cur="${cur#versions/}"
     if [ -n "$cur" ] && ! _huginn_core_newer "$cur" "$ver"; then
-      echo "huginn desktop: $cur is current (the per-user app)"
+      _huginn_ui_line ok desktop "$cur is current"
     else
-      echo "huginn desktop: ${cur:-?} -> $ver (the per-user app)"
-      _huginn_desktop_install || return 1
-      if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/" >/dev/null 2>&1; then
-        echo "  the app that is open runs ${cur:-the old version} until you quit it from its tray and open it again"
+      local dlog; dlog="$(mktemp)"
+      # Its own report to the log (the bar and any refusal still reach the
+      # terminal on stderr); `huginn desktop install` prints it in full.
+      if HUGINN_UI_COMPACT=1 _huginn_desktop_install >"$dlog"; then
+        _huginn_ui_line ok desktop "${cur:-?} -> $ver   installed"
+        if command -v pgrep >/dev/null 2>&1 && pgrep -f "$R/versions/" >/dev/null 2>&1; then
+          _huginn_ui_line warn desktop "the open app runs ${cur:-the old version} until you quit it from its tray"
+        fi
+        rm -f "$dlog"
+      else
+        _huginn_ui_line fail desktop "the update did not finish:"; sed 's/^/            /' "$dlog" >&2; rm -f "$dlog"; return 1
       fi
     fi
   fi
@@ -1184,33 +1299,34 @@ _huginn_desktop_update() {
     fi
     have="${have%-*}"
     if [ -z "$mgr" ]; then
-      echo "huginn desktop: /opt/huginn-desktop-kt belongs to no package this can update - skipped" >&2
+      _huginn_ui_line skip desktop "/opt/huginn-desktop-kt belongs to no package this can update"
     elif [ -n "$have" ] && ! _huginn_core_newer "$have" "$ver"; then
-      echo "huginn desktop: $have is current (the $mgr package)"
+      _huginn_ui_line ok desktop "$have is current (the $mgr package)"
     else
       obj="$(_huginn_json_obj "$man" "$key")"
       file="$(_huginn_json_str "$obj" file)"; sha="$(_huginn_json_str "$obj" sha256)"
       base="https://github.com/$HUGINN_REPO/releases/download/$tag"
       if [ -z "$file" ] || ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{64}$'; then
-        echo "huginn desktop: $tag has no usable $key package - skipped" >&2
+        _huginn_ui_line skip desktop "$tag has no usable $key package"
       elif ! { [ -t 0 ] && [ -t 1 ]; }; then
-        echo "huginn desktop: the $mgr package is ${have:-?}, $ver is out. To update it:"
-        if [ "$mgr" = pacman ]; then echo "  curl -fLO $base/$file && sudo pacman -U ./$file"; else echo "  curl -fLO $base/$file && sudo apt install ./$file"; fi
+        _huginn_ui_line warn desktop "the $mgr package is ${have:-?}, $ver is out; to update it:"
+        if [ "$mgr" = pacman ]; then echo "            curl -fLO $base/$file && sudo pacman -U ./$file" >&2; else echo "            curl -fLO $base/$file && sudo apt install ./$file" >&2; fi
       else
-        echo "huginn desktop: ${have:-?} -> $ver (the $mgr package; sudo asks for your password)"
         tmp="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop-pkg.XXXXXX")" || return 1
-        if ! curl -fL --max-time 900 -o "$tmp/$file" "$base/$file"; then
-          rm -rf "$tmp"; echo "huginn desktop: download failed: $base/$file" >&2; return 1
+        if ! _huginn_ui_download "$base/$file" "$tmp/$file" "$(_huginn_json_num "$obj" size)" desktop; then
+          rm -rf "$tmp"; _huginn_ui_line fail desktop "download failed: $base/$file"; return 1
         fi
         got="$(_huginn_sha256 "$tmp/$file")"
         if [ "$got" != "$sha" ]; then
-          rm -rf "$tmp"; echo "huginn desktop: $file did not match its sha256 - discarded, nothing installed" >&2; return 1
+          rm -rf "$tmp"; _huginn_ui_line fail desktop "$file did not match its sha256 - discarded, nothing installed"; return 1
         fi
+        _huginn_ui_line ok desktop "${have:-?} -> $ver   downloaded and verified; installing the $mgr package (sudo asks for your password)"
         # A local FILE, never a URL: pacman -U <url> also fetches a .sig that
         # these releases do not publish, and aborts.
         if [ "$mgr" = pacman ]; then sudo pacman -U --noconfirm "$tmp/$file"; else sudo apt-get install -y "$tmp/$file"; fi
         local rc=$?; rm -rf "$tmp"
-        [ "$rc" = 0 ] || { echo "huginn desktop: the $mgr update did not finish" >&2; return 1; }
+        [ "$rc" = 0 ] || { _huginn_ui_line fail desktop "the $mgr update did not finish"; return 1; }
+        _huginn_ui_line ok desktop "$ver installed (the $mgr package)"
       fi
     fi
   fi
@@ -1612,66 +1728,53 @@ EOF
     version|--version|-v)
       echo "(o> huginn-cli $HUGINN_VERSION  (host: $H)" ;;
     update)
-      local dest="${BASH_SOURCE[0]:-$HOME/.huginn/huginn.sh}" tmp got=
-      tmp="$dest.tmp"
-      # ⚠ NAMED BEFORE THE FIRST MESSAGE THAT MENTIONS IT. The mirror host is
-      # PINNED and is never $HUGINN_HOST - this path downloads a shell script the
-      # block below SOURCES, so the host it comes from is a trust root and not a
-      # convenience - and the fallback line said "falling back to the $H mirror",
-      # i.e. it named the one host this deliberately does not use, in the one
-      # message whose job is naming the one it does. A run could print "falling
-      # back to the rvhost mirror" and then "pulled from huginn mirror" in the
-      # same four lines.
+      local dest="${BASH_SOURCE[0]:-$HOME/.huginn/huginn.sh}" tmp got='' src='' t0=$SECONDS log newv
+      tmp="$dest.tmp"; log="$(mktemp)"
       local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-      echo "huginn: updating client -> $dest"
-      if command -v gh >/dev/null 2>&1; then
-        # Leave it at $tmp - the syntax check + backup below is the only install path.
-        if gh api "repos/$HUGINN_REPO/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-          got=1; echo "$(_huginn_color 96 1)  pulled from GitHub ($HUGINN_REPO) via gh$(_huginn_color 0 1)"
-        else
-          echo "$(_huginn_color 90 1)  (gh fetch failed - falling back to the pinned $uh mirror)$(_huginn_color 0 1)"
+      _huginn_ui_head "huginn update"
+      # gh's answer goes to $tmp, its complaints to the log - never mixed.
+      if command -v gh >/dev/null 2>&1 && _huginn_ui_spin client "fetching" "$log" \
+           bash -c 'gh api "repos/$1/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" > "$2"' _ "$HUGINN_REPO" "$tmp" \
+         && [ -s "$tmp" ]; then
+        got=1; src="from GitHub"
+      fi
+      if [ -z "$got" ]; then
+        [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
+          || _huginn_ui_line warn client "HUGINN_UPDATE_HOST is set: trusting $uh for this client's code"
+        if _huginn_ui_spin client "fetching from the $uh mirror" "$log" scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
+          got=1; src="from the $uh mirror"
         fi
       fi
       if [ -z "$got" ]; then
-        command -v gh >/dev/null 2>&1 || echo "$(_huginn_color 90 1)  (gh not installed - using the scp fallback)$(_huginn_color 0 1)"
-        # $HUGINN_HOST is routinely repointed at a test box or mistyped, which is
-        # why it answers "which box do I drive" and never "whose code do I run".
-        # Say which host is being trusted, every time.
-        [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
-          || echo "$(_huginn_color 93 1)  (HUGINN_UPDATE_HOST is set - trusting $uh for this client's code)$(_huginn_color 0 1)"
-        # BatchMode: never drop into an interactive password prompt in the middle
-        # of what reads as a non-interactive update.
-        if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
-          got=1; echo "$(_huginn_color 96 1)  pulled from $uh mirror via scp$(_huginn_color 0 1)"
-        fi
+        rm -f "$tmp" "$log" 2>/dev/null
+        _huginn_ui_line fail client "update failed: gh unavailable or errored, and the $uh mirror did not answer either"; return 1
       fi
-      # Validate BEFORE installing. Sourcing a truncated download leaves the live
-      # shell with a half-defined huginn function AND overwrites the good copy on
-      # disk, so the next shell is broken too.
-      if [ -n "$got" ]; then
-        if ! bash -n "$tmp" 2>/dev/null; then
-          echo "$(_huginn_color 91)huginn: downloaded client failed its syntax check - keeping the current version$(_huginn_color 0)" >&2
-          rm -f "$tmp"; return 1
-        fi
-        cp -f "$dest" "$dest.bak" 2>/dev/null
-        mv -f "$tmp" "$dest"
-        # shellcheck disable=SC1090
-        source "$dest"; huginn version
-        echo "$(_huginn_color 90 1)  (previous version saved as $(basename "$dest").bak)$(_huginn_color 0 1)"
-        # Lockstep (D10): the core this client drives follows it.
-        if _huginn_core_bin >/dev/null 2>&1; then huginn core update || true; fi
-        # Every huginn component on this machine, not only the CLI and the core
-        # (owner, 2026-10-16): the desktop app and the local-AI tier follow.
-        _huginn_desktop_update || true
-        if [ -d "${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}" ] && [ -s "$HOME/.huginn/huginn-local" ] && command -v node >/dev/null 2>&1; then
-          # It asks before it changes anything, so only where it can ask.
-          if [ -t 0 ]; then echo "huginn local: updating the local-AI tier"; huginn local update || true
-          else echo "huginn local: run 'huginn local update' in a terminal to update the local-AI tier"; fi
-        fi
+      if ! bash -n "$tmp" 2>/dev/null; then
+        rm -f "$tmp" "$log"; _huginn_ui_line fail client "the downloaded client failed its syntax check - kept $HUGINN_VERSION"; return 1
+      fi
+      newv="$(sed -n "s/^HUGINN_VERSION='\(.*\)'/\1/p" "$tmp" | head -1)"
+      if [ "$newv" = "$HUGINN_VERSION" ]; then
+        _huginn_ui_line ok client "$HUGINN_VERSION is current"
       else
-        rm -f "$tmp" 2>/dev/null
-        echo "huginn: update failed (gh unavailable or errored, and the $uh mirror did not answer either)" >&2; return 1
+        _huginn_ui_line ok client "$HUGINN_VERSION -> ${newv:-?}   $src"
       fi
+      cp -f "$dest" "$dest.bak" 2>/dev/null
+      mv -f "$tmp" "$dest"
+      source "$dest"
+      # Every huginn component on this machine follows, not only the CLI
+      # (owner, 2026-10-16): the core, the desktop app, the local-AI tier.
+      if _huginn_core_bin >/dev/null 2>&1; then HUGINN_UI_COMPACT=1 _huginn_core_update || true
+      else _huginn_ui_line skip core "not installed (huginn core install)"; fi
+      HUGINN_UI_COMPACT=1 _huginn_desktop_update || true
+      if [ -d "${HUGINN_LOCAL_DIR:-$HOME/.config/huginn-local}" ] && [ -s "$HOME/.huginn/huginn-local" ] && command -v node >/dev/null 2>&1; then
+        # It asks before it changes anything, so only where it can ask.
+        if [ -t 0 ]; then _huginn_ui_line ok "local AI" "checking (it asks before changing anything)"; huginn local update || true
+        else _huginn_ui_line warn "local AI" "run 'huginn local update' in a terminal to update it"; fi
+      else
+        _huginn_ui_line skip "local AI" "not installed"
+      fi
+      rm -f "$log"
+      printf '    %sdone in %s s%s\n' "$(_huginn_ui_c 90)" "$((SECONDS - t0))" "$(_huginn_ui_c 0)" >&2
       ;;
     list|ls)   ssh -T "$H" "tmux ls 2>/dev/null || echo '(no sessions running)'" ;;
     status|st) ssh -T "$H" huginn-status ;;
