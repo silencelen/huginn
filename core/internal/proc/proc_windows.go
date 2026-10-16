@@ -3,9 +3,13 @@
 package proc
 
 import (
+	"encoding/base64"
+	"fmt"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
+	"unicode/utf16"
 
 	"golang.org/x/sys/windows"
 )
@@ -66,4 +70,30 @@ func WaitExit(pid int, timeout time.Duration) bool {
 	defer windows.CloseHandle(h)
 	ev, err := windows.WaitForSingleObject(h, uint32(timeout/time.Millisecond))
 	return err == nil && ev == windows.WAIT_OBJECT_0
+}
+
+// StartIndependent starts bin with args through WMI (Win32_Process.Create), so
+// the process belongs to no job of the caller's: an ssh session, the desktop
+// app or a console that started it can end without taking it along. Used to
+// start the core directly when Task Scheduler is holding its task back
+// (Energy Saver on battery, no logon server reachable).
+func StartIndependent(bin string, args ...string) error {
+	line := `"` + bin + `"`
+	for _, a := range args {
+		line += " " + a
+	}
+	ps := "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '" +
+		strings.ReplaceAll(line, "'", "''") + "' }; exit [int]$r.ReturnValue"
+	u := utf16.Encode([]rune(ps))
+	b := make([]byte, len(u)*2)
+	for i, c := range u {
+		b[2*i], b[2*i+1] = byte(c), byte(c>>8)
+	}
+	c := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(b))
+	quiet(c)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }

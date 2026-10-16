@@ -38,3 +38,7 @@ func WaitExit(pid int, timeout time.Duration) bool {
 	}
 	return true
 }
+
+// StartIndependent starts bin detached (its own session). Windows needs more
+// than that (see proc_windows.go); here a new session is already independent.
+func StartIndependent(bin string, args ...string) error { return StartDetached(bin, args...) }
