@@ -126,6 +126,82 @@ func TaskXML(binary, user string, logon LogonType) string {
 	return b.String()
 }
 
+// TrayTaskXML is the "Huginn Tray" task: the tray at the user's own logon, in
+// their session (InteractiveToken), at normal priority. It exists because the
+// Startup folder runs only after Windows has worked through every Run-key app
+// one by one, each allowed 30 s: on PRESTIGE (2026-10-16) the tray appeared
+// 3.5 minutes after sign-in. A logon task starts at once. The Startup shortcut
+// stays as the fallback (Energy Saver can hold tasks back); the one-tray lock
+// makes the second start leave quietly.
+func TrayTaskXML(binary, user string) string {
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-16"?>` + "\r\n")
+	b.WriteString(`<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">` + "\r\n")
+	b.WriteString("  <RegistrationInfo>\r\n")
+	b.WriteString("    <Author>huginn</Author>\r\n")
+	b.WriteString("    <Description>huginn tray: the huginn icon and notifications, at sign-in. Written by huginn core.</Description>\r\n")
+	b.WriteString(`    <URI>\` + xmlText(TrayTaskName) + "</URI>\r\n")
+	b.WriteString("  </RegistrationInfo>\r\n")
+	b.WriteString("  <Triggers>\r\n")
+	b.WriteString("    <LogonTrigger>\r\n")
+	b.WriteString("      <Enabled>true</Enabled>\r\n")
+	b.WriteString("      <UserId>" + xmlText(user) + "</UserId>\r\n")
+	b.WriteString("    </LogonTrigger>\r\n")
+	b.WriteString("  </Triggers>\r\n")
+	b.WriteString("  <Principals>\r\n")
+	b.WriteString(`    <Principal id="Author">` + "\r\n")
+	b.WriteString("      <UserId>" + xmlText(user) + "</UserId>\r\n")
+	b.WriteString("      <LogonType>InteractiveToken</LogonType>\r\n")
+	b.WriteString("      <RunLevel>LeastPrivilege</RunLevel>\r\n")
+	b.WriteString("    </Principal>\r\n")
+	b.WriteString("  </Principals>\r\n")
+	b.WriteString("  <Settings>\r\n")
+	b.WriteString("    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n")
+	b.WriteString("    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n")
+	b.WriteString("    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n")
+	b.WriteString("    <AllowStartOnDemand>true</AllowStartOnDemand>\r\n")
+	b.WriteString("    <Enabled>true</Enabled>\r\n")
+	b.WriteString("    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n")
+	b.WriteString("    <Priority>5</Priority>\r\n")
+	b.WriteString("  </Settings>\r\n")
+	b.WriteString(`  <Actions Context="Author">` + "\r\n")
+	b.WriteString("    <Exec>\r\n")
+	b.WriteString("      <Command>" + xmlText(binary) + "</Command>\r\n")
+	b.WriteString("      <Arguments>core tray</Arguments>\r\n")
+	b.WriteString("      <WorkingDirectory>" + xmlText(windowsParent(binary)) + "</WorkingDirectory>\r\n")
+	b.WriteString("    </Exec>\r\n")
+	b.WriteString("  </Actions>\r\n")
+	b.WriteString("</Task>\r\n")
+	return b.String()
+}
+
+// EnsureTrayTaskWindows registers the "Huginn Tray" logon task (no admin
+// needed: it runs as this user, in their session). A refusal is a Warning —
+// the Startup shortcut still starts the tray, only later.
+func EnsureTrayTaskWindows(o WindowsOptions) (State, string) {
+	if o.NoTray {
+		return Skipped, "not requested"
+	}
+	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
+		return Warning, err.Error()
+	}
+	p := filepath.Join(o.StateDir, "huginn-tray-task.xml")
+	if err := os.WriteFile(p, EncodeUTF16(TrayTaskXML(o.Binary, o.User)), 0o600); err != nil {
+		return Warning, err.Error()
+	}
+	defer os.Remove(p)
+	res := o.Runner.Run("schtasks", "/Create", "/TN", TrayTaskName, "/XML", p, "/F")
+	if !res.OK() {
+		return Warning, "the logon task was refused (" + res.Why() + "); the Startup shortcut starts the tray instead, a little later"
+	}
+	return Done, "the logon task \"" + TrayTaskName + "\" starts it seconds after sign-in"
+}
+
+// TrayTaskRegistered: the "Huginn Tray" task exists.
+func TrayTaskRegistered(o WindowsOptions) bool {
+	return o.Runner.Run("schtasks", "/Query", "/TN", TrayTaskName).OK()
+}
+
 // PasswordRegisterScript registers the task from its XML with a stored password
 // read from STDIN — the password is never in this script, which travels in argv.
 // Pure.
@@ -356,7 +432,10 @@ func EnsureTrayWindows(o WindowsOptions) (State, string) {
 	if _, err := os.Stat(lnk); err != nil {
 		return Failed, "powershell reported success but nothing is at " + lnk
 	}
-	return Done, lnk
+	if st, d := EnsureTrayTaskWindows(o); st != Done {
+		return Done, lnk + " (" + d + ")"
+	}
+	return Done, lnk + " and the logon task \"" + TrayTaskName + "\""
 }
 
 // UninstallWindows stops and deletes the task and removes the shortcut.
@@ -386,6 +465,15 @@ func UninstallWindows(o WindowsOptions) Report {
 			return Done, ""
 		}},
 		{"remove tray shortcut", func() (State, string) { return removeIfPresent(o.StartupLnk()) }},
+		{"delete task \"" + TrayTaskName + "\"", func() (State, string) {
+			if !r.Run("schtasks", "/Query", "/TN", TrayTaskName).OK() {
+				return Skipped, "not there"
+			}
+			if res := r.Run("schtasks", "/Delete", "/TN", TrayTaskName, "/F"); !res.OK() {
+				return Warning, res.Why()
+			}
+			return Done, ""
+		}},
 	}
 	return run("uninstall", steps)
 }

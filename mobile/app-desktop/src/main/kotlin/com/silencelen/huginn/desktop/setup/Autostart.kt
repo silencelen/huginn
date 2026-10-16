@@ -232,6 +232,37 @@ object Autostart {
      * so the flag wins — quietly, because a notification about a shortcut is
      * noise, and nothing here is destructive either way.
      */
+    /**
+     * Whether huginn core's tray starts at sign-in here: its Startup shortcut
+     * (Windows) or its autostart entry (Linux). The paths are core/internal/
+     * service's: StartupLnk() and TrayPath().
+     */
+    fun coreTrayStartsAtLogin(windows: Boolean = ClaudePath.isWindows(), env: (String) -> String? = System::getenv,
+                              home: String? = System.getProperty("user.home")): Boolean {
+        val f = if (windows) {
+            val appData = env("APPDATA")?.takeIf { it.isNotBlank() } ?: return false
+            File("$appData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup", "Huginn.lnk")
+        } else {
+            val cfg = env("XDG_CONFIG_HOME")?.takeIf { it.startsWith("/") } ?: (home ?: return false) + "/.config"
+            File("$cfg/autostart", "huginn-core-tray.desktop")
+        }
+        return f.isFile
+    }
+
+    /**
+     * THE CORE'S TRAY STARTS AT SIGN-IN NOW (owner, 2026-10-16), and it opens
+     * this app. An app that also starts itself at sign-in adds nothing a person
+     * can see (it stands its own icon down while the core's tray is attached)
+     * and costs a login's worth of startup time. So, once: turn this app's own
+     * entry off where the core's tray starts at login. Recorded, so turning it
+     * back on in Settings sticks.
+     */
+    fun handOverToCoreTray(settings: DesktopSettings, trayAtLogin: () -> Boolean = { coreTrayStartsAtLogin() }) {
+        if (settings.autostartHandedToCore() || !trayAtLogin()) return
+        if (settings.autostartNow()) settings.setAutostart(false)
+        settings.markAutostartHandedToCore()
+    }
+
     fun reconcile(settings: DesktopSettings): Result<String>? {
         val want = settings.autostartNow()
         if (want == isEnabled()) {
