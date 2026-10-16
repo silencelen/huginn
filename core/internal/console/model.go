@@ -43,6 +43,8 @@ const (
 	scrSettings
 	scrCore
 	scrHelp
+	scrChat    // one conversation (from chats or a round)
+	scrProject // one project's dashboard
 )
 
 type section struct {
@@ -56,13 +58,13 @@ type section struct {
 // sections, in the design's stable numbering (docs/CONSOLE.md §5).
 var sections = []section{
 	{scrSessions, "1", "sessions", "huginn ls", true},
-	{scrChats, "2", "chats", "the desktop or phone app", false},
-	{scrProjects, "3", "projects", "huginn projects", false},
-	{scrRounds, "4", "rounds", "huginn rounds", false},
+	{scrChats, "2", "chats", "the desktop or phone app", true},
+	{scrProjects, "3", "projects", "huginn projects", true},
+	{scrRounds, "4", "rounds", "huginn rounds", true},
 	{scrDevices, "5", "devices", "huginn devices", true},
 	{scrUsage, "6", "usage", "huginn headroom", true},
-	{scrArchive, "7", "archive", "huginn archive", false},
-	{scrSettings, "8", "settings", "huginn core status", false},
+	{scrArchive, "7", "archive", "huginn archive", true},
+	{scrSettings, "8", "settings", "huginn core status", true},
 	{scrCore, "9", "core", "huginn core status", true},
 }
 
@@ -71,6 +73,12 @@ func sectionFor(s screen) section {
 		if x.scr == s {
 			return x
 		}
+	}
+	switch s {
+	case scrChat:
+		return section{scr: s, name: "chat", verb: "the desktop or phone app", ready: true}
+	case scrProject:
+		return section{scr: s, name: "project", verb: "huginn projects show <name>", ready: true}
 	}
 	return section{scr: s, name: "help", verb: "huginn help", ready: true}
 }
@@ -85,6 +93,7 @@ type fetched struct {
 	devices  []device
 	hr       headroom
 	cnt      counts
+	lists    lists
 	appdErr  error
 	gen      int
 }
@@ -118,6 +127,9 @@ type model struct {
 	events  chan tea.Msg
 
 	cur map[screen]int // cursor per screen, kept across refetches
+
+	chat chatState
+	proj projState
 
 	input   *prompt
 	flash   string
@@ -210,7 +222,10 @@ func (m *model) fetch() tea.Cmd {
 		run(func() { var err error; f.sessions, err = b.sessions(ctx); setErr(err) })
 		run(func() { var err error; f.devices, err = b.devices(ctx); setErr(err) })
 		run(func() { var err error; f.hr, err = b.headroom(ctx); setErr(err) })
-		run(func() { f.cnt = b.counts(ctx) })
+		run(func() { f.lists.chats, _ = b.chats(ctx) })
+		run(func() { f.lists.projects, _ = b.projects(ctx) })
+		run(func() { f.lists.rounds, _ = b.rounds(ctx) })
+		run(func() { f.lists.archive, _ = b.archive(ctx) })
 		wg.Wait()
 		return f
 	}
@@ -240,6 +255,9 @@ func (m *model) open(s screen) {
 func (m *model) back() bool {
 	if len(m.stack) == 0 {
 		return false
+	}
+	if m.scr == scrChat && m.chat.cancel != nil {
+		m.chat.cancel() // stop following; the run itself goes on on the host
 	}
 	m.scr = m.stack[len(m.stack)-1]
 	m.stack = m.stack[:len(m.stack)-1]
@@ -285,6 +303,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetch()
 		}
 		return m, nil
+	case chatLoaded:
+		m.chat.loading, m.chat.err = false, msg.err
+		if msg.err == nil && msg.d.ID == m.chat.id {
+			m.chat.d = msg.d
+			m.chat.live.Reset()
+			if msg.d.Running && !m.chat.busy {
+				m.chat.busy = true
+				return m, m.follow1()
+			}
+		}
+		return m, nil
+	case chatEvent:
+		return m, tea.Batch(m.onChatEvent(msg), m.next())
+	case openChatMsg:
+		cmd := m.openChat(msg.id)
+		if msg.compose {
+			return m, tea.Batch(cmd, m.ask("say:", "", "", func(text string) tea.Cmd { return m.send(text) }))
+		}
+		return m, cmd
+	case dashLoaded:
+		if msg.id == m.proj.p.ID {
+			m.proj.loading, m.proj.err, m.proj.members = false, msg.err, msg.members
+		}
+		return m, nil
+	case revived:
+		m.say("revived as "+msg.name, true)
+		return m, tea.Batch(m.fetch(), m.attachTo(msg.name, false))
 	case tea.KeyMsg:
 		if m.input != nil {
 			return m, m.promptKey(msg)
@@ -363,9 +408,24 @@ func (m *model) key(k tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 	}
+	if m.scr == scrChat && s == "ctrl+x" {
+		return m.chatKey(s)
+	}
 	switch m.scr {
 	case scrHome:
 		return m.homeKey(s)
+	case scrChats:
+		return m.chatsKey(s)
+	case scrChat:
+		return m.chatKey(s)
+	case scrProjects:
+		return m.projectsKey(s)
+	case scrProject:
+		return m.projectKey(s)
+	case scrRounds:
+		return m.roundsKey(s)
+	case scrArchive:
+		return m.archiveKey(s)
 	case scrSessions:
 		return m.sessionsKey(s)
 	case scrDevices:
@@ -477,6 +537,20 @@ func (m *model) View() string {
 			body = m.coreView()
 		case scrHelp:
 			body = m.helpView()
+		case scrChats:
+			body = m.chatsView()
+		case scrChat:
+			body = m.chatView()
+		case scrProjects:
+			body = m.projectsView()
+		case scrProject:
+			body = m.projectView()
+		case scrRounds:
+			body = m.roundsView()
+		case scrArchive:
+			body = m.archiveView()
+		case scrSettings:
+			body = m.settingsView()
 		default:
 			body = m.laterView()
 		}
@@ -595,6 +669,18 @@ func (m *model) keysFor() string {
 		parts = []string{k("o", "this machine on/off"), k("c", "scope"), k("esc", "back")}
 	case m.scr == scrCore:
 		parts = []string{k("u", "update"), k("R", "restart"), k("i", "set up"), k("esc", "back")}
+	case m.scr == scrChats:
+		parts = []string{k("⏎", "open"), k("n", "new"), k("R", "rename"), k("x", "delete"), k("esc", "back")}
+	case m.scr == scrChat:
+		parts = []string{k("i", "write"), k("↑↓", "scroll"), k("ctrl+x", "cancel run"), k("esc", "back")}
+	case m.scr == scrProjects:
+		parts = []string{k("⏎", "dashboard"), k("e", "end"), k("esc", "back")}
+	case m.scr == scrProject:
+		parts = []string{k("⏎", "attach member"), k("esc", "back")}
+	case m.scr == scrRounds:
+		parts = []string{k("⏎", "last run"), k("p", "pause/resume"), k("x", "delete"), k("esc", "back")}
+	case m.scr == scrArchive:
+		parts = []string{k("⏎", "revive"), k("x", "forget"), k("esc", "back")}
 	default:
 		parts = []string{k("esc", "back"), k("?", "help"), k("q", "quit")}
 	}
