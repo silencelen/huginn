@@ -20,5 +20,5 @@
     8 settings           this terminal, this machine, the core                 
     9 core               core 2.3.0 · this machine is a device                 
                                                                                
- up/dn move  enter open  1-9 jump  ? help  q quit                              
+ up/dn move  enter open  1-9 jump  ? help  q quit  : go to / run               
                                                                                
