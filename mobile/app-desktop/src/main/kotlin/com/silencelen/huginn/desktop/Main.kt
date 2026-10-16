@@ -174,6 +174,7 @@ fun main(args: Array<String>) {
     // actually chose, so the flag wins. Off the launch path: on Windows it can
     // spawn a PowerShell, and nothing about a shortcut is worth delaying a window.
     scope.launch {
+        runCatching { Autostart.handOverToCoreTray(settings) }
         runCatching { Autostart.reconcile(settings) }.getOrNull()?.onFailure {
             // Said somewhere a person can find it: the Settings toggle reads the
             // disk now, and this is the line that explains why it disagrees with

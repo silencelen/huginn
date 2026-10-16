@@ -15,6 +15,7 @@ const (
 	UnitName      = "huginn-core.service"
 	TrayDesktop   = "huginn-core-tray.desktop"
 	TaskName      = "Huginn Core"
+	TrayTaskName  = "Huginn Tray"
 	TrayShortcut  = "Huginn.lnk"
 	AUMID         = "com.silencelen.huginn.desktop-kt"
 	staleTaskFile = "huginn-core-task.xml"

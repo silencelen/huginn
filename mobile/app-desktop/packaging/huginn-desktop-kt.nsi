@@ -444,7 +444,7 @@ SectionEnd
 Section /o "Serve local AI models from this computer" SEC_LOCALAI
 SectionEnd
 
-Section "Start Huginn when you sign in" SEC_AUTOSTART
+Section /o "Start the Huginn window when you sign in" SEC_AUTOSTART
 SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -452,7 +452,7 @@ SectionEnd
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CLAUDE} "Huginn will look for the claude command and prove it runs, so work does not fail the first time it is asked for."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_DEVICE} "Huginn will offer to enrol this computer so it can run work here. Nothing listens on a port, and you choose what it may do."
   !insertmacro MUI_DESCRIPTION_TEXT ${SEC_LOCALAI} "Huginn will offer to download and serve small AI models here. It shows the exact plan and the download size before anything happens."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "Huginn will offer to add itself to your Startup folder, so it is already watching when you sign in."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} "huginn core's tray already starts when you sign in and opens this app. Tick this only if you want the app's own window started at sign-in too."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ------------------------------------------------------ the answer file

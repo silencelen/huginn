@@ -208,4 +208,49 @@ class AutostartTest {
         assertEquals(Autostart.NOT_PACKAGED, outcome.exceptionOrNull()?.message)
         assertFalse(Autostart.isEnabled(false, { null }, home.absolutePath), "nothing was written")
     }
+
+    // ---- the hand-over to huginn core's tray (owner, 2026-10-16) ----------------
+
+    private fun settings(): com.silencelen.huginn.desktop.DesktopSettings =
+        com.silencelen.huginn.desktop.DesktopSettings(File(Files.createTempDirectory("as-hand").toFile(), "settings.json"))
+
+    @Test
+    fun `the app's own sign-in entry is turned off once where the core's tray starts at login`() {
+        val s = settings()
+        s.setAutostart(true)
+        Autostart.handOverToCoreTray(s) { true }
+        assertFalse(s.autostartNow(), "the core's tray starts at sign-in; the app's own entry goes")
+        assertTrue(s.autostartHandedToCore())
+        // Turned back on by the person: left alone from then on.
+        s.setAutostart(true)
+        Autostart.handOverToCoreTray(s) { true }
+        assertTrue(s.autostartNow(), "a choice made after the hand-over must stick")
+    }
+
+    @Test
+    fun `without the core's tray at login nothing is handed over`() {
+        val s = settings()
+        s.setAutostart(true)
+        Autostart.handOverToCoreTray(s) { false }
+        assertTrue(s.autostartNow(), "no core tray at login: the app's own entry is the only thing at sign-in")
+        assertFalse(s.autostartHandedToCore(), "and the hand-over is still due for when the core's tray arrives")
+    }
+
+    @Test
+    fun `the core tray's login entry is found where the core writes it`() {
+        val home = Files.createTempDirectory("as-core").toFile()
+        val appData = File(home, "Roaming").apply { mkdirs() }
+        val env = { k: String -> if (k == "APPDATA") appData.absolutePath else null }
+        assertFalse(Autostart.coreTrayStartsAtLogin(true, env, home.absolutePath))
+        // Built exactly as the check builds it: on Linux the backslashes are
+        // part of one directory name, so this asserts the string, not the OS.
+        File("${appData.absolutePath}\\Microsoft\\Windows\\Start Menu\\Programs\\Startup").let {
+            it.mkdirs(); File(it, "Huginn.lnk").writeText("lnk")
+        }
+        assertTrue(Autostart.coreTrayStartsAtLogin(true, env, home.absolutePath))
+        assertFalse(Autostart.coreTrayStartsAtLogin(false, { null }, home.absolutePath))
+        File(home, ".config/autostart").mkdirs()
+        File(home, ".config/autostart/huginn-core-tray.desktop").writeText("[Desktop Entry]")
+        assertTrue(Autostart.coreTrayStartsAtLogin(false, { null }, home.absolutePath))
+    }
 }

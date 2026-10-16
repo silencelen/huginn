@@ -92,6 +92,12 @@ class InstallerFirstRunTest {
             nsi.contains("Section /o \"Serve local AI models from this computer\" SEC_LOCALAI"),
             "local AI must not be ticked by default: an installer default should never be the expensive one",
         )
+        // Start-at-sign-in belongs to huginn core's tray since 2.3.3 (owner,
+        // 2026-10-16): the app's own Startup entry is the opt-in, not the default.
+        assertTrue(
+            Regex("""Section /o "[^"]*" SEC_AUTOSTART""").containsMatchIn(nsi),
+            "the app's own start-at-sign-in must not be ticked by default: the core's tray starts at sign-in",
+        )
     }
 
     @Test
