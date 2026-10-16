@@ -58,6 +58,17 @@ func core(args []string) int {
 	case "tray":
 		// The tray role (docs/CORE-ARCHITECTURE.md §3.1): started at graphical
 		// login, draws the icon and posts notifications that `core run` decides.
+		//
+		// --at-login: started by the "Huginn Tray" logon task. The tray at
+		// sign-in is ON only while its Startup shortcut is there and enabled
+		// (Task Manager's Startup tab), so a person who turned that off gets no
+		// tray from the task either, at once rather than after the next update.
+		if len(args) > 1 && args[1] == "--at-login" && runtime.GOOS == "windows" {
+			if o, err := service.WindowsDefaults(stableBinary()); err == nil &&
+				(!fileExists(o.StartupLnk()) || startupDisabled(service.TrayShortcut)) {
+				return 0
+			}
+		}
 		tray.DetachConsole()
 		p := paths()
 		tray.Run(tray.Options{Socket: daemon.SocketPath(p), Lock: filepath.Join(p.Runtime, "tray.lock")})

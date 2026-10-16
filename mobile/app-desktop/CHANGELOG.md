@@ -1,5 +1,10 @@
 # Huginn Desktop changelog
 
+## 2.3.5
+
+Carries core 2.3.5: on Windows the huginn tray now comes up properly at sign-in, without a console
+flash (details in the CLI changelog). Version 2.3.4 of the desktop was not released.
+
 ## 2.3.3
 
 Carries core 2.3.3.
