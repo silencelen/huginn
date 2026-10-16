@@ -462,11 +462,11 @@ thing a user should decide. The notifications are not affected.
 session 1; the core claims notifications for that tray. **Found:** an unelevated update restart
 could leave the core DOWN. The old core closes its socket before its process exits (shutdown waits
 up to 5 s on open event streams), Task Scheduler ignores `/Run` for a running instance, and the
-one `/Run` landed in that window. Fixed after 2.1.1: wait for the old pid, then repeat `/Run`
+one `/Run` landed in that window. Fixed in 2.1.2: wait for the old pid, then repeat `/Run`
 until the new core answers (proven twice on PRESTIGE, 9 s each). **Not explained:** right after
 the owner's update the core reported `tray: true` with no tray process running (and no tray
 started at login since). A killed tray, and a killed raw client, both drop the count within 2 s,
-so this was not reproduced; watch for it. **Still unchecked:** the Linux tray on stigo (SNI and
+so this was not reproduced; watch for it. The owner saw SEVERAL huginn tray icons after the update and closed each one. Windows leaves a dead icon behind for a process that was killed rather than quit, and the desktop installer runs `taskkill /F /T` on the app. Lead: which trays existed during an app update, and which of them were killed. **Still unchecked:** the Linux tray on stigo (SNI and
 notifications).
 
 **Security review of the 2.1.0 range (2026-10-15): no HIGH or CRITICAL.** Fixed before the cut:
