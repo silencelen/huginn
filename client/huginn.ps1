@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.3.0
+# Version: 2.3.1
 
-$script:HUGINN_VERSION = '2.3.0'
+$script:HUGINN_VERSION = '2.3.1'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -833,6 +833,7 @@ function _Huginn-HelpBody {
                               with nobody signed in - and pair it with the host
                               [--logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
+  huginn core start           start it now if it is set up but not running
   huginn core update          take the newest core release (restarts the core)
   huginn core uninstall       stop starting it at boot
   huginn device [status]      what THIS machine offers huginn, and what huginn

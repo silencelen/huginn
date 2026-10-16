@@ -169,8 +169,13 @@ func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 	}
 	var lastRun time.Time
 	said := false
-	// systemd's RestartSec is 10 s.
-	st, up := waitCore(30*time.Second, func(s coreSnapshot, up bool) bool {
+	// systemd's RestartSec is 10 s. Windows gets 20 s for its task before the
+	// direct start below.
+	wait := 30 * time.Second
+	if runtime.GOOS == "windows" {
+		wait = 20 * time.Second
+	}
+	st, up := waitCore(wait, func(s coreSnapshot, up bool) bool {
 		if up && s.Version == version.Version {
 			return true
 		}
@@ -183,6 +188,9 @@ func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 		}
 		return false
 	})
+	if !up && runtime.GOOS == "windows" {
+		st, up = startDirectly()
+	}
 	switch {
 	case up && st.Version == version.Version:
 		fmt.Printf("  restarted huginn core: %s -> %s\n", old, st.Version)
@@ -192,6 +200,22 @@ func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 		fmt.Printf("  huginn core has not come back yet%s\n", windowsRetryNote())
 	}
 	return st, up
+}
+
+// startDirectly starts the core itself when Task Scheduler holds its task
+// back. Seen on PRESTIGE (2026-10-16): on battery with Energy Saver on, every
+// start of the "Huginn Core" task was launched and QUEUED, never run, so an
+// update's restart left the core down until the laptop was charged. A core
+// started this way serves this login; the queued task, when it finally runs,
+// finds it listening and steps aside (ErrInUse), and the next boot is the
+// task's again.
+func startDirectly() (coreSnapshot, bool) {
+	fmt.Println("  Windows is holding the boot task back (Energy Saver on battery, or no logon server); starting huginn core directly")
+	if err := proc.StartIndependent(stableBinary(), "core", "run"); err != nil {
+		fmt.Println("  could not start it directly: " + err.Error())
+		return coreSnapshot{}, false
+	}
+	return waitCore(15*time.Second, func(_ coreSnapshot, up bool) bool { return up })
 }
 
 func windowsRetryNote() string {
