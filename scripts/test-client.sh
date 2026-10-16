@@ -1182,6 +1182,25 @@ else
   skip "ps1 desktop install answer (no pwsh)"
 fi
 
+echo "[6b2/8] the download bar on a slow start"
+# WHY: until curl has CREATED the output file, the bar's size probe fails its
+# redirection - and bash reports a failed redirection before a `2>/dev/null`
+# written after it applies. Every redraw then printed "No such file or
+# directory" over the bar (cli 2.4.0, seen on a first install). A curl that
+# creates the file late, drawn on a real terminal (script(1)).
+if command -v script >/dev/null 2>&1; then
+  SD="$(mktemp -d)"; mkdir -p "$SD/stub"
+  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\nsleep 0.6; head -c 300000 /dev/zero > "$out"\n' > "$SD/stub/curl"
+  chmod +x "$SD/stub/curl"
+  timeout 20 env PATH="$SD/stub:$PATH" TERM=xterm script -qfec "bash -c '. client/huginn.sh; _huginn_ui_download http://x/y $SD/out 300000 core; echo RC=\$?'" /dev/null </dev/null > "$SD/raw" 2>&1
+  ! grep -q 'No such file' "$SD/raw" && grep -q 'RC=0' "$SD/raw" && [ "$(wc -c < "$SD/out")" = 300000 ] \
+    && ok "download bar: no errors while the file does not exist yet" || bad "download bar on a slow start drew: $(tr '\r' '\n' < "$SD/raw" | grep -v '^$' | head -3)"
+  rm -rf "$SD"
+else
+  skip "download bar slow start (no script(1))"
+fi
+echo
+
 echo "[6c/8] huginn core: the shell is a door to the Go binary, and device follows it"
 # A FAKE core binary in a scratch HOME: these checks are about what the client
 # hands the binary, not about the core (core/test/e2e.sh holds that).
