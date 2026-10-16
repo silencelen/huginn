@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.3.0] - 2026-10-15
 
 ### Added
 - **The huginn console.** Plain `huginn` in a terminal now opens a full-screen console with menus for

@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 2.3.0
+
+Carries core 2.3.0. The core now includes the huginn console, so plain `huginn` in a terminal on a
+machine set up from the desktop installer opens the console, and `huginn setup ssh` adds the SSH side
+when you want to attach to sessions from a terminal. The app itself is unchanged apart from the
+bundled core.
+
 ## 2.2.0
 
 Carries core 2.2.0. The desktop is now a layer on top of huginn core, which includes the CLI.
