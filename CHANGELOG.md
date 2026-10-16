@@ -8,6 +8,22 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.3.4] - 2026-10-16
+
+### Changed
+- **`huginn update` updates everything huginn on the machine:** the client and huginn core as before,
+  then the desktop app and the local-AI tier, whichever are installed. It used to stop after the
+  core.
+  - **Windows:** the desktop installer comes from the newest release, is checked against the sha256
+    in that release's manifest, and runs silently (it is per-user: no administrator). An app that
+    was open is opened again.
+  - **Linux, per-user app:** updated through the same verified path as `huginn desktop install`.
+  - **Linux, Debian or Arch package:** downloaded, checked against its sha256, then installed with
+    `sudo` from a terminal. Without a terminal, the exact command is printed.
+  - **Local-AI tier:** `huginn local update` runs from a terminal, since it asks before it changes
+    anything.
+- **`huginn desktop update`** (new) does the desktop step on its own.
+
 ## [2.3.3] - 2026-10-16
 
 ### Changed
