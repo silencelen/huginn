@@ -19,10 +19,10 @@ func TestSummarize(t *testing.T) {
 	if s.State != traystate.Attention || strings.Join(s.Attention, ",") != "a,b" || s.Working != 2 || !s.Connected {
 		t.Fatalf("%+v", s)
 	}
-	if s.Tooltip != "huginn — 2 sessions need you" {
+	if s.Tooltip != "Huginn — 2 sessions need you" {
 		t.Fatal(s.Tooltip)
 	}
-	if s := summarize(notify.Watch{Sessions: map[string]string{"c": notify.StateRunning}}); s.State != traystate.Working || s.Tooltip != "huginn — 1 working" {
+	if s := summarize(notify.Watch{Sessions: map[string]string{"c": notify.StateRunning}}); s.State != traystate.Working || s.Tooltip != "Huginn — 1 working" {
 		t.Fatalf("%+v", s)
 	}
 	if s := summarize(notify.Watch{}); s.State != traystate.Idle {

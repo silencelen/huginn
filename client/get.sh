@@ -113,7 +113,11 @@ else
   # install.sh asks for the host when none was given; with no terminal at all
   # (automation) the host must be the argument.
   [ -n "$HOST" ] || has_tty || die host "no terminal to ask on - pass the host: sh -s -- <host>"
-  if [ -n "$HOST" ]; then HUGINN_SETUP=1 bash "$T/install.sh" "$HOST" < "$IN"; else HUGINN_SETUP=1 bash "$T/install.sh" < "$IN"; fi
+  if [ -n "$HOST" ]; then HUGINN_SETUP=1 HUGINN_APPD_URL_FILE="$T/appd-url" bash "$T/install.sh" "$HOST" < "$IN"
+  else HUGINN_SETUP=1 HUGINN_APPD_URL_FILE="$T/appd-url" bash "$T/install.sh" < "$IN"; fi
+  # huginn's address, as install.sh worked it out from what was typed: pairing
+  # uses it when ssh cannot fetch the token (run 7).
+  [ -s "$T/appd-url" ] && { HUGINN_APPD_URL="$(cat "$T/appd-url")"; export HUGINN_APPD_URL; }
   ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
   # huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it.
   if [ -z "$CAN_CORE" ]; then
@@ -121,10 +125,9 @@ else
       *) line skip core "does not run on Termux: this phone uses the CLI (the huginn app is the device)" ;; esac
   else
     # Its own lines join this block: download, binary, service, linger, tray,
-    # and pairing - which waits for the host's trust when there is none yet.
-    NOPAIR=""; [ -n "$TRUSTED" ] || NOPAIR=1
-    if HUGINN_SETUP=1 HUGINN_CORE_NOPAIR="$NOPAIR" \
-         bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install' < "$IN"; then CORE=1; PAIRED="$TRUSTED"
+    # and pairing - which, without ssh to the host, asks for the token (run 7).
+    if HUGINN_SETUP=1 bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install' < "$IN"; then CORE=1
+      "$HOME/.local/bin/huginn" core status 2>/dev/null | grep -q 'not paired' || PAIRED=1
     elif [ -x "$HOME/.local/bin/huginn" ]; then CORE=1   # in place; a later step (pairing) failed, and said why above
     else line fail core "did not finish - run it again to see why: huginn core install"; fi
   fi
@@ -158,18 +161,16 @@ if [ -n "$GUI" ] && [ -n "$CORE" ]; then
   say "Huginn is open: its setup connects huginn core to huginn (the address, then the token),"
   say "and offers this machine as a device. Close this terminal whenever you like."
   say "$(color 90)Attaching to sessions from a terminal uses SSH; set that up any time with: huginn setup ssh$(color 0)"
-elif [ -z "$TRUSTED" ]; then
-  say "huginn is installed, but the host does not trust this computer yet."
-  say "Authorize the key shown above on the host, then run:  huginn core install"
-  say "(it pairs huginn core with the host), and to offer this machine:  huginn device on"
 elif [ -n "$CORE" ] && [ -z "$PAIRED" ]; then
-  say "huginn is installed, but huginn core is not paired with the host yet (above says why)."
-  say "Once that is fixed, run:  huginn core install   (everything else is already in place)"
+  say "huginn is installed, but huginn core is not paired with huginn yet (above says why)."
+  say "Pair it any time:  huginn core pair --url ${HUGINN_APPD_URL:-https://<host>:8787}   (asks for the token)"
+  say "then offer this machine:  huginn device on"
 elif [ -z "$CORE" ] && [ -z "$(uname -o 2>/dev/null | grep Android)" ] && [ "$(uname -s)" != Darwin ]; then
   say "The CLI is installed, but huginn core is not (above says why): huginn core install"
 else
   say "huginn is set up. Open a new terminal and run:  huginn"
   say "That opens the console; huginn help lists every command."
+  [ -n "$GUI" ] || [ -n "$TRUSTED" ] || say "$(color 90)Attaching to sessions from a terminal needs ssh to the host; set that up any time with: huginn setup ssh$(color 0)"
 fi
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)
   [ -n "$CORE" ] && say "$(color 90)~/.local/bin is not on this shell's PATH; a new login shell adds it on most systems.$(color 0)" ;;

@@ -11,7 +11,35 @@ const (
 	// EventCoreTray is {"attached": bool}: whether a tray role is attached. The
 	// desktop GUI stands its own tray and notifier down while it is true.
 	EventCoreTray = "coretray"
+	// EventGUI is a GUI: whether the desktop app is attached, and its "Close
+	// to tray" setting. The tray then carries the app's items (owner rule
+	// 2026-10-17: one icon, one menu).
+	EventGUI = "coregui"
+	// EventGUICmd is a GUICmd for the desktop app, sent by the tray through
+	// POST /core/gui. Never retained: a stored "quit" would close every app
+	// that connects later.
+	EventGUICmd = "gui.cmd"
 )
+
+// GUI is the desktop app as the tray needs to know it.
+type GUI struct {
+	Attached    bool `json:"attached"`
+	CloseToTray bool `json:"closeToTray"`
+}
+
+// GUI commands.
+const (
+	CmdOpen        = "open"        // bring the window up; URL, when set, is a huginn:// target
+	CmdQuit        = "quit"        // quit the app (huginn core keeps running)
+	CmdCloseToTray = "closeToTray" // set "Close to tray" to Value
+)
+
+// GUICmd is one command for the desktop app.
+type GUICmd struct {
+	Cmd   string `json:"cmd"`
+	Value *bool  `json:"value,omitempty"`
+	URL   string `json:"url,omitempty"`
+}
 
 // States of the icon, the brand's state ladder (BRAND.md §2).
 const (

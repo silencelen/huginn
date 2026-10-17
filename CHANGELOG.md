@@ -8,6 +8,45 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.7] - 2026-10-17
+
+From the owner's sixth and seventh recorded installs on PRESTIGE. The sixth confirmed the uninstall no
+longer opens a "ping" window. The seventh took the terminal-only path, without the desktop app.
+
+### Fixed
+- **`huginn uninstall` removes local AI on Windows.** Once its services stopped, the model server
+  still held its files for a moment, and deleting the folder failed with `EPERM`. The removal now
+  waits up to 15 s for anything still running from the folder, ends what is left, and retries the
+  delete.
+- **A second `huginn uninstall` can still remove local AI** after the first one could not. The
+  first had removed the CLI, which holds the local-AI manager, so the second had nothing to run it
+  with. The core now carries a copy of the manager and uses it.
+- **No visible console during uninstall.** The elevated step that deletes the boot task runs hidden.
+  The visible window showed nothing, and a click on it paused the step.
+- **No Linux `systemctl` hints on Windows** when local AI is turned off.
+- **Terminal setup pairs without SSH** (run 7: the host refuses port 22 from PRESTIGE). When SSH to
+  the host does not answer, setup asks for huginn's token, typed or pasted and never shown, and
+  pairs over huginn's own port. Then it goes on to offer the device and local AI. `huginn core
+  install` does the same instead of printing a raw `ssh: connect … timed out`. Before, nothing
+  paired.
+- **The host prompt takes huginn's address as people know it.** `192.168.2.117:8787` or
+  `https://192.168.2.117:8787` gives SSH the bare host and keeps the address for pairing. It used to
+  become an SSH host name that resolved nowhere.
+- **No "Press Enter when that is done" when there is nothing to do.** With SSH not answering at all,
+  setup says that attaching from a terminal needs SSH, and moves on.
+- **`huginn core pair` no longer shows the token as it is typed or pasted.**
+
+### Changed
+- **One tray icon, one menu** (owner). huginn core's tray icon now carries the desktop app's items
+  while the app is open: **Close to tray** and **Quit Huginn**, under Open Huginn and the sessions
+  that need you. The app no longer needs an icon of its own beside it. Clicks reach the app through
+  the core (`POST /core/gui`), sent once and never replayed to an app that connects later. Open
+  Huginn brings a running window up directly, without starting a second process to pass the click
+  on.
+- **"Quit tray" is now "Hide this icon".** Next to "Quit Huginn" it read like the same thing. It
+  takes the icon away until the next sign-in, and huginn core keeps running.
+- **The tray's tooltip reads "Huginn — idle"**, capitalised like the rest of the prose (BRAND.md).
+
 ## [2.5.6] - 2026-10-17
 
 From the owner's fifth recorded install on PRESTIGE.

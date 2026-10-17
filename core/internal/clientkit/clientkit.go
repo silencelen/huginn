@@ -36,6 +36,11 @@ var llmShim []byte
 // never asked for the local-AI tier is not given one.
 var satellites = map[string][]byte{"huginn-local": localManager, "huginn-llm-shim": llmShim}
 
+// LocalManager is the huginn-local this core carries: what `huginn uninstall`
+// runs when ~/.huginn holds none (an earlier uninstall removed the CLI after
+// the local tier refused to go, run 7), so the tier can still be removed.
+func LocalManager() []byte { return localManager }
+
 // The lines install.sh / install.ps1 write. Matched WHOLE-LINE on removal, so
 // a line somebody wrote by hand is reported, never rewritten.
 const (

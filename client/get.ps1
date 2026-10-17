@@ -114,11 +114,16 @@ try {
     # huginn core IS the product (owner rule 2026-10-15): the CLI rides inside
     # it. Its lines join this block, and pairing waits for the host's trust.
     $env:HUGINN_SETUP = '1'
-    if (-not $trusted) { $env:HUGINN_CORE_NOPAIR = '1' }
+    # Pairing does not wait for ssh: without it, the core install asks for the
+    # token instead (run 7: the host refused port 22, and nothing paired).
     # A refusal in the client throws (_Huginn-Fail), so getting past the call is
     # success. A refusal AFTER the core is in place (pairing) has already said
     # why in its own line.
-    try { huginn core install; $core = $true; $paired = $trusted }
+    try {
+      huginn core install; $core = $true
+      $cb = "$env:LOCALAPPDATA\huginn\bin\huginn.exe"
+      $paired = (Test-Path $cb) -and (((& $cb core status 2>$null) -join "`n") -notmatch 'not paired')
+    }
     catch {
       if (Test-Path "$env:LOCALAPPDATA\huginn\bin\huginn.exe") { $core = $true }
       else { _Huginn-UiLine 'fail' 'core' "did not finish: $($_.Exception.Message)"; _Huginn-UiNote 'run it again to see why: huginn core install' }
@@ -164,18 +169,19 @@ if ($withDesktop -and $core) {
   Write-Host '    Huginn is open: its setup connects huginn core to huginn (the address, then the token),'
   Write-Host '    and offers this machine as a device. Close this window whenever you like.'
   _Huginn-Say '    Attaching to sessions from a terminal uses SSH; set that up any time with: huginn setup ssh' DarkGray
-} elseif (-not $withDesktop -and -not $trusted) {
-  Write-Host '    huginn is installed, but the host does not trust this computer yet.'
-  Write-Host '    Authorize the key shown above on the host, then run:  huginn core install'
-  Write-Host '    (it pairs huginn core with the host), and to offer this machine:  huginn device on'
 } elseif ($core -and -not $paired -and -not $withDesktop) {
-  Write-Host '    huginn is installed, but huginn core is not paired with the host yet (above says why).'
-  Write-Host '    Once that is fixed, run:  huginn core install   (everything else is already in place)'
+  $pairUrl = if ($env:HUGINN_APPD_URL) { $env:HUGINN_APPD_URL } else { 'https://<host>:8787' }
+  Write-Host '    huginn is installed, but huginn core is not paired with huginn yet (above says why).'
+  Write-Host "    Pair it any time:  huginn core pair --url $pairUrl   (asks for the token)"
+  Write-Host '    then offer this machine:  huginn device on'
 } elseif (-not $core) {
   Write-Host '    huginn core did not install (above says why): huginn core install'
 } else {
   Write-Host '    huginn is set up. Run:  huginn'
   Write-Host '    That opens the console; huginn help lists every command.'
+  if (-not $withDesktop -and -not $trusted) {
+    _Huginn-Say '    Attaching to sessions from a terminal needs ssh to the host; set that up any time with: huginn setup ssh' DarkGray
+  }
 }
 _Huginn-Say ("    done in {0} s" -f [int]$t0.Elapsed.TotalSeconds) DarkGray
 } $HuginnHost $Gui

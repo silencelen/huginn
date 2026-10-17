@@ -1,5 +1,22 @@
 # Huginn Desktop changelog
 
+## 2.5.7
+
+Carries core 2.5.7. From the owner's sixth recorded setup run on PRESTIGE.
+
+### Changed
+- **One tray icon, one menu** (owner). While huginn core's tray icon is there, it carries this app's
+  Close to tray and Quit Huginn, and this app shows no icon of its own. **Close to tray now works
+  with it:** closing the window hides it, and the tray's Open Huginn brings it back. Before, closing
+  always quit while the core's tray was attached. The app's own icon still appears wherever the core
+  has no tray.
+
+### Fixed
+- **Setup's list says "downloaded; turning on the services" once the downloads are in,** instead of
+  the manager's own notes ("note: the front door answers without the key…"). The card keeps the
+  manager's lines.
+- **The local-AI card's Details can be hidden again** ("Hide details").
+
 ## 2.5.6
 
 Carries core 2.5.6. From the owner's fifth recorded setup run on PRESTIGE.

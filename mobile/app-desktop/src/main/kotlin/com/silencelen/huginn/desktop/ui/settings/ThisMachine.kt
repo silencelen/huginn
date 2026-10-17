@@ -366,7 +366,14 @@ internal object LocalServeFlow {
         // Setup's rail follows the install wherever the reader is: run 5 left
         // the step on "read the plan, then Download" for the whole download.
         val p = progress.value
-        val detail = if (p != null && p.doneMb < p.totalMb) "downloading ${p.words}" else l.trim()
+        // Once the downloads are in, the manager's lines are its own notes
+        // (run 6's list read "note: the front door answers without the key…");
+        // the list says what is happening in words, the card keeps the lines.
+        val detail = when {
+            p != null && p.doneMb < p.totalMb -> "downloading ${p.words}"
+            p != null -> "downloaded; turning on the services"
+            else -> l.trim()
+        }
         com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
             it.working(com.silencelen.huginn.settings.SetupStep.LOCAL_AI, detail)
         }
@@ -682,8 +689,9 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
     // The manager's own words, raw: if it ever lies, the lie is inspectable.
     // Once it is serving and nothing runs, they fold away behind Details:
     // run 4's card ended on its guardrail notes, which read as warnings.
-    if (log.isNotEmpty() && engineUp && !busy && !details) {
-        TextButton(onClick = { details = true }) { Text("Details") }
+    if (log.isNotEmpty() && engineUp && !busy) {
+        TextButton(onClick = { details = !details }) { Text(if (details) "Hide details" else "Details") }
+        if (details) log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
     } else {
         log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
     }

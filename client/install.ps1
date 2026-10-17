@@ -15,8 +15,22 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $t0 = [Diagnostics.Stopwatch]::StartNew()
 function Tilde([string]$p) { if ($p.StartsWith($HOME, [StringComparison]::OrdinalIgnoreCase)) { '~' + $p.Substring($HOME.Length) } else { $p } }
 if (-not $env:HUGINN_SETUP) { _Huginn-UiHead 'huginn client install' }
-if (-not $HuginnHost) { $HuginnHost = Read-Host '    Huginn host (IP or DNS name reachable over SSH)' }
+if (-not $HuginnHost) { $HuginnHost = Read-Host '    Huginn host (its IP address or name)' }
 if (-not $HuginnHost) { _Huginn-UiLine 'fail' 'host' 'no host given - run it again with the host: -HuginnHost <host>'; throw 'huginn: no host given' }
+# People type huginn's address as they know it, https:// and :8787 included
+# (run 7: "192.168.2.117:8787" became an ssh host name that resolved nowhere).
+# ssh gets the bare host; pairing later uses the address.
+$hg = $HuginnHost.Trim()
+if ($hg -match '^(?:https?://)?(\[[^\]]+\]|[^/:]+)(?::(\d+))?(?:/.*)?$') {
+  $bare = $Matches[1]; $port = $Matches[2]
+  if ($hg -match '^https?://' -or ($port -and $port -ne '22')) {
+    $scheme = if ($hg -match '^http://') { 'http' } else { 'https' }
+    $env:HUGINN_APPD_URL = "${scheme}://${bare}:" + $(if ($port -and $port -ne '22') { $port } else { '8787' })
+  }
+  $HuginnHost = $bare.Trim('[', ']')   # ssh takes an IPv6 address bare
+  # Without a port or scheme, huginn's own port on the same host.
+  if (-not $env:HUGINN_APPD_URL) { $env:HUGINN_APPD_URL = "https://${bare}:8787" }
+}
 New-Item -ItemType Directory -Force "$HOME\.ssh" | Out-Null
 
 # 1. SSH key: yours when there is one (it is very likely the one your other
@@ -102,8 +116,14 @@ if ($why -eq 'denied' -or $why -eq 'hostkey') {
   Write-Host "      echo '$((Get-Content "$Key.pub" -Raw).Trim())' >> ~/.ssh/authorized_keys"
   Write-Host ''
 }
-if ($why -ne 'ok' -and $why -ne 'changed' -and $interactive) {
-  Read-Host '    Press Enter when that is done (Ctrl-C to finish later)' | Out-Null
+# Waiting for a person only when there is something for them to do on the
+# host. ssh not answering at all (no port 22 from here) has nothing to wait
+# for: it said "Press Enter when that is done" to nobody (run 7). Pairing goes
+# over huginn's own port, and asks for the token instead.
+if ($why -match '^unreachable') {
+  _Huginn-UiNote 'Attaching to sessions from a terminal needs ssh to the host; everything else uses huginn''s own port.'
+} elseif ($why -ne 'ok' -and $why -ne 'changed' -and $interactive) {
+  Read-Host '    Press Enter once the key is added (Ctrl-C to finish later)' | Out-Null
   $why = Test-HuginnSsh
   Show-HuginnTrust $why
 }

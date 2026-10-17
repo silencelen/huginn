@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.6
+# Version: 2.5.7
 
-HUGINN_VERSION='2.5.6'
+HUGINN_VERSION='2.5.7'
 HUGINN_REPO='silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which it then
 # sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
@@ -430,6 +430,12 @@ _huginn_core_pair() {
     [ "${2:-}" = say ] && _huginn_ui_line ok paired "$(sed -n 's/^  huginn: *//p' <<< "$st" | head -1)"
     return 0
   fi
+  # Can the token be fetched over ssh? When ssh does not answer (no port 22
+  # from here, a key not trusted yet), the person pastes it instead: pairing
+  # itself goes over huginn's own port and needs no ssh (run 7).
+  if ! ssh -T -o BatchMode=yes -o ConnectTimeout=8 "$H" true >/dev/null 2>&1; then
+    _huginn_core_pair_by_token "$bin" "$H"; return
+  fi
   srv="$(_huginn_srv_url "$H")"
   if [ -z "$srv" ]; then
     _huginn_ui_line fail paired "could not work out $H's daemon address"
@@ -445,6 +451,42 @@ _huginn_core_pair() {
     rm -f "$log"; return 1
   fi
   rm -f "$log"
+}
+
+# Pairs huginn core with a token the person pastes, at the address the ssh
+# alias names (ssh -G reads the config without connecting) or the one the
+# installer was given ($HUGINN_APPD_URL). Not echoed. Without a terminal to
+# ask on, says the one command that does it.
+_huginn_core_pair_by_token() {
+  local bin="$1" H="$2" srv hn tok out rc
+  srv="${HUGINN_APPD_URL:-}"
+  if [ -z "$srv" ]; then
+    hn="$(ssh -G "$H" 2>/dev/null | sed -n 's/^hostname //p' | head -1)"
+    [ -n "$hn" ] && [ "$hn" != "$H" ] && srv="https://$hn:8787"
+  fi
+  if [ -z "$srv" ]; then
+    _huginn_ui_line warn paired "not yet: ssh to $H did not answer, and its address is not known here"
+    printf '                  pair with the token: huginn core pair --url https://<host>:8787\n' >&2
+    return 0
+  fi
+  if ! ( : < /dev/tty ) 2>/dev/null; then
+    _huginn_ui_line warn paired "not yet: ssh to $H did not answer - pair with the token: huginn core pair --url $srv"
+    return 0
+  fi
+  _huginn_ui_line warn paired "ssh to $H did not answer, so the token cannot be fetched from the host"
+  printf '                  %shuginn core can pair with it pasted here instead (on the host: sudo cat /etc/huginn-appd/token).%s\n' "$(_huginn_ui_c 90)" "$(_huginn_ui_c 0)" >&2
+  printf "    huginn's token for %s (not shown; Enter to skip): " "$srv" >&2
+  IFS= read -rs tok < /dev/tty || tok=""
+  printf '\n' >&2
+  tok="$(printf '%s' "$tok" | tr -d '[:space:]')"
+  if [ -z "$tok" ]; then _huginn_ui_line skip paired "not yet - huginn core pair --url $srv, any time"; return 0; fi
+  out="$(printf '%s\n' "$tok" | "$bin" core pair --url "$srv" 2>&1)"; rc=$?
+  tok=""
+  if [ "$rc" -eq 0 ]; then _huginn_ui_line ok paired "$(printf '%s' "$out" | head -1 | sed 's/^paired with //')"
+  else
+    _huginn_ui_line fail paired "could not pair with $srv"; printf '%s\n' "$out" | sed 's/^/                  /' >&2
+    printf '                  try again: huginn core pair --url %s\n' "$srv" >&2
+  fi
 }
 
 # Is release $2 newer than the installed core $1? A prerelease (2.1.0-rc.1)

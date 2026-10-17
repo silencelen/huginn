@@ -510,11 +510,23 @@ func corePair(args []string) int {
 	}
 	tok := os.Getenv("HUGINN_APPD_TOKEN")
 	if tok == "" {
-		if fi, _ := os.Stdin.Stat(); fi != nil && fi.Mode()&os.ModeCharDevice != 0 {
-			fmt.Print("appd token: ")
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			// Typed or pasted at a prompt: not echoed (it was, and a pasted
+			// token then sat in the scrollback; run 3 showed one in a recording).
+			fmt.Print("huginn's token (on the host: sudo cat /etc/huginn-appd/token): ")
+			b, err := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Println()
+			if err == nil {
+				tok = strings.TrimSpace(string(b))
+			}
+		} else {
+			line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+			tok = strings.TrimSpace(line)
 		}
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		tok = strings.TrimSpace(line)
+	}
+	if tok == "" {
+		fmt.Fprintln(os.Stderr, "huginn core pair: no token given - nothing was changed")
+		return 2
 	}
 	var out map[string]string
 	if _, err := call(http.MethodPost, "/core/pair", daemon.Pair{URL: *url, Token: tok}, &out); err != nil {

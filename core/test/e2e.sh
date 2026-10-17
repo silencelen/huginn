@@ -157,6 +157,23 @@ grep -q '"tray":true' <<< "$(curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Pro
 GUIVIEW="$(timeout 2 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events' 2>/dev/null || true)"
 grep -A1 '^event: coretray' <<< "$GUIVIEW" | grep -q '"attached":true' \
   && ok "a GUI subscriber is told the core tray is attached (it stands its own down)" || bad "no coretray event for the GUI"
+# One icon, one menu (owner rule 2026-10-17): the app attaches as role=gui, the
+# tray is told so and is given the app's Close to tray, and the tray's Quit
+# Huginn reaches the app through the core, once.
+curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events?role=gui' > "$T/gui.log" 2>/dev/null &
+GUI=$!
+for _ in $(seq 50); do grep -q '"attached":true,"closeToTray"' "$T/events.log" 2>/dev/null && break; sleep 0.1; done
+curl -s --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' -H 'Content-Type: application/json' -d '{"closeToTray":false}' http://core/core/presence > /dev/null
+for _ in $(seq 50); do grep -q '"attached":true,"closeToTray":false' "$T/events.log" && break; sleep 0.1; done
+grep -q '"attached":true,"closeToTray":false' "$T/events.log" \
+  && ok "the tray is told the app is open, with its Close to tray" || bad "no coregui for the tray: $(grep -A1 coregui "$T/events.log" | tail -2)"
+C="$(curl -s -o /dev/null -w '%{http_code}' --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' -H 'Content-Type: application/json' -d '{"cmd":"quit"}' http://core/core/gui)"
+for _ in $(seq 50); do grep -q '"cmd":"quit"' "$T/gui.log" && break; sleep 0.1; done
+[ "$C" = 202 ] && grep -q '"cmd":"quit"' "$T/gui.log" \
+  && ok "the tray's Quit Huginn reaches the app through the core" || bad "gui command: $C $(tail -2 "$T/gui.log")"
+kill $GUI 2>/dev/null; wait $GUI 2>/dev/null
+LATE="$(timeout 1 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://core/core/events?role=gui' 2>/dev/null || true)"
+grep -q 'gui.cmd' <<< "$LATE" && bad "a later app was replayed the quit" || ok "a later app is not replayed a command"
 tmux -L "huginn-core-e2e-$$" new-session -d -s notifye2e 'sleep 600'
 sleep 2   # let a digest with the session in it seed the baseline first
 printf '{"state":"attention","ts":%s}' "$(date +%s%3N)" > "$T/appd/state/notifye2e"
