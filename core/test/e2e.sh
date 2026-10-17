@@ -80,6 +80,13 @@ px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && ok "unpinned: 
 "$T/huginn" core route remove "$DEAD" >/dev/null 2>&1
 python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));assert not c['appd'].get('routes') and not c['appd'].get('pinned'),c['appd']" \
   && ok "core route remove: gone from core.json" || bad "core route remove"
+# The local tier's token comes from the core (the desktop never holds one).
+# (The core reads the tier's default place under this test's own HOME.)
+LT="$HOME/.config/huginn-local/device/appd-token"
+SEED=$(px -X POST http://huginn-core/core/local/seed)
+[ "$(cat "$LT" 2>/dev/null)" = "$TOK" ] && [ "$(stat -c %a "$LT")" = 600 ] && grep -q '"url":"http' <<<"$SEED" \
+  && ok "core/local/seed: the tier's token file from the core's own store, 0600, and the address to use" || bad "local seed: $SEED"
+rm -rf "$HOME/.config/huginn-local"   # no tier here for the uninstall check below to find
 
 # huginn console against the real core and appd, in a pty (script(1)): it
 # draws Home from live data and quits on q.
