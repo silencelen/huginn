@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.6
+# Version: 2.5.7
 
-$script:HUGINN_VERSION = '2.5.6'
+$script:HUGINN_VERSION = '2.5.7'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -789,6 +789,13 @@ function _Huginn-CorePair {
     if ($Say -and $st -match '(?m)^  huginn:\s+(\S+)') { _Huginn-UiLine 'ok' 'paired' $Matches[1] }
     return
   }
+  # Can the token be fetched over ssh? When ssh does not answer (no port 22
+  # from here, a key not trusted yet), the person pastes it instead: pairing
+  # itself goes over huginn's own port and needs no ssh (run 7).
+  $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+  try { & ssh -T -o BatchMode=yes -o ConnectTimeout=8 $H true 2>&1 | Out-Null; $sshOk = ($LASTEXITCODE -eq 0) }
+  finally { $ErrorActionPreference = $eap }
+  if (-not $sshOk) { _Huginn-CorePairByToken $Bin $H; return }
   $srv = _Huginn-SrvUrl $H
   if (-not $srv) {
     _Huginn-UiLine 'fail' 'paired' "could not work out $H's daemon address"
@@ -809,6 +816,45 @@ function _Huginn-CorePair {
   else {
     _Huginn-UiLine 'fail' 'paired' "could not pair with $srv"; $out | ForEach-Object { _Huginn-UiNote ([string]$_) }
     _Huginn-Fail "huginn core: pairing with $srv failed"
+  }
+}
+
+# Pairs huginn core with a token the person pastes, at the address the ssh
+# alias names (ssh -G reads the config without connecting) or the one the
+# installer was given ($env:HUGINN_APPD_URL). Not echoed. Without a terminal
+# to ask in, says the one command that does it.
+function _Huginn-CorePairByToken([string]$Bin, [string]$H) {
+  $srv = $env:HUGINN_APPD_URL
+  if (-not $srv) {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $hn = @(& ssh -G $H 2>$null | Where-Object { $_ -match '^hostname ' }) | Select-Object -First 1 } finally { $ErrorActionPreference = $eap }
+    $hn = ([string]$hn -replace '^hostname ', '').Trim()
+    if ($hn -and $hn -ne $H) { $srv = "https://${hn}:8787" }
+  }
+  if (-not $srv) {
+    _Huginn-UiLine 'warn' 'paired' "not yet: ssh to $H did not answer, and its address is not known here"
+    _Huginn-UiNote 'pair with the token: huginn core pair --url https://<host>:8787'
+    return
+  }
+  if (-not ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)) {
+    _Huginn-UiLine 'warn' 'paired' "not yet: ssh to $H did not answer - pair with the token: huginn core pair --url $srv"
+    return
+  }
+  _Huginn-UiLine 'warn' 'paired' "ssh to $H did not answer, so the token cannot be fetched from the host"
+  _Huginn-UiNote 'huginn core can pair with it pasted here instead (on the host: sudo cat /etc/huginn-appd/token).'
+  $sec = Read-Host "    huginn's token for $srv (not shown; Enter to skip)" -AsSecureString
+  $tok = ([System.Net.NetworkCredential]::new('', $sec).Password).Trim()
+  if (-not $tok) { _Huginn-UiLine 'skip' 'paired' "not yet - huginn core pair --url $srv, any time"; return }
+  $enc = [Console]::OutputEncoding
+  try {
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    $out = @($tok | & $Bin core pair --url $srv 2>&1)
+    $rc = $LASTEXITCODE
+  } finally { [Console]::OutputEncoding = $enc; $tok = $null }
+  if ($rc -eq 0) { _Huginn-UiLine 'ok' 'paired' (([string]$out[0]) -replace '^paired with ', '') }
+  else {
+    _Huginn-UiLine 'fail' 'paired' "could not pair with $srv"; $out | ForEach-Object { _Huginn-UiNote ([string]$_) }
+    _Huginn-UiNote "try again: huginn core pair --url $srv"
   }
 }
 

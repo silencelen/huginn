@@ -29,6 +29,8 @@ type watcher struct {
 	d        *Daemon
 	trays    atomic.Int32 // tray roles attached to /core/events right now
 	senders  atomic.Int32 // of those, the ones that can show a notification
+	guis     atomic.Int32 // desktop apps attached (role=gui)
+	keepTray atomic.Int32 // the app's "Close to tray": 1 on, 0 off (on until it says)
 	mu       sync.Mutex
 	baseline notify.Baseline // survives stream reconnects: a reconnect is not news
 	focused  string          // the GUI's current target key, while it is fresh
@@ -104,7 +106,7 @@ func (w *watcher) run(ctx context.Context, api *appd.Client) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.publishSummary(traystate.Summary{State: traystate.Idle, Tooltip: "huginn — not reaching huginn", Connected: false})
+		w.publishSummary(traystate.Summary{State: traystate.Idle, Tooltip: "Huginn — not reaching huginn", Connected: false})
 		if err != nil {
 			w.d.logf("watch: %v (retrying in %s)", err, backoff)
 		} else {
@@ -190,18 +192,18 @@ func summarize(wd notify.Watch) traystate.Summary {
 		}
 	}
 	sort.Strings(attention)
-	s := traystate.Summary{State: traystate.Idle, Tooltip: "huginn — idle", Working: working, Connected: true}
+	s := traystate.Summary{State: traystate.Idle, Tooltip: "Huginn — idle", Working: working, Connected: true}
 	switch {
 	case len(attention) > 0:
 		s.State = traystate.Attention
 		if len(attention) == 1 {
-			s.Tooltip = "huginn — " + attention[0] + " needs you"
+			s.Tooltip = "Huginn — " + attention[0] + " needs you"
 		} else {
-			s.Tooltip = fmt.Sprintf("huginn — %d sessions need you", len(attention))
+			s.Tooltip = fmt.Sprintf("Huginn — %d sessions need you", len(attention))
 		}
 	case working > 0:
 		s.State = traystate.Working
-		s.Tooltip = fmt.Sprintf("huginn — %d working", working)
+		s.Tooltip = fmt.Sprintf("Huginn — %d working", working)
 	}
 	if len(attention) > traystate.MenuCap {
 		attention = attention[:traystate.MenuCap]

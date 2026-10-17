@@ -35,7 +35,7 @@ never be installed without the core; installing the CLI offers the GUI.
 | D3 | **Per-user, starts at boot without a login.** Linux: `systemd --user` + `loginctl enable-linger`. Windows: boot-time scheduled task as the account. | Act mode needs the user's `~/.claude` login and must act as the user. |
 | D4 | **The local-AI engine stays a machine-scope service** that the core installs and supervises. | llama-swap as today (systemd system unit / WinSW LocalSystem). Root only here. |
 | D5 | **The core owns the tray and the notifications.** | SNI on Linux, Win32 on Windows. Headless boxes simply have no tray. |
-| D6 | **Closing the GUI window quits the GUI process.** | The tray relaunches it. No JVM idling in the background; "Close to tray" goes away. |
+| D6 | ~~Closing the GUI window quits the GUI process.~~ **Retired 2026-10-17 (owner): one tray icon, one menu.** | The core's tray carries the app's items while it is open (Open Huginn, Close to tray, Quit Huginn; its own "Hide this icon" last), and "Close to tray" works with it. The app attaches as `/core/events?role=gui`, reports Close to tray in `/core/presence`, and the tray's clicks reach it as `gui.cmd` through `POST /core/gui`, sent once and never replayed. The app's own icon shows only where the core has no tray. |
 | D7 | **Per-user install, no root**, self-updating. | `~/.local/share/huginn`, `%LOCALAPPDATA%\huginn`. See §7 for how distro packages fit. |
 | D8 | **One bootstrap script per OS** is the primary entry point. | `curl -fsSL …/install.sh \| sh`, `irm …/install.ps1 \| iex`. It asks *Install the desktop GUI too? [y/N]* and *Keep huginn running in the background? [y/N]*. |
 | D9 | **GUI-first installers install the core first.** | The .exe/.deb/.pkg/tarball cannot leave a machine with a GUI and no core. |
@@ -161,7 +161,8 @@ rather than failing a call:
 - **`/core/*` — the core's own verbs.** `status`, `device` (get/set scope, on/off, act-while-locked),
   `local` (plan/on/off/status/persist, with a log stream for the elevated step), `update` (check/apply,
   progress stream), `routes` (list/pin/active/probe), `setup/*` (the onboarding probes), `presence` (the
-  GUI pushes `{visible, focused, view}`), `gui` (`open`, `focus`, `navigate`), `events` (an SSE stream of
+  GUI pushes `{focused, closeToTray}`), `gui` (the tray's `open` (with a huginn:// target), `quit`,
+  `closeToTray`; built 2.5.7), `events` (an SSE stream of
   core state for the GUI's settings pages and the tray).
 
 ### 5.3 What the Kotlin side changes

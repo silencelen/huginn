@@ -67,6 +67,37 @@ class CoreDevice internal constructor(
      */
     val coreTray: StateFlow<Boolean> = _coreTray.asStateFlow()
 
+    private val _guiCommands = kotlinx.coroutines.flow.MutableSharedFlow<GuiCommand>(extraBufferCapacity = 8)
+
+    /**
+     * What the core tray's menu asks of this app (owner rule 2026-10-17: one
+     * icon, one menu, carrying the app's items). Sent once by the core, never
+     * replayed, so a collector that arrives late misses nothing it should act on.
+     */
+    val guiCommands: kotlinx.coroutines.flow.SharedFlow<GuiCommand> = _guiCommands
+
+    /** One command from the core tray. */
+    sealed interface GuiCommand {
+        /** Bring the window up; [url], when set, is a huginn:// target. */
+        data class Open(val url: String?) : GuiCommand
+        data object Quit : GuiCommand
+        data class CloseToTray(val on: Boolean) : GuiCommand
+    }
+
+    @kotlinx.serialization.Serializable
+    private data class GuiCmdWire(val cmd: String = "", val value: Boolean? = null, val url: String? = null)
+
+    /** The core's "gui.cmd" event, as a [GuiCommand]; null for anything else. */
+    internal fun guiCommand(data: String): GuiCommand? {
+        val w = runCatching { CoreClient.json.decodeFromString(GuiCmdWire.serializer(), data) }.getOrNull() ?: return null
+        return when (w.cmd) {
+            "open" -> GuiCommand.Open(w.url?.takeIf { it.startsWith("huginn://") })
+            "quit" -> GuiCommand.Quit
+            "closeToTray" -> w.value?.let { GuiCommand.CloseToTray(it) }
+            else -> null
+        }
+    }
+
     @Volatile private var client: CoreClient? = null
     private var job: Job? = null
 
@@ -94,6 +125,10 @@ class CoreDevice internal constructor(
     /** Idempotent: follows the core's event stream for the life of the app. */
     fun start() {
         if (job?.isActive == true) return
+        // The tray's checkbox follows this app's setting wherever it changes.
+        scope.launch {
+            settings.closeToTray.collect { on -> client?.let { c -> runCatching { c.closeToTray(on) } } }
+        }
         job = scope.launch {
             // D9: the core that ships inside this app is put in place at once,
             // silently — copying a binary into the per-user layout needs no
@@ -107,11 +142,19 @@ class CoreDevice internal constructor(
                     lost()
                 } else {
                     runCatching {
-                        c.events().collect { (event, data) ->
+                        var said = false
+                        // As the GUI (role=gui): the core tray then carries this
+                        // app's items, and is told its Close to tray at once.
+                        c.events(role = "gui").collect { (event, data) ->
                             ready()
+                            if (!said) {
+                                said = true
+                                launch { runCatching { c.closeToTray(settings.closeToTrayNow()) } }
+                            }
                             when (event) {
                                 "device" -> apply(data)
                                 "coretray" -> _coreTray.value = data.contains("\"attached\":true")
+                                "gui.cmd" -> guiCommand(data)?.let { _guiCommands.tryEmit(it) }
                             }
                         }
                     }
@@ -189,7 +232,7 @@ class CoreDevice internal constructor(
     /** Tells the core what this window shows. Best effort: a core that is down simply does not suppress. */
     fun reportPresence(focusedKey: String?) {
         val c = client ?: return
-        scope.launch { runCatching { c.presence(focusedKey) } }
+        scope.launch { runCatching { c.presence(focusedKey, settings.closeToTrayNow()) } }
     }
 
     /**

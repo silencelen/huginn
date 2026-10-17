@@ -293,8 +293,18 @@ func uninstall(args []string) int {
 func removeLocalTier(t *tally, ce clientkit.Env, ldir, shown string) {
 	mgr := filepath.Join(ce.Dir(), "huginn-local")
 	node, nerr := exec.LookPath("node")
+	if nerr == nil && !fileExists(mgr) {
+		// The CLI is gone (an earlier uninstall removed it after the tier
+		// refused to go): the manager this core carries does the same job.
+		if f, err := os.CreateTemp("", "huginn-local-*.js"); err == nil {
+			f.Write(clientkit.LocalManager())
+			f.Close()
+			defer os.Remove(f.Name())
+			mgr = f.Name()
+		}
+	}
 	if nerr != nil || !fileExists(mgr) {
-		t.stays(shown + " - no manager or no node here, so nothing could unenrol or remove it")
+		t.stays(shown + " - no node here, so nothing could unenrol or remove it")
 		return
 	}
 	args := []string{mgr, "off", "--purge", "--yes"}

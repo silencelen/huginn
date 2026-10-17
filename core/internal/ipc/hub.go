@@ -42,6 +42,21 @@ func (h *Hub) Publish(ev Event) {
 	}
 }
 
+// Send is Publish without the record: subscribers connected now get ev, and
+// one connecting later never sees it. For commands, which must happen once.
+func (h *Hub) Send(ev Event) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- ev:
+		default:
+			delete(h.subs, ch)
+			close(ch)
+		}
+	}
+}
+
 func (h *Hub) subscribe() (chan Event, []Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

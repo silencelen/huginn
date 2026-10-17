@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 2.5.6
+// Version: 2.5.7
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '2.5.6';
+const VERSION = '2.5.7';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -1389,7 +1389,38 @@ function purgeDir() {
   if (dir === path.parse(dir).root || dir === path.resolve(os.homedir())) {
     throw new Error(`refusing to delete ${dir} — HUGINN_LOCAL_DIR names a directory the local tier does not own`);
   }
-  fs.rmSync(dir, { recursive: true, force: true });
+  if (process.platform === 'win32') endLeftovers(dir);
+  // Retried: Windows refuses (EPERM, EBUSY) for a moment after a service's
+  // process exits, while it lets go of the files it ran from (run 7).
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+}
+
+/**
+ * Windows: a stopped service's children (llama-server under llama-swap, the
+ * runner's node) can outlive `winsw stop` by a few seconds, holding the files
+ * the purge is about to delete - the EPERM run 7 hit. Waits up to 15 s for
+ * every process running from, or naming, the tier's directory to exit, then
+ * ends the rest. Never this process, nor the PowerShell asking (its own
+ * command line names the directory).
+ */
+function endLeftovers(dir) {
+  const ps = (cmd) => spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf8' });
+  const lit = dir.replace(/'/g, "''");
+  const query = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne ${process.pid} -and $_.ProcessId -ne $PID -and ` +
+    `(($_.ExecutablePath -and $_.ExecutablePath.StartsWith('${lit}', 'OrdinalIgnoreCase')) -or ` +
+    `($_.CommandLine -and $_.CommandLine.IndexOf('${lit}', [StringComparison]::OrdinalIgnoreCase) -ge 0)) } | ` +
+    'ForEach-Object { $_.ProcessId }';
+  const left = () => (ps(query).stdout || '').split(/\s+/).filter((x) => /^\d+$/.test(x));
+  const until = Date.now() + 15000;
+  let pids = left();
+  while (pids.length && Date.now() < until) {
+    spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},1000)']);
+    pids = left();
+  }
+  for (const pid of pids) {
+    spawnSync('taskkill', ['/F', '/PID', pid], { encoding: 'utf8' });
+    console.log(`  ended   process ${pid}, still running from ${dir}`);
+  }
 }
 
 /** The typed confirmation. A y/n is too cheap for a delete this size. */
@@ -1447,7 +1478,7 @@ async function cmdOff(flags) {
   // Deregister — inherits the device-off honesty: a DELETE failure keeps the
   // id and exits nonzero, and this command then does NOT proceed to deletions.
   const r = spawnSync(process.execPath, [runnerPath(), 'off'], {
-    encoding: 'utf8', env: { ...process.env, HUGINN_DEVICE_DIR: P('device') },
+    encoding: 'utf8', env: { ...process.env, HUGINN_DEVICE_DIR: P('device'), HUGINN_DEVICE_MANAGED: '1' },
   });
   process.stdout.write(r.stdout || ''); process.stderr.write(r.stderr || '');
   if (r.status !== 0) {

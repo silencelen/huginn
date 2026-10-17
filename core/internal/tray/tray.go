@@ -65,6 +65,12 @@ type role struct {
 	working   *systray.MenuItem
 	last      string // icon state shown, to skip redundant SetIcon calls
 
+	// The desktop app's own items, shown while it is attached (owner rule
+	// 2026-10-17: one icon, one menu - the app stands its own icon down).
+	keep    *systray.MenuItem // "Close to tray"
+	quitApp *systray.MenuItem // "Quit Huginn"
+	gui     traystate.GUI
+
 	readyDone atomic.Bool // the icon and menu are set up (see watchdog)
 }
 
@@ -104,7 +110,7 @@ func Run(o Options) {
 func (r *role) ready() {
 	systray.SetTitle("huginn")
 	r.setIcon(traystate.Idle)
-	systray.SetTooltip("huginn — connecting to huginn core…")
+	systray.SetTooltip("Huginn — connecting to huginn core…")
 	r.open = systray.AddMenuItem("Open Huginn", "Open the huginn window")
 	systray.AddSeparator()
 	for i := 0; i < traystate.MenuCap; i++ {
@@ -117,11 +123,31 @@ func (r *role) ready() {
 	r.working.Disable()
 	r.working.Hide()
 	systray.AddSeparator()
-	quit := systray.AddMenuItem("Quit tray", "Hide this icon (huginn core keeps running)")
+	r.keep = systray.AddMenuItemCheckbox("Close to tray", "Closing the Huginn window keeps it running here", true)
+	r.keep.Hide()
+	r.quitApp = systray.AddMenuItem("Quit Huginn", "Quit the Huginn window (huginn core keeps running)")
+	r.quitApp.Hide()
+	// It was "Quit tray": next to the app's "Quit Huginn" that read as the
+	// same thing (run 6). It only takes this icon away until the next sign-in.
+	quit := systray.AddMenuItem("Hide this icon", "huginn core keeps running; the icon comes back at your next sign-in")
 
 	go func() {
 		for range r.open.ClickedCh {
-			OpenURL("huginn://open")
+			r.openApp("")
+		}
+	}()
+	go func() {
+		for range r.keep.ClickedCh {
+			r.mu.Lock()
+			want := !r.gui.CloseToTray
+			r.mu.Unlock()
+			on := want
+			r.toApp(traystate.GUICmd{Cmd: traystate.CmdCloseToTray, Value: &on})
+		}
+	}()
+	go func() {
+		for range r.quitApp.ClickedCh {
+			r.toApp(traystate.GUICmd{Cmd: traystate.CmdQuit})
 		}
 	}()
 	for i, it := range r.rows {
@@ -131,7 +157,7 @@ func (r *role) ready() {
 				target := r.rowTarget[i]
 				r.mu.Unlock()
 				if target != "" {
-					OpenURL("huginn://open?view=sessions&id=" + url.QueryEscape(target))
+					r.openApp("huginn://open?view=sessions&id=" + url.QueryEscape(target))
 				}
 			}
 		}(i, it)
@@ -197,7 +223,8 @@ func (r *role) follow() {
 	backoff := time.Second
 	for {
 		err := r.stream(c)
-		r.show(traystate.Summary{State: traystate.Idle, Tooltip: "huginn — huginn core is not running"})
+		r.show(traystate.Summary{State: traystate.Idle, Tooltip: "Huginn — huginn core is not running"})
+		r.showGUI(traystate.GUI{}) // nothing to reach the app through
 		if err != nil {
 			r.o.Logger.Printf("tray: core events: %v (retrying in %s)", err, backoff)
 		}
@@ -307,8 +334,62 @@ func (r *role) handoff(c *http.Client) bool {
 	return true
 }
 
+// toApp sends the desktop app a command through the core. False when it did
+// not go (no app attached, or no core).
+func (r *role) toApp(c traystate.GUICmd) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := ipc.Do(ctx, ipc.Client(r.o.Socket), http.MethodPost, "/core/gui", c)
+	if err != nil {
+		r.o.Logger.Printf("tray: %s: %v", c.Cmd, err)
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusAccepted
+}
+
+// openApp brings the window up: through the core when the app is running (no
+// second process starting just to hand the click over), else by opening
+// huginn://, which starts it.
+func (r *role) openApp(target string) {
+	r.mu.Lock()
+	attached := r.gui.Attached
+	r.mu.Unlock()
+	if attached && r.toApp(traystate.GUICmd{Cmd: traystate.CmdOpen, URL: target}) {
+		return
+	}
+	if target == "" {
+		target = "huginn://open"
+	}
+	OpenURL(target)
+}
+
+// showGUI shows or hides the app's items for what the core says of it.
+func (r *role) showGUI(g traystate.GUI) {
+	r.mu.Lock()
+	r.gui = g
+	r.mu.Unlock()
+	if !g.Attached {
+		r.keep.Hide()
+		r.quitApp.Hide()
+		return
+	}
+	if g.CloseToTray {
+		r.keep.Check()
+	} else {
+		r.keep.Uncheck()
+	}
+	r.keep.Show()
+	r.quitApp.Show()
+}
+
 func (r *role) handle(event string, data []byte) {
 	switch event {
+	case traystate.EventGUI:
+		var g traystate.GUI
+		if json.Unmarshal(data, &g) == nil {
+			r.showGUI(g)
+		}
 	case traystate.EventTray:
 		var s traystate.Summary
 		if json.Unmarshal(data, &s) == nil {

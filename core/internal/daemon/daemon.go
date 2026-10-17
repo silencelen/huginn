@@ -105,6 +105,7 @@ func Run(ctx context.Context, o Options) error {
 	d := &Daemon{paths: o.Paths, st: st, secrets: sec, sel: sel, hub: ipc.NewHub(), logf: logger.Printf, lock: newLockReader(), ctx: ctx,
 		restartNow: make(chan struct{})}
 	d.watch = &watcher{d: d}
+	d.watch.keepTray.Store(1) // the app's default, until it says
 	d.installID = installID(st)
 	if cfg.MigratedFrom == nil && cfg.Device.ID == "" && cfg.Appd.URL == "" {
 		d.migrate = d.firstStartImport(ctx)
@@ -514,21 +515,73 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 				}
 			}()
 		}
+		// The desktop app identifies itself too, so the tray can carry its
+		// items while it is open (owner rule 2026-10-17: one icon, one menu).
+		if r.URL.Query().Get("role") == "gui" {
+			if d.watch.guis.Add(1) == 1 {
+				d.publishGUI()
+			}
+			defer func() {
+				if d.watch.guis.Add(-1) == 0 {
+					d.publishGUI()
+				}
+			}()
+		}
 		d.hub.ServeHTTP(w, r)
 	})
-	// POST /core/presence {"focused":"sess:<name>"|"chat:<id>"|""}: what the GUI
-	// shows, so its question is not also a toast. Repeated while visible; a
-	// report older than focusTTL is ignored.
+	// POST /core/presence {"focused":"sess:<name>"|"chat:<id>"|"", "closeToTray":bool}:
+	// what the GUI shows, so its question is not also a toast, and its "Close
+	// to tray" for the tray's menu. Repeated while visible; a focus older than
+	// focusTTL is ignored.
 	mux.HandleFunc("POST /core/presence", func(w http.ResponseWriter, r *http.Request) {
 		var p struct {
-			Focused string `json:"focused"`
+			Focused     *string `json:"focused"` // absent: focus unchanged (a Close-to-tray report alone)
+			CloseToTray *bool   `json:"closeToTray"`
 		}
 		if err := decode(r, &p); err != nil {
 			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		d.watch.setFocus(p.Focused)
+		if p.Focused != nil {
+			d.watch.setFocus(*p.Focused)
+		}
+		if p.CloseToTray != nil {
+			v := int32(0)
+			if *p.CloseToTray {
+				v = 1
+			}
+			if d.watch.keepTray.Swap(v) != v {
+				d.publishGUI()
+			}
+		}
 		ipc.WriteJSON(w, 200, map[string]bool{"claim": d.watch.claim()})
+	})
+	// POST /core/gui {"cmd":"open"|"quit"|"closeToTray", "value":bool, "url":"huginn://…"}:
+	// the tray's menu acting on the desktop app. Sent once, never retained.
+	mux.HandleFunc("POST /core/gui", func(w http.ResponseWriter, r *http.Request) {
+		var c traystate.GUICmd
+		if err := decode(r, &c); err != nil {
+			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		switch {
+		case c.Cmd == traystate.CmdCloseToTray && c.Value == nil:
+			ipc.WriteJSON(w, 400, map[string]string{"error": "closeToTray needs a value"})
+			return
+		case c.Cmd != traystate.CmdOpen && c.Cmd != traystate.CmdQuit && c.Cmd != traystate.CmdCloseToTray:
+			ipc.WriteJSON(w, 400, map[string]string{"error": "unknown command " + c.Cmd})
+			return
+		case c.URL != "" && !strings.HasPrefix(c.URL, "huginn://"):
+			ipc.WriteJSON(w, 400, map[string]string{"error": "only huginn:// targets"})
+			return
+		}
+		if d.watch.guis.Load() == 0 {
+			// The caller opens the app itself (huginn://open) when none is here.
+			ipc.WriteJSON(w, 409, map[string]string{"error": "no desktop app is attached"})
+			return
+		}
+		d.hub.Send(ipc.Event{Name: traystate.EventGUICmd, Data: c})
+		ipc.WriteJSON(w, 202, map[string]bool{"sent": true})
 	})
 	mux.HandleFunc("GET /core/status", func(w http.ResponseWriter, r *http.Request) {
 		cfg, _, _ := d.st.Load()
@@ -545,7 +598,7 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			"paired": cfg.Appd.URL != "" && d.hasToken(), "url": cfg.Appd.URL, "pins": pins,
 			"secrets": d.sel.Backend, "secretsWhy": d.sel.Why,
 			"migratedFrom": cfg.MigratedFrom, "firstStart": d.migrate,
-			"tray": d.watch.trays.Load() > 0, "notifyClaim": d.watch.claim(),
+			"tray": d.watch.trays.Load() > 0, "gui": d.watch.guis.Load() > 0, "notifyClaim": d.watch.claim(),
 			"device": d.deviceView(nil),
 		})
 	})
@@ -612,3 +665,13 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		ipc.WriteJSON(w, 200, map[string]string{"ok": "paired", "fingerprint": fp})
 	})
 }
+
+// publishGUI tells the tray whether the desktop app is attached, and its
+// "Close to tray" (retained: a tray that connects later reads it at once).
+func (d *Daemon) publishGUI() {
+	d.hub.Publish(ipc.Event{Name: traystate.EventGUI, Data: traystate.GUI{
+		Attached:    d.watch.guis.Load() > 0,
+		CloseToTray: d.watch.keepTray.Load() == 1,
+	}})
+}
+

@@ -15,10 +15,33 @@ HUSER="${HUGINN_USER:-root}"   # SSH user on the host; override: HUGINN_USER=hug
 t0=$SECONDS
 [ -n "${HUGINN_SETUP:-}" ] || _huginn_ui_head "huginn client install"
 if [ -z "$HHOST" ]; then
-  printf '    Huginn host (IP or DNS name reachable over SSH): ' >&2
+  printf '    Huginn host (its IP address or name): ' >&2
   read -r HHOST
 fi
 [ -n "$HHOST" ] || { _huginn_ui_line fail host "no host given - run it again with the host: ./install.sh <host>"; exit 1; }
+# People type huginn's address as they know it, https:// and :8787 included
+# (run 7: "192.168.1.20:8787" became an ssh host name that resolved nowhere).
+# ssh gets the bare host; pairing later uses the address (HUGINN_APPD_URL).
+_hg="$(printf '%s' "$HHOST" | tr -d '[:space:]')"
+_scheme=""; case "$_hg" in http://*) _scheme=http ;; https://*) _scheme=https ;; esac
+_hg="${_hg#http://}"; _hg="${_hg#https://}"; _hg="${_hg%%/*}"
+case "$_hg" in
+  \[*\]:*) _bare="${_hg%]:*}]"; _port="${_hg##*]:}" ;;
+  \[*\]) _bare="$_hg"; _port="" ;;
+  *:*:*) _bare="$_hg"; _port="" ;;   # a bare IPv6 address
+  *:*) _bare="${_hg%%:*}"; _port="${_hg#*:}" ;;
+  *) _bare="$_hg"; _port="" ;;
+esac
+if [ -n "$_scheme" ] || { [ -n "$_port" ] && [ "$_port" != 22 ]; }; then
+  [ -n "$_port" ] && [ "$_port" != 22 ] || _port=8787
+  HUGINN_APPD_URL="${_scheme:-https}://$_bare:$_port"; export HUGINN_APPD_URL
+fi
+HHOST="$(printf '%s' "$_bare" | tr -d '[]')"   # ssh takes an IPv6 address bare
+# Without a port or scheme, huginn's own port on the same host.
+case "$_bare" in *:*) [ -n "${HUGINN_APPD_URL:-}" ] || HUGINN_APPD_URL="https://[$HHOST]:8787" ;; *) [ -n "${HUGINN_APPD_URL:-}" ] || HUGINN_APPD_URL="https://$HHOST:8787" ;; esac
+export HUGINN_APPD_URL
+# get.sh runs this as its own process: the address goes back to it this way.
+[ -n "${HUGINN_APPD_URL_FILE:-}" ] && printf '%s\n' "$HUGINN_APPD_URL" > "$HUGINN_APPD_URL_FILE"
 mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
 tilde() { case "$1" in "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;; *) printf '%s' "$1" ;; esac; }
 
@@ -120,8 +143,14 @@ else
     printf '\n    Authorize this computer on the huginn host. On %s, as %s, run:\n\n' "$HHOST" "$HUSER" >&2
     printf "      echo '%s' >> ~/.ssh/authorized_keys\n\n" "$(cat "$KEY.pub")" >&2
   fi
-  if [ "$WHY" != changed ] && ( : < /dev/tty ) 2>/dev/null; then
-    printf '    Press Enter when that is done (Ctrl-C to finish later) ' >&2
+  # Waiting for a person only when there is something for them to do on the
+  # host: ssh not answering at all has nothing to wait for (run 7). Pairing
+  # goes over huginn's own port, and asks for the token instead.
+  case "$WHY" in unreachable*)
+    printf '                  %sAttaching to sessions from a terminal needs ssh to the host; everything else uses huginn'"'"'s own port.%s\n' "$(_huginn_ui_c 90)" "$(_huginn_ui_c 0)" >&2 ;;
+  esac
+  if [ "$WHY" != changed ] && [ "${WHY#unreachable}" = "$WHY" ] && ( : < /dev/tty ) 2>/dev/null; then
+    printf '    Press Enter once the key is added (Ctrl-C to finish later) ' >&2
     read -r _ < /dev/tty || true
     if trusted; then _huginn_ui_line ok trust "the huginn host accepts this key"
     else say_trust; fi

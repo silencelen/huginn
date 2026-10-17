@@ -34,7 +34,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '2.5.6';
+const VERSION = '2.5.7';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {
@@ -1564,6 +1564,9 @@ async function main() {
         ? 'Removed from huginn.'
         : 'Cleared this machine. It is STILL enrolled at the daemon (see above).');
       for (const f of gone) console.log(`  removed ${f}`);
+      // `huginn local off` stops its own services; and there is no systemctl
+      // on Windows (run 7 printed these there).
+      if (process.env.HUGINN_DEVICE_MANAGED === '1' || process.platform === 'win32') break;
       console.log('');
       console.log('Stop the runner too, or it enrols again:');
       console.log('  systemctl disable --now huginn-device          (system unit)');

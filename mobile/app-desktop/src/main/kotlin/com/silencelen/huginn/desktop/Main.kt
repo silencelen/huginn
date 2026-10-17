@@ -503,6 +503,19 @@ fun main(args: Array<String>) {
             quit()
         }
 
+        // The core tray's menu acting on this app (owner rule 2026-10-17: one
+        // icon, one menu): Open Huginn, its "needs you" rows, Close to tray and
+        // Quit Huginn arrive here through the core.
+        LaunchedEffect(Unit) {
+            store.coreDevice.guiCommands.collect { c ->
+                when (c) {
+                    is com.silencelen.huginn.desktop.core.CoreDevice.GuiCommand.Open -> handle(c.url)
+                    com.silencelen.huginn.desktop.core.CoreDevice.GuiCommand.Quit -> quit()
+                    is com.silencelen.huginn.desktop.core.CoreDevice.GuiCommand.CloseToTray -> settings.setCloseToTray(c.on)
+                }
+            }
+        }
+
         // The one way a screen can ask to be quit, and the only reason one does:
         // Settings' "Install and restart" has handed the machine to an installer
         // that has to replace files this process holds open. Collected here
@@ -525,6 +538,11 @@ fun main(args: Array<String>) {
         }
 
         val coreTray by store.coreDevice.coreTray.collectAsState()
+        // A window hidden behind the core's tray must not be stranded when that
+        // tray goes and this machine has no tray of its own to bring it back.
+        LaunchedEffect(coreTray) {
+            if (!coreTray && !isTraySupported && !windowVisible.value) windowVisible.value = true
+        }
         if (isTraySupported && !coreTray) {
             Tray(
                 icon = TrayIcons.painter(summary.state),
@@ -572,10 +590,11 @@ fun main(args: Array<String>) {
                 // tray summary all live on. With it off, closing the window really
                 // does mean quitting — an app that goes on running headless after
                 // its window is gone is one nothing can get rid of.
-                // With the core's tray attached, closing QUITS (D6): the core keeps
-                // running, its tray relaunches this window, and a JVM idling behind
-                // a hidden window is exactly what the core exists to make unneeded.
-                if (closeToTray && isTraySupported && !coreTray) windowVisible.value = false else quit()
+                // With the core's tray attached the window hides too (owner rule
+                // 2026-10-17, which retires D6's "closing quits"): that tray's menu
+                // carries this app's Close to tray and Quit Huginn, and its Open
+                // Huginn brings the window back.
+                if (closeToTray && (coreTray || isTraySupported)) windowVisible.value = false else quit()
             },
             state = windowState,
             visible = visible,
@@ -625,7 +644,7 @@ fun main(args: Array<String>) {
                     // note at the foot of this file; it fires only while the
                     // window has focus, which makes it a hide and not a summon.
                     shortcut == Shortcut.HIDE_TO_TRAY -> {
-                        if (isTraySupported && !store.coreDevice.coreTray.value) windowVisible.value = false
+                        if (store.coreDevice.coreTray.value || isTraySupported) windowVisible.value = false
                         true
                     }
                     shortcut == Shortcut.PALETTE -> { paletteOpen.value = true; true }

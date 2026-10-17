@@ -129,10 +129,21 @@ internal class CoreClient(private val socket: Path) {
     suspend fun patchDevice(s: CoreDeviceSettings): CoreDeviceView =
         json.decodeFromString(call("PATCH", "/core/device", json.encodeToString(s)))
 
-    /** What the window shows ("sess:<name>", "chat:<id>", or null), so the core does not toast it. */
-    suspend fun presence(focused: String?) {
-        call("POST", "/core/presence", json.encodeToString(mapOf("focused" to (focused ?: ""))))
+    /**
+     * What the window shows ("sess:<name>", "chat:<id>", or null), so the core
+     * does not toast it, and this app's "Close to tray" for the core tray's menu.
+     */
+    suspend fun presence(focused: String?, closeToTray: Boolean) {
+        call("POST", "/core/presence", json.encodeToString(Presence(focused ?: "", closeToTray)))
     }
+
+    /** "Close to tray" alone (focus unchanged): said on connect and on every change. */
+    suspend fun closeToTray(on: Boolean) {
+        call("POST", "/core/presence", json.encodeToString(Presence(null, on)))
+    }
+
+    @Serializable
+    private data class Presence(val focused: String?, val closeToTray: Boolean)
 
     /** Forget the pairing (Settings → Remove this computer). */
     suspend fun unpair() { call("POST", "/core/unpair", "{}") }
@@ -178,8 +189,9 @@ internal class CoreClient(private val socket: Path) {
      * each event first, so a fresh collector needs no separate GET. Ends (and
      * the caller reconnects) when the core goes away.
      */
-    fun events(): Flow<Pair<String, String>> = callbackFlow {
-        val call: Call = streaming.newCall(Request.Builder().url("$BASE/core/events").build())
+    fun events(role: String? = null): Flow<Pair<String, String>> = callbackFlow {
+        val url = "$BASE/core/events" + (role?.let { "?role=$it" } ?: "")
+        val call: Call = streaming.newCall(Request.Builder().url(url).build())
         val reader = Thread({
             runCatching {
                 call.execute().use { r ->

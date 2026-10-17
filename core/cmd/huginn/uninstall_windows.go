@@ -97,7 +97,9 @@ func removeService(t *tally) {
 		}
 	}
 	t.spin("waiting for administrator approval, to delete the boot task")
-	ps := "$p = Start-Process -FilePath '" + strings.ReplaceAll(bin, "'", "''") + "' -ArgumentList 'core','uninstall' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
+	// Hidden: a visible console here showed nothing, and a click on it froze the
+	// step in QuickEdit's "Select" mode (run 7).
+	ps := "$p = Start-Process -FilePath '" + strings.ReplaceAll(bin, "'", "''") + "' -ArgumentList 'core','uninstall' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode"
 	if exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps).Run() != nil || service.StatusWindows(o).Registered {
 		t.stays(`the "` + service.TaskName + `" boot task - run "huginn core uninstall" from an administrator terminal`)
 		return

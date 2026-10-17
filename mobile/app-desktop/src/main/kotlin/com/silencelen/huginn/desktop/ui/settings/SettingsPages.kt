@@ -581,6 +581,7 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
 @Composable
 fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
     val closeToTray by store.settings.closeToTray.collectAsState()
+    val coreTray by store.coreDevice.coreTray.collectAsState()
 
     SettingsToggleRow(
         id = "appearance.close-to-tray",
@@ -592,10 +593,11 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         // "leaves huginn running in the tray" on a box where closing the window
         // ends the process — verified, it was gone.
         summary = when {
-            !isTraySupported ->
+            !isTraySupported && !coreTray ->
                 "There is no system tray on this computer, so closing the window quits huginn " +
                     "and the watch stream stops with it."
-            closeToTray -> "Closing the window leaves huginn running in the tray."
+            closeToTray -> "Closing the window leaves huginn running in the tray." +
+                if (coreTray) " The tray icon's menu has this switch too." else ""
             else -> "Closing the window quits huginn, and the watch stream stops with it."
         },
         highlighted = SettingsRowStyle.isHighlighted("appearance.close-to-tray", mark),
