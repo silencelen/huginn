@@ -1493,6 +1493,27 @@ class AppStore(
 
     fun addRoute(name: String, url: String) = editRoutes { it.add(name, url, System.currentTimeMillis()) }
 
+    /**
+     * Setup's address step: ONE address, typed once (owner, 2026-10-16: the full
+     * route-list editor took twenty clicks on a first run). Sets the address in
+     * use - adding it when the book is empty, or when it is not the active one -
+     * as one book edit. Null on success; otherwise the guard's own sentence.
+     */
+    suspend fun useAddress(url: String): String? {
+        val typed = url.trim()
+        if (typed.isEmpty()) return "type huginn's address first"
+        val ok = editRoutesNow { book ->
+            val existing = book.routes.firstOrNull { it.url.equals(com.silencelen.huginn.data.RouteGuard.require(typed), ignoreCase = true) }
+            when {
+                existing != null -> book.activate(existing.id)
+                else -> book.add("huginn", typed, System.currentTimeMillis()).let { b ->
+                    b.routes.lastOrNull()?.let { b.activate(it.id) } ?: b
+                }
+            }
+        }
+        return if (ok) null else _routeNote.value ?: "that address was refused"
+    }
+
     fun renameRoute(id: String, name: String) = editRoutes { it.rename(id, name) }
 
     fun setRouteUrl(id: String, url: String) = editRoutes { it.setUrl(id, url) }

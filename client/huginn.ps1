@@ -606,6 +606,14 @@ function _Huginn-DesktopUpdate {
     $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
     $tail = ''
     if (-not $app) { $app = Join-Path $env:LOCALAPPDATA 'Programs\huginn-desktop-kt\huginn-desktop-kt.exe' }
+    # A silent first install answers its components page with the section
+    # DEFAULTS (local AI off, autostart off) into first-run.json, and the app
+    # then showed those steps as "skipped" - answers nobody gave (PRESTIGE,
+    # 2026-10-16). Nobody saw that page, so its file goes before the app opens.
+    if ($Install -and -not $have) {
+      $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+      Remove-Item -Force (Join-Path $cfgRoot 'huginn-desktop-kt\first-run.json') -ErrorAction SilentlyContinue
+    }
     if (($wasOpen -or $Install) -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = if ($Install) { ', opened' } else { ', reopened' } }
     if ($Install -and -not $have) { _Huginn-UiLine 'ok' 'desktop' "$now installed (Start menu)$tail" }
     else { _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail" }
