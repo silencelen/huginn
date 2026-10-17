@@ -1469,6 +1469,17 @@ function huginn {
         $elevRc = $p.ExitCode
       }
       for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
+      if ($LASTEXITCODE -ne 0) {
+        # Windows queues every start of the boot task on battery (Energy Saver;
+        # PRESTIGE, 2026-10-16: the desktop's setup then found no core).
+        # `core start` - unelevated, so the core never runs as administrator -
+        # starts it directly when the task is held back.
+        $slog = Join-Path ([IO.Path]::GetTempPath()) ('huginn-core-start-' + [guid]::NewGuid().ToString('N') + '.log')
+        $src = _Huginn-UiSpin 'core' 'starting huginn core (Windows held the boot task back)' $bin @('core', 'start') $slog
+        if ($src -eq 0) { _Huginn-UiLine 'ok' 'core' 'running (started directly; the boot task takes over at the next boot)' }
+        else { _Huginn-UiLine 'warn' 'core' 'not running yet - huginn core start'; @(Get-Content $slog -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object { _Huginn-UiNote $_ } }
+        Remove-Item $slog -Force -ErrorAction SilentlyContinue
+      }
       if ($rep) {
         # The elevated step does not start the tray (it would run as
         # administrator); this unelevated self-install does, when none is up.

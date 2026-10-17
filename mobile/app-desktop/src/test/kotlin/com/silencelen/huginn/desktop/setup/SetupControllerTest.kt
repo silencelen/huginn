@@ -366,4 +366,26 @@ class SetupControllerTest {
         // TWO DOORS, ONE FLOW. The dormant first-launch card used to drop the
         // reader at the top of Settings and leave them to find the section.
     }
+
+    /**
+     * A status on screen is re-read, not remembered (owner, 2026-10-16): the
+     * token step still said "huginn core is not running" after the core came up
+     * and Settings had connected it. recheck() corrects the rail from what is
+     * TRUE now, and a failure the truth has overtaken is replaced.
+     */
+    @Test
+    fun `recheck corrects a step whose truth moved, and leaves the rest`() {
+        var live: Map<SetupStep, StepStatus> = emptyMap()
+        val probes = object : FakeProbes(tokenResult = Result.failure(IllegalStateException("huginn core is not running"))) {
+            override suspend fun live(step: SetupStep): StepStatus? = live[step]
+        }
+        val c = controller(probes = probes)
+        c.goTo(SetupStep.TOKEN)
+        c.primary() // the token check runs, and fails
+        assertTrue(c.state.value.statusOf(SetupStep.TOKEN) is StepStatus.Failed, "${c.state.value.statusOf(SetupStep.TOKEN)}")
+        live = mapOf(SetupStep.TOKEN to StepStatus.Passed("huginn core holds the token"))
+        c.recheck()
+        assertEquals(StepStatus.Passed("huginn core holds the token"), c.state.value.statusOf(SetupStep.TOKEN))
+        assertEquals(StepStatus.Pending, c.state.value.statusOf(SetupStep.DEVICE), "steps with no live answer are left as they are")
+    }
 }
