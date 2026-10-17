@@ -163,8 +163,24 @@ class AppStore(
     suspend fun connectThroughCore(token: String): Result<String> = runCatching {
         val socket = checkNotNull(coreSocket) { "this system has no place for huginn core's socket" }
         val core = com.silencelen.huginn.desktop.core.CoreClient(socket)
-        check(core.socketPresent()) { "huginn core is not running: set it up first (the first screen of this app)" }
-        val st = core.status()
+        // Not answering is something to FIX here, not a place to send anyone:
+        // the "first screen" this used to point at sits under the setup window.
+        // `huginn core start` uses the boot task and, when Windows holds that
+        // back (Energy Saver on battery queued every start on PC01,
+        // 2026-10-16), starts the core directly.
+        var st = runCatching { core.status() }.getOrNull()
+        if (st == null) {
+            com.silencelen.huginn.desktop.core.CoreSetup.startService()
+            st = kotlinx.coroutines.withTimeoutOrNull(30_000) {
+                var s: com.silencelen.huginn.desktop.core.CoreStatus? = null
+                while (s == null) {
+                    s = runCatching { core.status() }.getOrNull()
+                    if (s == null) kotlinx.coroutines.delay(1_000)
+                }
+                s
+            }
+        }
+        checkNotNull(st) { "huginn core did not start: run `huginn core start` in a terminal, then Connect again" }
         check(!com.silencelen.huginn.update.Semver.isNewer(CoreBoot.MIN_CORE, st.version)) {
             "huginn core ${st.version} is older than ${CoreBoot.MIN_CORE}: huginn update brings it up to date"
         }

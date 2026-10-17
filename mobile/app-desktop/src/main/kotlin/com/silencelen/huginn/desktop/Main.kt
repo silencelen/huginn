@@ -31,6 +31,9 @@ import androidx.compose.ui.window.rememberWindowState
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.core.CoreBoot
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.drop
 import com.silencelen.huginn.data.TlsPins
 import com.silencelen.huginn.desktop.notify.Activation
 import com.silencelen.huginn.desktop.notify.Activations
@@ -185,6 +188,10 @@ fun main(args: Array<String>) {
     // no pre-answers, which is exactly what the `.deb` produces — Linux meets
     // the same flow, it simply arrives with nothing already ticked.
     val setup = SetupController(settings, DesktopSetupProbes(store) { notifier })
+    // A status on screen is re-read when the truth behind it moves (owner,
+    // 2026-10-16): the app moving onto huginn core, the device enrolling.
+    scope.launch { store.viaCoreState.drop(1).collect { setup.recheck() } }
+    scope.launch { store.coreDevice.status.map { it.enrolled }.distinctUntilChanged().drop(1).collect { setup.recheck() } }
     SetupHost.install(setup)
     setup.adopt(FirstRun.consume(configDir))
     // Makes the disk agree with the flag. The startup entry can go without this
