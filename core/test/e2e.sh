@@ -64,6 +64,23 @@ px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && ok "/appd/v1/s
 timeout 3 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://huginn-core/appd/v1/watch?stream=1' > "$T/watch.out" 2>/dev/null
 grep -q '^event:\|^data:' "$T/watch.out" && ok "/appd streams the watch feed" || { bad "/appd stream"; head -c 300 "$T/watch.out"; }
 
+# The route book (docs/DESKTOP-VIA-CORE.md): another address of the same daemon,
+# kept in core.json, used when the active one does not answer. A dead address
+# pinned (no switching) makes requests fail; unpinned, they work again.
+DEAD="http://127.0.0.1:$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
+"$T/huginn" core route add "$DEAD" --name dead --kind lan > "$T/route.out" 2>&1
+grep -q "$DEAD" "$T/route.out" && grep -q 'paired on' "$T/route.out" && python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));assert c['appd']['routes'][0]['url']=='$DEAD',c['appd']" \
+  && ok "core route add: kept in core.json, listed with the paired address" || { bad "core route add"; cat "$T/route.out"; }
+"$T/huginn" core route pin "$DEAD" >/dev/null 2>&1
+for _ in $(seq 50); do [ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/v1/status)" = 502 ] && break; sleep 0.1; done
+[ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/v1/status)" = 502 ] && ok "a pinned dead address: requests fail, nothing switches" || bad "pinned dead route still answered"
+"$T/huginn" core route pin none >/dev/null 2>&1
+for _ in $(seq 50); do px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && break; sleep 0.1; done
+px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && ok "unpinned: through the paired address again" || bad "after unpin"
+"$T/huginn" core route remove "$DEAD" >/dev/null 2>&1
+python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));assert not c['appd'].get('routes') and not c['appd'].get('pinned'),c['appd']" \
+  && ok "core route remove: gone from core.json" || bad "core route remove"
+
 # huginn console against the real core and appd, in a pty (script(1)): it
 # draws Home from live data and quits on q.
 if command -v script >/dev/null 2>&1; then
