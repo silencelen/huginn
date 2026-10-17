@@ -1,6 +1,7 @@
 # Huginn Desktop through huginn core
 
-Status: **design, for owner review** (2026-10-16). Nothing here is built yet.
+Status: **design approved** (owner, 2026-10-16), building. Decisions on the open questions are
+recorded below.
 
 ## Decision
 
@@ -122,33 +123,32 @@ Tests:
 - **Connection state.** The offline banner and RouteWitness read the core's 502 `kind` (and the
   core's `/core/events` link state) instead of their own probes.
 
-### Addresses (routes)
+### Addresses: the route book moves into the core (owner decision)
 
-The core keeps one URL for now. On PRESTIGE that is enough since the LAN-first and Yggdrasil work:
-`https://192.168.7.117:8787` answers at home (LAN) and away (the mesh's unsafe route to the home
-LAN).
+The core keeps a **route book**, as the desktop does today:
+- **Candidate addresses.** The address it was paired on, plus any added later:
+  - by the desktop's migration (its pinned routes);
+  - by `huginn core route add <url>`;
+  - learned from appd.
+- **Health per address.** Each address has a last-seen and a last-failed time, from real requests
+  and from a light background probe while one is failing.
+- **Auto-switch** (on by default). A request that cannot reach the active address is retried once
+  on the next healthy one, and the active address moves there.
+- **Pinning.** The same certificate pin applies to every address: it is appd's certificate,
+  proved by the token, whatever the address.
 
-If it is needed later, a route book moves into the core rather than staying in the desktop:
-- candidates learned at pairing time and from appd;
-- health checks and failover;
-- the same certificate pin on every address.
+The desktop's Settings > Host shows the book: list, add, remove, pin one, auto-switch on/off.
+Edits are `/core/routes` calls, and the core persists them in core.json.
 
-## Open questions for the owner
+## Decisions (owner, 2026-10-16)
 
-1. **The local AI tier from the desktop.** "Serve local models from this machine" (Settings > This
-   machine) passes the URL and token to the tier's manager, which writes `<localData>/device/appd-token`
-   for the tier's always-on runner service. With no token in the desktop, either:
-   - (a) the core writes that file on request (a new `/core/local/enrol`; on Windows the ProgramData
-     path needs the elevated step the manager already makes); or
-   - (b) the desktop's button runs `huginn local on`, which fetches the token over ssh, as the CLI
-     does.
-   Recommended: **(a)**. It works without ssh, and the token moves core to tier without passing
-   through the app.
-2. **Order.** Recommended: core 2.5.0 first (the proxy is useful to the console too), then desktop
-   2.5.0 behind it. A desktop that finds an older core keeps its direct link until the core is
-   updated (`huginn update` updates both).
-3. **The route book.** Recommended: retire it with this change and add a core route book only if a
-   machine needs it. Today one URL plus the mesh covers home and away.
+1. **The local AI tier gets its token from the core.** A new `/core/local/enrol` writes the tier's
+   `device/appd-token`. On Windows, ProgramData is written inside the elevated step the tier's
+   manager already takes, and the core hands the token to that step over a file only this user can
+   read. The token never passes through the desktop.
+2. **Order: core 2.5.0 first, then desktop 2.5.0.** A desktop that finds an older core keeps its
+   direct link until the core is updated.
+3. **The route book moves into the core** (above). It is not retired.
 
 ## Out of scope
 
