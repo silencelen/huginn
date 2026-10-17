@@ -4,6 +4,14 @@
 
 Carries core 2.5.6. From the owner's fifth recorded setup run on PRESTIGE.
 
+### Changed
+- **Local AI can finish in the background while setup carries on** (owner). A model download can
+  take a long while, more so on a bigger machine. Once it starts, the step offers **Continue setup**,
+  and says you can go on now or wait and watch it. The card shows one bar for the whole install,
+  with how much is done, how fast and about how long is left (`1240 of 2568 MB, 2.3 MB/s, about
+  10 min left`). The step's line in the list shows the same, and the finish screen says when local
+  AI is still setting up and that it carries on after setup closes.
+
 ### Fixed
 - **Setup's local-AI step says "setting up" while it downloads, with the latest progress,** instead
   of "checked, waiting on you" and "read the plan, then Download" for the whole download. The tally

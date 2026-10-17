@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -340,26 +341,53 @@ internal object LocalServeFlow {
     /** An install (Download and turn on) is what is running, not a plan or a stop. */
     @Volatile private var installing = false
 
+    /**
+     * The whole install's downloads, as one number: run 5 watched one file's
+     * percent for minutes with no idea how much was left (owner: on a bigger
+     * machine the models take much longer). Null when nothing is downloading.
+     */
+    val progress = kotlinx.coroutines.flow.MutableStateFlow<LocalLog.Progress?>(null)
+    @Volatile private var sizes: Map<String, Long> = emptyMap()
+    @Volatile private var doneMb = 0L
+    @Volatile private var rate: Double? = null
+
     fun line(l: String) {
         log.value = LocalLog.append(log.value, l)
+        if (!installing) return
+        val total = sizes.values.sum()
+        when (val step = LocalLog.parse(l)) {
+            is LocalLog.Step.Finished -> doneMb += sizes[step.name] ?: 0
+            is LocalLog.Step.Partial -> rate = step.mbPerS ?: rate
+            null -> {}
+        }
+        val partial = (LocalLog.parse(l) as? LocalLog.Step.Partial)?.takeIf { it.name in sizes }
+            ?.let { it.gotMb ?: sizes[it.name]?.let { mb -> mb * it.percent / 100 } } ?: 0L
+        if (total > 0) progress.value = LocalLog.Progress((doneMb + partial).coerceAtMost(total), total, rate)
         // Setup's rail follows the install wherever the reader is: run 5 left
         // the step on "read the plan, then Download" for the whole download.
-        if (installing) {
-            com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
-                it.working(com.silencelen.huginn.settings.SetupStep.LOCAL_AI, l.trim())
-            }
+        val p = progress.value
+        val detail = if (p != null && p.doneMb < p.totalMb) "downloading ${p.words}" else l.trim()
+        com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
+            it.working(com.silencelen.huginn.settings.SetupStep.LOCAL_AI, detail)
         }
     }
 
-    fun run(install: Boolean = false, block: suspend () -> Unit) {
+    /**
+     * @param downloads for an install, the plan's files: name to size in MB,
+     *   what [progress] is measured against.
+     */
+    fun run(install: Boolean = false, downloads: Map<String, Long> = emptyMap(), block: suspend () -> Unit) {
         if (busy.value) return
         busy.value = true
         installing = install
+        sizes = downloads; doneMb = 0; rate = null
+        progress.value = null
         log.value = emptyList()
         if (install) line("starting: the plan's downloads, then the two services")
         scope.launch {
             try { block() } finally {
                 busy.value = false
+                progress.value = null
                 if (install) {
                     installing = false
                     com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
@@ -386,6 +414,50 @@ internal object LocalLog {
         val last = log.lastOrNull()
         if (label != null && last != null && PROGRESS.find(last)?.groupValues?.get(1) == label) return log.dropLast(1) + l
         return (log + l).takeLast(8)
+    }
+
+    /** What a manager line says about the downloads. */
+    sealed interface Step {
+        /** A file is in place: downloaded and verified, or already there. */
+        data class Finished(val name: String) : Step
+
+        /** How far one file is. [gotMb] and [mbPerS] only from a 2.5.6+ manager. */
+        data class Partial(val name: String, val percent: Int, val gotMb: Long?, val mbPerS: Double?) : Step
+    }
+
+    private val FINISHED = Regex("""^(?:ok|kept)\s+(\S+)(?: sha256 verified| \(already present)""")
+    private val PARTIAL = Regex("""^(.+?): (\d{1,3})%(?:\s+(\d+) of \d+ MB, ([\d.]+) MB/s)?""")
+
+    fun parse(line: String): Step? {
+        val l = line.trim()
+        FINISHED.find(l)?.let { return Step.Finished(it.groupValues[1]) }
+        PARTIAL.find(l)?.let { m ->
+            return Step.Partial(
+                m.groupValues[1], m.groupValues[2].toInt(),
+                m.groupValues[3].toLongOrNull(), m.groupValues[4].toDoubleOrNull(),
+            )
+        }
+        return null
+    }
+
+    /** The install's downloads as one figure, with a time left once the speed is known. */
+    data class Progress(val doneMb: Long, val totalMb: Long, val mbPerS: Double?) {
+        val fraction: Float get() = if (totalMb <= 0) 0f else (doneMb.toFloat() / totalMb).coerceIn(0f, 1f)
+
+        val words: String get() = buildString {
+            append("$doneMb of $totalMb MB")
+            val r = mbPerS ?: return@buildString
+            if (r < 0.05) return@buildString
+            append(", ").append(String.format(java.util.Locale.ROOT, "%.1f", r)).append(" MB/s")
+            val left = ((totalMb - doneMb) / r).toLong()
+            if (left > 0) append(", about ").append(duration(left)).append(" left")
+        }
+    }
+
+    fun duration(seconds: Long): String = when {
+        seconds < 60 -> "a minute"
+        seconds < 3600 -> "${(seconds + 59) / 60} min"
+        else -> "${seconds / 3600} h ${(seconds % 3600 + 59) / 60} min"
     }
 }
 
@@ -536,7 +608,7 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                     TextButton(
                         onClick = {
                             LocalServeFlow.plan.value = null
-                            LocalServeFlow.run(install = true) {
+                            LocalServeFlow.run(install = true, downloads = p.downloads.associate { it.name to it.bytes / (1024 * 1024) }) {
                                 store.viaCore?.let { LocalServe.enableViaCore(it.socket) { l -> LocalServeFlow.line(l) } }
                                     ?: LocalServe.enable(url, token) { LocalServeFlow.line(it) }
                             }
@@ -597,6 +669,15 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                 enabled = !busy,
             ) { Text("Stop serving") }
         }
+    }
+    // The whole install as one bar, with how much, how fast and how long.
+    val progress by LocalServeFlow.progress.collectAsState()
+    progress?.takeIf { busy }?.let { pr ->
+        LinearProgressIndicator(
+            progress = { pr.fraction },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp, start = 4.dp, end = 4.dp),
+        )
+        Muted(pr.words, Modifier.padding(top = 4.dp, start = 4.dp), maxLines = 1)
     }
     // The manager's own words, raw: if it ever lies, the lie is inspectable.
     // Once it is serving and nothing runs, they fold away behind Details:

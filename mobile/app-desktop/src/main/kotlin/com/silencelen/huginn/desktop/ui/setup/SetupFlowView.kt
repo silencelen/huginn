@@ -47,6 +47,7 @@ import com.silencelen.huginn.ui.settings.SettingsFieldRow
 import com.silencelen.huginn.ui.settings.SettingsRouteListRow
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import com.silencelen.huginn.ui.settings.SetupScaffold
+import com.silencelen.huginn.ui.settings.SetupScaffoldRules
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -191,9 +192,22 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
             }
         }
 
-        SetupStep.LOCAL_AI -> LocalServeSection(store, intro = false, onServing = { detail ->
-            SetupHost.ifReady { it.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed(detail)) }
-        })
+        SetupStep.LOCAL_AI -> {
+            // Owner, 2026-10-17: the download can take a long while, so the step
+            // says plainly that setup can go on without it, or wait here.
+            val flow = SetupHost.controller?.state?.collectAsState()?.value
+            if (flow?.statusOf(SetupStep.LOCAL_AI) is StepStatus.Working) {
+                Text(
+                    SetupScaffoldRules.WORKING_CHOICE,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+                )
+            }
+            LocalServeSection(store, intro = false, onServing = { detail ->
+                SetupHost.ifReady { it.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed(detail)) }
+            })
+        }
 
         SetupStep.NOTIFY -> {
             val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)
