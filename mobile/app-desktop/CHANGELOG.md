@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.4.2
+
+Carries core 2.4.2.
+
+### Fixed
+- **Installing the desktop app no longer downgrades huginn core.** The Windows installer installs
+  the core it carries, and through 2.3.6 it did so without comparing versions. Installing Desktop
+  2.3.6 on a machine that had just been set up with CLI 2.4.1 put core 2.3.6 back. The core this
+  release carries keeps a newer installed core in place.
+- Versions 2.4.0 and 2.4.1 of the desktop were not released.
+
 ## 2.3.6
 
 Carries core 2.3.6.
