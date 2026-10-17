@@ -8,6 +8,28 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.2] - 2026-10-16
+
+### Changed
+- **The installers ask about the desktop app first, before any configuration** (owner rule):
+  - **Desktop:** they install huginn core (which carries the CLI) and the desktop app, then open
+    it. The app's setup window walks through the rest (huginn's address, the token, this machine
+    as a device) and configures the core with it. Nothing is paired in the terminal.
+  - **No desktop:** the terminal onboarding runs as before: host, key, the host's trust, the core
+    paired, then the device and local AI questions.
+  - On Linux the question is asked only where there is a graphical session.
+  - Terminal attach over SSH, in the desktop path, is set up any time with `huginn setup ssh`.
+
+### Fixed
+- **A fresh install could leave huginn core "paired" with no token, and stuck there.**
+  - The core's first-start import took the desktop's address without a token: the desktop had
+    saved the address it was typed, but no token yet.
+  - The core then reported itself paired, so nothing ever paired it properly.
+  - The desktop's setup accepted the token, but its device step failed with "no appd token"
+    (PRESTIGE).
+  - The import now takes an address only together with its token, and the core counts as paired
+    only when it holds both.
+
 ## [2.5.1] - 2026-10-16
 
 ### Added
