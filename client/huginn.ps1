@@ -1475,7 +1475,8 @@ function huginn {
       if ($env:HUGINN_CORE_NOPAIR) {
         # huginn setup: the host does not trust this computer yet, so there is
         # no ssh to fetch the token over; the person re-runs this after.
-        _Huginn-UiLine 'skip' 'paired' "not yet: the host does not trust this computer's key - huginn core install pairs it once it does"
+        if ($env:HUGINN_CORE_NOPAIR -eq 'window') { _Huginn-UiLine 'skip' 'paired' 'not yet: the Huginn window connects it (the address, then the token)' }
+        else { _Huginn-UiLine 'skip' 'paired' "not yet: the host does not trust this computer's key - huginn core install pairs it once it does" }
       } else { _Huginn-CorePair $bin -Say }
       if (-not $inBlock) { _Huginn-Say ("    done in {0} s" -f [int]$t0.Elapsed.TotalSeconds) DarkGray }
     } elseif (-not $bin) {

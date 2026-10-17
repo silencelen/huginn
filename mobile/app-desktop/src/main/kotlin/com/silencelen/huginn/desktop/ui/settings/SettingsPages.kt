@@ -150,13 +150,16 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
         value = token,
         onValueChange = { token = it },
         secret = true,
-        summary = "The bearer this app sends with every request.",
+        summary = "huginn's appd token (on the huginn host: sudo cat /etc/huginn-appd/token). " +
+            "Connecting pairs huginn core with huginn at the address above: the core keeps the token, this app keeps none.",
         highlighted = SettingsRowStyle.isHighlighted("host.token", mark),
         modifier = revealMark("host.token"),
         trailing = {
-            Button(onClick = { scope.launch { settings.setToken(token); message = "token saved" } }) {
-                Text("Save token")
-            }
+            Button(onClick = {
+                scope.launch {
+                    message = store.connectThroughCore(token).fold({ it }, { "not connected: ${it.message}" })
+                }
+            }) { Text("Connect") }
         },
     )
     message?.let {

@@ -1310,10 +1310,21 @@ FAKE
   GO="$(tr '\r' '\n' < "$GT/raw")"
   for want in 'release   cli-v9.9.9' 'key       ~/.ssh/id_ed25519 (made now)' "'Host huginn' -> 192.0.2.10" 'CLI       ' \
               'does not know this key yet' "echo 'ssh-ed25519 AAAAstub huginn@test' >> ~/.ssh/authorized_keys" \
-              'download  huginn 9.9.9' 'fake service' 'paired    not yet' 'no graphical session' 'huginn device on' 'done in'; do
+              'download  huginn 9.9.9' 'fake service' 'paired    not yet' 'huginn device on' 'done in'; do
     grep -qF -- "$want" <<< "$GO" || { bad "get.sh block lacks [$want]: $(printf '%s' "$GO" | tail -25)"; GT_BAD=1; break; }
   done
   [ -z "${GT_BAD:-}" ] && ok "get.sh: one setup block from release to summary, trust deferred honestly"
+  # The desktop path (owner rule 2026-10-16): the desktop question comes FIRST,
+  # and a yes skips the terminal's host/key/trust onboarding - the core is
+  # installed unpaired, for the app's window to connect.
+  rm -rf "$GT/home"; mkdir -p "$GT/home"; touch "$GT/home/.bashrc"
+  timeout 60 env -i HOME="$GT/home" PATH="$GT/stub:/usr/bin:/bin" TERM=xterm LANG=C HUGINN_GUI=y \
+    HUGINN_CORE_FILE="$GT/fake-core" script -qfec "sh client/get.sh" /dev/null </dev/null > "$GT/raw2" 2>&1
+  GD="$(tr '\r' '\n' < "$GT/raw2")"
+  grep -q 'paired    not yet: the Huginn window connects it' <<< "$GD" && grep -q 'download  huginn 9.9.9' <<< "$GD" \
+    && ! grep -q 'Huginn host' <<< "$GD" && ! grep -q 'key       ' <<< "$GD" \
+    && ok "get.sh: the desktop path installs the core unpaired and leaves onboarding to the window" \
+    || bad "get.sh desktop path drew: $(printf '%s' "$GD" | tail -15)"
   rm -rf "$GT"
 else
   skip "get.sh end to end (no script(1))"

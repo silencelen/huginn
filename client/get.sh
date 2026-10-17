@@ -5,15 +5,19 @@
 #
 # (or `| sh -s -- <host>` to name the huginn host up front; it asks otherwise)
 #
-# 1. installs the huginn client (the same install.sh a clone runs, from the
-#    newest cli-v release - never from a moving branch): key, `Host huginn`,
-#    the CLI, and the host's trust in the key,
-# 2. installs huginn core (huginn core install): the product itself, which
-#    carries the CLI, runs at boot and pairs with the host (not on Termux or
-#    macOS, where it cannot),
-# 3. asks: install the desktop app too?            -> huginn desktop install
-# 4. says what it set up and the next command.
-# The question can be answered up front: HUGINN_GUI=y|n.
+# FIRST it asks whether to install the desktop app (owner rule 2026-10-16;
+# asked only where there is a graphical session):
+#  - yes: installs huginn core (it carries the CLI and runs at boot) and the
+#    desktop app, and opens it. The app's setup window walks through the rest
+#    - the address, the token, this machine as a device - and configures huginn
+#    core with it.
+#  - no: onboards here in the terminal: the client (the same install.sh a clone
+#    runs, from the newest cli-v release - never from a moving branch: key,
+#    `Host huginn`, the host's trust in the key), huginn core, paired with the
+#    host (not on Termux or macOS, where it cannot run), then the device and
+#    local-AI questions.
+# The questions can be answered up front: HUGINN_GUI, HUGINN_DEVICE,
+# HUGINN_LOCAL = y|n; with no terminal to ask on, an unanswered one is a no.
 #
 # One installer block, drawn like `huginn update` (BRAND.md section 6): the
 # client's own helpers once it is downloaded, these few lines before that.
@@ -49,7 +53,6 @@ ask() {   # $1 = question, $2 = preset answer (env), default no
 get() { if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 60 "$1"; else wget -qO- --timeout=60 "$1"; fi; }
 
 printf '%s(o>%s huginn setup\n' "$(color 95)" "$(color 0)" >&2
-command -v ssh >/dev/null 2>&1 || die needs "an ssh client (Debian: apt install openssh-client; Termux: pkg install openssh)"
 command -v bash >/dev/null 2>&1 || die needs "bash (Termux: pkg install bash)"
 
 # The newest cli-v tag, by semver - the release a reviewed client is pinned to.
@@ -67,34 +70,7 @@ bash -n "$T/huginn.sh" || die release "$TAG's huginn.sh does not parse - refused
 chmod 755 "$T/install.sh"
 line ok release "$TAG, the newest release"
 
-# install.sh asks for the host when none was given; with no terminal at all
-# (automation) the host must be the argument.
-if has_tty; then IN=/dev/tty; else IN=/dev/null; [ -n "$HOST" ] || die host "no terminal to ask on - pass the host: sh -s -- <host>"; fi
-if [ -n "$HOST" ]; then HUGINN_SETUP=1 bash "$T/install.sh" "$HOST" < "$IN"; else HUGINN_SETUP=1 bash "$T/install.sh" < "$IN"; fi
-
-TRUSTED=""
-ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
-# huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it,
-# the console and the desktop app need it running. So it is installed, not
-# offered - except where it cannot run: Termux (the phone app is the device
-# there) and macOS (no core build yet).
-CORE="" PAIRED=""
-case "$(uname -s 2>/dev/null)/$(uname -o 2>/dev/null)" in
-  */Android*) line skip core "does not run on Termux: this phone uses the CLI (the huginn app is the device)" ;;
-  Darwin/*)   line skip core "has no macOS build yet: this Mac uses the CLI" ;;
-  *)
-    # Its own lines join this block: download, binary, service, linger, tray,
-    # and pairing - which waits for the host's trust when there is none yet.
-    NOPAIR=""; [ -n "$TRUSTED" ] || NOPAIR=1
-    if HUGINN_SETUP=1 HUGINN_CORE_NOPAIR="$NOPAIR" \
-         bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install' < "$IN"; then CORE=1; PAIRED="$TRUSTED"
-    elif [ -x "$HOME/.local/bin/huginn" ]; then CORE=1   # in place; a later step (pairing) failed, and said why above
-    else line fail core "did not finish - run it again to see why: huginn core install"; fi ;;
-esac
-# The questions (owner rule 2026-10-16: setup asks, it does not leave them to
-# later commands). Each can be answered up front - HUGINN_DEVICE, HUGINN_GUI,
-# HUGINN_LOCAL = y|n - and with no terminal to ask on, an unanswered question
-# is a no.
+if has_tty; then IN=/dev/tty; else IN=/dev/null; fi
 yes_no() {   # $1 = question, $2 = preset, $3 = default (y|n)
   if [ -n "$2" ]; then a="$2"
   elif has_tty; then
@@ -104,47 +80,85 @@ yes_no() {   # $1 = question, $2 = preset, $3 = default (y|n)
   case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 in_huginn() { bash -c '. "$HOME/.huginn/huginn.sh"; huginn "$@"' _ "$@"; }
+# Where huginn core can run: not Termux (the phone app is the device there),
+# not macOS (no core build yet).
+CAN_CORE=1
+case "$(uname -s 2>/dev/null)/$(uname -o 2>/dev/null)" in */Android*|Darwin/*) CAN_CORE="" ;; esac
+
+# THE FIRST QUESTION, before any configuration (owner rule 2026-10-16): with the
+# desktop app, its window walks the person through the rest and configures
+# huginn core; without it, this terminal does.
 GUI=""
-if [ -n "$CORE" ]; then
-  printf '\n' >&2
-  # 1. This machine as a device: huginn can run sessions here. Read-only
-  # (scope look) until widened with huginn device on --scope work.
-  if [ -n "$PAIRED" ]; then
+if [ -n "$CAN_CORE" ] && { [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || [ -n "${HUGINN_GUI:-}" ]; }; then
+  yes_no "Install the desktop app? Its window then walks you through the rest" "${HUGINN_GUI:-}" y && GUI=1
+fi
+printf '\n' >&2
+CORE="" PAIRED="" TRUSTED=""
+if [ -n "$GUI" ]; then
+  # The core (which carries the CLI) and the app; the app's setup connects the
+  # core to huginn - the address, then the token - so nothing is paired here.
+  if HUGINN_SETUP=1 HUGINN_CORE_NOPAIR=window bash -c '. "$1"; huginn core install' _ "$T/huginn.sh" < "$IN"; then CORE=1
+  elif [ -x "$HOME/.local/bin/huginn" ]; then CORE=1
+  else line fail core "did not finish - run it again to see why: huginn core install"; fi
+  if [ -n "$CORE" ]; then
+    if HUGINN_SETUP=1 in_huginn desktop install < "$IN"; then
+      # Opened in its own session, so it outlives this script and its terminal.
+      if command -v setsid >/dev/null 2>&1; then setsid "$HOME/.local/bin/huginn-desktop" >/dev/null 2>&1 < /dev/null &
+      else nohup "$HOME/.local/bin/huginn-desktop" >/dev/null 2>&1 < /dev/null & fi
+      line ok desktop "opened"
+    else GUI=""; line fail desktop "the install did not finish - run: huginn desktop install"; fi
+  fi
+else
+  command -v ssh >/dev/null 2>&1 || die needs "an ssh client (Debian: apt install openssh-client; Termux: pkg install openssh)"
+  # install.sh asks for the host when none was given; with no terminal at all
+  # (automation) the host must be the argument.
+  [ -n "$HOST" ] || has_tty || die host "no terminal to ask on - pass the host: sh -s -- <host>"
+  if [ -n "$HOST" ]; then HUGINN_SETUP=1 bash "$T/install.sh" "$HOST" < "$IN"; else HUGINN_SETUP=1 bash "$T/install.sh" < "$IN"; fi
+  ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
+  # huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it.
+  if [ -z "$CAN_CORE" ]; then
+    case "$(uname -s 2>/dev/null)" in Darwin) line skip core "has no macOS build yet: this Mac uses the CLI" ;;
+      *) line skip core "does not run on Termux: this phone uses the CLI (the huginn app is the device)" ;; esac
+  else
+    # Its own lines join this block: download, binary, service, linger, tray,
+    # and pairing - which waits for the host's trust when there is none yet.
+    NOPAIR=""; [ -n "$TRUSTED" ] || NOPAIR=1
+    if HUGINN_SETUP=1 HUGINN_CORE_NOPAIR="$NOPAIR" \
+         bash -c '. "$HOME/.huginn/huginn.sh"; huginn core install' < "$IN"; then CORE=1; PAIRED="$TRUSTED"
+    elif [ -x "$HOME/.local/bin/huginn" ]; then CORE=1   # in place; a later step (pairing) failed, and said why above
+    else line fail core "did not finish - run it again to see why: huginn core install"; fi
+  fi
+  if [ -n "$CORE" ] && [ -n "$PAIRED" ]; then
+    printf '\n' >&2
+    # This machine as a device: huginn can run sessions here. Read-only
+    # (scope look) until widened with huginn device on --scope work.
     if yes_no "Offer this machine to huginn as a device (read-only sessions until you widen it)?" "${HUGINN_DEVICE:-}" y; then
       if OUT="$(in_huginn device on 2>&1)"; then line ok device "on: huginn can run read-only sessions here (huginn device on --scope work widens it)"
       else line fail device "could not turn it on:"; printf '%s\n' "$OUT" | sed 's/^/                  /' >&2; fi
     else line skip device "not offered (huginn device on, any time)"; fi
-  fi
-  # 2. The desktop app, where there is a desktop to show it on.
-  if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${HUGINN_GUI:-}" ]; then
-    line skip desktop "no graphical session in this shell (huginn desktop install, from the desktop, any time)"
-  elif yes_no "Install the desktop app (a window and a tray on top of huginn core)?" "${HUGINN_GUI:-}" y; then
-    if HUGINN_SETUP=1 in_huginn desktop install < "$IN"; then GUI=1
-      # Until the desktop uses the core's own link to huginn (it is next), it
-      # asks for the address and token once, on its first screen.
-      say "              on its first screen it asks once for huginn's address and token"
-    else line fail desktop "the install did not finish - run: huginn desktop install"; fi
-  else
-    line skip desktop "not installed (huginn desktop install, any time)"
-  fi
-  # 3. The local AI tier, only where it would run on a GPU.
-  if [ -n "$PAIRED" ] && command -v node >/dev/null 2>&1; then
-    PLAN="$(in_huginn local plan --json 2>/dev/null | tr -d '\n')"
-    case "$PLAN" in *'"gpu":{'*'"setup":false'*|*'"setup":false'*'"gpu":{'*)
-      GPU="$(printf '%s' "$PLAN" | sed -n 's/.*"gpu":{"name":"\([^"]*\)".*/\1/p')"
-      NEED="$(printf '%s' "$PLAN" | sed -n 's/.*"needBytes":\([0-9]*\).*/\1/p')"
-      GB="$(awk -v b="${NEED:-0}" 'BEGIN{printf "%.1f GB", b/1073741824}')"
-      if yes_no "Serve local AI models from this machine's ${GPU:-GPU} ($GB download)?" "${HUGINN_LOCAL:-}" n; then
-        line ok "local AI" "setting up - its own steps follow"
-        if in_huginn local on --yes < "$IN"; then line ok "local AI" "serving from the ${GPU:-GPU} (huginn local status)"
-        else line fail "local AI" "did not finish (above says why) - run: huginn local on"; fi
-      else line skip "local AI" "not set up (huginn local on, any time)"; fi ;;
-    esac
+    # The local AI tier, only where it would run on a GPU.
+    if command -v node >/dev/null 2>&1; then
+      PLAN="$(in_huginn local plan --json 2>/dev/null | tr -d '\n')"
+      case "$PLAN" in *'"gpu":{'*'"setup":false'*|*'"setup":false'*'"gpu":{'*)
+        GPU="$(printf '%s' "$PLAN" | sed -n 's/.*"gpu":{"name":"\([^"]*\)".*/\1/p')"
+        NEED="$(printf '%s' "$PLAN" | sed -n 's/.*"needBytes":\([0-9]*\).*/\1/p')"
+        GB="$(awk -v b="${NEED:-0}" 'BEGIN{printf "%.1f GB", b/1073741824}')"
+        if yes_no "Serve local AI models from this machine's ${GPU:-GPU} ($GB download)?" "${HUGINN_LOCAL:-}" n; then
+          line ok "local AI" "setting up - its own steps follow"
+          if in_huginn local on --yes < "$IN"; then line ok "local AI" "serving from the ${GPU:-GPU} (huginn local status)"
+          else line fail "local AI" "did not finish (above says why) - run: huginn local on"; fi
+        else line skip "local AI" "not set up (huginn local on, any time)"; fi ;;
+      esac
+    fi
   fi
 fi
 
 printf '\n' >&2
-if [ -z "$TRUSTED" ]; then
+if [ -n "$GUI" ] && [ -n "$CORE" ]; then
+  say "Huginn is open: its setup connects huginn core to huginn (the address, then the token),"
+  say "and offers this machine as a device. Close this terminal whenever you like."
+  say "$(color 90)Attaching to sessions from a terminal uses SSH; set that up any time with: huginn setup ssh$(color 0)"
+elif [ -z "$TRUSTED" ]; then
   say "huginn is installed, but the host does not trust this computer yet."
   say "Authorize the key shown above on the host, then run:  huginn core install"
   say "(it pairs huginn core with the host), and to offer this machine:  huginn device on"

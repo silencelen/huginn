@@ -129,6 +129,17 @@ class HuginnClient(
     private val transport: DaemonTransport = huginnTransport(),
     /** Where proved fingerprints live. The process's book unless a test isolates one. */
     private val pins: PinBook = PinBook.process,
+    /**
+     * The desktop's second way to huginn: through huginn core on this machine
+     * (docs/DESKTOP-VIA-CORE.md). Null on the phone, which has no core.
+     */
+    private val coreTransport: DaemonTransport? = null,
+    /**
+     * Read per request: true sends it through [coreTransport]. A desktop whose
+     * setup pairs the core moves onto it at once, mid-run, without a restart -
+     * the base url and token providers follow the same answer.
+     */
+    private val useCore: () -> Boolean = { false },
 ) {
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
@@ -297,7 +308,24 @@ class HuginnClient(
      * `expectSuccess = false` because this client reads the server's own error
      * text out of a non-2xx body rather than letting the plugin throw over it.
      */
-    private val http = HttpClient(transport.engine { pins.pinsFor(tokenProvider().trim()) }) {
+    private val http: HttpClient get() = if (coreTransport != null && useCore()) viaCore else direct
+
+    /**
+     * Through huginn core: plain http over the core's local socket, so no pins
+     * and no proof here - the core proves huginn on its own link. Built the
+     * first time it is needed.
+     */
+    private val viaCore: HttpClient by lazy {
+        HttpClient(requireNotNull(coreTransport).engine { emptyList() }) {
+            expectSuccess = false
+            install(HttpTimeout) {
+                connectTimeoutMillis = CONNECT_TIMEOUT_MS
+                socketTimeoutMillis = READ_TIMEOUT_MS
+            }
+        }
+    }
+
+    private val direct = HttpClient(transport.engine { pins.pinsFor(tokenProvider().trim()) }) {
         expectSuccess = false
         install(HttpTimeout) {
             connectTimeoutMillis = CONNECT_TIMEOUT_MS
@@ -414,7 +442,10 @@ class HuginnClient(
     }
 
     /** Releases the engine. Optional on Android (the process owns it); the desktop client should call it. */
-    fun close() = http.close()
+    fun close() {
+        direct.close()
+        if (coreTransport != null && useCore()) viaCore.close()
+    }
 
     /**
      * ONE path segment, from a name or id: percent-encoded, slash included.
