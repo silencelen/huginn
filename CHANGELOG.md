@@ -8,6 +8,15 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.1] - 2026-10-16
+
+### Added
+- `GET /core/status` reports the certificate fingerprints the core proved (`pins`). They are public
+  hashes, not secrets. Huginn Desktop 2.5.1 compares them with its own pins before it hands its link
+  to the core: the same certificate means the same huginn, even on another address (a LAN and a
+  mesh address of one host).
+- **Huginn Desktop 2.5.1 goes through huginn core.** See its changelog; this is the core it needs.
+
 ## [2.5.0] - 2026-10-16
 
 The core side of "the desktop goes through huginn core" (docs/DESKTOP-VIA-CORE.md, owner decision
