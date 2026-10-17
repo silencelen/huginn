@@ -212,11 +212,9 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
             modifier = Modifier.padding(top = 10.dp),
         )
 
-        Muted(
-            lockSentence(actWhileLocked, status.locked, status.lockKnown, isWindowsHost()),
-            Modifier.padding(top = 10.dp, start = 4.dp),
-            maxLines = 4,
-        )
+        lockSentence(actWhileLocked, status.locked, status.lockKnown, isWindowsHost()).takeIf { it.isNotBlank() }?.let {
+            Muted(it, Modifier.padding(top = 10.dp, start = 4.dp), maxLines = 4)
+        }
     }
 }
 
@@ -258,13 +256,13 @@ internal fun lockSentence(
             "screen here for anyone to unlock; the switch is the only way to change it."
     locked ->
         "This machine reads as locked, so it is read-only until someone unlocks it."
-    else ->
-        "While the screen is locked, this machine drops to Look and refuses Act." +
-            // Said only where it is true. The probe reads a connected
-            // remote-desktop session as somebody being here, which is the
-            // difference between a Windows box being usable remotely and it
-            // refusing Act for as long as it is on.
-            if (windowsHost) " A connected remote-desktop session counts as someone being here." else ""
+    // The switch's own "Off:" line already says the machine drops to Look
+    // while locked; saying it again under it was run 4's duplicate. What is
+    // left is the one thing the switch does not say, and only where it is true:
+    // the probe reads a connected remote-desktop session as somebody being
+    // here, which is the difference between a Windows box being usable remotely
+    // and it refusing Act for as long as it is on.
+    else -> if (windowsHost) "A connected remote-desktop session counts as someone being here." else ""
 }
 
 /** The word the scope radio above shows, for the sentence that quotes it back. */
@@ -339,19 +337,44 @@ internal object LocalServeFlow {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
     )
 
-    fun line(l: String) { log.value = LocalLog.append(log.value, l) }
+    /** An install (Download and turn on) is what is running, not a plan or a stop. */
+    @Volatile private var installing = false
 
-    fun run(block: suspend () -> Unit) {
+    fun line(l: String) {
+        log.value = LocalLog.append(log.value, l)
+        // Setup's rail follows the install wherever the reader is: run 5 left
+        // the step on "read the plan, then Download" for the whole download.
+        if (installing) {
+            com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
+                it.working(com.silencelen.huginn.settings.SetupStep.LOCAL_AI, l.trim())
+            }
+        }
+    }
+
+    fun run(install: Boolean = false, block: suspend () -> Unit) {
         if (busy.value) return
         busy.value = true
+        installing = install
         log.value = emptyList()
-        scope.launch { try { block() } finally { busy.value = false } }
+        if (install) line("starting: the plan's downloads, then the two services")
+        scope.launch {
+            try { block() } finally {
+                busy.value = false
+                if (install) {
+                    installing = false
+                    com.silencelen.huginn.desktop.setup.SetupHost.ifReady {
+                        it.workEnded(com.silencelen.huginn.settings.SetupStep.LOCAL_AI, log.value.lastOrNull())
+                    }
+                }
+            }
+        }
     }
 }
 
 /** The card's last few lines. */
 internal object LocalLog {
-    private val PROGRESS = Regex("""^(.+): \d{1,3}%$""")
+    // "file: 31%" and, since 2.5.6, "file: 31%  740 of 2382 MB, 2.3 MB/s".
+    private val PROGRESS = Regex("""^(.+?): \d{1,3}%(\s.*)?$""")
 
     /**
      * A download's progress ("Qwen3-4B-Q4_K_M.gguf: 40%") replaces its own
@@ -474,8 +497,15 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                     }
                 }
                 Muted(
-                    "Checks what this machine can serve and shows the exact plan before anything downloads. " +
-                        "Also available from a terminal:  huginn local on",
+                    if (busy) {
+                        // Run 5: "Working..." over a sentence about checking the
+                        // plan, while 2.4 GB downloaded under it.
+                        "Setting up. It carries on if you leave this page or close the window; " +
+                            "the lines below are the manager's own."
+                    } else {
+                        "Checks what this machine can serve and shows the exact plan before anything downloads. " +
+                            "Also available from a terminal:  huginn local on"
+                    },
                     Modifier.padding(start = 4.dp),
                     maxLines = 3,
                 )
@@ -506,7 +536,7 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                     TextButton(
                         onClick = {
                             LocalServeFlow.plan.value = null
-                            LocalServeFlow.run {
+                            LocalServeFlow.run(install = true) {
                                 store.viaCore?.let { LocalServe.enableViaCore(it.socket) { l -> LocalServeFlow.line(l) } }
                                     ?: LocalServe.enable(url, token) { LocalServeFlow.line(it) }
                             }

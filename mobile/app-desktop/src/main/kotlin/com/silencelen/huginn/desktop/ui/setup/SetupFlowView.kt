@@ -11,6 +11,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -170,7 +171,25 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
         // own subtitle back with four words changed, twice in a row (steps 4 and
         // 5). Exactly the same call the autostart row gets below, for exactly the
         // same reason. `SetupIntroTest` greps for these two arguments.
-        SetupStep.DEVICE -> DeviceSection(store, intro = false)
+        SetupStep.DEVICE -> {
+            DeviceSection(store, intro = false)
+            // The step follows its switch (owner rule: what is shown is re-read).
+            // Run 5 turned "Available to huginn" off and the list still read
+            // "Waiting for work", counted as set up. Turning it off after it
+            // passed is the person's answer; an enrolment that lands passes it.
+            val on by settings.deviceEnabled.collectAsState()
+            val device by store.coreDevice.status.collectAsState()
+            LaunchedEffect(on, device.enrolled, device.note) {
+                SetupHost.ifReady { c ->
+                    val cur = c.state.value.statusOf(SetupStep.DEVICE)
+                    when {
+                        on && device.enrolled ->
+                            c.settledByCard(SetupStep.DEVICE, StepStatus.Passed(device.note.ifBlank { "enrolled, waiting for work" }))
+                        !on && cur is StepStatus.Passed -> c.settledByCard(SetupStep.DEVICE, StepStatus.Skipped())
+                    }
+                }
+            }
+        }
 
         SetupStep.LOCAL_AI -> LocalServeSection(store, intro = false, onServing = { detail ->
             SetupHost.ifReady { it.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed(detail)) }

@@ -95,6 +95,17 @@ sealed interface StepStatus {
     data class Checked(val detail: String) : StepStatus
 
     /**
+     * Underway, and nobody needs to do anything: the local-AI card's install
+     * downloading in the background. Run 5 read "checked, waiting on you" over
+     * a download that was running. [detail] is its latest progress line.
+     *
+     * RESOLVED - the reader has answered, and the flow may move on and finish
+     * while it runs - and NEVER STORED: after a restart the live re-check says
+     * what became of it, rather than a "setting up" nothing is doing.
+     */
+    data class Working(val detail: String) : StepStatus
+
+    /**
      * The reader said no, or the step could not be offered. [why] is empty for a
      * plain decline; a gated step that never got its chance says so.
      */
@@ -343,12 +354,14 @@ object SetupFlow {
         val waiting = STEPS.count { state.statusOf(it) is StepStatus.Checked }
         val skipped = STEPS.count { state.statusOf(it) is StepStatus.Skipped }
         val failed = STEPS.count { state.statusOf(it) is StepStatus.Failed }
+        val working = STEPS.count { state.statusOf(it) is StepStatus.Working }
         val parts = buildList {
             add("$passed of ${STEPS.size} set up")
             // Second, and before the two settled counts: it is the only clause
             // that names something still to do. A checked step counted as
             // nothing at all is how "4 of 7" came to sit under a printed verdict.
             if (waiting > 0) add("$waiting waiting on you")
+            if (working > 0) add("$working still setting up")
             if (skipped > 0) add("$skipped skipped")
             if (failed > 0) add("$failed could not be proven")
         }
@@ -429,6 +442,7 @@ object SetupFlow {
                     is StepStatus.Passed -> StoredStep(step.name, "passed", st.detail)
                     is StepStatus.Failed -> StoredStep(step.name, "failed", st.reason)
                     is StepStatus.Checked -> StoredStep(step.name, "checked", st.detail)
+                    is StepStatus.Working -> null
                     is StepStatus.Skipped -> StoredStep(step.name, "skipped", st.why)
                 }
             },

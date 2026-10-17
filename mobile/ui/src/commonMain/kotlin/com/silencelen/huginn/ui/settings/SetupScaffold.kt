@@ -85,6 +85,9 @@ enum class SetupTone {
      * worked), and not declined (nobody has declined anything).
      */
     WAITING_ON_YOU,
+
+    /** Underway in the background; nobody needs to act. */
+    WORKING,
 }
 
 /**
@@ -251,6 +254,7 @@ object SetupScaffoldRules {
         is StepStatus.Passed -> SetupTone.PROVEN
         is StepStatus.Failed -> SetupTone.REFUSED
         is StepStatus.Checked -> SetupTone.WAITING_ON_YOU
+        is StepStatus.Working -> SetupTone.WORKING
         is StepStatus.Skipped -> SetupTone.DECLINED
     }
 
@@ -285,8 +289,12 @@ object SetupScaffoldRules {
         // this line used to read "not checked yet" beside a printed verdict.
         is StepStatus.Checked ->
             if (status.detail.isBlank()) CHECKED_WORDS else "$CHECKED_WORDS — ${status.detail}"
+        is StepStatus.Working -> if (status.detail.isBlank()) WORKING_WORDS else "$WORKING_WORDS — ${status.detail}"
         is StepStatus.Skipped -> if (status.why.isBlank()) "skipped" else "skipped — ${status.why}"
     }
+
+    /** A [StepStatus.Working] step: it carries on whether or not anyone watches. */
+    const val WORKING_WORDS: String = "setting up"
 
     /** What a [StepStatus.Checked] step is, in four words: the machine has answered, you have not. */
     const val CHECKED_WORDS: String = "checked, waiting on you"
@@ -504,4 +512,6 @@ private fun toneColour(tone: SetupTone): Color = when (tone) {
     // colour, the accent lit up (BRAND.md section 2), the same step the tray and
     // the session rows use. Proven is the success step, not the accent.
     SetupTone.WAITING_ON_YOU -> LocalHuginnColors.current.stateAttention
+    // The same colour a working session's row carries.
+    SetupTone.WORKING -> LocalHuginnColors.current.stateWorking
 }

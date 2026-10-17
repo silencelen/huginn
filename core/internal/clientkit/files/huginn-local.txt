@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 2.5.5
+// Version: 2.5.6
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '2.5.5';
+const VERSION = '2.5.6';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -625,13 +625,21 @@ function fetchToFile(url, dest, redirects = 0, label = path.basename(dest)) {
       if (res.statusCode !== 200) { res.resume(); return reject(new Error(`${url} answered ${res.statusCode}`)); }
       const out = fs.createWriteStream(dest);
       const total = Number(res.headers['content-length'] || 0);
-      let got = 0, lastPct = -10;
+      // Every percent, at most once a second, with how much and how fast: a
+      // 2.4 GB model at 10% steps read "0%" for two minutes, and looked stuck
+      // (owner's run 5). The desktop card keeps one line per file.
+      const t0 = Date.now();
+      let got = 0, lastPct = -1, lastT = 0;
       res.on('data', (c) => {
         got += c.length;
-        if (total) {
-          const pct = Math.floor((got / total) * 100);
-          if (pct >= lastPct + 10) { lastPct = pct; process.stdout.write(`\r    ${label}: ${pct}%   `); }
-        }
+        if (!total) return;
+        const pct = Math.floor((got / total) * 100);
+        const now = Date.now();
+        if (pct === lastPct || (now - lastT < 1000 && pct < 100)) return;
+        lastPct = pct; lastT = now;
+        const mb = (n) => (n / (1024 * 1024)).toFixed(0);
+        const rate = got / Math.max(0.001, (now - t0) / 1000) / (1024 * 1024);
+        process.stdout.write(`\r    ${label}: ${pct}%  ${mb(got)} of ${mb(total)} MB, ${rate.toFixed(1)} MB/s   `);
       });
       res.pipe(out);
       out.on('finish', () => { process.stdout.write('\r'); out.close(() => resolve()); });

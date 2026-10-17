@@ -187,6 +187,40 @@ class SetupController(
     }
 
     /**
+     * A card's work is running in the background (local AI downloading): the
+     * step says so, with the latest progress line, and is not counted as waiting
+     * on the reader. Not stored - see [StepStatus.Working]. A step already
+     * passed stays passed.
+     */
+    fun working(step: SetupStep, detail: String) {
+        val cur = _state.value.statusOf(step)
+        if (cur is StepStatus.Passed) return
+        val next = StepStatus.Working(detail)
+        if (cur == next) return
+        dropNoteOf(step)
+        _state.value = SetupFlow.settledByCard(_state.value, step, next)
+    }
+
+    /**
+     * That work ended: what the machine says now, read live, or why it did not
+     * finish - the card's last line. Only a step still marked working is
+     * touched; anything the reader did meanwhile stands.
+     */
+    fun workEnded(step: SetupStep, lastLine: String?) {
+        if (_state.value.statusOf(step) !is StepStatus.Working) return
+        scope.launch {
+            val live = runCatching { probes.live(step) }.getOrNull()
+            if (_state.value.statusOf(step) !is StepStatus.Working) return@launch
+            put(
+                SetupFlow.settledByCard(
+                    _state.value, step,
+                    live ?: StepStatus.Failed(lastLine?.trim()?.takeIf { it.isNotEmpty() } ?: "it did not finish"),
+                ),
+            )
+        }
+    }
+
+    /**
      * The note under a step's control was that step's last answer. Once the
      * card or a recheck settles it, the note is stale: run 3 showed "can serve,
      * 2568 MB to download" under a card already serving. A question still
@@ -263,7 +297,7 @@ class SetupController(
             // reader back exactly where they were, which is what made the step
             // look inert. The choice itself is the consent card in the step
             // body, or "Skip for now" beside this button.
-            is StepStatus.Passed, is StepStatus.Skipped, is StepStatus.Checked -> advance()
+            is StepStatus.Passed, is StepStatus.Skipped, is StepStatus.Checked, is StepStatus.Working -> advance()
             else -> run(s.current)
         }
     }
