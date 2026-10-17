@@ -140,26 +140,49 @@ class AppStore(
      */
     val link: CoreBoot.Outcome = CoreBoot.Outcome.Direct("not decided (a test)"),
 ) {
-    /** The core carries this run's traffic. */
-    val viaCore: CoreBoot.Outcome.ViaCore? get() = link as? CoreBoot.Outcome.ViaCore
+    /**
+     * The core carries the traffic - from the start (the link above), or from the
+     * moment setup paired it ([connectThroughCore]): the client reads this per
+     * request, so the move needs no restart.
+     */
+    private val _viaCore = kotlinx.coroutines.flow.MutableStateFlow(link as? CoreBoot.Outcome.ViaCore)
+    val viaCoreState: kotlinx.coroutines.flow.StateFlow<CoreBoot.Outcome.ViaCore?> = _viaCore
+    val viaCore: CoreBoot.Outcome.ViaCore? get() = _viaCore.value
+
+    /** Where huginn core listens on this machine (it may not be running). */
+    private val coreSocket: java.nio.file.Path? = (link as? CoreBoot.Outcome.ViaCore)?.socket
+        ?: com.silencelen.huginn.desktop.core.CorePaths.socket()
 
     /**
-     * On this app's own link, after setup proved a token: pair an installed core
-     * that is new enough and not paired yet with the same address and token, so
-     * the next start goes through it (and deletes this app's copy). Null when
-     * there is no such core; otherwise what to tell the person.
+     * Setup's token step (owner rule 2026-10-16: the desktop's enroller configures
+     * the CORE): pair huginn core with this app's address and [token] - the core
+     * proves them and keeps the token in its own store - give it this app's other
+     * addresses, prove a request through it, and move this run onto it. Only then
+     * is this app's own copy of anything cleared.
      */
-    suspend fun pairCoreWithOwnLink(): String? {
-        if (viaCore != null) return null
-        val socket = com.silencelen.huginn.desktop.core.CorePaths.socket() ?: return null
+    suspend fun connectThroughCore(token: String): Result<String> = runCatching {
+        val socket = checkNotNull(coreSocket) { "this system has no place for huginn core's socket" }
         val core = com.silencelen.huginn.desktop.core.CoreClient(socket)
-        if (!core.socketPresent()) return null
-        val st = runCatching { core.status() }.getOrNull() ?: return null
-        if (st.paired || com.silencelen.huginn.update.Semver.isNewer(CoreBoot.MIN_CORE, st.version)) return null
-        return runCatching { core.pair(settings.baseUrlNow(), settings.tokenNow()) }
-            .fold({ "huginn core is paired with it too: reopen Huginn and the link moves into the core" },
-                { "huginn core could not be paired with it (${it.message})" })
+        check(core.socketPresent()) { "huginn core is not running: set it up first (the first screen of this app)" }
+        val st = core.status()
+        check(!com.silencelen.huginn.update.Semver.isNewer(CoreBoot.MIN_CORE, st.version)) {
+            "huginn core ${st.version} is older than ${CoreBoot.MIN_CORE}: huginn update brings it up to date"
+        }
+        val book = settings.routeBookNow()
+        val url = book.activeUrl.ifBlank { settings.baseUrlNow() }
+        check(url.isNotBlank()) { HuginnClient.NO_ROUTE }
+        check(token.isNotBlank()) { "no token yet - paste the one from the huginn host into the box above" }
+        core.pair(url, token.trim())
+        for (r in book.routes) {
+            if (r.url != url) runCatching { core.addRoute(r.url, r.name, r.kind.name.lowercase().let { if (it == "local") "custom" else it }) }
+        }
+        check(core.appdThroughCore()) { "huginn core is paired, but huginn did not answer through it yet" }
+        val now = core.status()
+        settings.clearOwnCredentials()
+        _viaCore.value = CoreBoot.Outcome.ViaCore(socket, now.version, now.url, "paired in setup")
+        "huginn core is paired with huginn at ${now.url}; this app goes through it"
     }
+
 
 
     /**
@@ -213,11 +236,11 @@ class AppStore(
         // certificate. The transport's hook runs before it installs the pinning
         // trust manager, so the interceptor rides along without being able to
         // weaken it.
-        transport = viaCore?.let { v ->
-            // The core picks the address and proves it; there is no route of
-            // this app's own to witness.
-            CoreDaemonTransport(v.socket)
-        } ?: OkHttpDaemonTransport {
+        // Through the core: the core picks the address and proves it, so there is
+        // no route of this app's own to witness.
+        coreTransport = coreSocket?.let { CoreDaemonTransport(it) },
+        useCore = { _viaCore.value != null },
+        transport = OkHttpDaemonTransport {
             addInterceptor { chain ->
                 val response = chain.proceed(chain.request())
                 noteRouteReached(chain.request().url.toString(), response.code)
@@ -2322,7 +2345,8 @@ class AppStore(
      * One counter, because the remedy for both is identical.
      */
     private suspend fun watchLoop() {
-        presence.streamKey.collectLatest {
+        // Also restarted when the run moves onto huginn core (setup paired it).
+        kotlinx.coroutines.flow.combine(presence.streamKey, _viaCore) { k, v -> k to (v != null) }.collectLatest {
             var backoffMs = MIN_BACKOFF_MS
             var hash: String? = null
             while (scope.isActive) {

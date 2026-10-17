@@ -171,11 +171,8 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                 value = token,
                 onValueChange = { token = it; SetupDrafts.token = it },
                 secret = true,
-                summary = "The bearer this app sends with every request. " +
-                    "\"Try the token\" uses what is in this box.",
-                trailing = {
-                    Button(onClick = { scope.launch { settings.setToken(token.trim()) } }) { Text("Save token") }
-                },
+                summary = "huginn's appd token. On the huginn host, `sudo cat /etc/huginn-appd/token` prints it. " +
+                    "Checking it pairs huginn core with huginn: the core keeps the token, this app keeps none.",
             )
         }
 
@@ -270,16 +267,16 @@ class DesktopSetupProbes(
         check(wanted.isNotBlank()) {
             "no token yet — paste the one from the huginn host into the box above"
         }
-        if (wanted != store.settings.tokenNow()) store.settings.setToken(wanted)
-        // THE CHECK NOTHING DID. The token field's only feedback was the words
-        // "token saved", printed whether or not the daemon would ever accept it.
+        // ⚠ INTO THE CORE, NOT THIS APP (owner rule 2026-10-16): the token pairs
+        // huginn core, which proves it against the address above and keeps it;
+        // this app then goes through the core and holds no token of its own.
+        // THE CHECK NOTHING DID used to be here as a direct /v1/status; the
+        // core's pairing proves the token, and the status below proves the link.
+        store.connectThroughCore(wanted).getOrThrow()
         val status = store.client.status()
         val version = status.appdVersion?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
         val host = status.host?.takeIf { it.isNotBlank() }?.let { " on $it" }.orEmpty()
-        // A token that works goes to huginn core too, when one is here and not
-        // paired yet: the next start then hands this app's link over to it.
-        val handed = store.pairCoreWithOwnLink()?.let { " - $it" }.orEmpty()
-        "accepted by $version$host$handed"
+        "huginn core paired: accepted by $version$host"
     }
 
     override suspend fun claude(): Result<String> = withContext(Dispatchers.IO) {

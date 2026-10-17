@@ -513,7 +513,8 @@ _huginn_core() {
       if [ -n "${HUGINN_CORE_NOPAIR:-}" ]; then
         # huginn setup: the host does not trust this computer yet, so there is
         # no ssh to fetch the token over; the person re-runs this after.
-        _huginn_ui_line skip paired "not yet: the host does not trust this computer's key - huginn core install pairs it once it does"
+        if [ "$HUGINN_CORE_NOPAIR" = window ]; then _huginn_ui_line skip paired "not yet: the Huginn window connects it (the address, then the token)"
+        else _huginn_ui_line skip paired "not yet: the host does not trust this computer's key - huginn core install pairs it once it does"; fi
       else
         _huginn_core_pair "$bin" say || return 1
       fi
