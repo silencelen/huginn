@@ -173,8 +173,31 @@ object SetupScaffoldRules {
         return when (state.statusOf(step)) {
             StepStatus.Pending -> verb(step)
             is StepStatus.Failed -> "Try again"
+            // Owner, 2026-10-17: a model download can take a long while, so the
+            // way on says that setup goes on without waiting for it.
+            is StepStatus.Working -> if (last) "Done" else CONTINUE_WORKING
             else -> if (last) "Done" else "Next"
         }
+    }
+
+    /** The primary over a step still setting up in the background. */
+    const val CONTINUE_WORKING: String = "Continue setup"
+
+    /**
+     * Said under a step that is setting up in the background: the two choices,
+     * both of them fine (owner, 2026-10-17).
+     */
+    const val WORKING_CHOICE: String =
+        "This can take a while. Continue setup now and it finishes in the background; the list above " +
+            "says when it is done. Or wait here and watch it."
+
+    /** The finish card, when something is still setting up. */
+    fun finishedBlurb(state: SetupState): String {
+        val still = SetupFlow.STEPS.filter { state.statusOf(it) is StepStatus.Working }
+        if (still.isEmpty()) return FINISHED_BLURB
+        val names = still.joinToString(" and ") { railLabel(it) }
+        return "$names is still setting up in the background. It carries on after you close setup; " +
+            "Settings > Devices shows how far it is.\n\n" + FINISHED_BLURB
     }
 
     /**
@@ -374,7 +397,7 @@ fun SetupScaffold(
                             modifier = Modifier.padding(top = 6.dp),
                         )
                         Text(
-                            SetupScaffoldRules.FINISHED_BLURB,
+                            SetupScaffoldRules.finishedBlurb(state),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 6.dp),

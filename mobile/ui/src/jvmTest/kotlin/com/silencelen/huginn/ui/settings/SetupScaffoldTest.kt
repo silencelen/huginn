@@ -347,4 +347,23 @@ class SetupRoundThreeTest {
         assertTrue(SetupScaffoldRules.RAIL_REASON_LINES >= 3, "one clause is not a reason")
         assertTrue("maxLines = 1" !in rail, "a one-line reason is a reason that was not given")
     }
+
+    /**
+     * Owner, 2026-10-17: a model download can take a long while, so a step
+     * setting up in the background offers the way on by name, and the finish
+     * card says what is still running.
+     */
+    @Test
+    fun `a step setting up in the background says setup can go on, and the finish says it is still running`() {
+        val working = SetupState(
+            current = SetupStep.LOCAL_AI,
+            results = mapOf(SetupStep.LOCAL_AI to StepStatus.Working("downloading 740 of 2568 MB")),
+        )
+        assertEquals(SetupScaffoldRules.CONTINUE_WORKING, SetupScaffoldRules.primaryLabel(working))
+        assertFalse(SetupScaffoldRules.canSkip(working), "it is underway: nothing to decline")
+        assertEquals("setting up — downloading 740 of 2568 MB", SetupScaffoldRules.stateWords(working.results.getValue(SetupStep.LOCAL_AI)))
+        val blurb = SetupScaffoldRules.finishedBlurb(working.copy(finished = true))
+        assertTrue(blurb.startsWith("Local AI is still setting up in the background"), blurb)
+        assertEquals(SetupScaffoldRules.FINISHED_BLURB, SetupScaffoldRules.finishedBlurb(SetupState(finished = true)))
+    }
 }
