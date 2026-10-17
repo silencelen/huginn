@@ -113,4 +113,27 @@ class ViaCoreTest {
         assertEquals("Bearer app-token", req["auth"], "appd sees the token the CORE now holds")
         assertEquals("desktop-kt-test", req["client"], "and this app's own client id")
     }
+
+    @Test
+    fun `one client moves onto the core mid-run, with no restart`() = runBlocking {
+        if (core == null) return@runBlocking
+        val url = "http://127.0.0.1:${appd.address.port}"
+        // The core holds a token of its own; this app starts on its own link with another.
+        CoreClient(sock).pair(url, "core-token")
+        var onCore = false
+        val client = HuginnClient(
+            baseUrlProvider = { if (onCore) CoreDaemonTransport.APPD_BASE else url },
+            tokenProvider = { if (onCore) "" else "app-token" },
+            clientIdProvider = { "desktop-kt-test" },
+            coreTransport = CoreDaemonTransport(sock),
+            useCore = { onCore },
+        )
+        seen.clear()
+        client.status()
+        assertEquals("Bearer app-token", seen.last()["auth"], "before: this app's own link")
+        onCore = true
+        client.status()
+        assertEquals("Bearer core-token", seen.last()["auth"], "after: the very next call goes through the core")
+        assertEquals("desktop-kt-test", seen.last()["client"])
+    }
 }
