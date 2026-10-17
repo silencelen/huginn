@@ -1,0 +1,290 @@
+package appd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// The route book (docs/DESKTOP-VIA-CORE.md, owner decision 2026-10-16): one
+// daemon, several addresses — its LAN address at home, its mesh address away,
+// a tailnet name — and the core uses whichever answers. The desktop kept this
+// list itself until the core became its only way to huginn.
+//
+// What switches: a request that never reached appd - the connection was
+// refused, timed out or had no route, or the address answered with a
+// certificate that is not the proved one (away from home, the LAN address can
+// be somebody else's machine; the pin is judged inside the handshake, so
+// nothing was sent to it). Such a request is tried once more on the next
+// address, which becomes the active one.
+// What never switches: anything after the request left - an answer from appd
+// (any status), a connection that broke mid-answer (a POST may have been
+// done; sending it again elsewhere could do it twice) - and a missing token,
+// or the caller giving up. With ONE address, a wrong certificate stays the
+// interception error it always was.
+//
+// Every address is judged by the same pin: the pin is appd's certificate,
+// proved by the token, whatever address it is reached on.
+
+// RouteDialTimeout bounds the TCP connect when there is another address to
+// try: a dead address is given up on in seconds, not the 20 s handshake limit.
+const RouteDialTimeout = 6 * time.Second
+
+// RouteHealth is what the core knows about one address.
+type RouteHealth struct {
+	URL        string    `json:"url"`
+	Active     bool      `json:"active"`
+	LastSeenAt time.Time `json:"lastSeenAt,omitzero"`
+	LastFailAt time.Time `json:"lastFailAt,omitzero"`
+	LastError  string    `json:"lastError,omitempty"`
+}
+
+// RouteEvent is a switch of the active address (From/To set) or a change in
+// one address's health (Health set).
+type RouteEvent struct {
+	From, To, Why string
+	Health        *RouteHealth
+}
+
+type routeState struct {
+	rmu      sync.Mutex
+	routes   []*url.URL
+	active   int
+	fixed    bool
+	health   []RouteHealth
+	onRoute  func(RouteEvent)
+	dialT    time.Duration
+	lastNote []time.Time // last health report per address, to report a steady state rarely
+}
+
+func (c *Client) initRoutes(base *url.URL, cfg Config) error {
+	c.routes = []*url.URL{base}
+	seen := map[string]bool{base.String(): true}
+	for _, r := range cfg.Routes {
+		raw := NormalizeURL(r)
+		if err := URLRefusal(raw); err != nil {
+			return fmt.Errorf("route %s: %w", r, err)
+		}
+		u, _ := url.Parse(raw)
+		if seen[u.String()] {
+			continue
+		}
+		seen[u.String()] = true
+		c.routes = append(c.routes, u)
+	}
+	c.fixed = cfg.Fixed
+	c.onRoute = cfg.OnRoute
+	c.health = make([]RouteHealth, len(c.routes))
+	c.lastNote = make([]time.Time, len(c.routes))
+	for i, u := range c.routes {
+		c.health[i].URL = trimURL(u)
+	}
+	if len(c.routes) > 1 && !c.fixed {
+		c.dialT = RouteDialTimeout
+	}
+	return nil
+}
+
+func trimURL(u *url.URL) string { return strings.TrimSuffix(u.String(), "/") }
+
+// cur is the active address.
+func (c *Client) cur() *url.URL {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	if len(c.routes) == 0 {
+		return c.base
+	}
+	return c.routes[c.active]
+}
+
+// Routes is a snapshot of every address and what is known about it.
+func (c *Client) Routes() []RouteHealth {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	out := make([]RouteHealth, len(c.health))
+	copy(out, c.health)
+	for i := range out {
+		out[i].Active = i == c.active
+	}
+	return out
+}
+
+// withRoutes runs attempt on the active address and, when it never reached
+// appd there and another address is allowed, once more on the next one.
+func (c *Client) withRoutes(ctx context.Context, attempt func() error) error {
+	i := c.activeIndex()
+	err := attempt()
+	c.note(i, err)
+	if !c.notDelivered(ctx, err) {
+		return err
+	}
+	next, ok := c.switchFrom(i, err)
+	if !ok {
+		return err
+	}
+	err = attempt()
+	c.note(next, err)
+	return err
+}
+
+func (c *Client) activeIndex() int {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	return c.active
+}
+
+// notDelivered: the request never reached appd at this address, so another
+// address may be tried without doing anything twice.
+func (c *Client) notDelivered(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	var se *StatusError
+	if errors.As(err, &se) || errors.Is(err, errBodySent) || Classify(err) == KindAuth {
+		return false
+	}
+	// The address did not prove to be this daemon: a certificate that is not
+	// the pinned one, a proof that fails, or no TLS at all ("older than
+	// 3.11" - on an address that is somebody else's machine, that is what
+	// they say). The proof never carries the token, so nothing was sent.
+	var pm *PinMismatchError
+	if errors.As(err, &pm) || errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) {
+		c.rmu.Lock()
+		several := len(c.routes) > 1
+		c.rmu.Unlock()
+		return several // see the top of this file
+	}
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "dial" {
+		return true
+	}
+	// This package's own wording for a connect or handshake that ran out of
+	// time (dialErr, handshakeErr): both happen before a request byte exists.
+	m := err.Error()
+	for _, s := range []string{"did not finish within", "connection refused", "no route to host", "network is unreachable"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// switchFrom moves the active address off failed (an index), to the first
+// other address that has not failed more recently than it answered, else
+// simply the next one. false: switching is not allowed or there is nowhere
+// to go.
+func (c *Client) switchFrom(failed int, why error) (int, bool) {
+	c.rmu.Lock()
+	if c.fixed || len(c.routes) < 2 {
+		c.rmu.Unlock()
+		return 0, false
+	}
+	if c.active != failed {
+		// Another request already moved it; use what it chose.
+		i := c.active
+		c.rmu.Unlock()
+		return i, true
+	}
+	next := -1
+	for k := 1; k < len(c.routes); k++ {
+		j := (failed + k) % len(c.routes)
+		h := c.health[j]
+		if h.LastFailAt.IsZero() || h.LastSeenAt.After(h.LastFailAt) {
+			next = j
+			break
+		}
+	}
+	if next < 0 {
+		next = (failed + 1) % len(c.routes)
+	}
+	from, to := trimURL(c.routes[failed]), trimURL(c.routes[next])
+	c.active = next
+	on := c.onRoute
+	c.rmu.Unlock()
+	c.logf("huginn did not answer at %s (%v); switching to %s", from, why, to)
+	if on != nil {
+		on(RouteEvent{From: from, To: to, Why: why.Error()})
+	}
+	return next, true
+}
+
+// note records how one attempt on address i went. A failure that is appd's
+// own answer (a status) still proves the address works.
+func (c *Client) note(i int, err error) {
+	var se *StatusError
+	ok := err == nil || errors.As(err, &se)
+	link := !ok && c.notDelivered(context.Background(), err)
+	if !ok && !link {
+		return // not about the address (the token, the caller, an interception)
+	}
+	c.rmu.Lock()
+	if i >= len(c.health) {
+		c.rmu.Unlock()
+		return
+	}
+	h := &c.health[i]
+	now := time.Now()
+	changed := false
+	if ok {
+		changed = h.LastSeenAt.IsZero() || h.LastFailAt.After(h.LastSeenAt) || now.Sub(c.lastNote[i]) > time.Minute
+		h.LastSeenAt = now
+		h.LastError = ""
+	} else {
+		changed = true
+		h.LastFailAt = now
+		h.LastError = err.Error()
+	}
+	snap := *h
+	snap.Active = i == c.active
+	if changed {
+		c.lastNote[i] = now
+	}
+	on := c.onRoute
+	c.rmu.Unlock()
+	if changed && on != nil {
+		on(RouteEvent{Health: &snap})
+	}
+}
+
+// TryPreferred moves back to the first address when it answers again: a
+// pinned TLS handshake, nothing sent. The daemon calls it now and then while
+// it is on another address; it never runs in front of a request.
+func (c *Client) TryPreferred(ctx context.Context) bool {
+	c.rmu.Lock()
+	if c.fixed || len(c.routes) < 2 || c.active == 0 {
+		c.rmu.Unlock()
+		return false
+	}
+	pref := c.routes[0]
+	c.rmu.Unlock()
+	tok, err := ResolveToken(c.tokens)
+	if err != nil || pref.Scheme != "https" {
+		return false
+	}
+	pins := c.loadPins(tok)
+	if len(pins) == 0 {
+		return false
+	}
+	conn, err := c.dialPinned(pins)(ctx, "tcp", hostPort(pref))
+	if err != nil {
+		c.note(0, err)
+		return false
+	}
+	conn.Close()
+	c.note(0, nil)
+	c.rmu.Lock()
+	from := trimURL(c.routes[c.active])
+	c.active = 0
+	on := c.onRoute
+	c.rmu.Unlock()
+	c.logf("huginn answers at %s again; switching back from %s", trimURL(pref), from)
+	if on != nil {
+		on(RouteEvent{From: from, To: trimURL(pref), Why: "the preferred address answers again"})
+	}
+	return true
+}
