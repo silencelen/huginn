@@ -1,5 +1,38 @@
 # Huginn Desktop changelog
 
+## 2.5.1
+
+Carries core 2.5.1. **The app now goes through huginn core** (docs/DESKTOP-VIA-CORE.md, owner
+decision 2026-10-16): it no longer holds the appd token.
+
+### Changed
+- **One link per machine: huginn core's.**
+  - When the core on this machine is running, is 2.5.1 or newer and is paired, every request the
+    app makes goes through it, over its local socket.
+  - The core adds its own token, proves huginn's certificate and picks the address from its route
+    book.
+  - The app keeps no token and pins nothing.
+- **The app's own link is handed over once, at start:**
+  - an unpaired core is paired with the app's address and token;
+  - the app's other addresses join the core's route book;
+  - only after a request through the core has worked does the app delete its own token and pins
+    (the addresses stay);
+  - a core paired with a different huginn is never migrated into. "Different" is judged by the
+    certificate the core proved, so the same huginn on a LAN and a mesh address is recognised.
+- **Setup.** On a machine whose core is paired, the address and token steps pass on their own:
+  there is nothing to type. On a machine whose core is not paired yet, a token proved in setup also
+  pairs the core; reopen the app and the link moves into the core.
+- **Settings > Host** shows the core's route book while the core carries the app:
+  - each address with its health, which one is in use and which one it was paired on;
+  - pin and unpin, remove, add an address;
+  - automatic switching on or off.
+  It is the same book `huginn core route` shows. Settings > Privacy says the token is kept by
+  huginn core.
+- **Serve local models from this machine** takes the token from the core (`/core/local/seed`), not
+  from the app.
+- **Escape hatch:** with `HUGINN_DESKTOP_DIRECT=1` in its environment, the app keeps a link of its
+  own for that run. After a hand-over it then asks for the token again.
+
 ## 2.4.2
 
 Carries core 2.4.2.

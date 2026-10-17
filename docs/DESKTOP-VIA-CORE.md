@@ -1,7 +1,7 @@
 # Huginn Desktop through huginn core
 
-Status: **design approved** (owner, 2026-10-16), building. Decisions on the open questions are
-recorded below.
+Status: **shipped** in core 2.5.0/2.5.1 and Huginn Desktop 2.5.1 (2026-10-16). The design was approved
+by the owner on 2026-10-16; the decisions on its open questions are recorded below.
 
 ## Decision
 
