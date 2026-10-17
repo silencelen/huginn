@@ -401,4 +401,50 @@ class SetupControllerTest {
         assertEquals(StepStatus.Passed("huginn core holds the token"), c.state.value.statusOf(SetupStep.TOKEN))
         assertEquals(StepStatus.Pending, c.state.value.statusOf(SetupStep.DEVICE), "steps with no live answer are left as they are")
     }
+
+    /**
+     * Run 5: the download ran for minutes while the rail read "checked, waiting
+     * on you" and the note still said "read the plan, then Download". A running
+     * install is its own state, counted as such, and its end is read live.
+     */
+    @Test
+    fun `an install in the background is setting up, not waiting on you, and its end is read live`() {
+        var live: Map<SetupStep, StepStatus> = emptyMap()
+        val probes = object : FakeProbes(localAiResult = LocalAiOutcome.Offered("can serve, 2568 MB")) {
+            override suspend fun live(step: SetupStep): StepStatus? = live[step]
+        }
+        val c = controller(probes = probes)
+        c.rerun(at = SetupStep.LOCAL_AI)
+        c.primary()
+        assertEquals("can serve, 2568 MB", c.note.value)
+
+        c.working(SetupStep.LOCAL_AI, "Qwen3-4B-Q4_K_M.gguf: 31%  740 of 2382 MB, 2.3 MB/s")
+        val st = c.state.value.statusOf(SetupStep.LOCAL_AI)
+        assertEquals(StepStatus.Working("Qwen3-4B-Q4_K_M.gguf: 31%  740 of 2382 MB, 2.3 MB/s"), st)
+        assertEquals(null, c.note.value, "the offer to download is gone once it downloads")
+        val words = SetupFlow.summary(c.state.value)
+        assertTrue("still setting up" in words && "waiting on you" !in words, words)
+        assertTrue(st.resolved, "the reader has answered; the flow may finish while it runs")
+        assertEquals(null, SetupFlow.decode(SetupFlow.encode(c.state.value))?.results?.get(SetupStep.LOCAL_AI), "never stored")
+
+        live = mapOf(SetupStep.LOCAL_AI to StepStatus.Passed("serving nomic-embed, qwen3-4b"))
+        c.workEnded(SetupStep.LOCAL_AI, "On. class C, 2 model(s)")
+        assertEquals(StepStatus.Passed("serving nomic-embed, qwen3-4b"), c.state.value.statusOf(SetupStep.LOCAL_AI))
+    }
+
+    @Test
+    fun `an install that ends without serving fails with its last line`() {
+        val c = controller(probes = FakeProbes(localAiResult = LocalAiOutcome.Offered("can serve")))
+        c.rerun(at = SetupStep.LOCAL_AI)
+        c.working(SetupStep.LOCAL_AI, "fetch Qwen3-4B-Q4_K_M.gguf")
+        c.workEnded(SetupStep.LOCAL_AI, "nothing ran — the UAC prompt was declined, or elevation failed")
+        assertEquals(
+            StepStatus.Failed("nothing ran — the UAC prompt was declined, or elevation failed"),
+            c.state.value.statusOf(SetupStep.LOCAL_AI),
+        )
+        // A passed step is never knocked back to "setting up".
+        c.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed("serving"))
+        c.working(SetupStep.LOCAL_AI, "anything")
+        assertEquals(StepStatus.Passed("serving"), c.state.value.statusOf(SetupStep.LOCAL_AI))
+    }
 }

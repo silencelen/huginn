@@ -8,6 +8,15 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.6] - 2026-10-17
+
+From the owner's fifth recorded install on PC01.
+
+### Changed
+- **Local AI downloads report every percent, with how much and how fast**
+  (`Qwen3-4B-Q4_K_M.gguf: 31%  740 of 2382 MB, 2.3 MB/s`), at most once a second. In steps of
+  10%, a 2.4 GB model read "0%" for two minutes and looked stuck.
+
 ## [2.5.5] - 2026-10-17
 
 From the owner's fourth recorded install on PC01.

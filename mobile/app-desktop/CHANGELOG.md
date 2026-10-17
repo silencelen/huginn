@@ -1,5 +1,24 @@
 # Huginn Desktop changelog
 
+## 2.5.6
+
+Carries core 2.5.6. From the owner's fifth recorded setup run on PC01.
+
+### Fixed
+- **Setup's local-AI step says "setting up" while it downloads, with the latest progress,** instead
+  of "checked, waiting on you" and "read the plan, then Download" for the whole download. The tally
+  reads "1 still setting up". When the install ends, the step reads what the machine says: serving,
+  or the manager's last line if it did not finish. That happens even if you have moved on or closed
+  setup.
+- **The "This computer" step follows its switch.** Turning "Available to huginn" off left the step
+  reading "Waiting for work" and counted as set up. It now reads skipped, and passes again once the
+  machine enrols.
+- **The lock-screen rule is said once.** The switch's own line already says the machine drops to
+  Look while locked. The note under it now adds only what the switch does not say: on Windows, a
+  remote-desktop session counts as someone being there.
+- **Settings' local-AI card says it is setting up while it runs,** and that it carries on if you
+  leave the page. It used to show "Working…" over the text about checking the plan.
+
 ## 2.5.5
 
 Carries core 2.5.5. From the owner's fourth recorded setup run on PC01, which went 7 of 7.
