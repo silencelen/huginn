@@ -8,6 +8,43 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.0] - 2026-10-16
+
+The core side of "the desktop goes through huginn core" (docs/DESKTOP-VIA-CORE.md, owner decision
+2026-10-16): the desktop app will stop holding the appd token and send everything through the core
+on the same machine. This release makes the core able to carry all of it. The desktop release that
+uses it comes next; until then, nothing changes for the desktop.
+
+### Added
+- **The core's `/appd` proxy is transparent.** Before, it carried short JSON calls and one GET
+  stream, enough for the console. Now:
+  - any method;
+  - request bodies are streamed with their own Content-Type, up to appd's 128 MiB upload limit;
+  - every answer is copied as it arrives: event streams over GET or POST, 25 s long polls,
+    downloads;
+  - appd's status, headers and body come back as appd sent them;
+  - a caller's `X-Huginn-Client` and `X-Huginn-Notify` reach appd as its own, so appd still tells
+    the desktop and the core apart;
+  - there is no fixed timeout.
+  When huginn cannot be reached, the core says why in `kind`: `unreachable`, `tls`, `auth` or
+  `unpaired`.
+- **A route book in the core:** the paired daemon's other addresses, such as its LAN address at
+  home and its mesh address away. It is kept in core.json and works like this:
+  - A request that never reached huginn is tried once more on the next address, which becomes the
+    active one. That covers a connection that is refused, timed out or has no route, and an address
+    whose certificate is not huginn's (somebody else's machine at a home address). In that last case
+    nothing is sent, because the certificate is judged before any byte.
+  - A request that may have reached huginn is never sent again, even if its answer broke off.
+  - A dead address is given up on in 6 s, not the 20 s handshake limit.
+  - The core moves back to the preferred address within a minute of it answering again.
+  - `huginn core route` lists the addresses with their health; `add <url> [--name] [--kind]`,
+    `remove`, `pin <url>|none` and `auto on|off` edit them. The same book is at `/core/routes` for
+    the desktop.
+  - Pairing with a different huginn clears the book.
+- **`POST /core/local/seed`:** the core hands the local AI tier its appd token from its own secrets
+  store and names the address to turn it on with. The desktop's "serve local models" uses it, so the
+  token never passes through the app.
+
 ## [2.4.2] - 2026-10-16
 
 ### Added
