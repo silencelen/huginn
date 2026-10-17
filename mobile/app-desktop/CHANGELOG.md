@@ -1,5 +1,21 @@
 # Huginn Desktop changelog
 
+## 2.5.2
+
+Carries core 2.5.2.
+
+### Changed
+- **The setup window configures huginn core.** Its address and token steps now pair the core: the
+  core proves the token against the address and keeps it, and this app's addresses join the core's
+  route book. The app moves onto the core in the same run, with no restart, and keeps no token of
+  its own. Settings > Host's token row does the same, under a "Connect" button.
+- The token step says where the token comes from: `sudo cat /etc/huginn-appd/token` on the huginn
+  host.
+
+### Fixed
+- Its device step failed with "no appd token" after the token step had passed, on a machine whose
+  core had kept an address without a token. See the CLI 2.5.2 changelog.
+
 ## 2.5.1
 
 Carries core 2.5.1. **The app now goes through huginn core** (docs/DESKTOP-VIA-CORE.md, owner
