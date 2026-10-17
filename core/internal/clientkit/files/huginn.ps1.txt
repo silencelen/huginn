@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.2
+# Version: 2.5.3
 
-$script:HUGINN_VERSION = '2.5.2'
+$script:HUGINN_VERSION = '2.5.3'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -606,6 +606,14 @@ function _Huginn-DesktopUpdate {
     $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
     $tail = ''
     if (-not $app) { $app = Join-Path $env:LOCALAPPDATA 'Programs\huginn-desktop-kt\huginn-desktop-kt.exe' }
+    # A silent first install answers its components page with the section
+    # DEFAULTS (local AI off, autostart off) into first-run.json, and the app
+    # then showed those steps as "skipped" - answers nobody gave (PC01,
+    # 2026-10-16). Nobody saw that page, so its file goes before the app opens.
+    if ($Install -and -not $have) {
+      $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+      Remove-Item -Force (Join-Path $cfgRoot 'huginn-desktop-kt\first-run.json') -ErrorAction SilentlyContinue
+    }
     if (($wasOpen -or $Install) -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = if ($Install) { ', opened' } else { ', reopened' } }
     if ($Install -and -not $have) { _Huginn-UiLine 'ok' 'desktop' "$now installed (Start menu)$tail" }
     else { _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail" }
@@ -1461,6 +1469,17 @@ function huginn {
         $elevRc = $p.ExitCode
       }
       for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
+      if ($LASTEXITCODE -ne 0) {
+        # Windows queues every start of the boot task on battery (Energy Saver;
+        # PC01, 2026-10-16: the desktop's setup then found no core).
+        # `core start` - unelevated, so the core never runs as administrator -
+        # starts it directly when the task is held back.
+        $slog = Join-Path ([IO.Path]::GetTempPath()) ('huginn-core-start-' + [guid]::NewGuid().ToString('N') + '.log')
+        $src = _Huginn-UiSpin 'core' 'starting huginn core (Windows held the boot task back)' $bin @('core', 'start') $slog
+        if ($src -eq 0) { _Huginn-UiLine 'ok' 'core' 'running (started directly; the boot task takes over at the next boot)' }
+        else { _Huginn-UiLine 'warn' 'core' 'not running yet - huginn core start'; @(Get-Content $slog -Encoding UTF8 -ErrorAction SilentlyContinue) | ForEach-Object { _Huginn-UiNote $_ } }
+        Remove-Item $slog -Force -ErrorAction SilentlyContinue
+      }
       if ($rep) {
         # The elevated step does not start the tray (it would run as
         # administrator); this unelevated self-install does, when none is up.

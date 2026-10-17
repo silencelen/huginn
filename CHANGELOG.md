@@ -8,6 +8,19 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.3] - 2026-10-16
+
+### Fixed
+- **On a laptop on battery, the Windows installer left huginn core stopped.** Windows' Energy Saver
+  queues every start of the core's boot task. `huginn core install` now runs `huginn core start`
+  itself when the core does not answer after the task is registered. It runs unelevated, so the
+  core never runs as administrator, and starts the core directly when the task is held back. Until
+  now, the desktop's setup then found no core (PC01).
+- **A fresh `huginn desktop install` no longer pre-answers the desktop's setup.** The silent
+  installer wrote its components page's defaults (local AI off, start at sign-in off), and the
+  app showed those steps as "skipped", answers nobody gave. That file is removed before the app
+  opens.
+
 ## [2.5.2] - 2026-10-16
 
 ### Changed
