@@ -28,6 +28,15 @@ import kotlinx.coroutines.launch
  */
 interface SetupProbes {
 
+    /**
+     * What is TRUE for [step] right now, read without asking anyone - or null
+     * where only the step's own check (or a person) can say. Re-read each time
+     * the flow opens or moves (owner, 2026-10-16: a status on screen is
+     * re-checked, not remembered - the rail still said "huginn core is not
+     * running" after the core came up and Settings had connected).
+     */
+    suspend fun live(step: SetupStep): StepStatus? = null
+
     /** `/v1/ping` on the active route. No token — this proves a daemon, not a bearer. */
     suspend fun route(): Result<String>
 
@@ -134,7 +143,7 @@ class SetupController(
 
     /** First run, or an installer that left answers to replay. Never after a finish. */
     fun open(routeBookEmpty: Boolean) {
-        if (interestedOnLaunch(routeBookEmpty)) _visible.value = true
+        if (interestedOnLaunch(routeBookEmpty)) { _visible.value = true; recheck() }
     }
 
     /**
@@ -356,8 +365,29 @@ class SetupController(
     // ------------------------------------------------------------- plumbing
 
     private fun put(next: SetupState) {
+        val moved = next.current != _state.value.current
         _state.value = next
         settings.setSetupProgress(SetupFlow.encode(next))
+        if (moved) recheck()
+    }
+
+    /**
+     * Re-reads every step that can be read without a question ([SetupProbes.live])
+     * and corrects the rail where the truth moved: a token the core now holds, a
+     * device that enrolled, a switch turned on elsewhere. Called when the flow
+     * opens, when it moves to another step, and when the app's link changes.
+     * Two passes with different words are the same pass; nothing churns.
+     */
+    fun recheck() {
+        scope.launch {
+            for (step in SetupFlow.STEPS) {
+                val live = runCatching { probes.live(step) }.getOrNull() ?: continue
+                val cur = _state.value.statusOf(step)
+                if (cur == live || (cur is StepStatus.Passed && live is StepStatus.Passed)) continue
+                _state.value = SetupFlow.settledByCard(_state.value, step, live)
+                settings.setSetupProgress(SetupFlow.encode(_state.value))
+            }
+        }
     }
 
     private fun restore(): SetupState =

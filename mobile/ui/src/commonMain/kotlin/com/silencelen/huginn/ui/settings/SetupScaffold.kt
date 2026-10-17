@@ -127,7 +127,8 @@ object SetupScaffoldRules {
         SetupStep.DEVICE ->
             "Lets huginn run sessions here. Nothing listens on a port: huginn core asks huginn for work."
         SetupStep.LOCAL_AI ->
-            "Serves small models from here to huginn's chats. You see the plan before anything downloads."
+            "Runs small models here and offers them in huginn's chat menus. The plan is shown in full " +
+                "before anything downloads."
         SetupStep.NOTIFY -> "Sends a test notification; tell it whether it appeared."
         SetupStep.AUTOSTART -> "huginn core's tray already starts at sign-in. This opens the window too."
     }

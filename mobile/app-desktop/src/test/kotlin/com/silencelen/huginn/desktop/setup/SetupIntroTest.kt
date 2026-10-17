@@ -81,7 +81,7 @@ class SetupIntroTest {
     @Test
     fun `the flow hosts both sections with their own intro off`() {
         val src = File(flowView()).readText()
-        for (call in listOf("DeviceSection(store, intro = false)", "LocalServeSection(store, intro = false)")) {
+        for (call in listOf("DeviceSection(store, intro = false)", "LocalServeSection(store, intro = false")) {
             assertTrue(
                 src.contains(call),
                 "SetupFlowView must host the section without its heading: $call",

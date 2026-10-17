@@ -224,6 +224,20 @@ class DesktopSetupProbes(
     private val notifier: () -> Notifier,
 ) : SetupProbes {
 
+    override suspend fun live(step: SetupStep): StepStatus? = when (step) {
+        SetupStep.ROUTE -> store.viaCore?.let { StepStatus.Passed("huginn core reaches huginn at ${it.url}") }
+        SetupStep.TOKEN -> store.viaCore?.let { StepStatus.Passed("huginn core holds the token") }
+        SetupStep.DEVICE -> store.coreDevice.status.value.takeIf { it.enrolled }
+            ?.let { StepStatus.Passed(it.note.ifBlank { "enrolled, waiting for work" }) }
+        SetupStep.LOCAL_AI -> LocalServe.status().getOrNull()
+            ?.takeIf { it.setup == true && it.engine.reachable && it.engine.models.isNotEmpty() }
+            ?.let { StepStatus.Passed("serving ${it.engine.models.joinToString(", ")} as \"${it.deviceName ?: "?"}\"") }
+        SetupStep.AUTOSTART -> withContext(Dispatchers.IO) {
+            if (com.silencelen.huginn.desktop.setup.Autostart.isEnabled()) StepStatus.Passed("the window opens at sign-in") else null
+        }
+        else -> null
+    }
+
     override suspend fun route(): Result<String> = runCatching {
         store.viaCore?.let { return@runCatching "through huginn core ${it.coreVersion}, at ${it.url}" }
         val url = store.settings.baseUrlNow()
