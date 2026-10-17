@@ -903,9 +903,17 @@ fun main(args: Array<String>) {
  * "unknown" and answers by keeping the size and dropping the position.
  */
 private fun screens(): List<Screen> = runCatching {
-    java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.map {
-        val b = it.defaultConfiguration.bounds
-        Screen(b.x, b.y, b.width, b.height)
+    val env = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+    val tk = java.awt.Toolkit.getDefaultToolkit()
+    // The default screen first: an unplaced window opens on it. And each one's
+    // WORK AREA - less the taskbar - since a window as tall as the whole screen
+    // has its bottom under the taskbar or its title bar off the top (run 4).
+    val devices = listOf(env.defaultScreenDevice) + env.screenDevices.filter { it != env.defaultScreenDevice }
+    devices.map {
+        val gc = it.defaultConfiguration
+        val b = gc.bounds
+        val i = runCatching { tk.getScreenInsets(gc) }.getOrNull() ?: java.awt.Insets(0, 0, 0, 0)
+        Screen(b.x + i.left, b.y + i.top, b.width - i.left - i.right, b.height - i.top - i.bottom)
     }
 }.getOrElse {
     runCatching {

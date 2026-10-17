@@ -689,6 +689,27 @@ class DesktopSurfaceTest {
     }
 
     @Test
+    fun `a first launch opens maximized, not merely large`() {
+        // Owner, run 4: the default 1280x840 on a smaller laptop work area put
+        // the title bar, and its close button, off the top of the screen.
+        val laptop = listOf(Screen(0, 0, 1280, 672))
+        val out = WindowLayout.restore(WindowLayout(), laptop)
+        assertTrue(out.maximized, "a first launch is maximized")
+        assertTrue(out.w <= 1280 && out.h <= 672, "and its restored size still fits: ${out.w}x${out.h}")
+        assertTrue(WindowLayout.restore(WindowLayout(), listOf(Screen(0, 0, 2560, 1400))).maximized)
+    }
+
+    @Test
+    fun `a window that would fill the screen opens maximized, a smaller one stays where it was`() {
+        val laptop = listOf(Screen(0, 0, 1280, 672))
+        assertTrue(WindowLayout.restore(WindowLayout(x = 0, y = 0, w = 1280, h = 840), laptop).maximized)
+        assertTrue(WindowLayout.restore(WindowLayout(w = 1400, h = 900), laptop).maximized, "unplaced too")
+        val kept = WindowLayout.restore(WindowLayout(x = 100, y = 60, w = 1000, h = 600), laptop)
+        assertFalse(kept.maximized)
+        assertEquals(WindowLayout(100, 60, 1000, 600), kept)
+    }
+
+    @Test
     fun `maximized survives the round trip`() {
         val out = WindowLayout.restore(WindowLayout(10, 10, 1280, 840, maximized = true), 1920, 1080)
         assertTrue(out.maximized)
