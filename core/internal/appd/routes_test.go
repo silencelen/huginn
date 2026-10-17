@@ -157,7 +157,11 @@ func TestRouteForwardRetriesAnUnsentBody(t *testing.T) {
 	cert := mintCert(t, "huginn-appd")
 	var got string
 	live := fakeDaemon(t, certCfg(cert), goodAnswer(testToken, cert), func(f *fake) {
-		f.other = func(w http.ResponseWriter, r *http.Request) { b, _ := io.ReadAll(r.Body); got = string(b); io.WriteString(w, `{}`) }
+		f.other = func(w http.ResponseWriter, r *http.Request) {
+			b, _ := io.ReadAll(r.Body)
+			got = string(b)
+			io.WriteString(w, `{}`)
+		}
 	})
 	c := newTestClient(t, deadURL(t), nil, func(cfg *Config) { cfg.Routes = []string{live.url()} })
 	res, err := c.Forward(t.Context(), http.MethodPost, "/v1/uploads?name=a.txt", http.Header{"Content-Type": {"text/plain"}}, strings.NewReader("hello"))
