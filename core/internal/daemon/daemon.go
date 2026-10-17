@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -186,8 +187,7 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "Not paired with huginn — run `huginn core pair`"})
 		return
 	}
-	api, err := appd.New(appd.Config{URL: cfg.Appd.URL, Tokens: tokenSource{d.secrets}, Pins: pinStore{d.st}, Logf: d.logf,
-		Headers: d.watch.headers})
+	api, err := appd.New(d.apiConfig(cfg))
 	if err != nil {
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "The saved huginn address is refused: " + err.Error()})
 		return
@@ -211,9 +211,24 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 		go func() { defer wg.Done(); r.Serve(rctx) }()
 		go func() { defer wg.Done(); d.watch.run(rctx, api) }()
+		go func() {
+			// Back on the preferred address once it answers again (a pinned
+			// handshake, nothing sent; a no-op while already on it).
+			defer wg.Done()
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-rctx.Done():
+					return
+				case <-t.C:
+					api.TryPreferred(rctx)
+				}
+			}
+		}()
 		wg.Wait()
 	}()
 }
@@ -437,11 +452,22 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 	if _, err := probe.Do(pctx, "GET", "/v1/status", nil); err != nil {
 		return "", err
 	}
+	prevTok, _ := d.secrets.Get(store.SecretToken) // read before it is replaced
 	if err := d.secrets.Set(store.SecretToken, tok); err != nil {
 		return "", fmt.Errorf("saving the token (%s): %w", d.secrets.Backend(), err)
 	}
 	ps, _ := mem.LoadPins()
 	_, _, err = d.st.Update(func(c *store.Config) error {
+		// Another daemon (another token): its addresses are not this one's.
+		// The same daemon on another address keeps its route book, minus the
+		// address that is now the paired one.
+		if prevTok != tok {
+			c.Appd.Routes, c.Appd.Pinned = nil, ""
+		}
+		c.Appd.Routes = slices.DeleteFunc(c.Appd.Routes, func(r store.Route) bool { return r.URL == url })
+		if c.Appd.Pinned == url {
+			c.Appd.Pinned = ""
+		}
 		c.Appd.URL = url
 		c.Secrets = d.secrets.Backend()
 		c.Pins = nil
@@ -458,6 +484,7 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 
 func (d *Daemon) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/appd/", d.proxy)
+	d.routeHandlers(mux)
 	mux.HandleFunc("GET /core/events", func(w http.ResponseWriter, r *http.Request) {
 		// A tray role identifies itself, so the core knows somebody can SEE a
 		// notification before it claims them from appd (D14).

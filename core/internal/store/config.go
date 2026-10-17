@@ -51,7 +51,24 @@ type Device struct {
 
 // Appd is how the core reaches the daemon.
 type Appd struct {
+	// URL is the address it was paired on: the preferred one.
 	URL string `json:"url,omitempty"`
+	// Routes are the same daemon's other addresses, in order of preference
+	// after URL (appd/routes.go): a LAN address at home, a mesh address away.
+	Routes []Route `json:"routes,omitempty"`
+	// Pinned keeps every request on this one address ("" = none).
+	Pinned string `json:"pinned,omitempty"`
+	// NoAutoSwitch turns switching between addresses off (the zero value,
+	// switching on, is the default).
+	NoAutoSwitch bool `json:"noAutoSwitch,omitempty"`
+}
+
+// Route is one more address of the paired daemon.
+type Route struct {
+	URL     string    `json:"url"`
+	Name    string    `json:"name,omitempty"`
+	Kind    string    `json:"kind,omitempty"` // lan | mesh | tailnet | custom
+	AddedAt time.Time `json:"addedAt,omitzero"`
 }
 
 // Migration records the one-time import (§10 P1), so it is never re-run over

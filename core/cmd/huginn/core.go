@@ -83,6 +83,8 @@ func core(args []string) int {
 		}
 		fmt.Println("posted and withdrew a test notification")
 		return 0
+	case "route", "routes":
+		return coreRoute(args[1:])
 	case "self-install":
 		_, force := hasFlag(args, "--force")
 		if have := newerInstalled(); have != "" && !force {
