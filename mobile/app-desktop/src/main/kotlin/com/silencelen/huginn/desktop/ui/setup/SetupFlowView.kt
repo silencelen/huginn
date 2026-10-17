@@ -113,6 +113,17 @@ fun SetupOverlay(store: AppStore) {
 private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
     val settings = store.settings
     val scope = rememberCoroutineScope()
+    val viaCore = store.viaCore
+    if (viaCore != null && (step == SetupStep.ROUTE || step == SetupStep.TOKEN)) {
+        // Through huginn core, the address and the token are the core's
+        // (docs/DESKTOP-VIA-CORE.md): there is nothing here to type.
+        Text(
+            if (step == SetupStep.ROUTE) "huginn core reaches huginn at ${viaCore.url}, and keeps its other addresses (Settings > Host)."
+            else "huginn core holds the token; this app keeps none of its own.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        return
+    }
     when (step) {
         SetupStep.ROUTE -> {
             val book by store.routeBook.collectAsState()
@@ -217,6 +228,7 @@ class DesktopSetupProbes(
 ) : SetupProbes {
 
     override suspend fun route(): Result<String> = runCatching {
+        store.viaCore?.let { return@runCatching "through huginn core ${it.coreVersion}, at ${it.url}" }
         val url = store.settings.baseUrlNow()
         check(url.isNotBlank()) { HuginnClient.NO_ROUTE }
         // ⚠⚠ THE PROBE, NOT `ping()`. This step exists to separate "nothing
@@ -241,6 +253,13 @@ class DesktopSetupProbes(
     }
 
     override suspend fun token(): Result<String> = runCatching {
+        store.viaCore?.let {
+            // Proved the same way as below - an authenticated call - only the
+            // core's token is the one it carries.
+            val status = store.client.status()
+            return@runCatching "huginn core's token, accepted by " +
+                (status.appdVersion?.takeIf { v -> v.isNotBlank() }?.let { v -> "appd $v" } ?: "huginn")
+        }
         // ⚠ THE FIELD, COMMITTED FIRST. This read `tokenNow()` alone, which is
         // only written by the separate "Save token" button — so on a fresh
         // install, with the field visibly full, the one control the step offers
@@ -257,7 +276,10 @@ class DesktopSetupProbes(
         val status = store.client.status()
         val version = status.appdVersion?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
         val host = status.host?.takeIf { it.isNotBlank() }?.let { " on $it" }.orEmpty()
-        "accepted by $version$host"
+        // A token that works goes to huginn core too, when one is here and not
+        // paired yet: the next start then hands this app's link over to it.
+        val handed = store.pairCoreWithOwnLink()?.let { " - $it" }.orEmpty()
+        "accepted by $version$host$handed"
     }
 
     override suspend fun claude(): Result<String> = withContext(Dispatchers.IO) {
