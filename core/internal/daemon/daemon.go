@@ -526,9 +526,16 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /core/status", func(w http.ResponseWriter, r *http.Request) {
 		cfg, _, _ := d.st.Load()
+		// The proved certificate fingerprints: public hashes, not secrets. A
+		// desktop compares them with its own pins to tell "the same huginn on
+		// another address" from "another huginn" before it hands its link over.
+		pins := []string{}
+		for _, ps := range cfg.Pins {
+			pins = append(pins, ps...)
+		}
 		ipc.WriteJSON(w, 200, map[string]any{
 			"version": version.Version, "proto": version.Proto, "pid": os.Getpid(),
-			"paired": cfg.Appd.URL != "", "url": cfg.Appd.URL,
+			"paired": cfg.Appd.URL != "", "url": cfg.Appd.URL, "pins": pins,
 			"secrets": d.sel.Backend, "secretsWhy": d.sel.Why,
 			"migratedFrom": cfg.MigratedFrom, "firstStart": d.migrate,
 			"tray": d.watch.trays.Load() > 0, "notifyClaim": d.watch.claim(),

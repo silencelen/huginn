@@ -457,7 +457,10 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true) {
                     TextButton(
                         onClick = {
                             plan = null
-                            LocalServeFlow.run { LocalServe.enable(url, token) { LocalServeFlow.line(it) } }
+                            LocalServeFlow.run {
+                                store.viaCore?.let { LocalServe.enableViaCore(it.socket) { l -> LocalServeFlow.line(l) } }
+                                    ?: LocalServe.enable(url, token) { LocalServeFlow.line(it) }
+                            }
                         },
                         enabled = !busy && p.gate?.ok == true,
                     ) { Text(if (busy) "Setting up…" else "Download and turn on (${p.needBytes / (1024 * 1024)} MB)") }

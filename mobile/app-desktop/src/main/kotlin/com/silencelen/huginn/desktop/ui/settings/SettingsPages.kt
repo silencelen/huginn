@@ -103,6 +103,8 @@ import kotlinx.serialization.json.put
  */
 @Composable
 fun ColumnScope.HostPage(store: AppStore, mark: String?) {
+    // Through huginn core, the link is the core's: its route book, no token here.
+    store.viaCore?.let { CoreHostSection(store, it); return }
     val settings = store.settings
     val scope = rememberCoroutineScope()
     val book by store.routeBook.collectAsState()
@@ -460,7 +462,11 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
     SettingsReadOnlyRow(
         id = "privacy.token",
         title = "What the token is",
-        value = if (store.settings.tokenNow().isNotBlank()) "saved on this computer" else "not set",
+        value = when {
+            store.viaCore != null -> "kept by huginn core, not by this app"
+            store.settings.tokenNow().isNotBlank() -> "saved on this computer"
+            else -> "not set"
+        },
         summary = "One bearer, kept in ${store.settings.path} at mode 0600 and sent with every " +
             "request. It is root-equivalent on the daemon, which is why the address it travels to " +
             "is on an allowlist.",

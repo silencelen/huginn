@@ -656,6 +656,19 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         }
     }
 
+    /**
+     * After the link has moved into huginn core (core/CoreBoot.kt): this app
+     * keeps no credential of its own. The addresses stay - they are not secrets,
+     * and they are this app's way back if the core is ever removed.
+     */
+    fun clearOwnCredentials() {
+        _token.value = ""
+        _tlsPins.value = ""
+        mutate { it.copy(token = "", tlsPins = "") }
+    }
+
+    fun tlsPinsNow(): String = _tlsPins.value
+
     fun setCloseToTray(value: Boolean) {
         _closeToTray.value = value
         mutate { it.copy(closeToTray = value) }

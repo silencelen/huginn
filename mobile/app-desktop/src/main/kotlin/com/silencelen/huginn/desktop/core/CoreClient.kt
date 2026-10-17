@@ -47,9 +47,43 @@ data class CoreDeviceSettings(
 @Serializable
 data class CoreDeviceView(val status: CoreDeviceStatus = CoreDeviceStatus(), val settings: CoreDeviceSettings = CoreDeviceSettings())
 
+/** `GET /core/status`, the fields this app reads. */
+@Serializable
+data class CoreStatus(
+    val version: String = "",
+    val proto: String = "",
+    val paired: Boolean = false,
+    val url: String = "",
+    /** The certificate fingerprints the core proved (2.5.1+): public hashes, not secrets. */
+    val pins: List<String> = emptyList(),
+)
+
+/** One address in the core's route book (`daemon.RouteView`). */
+@Serializable
+data class CoreRoute(
+    val url: String,
+    val name: String = "",
+    val kind: String = "",
+    val preferred: Boolean = false,
+    val pinned: Boolean = false,
+    val active: Boolean = false,
+    val lastSeenAt: String? = null,
+    val lastFailAt: String? = null,
+    val lastError: String = "",
+)
+
+/** `GET /core/routes` (`daemon.RoutesView`). */
+@Serializable
+data class CoreRoutes(val autoSwitch: Boolean = true, val routes: List<CoreRoute> = emptyList())
+
+/** `POST /core/local/seed`: where the local tier's token now is, and the address to use. */
+@Serializable
+data class CoreLocalSeed(val url: String, val dir: String = "", val tokenFile: String = "")
+
 /**
- * HTTP to `huginn core` over its AF_UNIX socket (docs/CORE-ARCHITECTURE.md §5).
- * P1 speaks only the core's own routes (`/core/…`); the `/appd/…` proxy arrives in P2.
+ * HTTP to `huginn core` over its AF_UNIX socket (docs/CORE-ARCHITECTURE.md §5):
+ * the core's own routes (`/core/…`). Everything this app asks appd goes through the
+ * core's `/appd/…` proxy instead, on [CoreDaemonTransport] (docs/DESKTOP-VIA-CORE.md).
  */
 internal class CoreClient(private val socket: Path) {
     /** Bump with `version.Proto` in Go. */
@@ -102,6 +136,42 @@ internal class CoreClient(private val socket: Path) {
 
     /** Forget the pairing (Settings → Remove this computer). */
     suspend fun unpair() { call("POST", "/core/unpair", "{}") }
+
+    suspend fun status(): CoreStatus = json.decodeFromString(call("GET", "/core/status"))
+
+    /**
+     * Pair the core with huginn: it proves the address with the token and keeps
+     * both. The token goes into the core's own secrets store, never this app's.
+     */
+    suspend fun pair(url: String, token: String) {
+        call("POST", "/core/pair", json.encodeToString(mapOf("url" to url, "token" to token)))
+    }
+
+    suspend fun routes(): CoreRoutes = json.decodeFromString(call("GET", "/core/routes"))
+
+    suspend fun addRoute(url: String, name: String = "", kind: String = ""): CoreRoutes =
+        json.decodeFromString(call("POST", "/core/routes", json.encodeToString(mapOf("url" to url, "name" to name, "kind" to kind))))
+
+    suspend fun removeRoute(url: String): CoreRoutes =
+        json.decodeFromString(call("DELETE", "/core/routes?url=" + java.net.URLEncoder.encode(url, Charsets.UTF_8)))
+
+    /** [pinned] "" unpins; null leaves it. [autoSwitch] null leaves it. */
+    suspend fun patchRoutes(pinned: String? = null, autoSwitch: Boolean? = null): CoreRoutes {
+        val body = buildMap<String, kotlinx.serialization.json.JsonElement> {
+            pinned?.let { put("pinned", kotlinx.serialization.json.JsonPrimitive(it)) }
+            autoSwitch?.let { put("autoSwitch", kotlinx.serialization.json.JsonPrimitive(it)) }
+        }
+        return json.decodeFromString(call("PATCH", "/core/routes", kotlinx.serialization.json.JsonObject(body).toString()))
+    }
+
+    /** Hand the local-AI tier its token from the core, and learn the address to give it. */
+    suspend fun localSeed(): CoreLocalSeed = json.decodeFromString(call("POST", "/core/local/seed", "{}"))
+
+    /**
+     * Whether appd answers THROUGH the core right now: `GET /appd/v1/status`. The
+     * check a migration makes before it deletes anything from this app's settings.
+     */
+    suspend fun appdThroughCore(): Boolean = runCatching { call("GET", "/appd/v1/status"); true }.getOrDefault(false)
 
     /**
      * `/core/events` as (event, data) pairs. The core replays the newest of
