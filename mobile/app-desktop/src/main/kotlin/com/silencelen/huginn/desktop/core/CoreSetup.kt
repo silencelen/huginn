@@ -141,7 +141,7 @@ internal object CoreSetup {
                 // cannot cross the elevation boundary, so the exit code is the answer
                 // and `core status` (unelevated) is what the person then reads.
                 val ps = "\$p = Start-Process -FilePath '${bin.toString().replace("'", "''")}' " +
-                    "-ArgumentList 'core','install' -Verb RunAs -Wait -PassThru; exit \$p.ExitCode"
+                    "-ArgumentList 'core','install' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit \$p.ExitCode"
                 run(listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps), timeoutS = 300)
             } else {
                 run(listOf(bin.toString(), "core", "install"), timeoutS = 180)

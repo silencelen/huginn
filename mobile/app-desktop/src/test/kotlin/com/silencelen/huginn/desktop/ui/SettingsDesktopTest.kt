@@ -151,6 +151,7 @@ class SettingsDesktopTest {
     fun `the last three lines report this install`() {
         assertEquals("token saved here", SettingsSummaries.of("privacy", live()))
         assertEquals("no token saved", SettingsSummaries.of("privacy", live().copy(tokenSet = false)))
+        assertEquals("token kept by huginn core", SettingsSummaries.of("privacy", live().copy(tokenSet = false, viaCore = true)))
         assertEquals("close to tray on", SettingsSummaries.of("appearance", live()))
         assertEquals("closing quits", SettingsSummaries.of("appearance", live().copy(closeToTray = false)))
         // ⚠ THE SETTING IS NOT THE BEHAVIOUR ON A MACHINE WITH NO TRAY. `Main.kt`

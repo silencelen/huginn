@@ -182,7 +182,18 @@ class SetupController(
      */
     fun settledByCard(step: SetupStep, status: StepStatus) {
         if (_state.value.statusOf(step) == status) return
+        dropNoteOf(step)
         put(SetupFlow.settledByCard(_state.value, step, status))
+    }
+
+    /**
+     * The note under a step's control was that step's last answer. Once the
+     * card or a recheck settles it, the note is stale: run 3 showed "can serve,
+     * 2568 MB to download" under a card already serving. A question still
+     * waiting on the reader stays.
+     */
+    private fun dropNoteOf(step: SetupStep) {
+        if (step == _state.value.current && !_awaitingAnswer.value) _note.value = null
     }
 
     /** Leaves the flow exactly where it is, so coming back resumes rather than restarts. */
@@ -384,6 +395,7 @@ class SetupController(
                 val live = runCatching { probes.live(step) }.getOrNull() ?: continue
                 val cur = _state.value.statusOf(step)
                 if (cur == live || (cur is StepStatus.Passed && live is StepStatus.Passed)) continue
+                dropNoteOf(step)
                 _state.value = SetupFlow.settledByCard(_state.value, step, live)
                 settings.setSetupProgress(SetupFlow.encode(_state.value))
             }

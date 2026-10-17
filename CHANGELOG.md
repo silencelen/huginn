@@ -8,6 +8,22 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.4] - 2026-10-16
+
+From the owner's third recorded install on PRESTIGE.
+
+### Fixed
+- **The desktop app no longer runs as administrator when it is installed from an administrator
+  terminal.** `huginn desktop install` opened it with the terminal's token. It now opens through
+  Explorer, as the signed-in user.
+- **Local AI set up from the desktop no longer prints Linux service commands on Windows.** The
+  device runner's "start it with systemctl" lines are for a person enrolling by hand. `huginn
+  local on` installs and starts the services itself, so they are left out there, and on Windows.
+- **Download progress names the file being downloaded** (`Qwen3-4B-Q4_K_M.gguf: 40%`), not its
+  `.dl.tmp` temporary file.
+- **`huginn uninstall` wraps long rows under their own text** in a narrow terminal, not at the
+  margin. The same goes for every installer-style line the core prints.
+
 ## [2.5.3] - 2026-10-16
 
 ### Fixed

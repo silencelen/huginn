@@ -17,6 +17,10 @@ package com.silencelen.huginn.desktop.setup
  */
 object SetupDrafts {
 
+    /** The address field's current text, as the step body last drew it. */
+    @Volatile
+    var address: String = ""
+
     /** The token field's current text, as the step body last drew it. */
     @Volatile
     var token: String = ""
@@ -35,6 +39,7 @@ object SetupDrafts {
         draft.trim().ifBlank { saved }
 
     fun clear() {
+        address = ""
         token = ""
     }
 }

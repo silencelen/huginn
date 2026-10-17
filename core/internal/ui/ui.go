@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -48,6 +49,7 @@ type Out struct {
 	uni    bool
 	still  bool // HUGINN_REDUCED_MOTION: one frame, no animation
 	rec    bool // Records: tab-separated records, nothing drawn
+	cols   int  // the terminal's width; 0 = no wrapping (a pipe, a file)
 	start  time.Time
 	mu     sync.Mutex
 	active *spinner
@@ -64,7 +66,56 @@ func New() *Out {
 		uni:   unicodeOK(),
 		still: os.Getenv("HUGINN_REDUCED_MOTION") != "",
 		start: time.Now(),
+		cols:  termCols(tty),
 	}
+}
+
+func termCols(tty bool) int {
+	if !tty {
+		return 0
+	}
+	if w, _, err := term.GetSize(int(os.Stderr.Fd())); err == nil && w >= 40 {
+		return w
+	}
+	return 0
+}
+
+// wrap breaks text at spaces into lines that fit the terminal, the first
+// starting at column first and the rest at column hang, so a long row carries
+// on under its own text instead of at the margin (a Windows console 100
+// columns wide broke "asked separately" after its "l", run 3). A word longer
+// than a line is cut. No width (not a terminal), or text carrying colour
+// escapes: one line, as given.
+func (o *Out) wrap(text string, first, hang int) []string {
+	if o.cols == 0 || strings.ContainsRune(text, 0x1b) {
+		return []string{text}
+	}
+	width := func(col int) int {
+		if w := o.cols - 1 - col; w > 10 {
+			return w
+		}
+		return 10
+	}
+	var lines []string
+	cur, room := "", width(first)
+	for _, word := range strings.Fields(text) {
+		for utf8.RuneCountInString(word) > width(hang) {
+			if cur != "" {
+				lines, cur, room = append(lines, cur), "", width(hang)
+			}
+			r := []rune(word)
+			lines, word, room = append(lines, string(r[:room])), string(r[room:]), width(hang)
+		}
+		switch {
+		case cur == "":
+			cur = word
+		case utf8.RuneCountInString(cur)+1+utf8.RuneCountInString(word) <= room:
+			cur += " " + word
+		default:
+			lines, cur, room = append(lines, cur), word, width(hang)
+		}
+	}
+	return append(lines, cur)
 }
 
 // For writes to w as a terminal or not, with explicit glyph choice: tests and
@@ -191,7 +242,35 @@ func (o *Out) Line(s State, comp, text string) {
 	defer o.mu.Unlock()
 	g, col := o.glyph(s)
 	o.clear()
-	fmt.Fprintf(o.w, "     %s%s%s  %-9s %s\n", o.c(col), g, o.c("0"), comp, text)
+	ls := o.wrap(text, 18, 18)
+	fmt.Fprintf(o.w, "     %s%s%s  %-9s %s\n", o.c(col), g, o.c("0"), comp, ls[0])
+	for _, l := range ls[1:] {
+		fmt.Fprintf(o.w, "%s%s\n", strings.Repeat(" ", 18), l)
+	}
+}
+
+// Row is a component line with no mark - a plan, before anything happens -
+// with its text at column 16 and wrapped under itself. dim mutes the whole
+// row (a component that is not here).
+func (o *Out) Row(comp, text string, dim bool) {
+	if o.rec {
+		o.record("say", "", fmt.Sprintf("  %-9s %s", comp, text))
+		return
+	}
+	o.Stop()
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	paint := func(s string) string {
+		if dim {
+			return o.Dim(s)
+		}
+		return s
+	}
+	ls := o.wrap(text, 16, 16)
+	fmt.Fprintf(o.w, "    %s\n", paint(fmt.Sprintf("  %-9s %s", comp, ls[0])))
+	for _, l := range ls[1:] {
+		fmt.Fprintf(o.w, "%s%s\n", strings.Repeat(" ", 16), paint(l))
+	}
 }
 
 // Note is a muted line under the previous one, aligned with its text.
@@ -205,8 +284,10 @@ func (o *Out) Note(text string) {
 	o.Stop()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for _, l := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-		fmt.Fprintf(o.w, "%s%s\n", strings.Repeat(" ", 18), o.Dim(l))
+	for _, para := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		for _, l := range o.wrap(para, 18, 18) {
+			fmt.Fprintf(o.w, "%s%s\n", strings.Repeat(" ", 18), o.Dim(l))
+		}
 	}
 }
 
@@ -223,7 +304,9 @@ func (o *Out) Say(text string) {
 		io.WriteString(o.w, "\n")
 		return
 	}
-	fmt.Fprintf(o.w, "    %s\n", text)
+	for _, l := range o.wrap(text, 4, 4) {
+		fmt.Fprintf(o.w, "    %s\n", l)
+	}
 }
 
 // Prompt writes text with no newline (a question the caller then reads).
@@ -234,7 +317,17 @@ func (o *Out) Prompt(text string) {
 	o.Stop()
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	fmt.Fprintf(o.w, "    %s", text)
+	// The answer is typed after the last line, so that line keeps its
+	// trailing space and has no newline.
+	ls := o.wrap(text, 4, 4)
+	for _, l := range ls[:len(ls)-1] {
+		fmt.Fprintf(o.w, "    %s\n", l)
+	}
+	end := ls[len(ls)-1]
+	if strings.HasSuffix(text, " ") {
+		end += " "
+	}
+	fmt.Fprintf(o.w, "    %s", end)
 }
 
 // Took is the closing "done in N s" line.

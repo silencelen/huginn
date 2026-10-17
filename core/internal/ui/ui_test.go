@@ -100,3 +100,41 @@ func TestRecords(t *testing.T) {
 		t.Fatalf("got %q", b.String())
 	}
 }
+
+// A row longer than the terminal carries on under its own text, never at the
+// margin (run 3: "asked separatel" / "y" on a Windows console).
+func TestWrapHangs(t *testing.T) {
+	var b bytes.Buffer
+	o := For(&b, false, false)
+	o.cols = 60
+	o.Row("local AI", "C:\\ProgramData\\huginn-local: models, sessions, runtime (2.6 GB) - asked separately", false)
+	o.Line(OK, "core", "removed the boot service, the tray, the binary, its config and state")
+	o.Prompt("Also remove the local AI tier (2.6 GB of models, sessions and runtime)? [Y/n] ")
+	lines := strings.Split(b.String(), "\n")
+	for _, l := range lines {
+		if len(l) > 59 {
+			t.Fatalf("line wider than the terminal (%d): %q", len(l), l)
+		}
+	}
+	want := []string{
+		"      local AI  C:\\ProgramData\\huginn-local: models,",
+		"                sessions, runtime (2.6 GB) - asked",
+		"                separately",
+		"     +  core      removed the boot service, the tray, the",
+		"                  binary, its config and state",
+		"    Also remove the local AI tier (2.6 GB of models,",
+		"    sessions and runtime)? [Y/n] ",
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Fatalf("line %d\ngot  %q\nwant %q\nall:\n%s", i, lines[i], w, b.String())
+		}
+	}
+	// No terminal width: one line each, as before.
+	b.Reset()
+	o.cols = 0
+	o.Row("local AI", strings.Repeat("word ", 30), true)
+	if strings.Count(b.String(), "\n") != 1 {
+		t.Fatalf("wrapped without a width: %q", b.String())
+	}
+}

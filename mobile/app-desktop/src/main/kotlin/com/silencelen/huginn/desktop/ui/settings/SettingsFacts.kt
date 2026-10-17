@@ -37,6 +37,8 @@ data class SettingsFacts(
     val devices: List<Device> = emptyList(),
     val route: String = "",
     val tokenSet: Boolean = false,
+    /** huginn core carries this app's link and holds the token (docs/DESKTOP-VIA-CORE.md). */
+    val viaCore: Boolean = false,
     /** This window has been attended recently — the other half of "claiming". */
     val present: Boolean = false,
     val notifyEnabled: Boolean = true,
@@ -166,7 +168,12 @@ object SettingsSummaries {
             )
         }
 
-        "privacy" -> if (f.tokenSet) "token saved here" else "no token saved"
+        "privacy" -> when {
+            // Run 3 read "no token saved" on a working link: the core keeps it.
+            f.viaCore -> "token kept by huginn core"
+            f.tokenSet -> "token saved here"
+            else -> "no token saved"
+        }
 
         // ⚠ THE SETTING IS NOT THE BEHAVIOUR. With no tray there is nothing to
         // close TO, whatever the toggle says, and the app already behaves that way

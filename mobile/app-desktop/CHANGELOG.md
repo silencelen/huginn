@@ -1,5 +1,33 @@
 # Huginn Desktop changelog
 
+## 2.5.4
+
+Carries core 2.5.4. From the owner's third recorded setup run on PRESTIGE.
+
+### Fixed
+- **Clicking setup's test notification no longer opens an empty "Untitled - not found" chat.**
+  Windows keeps the toast in the Action Center after setup withdraws it. A click now only brings
+  the window up.
+- **The local-AI step stops offering a download once it is serving.** The note under the card
+  ("can serve, 2568 MB to download") stayed after the step had passed. A note is cleared as soon
+  as the card or a re-check settles its step.
+- **No empty administrator windows during setup.** The elevated local-AI and core-install steps
+  run hidden; their output already shows in the card. A click on the visible console used to
+  pause the install in QuickEdit's "Select" mode.
+- **The card's log keeps one line per download** and updates it, instead of a line every 10%.
+- **Settings > Privacy & security reads "token kept by huginn core"** while the core carries the
+  link, not "no token saved".
+
+### Changed
+- **The address step has one Check button,** the step's own. The field had a second one that did
+  the same thing.
+- **The token step says where the token comes from once,** not in the step and again under the
+  field.
+- **"This computer" asks for a folder only under Work,** the one scope that uses it, and no longer
+  repeats the claude path from step 3.
+- **Settings > Host shows Pin and "Switch addresses automatically" only when huginn core has more
+  than one address.** Both choose between addresses.
+
 ## 2.5.3
 
 Carries core 2.5.3. From the owner's two recorded setup runs on PRESTIGE.

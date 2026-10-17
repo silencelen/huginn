@@ -178,6 +178,19 @@ class SetupControllerTest {
     }
 
     @Test
+    fun `the card turning serving on clears the offer printed under it`() {
+        // Run 3: the step passed ("serving qwen3-4b") and the note under the
+        // card still offered the download it had just finished.
+        val c = controller(probes = FakeProbes(localAiResult = LocalAiOutcome.Offered("can serve, 4200 MB")))
+        c.rerun(at = SetupStep.LOCAL_AI)
+        c.primary()
+        assertEquals("can serve, 4200 MB", c.note.value)
+        c.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed("serving qwen3-4b"))
+        assertEquals(StepStatus.Passed("serving qwen3-4b"), c.state.value.statusOf(SetupStep.LOCAL_AI))
+        assertEquals(null, c.note.value, "the offer outlived the step it described")
+    }
+
+    @Test
     fun `a checked step moves on rather than running its check again`() {
         // The primary button reads "Next" over a Checked step, so pressing it
         // must advance. It used to re-enter `run`, which re-probed and put the

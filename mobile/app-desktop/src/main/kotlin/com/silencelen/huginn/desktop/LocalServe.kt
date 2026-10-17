@@ -482,7 +482,10 @@ object LocalServe {
         val ps = try {
             ProcessBuilder(
                 "powershell.exe", "-NoProfile", "-Command",
-                "exit (Start-Process -Verb RunAs -PassThru -Wait -FilePath '${cmd.absolutePath}').ExitCode",
+                // Hidden: the log above is tailed into the card, and the visible
+                // console showed nothing but a cursor, and a click on it froze the run
+                // in QuickEdit's "Select" mode (run 3).
+                "exit (Start-Process -Verb RunAs -WindowStyle Hidden -PassThru -Wait -FilePath '${cmd.absolutePath}').ExitCode",
             ).redirectErrorStream(true).start()
         } catch (e: Exception) {
             onLine("could not start the elevated step: ${e.message}")

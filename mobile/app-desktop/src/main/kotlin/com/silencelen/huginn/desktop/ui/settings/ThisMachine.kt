@@ -163,24 +163,31 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
             }
         }
 
-        // Said plainly rather than implied by the word "work": overstating a fence
-        // is worse than not having one.
-        Muted(
-            "Work starts in the folder below. That is where a run begins, not a " +
-                "sandbox — a command that is allowed to run can leave any folder.",
-            Modifier.padding(top = 8.dp, start = 4.dp),
-            maxLines = 3,
-        )
+        // The folder is Work's alone: Look and Own start in the account's home
+        // (huginn-device's own note says so), and run 3 showed the field under
+        // Own, asking for something that scope never reads.
+        if (scopeWire == "work") {
+            // Said plainly rather than implied by the word "work": overstating a
+            // fence is worse than not having one.
+            Muted(
+                "Work starts in the folder below. That is where a run begins, not a " +
+                    "sandbox — a command that is allowed to run can leave any folder.",
+                Modifier.padding(top = 8.dp, start = 4.dp),
+                maxLines = 3,
+            )
 
-        OutlinedTextField(
-            value = root,
-            onValueChange = { store.coreDevice.setRoot(it) },
-            label = { Text("Folder for Work runs") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
+            OutlinedTextField(
+                value = root,
+                onValueChange = { store.coreDevice.setRoot(it) },
+                label = { Text("Folder for Work runs") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
 
-        ClaudePathField(store)
+        // In setup, step 3 is this very field; asking again a step later read as
+        // a second claude to find.
+        if (intro) ClaudePathField(store)
 
         // ⚠ THE SAME SHARED ROW AS EVERY OTHER TOGGLE, drawn from the catalog id
         // so search can find it and land on something that exists. It sits here,
@@ -324,13 +331,30 @@ private object LocalServeFlow {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
     )
 
-    fun line(l: String) { log.value = (log.value + l).takeLast(8) }
+    fun line(l: String) { log.value = LocalLog.append(log.value, l) }
 
     fun run(block: suspend () -> Unit) {
         if (busy.value) return
         busy.value = true
         log.value = emptyList()
         scope.launch { try { block() } finally { busy.value = false } }
+    }
+}
+
+/** The card's last few lines. */
+internal object LocalLog {
+    private val PROGRESS = Regex("""^(.+): \d{1,3}%$""")
+
+    /**
+     * A download's progress ("Qwen3-4B-Q4_K_M.gguf: 40%") replaces its own
+     * previous line rather than adding one: run 3's card was eight lines of one
+     * file's percentages, with everything before them scrolled away.
+     */
+    fun append(log: List<String>, l: String): List<String> {
+        val label = PROGRESS.find(l)?.groupValues?.get(1)
+        val last = log.lastOrNull()
+        if (label != null && last != null && PROGRESS.find(last)?.groupValues?.get(1) == label) return log.dropLast(1) + l
+        return (log + l).takeLast(8)
     }
 }
 
