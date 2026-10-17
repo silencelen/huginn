@@ -442,3 +442,21 @@ func TestReadMigration(t *testing.T) {
 		t.Fatal("source modified")
 	}
 }
+
+// A desktop caught mid-setup has saved the address it was typed but not yet a
+// token. Importing the address alone made a core that called itself paired,
+// reached nothing, and so was never paired properly (PRESTIGE, 2026-10-16).
+// Its device settings still come across.
+func TestImportTakesNoAddressWithoutItsToken(t *testing.T) {
+	desk := `{"baseUrl":"https://huginn:8787","token":"","deviceEnabled":true,"deviceId":"dev-desk","deviceScope":"own","deviceActWhileLocked":true}`
+	p := PlanImport(MigrationInput{Sources: srcs(), Desktop: []byte(desk)})
+	ch := p.Choose(nil)
+	var cfg Config
+	ch.Apply(&cfg, []string{srcs().DesktopSettings}, time.Now())
+	if cfg.Appd.URL != "" {
+		t.Fatalf("an address with no token was imported: %q", cfg.Appd.URL)
+	}
+	if !cfg.Device.Enabled || cfg.Device.Scope != "own" {
+		t.Fatalf("the device settings did not come across: %+v", cfg.Device)
+	}
+}

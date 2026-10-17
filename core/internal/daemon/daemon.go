@@ -482,6 +482,12 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 	return fp, nil
 }
 
+// hasToken: the secrets store holds an appd token.
+func (d *Daemon) hasToken() bool {
+	t, err := d.secrets.Get(store.SecretToken)
+	return err == nil && strings.TrimSpace(t) != ""
+}
+
 func (d *Daemon) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/appd/", d.proxy)
 	d.routeHandlers(mux)
@@ -535,7 +541,8 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		}
 		ipc.WriteJSON(w, 200, map[string]any{
 			"version": version.Version, "proto": version.Proto, "pid": os.Getpid(),
-			"paired": cfg.Appd.URL != "", "url": cfg.Appd.URL, "pins": pins,
+			// Paired = an address AND a token: an address alone reaches nothing.
+			"paired": cfg.Appd.URL != "" && d.hasToken(), "url": cfg.Appd.URL, "pins": pins,
 			"secrets": d.sel.Backend, "secretsWhy": d.sel.Why,
 			"migratedFrom": cfg.MigratedFrom, "firstStart": d.migrate,
 			"tray": d.watch.trays.Load() > 0, "notifyClaim": d.watch.claim(),

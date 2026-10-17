@@ -48,7 +48,7 @@ func (d *Daemon) firstStartImport(ctx context.Context) string {
 		for _, c := range plan.Candidates {
 			if c.Token != "" && c.URL != "" {
 				if err := d.secrets.Set(store.SecretToken, c.Token); err == nil {
-					ch.Device.URL = c.URL
+					ch.Device.URL, ch.Device.Token = c.URL, c.Token
 				}
 				break
 			}
