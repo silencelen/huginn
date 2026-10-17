@@ -268,6 +268,7 @@ fun main(args: Array<String>) {
 
     fun navigate(target: NavTarget) {
         summon()
+        if (target == NavTarget.SETUP_TEST) return
         when (target.kind) {
             TargetKind.CHATS -> store.openChat(target.id)
             TargetKind.SESSIONS -> store.openSession(target.id)

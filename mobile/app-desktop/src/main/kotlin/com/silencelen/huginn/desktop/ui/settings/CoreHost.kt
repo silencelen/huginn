@@ -64,13 +64,20 @@ internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.
     )
     val routes = book?.routes.orEmpty()
     for (r in routes) {
-        SettingsActionRow(
-            id = "host.core-route.${r.url}",
-            title = r.url + tags(r),
-            summary = health(r),
-            actionLabel = if (r.pinned) "Unpin" else "Pin",
-            onAction = { act { core.patchRoutes(pinned = if (r.pinned) "" else r.url) } },
-        )
+        // Pinning picks one address over the others: with one address there is
+        // nothing to pick (run 3 showed a lone "Pin"). A pin left from before
+        // stays undoable.
+        if (routes.size > 1 || r.pinned) {
+            SettingsActionRow(
+                id = "host.core-route.${r.url}",
+                title = r.url + tags(r),
+                summary = health(r),
+                actionLabel = if (r.pinned) "Unpin" else "Pin",
+                onAction = { act { core.patchRoutes(pinned = if (r.pinned) "" else r.url) } },
+            )
+        } else {
+            SettingsReadOnlyRow(id = "host.core-route.${r.url}", title = r.url + tags(r), summary = health(r))
+        }
         if (!r.preferred) {
             SettingsActionRow(
                 id = "host.core-route-remove.${r.url}",
@@ -81,7 +88,7 @@ internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.
             )
         }
     }
-    book?.let { b ->
+    book?.takeIf { routes.size > 1 }?.let { b ->
         SettingsToggleRow(
             id = "host.core-autoswitch",
             title = "Switch addresses automatically",

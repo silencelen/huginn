@@ -166,6 +166,7 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
     val closeToTray by store.settings.closeToTray.collectAsState()
     val deviceEnabled by store.settings.deviceEnabled.collectAsState()
     val update by store.updater.state.collectAsState()
+    val via by store.viaCoreState.collectAsState()
 
     return SettingsFacts(
         account = state.account,
@@ -175,6 +176,7 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
         devices = devices,
         route = route,
         tokenSet = token.isNotBlank(),
+        viaCore = via != null,
         present = present,
         notifyEnabled = notifyEnabled,
         closeToTray = closeToTray,

@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.3
+# Version: 2.5.4
 
-$script:HUGINN_VERSION = '2.5.3'
+$script:HUGINN_VERSION = '2.5.4'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -557,6 +557,17 @@ function _Huginn-DesktopAskQuit {
 # opened again afterwards. Not installed: nothing to do, silently.
 # -Install: `huginn desktop install` - the same verified, silent install for a
 # machine that has no desktop app yet (it used to point at the .exe instead).
+# Opens an app as the signed-in user. From an elevated terminal (run 3: the
+# one-liner pasted into an administrator PowerShell) Start-Process hands the
+# app this terminal's administrator token, and the desktop app then ran
+# elevated. Explorer starts it with the user's own token.
+function _Huginn-OpenAsUser([string]$Path) {
+  $admin = $false
+  try { $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) } catch { }
+  if ($admin) { Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $Path + '"') }
+  else { Start-Process -FilePath $Path }
+}
+
 function _Huginn-DesktopUpdate {
   param([switch]$Install)
   $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\huginn-desktop-kt'
@@ -614,7 +625,7 @@ function _Huginn-DesktopUpdate {
       $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
       Remove-Item -Force (Join-Path $cfgRoot 'huginn-desktop-kt\first-run.json') -ErrorAction SilentlyContinue
     }
-    if (($wasOpen -or $Install) -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = if ($Install) { ', opened' } else { ', reopened' } }
+    if (($wasOpen -or $Install) -and (Test-Path $app)) { _Huginn-OpenAsUser $app; $tail = if ($Install) { ', opened' } else { ', reopened' } }
     if ($Install -and -not $have) { _Huginn-UiLine 'ok' 'desktop' "$now installed (Start menu)$tail" }
     else { _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail" }
     if ($coreWas -and $coreKeep -and (Test-Path $coreKeep)) {

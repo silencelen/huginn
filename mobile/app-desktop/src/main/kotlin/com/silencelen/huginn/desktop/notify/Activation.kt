@@ -35,6 +35,16 @@ data class NavTarget(val kind: TargetKind, val id: String) {
             TargetKind.CHATS -> "chat:$id"
             TargetKind.SESSIONS -> "sess:$id"
         }
+
+    companion object {
+        /**
+         * Setup's test notification. It has nowhere to go: a click only brings
+         * the window up. It used to open a chat by this id, which on Windows
+         * (where a toast outlives its withdraw in the Action Center) landed on
+         * "Untitled - not found" after setup (run 3).
+         */
+        val SETUP_TEST = NavTarget(TargetKind.CHATS, "huginn-setup-test")
+    }
 }
 
 /** What a `huginn://` URL asked for. */

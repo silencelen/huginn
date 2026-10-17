@@ -27,7 +27,6 @@ import com.silencelen.huginn.desktop.notify.NavTarget
 import com.silencelen.huginn.desktop.notify.Notifier
 import com.silencelen.huginn.desktop.notify.NotifyRequest
 import com.silencelen.huginn.desktop.notify.Notifiers
-import com.silencelen.huginn.desktop.notify.TargetKind
 import com.silencelen.huginn.desktop.setup.Autostart
 import com.silencelen.huginn.desktop.setup.ClaudePath
 import com.silencelen.huginn.desktop.setup.LocalAiOutcome
@@ -127,26 +126,19 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
     }
     when (step) {
         SetupStep.ROUTE -> {
-            // ONE field and one button (owner, 2026-10-16). More addresses -
-            // a mesh or LAN one - go in Settings > Host, into huginn core's book.
+            // ONE field (owner, 2026-10-16), and the step's own button checks it:
+            // a second "Check" beside the field did the same thing (run 3). More
+            // addresses - a mesh or LAN one - go in Settings > Host, into huginn
+            // core's book. The draft is published for the probe, as the token's is.
             val book by store.routeBook.collectAsState()
             var address by remember { mutableStateOf(book.activeUrl) }
-            var refusal by remember { mutableStateOf<String?>(null) }
+            SetupDrafts.address = address
             SettingsFieldRow(
                 id = "host.address",
                 title = "Address",
                 value = address,
-                onValueChange = { address = it; refusal = null },
-                summary = refusal ?: "An IP address or a name; https:// and the port are added for you.",
-                isError = refusal != null,
-                trailing = {
-                    Button(onClick = {
-                        scope.launch {
-                            refusal = store.useAddress(address)
-                            if (refusal == null) SetupHost.ifReady { it.runCurrent() }
-                        }
-                    }) { Text("Check") }
-                },
+                onValueChange = { address = it; SetupDrafts.address = it },
+                summary = "An IP address or a name; https:// and the port are added for you.",
             )
         }
 
@@ -165,8 +157,7 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                 value = token,
                 onValueChange = { token = it; SetupDrafts.token = it },
                 secret = true,
-                summary = "huginn's appd token. On the huginn host, `sudo cat /etc/huginn-appd/token` prints it. " +
-                    "Checking it pairs huginn core with huginn: the core keeps the token, this app keeps none.",
+                // The step's own text says where it comes from and who keeps it.
             )
         }
 
@@ -240,8 +231,12 @@ class DesktopSetupProbes(
 
     override suspend fun route(): Result<String> = runCatching {
         store.viaCore?.let { return@runCatching "through huginn core ${it.coreVersion}, at ${it.url}" }
+        // The field first, as the token step does: what the reader typed is
+        // what gets checked, without a second button to commit it.
+        val typed = SetupDrafts.address.trim()
+        if (typed.isNotEmpty()) store.useAddress(typed)?.let { error(it) }
         val url = store.settings.baseUrlNow()
-        check(url.isNotBlank()) { HuginnClient.NO_ROUTE }
+        check(url.isNotBlank()) { "type huginn's address first" }
         // ⚠⚠ THE PROBE, NOT `ping()`. This step exists to separate "nothing
         // answers at that address" from "something answers and does not like your
         // bearer" — and it used to ask a TOKEN-GATED route, so on every fresh
@@ -338,8 +333,8 @@ class DesktopSetupProbes(
         plan.refuse?.let { return LocalAiOutcome.Refused("this machine can't serve: $it") }
         val mb = plan.needBytes / (1024 * 1024)
         return LocalAiOutcome.Offered(
-            "This machine can serve (class ${plan.cls ?: "?"}), ${mb} MB to download. " +
-                "Use the card above to read the plan and turn it on.",
+            "This machine can serve (class ${plan.cls ?: "?"}): $mb MB to download. " +
+                "Set up local AI shows the whole plan before anything downloads.",
         )
     }
 
@@ -388,6 +383,6 @@ class DesktopSetupProbes(
          * backend that cannot withdraw it expires on its own, and the worst
          * outcome of a click is the Chats list.
          */
-        val TEST_TARGET = NavTarget(TargetKind.CHATS, "huginn-setup-test")
+        val TEST_TARGET = NavTarget.SETUP_TEST
     }
 }

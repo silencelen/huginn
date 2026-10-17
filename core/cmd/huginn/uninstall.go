@@ -140,9 +140,9 @@ func uninstall(args []string) int {
 	u.Say("")
 	row := func(here bool, comp, what, absent string) {
 		if here {
-			u.Say(fmt.Sprintf("  %-9s %s", comp, what))
+			u.Row(comp, what, false)
 		} else {
-			u.Say(u.Dim(fmt.Sprintf("  %-9s %s", comp, absent)))
+			u.Row(comp, absent, true)
 		}
 	}
 	svc := serviceInstalled(stableBinary())
@@ -161,11 +161,11 @@ func uninstall(args []string) int {
 	row(dirExists(ce.Dir()), "CLI", h(ce.Dir())+" and its line in your shell startup files", "not installed here")
 	switch {
 	case !sshStanzaPresent(home):
-		u.Say(u.Dim(fmt.Sprintf("  %-9s no 'Host huginn' stanza here", "ssh")))
+		u.Row("ssh", "no 'Host huginn' stanza here", true)
 	case all:
-		u.Say(fmt.Sprintf("  %-9s %s", "ssh", "the 'Host huginn' stanza, and its key if it is huginn's own"))
+		u.Row("ssh", "the 'Host huginn' stanza, and its key if it is huginn's own", false)
 	default:
-		u.Say(u.Dim(fmt.Sprintf("  %-9s kept: 'Host huginn' and your key (--all removes them)", "ssh")))
+		u.Row("ssh", "kept: 'Host huginn' and your key (--all removes them)", true)
 	}
 	if runtime.GOOS == "windows" && svc {
 		u.Say("")
