@@ -457,7 +457,12 @@ object LocalServe {
         if (!mgr.isFile) { onLine("the manager is not fetched — set up first"); return 2 }
         val node = nodeBin()
         if (node == null) { onLine(NODE_MISSING); return 2 }
-        val dir = localDataDir()
+        // Staged in THIS USER's temp, never in ProgramData: a file an earlier
+        // elevated run created there belongs to the administrators, and this
+        // unelevated app could not rewrite it - "Stop serving" failed with
+        // "activate.log (Access is denied)" (PC01, 2026-10-16). The elevated
+        // child runs as this same user, so it can write here too.
+        val dir = File(System.getProperty("java.io.tmpdir"), "huginn-local-activate")
         val log = File(dir, "activate.log")
         val cmd = File(dir, "activate.cmd")
         // Refused BEFORE anything is written, and said in the section's own

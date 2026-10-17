@@ -32,8 +32,9 @@ import com.silencelen.huginn.desktop.setup.Autostart
 import com.silencelen.huginn.desktop.setup.ClaudePath
 import com.silencelen.huginn.desktop.setup.LocalAiOutcome
 import com.silencelen.huginn.desktop.setup.SetupController
-import com.silencelen.huginn.desktop.setup.SetupDrafts
 import com.silencelen.huginn.desktop.setup.SetupHost
+import com.silencelen.huginn.settings.StepStatus
+import com.silencelen.huginn.desktop.setup.SetupDrafts
 import com.silencelen.huginn.desktop.setup.SetupProbes
 import com.silencelen.huginn.desktop.ui.settings.ClaudePathField
 import com.silencelen.huginn.desktop.ui.settings.DeviceSection
@@ -126,33 +127,26 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
     }
     when (step) {
         SetupStep.ROUTE -> {
+            // ONE field and one button (owner, 2026-10-16). More addresses -
+            // a mesh or LAN one - go in Settings > Host, into huginn core's book.
             val book by store.routeBook.collectAsState()
-            val health by store.routeHealth.collectAsState()
-            val resolving by store.resolvingRoute.collectAsState()
-            val routeNote by store.routeNote.collectAsState()
-            SettingsRouteListRow(
-                book = book,
-                actions = remember(store) {
-                    RouteListActions(
-                        activate = { store.activateRoute(it) },
-                        rename = { id, name -> store.renameRoute(id, name) },
-                        setUrl = { id, url -> store.setRouteUrl(id, url) },
-                        move = { id, delta -> store.moveRoute(id, delta) },
-                        remove = { store.removeRoute(it) },
-                        add = { name, url -> store.addRoute(name, url) },
-                        setAutoSwitch = { store.setAutoSwitch(it) },
-                        findLive = { store.findLiveRoute() },
-                        // One Save, one book operation, and a refusal that stays on the form (edge #64/#81).
-                        editBoth = { id, name, url -> store.editRoute(id, name, url) },
-                        clearNote = { store.clearRouteNote() },
-                    )
+            var address by remember { mutableStateOf(book.activeUrl) }
+            var refusal by remember { mutableStateOf<String?>(null) }
+            SettingsFieldRow(
+                id = "host.address",
+                title = "Address",
+                value = address,
+                onValueChange = { address = it; refusal = null },
+                summary = refusal ?: "An IP address or a name; https:// and the port are added for you.",
+                isError = refusal != null,
+                trailing = {
+                    Button(onClick = {
+                        scope.launch {
+                            refusal = store.useAddress(address)
+                            if (refusal == null) SetupHost.ifReady { it.runCurrent() }
+                        }
+                    }) { Text("Check") }
                 },
-                health = health,
-                nowMs = System.currentTimeMillis(),
-                summary = "The addresses that reach huginn, tried in this order.",
-                finding = resolving,
-                note = routeNote,
-                suggestedUrl = HuginnSettings.ROUTE_URL_PLACEHOLDER,
             )
         }
 
@@ -186,7 +180,9 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
         // same reason. `SetupIntroTest` greps for these two arguments.
         SetupStep.DEVICE -> DeviceSection(store, intro = false)
 
-        SetupStep.LOCAL_AI -> LocalServeSection(store, intro = false)
+        SetupStep.LOCAL_AI -> LocalServeSection(store, intro = false, onServing = { detail ->
+            SetupHost.ifReady { it.settledByCard(SetupStep.LOCAL_AI, StepStatus.Passed(detail)) }
+        })
 
         SetupStep.NOTIFY -> {
             val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)
@@ -207,7 +203,11 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
         // the entry goes and where to turn it off without coming back here — so
         // nothing is added around it. Repeating it under the control was the
         // first thing a walk through the real flow showed.
-        SetupStep.AUTOSTART -> StartupRow(store)
+        SetupStep.AUTOSTART -> StartupRow(store, onChanged = { on ->
+            SetupHost.ifReady {
+                it.settledByCard(SetupStep.AUTOSTART, if (on) StepStatus.Passed("the window opens at sign-in") else StepStatus.Skipped())
+            }
+        })
     }
 }
 

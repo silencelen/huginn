@@ -100,44 +100,36 @@ enum class SetupTone {
 object SetupScaffoldRules {
 
     /** The screen's own title. Deliberately not "Wizard" or "Onboarding". */
-    const val TITLE: String = "Set huginn up on this computer"
+    const val TITLE: String = "Set up huginn on this computer"
 
+    // Short and plain (owner, 2026-10-16: the first run read as complicated).
     const val BLURB: String =
-        "Seven things, each one checked rather than assumed. Skip anything you do not want — " +
-            "a skipped step is an answer, and you can run this again from Settings."
+        "Connect this computer to huginn, then choose what it does. Skip anything you like; " +
+            "Settings can run this again."
 
     fun title(step: SetupStep): String = when (step) {
-        SetupStep.ROUTE -> "Where huginn is"
-        SetupStep.TOKEN -> "The token this app signs in with"
-        SetupStep.CLAUDE -> "Which claude this computer runs"
+        SetupStep.ROUTE -> "huginn's address"
+        SetupStep.TOKEN -> "huginn's token"
+        SetupStep.CLAUDE -> "Claude on this computer"
         SetupStep.DEVICE -> "Let huginn run work here"
         SetupStep.LOCAL_AI -> "Serve local AI from this computer"
-        SetupStep.NOTIFY -> "Notifications on this screen"
-        SetupStep.AUTOSTART -> "Start with your session"
+        SetupStep.NOTIFY -> "Notifications"
+        SetupStep.AUTOSTART -> "Open at sign-in"
     }
 
     /** One line under the title: what the step will actually DO, not what it is about. */
     fun blurb(step: SetupStep): String = when (step) {
-        SetupStep.ROUTE ->
-            "The address huginn answers on. It is dialled here and now — a saved address that " +
-                "nothing ever called is the way this used to fail."
+        SetupStep.ROUTE -> "The address of your huginn host, for example 192.168.1.10 or huginn.example.net."
         SetupStep.TOKEN ->
-            "The bearer every request carries. It is used on a real call, because reaching the " +
-                "daemon proves there is a daemon, not that it will take this token."
-        SetupStep.CLAUDE ->
-            "Work runs by starting claude here. This looks for it and runs claude --version to " +
-                "prove the one it found actually starts."
+            "On the huginn host, sudo cat /etc/huginn-appd/token prints it. Connecting hands it to " +
+                "huginn core, which keeps it."
+        SetupStep.CLAUDE -> "Finds claude on this computer and checks that it starts."
         SetupStep.DEVICE ->
-            "Enrols this computer so huginn can run work in its own context. Nothing listens on " +
-                "a port: this app asks huginn for work and posts the results back."
+            "Lets huginn run sessions here. Nothing listens on a port: huginn core asks huginn for work."
         SetupStep.LOCAL_AI ->
-            "Runs small models here and offers them in huginn's chat menus. The plan is shown in " +
-                "full before anything downloads."
-        SetupStep.NOTIFY ->
-            "A real notification is posted now. Whether it arrived is something only you can say, " +
-                "so this step asks."
-        SetupStep.AUTOSTART ->
-            "Starts huginn when you sign in, so the window is already watching when you get here."
+            "Serves small models from here to huginn's chats. You see the plan before anything downloads."
+        SetupStep.NOTIFY -> "Sends a test notification; tell it whether it appeared."
+        SetupStep.AUTOSTART -> "huginn core's tray already starts at sign-in. This opens the window too."
     }
 
     /** The short name beside the step number in the rail. */
@@ -153,8 +145,8 @@ object SetupScaffoldRules {
 
     /** What the primary button does, when the step has not been attempted yet. */
     fun verb(step: SetupStep): String = when (step) {
-        SetupStep.ROUTE -> "Try the address"
-        SetupStep.TOKEN -> "Try the token"
+        SetupStep.ROUTE -> "Check the address"
+        SetupStep.TOKEN -> "Connect"
         SetupStep.CLAUDE -> "Find claude"
         SetupStep.DEVICE -> "Enrol this computer"
         SetupStep.LOCAL_AI -> "Check what this computer can serve"

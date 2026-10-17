@@ -30,7 +30,7 @@ class SetupScaffoldTest {
     @Test
     fun `the primary button tells apart untried, failed and answered`() {
         val fresh = SetupState()
-        assertEquals("Try the address", SetupScaffoldRules.primaryLabel(fresh))
+        assertEquals("Check the address", SetupScaffoldRules.primaryLabel(fresh))
 
         val failed = SetupFlow.fail(fresh, "connection refused")
         assertEquals("Try again", SetupScaffoldRules.primaryLabel(failed))

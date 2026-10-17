@@ -41,7 +41,7 @@ import kotlinx.coroutines.withContext
  * leaving a switch sitting proudly in the on position over nothing.
  */
 @Composable
-fun ColumnScope.StartupRow(store: AppStore, mark: String? = null) {
+fun ColumnScope.StartupRow(store: AppStore, mark: String? = null, onChanged: ((Boolean) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
     val on by store.settings.autostart.collectAsState()
     // ⚠ THE DISK, NOT THE FLAG. The comment above promised that and the code
@@ -68,7 +68,7 @@ fun ColumnScope.StartupRow(store: AppStore, mark: String? = null) {
                     if (want) Autostart.enable() else Autostart.disable()
                 }
                 result.fold(
-                    onSuccess = { store.settings.setAutostart(want); note = it },
+                    onSuccess = { store.settings.setAutostart(want); note = it; onChanged?.invoke(want) },
                     // ⚠ THE FLAG DOES NOT MOVE ON A FAILED WRITE. A switch that
                     // flips while the file it stands for was never written is
                     // the exact lie this row exists to avoid.
