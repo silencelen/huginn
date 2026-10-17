@@ -1166,8 +1166,9 @@ mkdir -p "$DR"; dt_run 'huginn desktop uninstall'; RC=$?
   && ok "uninstall: a directory without the marker is never removed" || bad "uninstall without marker (rc=$RC): $(cat "$DT/out")"
 rm -rf "$DR"
 
-# ps1 parity: the sub-verbs exist in both clients' desktop branch, and on the
-# PowerShell side install/uninstall answer with the Windows pointer.
+# ps1 parity: the sub-verbs exist in both clients' desktop branch. On Windows
+# `desktop install` runs the release's installer, sha256-checked and silent
+# (it pointed at the .exe before 2.4.2); off Windows it is the bash client's.
 for sv in install uninstall update arch portable; do
   a=$(awk '/^    desktop\)/,/^    usage\|cost\|ccusage\)/' client/huginn.sh | grep -cE "^[[:space:]]+([a-z|]+\|)?$sv(\||\))")
   b=$(grep -cE "'$sv'" client/huginn.ps1)
@@ -1175,9 +1176,14 @@ for sv in install uninstall update arch portable; do
 done
 if command -v pwsh >/dev/null 2>&1; then
   PI=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn desktop install" 2>&1 | tr -d '\r')
-  grep -q 'Linux per-user install' <<<"$PI" && grep -q 'huginn desktop windows' <<<"$PI" \
-    && ok "ps1: desktop install answers that it is Linux-only, pointing at the Windows installer" \
-    || bad "ps1: desktop install said: $PI"
+  grep -q "the bash client's" <<<"$PI" && ! grep -q 'downloading' <<<"$PI" \
+    && ok "ps1: desktop install off Windows names the bash client and downloads nothing" \
+    || bad "ps1: desktop install off Windows said: $PI"
+  PU=$(pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; huginn desktop uninstall" 2>&1 | tr -d '\r')
+  grep -q 'Settings > Apps' <<<"$PU" && grep -q 'huginn uninstall' <<<"$PU" \
+    && ok "ps1: desktop uninstall points at Settings > Apps and huginn uninstall" || bad "ps1: desktop uninstall said: $PU"
+  grep -q '_Huginn-DesktopUpdate -Install' client/huginn.ps1 \
+    && ok "ps1: desktop install on Windows is the verified update path" || bad "ps1: desktop install does not use _Huginn-DesktopUpdate -Install"
 else
   skip "ps1 desktop install answer (no pwsh)"
 fi
@@ -1255,6 +1261,63 @@ else
   skip "ps1 core install records (no pwsh)"
 fi
 rm -rf "$CT"
+echo
+
+echo "[6d/8] the one-line installers (get.sh, get.ps1)"
+sh -n client/get.sh && ok "get.sh parses as POSIX sh" || bad "get.sh does not parse"
+# WHY: PowerShell names are case-insensitive. get.ps1's `$gui = $false` wrote
+# "False" into its own [string]$Gui parameter, so the desktop question was
+# never asked on Windows (PC01, 2026-10-16). No assignment may reuse a
+# parameter's name.
+GP_CLOBBER="$(python3 - <<'PY'
+import re
+s=open('client/get.ps1').read()
+params=set()
+for m in re.finditer(r'param\(([^)]*)\)', s):
+    params |= {n.lower() for n in re.findall(r'\$(\w+)', m.group(1))}
+hits=[l.strip() for l in s.splitlines() if (m:=re.match(r'\s*\$(\w+)\s*=[^=]', l)) and m.group(1).lower() in params and not re.match(r'\s*\$(\w+)\s*=\s*\$env:', l) and 'if (-not $' not in l]
+print('\n'.join(hits))
+PY
+)"
+[ -z "$GP_CLOBBER" ] && ok "get.ps1: no variable shadows one of its parameters" || bad "get.ps1 assigns over a parameter: $GP_CLOBBER"
+# get.sh end to end against stubs: a release feed, ssh that does not trust the
+# key yet, and a fake core. One block: release, key, ssh, CLI, trust, the
+# authorize line, the core's lines, pairing deferred, the summary.
+if command -v script >/dev/null 2>&1; then
+  GT="$(mktemp -d)"; mkdir -p "$GT/home" "$GT/stub"; touch "$GT/home/.bashrc"
+  cat > "$GT/stub/curl" <<STUB
+#!/bin/sh
+for a; do url="\$a"; done
+case "\$url" in
+  *api.github.com/repos/*/releases*) echo '[{"tag_name": "cli-v9.9.9"}]' ;;
+  *raw.githubusercontent.com/*/cli-v9.9.9/client/*) cat "$PWD/client/\${url##*/}" ;;
+  *) exit 22 ;;
+esac
+STUB
+  printf '#!/bin/sh\necho "x@y: Permission denied (publickey)." >&2\nexit 255\n' > "$GT/stub/ssh"
+  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = -f ] && f="$2"; shift; done\necho k > "$f"; echo "ssh-ed25519 AAAAstub huginn@test" > "$f.pub"\n' > "$GT/stub/ssh-keygen"
+  cat > "$GT/fake-core" <<'FAKE'
+#!/bin/sh
+case "$*" in
+  version) echo "(o> huginn 9.9.9 linux/amd64" ;;
+  "core install"*) mkdir -p "$HOME/.local/bin"; cp "$0" "$HOME/.local/bin/huginn"; echo "     +  service   fake service" >&2 ;;
+  "core status") echo "(o> huginn core 9.9.9  pid 1"; echo "  huginn:  not paired" ;;
+esac
+FAKE
+  chmod +x "$GT/stub/"* "$GT/fake-core"
+  (sleep 2; printf '\n') | timeout 60 env -i HOME="$GT/home" PATH="$GT/stub:/usr/bin:/bin" TERM=xterm LANG=C \
+    HUGINN_CORE_FILE="$GT/fake-core" script -qfec "sh client/get.sh 192.0.2.10" /dev/null > "$GT/raw" 2>&1
+  GO="$(tr '\r' '\n' < "$GT/raw")"
+  for want in 'release   cli-v9.9.9' 'key       ~/.ssh/id_ed25519 (made now)' "'Host huginn' -> 192.0.2.10" 'CLI       ' \
+              'does not know this key yet' "echo 'ssh-ed25519 AAAAstub huginn@test' >> ~/.ssh/authorized_keys" \
+              'download  huginn 9.9.9' 'fake service' 'paired    not yet' 'no graphical session' 'huginn device on' 'done in'; do
+    grep -qF -- "$want" <<< "$GO" || { bad "get.sh block lacks [$want]: $(printf '%s' "$GO" | tail -25)"; GT_BAD=1; break; }
+  done
+  [ -z "${GT_BAD:-}" ] && ok "get.sh: one setup block from release to summary, trust deferred honestly"
+  rm -rf "$GT"
+else
+  skip "get.sh end to end (no script(1))"
+fi
 echo
 
 echo "[7/8] the headless runner (client/huginn-device)"

@@ -8,6 +8,48 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.4.2] - 2026-10-16
+
+### Added
+- **Setup asks its questions.** After the core is installed and paired, the one-line installers
+  ask, each with a default, and can be answered up front for unattended installs
+  (`HUGINN_DEVICE`, `HUGINN_GUI`, `HUGINN_LOCAL` = `y` or `n`; no terminal = no):
+  - Offer this machine to huginn as a device? [Y/n]: `huginn device on`, read-only (scope `look`)
+    until widened with `--scope work`.
+  - Install the desktop app? [Y/n]: verified and silent. On Linux it is asked only where there is a
+    graphical session.
+  - Serve local AI models from this machine's GPU? [y/N]: offered only where `huginn local plan`
+    finds a usable GPU and the tier is not set up. On Windows it runs in one elevated window that
+    shows the download.
+- **`huginn desktop install` works on Windows.** It downloads the release's installer, checks its
+  sha256 against the release manifest, installs silently (per-user, no admin) and opens the app.
+  It used to answer with the `.exe` link to run by hand.
+- After `irm …/get.ps1 | iex`, `huginn` works in the same window, not only in new ones.
+
+### Fixed
+- **Installing Huginn Desktop downgraded the core.** The desktop's installer runs the core it
+  carries (`core self-install`) without comparing versions, so installing Desktop 2.3.6 after the
+  2.4.1 one-liner put core 2.3.6 back (PC01).
+  - `core self-install` now keeps a newer installed core and exits 0, saying so (`--force`
+    overrides).
+  - An older copy's `core install` hands the install to the newer core.
+  - `huginn desktop install` and `huginn desktop update` put the newer core back if an older
+    desktop installer replaced it.
+- **The desktop question was never asked on Windows.** get.ps1's own `$gui = $false` overwrote its
+  `[string]$Gui` parameter with "False" (PowerShell names are case-insensitive), which read as the
+  answer no. A test now refuses any assignment that reuses a parameter's name.
+- **`huginn uninstall` left the local AI tier behind on Windows.** It is LocalSystem services under
+  ProgramData, and uninstall ran its removal unelevated, which the tier refuses.
+  - Uninstall now asks about it on its own, with its size: "Also remove the local AI tier …?
+    [Y/n]", default yes.
+  - On Windows the removal runs elevated: one administrator prompt, a hidden window, its output
+    in the uninstall's log.
+  - Answering no keeps it, as a note.
+- Uninstall no longer spends 20 s starting a stopped core when no device is enrolled to retire.
+- The pairing line read `752cd51125aa37f4ΓÇª` in PowerShell: the core's UTF-8 was read as the
+  console's code page. The line is ASCII now, and the PowerShell client reads the core's output and
+  logs as UTF-8.
+
 ## [2.4.1] - 2026-10-16
 
 ### Fixed
