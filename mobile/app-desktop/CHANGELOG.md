@@ -5,6 +5,10 @@
 Carries core 2.5.5. From the owner's fourth recorded setup run on PRESTIGE, which went 7 of 7.
 
 ### Fixed
+- **The first launch opens maximized, the way Windows snaps a window,** not as a window bigger
+  than the screen. On a laptop the default size put the title bar, with its minimize and close
+  buttons, off the top edge. A window that would fill its screen opens maximized as well, and
+  sizes are measured against the area above the taskbar.
 - **A mistyped address no longer ends up in huginn core's address book.** The address step added
   each address it was given, so a typo it refused stayed beside the corrected one and was handed
   to the core. A new address now replaces the one in use.

@@ -98,8 +98,15 @@ data class WindowLayout(
         fun restore(saved: WindowLayout, screens: List<Screen>): WindowLayout {
             val w = saved.w.coerceAtLeast(MIN_W)
             val h = saved.h.coerceAtLeast(MIN_H)
+            // ⚠ MAXIMIZED, NOT MERELY LARGE (owner, 2026-10-17). A first launch
+            // opened at the default 1280x840 on a laptop whose work area is
+            // smaller, so the window was bigger than the screen and its title bar
+            // - minimize, maximize, close - sat off the top edge. A first launch
+            // opens maximized, as Windows snaps it; so does any window that would
+            // fill the screen it opens on.
+            val first = saved == WindowLayout()
             val usable = screens.filter { it.w > 0 && it.h > 0 }
-            if (usable.isEmpty()) return WindowLayout(UNPLACED, UNPLACED, w, h, saved.maximized)
+            if (usable.isEmpty()) return WindowLayout(UNPLACED, UNPLACED, w, h, saved.maximized || first)
 
             // ⚠ THE UNION, NOT THE FIRST ONE. Judging against a single rectangle
             // is what discarded a remembered position on every launch of a
@@ -114,20 +121,31 @@ data class WindowLayout(
             val spanH = usable.maxOf { it.y + it.h } - usable.minOf { it.y }
             val fitW = w.coerceAtMost(spanW)
             val fitH = h.coerceAtMost(spanH)
-            if (!saved.placed) return WindowLayout(UNPLACED, UNPLACED, fitW, fitH, saved.maximized)
+            fun fills(on: Screen, fw: Int, fh: Int) = fw >= on.w && fh >= on.h
+            if (!saved.placed) {
+                // An unplaced window opens centred on the default screen, which
+                // [screens] lists first: sized to IT, not to the whole desk.
+                val home = usable.first()
+                val hw = fitW.coerceAtMost(home.w)
+                val hh = fitH.coerceAtMost(home.h)
+                return WindowLayout(UNPLACED, UNPLACED, hw, hh, saved.maximized || first || fills(home, hw, hh))
+            }
 
             // Draggable on ANY of them: the title-bar strip has to land on a
             // screen, and which screen that is does not matter.
-            val onScreen = usable.any { s ->
+            val on = usable.firstOrNull { s ->
                 saved.x + VISIBLE_MARGIN in s.x..(s.x + s.w) &&
                     saved.y in s.y..(s.y + s.h - VISIBLE_MARGIN / 2)
             }
-            return if (onScreen) {
-                WindowLayout(saved.x, saved.y, fitW, fitH, saved.maximized)
+            return if (on != null) {
+                WindowLayout(saved.x, saved.y, fitW, fitH, saved.maximized || fills(on, fitW, fitH))
             } else {
                 // Every display it could have been on is gone. Centring is better
                 // than clamping to an edge: clamped windows pile up in one corner.
-                WindowLayout(UNPLACED, UNPLACED, fitW, fitH, saved.maximized)
+                val home = usable.first()
+                val hw = fitW.coerceAtMost(home.w)
+                val hh = fitH.coerceAtMost(home.h)
+                WindowLayout(UNPLACED, UNPLACED, hw, hh, saved.maximized || fills(home, hw, hh))
             }
         }
     }
