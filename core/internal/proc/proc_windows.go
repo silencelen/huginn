@@ -24,6 +24,16 @@ func detach(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachedProcess | createNewProcessGroup | createBreakawayFromJob, HideWindow: true}
 }
 
+// hidden: a console that is never shown (CREATE_NO_WINDOW), its own process
+// group, and out of the caller's job when the job allows it.
+func hidden(cmd *exec.Cmd, breakaway bool) {
+	flags := uint32(0x08000000 /* CREATE_NO_WINDOW */ | createNewProcessGroup)
+	if breakaway {
+		flags |= createBreakawayFromJob
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: flags, HideWindow: true}
+}
+
 func plain(cmd *exec.Cmd) *exec.Cmd {
 	c := exec.Command(cmd.Path, cmd.Args[1:]...)
 	c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: detachedProcess | createNewProcessGroup, HideWindow: true}

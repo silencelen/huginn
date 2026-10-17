@@ -13,6 +13,8 @@ func detach(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true
 
 func plain(*exec.Cmd) *exec.Cmd { return nil }
 
+func hidden(cmd *exec.Cmd, _ bool) { detach(cmd) }
+
 // InteractiveSession: this process belongs to a graphical login, where a tray
 // can be drawn (an ssh shell or a service has neither variable).
 func InteractiveSession() bool {

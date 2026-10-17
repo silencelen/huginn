@@ -103,14 +103,28 @@ object Notifiers {
      * @param name [com.silencelen.huginn.desktop.diag.AppLog.notifierName], which
      *   is null exactly when the chosen backend is [NoNotifier].
      */
-    fun pathWords(name: String?): String = name?.trim()?.takeIf { it.isNotEmpty() } ?: "none"
+    fun pathWords(name: String?): String {
+        val n = name?.trim()?.takeIf { it.isNotEmpty() } ?: return "none"
+        // FallbackNotifier's "primary→fallback(live)": the live one is the fact.
+        val live = Regex("""\(([^()]*)\)$""").find(n)?.groupValues?.get(1) ?: n
+        // Said as a person would (run 4 read "windows-toast→awt-balloon(windows-toast)").
+        return when {
+            live.startsWith("windows-toast") -> "Windows notifications"
+            live.startsWith("awt") -> "tray balloons"
+            live.startsWith("libnotify") -> "desktop notifications"
+            else -> live
+        }
+    }
 
-    /** Why that is the path, and where attention goes when there is none. */
+    /**
+     * Why that is the path, and where attention goes when there is none. The
+     * backend's own name stays here, in brackets, as the log writes it.
+     */
     fun pathSummary(name: String?): String =
         if (pathWords(name) == "none") {
             "$NOWHERE_TO_POST. Anything that needs you goes to Telegram instead."
         } else {
-            "Notifications are posted through ${pathWords(name)} while this window is claiming the route."
+            "Posted as ${pathWords(name)} while this window is claiming the route (${name?.trim()})."
         }
 
     /**

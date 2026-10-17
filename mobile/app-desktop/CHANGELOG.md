@@ -1,5 +1,26 @@
 # Huginn Desktop changelog
 
+## 2.5.5
+
+Carries core 2.5.5. From the owner's fourth recorded setup run on PC01, which went 7 of 7.
+
+### Fixed
+- **A mistyped address no longer ends up in huginn core's address book.** The address step added
+  each address it was given, so a typo it refused stayed beside the corrected one and was handed
+  to the core. A new address now replaces the one in use.
+- **Settings > Host says "Remove 192.168.1.20:8787",** not "Remove huginn", which read like
+  uninstalling.
+- **Settings > Privacy & security describes the token the core keeps,** not this app's settings
+  file, and says that removing access unpairs huginn core.
+
+### Changed
+- **Local AI in setup has one way in.** "Show the plan" puts the plan, with its Download button,
+  on the card. The card no longer has a second "Set up local AI…" button beside it.
+- **Once local AI is serving, the manager's log folds away behind Details.** Its guardrail notes
+  read as warnings at the end of a successful setup.
+- **Notifications say how they arrive in plain words** ("Windows notifications"), with the
+  backend's own name kept in the summary.
+
 ## 2.5.4
 
 Carries core 2.5.4. From the owner's third recorded setup run on PC01.

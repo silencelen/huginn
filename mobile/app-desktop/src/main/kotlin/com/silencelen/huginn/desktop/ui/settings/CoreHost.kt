@@ -81,7 +81,9 @@ internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.
         if (!r.preferred) {
             SettingsActionRow(
                 id = "host.core-route-remove.${r.url}",
-                title = "Remove ${r.name.ifBlank { r.url }}",
+                // The address, never the name: a route named "huginn" read
+                // "Remove huginn", like uninstalling it (run 4).
+                title = "Remove ${r.url.removePrefix("https://")}",
                 actionLabel = "Remove",
                 destructive = true,
                 onAction = { act { core.removeRoute(r.url) } },
