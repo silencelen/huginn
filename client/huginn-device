@@ -34,7 +34,7 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 
-const VERSION = '2.4.1';
+const VERSION = '2.4.2';
 
 // ---8<--- GENERATED POLICY — scripts/gen-device-policy.js — DO NOT EDIT ---8<---
 const POLICY = {

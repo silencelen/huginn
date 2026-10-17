@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.4.1
+# Version: 2.4.2
 
-$script:HUGINN_VERSION = '2.4.1'
+$script:HUGINN_VERSION = '2.4.2'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -214,7 +214,7 @@ function _Huginn-UiWait {
 # its lines back to be drawn here. $Tray is appended to the tray's ok line.
 function _Huginn-UiRecords {
   param([string]$Path, [string]$Tray)
-  foreach ($r in @(Get-Content $Path -ErrorAction SilentlyContinue)) {
+  foreach ($r in @(Get-Content $Path -Encoding UTF8 -ErrorAction SilentlyContinue)) {
     $f = $r -split "`t", 3
     if ($f.Count -lt 3) { continue }
     switch ($f[0]) {
@@ -241,7 +241,8 @@ function _Huginn-UiSpin {
     $i++; Start-Sleep -Milliseconds 125
   }
   $p.WaitForExit()
-  (@(Get-Content $o -ErrorAction SilentlyContinue) + @(Get-Content $e -ErrorAction SilentlyContinue)) | Set-Content $Log
+  # The core writes UTF-8; Windows PowerShell 5.1 would read it as the ANSI page.
+  (@(Get-Content $o -Encoding UTF8 -ErrorAction SilentlyContinue) + @(Get-Content $e -Encoding UTF8 -ErrorAction SilentlyContinue)) | Set-Content -Encoding UTF8 $Log
   Remove-Item $o, $e -Force -ErrorAction SilentlyContinue
   _Huginn-UiClear
   return $p.ExitCode
@@ -554,11 +555,14 @@ function _Huginn-DesktopAskQuit {
 # from the release, is checked against the sha256 in that release's manifest,
 # and runs silently (it is per-user: no administrator). An app that was open is
 # opened again afterwards. Not installed: nothing to do, silently.
+# -Install: `huginn desktop install` - the same verified, silent install for a
+# machine that has no desktop app yet (it used to point at the .exe instead).
 function _Huginn-DesktopUpdate {
+  param([switch]$Install)
   $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\huginn-desktop-kt'
   $reg = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
-  if (-not $reg) { _Huginn-UiLine 'skip' 'desktop' 'not installed (huginn desktop)'; return }
-  $have = "$($reg.DisplayVersion)"
+  if (-not $reg -and -not $Install) { _Huginn-UiLine 'skip' 'desktop' 'not installed (huginn desktop install)'; return }
+  $have = if ($reg) { "$($reg.DisplayVersion)" } else { '' }
   $rel = _Huginn-DesktopRelease
   if (-not $rel) { _Huginn-UiLine 'fail' 'desktop' 'could not read the release feed - not updated'; return }
   $ver = "$($rel.manifest.version)"
@@ -575,8 +579,18 @@ function _Huginn-DesktopUpdate {
     _Huginn-UiDownload "https://github.com/$script:HUGINN_REPO/releases/download/$($rel.tag)/$file" $exe ([long]$a.size) 'desktop'
     $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
     if ($got -ne $sha) { _Huginn-UiLine 'fail' 'desktop' "$file did not match its sha256 - discarded, nothing installed"; return }
-    $app = Join-Path (Split-Path -Parent "$($reg.UninstallString)".Trim('"')) 'huginn-desktop-kt.exe'
+    $app = if ($reg) { Join-Path (Split-Path -Parent "$($reg.UninstallString)".Trim('"')) 'huginn-desktop-kt.exe' } else { '' }
     $wasOpen = [bool](Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)
+    # The installer installs the core it carries. Desktop 2.3.6 and older do
+    # that without comparing versions, which put an OLDER core over the one
+    # this machine runs (PRESTIGE, 2026-10-16) - so the current core is kept
+    # aside and put back if the installer replaced it with an older one.
+    $coreBin = _Huginn-CoreBin; $coreWas = ''; $coreKeep = ''
+    if ($coreBin) {
+      if (((& $coreBin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $coreWas = $Matches[1] }
+      $coreKeep = Join-Path ([IO.Path]::GetTempPath()) ('huginn-core-keep-' + [guid]::NewGuid().ToString('N') + '.exe')
+      Copy-Item -LiteralPath $coreBin -Destination $coreKeep -Force -ErrorAction SilentlyContinue
+    }
     # Ask it to quit the way its own tray menu does, before the installer has
     # to end it by force (a forced end left the launcher showing error dialogs).
     if ($wasOpen) {
@@ -591,12 +605,25 @@ function _Huginn-DesktopUpdate {
     if ($p.ExitCode -ne 0) { _Huginn-UiLine 'fail' 'desktop' "the installer exited $($p.ExitCode) - see Settings > Apps"; return }
     $now = "$((Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).DisplayVersion)"
     $tail = ''
-    if ($wasOpen -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = ', reopened' }
-    _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail"
+    if (-not $app) { $app = Join-Path $env:LOCALAPPDATA 'Programs\huginn-desktop-kt\huginn-desktop-kt.exe' }
+    if (($wasOpen -or $Install) -and (Test-Path $app)) { Start-Process -FilePath $app; $tail = if ($Install) { ', opened' } else { ', reopened' } }
+    if ($Install -and -not $have) { _Huginn-UiLine 'ok' 'desktop' "$now installed (Start menu)$tail" }
+    else { _Huginn-UiLine 'ok' 'desktop' "$from -> $now   installed$tail" }
+    if ($coreWas -and $coreKeep -and (Test-Path $coreKeep)) {
+      $coreNow = ''
+      if (((& $coreBin version 2>$null) -join '') -match '^\(o> huginn (\S+) ') { $coreNow = $Matches[1] }
+      if ($coreNow -and (_Huginn-CoreNewer $coreNow $coreWas)) {
+        $log = "$coreKeep.log"
+        $null = _Huginn-UiSpin 'core' "putting $coreWas back" $coreKeep @('core', 'self-install') $log
+        Remove-Item $log -Force -ErrorAction SilentlyContinue
+        _Huginn-UiLine 'ok' 'core' "kept $coreWas (the desktop installer carries $coreNow)"
+      }
+    }
   } catch {
-    _Huginn-UiLine 'fail' 'desktop' "update failed: $($_.Exception.Message)"
+    _Huginn-UiLine 'fail' 'desktop' "install failed: $($_.Exception.Message)"
   } finally {
     Remove-Item -Force $exe -ErrorAction SilentlyContinue
+    if ($coreKeep) { Remove-Item -Force $coreKeep -ErrorAction SilentlyContinue }
   }
 }
 
@@ -652,7 +679,7 @@ function _Huginn-CoreFetch {
     # `$null = _Huginn-CoreFetch` once threw the report away with it.)
     $log = "$tmp.log"
     $rc = _Huginn-UiSpin 'core' 'installing' $tmp @('core', 'self-install') $log
-    $report = @(Get-Content $log -ErrorAction SilentlyContinue); Remove-Item $log -Force -ErrorAction SilentlyContinue
+    $report = @(Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue); Remove-Item $log -Force -ErrorAction SilentlyContinue
     if ($rc -ne 0) {
       _Huginn-UiLine 'fail' 'core' 'self-install failed:'; $report | ForEach-Object { Write-Host "            $_" }
       _Huginn-Fail "huginn core: self-install failed"
@@ -700,7 +727,7 @@ function _Huginn-CoreUpdate {
         $log = Join-Path ([IO.Path]::GetTempPath()) ("huginn-restart-" + [guid]::NewGuid().ToString('N') + '.log')
         $rc = _Huginn-UiSpin 'core' "restarting $run onto $cur" $bin @('core', 'self-install') $log
         if ($rc -eq 0) { _Huginn-UiLine 'ok' 'core' "$cur   restarted (it was still running $run)" }
-        else { _Huginn-UiLine 'fail' 'core' 'the restart failed:'; Get-Content $log | ForEach-Object { Write-Host "            $_" } }
+        else { _Huginn-UiLine 'fail' 'core' 'the restart failed:'; Get-Content $log -Encoding UTF8 | ForEach-Object { Write-Host "            $_" } }
         Remove-Item $log -Force -ErrorAction SilentlyContinue; return
       }
       _Huginn-UiLine 'ok' 'core' "$cur is current"; return
@@ -728,8 +755,14 @@ function _Huginn-CorePair {
     _Huginn-Fail "huginn core: could not work out $H's daemon address"
   }
   if (_Huginn-UiTty) { _Huginn-UiLive (@(_Huginn-UiFrames)[0]) 'paired' "fetching the token over ssh and pairing with $srv" }
-  $out = @(((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv 2>&1)
-  $rc = $LASTEXITCODE
+  # What the core prints is UTF-8; read as the console's OEM page, its ellipsis
+  # came out as three box-drawing letters on PRESTIGE.
+  $enc = [Console]::OutputEncoding
+  try {
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    $out = @(((ssh -T $H 'cat /etc/huginn-appd/token') -join '') | & $Bin core pair --url $srv 2>&1)
+    $rc = $LASTEXITCODE
+  } finally { [Console]::OutputEncoding = $enc }
   _Huginn-UiClear
   if ($rc -eq 0) { _Huginn-UiLine 'ok' 'paired' (([string]$out[0]) -replace '^paired with ', '') }
   else {
@@ -1430,7 +1463,7 @@ function huginn {
         # administrator); this unelevated self-install does, when none is up.
         $log = "$rep.log"; $started = ''
         $null = _Huginn-UiSpin 'tray' 'starting the tray' $bin @('core', 'self-install') $log
-        if (@(Get-Content $log -ErrorAction SilentlyContinue) -match 'started the tray') { $started = 'started now' }
+        if (@(Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue) -match 'started the tray') { $started = 'started now' }
         Remove-Item $log -Force -ErrorAction SilentlyContinue
         _Huginn-UiRecords $rep $started
         Remove-Item $rep -Force -ErrorAction SilentlyContinue
@@ -1600,9 +1633,22 @@ function huginn {
     # _huginn_desktop_install). Named here so the verb set matches, and so the
     # answer on Windows is a pointer rather than "usage".
     if ($arg -eq 'update') { _Huginn-DesktopUpdate; return }
-    if ($arg -in 'install', 'uninstall', 'remove') {
-      _Huginn-Fail ("huginn: 'desktop $arg' is the Linux per-user install (the bash client: huginn.sh).`n" +
-                    "  On Windows the installer IS per-user and updates itself: huginn desktop windows")
+    if ($arg -eq 'install') {
+      # ($IsWindows is unset on Windows PowerShell 5.1, which is Windows.)
+      if ($null -ne $IsWindows -and -not $IsWindows) {
+        _Huginn-Fail "huginn: 'desktop install' here is the bash client's (huginn.sh): the per-user Linux install"
+      }
+      # The release's installer, sha256-checked against its manifest, run
+      # silently (per-user: no admin), then opened.
+      $t0 = [Diagnostics.Stopwatch]::StartNew()
+      if (-not $env:HUGINN_SETUP) { _Huginn-UiHead 'huginn desktop install' }
+      _Huginn-DesktopUpdate -Install
+      if (-not $env:HUGINN_SETUP) { _Huginn-Say ("    done in {0} s" -f [int]$t0.Elapsed.TotalSeconds) DarkGray }
+      return
+    }
+    if ($arg -in 'uninstall', 'remove') {
+      _Huginn-Fail ("huginn: 'desktop $arg': on Windows, remove Huginn Desktop from Settings > Apps`n" +
+                    "  (huginn uninstall takes the whole stack, the desktop included)")
     }
     $want = switch ($arg) {
       { $_ -in '', 'both', 'all' }              { ''; break }

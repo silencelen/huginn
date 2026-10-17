@@ -84,6 +84,13 @@ func core(args []string) int {
 		fmt.Println("posted and withdrew a test notification")
 		return 0
 	case "self-install":
+		_, force := hasFlag(args, "--force")
+		if have := newerInstalled(); have != "" && !force {
+			// Kept, and a success: the caller (an installer, the app) wanted a
+			// core here, and a newer one is.
+			fmt.Println("  kept huginn " + have + ": it is newer than this copy (" + version.Version + "); `core self-install --force` installs this one anyway")
+			return 0
+		}
 		bin, ok := selfInstall()
 		if !ok {
 			return 1
@@ -194,6 +201,25 @@ func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }
 func lingerMarker() string { return filepath.Join(paths().State, "linger-enabled") }
 
 func coreInstall(args []string) int {
+	// An older copy hands the install to the newer core already here, rather
+	// than putting itself in its place (see downgrade.go).
+	if rest, force := hasFlag(args, "--force"); !force {
+		if have := newerInstalled(); have != "" {
+			l, _ := install.DefaultLayout()
+			c := exec.Command(l.Binary(), append([]string{"core", "install"}, rest...)...)
+			c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+			if err := c.Run(); err != nil {
+				if ee, ok := err.(*exec.ExitError); ok {
+					return ee.ExitCode()
+				}
+				fmt.Fprintln(os.Stderr, "huginn core install: "+err.Error())
+				return 1
+			}
+			return 0
+		}
+	} else {
+		args = rest
+	}
 	fs := flag.NewFlagSet("core install", flag.ContinueOnError)
 	logon := fs.String("logon", "s4u", "Windows only: s4u (no stored password) or password")
 	trayOn := fs.Bool("tray", false, "Linux: start the tray at login even when this shell has no graphical session (an ssh shell)")
@@ -495,7 +521,7 @@ func corePair(args []string) int {
 		return 1
 	}
 	if fp := out["fingerprint"]; fp != "" {
-		fmt.Printf("paired with %s (certificate %s… proved by the token)\n", *url, fp[:16])
+		fmt.Printf("paired with %s (certificate %s... proved by the token)\n", *url, fp[:16])
 	} else {
 		fmt.Printf("paired with %s (loopback, plain http)\n", *url)
 	}

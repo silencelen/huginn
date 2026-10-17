@@ -91,24 +91,63 @@ case "$(uname -s 2>/dev/null)/$(uname -o 2>/dev/null)" in
     elif [ -x "$HOME/.local/bin/huginn" ]; then CORE=1   # in place; a later step (pairing) failed, and said why above
     else line fail core "did not finish - run it again to see why: huginn core install"; fi ;;
 esac
+# The questions (owner rule 2026-10-16: setup asks, it does not leave them to
+# later commands). Each can be answered up front - HUGINN_DEVICE, HUGINN_GUI,
+# HUGINN_LOCAL = y|n - and with no terminal to ask on, an unanswered question
+# is a no.
+yes_no() {   # $1 = question, $2 = preset, $3 = default (y|n)
+  if [ -n "$2" ]; then a="$2"
+  elif has_tty; then
+    if [ "$3" = y ]; then printf '    %s [Y/n] ' "$1" > /dev/tty; else printf '    %s [y/N] ' "$1" > /dev/tty; fi
+    read -r a < /dev/tty || a=""; [ -n "$a" ] || a="$3"
+  else a=n; fi
+  case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+in_huginn() { bash -c '. "$HOME/.huginn/huginn.sh"; huginn "$@"' _ "$@"; }
 GUI=""
-case "$(uname -o 2>/dev/null)" in Android*) ;; *)
-  if [ -n "$CORE" ]; then
-    [ -n "${HUGINN_GUI:-}" ] || printf '\n' >&2
-    if ask "Install the desktop app too (a window and a tray on top of huginn core)?" "${HUGINN_GUI:-}"; then
-      if HUGINN_SETUP=1 bash -c '. "$HOME/.huginn/huginn.sh"; huginn desktop install' < "$IN"; then GUI=1
-      else line fail desktop "the install did not finish - run: huginn desktop install"; fi
-    else
-      line skip desktop "not installed (huginn desktop install adds it any time)"
-    fi
-  fi ;;
-esac
+if [ -n "$CORE" ]; then
+  printf '\n' >&2
+  # 1. This machine as a device: huginn can run sessions here. Read-only
+  # (scope look) until widened with huginn device on --scope work.
+  if [ -n "$PAIRED" ]; then
+    if yes_no "Offer this machine to huginn as a device (read-only sessions until you widen it)?" "${HUGINN_DEVICE:-}" y; then
+      if OUT="$(in_huginn device on 2>&1)"; then line ok device "on: huginn can run read-only sessions here (huginn device on --scope work widens it)"
+      else line fail device "could not turn it on:"; printf '%s\n' "$OUT" | sed 's/^/                  /' >&2; fi
+    else line skip device "not offered (huginn device on, any time)"; fi
+  fi
+  # 2. The desktop app, where there is a desktop to show it on.
+  if [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && [ -z "${HUGINN_GUI:-}" ]; then
+    line skip desktop "no graphical session in this shell (huginn desktop install, from the desktop, any time)"
+  elif yes_no "Install the desktop app (a window and a tray on top of huginn core)?" "${HUGINN_GUI:-}" y; then
+    if HUGINN_SETUP=1 in_huginn desktop install < "$IN"; then GUI=1
+      # Until the desktop uses the core's own link to huginn (it is next), it
+      # asks for the address and token once, on its first screen.
+      say "              on its first screen it asks once for huginn's address and token"
+    else line fail desktop "the install did not finish - run: huginn desktop install"; fi
+  else
+    line skip desktop "not installed (huginn desktop install, any time)"
+  fi
+  # 3. The local AI tier, only where it would run on a GPU.
+  if [ -n "$PAIRED" ] && command -v node >/dev/null 2>&1; then
+    PLAN="$(in_huginn local plan --json 2>/dev/null | tr -d '\n')"
+    case "$PLAN" in *'"gpu":{'*'"setup":false'*|*'"setup":false'*'"gpu":{'*)
+      GPU="$(printf '%s' "$PLAN" | sed -n 's/.*"gpu":{"name":"\([^"]*\)".*/\1/p')"
+      NEED="$(printf '%s' "$PLAN" | sed -n 's/.*"needBytes":\([0-9]*\).*/\1/p')"
+      GB="$(awk -v b="${NEED:-0}" 'BEGIN{printf "%.1f GB", b/1073741824}')"
+      if yes_no "Serve local AI models from this machine's ${GPU:-GPU} ($GB download)?" "${HUGINN_LOCAL:-}" n; then
+        line ok "local AI" "setting up - its own steps follow"
+        if in_huginn local on --yes < "$IN"; then line ok "local AI" "serving from the ${GPU:-GPU} (huginn local status)"
+        else line fail "local AI" "did not finish (above says why) - run: huginn local on"; fi
+      else line skip "local AI" "not set up (huginn local on, any time)"; fi ;;
+    esac
+  fi
+fi
 
 printf '\n' >&2
 if [ -z "$TRUSTED" ]; then
   say "huginn is installed, but the host does not trust this computer yet."
   say "Authorize the key shown above on the host, then run:  huginn core install"
-  say "(it pairs huginn core with the host; nothing else needs doing again)"
+  say "(it pairs huginn core with the host), and to offer this machine:  huginn device on"
 elif [ -n "$CORE" ] && [ -z "$PAIRED" ]; then
   say "huginn is installed, but huginn core is not paired with the host yet (above says why)."
   say "Once that is fixed, run:  huginn core install   (everything else is already in place)"
