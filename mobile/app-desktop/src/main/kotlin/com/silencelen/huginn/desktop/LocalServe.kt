@@ -289,6 +289,22 @@ object LocalServe {
     }
 
     /**
+     * [enable] through huginn core (docs/DESKTOP-VIA-CORE.md): the core writes the
+     * tier's token file from its own store and names the address to use
+     * (`POST /core/local/seed`), so the token never passes through this app.
+     * The rest is [enable]'s: `on --yes`, elevated on Windows.
+     */
+    suspend fun enableViaCore(socket: java.nio.file.Path, onLine: (String) -> Unit): Int = withContext(Dispatchers.IO) {
+        val seed = runCatching { com.silencelen.huginn.desktop.core.CoreClient(socket).localSeed() }.getOrElse {
+            onLine("huginn core could not hand the local tier its token: ${it.message}")
+            return@withContext 2
+        }
+        onLine("huginn core handed the local tier its token")
+        val args = enableArgs(seed.url, isWindows())
+        if (isWindows()) runElevatedWindows(args, onLine) else run(*args.toTypedArray(), onLine = onLine)
+    }
+
+    /**
      * What `on` is asked to install — and `--system` on Linux is the whole
      * feature.
      *

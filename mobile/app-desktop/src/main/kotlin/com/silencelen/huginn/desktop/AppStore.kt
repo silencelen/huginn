@@ -21,6 +21,8 @@ import com.silencelen.huginn.ui.ScratchpadRules
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.toSchedule
 import com.silencelen.huginn.desktop.core.CoreDevice
+import com.silencelen.huginn.desktop.core.CoreBoot
+import com.silencelen.huginn.desktop.core.CoreDaemonTransport
 import com.silencelen.huginn.desktop.ui.shouldProbeApps
 import com.silencelen.huginn.desktop.update.BuildInfo
 import com.silencelen.huginn.data.DraftBook
@@ -130,7 +132,35 @@ class AppStore(
     val settings: DesktopSettings,
     val presence: Presence,
     val scope: CoroutineScope,
+    /**
+     * Through huginn core, or this app's own link, for this run (core/CoreBoot.kt).
+     * Through the core, the client below holds no token and pins nothing: the core's
+     * transport carries every call to the core's /appd proxy, and the core keeps the
+     * route book (Settings > Host shows it).
+     */
+    val link: CoreBoot.Outcome = CoreBoot.Outcome.Direct("not decided (a test)"),
 ) {
+    /** The core carries this run's traffic. */
+    val viaCore: CoreBoot.Outcome.ViaCore? get() = link as? CoreBoot.Outcome.ViaCore
+
+    /**
+     * On this app's own link, after setup proved a token: pair an installed core
+     * that is new enough and not paired yet with the same address and token, so
+     * the next start goes through it (and deletes this app's copy). Null when
+     * there is no such core; otherwise what to tell the person.
+     */
+    suspend fun pairCoreWithOwnLink(): String? {
+        if (viaCore != null) return null
+        val socket = com.silencelen.huginn.desktop.core.CorePaths.socket() ?: return null
+        val core = com.silencelen.huginn.desktop.core.CoreClient(socket)
+        if (!core.socketPresent()) return null
+        val st = runCatching { core.status() }.getOrNull() ?: return null
+        if (st.paired || com.silencelen.huginn.update.Semver.isNewer(CoreBoot.MIN_CORE, st.version)) return null
+        return runCatching { core.pair(settings.baseUrlNow(), settings.tokenNow()) }
+            .fold({ "huginn core is paired with it too: reopen Huginn and the link moves into the core" },
+                { "huginn core could not be paired with it (${it.message})" })
+    }
+
 
     /**
      * Whether this desktop can ACTUALLY deliver a notification right now — set from
@@ -159,8 +189,8 @@ class AppStore(
      * render suppresses it just as silently.
      */
     val client = HuginnClient(
-        baseUrlProvider = { settings.baseUrlNow() },
-        tokenProvider = { settings.tokenNow() },
+        baseUrlProvider = { if (viaCore != null) CoreDaemonTransport.APPD_BASE else settings.baseUrlNow() },
+        tokenProvider = { if (viaCore != null) "" else settings.tokenNow() },
         clientIdProvider = { settings.clientIdNow() },
         canNotifyProvider = { settings.notifyEnabledNow() && presence.present.value && canDeliver() },
         // ⚠⚠ THE ROUTE WITNESS IS STAMPED HERE, NOT BY THE CALLERS. See
@@ -183,7 +213,11 @@ class AppStore(
         // certificate. The transport's hook runs before it installs the pinning
         // trust manager, so the interceptor rides along without being able to
         // weaken it.
-        transport = OkHttpDaemonTransport {
+        transport = viaCore?.let { v ->
+            // The core picks the address and proves it; there is no route of
+            // this app's own to witness.
+            CoreDaemonTransport(v.socket)
+        } ?: OkHttpDaemonTransport {
             addInterceptor { chain ->
                 val response = chain.proceed(chain.request())
                 noteRouteReached(chain.request().url.toString(), response.code)
@@ -2082,6 +2116,8 @@ class AppStore(
      * laptop opened off-network still knows where home is.
      */
     private suspend fun resolveRoute(force: Boolean = false) {
+        // Through the core, the core's route book does this (appd/routes.go).
+        if (viaCore != null) return
         _resolvingRoute.value = true
         val outcome = RouteResolver.resolveProving(
             book = _routeBook.value,

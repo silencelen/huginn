@@ -30,6 +30,8 @@ import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberWindowState
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.desktop.diag.AppLog
+import com.silencelen.huginn.desktop.core.CoreBoot
+import com.silencelen.huginn.data.TlsPins
 import com.silencelen.huginn.desktop.notify.Activation
 import com.silencelen.huginn.desktop.notify.Activations
 import com.silencelen.huginn.desktop.notify.NavTarget
@@ -120,7 +122,23 @@ fun main(args: Array<String>) {
     // SupervisorJob: one loop failing (a watch stream against an unreachable
     // route) must not take the poll loop and the UI's coroutines down with it.
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val store = AppStore(settings, presence, scope)
+    // Through huginn core, or this app's own link, for this whole run - decided
+    // before the one client is built (docs/DESKTOP-VIA-CORE.md). An app that
+    // still holds its own token hands it to the core here, once.
+    val link = CoreBoot.decide(
+        CoreBoot.OwnLink(
+            baseUrl = settings.baseUrlNow(),
+            token = settings.tokenNow(),
+            routes = settings.routeBookNow().routes,
+            pins = TlsPins.decode(settings.tlsPinsNow()).pins,
+        ),
+        clearOwnCredentials = settings::clearOwnCredentials,
+    )
+    AppLog.info("link", when (link) {
+        is CoreBoot.Outcome.ViaCore -> "through huginn core ${link.coreVersion} (${link.url})" + (link.note?.let { " - $it" } ?: "")
+        is CoreBoot.Outcome.Direct -> "this app's own (${link.why})"
+    })
+    val store = AppStore(settings, presence, scope, link)
 
     // The tray icon is also the fallback notification surface, so its state is
     // built before the notifier that may need it.
