@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/clientkit"
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
+	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/ui"
 	"github.com/silencelen/huginn/core/internal/version"
@@ -144,7 +146,11 @@ func uninstall(args []string) int {
 	}
 	svc := serviceInstalled(stableBinary())
 	row(desktopPresent(home), "desktop", "Huginn Desktop and its settings (they hold a copy of the appd token)", "not installed here")
-	row(dirExists(ldir), "local AI", h(ldir)+": models, sessions, runtime (can be several GB)", "not installed here")
+	localSize := ""
+	if dirExists(ldir) {
+		localSize = humanSize(dirSize(ldir))
+	}
+	row(dirExists(ldir), "local AI", h(ldir)+": models, sessions, runtime ("+localSize+") - asked separately", "not installed here")
 	row(deviceEnrolled(p), "device", "this machine's row on huginn, retired first, while the token exists", "none enrolled here")
 	coreWhat := h(l.Root) + ", " + h(p.Config) + ", " + h(p.State)
 	if svc {
@@ -165,13 +171,31 @@ func uninstall(args []string) int {
 		u.Say("Windows asks for administrator approval once, to delete the boot task.")
 	}
 	u.Say("")
+	in := bufio.NewReader(os.Stdin)
 	if !yes {
 		u.Prompt(`Type "uninstall" to continue: `)
-		ans, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		ans, _ := in.ReadString('\n')
 		if strings.TrimSpace(ans) != "uninstall" {
 			u.Say("Nothing was removed.")
 			return 1
 		}
+	}
+	// The local-AI tier is asked about on its own (owner rule 2026-10-16): it
+	// is gigabytes that are slow to fetch again, it is machine-wide, and on
+	// Windows taking it off needs an administrator. Default yes: uninstall is
+	// the whole stack.
+	removeLocal := true
+	if dirExists(ldir) && !yes {
+		q := "Also remove the local AI tier (" + localSize + " of models, sessions and runtime)?"
+		if runtime.GOOS == "windows" && !proc.Elevated() {
+			q += " Windows asks for administrator approval for it."
+		}
+		u.Prompt(q + " [Y/n] ")
+		ans, _ := in.ReadString('\n')
+		a := strings.ToLower(strings.TrimSpace(ans))
+		removeLocal = !(a == "n" || a == "no")
+	}
+	if !yes {
 		u.Say("")
 	}
 
@@ -199,21 +223,10 @@ func uninstall(args []string) int {
 	end(t, "Huginn Desktop and its settings", "not installed")
 
 	t = part("local AI")
-	if dirExists(ldir) {
-		mgr := filepath.Join(ce.Dir(), "huginn-local")
-		node, nerr := exec.LookPath("node")
-		if nerr == nil && fileExists(mgr) {
-			t.spin("removing models, sessions and the runtime")
-			c := exec.Command(node, mgr, "off", "--purge", "--yes")
-			c.Stdout, c.Stderr = log, log
-			if c.Run() == nil {
-				t.gone(ldir)
-			} else {
-				t.stays(h(ldir) + " - 'huginn local off --purge' did not finish; run it again when huginn is reachable")
-			}
-		} else {
-			t.stays(h(ldir) + " - no manager or no node here, so nothing could unenrol or remove it")
-		}
+	if dirExists(ldir) && !removeLocal {
+		t.keep(h(ldir) + " - you chose to keep it; its services keep running (reinstall huginn, then huginn local off --purge, to remove it later)")
+	} else if dirExists(ldir) {
+		removeLocalTier(t, ce, ldir, h(ldir))
 	}
 	end(t, "the local-AI tier", "not installed")
 
@@ -270,6 +283,72 @@ func uninstall(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// removeLocalTier runs the tier's own `huginn local off --purge`, which also
+// unenrols its runner while huginn is still reachable. On Windows the tier is
+// LocalSystem services under ProgramData, so an unelevated uninstall runs it
+// elevated - one UAC prompt, a hidden window, its output into the log.
+func removeLocalTier(t *tally, ce clientkit.Env, ldir, shown string) {
+	mgr := filepath.Join(ce.Dir(), "huginn-local")
+	node, nerr := exec.LookPath("node")
+	if nerr != nil || !fileExists(mgr) {
+		t.stays(shown + " - no manager or no node here, so nothing could unenrol or remove it")
+		return
+	}
+	args := []string{mgr, "off", "--purge", "--yes"}
+	if runtime.GOOS == "windows" && !proc.Elevated() {
+		t.spin("removing models, sessions and the runtime (approve the administrator prompt)")
+		elog := filepath.Join(os.TempDir(), "huginn-local-off-"+time.Now().Format("150405")+".log")
+		rc, err := runElevatedWindows(node, args, elog)
+		if b, rerr := os.ReadFile(elog); rerr == nil {
+			t.log.Write(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))) // Set-Content's BOM
+			os.Remove(elog)
+		}
+		switch {
+		case err != nil:
+			t.stays(shown + " - could not ask for administrator approval (" + err.Error() + ")")
+		case rc == 1223:
+			t.stays(shown + " - administrator approval was declined; from an administrator terminal: huginn local off --purge")
+		case rc != 0 || dirExists(ldir):
+			t.stays(shown + " - 'huginn local off --purge' did not finish (the log has its output); run it again from an administrator terminal")
+		default:
+			t.gone(ldir)
+		}
+		return
+	}
+	t.spin("removing models, sessions and the runtime")
+	c := exec.Command(node, args...)
+	c.Stdout, c.Stderr = t.log, t.log
+	if c.Run() == nil {
+		t.gone(ldir)
+	} else {
+		t.stays(shown + " - 'huginn local off --purge' did not finish (the log has its output); run it again when huginn is reachable")
+	}
+}
+
+// dirSize is the bytes under dir (best effort: unreadable entries count 0).
+func dirSize(dir string) int64 {
+	var n int64
+	filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			if fi, err := d.Info(); err == nil {
+				n += fi.Size()
+			}
+		}
+		return nil
+	})
+	return n
+}
+
+func humanSize(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%d MB", n>>20)
+	}
+	return fmt.Sprintf("%d KB", n>>10)
 }
 
 // tilde shortens a path under home for the screen (the log keeps it whole).
