@@ -16,6 +16,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/clientkit"
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
+	"github.com/silencelen/huginn/core/internal/localtier"
 	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/ui"
@@ -371,19 +372,7 @@ func deviceEnrolled(p store.Paths) bool {
 
 func dirExists(p string) bool { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
 
-func localTierDir(home string) string {
-	if d := os.Getenv("HUGINN_LOCAL_DIR"); d != "" {
-		return d
-	}
-	if runtime.GOOS == "windows" {
-		pd := os.Getenv("ProgramData")
-		if pd == "" {
-			pd = `C:\ProgramData`
-		}
-		return filepath.Join(pd, "huginn-local")
-	}
-	return filepath.Join(home, ".config", "huginn-local")
-}
+func localTierDir(home string) string { return localtier.Dir(home) }
 
 // retireDevice turns the device off through the running core, which deletes
 // the row on appd, and waits for that to land: the core and its token are
