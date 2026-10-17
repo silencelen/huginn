@@ -43,6 +43,29 @@ func ForwardableResponseHeader(name string) bool { return !hopByHop[http.Canonic
 // No request timeout: ctx (the caller's connection) ends it. Dialling and the
 // TLS handshake keep their own limits.
 func (c *Client) Forward(ctx context.Context, method, pathQuery string, in http.Header, body io.Reader) (*http.Response, error) {
+	var cr *countingReader
+	if body != nil {
+		cr = &countingReader{r: body}
+	}
+	var res *http.Response
+	err := c.withRoutes(ctx, func() error {
+		// Another address is tried only while the body is untouched.
+		if cr != nil && cr.n.Load() > 0 {
+			return errBodySent
+		}
+		var err error
+		res, err = c.forward1(ctx, method, pathQuery, in, cr)
+		return err
+	})
+	if errors.Is(err, errBodySent) {
+		return nil, errors.New("the request body was already sent to an address that then failed; send it again")
+	}
+	return res, err
+}
+
+var errBodySent = errors.New("body already sent")
+
+func (c *Client) forward1(ctx context.Context, method, pathQuery string, in http.Header, cr *countingReader) (*http.Response, error) {
 	target, err := c.resolve(pathQuery)
 	if err != nil {
 		return nil, err
@@ -50,10 +73,6 @@ func (c *Client) Forward(ctx context.Context, method, pathQuery string, in http.
 	tok, err := ResolveToken(c.tokens)
 	if err != nil {
 		return nil, err
-	}
-	var cr *countingReader
-	if body != nil {
-		cr = &countingReader{r: body}
 	}
 	switch target.Scheme {
 	case "https":

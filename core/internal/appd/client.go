@@ -57,11 +57,22 @@ type Config struct {
 	// (X-Huginn-Client) and its notify claim (X-Huginn-Notify, D14). Called per
 	// request, so a claim that changes is sent as it is NOW.
 	Headers func() map[string]string
+	// Routes are other addresses of the SAME daemon (its LAN address, its
+	// mesh address, ...), in order of preference after URL; see routes.go.
+	// The certificate pin is the daemon's, so it holds on every address.
+	Routes []string
+	// Fixed keeps every request on URL: no switching (a pinned route, or
+	// auto-switch turned off).
+	Fixed bool
+	// OnRoute, if set, hears every switch of the active address and every
+	// change in an address's health.
+	OnRoute func(RouteEvent)
 }
 
 // Client talks to one daemon address. Safe for concurrent use.
 type Client struct {
-	base   *url.URL
+	routeState
+	base   *url.URL // routes[active]; read through cur()
 	tokens TokenSource
 	pins   PinStore
 	hs     time.Duration
@@ -98,6 +109,9 @@ func New(cfg Config) (*Client, error) {
 		hs: cfg.HandshakeTimeout, probeT: cfg.ProbeTimeout, reqT: cfg.RequestTimeout,
 		logf: cfg.Logf, hdrs: cfg.Headers,
 	}
+	if err := c.initRoutes(base, cfg); err != nil {
+		return nil, err
+	}
 	if c.pins == nil {
 		c.pins = &MemoryPinStore{}
 	}
@@ -117,9 +131,9 @@ func New(cfg Config) (*Client, error) {
 }
 
 // URL is the normalised base url this client dials.
-func (c *Client) URL() string { return strings.TrimSuffix(c.base.String(), "/") }
+func (c *Client) URL() string { return strings.TrimSuffix(c.cur().String(), "/") }
 
-func (c *Client) origin() string { return c.base.Scheme + "://" + c.base.Host }
+func (c *Client) origin() string { b := c.cur(); return b.Scheme + "://" + b.Host }
 
 // Close drops idle connections.
 func (c *Client) Close() {
@@ -150,6 +164,16 @@ func (c *Client) Do(ctx context.Context, method, path string, body any) (*Respon
 // Raw is Do with the body already encoded (JSON or nothing): the core's
 // /appd/* proxy forwards what the console or GUI sent, byte for byte.
 func (c *Client) Raw(ctx context.Context, method, path string, payload []byte) (*Response, error) {
+	var resp *Response
+	err := c.withRoutes(ctx, func() error {
+		var err error
+		resp, err = c.raw1(ctx, method, path, payload)
+		return err
+	})
+	return resp, err
+}
+
+func (c *Client) raw1(ctx context.Context, method, path string, payload []byte) (*Response, error) {
 	target, err := c.resolve(path)
 	if err != nil {
 		return nil, err
@@ -205,8 +229,9 @@ func (c *Client) resolve(path string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("refusing request path %q: %v", path, err)
 	}
-	t := c.base.ResolveReference(ref)
-	if t.Scheme != c.base.Scheme || t.Host != c.base.Host || t.User != nil {
+	b := c.cur()
+	t := b.ResolveReference(ref)
+	if t.Scheme != b.Scheme || t.Host != b.Host || t.User != nil {
 		return nil, fmt.Errorf("refusing request path %q: it leaves %s", path, c.origin())
 	}
 	return t, nil
@@ -256,7 +281,7 @@ func (c *Client) Prove(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if c.base.Scheme != "https" {
+	if c.cur().Scheme != "https" {
 		return "", fmt.Errorf("%s is loopback plain http; there is no certificate to prove", c.URL())
 	}
 	pins, err := c.proveAndPin(ctx, tok, c.loadPins(tok))
@@ -315,7 +340,8 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 
 	pctx, cancel := context.WithTimeout(ctx, c.probeT)
 	defer cancel()
-	addr := hostPort(c.base)
+	base := c.cur()
+	addr := hostPort(base)
 	var d net.Dialer
 	raw, err := d.DialContext(pctx, "tcp", addr)
 	if err != nil {
@@ -323,7 +349,7 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 	}
 	tc := tls.Client(raw, &tls.Config{
 		InsecureSkipVerify: true, // ⚠ ONLY because the proof below is the check, and this channel carries nothing
-		ServerName:         sni(c.base.Hostname()),
+		ServerName:         sni(base.Hostname()),
 		NextProtos:         []string{"http/1.1"},
 		MinVersion:         tls.VersionTLS12,
 	})
@@ -344,7 +370,7 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 	}
 	seen := Fingerprint(cs.PeerCertificates[0].Raw)
 
-	u := *c.base
+	u := *base
 	u.Path, u.RawPath, u.RawQuery, u.Fragment = "/v1/challenge", "", "nonce="+nonce, ""
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
@@ -463,7 +489,8 @@ func (c *Client) dialPinned(pins []string) func(context.Context, string, string)
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		hctx, cancel := context.WithTimeout(ctx, c.hs)
 		defer cancel()
-		var d net.Dialer
+		// With other addresses to try, a dead one is given up on sooner.
+		d := net.Dialer{Timeout: c.dialT}
 		raw, err := d.DialContext(hctx, network, addr)
 		if err != nil {
 			return nil, c.dialErr(hctx, ctx, addr, c.hs, err)
@@ -627,6 +654,16 @@ func (c *Client) stamp(req *http.Request) {
 // the caller closes the body. A status of 400 or above is returned as a
 // *StatusError with the body already closed.
 func (c *Client) Stream(ctx context.Context, path string) (*http.Response, error) {
+	var res *http.Response
+	err := c.withRoutes(ctx, func() error {
+		var err error
+		res, err = c.stream1(ctx, path)
+		return err
+	})
+	return res, err
+}
+
+func (c *Client) stream1(ctx context.Context, path string) (*http.Response, error) {
 	target, err := c.resolve(path)
 	if err != nil {
 		return nil, err
