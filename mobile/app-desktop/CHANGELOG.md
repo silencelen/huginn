@@ -1,5 +1,35 @@
 # Huginn Desktop changelog
 
+## 2.5.3
+
+Carries core 2.5.3. From the owner's two recorded setup runs on PRESTIGE.
+
+### Changed
+- **Setup re-checks what it shows.**
+  - Each time it opens, moves to another step, or the app moves onto huginn core (or the device
+    enrols), every step that can be read without a question is read again and the list is
+    corrected. That covers huginn core holding the token, the device enrolled, local AI serving and
+    the window opening at sign-in.
+  - A step that failed earlier and has since come right says so: the token step no longer reads
+    "huginn core is not running" after the core came up.
+- **The address is one field and a Check button,** not the address-list editor. More addresses go
+  in Settings > Host, into huginn core's route book.
+- **Shorter, plainer wording** on every step. The token step says where the token comes from and
+  that connecting hands it to huginn core. The address check no longer reads "cannot prove it is
+  huginn" before there is a token to prove it with.
+
+### Fixed
+- **Connect started nothing when huginn core was not running.** It said "set it up first (the first
+  screen of this app)", and that screen was hidden under the setup window. It now starts the core
+  (directly, when Windows holds its boot task back) and waits for it.
+- **Local AI and start-at-sign-in stayed "skipped"** after the local AI card showed it serving, or
+  the switch was turned on. Each step now follows its own card.
+- A machine that had not downloaded the local AI manager yet showed "The manager did not answer:
+  not fetched". It now reads "Not set up on this computer yet".
+- **"Stop serving" (local AI) failed on Windows** with "activate.log (Access is denied)". The
+  elevated step is now staged in your own temp folder, not in ProgramData, where an earlier elevated
+  run had left files owned by administrators.
+
 ## 2.5.2
 
 Carries core 2.5.2.
