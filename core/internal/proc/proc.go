@@ -23,6 +23,25 @@ func StartDetached(bin string, args ...string) error {
 	return cmd.Process.Release()
 }
 
+// StartHidden is StartDetached for a console program that starts console
+// programs of its own (cmd running ping): on Windows it gets a console that is
+// never shown, which its children share. A DETACHED_PROCESS cmd has no console,
+// so its ping opened a window of its own - an empty "ping -n 4 127.0.0.1"
+// terminal after every uninstall (run 4).
+func StartHidden(bin string, args ...string) error {
+	cmd := exec.Command(bin, args...)
+	hidden(cmd, true)
+	if err := cmd.Start(); err != nil {
+		retry := exec.Command(bin, args...)
+		hidden(retry, false)
+		if err2 := retry.Start(); err2 == nil {
+			return retry.Process.Release()
+		}
+		return err
+	}
+	return cmd.Process.Release()
+}
+
 // Output runs bin briefly and returns its stdout, with no console window on
 // Windows (a console program started from the tray would flash one).
 func Output(bin string, args ...string) (string, error) {

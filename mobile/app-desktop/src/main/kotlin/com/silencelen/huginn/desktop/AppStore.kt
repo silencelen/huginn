@@ -1512,21 +1512,18 @@ class AppStore(
     /**
      * Setup's address step: ONE address, typed once (owner, 2026-10-16: the full
      * route-list editor took twenty clicks on a first run). Sets the address in
-     * use - adding it when the book is empty, or when it is not the active one -
-     * as one book edit. Null on success; otherwise the guard's own sentence.
+     * use as one book edit: an address already in the book becomes the active
+     * one; a new one REPLACES the active address, because the field shows that
+     * address and editing it means "this one instead". It used to be added
+     * beside it, so a mistyped address the step then refused stayed in the book,
+     * was handed to huginn core with the rest, and sat in its route book as a
+     * second address (run 4: 192.166.2.117). Adds only into an empty book.
+     * Null on success; otherwise the guard's own sentence.
      */
     suspend fun useAddress(url: String): String? {
         val typed = url.trim()
         if (typed.isEmpty()) return "type huginn's address first"
-        val ok = editRoutesNow { book ->
-            val existing = book.routes.firstOrNull { it.url.equals(com.silencelen.huginn.data.RouteGuard.require(typed), ignoreCase = true) }
-            when {
-                existing != null -> book.activate(existing.id)
-                else -> book.add("huginn", typed, System.currentTimeMillis()).let { b ->
-                    b.routes.lastOrNull()?.let { b.activate(it.id) } ?: b
-                }
-            }
-        }
+        val ok = editRoutesNow { book -> addressEdit(book, typed, System.currentTimeMillis()) }
         return if (ok) null else _routeNote.value ?: "that address was refused"
     }
 
@@ -2476,5 +2473,17 @@ class AppStore(
         @Volatile
         var current: AppStore? = null
             private set
+    }
+}
+
+/** [AppStore.useAddress]'s book edit, pure so the rule can be tested. */
+internal fun addressEdit(book: com.silencelen.huginn.data.RouteBook, typed: String, now: Long): com.silencelen.huginn.data.RouteBook {
+    val clean = com.silencelen.huginn.data.RouteGuard.require(typed)
+    val existing = book.routes.firstOrNull { it.url.equals(clean, ignoreCase = true) }
+    val active = book.active
+    return when {
+        existing != null -> book.activate(existing.id)
+        active != null -> book.setUrl(active.id, clean)
+        else -> book.add("huginn", clean, now).let { b -> b.routes.lastOrNull()?.let { b.activate(it.id) } ?: b }
     }
 }

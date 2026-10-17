@@ -470,9 +470,16 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
             store.settings.tokenNow().isNotBlank() -> "saved on this computer"
             else -> "not set"
         },
-        summary = "One bearer, kept in ${store.settings.path} at mode 0600 and sent with every " +
-            "request. It is root-equivalent on the daemon, which is why the address it travels to " +
-            "is on an allowlist.",
+        // Run 4: "kept by huginn core" beside a summary naming this app's
+        // settings file as where the token lives.
+        summary = if (store.viaCore != null) {
+            "One bearer, kept by huginn core in this account's own store and sent only by the core, " +
+                "on its proven link to huginn. It is root-equivalent on the daemon; this app never sees it."
+        } else {
+            "One bearer, kept in ${store.settings.path} at mode 0600 and sent with every " +
+                "request. It is root-equivalent on the daemon, which is why the address it travels to " +
+                "is on an allowlist."
+        },
         highlighted = SettingsRowStyle.isHighlighted("privacy.token", mark),
         modifier = revealMark("privacy.token"),
     )
@@ -484,8 +491,13 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
         onAction = { confirming = true },
         enabled = !busy,
         destructive = true,
-        summary = "Unenrols this machine from huginn and forgets the token here. Your chats " +
-            "and sessions stay on huginn.",
+        summary = if (store.viaCore != null) {
+            "Unenrols this machine from huginn and unpairs huginn core, which forgets the token. " +
+                "Your chats and sessions stay on huginn."
+        } else {
+            "Unenrols this machine from huginn and forgets the token here. Your chats " +
+                "and sessions stay on huginn."
+        },
         highlighted = SettingsRowStyle.isHighlighted("privacy.remove-this-computer", mark),
         modifier = revealMark("privacy.remove-this-computer"),
     )

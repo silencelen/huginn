@@ -324,9 +324,17 @@ private val SCOPE_CHOICES = listOf(
  * CANCELLED the reader while the elevated child kept running unwatched. One
  * flow at a time is all the manager allows anyway.
  */
-private object LocalServeFlow {
+internal object LocalServeFlow {
     val busy = kotlinx.coroutines.flow.MutableStateFlow(false)
     val log = kotlinx.coroutines.flow.MutableStateFlow(listOf<String>())
+
+    /**
+     * The plan the consent card shows. Held here, not in the card, so setup's
+     * own button can put it on the card: it was a second button ("Check what
+     * this computer can serve") beside the card's "Set up local AI…", both
+     * checking the same thing (run 4).
+     */
+    val plan = kotlinx.coroutines.flow.MutableStateFlow<LocalServe.Plan?>(null)
     private val scope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
     )
@@ -369,7 +377,8 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
     var error by remember { mutableStateOf<String?>(null) }
     val busy by LocalServeFlow.busy.collectAsState()
     val log by LocalServeFlow.log.collectAsState()
-    var plan by remember { mutableStateOf<LocalServe.Plan?>(null) }
+    val plan by LocalServeFlow.plan.collectAsState()
+    var details by remember { mutableStateOf(false) }
 
     fun refresh() {
         scope.launch {
@@ -434,13 +443,16 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
         }
         val p = plan
         when {
+            // In setup the step's own button reads the plan onto this card;
+            // a second door here did the same thing.
+            p == null && !intro && s?.setup != true -> Unit
             p == null -> {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
                     TextButton(
                         onClick = {
                             LocalServeFlow.run {
                                 LocalServe.plan { LocalServeFlow.line(it) }
-                                    .onSuccess { plan = it; LocalServeFlow.log.value = emptyList() }
+                                    .onSuccess { LocalServeFlow.plan.value = it; LocalServeFlow.log.value = emptyList() }
                                     .onFailure { LocalServeFlow.line(it.message ?: "could not read this machine") }
                             }
                         },
@@ -470,7 +482,7 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
             }
             p.refuse != null -> {
                 Muted("This machine can't serve: ${p.refuse}", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 4)
-                TextButton(onClick = { plan = null }, enabled = !busy) { Text("Back") }
+                TextButton(onClick = { LocalServeFlow.plan.value = null }, enabled = !busy) { Text("Back") }
             }
             else -> {
                 // The consent card — the same lines the terminal flow prints.
@@ -493,7 +505,7 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                     val token = store.settings.tokenNow()
                     TextButton(
                         onClick = {
-                            plan = null
+                            LocalServeFlow.plan.value = null
                             LocalServeFlow.run {
                                 store.viaCore?.let { LocalServe.enableViaCore(it.socket) { l -> LocalServeFlow.line(l) } }
                                     ?: LocalServe.enable(url, token) { LocalServeFlow.line(it) }
@@ -501,7 +513,9 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
                         },
                         enabled = !busy && p.gate?.ok == true,
                     ) { Text(if (busy) "Setting up…" else "Download and turn on (${p.needBytes / (1024 * 1024)} MB)") }
-                    TextButton(onClick = { plan = null }, enabled = !busy) { Text("Cancel") }
+                    // In setup, "Skip for now" is the way to decline; a Cancel here
+                    // emptied the card with no way back to the plan.
+                    if (intro) TextButton(onClick = { LocalServeFlow.plan.value = null }, enabled = !busy) { Text("Cancel") }
                 }
             }
         }
@@ -555,7 +569,13 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
         }
     }
     // The manager's own words, raw: if it ever lies, the lie is inspectable.
-    log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
+    // Once it is serving and nothing runs, they fold away behind Details:
+    // run 4's card ended on its guardrail notes, which read as warnings.
+    if (log.isNotEmpty() && engineUp && !busy && !details) {
+        TextButton(onClick = { details = true }) { Text("Details") }
+    } else {
+        log.forEach { Muted(it, Modifier.padding(start = 8.dp), maxLines = 1) }
+    }
 }
 
 /**

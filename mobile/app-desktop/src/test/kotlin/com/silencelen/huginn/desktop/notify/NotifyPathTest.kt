@@ -35,14 +35,14 @@ class NotifyPathTest {
 
     @Test
     fun `a wired machine names the backend it is using`() {
-        assertEquals("libnotify", Notifiers.pathWords("libnotify"))
-        assertTrue(Notifiers.pathSummary("libnotify").contains("libnotify"))
-        // FallbackNotifier's compound name is the honest one and passes through
-        // whole: which backend is live right now is the fact being reported.
-        assertEquals(
-            "windows-toast→awt-tray(windows-toast)",
-            Notifiers.pathWords("windows-toast→awt-tray(windows-toast)"),
-        )
+        assertEquals("desktop notifications", Notifiers.pathWords("libnotify"))
+        assertTrue(Notifiers.pathSummary("libnotify").contains("libnotify"), "the log's name stays in the summary")
+        // FallbackNotifier's compound name: which backend is live right now is
+        // the fact, said in words (run 4), with the raw name kept in the summary.
+        val compound = "windows-toast→awt-balloon(windows-toast)"
+        assertEquals("Windows notifications", Notifiers.pathWords(compound))
+        assertEquals("tray balloons", Notifiers.pathWords("windows-toast→awt-balloon(awt-balloon)"))
+        assertTrue(Notifiers.pathSummary(compound).contains(compound))
     }
 
     @Test

@@ -173,7 +173,7 @@ func removeRootLater(t *tally, root string) {
 	}
 	fmt.Fprintf(f, "@echo off\r\nping -n 4 127.0.0.1 >nul\r\nrmdir /s /q \"%s\"\r\ndel \"%%~f0\"\r\n", root)
 	f.Close()
-	if err := proc.StartDetached("cmd.exe", "/c", f.Name()); err != nil {
+	if err := proc.StartHidden("cmd.exe", "/c", f.Name()); err != nil {
 		t.stays(root + " - " + err.Error())
 		return
 	}

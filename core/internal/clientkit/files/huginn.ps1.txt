@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.4
+# Version: 2.5.5
 
-$script:HUGINN_VERSION = '2.5.4'
+$script:HUGINN_VERSION = '2.5.5'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -167,7 +167,27 @@ function _Huginn-UiUni {
   return ([bool]$env:WT_SESSION -or ([Console]::OutputEncoding.CodePage -eq 65001))
 }
 function _Huginn-UiWidth { try { [Math]::Max(40, [Console]::WindowWidth - 1) } catch { 79 } }
-function _Huginn-UiClear { if (_Huginn-UiTty) { $w = _Huginn-UiWidth; [Console]::Write("`r" + (' ' * $w) + "`r") } }
+# Redrawn lines go through Write-Host, never [Console]::Write: PowerShell 7
+# encodes [Console]::Write in the console's OEM page, which has no wing
+# diagonals, so the wingbeat read "?_?" (run 4); Write-Host draws them.
+function _Huginn-UiClear { if (_Huginn-UiTty) { $w = _Huginn-UiWidth; Write-Host ("`r" + (' ' * $w) + "`r") -NoNewline } }
+# Breaks $Text at spaces into lines that fit the terminal from column $Col, so
+# a long line carries on under its own text instead of at the margin (run 4:
+# "so no password is stor" / "ed)"). Redirected, or short: one line, as given.
+function _Huginn-UiWrap {
+  param([string]$Text, [int]$Col)
+  $w = (_Huginn-UiWidth) - $Col
+  if (-not (_Huginn-UiTty) -or $w -lt 20 -or $Text.Length -le $w) { return $Text }
+  $out = @(); $rest = $Text
+  while ($rest.Length -gt $w) {
+    $i = $rest.LastIndexOf(' ', $w)
+    if ($i -lt 1) { $i = $w }
+    $out += $rest.Substring(0, $i).TrimEnd()
+    $rest = $rest.Substring($i).TrimStart()
+  }
+  if ($rest) { $out += $rest }
+  return $out   # callers wrap it in @()
+}
 function _Huginn-UiLine {
   param([string]$State, [string]$Comp, [string]$Text)
   $u = _Huginn-UiUni
@@ -179,9 +199,11 @@ function _Huginn-UiLine {
   }
   $c = switch ($State) { 'ok' { 'Cyan' } 'fail' { 'Red' } 'warn' { 'Yellow' } default { 'DarkGray' } }
   _Huginn-UiClear
+  $ls = @(_Huginn-UiWrap $Text 18)
   Write-Host '     ' -NoNewline
   _Huginn-Say $g $c -NoNewline
-  Write-Host ('  ' + $Comp.PadRight(9) + ' ' + $Text)
+  Write-Host ('  ' + $Comp.PadRight(9) + ' ' + $ls[0])
+  foreach ($l in @($ls | Select-Object -Skip 1)) { Write-Host ((' ' * 18) + $l) }
 }
 function _Huginn-UiHead { param([string]$Text) _Huginn-Say '(o>' Magenta -NoNewline; Write-Host " $Text" }
 function _Huginn-UiFrames {
@@ -195,9 +217,9 @@ function _Huginn-UiLive {
   $w = _Huginn-UiWidth
   $line = '    ' + $Frame + ' ' + $Comp.PadRight(9) + ' ' + $Text
   if ($line.Length -gt $w) { $line = $line.Substring(0, $w) }
-  [Console]::Write("`r" + $line.PadRight($w))
+  Write-Host ("`r" + $line.PadRight($w)) -NoNewline
 }
-function _Huginn-UiNote { param([string]$Text) _Huginn-Say ((' ' * 18) + $Text) DarkGray }
+function _Huginn-UiNote { param([string]$Text) foreach ($l in @(_Huginn-UiWrap $Text 18)) { _Huginn-Say ((' ' * 18) + $l) DarkGray } }
 # Waits for $P (a process started elsewhere, e.g. elevated) with the wingbeat.
 function _Huginn-UiWait {
   param([System.Diagnostics.Process]$P, [string]$Comp, [string]$What)
@@ -219,7 +241,7 @@ function _Huginn-UiRecords {
     if ($f.Count -lt 3) { continue }
     switch ($f[0]) {
       'note' { _Huginn-UiNote $f[2] }
-      'say'  { Write-Host ('    ' + $f[2]) }
+      'say'  { foreach ($l in @(_Huginn-UiWrap $f[2] 4)) { Write-Host ('    ' + $l) } }
       default {
         $t = $f[2]
         if ($f[0] -eq 'ok' -and $f[1] -eq 'tray' -and $Tray) { $t = "$t; $Tray" }

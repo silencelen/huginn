@@ -150,7 +150,7 @@ object SetupScaffoldRules {
         SetupStep.TOKEN -> "Connect"
         SetupStep.CLAUDE -> "Find claude"
         SetupStep.DEVICE -> "Enrol this computer"
-        SetupStep.LOCAL_AI -> "Check what this computer can serve"
+        SetupStep.LOCAL_AI -> "Show the plan"
         SetupStep.NOTIFY -> "Send a test notification"
         SetupStep.AUTOSTART -> "Turn it on"
     }

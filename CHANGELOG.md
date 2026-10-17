@@ -8,6 +8,19 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.5] - 2026-10-17
+
+From the owner's fourth recorded install on PRESTIGE.
+
+### Fixed
+- **No empty "ping" terminal after `huginn uninstall` on Windows.** The step that removes the
+  core's own folder after it exits ran `cmd` with no console, so the `ping` it waits with opened
+  a window of its own. It now runs in a console that is never shown.
+- **The installer's spinner draws its wing marks in PowerShell 7** instead of `?`. Redrawn lines
+  go through the PowerShell host, which can show them.
+- **Long installer lines wrap under their own text** in the PowerShell client too, the way the
+  core's own lines do since 2.5.4.
+
 ## [2.5.4] - 2026-10-16
 
 From the owner's third recorded install on PRESTIGE.

@@ -37,6 +37,7 @@ import com.silencelen.huginn.desktop.setup.SetupDrafts
 import com.silencelen.huginn.desktop.setup.SetupProbes
 import com.silencelen.huginn.desktop.ui.settings.ClaudePathField
 import com.silencelen.huginn.desktop.ui.settings.DeviceSection
+import com.silencelen.huginn.desktop.ui.settings.LocalServeFlow
 import com.silencelen.huginn.desktop.ui.settings.LocalServeSection
 import com.silencelen.huginn.desktop.ui.settings.StartupRow
 import com.silencelen.huginn.settings.SetupStep
@@ -331,11 +332,10 @@ class DesktopSetupProbes(
         }
         val plan = LocalServe.plan { }.getOrElse { return LocalAiOutcome.Refused(SetupController.reason(it)) }
         plan.refuse?.let { return LocalAiOutcome.Refused("this machine can't serve: $it") }
+        // The plan goes onto the card, with its Download button: one way in.
+        LocalServeFlow.plan.value = plan
         val mb = plan.needBytes / (1024 * 1024)
-        return LocalAiOutcome.Offered(
-            "This machine can serve (class ${plan.cls ?: "?"}): $mb MB to download. " +
-                "Set up local AI shows the whole plan before anything downloads.",
-        )
+        return LocalAiOutcome.Offered("can serve (class ${plan.cls ?: "?"}): read the plan, then Download and turn on ($mb MB)")
     }
 
     override suspend fun postTestNotification(): Result<String> = runCatching {
