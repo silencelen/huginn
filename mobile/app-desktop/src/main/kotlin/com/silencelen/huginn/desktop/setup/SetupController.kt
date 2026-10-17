@@ -161,6 +161,21 @@ class SetupController(
         _visible.value = true
     }
 
+    /** Runs the current step's check now (the address field's own button). */
+    fun runCurrent() {
+        if (_busy.value) return
+        run(_state.value.current)
+    }
+
+    /**
+     * What a step's own card did (the autostart switch, the local-AI card),
+     * recorded on that step - so the rail says what the card says.
+     */
+    fun settledByCard(step: SetupStep, status: StepStatus) {
+        if (_state.value.statusOf(step) == status) return
+        put(SetupFlow.settledByCard(_state.value, step, status))
+    }
+
     /** Leaves the flow exactly where it is, so coming back resumes rather than restarts. */
     fun close() {
         _visible.value = false

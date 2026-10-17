@@ -288,7 +288,10 @@ class HuginnClient(
             if (probe.intercepted) return "$where could not prove it is your huginn daemon — someone may be intercepting the connection"
             // Over TLS an unproved answer is a daemon asked before a token was
             // given — the setup flow's address step — not an old one.
-            if (probe.answered && probe.secure) return "$what at $where ${DaemonChallenge.NOT_PROVEN}"
+            // So it is said as what it is - an answer waiting for the token - and not
+            // as a failure: "cannot prove it is huginn" read as broken on a correct
+            // address (PRESTIGE, 2026-10-16).
+            if (probe.answered && probe.secure) return "$what answers at $where; the token (next) proves it is yours"
             if (probe.answered) return "$what at $where ${DaemonChallenge.NOT_PROVEN} — a daemon older than 3.6"
             return "nothing at $where answered as huginn"
         }

@@ -339,7 +339,7 @@ private fun isWindowsHost() = System.getProperty("os.name")?.startsWith("Windows
 
 /** @param intro see [DeviceSection]. False inside the setup flow (D-13). */
 @Composable
-internal fun LocalServeSection(store: AppStore, intro: Boolean = true) {
+internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing: ((String) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
     var status by remember { mutableStateOf<LocalServe.Status?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -360,7 +360,12 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true) {
                 } else { status = null; error = null; return@launch }
             }
             LocalServe.status()
-                .onSuccess { status = it; error = null }
+                .onSuccess {
+                    status = it; error = null
+                    if (it.setup == true && it.engine.reachable && it.engine.models.isNotEmpty()) {
+                        onServing?.invoke("serving ${it.engine.models.joinToString(", ")} as \"${it.deviceName ?: "?"}\"")
+                    }
+                }
                 .onFailure { status = null; error = it.message }
         }
     }
@@ -377,7 +382,15 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true) {
     val s = status
     val engineUp = s?.setup == true && s.engine.reachable && s.engine.models.isNotEmpty()
     if (!engineUp) {
-        if (error != null) Muted("The manager did not answer: $error", Modifier.padding(top = 8.dp, start = 4.dp), maxLines = 2)
+        if (error != null) {
+            // "not fetched" is a machine that has not downloaded the manager yet,
+            // which is no fault: the button below fetches it.
+            Muted(
+                if (error == "not fetched") "Not set up on this computer yet." else "The manager did not answer: $error",
+                Modifier.padding(top = 8.dp, start = 4.dp),
+                maxLines = 2,
+            )
+        }
         // Installed-but-dark gets its diagnosis AND the door back on — the
         // audit caught Stop dead-ending this section with nothing but Refresh.
         // An alive endpoint serving an EMPTY list is its own named state, not

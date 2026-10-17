@@ -227,6 +227,15 @@ object SetupFlow {
     fun checked(state: SetupState, detail: String): SetupState =
         record(state, state.current, StepStatus.Checked(detail))
 
+    /**
+     * A step its own card settled - the autostart switch turned on, the local-AI
+     * card that turned serving on (or found it already serving). Recorded on THAT
+     * step, without moving the reader: the rail said "skipped" beside a switch
+     * that was on and a card that said "Serving" (PRESTIGE, 2026-10-16).
+     */
+    fun settledByCard(state: SetupState, step: SetupStep, status: StepStatus): SetupState =
+        record(state, step, status)
+
     /** The reader declined. An ANSWER — the flow moves on and the finish line counts it. */
     fun skip(state: SetupState): SetupState =
         next(record(state, state.current, StepStatus.Skipped()))
