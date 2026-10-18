@@ -59,7 +59,7 @@ class ChatEmptyTest {
             chatEmptyCopy(messagesGone = false, mode = "act").body,
         )
         assertEquals(
-            "Reasoning and memory, no tools.",
+            "Reads files and the web; changes nothing.",
             chatEmptyCopy(messagesGone = false, mode = "ask").body,
         )
     }
@@ -79,7 +79,7 @@ class ChatEmptyTest {
         assertTrue("the empty state does not consult chatEmptyCopy", text.contains("chatEmptyCopy("))
         assertTrue(
             "the mode placeholder is hard-coded in the screen again",
-            !text.contains("\"Reasoning and memory, no tools.\""),
+            !text.contains("\"Reads files and the web; changes nothing.\""),
         )
     }
 

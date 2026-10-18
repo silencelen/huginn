@@ -207,7 +207,7 @@ internal fun quickActionCount(q: QuickActions): Int =
     listOf(q.explain, q.execute, q.askInNewChat, q.quote).count { it.isNotBlank() }
 
 /**
- * "On · push · Telegram fallback".
+ * "On · push · relay fallback".
  *
  * Three facts in the order they fail in: whether this phone is listening at all,
  * how fast it hears, and whether huginn has a way to reach you when it is not.
@@ -221,7 +221,7 @@ private fun notifySummary(f: PhoneSettingsFacts): String {
     }
     f.alerts?.let { a ->
         if (a.enabled && a.channel != "none") {
-            bits += "${a.channel.replaceFirstChar { it.uppercase() }} ${if (a.mode == "always") "always" else "fallback"}"
+            bits += "relay ${if (a.mode == "always") "always" else "fallback"}"
         }
     }
     return bits.joinToString(" · ")

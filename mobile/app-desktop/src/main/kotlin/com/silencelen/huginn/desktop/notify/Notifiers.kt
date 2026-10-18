@@ -122,7 +122,7 @@ object Notifiers {
      */
     fun pathSummary(name: String?): String =
         if (pathWords(name) == "none") {
-            "$NOWHERE_TO_POST. Anything that needs you goes to Telegram instead."
+            "$NOWHERE_TO_POST. Anything that needs you goes to your other devices instead."
         } else {
             "Posted as ${pathWords(name)} while this window is claiming the route (${name?.trim()})."
         }
@@ -147,16 +147,16 @@ object Notifiers {
      *   chosen backend, null exactly when it is [NoNotifier].
      */
     fun claimWords(enabled: Boolean, present: Boolean, name: String?): String = when {
-        !enabled -> "off — huginn falls back to Telegram"
+        !enabled -> "off — huginn alerts your other devices instead"
         // NOT `NOWHERE_TO_POST` verbatim: the row directly below this one already
         // carries the reason in full, and two identical sentences stacked is the
         // other way to make a page unreadable. This says the CONSEQUENCE for the
         // control it is attached to; that row says why.
         pathWords(name) == "none" ->
             "claiming nothing — there is no way to show a notification on this computer, " +
-                "so Telegram stays live whatever this is set to"
+                "so your other devices are alerted whatever this is set to"
         present -> "claiming: this window has been attended recently"
-        else -> "not claiming: window hidden or unattended, so Telegram stays live"
+        else -> "not claiming: window hidden or unattended, so your other devices are alerted"
     }
 
     /**
@@ -178,7 +178,7 @@ object Notifiers {
         if (notifier.canDeliver()) {
             null
         } else {
-            "$NOWHERE_TO_POST. huginn will keep using Telegram for anything that needs you."
+            "$NOWHERE_TO_POST. huginn will keep alerting your other devices for anything that needs you."
         }
 
     /** One honest line for the log at startup, and for the diagnostics blob. */

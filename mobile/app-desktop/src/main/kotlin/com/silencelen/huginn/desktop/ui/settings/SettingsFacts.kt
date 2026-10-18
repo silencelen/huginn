@@ -151,9 +151,9 @@ object SettingsSummaries {
         // Why the claim is off is the half a reader needs: "off" is also what a
         // bug looks like, and the two reasons it can be off are different facts.
         "notify" -> when {
-            !f.notifyEnabled -> "off · Telegram"
+            !f.notifyEnabled -> "off · other devices"
             f.present -> "claiming · this window"
-            else -> "not claiming · Telegram stays live"
+            else -> "not claiming · other devices are alerted"
         }
 
         "devices" -> {

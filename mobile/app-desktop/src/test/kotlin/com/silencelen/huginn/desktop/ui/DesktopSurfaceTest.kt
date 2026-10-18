@@ -427,7 +427,7 @@ class DesktopSurfaceTest {
 
         val off = connectionTip(false, "http://100.101.102.103:8787", notifyEnabled = true)
         assertTrue(off.contains("detached"), off)
-        assertTrue(off.contains("Telegram"), off)
+        assertTrue(off.contains("other devices"), off)
 
         val muted = connectionTip(true, "http://localhost:8787", notifyEnabled = false)
         assertTrue(muted.contains("switched off in Settings"), muted)

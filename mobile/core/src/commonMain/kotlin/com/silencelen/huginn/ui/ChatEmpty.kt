@@ -51,5 +51,5 @@ fun chatEmptyCopy(messagesGone: Boolean, mode: String): ChatEmptyCopy = when {
         "Claude Code has swept its transcript. The list keeps its last line; the conversation itself is gone.",
     )
     mode == "act" -> ChatEmptyCopy("Act mode", "Runs on the host with tools: files, commands, the web.")
-    else -> ChatEmptyCopy("Ask mode", "Reasoning and memory, no tools.")
+    else -> ChatEmptyCopy("Ask mode", "Reads files and the web; changes nothing.")
 }

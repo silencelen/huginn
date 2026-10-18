@@ -130,11 +130,11 @@ class SettingsDesktopTest {
     fun `the notifications line says whether this window is claiming`() {
         assertEquals("claiming · this window", SettingsSummaries.of("notify", live()))
         assertEquals(
-            "not claiming · Telegram stays live",
+            "not claiming · other devices are alerted",
             SettingsSummaries.of("notify", live().copy(present = false)),
             "a hidden window is not claiming, and that is not an error",
         )
-        assertEquals("off · Telegram", SettingsSummaries.of("notify", live().copy(notifyEnabled = false)))
+        assertEquals("off · other devices", SettingsSummaries.of("notify", live().copy(notifyEnabled = false)))
     }
 
     @Test

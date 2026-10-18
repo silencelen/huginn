@@ -210,11 +210,30 @@ fun ChatsPage(
 // ------------------------------------------------------------------ notify
 
 /**
+ * What "Message me when a session needs me" will actually use, in words: push
+ * when huginn holds a push credential, its alert relay when it has one, both,
+ * or neither (and then the switch is off-limits, with the reason).
+ */
+internal fun hostAlertsSummary(al: Alerts): String {
+    val relay = al.channel != "none"
+    val how = when {
+        al.pushConfigured && relay -> "as a push notification, and over huginn's alert relay when push does not get through"
+        al.pushConfigured -> "as a push notification"
+        relay -> "over huginn's alert relay"
+        else -> return "huginn has no way to reach this phone with the app closed: push is not set up on " +
+            "huginn, and it has no alert relay."
+    }
+    return "Sent by huginn $how, so it reaches you with this app closed. Also tells you when a long " +
+        "chat finishes." + (if (al.delivered > 0) " ${al.delivered} sent so far." else "")
+}
+
+/**
  * Two mechanisms, named as two groups, because they were two switches one word
  * apart with nothing saying they were different things.
  *
- * "From huginn" is the host messaging you over Telegram — it works with this app
- * closed, which is most of the time, so it is listed first. "From this phone" is
+ * "From huginn" is the host reaching you — by push, and over its alert relay
+ * when one is set up — with this app closed, which is most of the time, so it is
+ * listed first. "From this phone" is
  * this client's own notifications, which need Android's permission, an exemption
  * from Doze, and either a push or a background check to carry them.
  */
@@ -243,17 +262,13 @@ fun NotifyPage(
         SettingsToggleRow(
             id = "notify.host-alerts",
             title = "Message me when a session needs me",
-            summary = if (al.channel == "telegram")
-                "Sent by huginn over Telegram, so it reaches you with this app closed and costs " +
-                    "no battery. Also tells you when a long chat finishes." +
-                    (if (al.delivered > 0) " ${al.delivered} sent so far." else "")
-            else "No delivery channel is configured on huginn.",
+            summary = hostAlertsSummary(al),
             checked = al.enabled,
             onCheckedChange = onAlertsEnabled,
-            enabled = al.channel != "none",
+            enabled = al.pushConfigured || al.channel != "none",
             highlighted = SettingsRowStyle.isHighlighted("notify.host-alerts", highlight),
         )
-        if (al.enabled) {
+        if (al.enabled && al.channel != "none") {
             // Fallback is the default and the recommendation: both channels firing
             // for one event teaches you to dismiss without reading, and then the
             // one that mattered is gone too.
@@ -262,12 +277,12 @@ fun NotifyPage(
                 title = "Only when the app is out of contact",
                 summary = when {
                     al.mode == "always" ->
-                        "Off, so every alert arrives twice — once in the app and once on Telegram."
+                        "Off, so every alert arrives twice — once in the app and once over huginn's alert relay."
                     al.appOnline ->
-                        "On. huginn can see this phone checking in, so it is staying quiet and " +
-                            "letting the app notify you."
+                        "On. huginn can see this phone checking in, so the relay stays quiet and " +
+                            "the app notifies you."
                     else ->
-                        "On. huginn has not heard from this phone recently, so Telegram is " +
+                        "On. huginn has not heard from this phone recently, so its alert relay is " +
                             "carrying alerts."
                 },
                 checked = al.mode != "always",
@@ -377,8 +392,8 @@ fun NotifyPage(
                     "huginn can push, but this phone has not registered yet. It registers itself " +
                         "on start — check the token in Host & sign-in."
                 else ->
-                    "Push is not set up on huginn, so alerts arrive on the 10-minute check or by " +
-                        "Telegram instead."
+                    "Push is not set up on huginn, so alerts arrive on the 10-minute check, or " +
+                        "over huginn's alert relay if it has one."
             },
             highlighted = SettingsRowStyle.isHighlighted("notify.delivery", highlight),
         )

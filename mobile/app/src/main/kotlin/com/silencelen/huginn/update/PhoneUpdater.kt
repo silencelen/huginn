@@ -69,6 +69,8 @@ class PhoneUpdater(
         ::downloadTo,
     private val installer: (File) -> Boolean,
     private val sha256Matches: (File, String) -> Boolean = Sha256::matches,
+    /** False in a build made with `-Phuginn.updateRepo=` (empty): no update checks at all. */
+    private val enabled: Boolean = true,
 ) {
     private val _state = MutableStateFlow<AppUpdateState>(AppUpdateState.Idle)
     val state: StateFlow<AppUpdateState> = _state.asStateFlow()
@@ -82,6 +84,7 @@ class PhoneUpdater(
      * [AppUpdateState.Available] or [AppUpdateState.UpToDate].
      */
     suspend fun check(): AppUpdateState {
+        if (!enabled) return fail(DISABLED)
         _state.value = AppUpdateState.Checking
         val releases = runCatching { feed.list() }
             .getOrElse { return fail("could not reach GitHub releases: ${it.message}") }
@@ -168,15 +171,24 @@ class PhoneUpdater(
     companion object {
         const val MANIFEST_NAME: String = "latest.json"
 
-        /** The real updater, wired to this install of the app. */
+        /** What the update row says in a build with update checks turned off. */
+        const val DISABLED: String = "update checks are turned off in this build"
+
+        /**
+         * The real updater, wired to this install of the app, reading the release
+         * repo the build was made with ([BuildConfig.UPDATE_REPO]; empty = off).
+         */
         fun forApp(context: Context): PhoneUpdater {
             val app = context.applicationContext
             val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            val repo = com.silencelen.huginn.BuildConfig.UPDATE_REPO
             return PhoneUpdater(
                 installedVersionCode = PackageInfoCompat.getLongVersionCode(info),
                 installedVersionName = info.versionName ?: "",
+                feed = GithubReleases(repo = repo.ifEmpty { GithubReleases.REPO }),
                 cacheDir = File(app.cacheDir, "updates"),
                 installer = { file -> installApk(app, file) },
+                enabled = repo.isNotEmpty(),
             )
         }
 

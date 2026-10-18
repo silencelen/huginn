@@ -69,7 +69,7 @@ class SettingsPhoneTest {
         assertEquals("alex@example-household.org · 2 saved logins", phoneSummary(category("host"), f))
         assertEquals("Fable 37% · ladder set", phoneSummary(category("usage"), f))
         assertEquals("4 quick actions", phoneSummary(category("chats"), f))
-        assertEquals("On · push · Telegram fallback", phoneSummary(category("notify"), f))
+        assertEquals("On · push · relay fallback", phoneSummary(category("notify"), f))
         assertEquals("3 machines · 1 serving", phoneSummary(category("devices"), f))
         assertEquals("lock on", phoneSummary(category("privacy"), f))
         assertEquals("3.1.0 · up to date", phoneSummary(category("updates"), f))

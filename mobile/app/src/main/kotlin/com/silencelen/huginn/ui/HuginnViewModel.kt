@@ -719,8 +719,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess {
                     _alerts.value = _alerts.value?.copy(mode = it.mode) ?: it
                     _toast.value = if (it.mode == "always")
-                        "Telegram will carry every alert"
-                    else "Telegram only when the app is out of contact"
+                        "The alert relay will carry every alert"
+                    else "The alert relay only when the app is out of contact"
                 }
                 .onFailure { _toast.value = errText(it) }
         }

@@ -188,7 +188,7 @@ fun ChatOptionsBar(
                 PickerChip(
                     label = if (mode == "act") "Act" else "Ask",
                     options = listOf(
-                        "ask" to "Ask — reasoning and memory, no tools",
+                        "ask" to "Ask — reads and searches, changes nothing",
                         "act" to "Act — files, commands, the web",
                     ),
                     enabled = enabled,

@@ -470,7 +470,7 @@ class SetupController(
          * not a verdict on the machine.
          */
         const val NOTIFY_MISSED: String =
-            "nothing appeared. huginn will keep using Telegram for anything that needs you; " +
+            "nothing appeared. huginn will keep alerting your other devices for anything that needs you; " +
                 "Notifications in Settings shows which path this computer is using."
 
         /** A throwable's own sentence, never its class name if it has one. */

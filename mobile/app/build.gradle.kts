@@ -52,6 +52,17 @@ android {
         // Single-ABI for smaller APK; phone is arm64-v8a.
         ndk { abiFilters += listOf("arm64-v8a") }
 
+        // Where the in-app updater looks for releases (owner/repo on GitHub). A
+        // build with its own signing key cannot install the official APKs, so it
+        // names its own repo, or turns update checks off with an empty value:
+        //   ./gradlew :app:assembleRelease -Phuginn.updateRepo=you/huginn
+        //   ./gradlew :app:assembleRelease -Phuginn.updateRepo=
+        val updateRepo = providers.gradleProperty("huginn.updateRepo").getOrElse("silencelen/huginn")
+        require(updateRepo.isEmpty() || Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").matches(updateRepo)) {
+            "huginn.updateRepo must be owner/repo or empty, not '$updateRepo'"
+        }
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
+
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -103,6 +114,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     sourceSets["main"].kotlin.srcDirs("src/main/kotlin")
     sourceSets["test"].kotlin.srcDirs("src/test/kotlin")
