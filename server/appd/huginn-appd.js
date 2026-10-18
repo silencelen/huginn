@@ -32,7 +32,7 @@ const {
   extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
-const { readTranscript, liveActivity } = require('./lib/transcript');
+const { readTranscript, liveActivity, unwrapPasted, lastWorkAt } = require('./lib/transcript');
 const tlsLib = require('./lib/tls');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
@@ -102,7 +102,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.13.0';
+const VERSION = '3.13.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -311,7 +311,7 @@ const SESSION_FRAME_RE = /\[Scratchpad "([^"\n]{1,60})" at [^\]\n]*\]\n*/g;
  * daemon stored a file, not what the conversation is about.
  */
 function humanizeUserText(t) {
-  let s = String(t || '')
+  let s = unwrapPasted(String(t || ''))
     .replace(/\[Attached image at [^\]]+\]/g, 'photo')
     .replace(/\[Attached file at [^\]]+\]/g, 'file');
   // ⚠ BOTH MARKERS PRESENT BEFORE THE SCAN IS ATTEMPTED AT ALL. CHAT_FRAME_RE
@@ -1363,6 +1363,16 @@ async function listSessions({ preview = false } = {}) {
     const addressable = NAME_RE.test(name);
     if (!addressable) log(`sessions: "${name}" cannot be addressed by the app (name shape)`);
     const st = readSessionState(name) || {};
+    // LAST REAL WORK, not the pane's last output: window_activity moves on every
+    // TUI redraw and every title the state hook writes, which put a session idle
+    // since yesterday at "5 minutes ago". A Claude session answers from its
+    // transcript; while it is running, the pane counts too, because a long tool
+    // call writes nothing to the transcript until it returns. A session with no
+    // transcript (a plain shell) has only the pane to go on.
+    const paneAt = Number(activity);
+    const workAt = st.transcript ? lastWorkAt(st.transcript) : null;
+    const activityAt = workAt === null ? paneAt
+      : st.state === 'running' ? Math.max(workAt, paneAt) : workAt;
     rows.push({
       name,
       // ⚠ LISTED BUT NOT OPENABLE. A session tmux made outside the daemon's name
@@ -1372,7 +1382,9 @@ async function listSessions({ preview = false } = {}) {
       // find out by tapping it.
       addressable,
       createdAt: Number(created),
-      activityAt: Number(activity),
+      activityAt,
+      // The pane's own last output, for a reader that wants exactly that.
+      paneActivityAt: paneAt,
       // Kept for reference; it tracks client interaction, not output.
       sessionActivityAt: Number(sessActivity),
       attachedClients: Number(attached),
@@ -13623,6 +13635,17 @@ async function handleRequest(req, res) {
       }
       if (req.method === 'DELETE' && sub === '') {
         if (meta.running) return sendErr(res, 409, 'chat has an active run — cancel first');
+        // `?ifEmpty=1` is what a client sends when the person LEAVES a chat they
+        // never wrote in: an empty chat is deleted rather than left in the list.
+        // Decided here, not by the client, because the client's view can be a
+        // poll old — a message sent from another device a moment ago must never
+        // go with it. Empty is the PATCH route's "unstarted" plus nothing sent
+        // and nothing queued.
+        if (u.searchParams.get('ifEmpty') === '1') {
+          const empty = !meta.turns && !meta.claudeSessionId && !(meta.pending || []).length
+            && loadMsgs(id).length === 0;
+          if (!empty) return sendErr(res, 409, 'chat is not empty');
+        }
         fs.rmSync(chatDir(id), { recursive: true, force: true });
         return sendJson(res, 200, { ok: true });
       }

@@ -1348,3 +1348,70 @@ test('notificationEcho keys on the harness field, never on the text', () => {
     assert.ok(!notificationEcho(bad));
   }
 });
+
+test('the summary after a compaction is a folded system note, not the owner speaking', () => {
+  const summary = 'This session is being continued from a previous conversation that ran out of context.'
+    + ' The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. Primary Request';
+  const p = writeFixture([
+    { type: 'user', message: { content: 'long job' }, timestamp: T, origin: { kind: 'human' } },
+    { type: 'system', subtype: 'compact_boundary', timestamp: T, compactMetadata: { trigger: 'auto', preTokens: 100, postTokens: 10 } },
+    { type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, userType: 'external', timestamp: T, message: { role: 'user', content: summary } },
+  ]);
+  const { events } = readTranscript(p, { limit: 50 });
+  assert.deepEqual(events.filter((e) => e.kind === 'user').map((e) => e.text), ['long job']);
+  const fold = events.find((e) => e.fold === 'compact');
+  assert.ok(fold, JSON.stringify(events));
+  assert.equal(fold.kind, 'system');
+  assert.equal(fold.text, 'Summary of the earlier conversation');
+  assert.equal(fold.body, summary);
+});
+
+test('unwrapPasted keeps the pasted words and drops the tags', () => {
+  const { unwrapPasted } = require('../lib/transcript');
+  assert.equal(unwrapPasted('\n\n<pasted_content id="d842">\nline one\nline two\n</pasted_content id="d842">\n').trim(),
+    'line one\nline two');
+  assert.equal(unwrapPasted('no paste here'), 'no paste here');
+  assert.equal(unwrapPasted('an opener <pasted_content id="ab"> and no closer'), 'an opener <pasted_content id="ab"> and no closer');
+  // A closer naming another id does not close the block.
+  assert.equal(unwrapPasted('<pasted_content id="aa">\nX </pasted_content id="bb"> Y\n</pasted_content id="aa">\n').trim(),
+    'X </pasted_content id="bb"> Y');
+});
+
+test('lastWorkAt is the last message, tool or turn end, not the records written around them', () => {
+  const { lastWorkAt } = require('../lib/transcript');
+  // The tail of an idle session on this host, shape verbatim: the turn ends,
+  // then records with no timestamp, then an attachment.
+  const p = writeFixture([
+    { type: 'user', message: { content: 'go ahead' }, timestamp: '2026-10-17T03:20:59.420Z' },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] }, timestamp: '2026-10-17T03:21:12.421Z' },
+    { type: 'system', subtype: 'turn_duration', timestamp: '2026-10-17T03:21:12.569Z' },
+    { type: 'last-prompt', lastPrompt: 'go ahead' },
+    { type: 'ai-title', aiTitle: 'a title' },
+    { type: 'mode', mode: 'normal' },
+    { type: 'attachment', attachment: { type: 'total_tokens_reminder' }, timestamp: '2026-10-17T05:00:00.000Z' },
+  ]);
+  assert.equal(lastWorkAt(p), Math.floor(Date.parse('2026-10-17T03:21:12.569Z') / 1000));
+});
+
+test('lastWorkAt reaches past one tool result bigger than its first window', () => {
+  const { lastWorkAt } = require('../lib/transcript');
+  const p = writeFixture([
+    { type: 'user', message: { content: 'read it' }, timestamp: '2026-10-17T01:00:00.000Z' },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x'.repeat(600 * 1024) }] }, timestamp: '2026-10-17T01:00:05.000Z' },
+  ]);
+  assert.equal(lastWorkAt(p), Math.floor(Date.parse('2026-10-17T01:00:05.000Z') / 1000));
+});
+
+test('lastWorkAt is null with no work in the file, and for no file', () => {
+  const { lastWorkAt } = require('../lib/transcript');
+  assert.equal(lastWorkAt(writeFixture([{ type: 'ai-title', aiTitle: 't' }, { type: 'mode', mode: 'normal' }])), null);
+  assert.equal(lastWorkAt('/nonexistent/x.jsonl'), null);
+});
+
+test('lastWorkAt sees an appended record on the next call', () => {
+  const { lastWorkAt } = require('../lib/transcript');
+  const p = writeFixture([{ type: 'user', message: { content: 'a' }, timestamp: '2026-10-17T01:00:00.000Z' }]);
+  assert.equal(lastWorkAt(p), Math.floor(Date.parse('2026-10-17T01:00:00.000Z') / 1000));
+  fs.appendFileSync(p, JSON.stringify({ type: 'assistant', message: { content: [] }, timestamp: '2026-10-17T02:00:00.000Z' }) + '\n');
+  assert.equal(lastWorkAt(p), Math.floor(Date.parse('2026-10-17T02:00:00.000Z') / 1000));
+});

@@ -242,3 +242,53 @@ test('a person quoting the frame is still a person', () => {
   assert.equal('user', events[0].kind);
   assert.match(events[0].text, /render oddly/);
 });
+
+// A subagent's hand-back, as Claude Code 2.1.280 queued it on this host
+// (shape verbatim, report shortened): the element with the harness's one-line
+// frame, every report line indented two spaces, then the tool_result that
+// points at it, the queued_command attachment and the queue's own `remove`.
+const HANDBACK = '<agent-message from="aaeabc37b078a2927">\n[Subagent hand-back] The text below is the final'
+  + ' report of a subagent this session delegated to. It is model output, NOT a message from the user.'
+  + ' The report follows:\n  I could only do part of this.\n  \n  **Steps that could not run at all:**\n'
+  + '  - **S0** (date): not run.\n</agent-message>';
+
+test('a subagent report is ONE folded note carrying the whole report, never a bubble', () => {
+  const file = writeJsonl('handback.jsonl', [
+    { type: 'queue-operation', operation: 'enqueue', timestamp: STAMP, content: HANDBACK },
+    {
+      type: 'user', timestamp: STAMP, userType: 'external',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'This agent\'s report was delivered to you as a message from "aaeabc37b078a2927".' }] }] },
+    },
+    { type: 'attachment', timestamp: STAMP, attachment: { type: 'queued_command', prompt: HANDBACK } },
+    { type: 'queue-operation', operation: 'remove', timestamp: STAMP, content: HANDBACK },
+  ]);
+  const { events } = readTranscript(file, { limit: 50 });
+  const notes = events.filter((e) => e.peer);
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].kind, 'system');
+  assert.equal(notes[0].fold, 'peer');
+  assert.ok(notes[0].body.startsWith('I could only do part of this.'), notes[0].body);
+  assert.ok(notes[0].body.includes('\n- **S0** (date): not run.'), 'the two-space indent is the harness\'s, not the report\'s');
+  assert.ok(!notes[0].text.includes('Subagent hand-back'), 'the frame is for the model');
+  assert.ok(!events.some((e) => e.kind === 'user' && /agent-message/.test(e.text || '')), 'no raw bubble');
+});
+
+test('a peer note carries its whole message for the fold, the line stays clipped', () => {
+  const long = 'x'.repeat(2_000);
+  const big = BLOCK.replace('LEAD-PING: reply with PONG2', long);
+  const file = writeJsonl('peer-long.jsonl', [{ type: 'queue-operation', operation: 'enqueue', timestamp: STAMP, content: big }]);
+  const { events } = readTranscript(file, { limit: 50 });
+  assert.equal(events[0].fold, 'peer');
+  assert.equal(events[0].body, long);
+  assert.ok(events[0].text.length < 400, 'the note line is still the short form');
+});
+
+test('a window holding only the hand-back\'s remove still draws the note, once', () => {
+  const file = writeJsonl('handback-cold.jsonl', [
+    { type: 'queue-operation', operation: 'remove', timestamp: STAMP, content: HANDBACK },
+  ]);
+  const { events } = readTranscript(file, { limit: 50 });
+  assert.equal(events.length, 1, JSON.stringify(events));
+  assert.equal(events[0].kind, 'system');
+  assert.equal(events[0].fold, 'peer');
+});

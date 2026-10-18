@@ -45,6 +45,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { listAgentFiles, journalSummaries, journalSettled, agentTask, ACTIVE_S } = require('./agents');
 const { priceTokens, bucketKey } = require('./pricing');
+const { unwrapPasted } = require('./transcript');
 
 /** Bytes read per pass. Bounded so a 32MB transcript never lands in RAM whole. */
 const CHUNK = 4 * 1024 * 1024;
@@ -511,7 +512,9 @@ function consume(s, d) {
       if (s.turn && ts) s.turn.lastTs = ts;
       return;
     }
-    if (d.isMeta === true || MACHINE_USER.test(text) || !text.trim()) {
+    // The summary Claude Code writes after a compaction wears the user role and
+    // no isMeta; the boundary above is already its node, and nobody said it.
+    if (d.isMeta === true || d.isCompactSummary === true || MACHINE_USER.test(text) || !text.trim()) {
       if (s.turn && ts) s.turn.lastTs = ts;
       return;
     }
@@ -523,8 +526,8 @@ function consume(s, d) {
       ts,
       endTs: ts,
       durMs: 0,
-      label: clip(firstLine(text), USER_LABEL_MAX),
-      detail: clip(text, DETAIL_MAX) || null,
+      label: clip(firstLine(unwrapPasted(text)), USER_LABEL_MAX),
+      detail: clip(unwrapPasted(text), DETAIL_MAX) || null,
       tokens: zeroTokens(),
       toolCalls: 0,
       tools: [],

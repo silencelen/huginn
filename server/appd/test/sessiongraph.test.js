@@ -951,3 +951,36 @@ test('the cursor moves when an AGENT grows even though the parent did not', () =
   assert.equal(b.cursor.size, a.cursor.size);
   assert.ok(b.cursor.agentBytes > a.cursor.agentBytes, 'the cursor notices');
 });
+
+test('the summary after a compaction is not a message from the person', () => {
+  // Claude Code writes the summary as a `user` record with no isMeta; the
+  // boundary before it is already the map's node for the break.
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'scs.jsonl', [
+    userSays('long job', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'working' }], {}),
+    { type: 'system', subtype: 'compact_boundary', uuid: 'cb', timestamp: T(2), compactMetadata: { trigger: 'auto', preTokens: 100, postTokens: 10 } },
+    {
+      type: 'user', uuid: 'cs', timestamp: T(3), isCompactSummary: true, isVisibleInTranscriptOnly: true,
+      message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.\n\nSummary:\n1. Primary Request' },
+    },
+    assistant('r2', 4, [{ type: 'text', text: 'carrying on' }], {}),
+  ]);
+  const g = sessionGraph(file, 'scs');
+  assert.equal(g.totals.userMessages, 1);
+  assert.deepEqual(g.nodes.map((n) => n.kind), ['user', 'response', 'compact', 'response']);
+});
+
+test('a pasted message is labelled with what was pasted, not the paste tag', () => {
+  resetCache();
+  const dir = tmpdir();
+  const file = write(dir, 'spaste.jsonl', [
+    userSays('\n\n<pasted_content id="d842">\nbug: empty chats should auto delete\nbug: projects count\n</pasted_content id="d842">\n', 0),
+    assistant('r1', 1, [{ type: 'text', text: 'on it' }], {}),
+  ]);
+  const g = sessionGraph(file, 'spaste');
+  const user = g.nodes.find((n) => n.kind === 'user');
+  assert.equal(user.label, 'bug: empty chats should auto delete');
+  assert.ok(!user.detail.includes('pasted_content'), user.detail);
+});
