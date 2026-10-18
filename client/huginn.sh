@@ -978,7 +978,10 @@ _huginn_appd() {
   local H="${HUGINN_HOST:-huginn}" raw body data='' rc=0 ef= cmd err=
   _HUGINN_APPD_CODE=
   [ -z "${3:-}" ] || data=" -H 'Content-Type: application/json' --data '$3'"
-  cmd="curl -s -w '\n%{http_code}' -X $1$data -H \"Authorization: Bearer \$(cat /etc/huginn-appd/token 2>/dev/null)\" \"http://127.0.0.1:8787$2\""
+  # The token is read ON THE HOST and handed to curl as a config line on stdin
+  # (`-K -`): printf is a shell builtin, so it never appears in any process's
+  # command line, where every other account on the host could read it.
+  cmd="printf 'header = \"Authorization: Bearer %s\"\n' \"\$(cat /etc/huginn-appd/token 2>/dev/null)\" | curl -K - -s -w '\n%{http_code}' -X $1$data \"http://127.0.0.1:8787$2\""
   ef="$(mktemp "${TMPDIR:-/tmp}/huginn-ssh.XXXXXX" 2>/dev/null)" || ef=
   if [ -n "$ef" ]; then
     raw="$(ssh -T "$H" "$cmd" 2>"$ef")" || rc=$?

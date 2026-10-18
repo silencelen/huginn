@@ -35,8 +35,11 @@ it can run commands on the server through sessions and act chats. See [Security]
 
 ```bash
 # on the server
-curl -s -H "Authorization: Bearer $(cat /etc/huginn-appd/token)" http://127.0.0.1:8787/v1/ping
+curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") http://127.0.0.1:8787/v1/ping
 ```
+
+The header is read from a process substitution, so the token never shows in the process list,
+where any other account on the server could read it.
 
 ## TLS and pinning
 
@@ -68,7 +71,7 @@ openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \
 ```bash
 # on another computer
 curl -s -k --pinnedpubkey 'sha256//<pin from above>' \
-  -H "Authorization: Bearer $TOKEN" https://192.168.1.20:8787/v1/ping
+  -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") https://192.168.1.20:8787/v1/ping
 ```
 
 `-k` skips the certificate-authority check, and `--pinnedpubkey` still refuses any other key. The

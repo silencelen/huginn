@@ -217,8 +217,10 @@ STUB
   E=$(emit 'huginn end testsess')
   grep -q "POST .*/v1/sessions/testsess/soft-end" <<<"$E" \
     && ok "end POSTs soft-end for the canonical name" || bad "end sent: $E"
-  grep -q 'Bearer \$(cat /etc/huginn-appd/token' <<<"$E" \
+  grep -q '\$(cat /etc/huginn-appd/token' <<<"$E" \
     && ok "token is read ON THE HOST, never marshalled from the client" || bad "token handling changed"
+  grep -q 'curl -K -' <<<"$E" && ! grep -q -- '-H "Authorization' <<<"$E" \
+    && ok "the token reaches curl on stdin, never on its command line" || bad "token is on curl's argv: $E"
   grep -q "WRAPUP" "$T/out" \
     && ok "end reports the phrase the daemon returned" || bad "end did not parse the JSON reply"
 

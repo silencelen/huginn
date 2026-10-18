@@ -130,7 +130,7 @@ only), turn alerts on from the server, as root:
 
 ```bash
 TOKEN=$(cat /etc/huginn-appd/token)
-curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+curl -s -X POST -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H 'Content-Type: application/json' \
   -d '{"enabled":true}' http://127.0.0.1:8787/v1/alerts
 ```
 

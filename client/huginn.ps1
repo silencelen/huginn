@@ -103,7 +103,10 @@ function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
 function _Huginn-Appd {
   param([string]$H, [string]$Method, [string]$Path, [string]$Body)
   $data = if ($Body) { " -H 'Content-Type: application/json' --data '" + $Body + "'" } else { '' }
-  $remote = 'curl -s -w "\n%{http_code}" -X ' + $Method + $data + ' -H "Authorization: Bearer $(cat /etc/huginn-appd/token 2>/dev/null)" "http://127.0.0.1:8787' + $Path + '"'
+  # The token is read ON THE HOST and handed to curl as a config line on stdin
+  # (`-K -`): printf is a shell builtin, so it never appears in any process's
+  # command line, where every other account on the host could read it.
+  $remote = 'printf ''header = "Authorization: Bearer %s"\n'' "$(cat /etc/huginn-appd/token 2>/dev/null)" | curl -K - -s -w "\n%{http_code}" -X ' + $Method + $data + ' "http://127.0.0.1:8787' + $Path + '"'
   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
   $raw = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>&1
   $rc = $LASTEXITCODE

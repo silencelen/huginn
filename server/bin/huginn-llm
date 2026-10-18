@@ -101,7 +101,7 @@ fi
 
 TITLE=$(printf '%s' "llm: $PROMPT" | tr '\n' ' ' | head -c 60)
 CHAT=$(appd_curl -s -m 15 -X POST "$API/v1/chats" \
-  -d "$(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE")")
+  -d @<(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE"))
 CID=$(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('id',''))")
 if [ -z "$CID" ]; then
   echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "$CLEAN_PY
@@ -127,8 +127,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The body travels through a process substitution, like the token: on argv the
+# prompt was readable by every account on the host, and one over the kernel's
+# argument limit (128 KiB) could not be sent at all.
 SENT=$(appd_curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" \
-  -d "$(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT")")
+  -d @<(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT"))
 printf '%s' "$SENT" | grep -q '"ok":true' || {
   echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "$CLEAN_PY
 import json,sys; print(clean(json.load(sys.stdin).get('error','?')))")" >&2

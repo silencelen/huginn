@@ -67,7 +67,7 @@ drop-in.
 
    ```bash
    systemctl show huginn-appd -p Environment
-   curl -s -H "Authorization: Bearer $(cat /etc/huginn-appd/token)" http://127.0.0.1:8787/v1/sessions
+   curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") http://127.0.0.1:8787/v1/sessions
    ```
 
    An empty session list while sessions are running means the daemon cannot see tmux, usually
