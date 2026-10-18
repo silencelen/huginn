@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.5.9
+# Version: 2.5.10
 
-$script:HUGINN_VERSION = '2.5.9'
+$script:HUGINN_VERSION = '2.5.10'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
 # into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
@@ -1678,6 +1678,27 @@ function huginn {
     $sub = if ($args.Count -ge 2) { $args[1] } else { 'status' }
     $rest = if ($args.Count -ge 3) { $args[2..($args.Count-1)] } else { @() }
     $mgr = Join-Path $HOME '.huginn/huginn-local'
+    # On Windows the tier is LocalSystem services, so these need an
+    # administrator. From a normal terminal they asked for one to be opened by
+    # hand ("re-run from an Administrator terminal"); now one approval prompt
+    # runs the same command in an administrator window, which shows its
+    # progress (downloads included) and stays open if it fails.
+    $winAdminVerb = (@('on', 'off', 'update', 'persist') -contains $sub) -and
+      ($env:OS -eq 'Windows_NT') -and -not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($winAdminVerb) {
+      $q = @($rest | ForEach-Object { "'" + ([string]$_ -replace "'", "''") + "'" }) -join ' '
+      $cmd = ". `"$HOME\.huginn\huginn.ps1`"; huginn local $sub $q; if (`$LASTEXITCODE) { Read-Host 'It did not finish (above says why). Press Enter to close' }; exit `$LASTEXITCODE"
+      $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+      $psExe = (Get-Process -Id $PID).Path
+      try { $p = Start-Process -FilePath $psExe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $enc -Verb RunAs -PassThru }
+      catch { _Huginn-Fail "huginn local ${sub}: administrator approval was declined - nothing changed" }
+      $null = $p.Handle
+      _Huginn-UiWait $p 'local AI' "huginn local $sub, in its own administrator window"
+      if ($p.ExitCode -eq 0) { _Huginn-UiLine 'ok' 'local AI' "huginn local $sub finished (huginn local status)" }
+      else { _Huginn-UiLine 'fail' 'local AI' "huginn local $sub did not finish (exit $($p.ExitCode)); its window said why" }
+      $global:LASTEXITCODE = $p.ExitCode
+      return
+    }
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
       _Huginn-Fail "huginn local: needs node - install Node.js LTS: winget install OpenJS.NodeJS.LTS"
     } elseif ($sub -eq 'on' -or $sub -eq 'update' -or $sub -eq 'plan') {
