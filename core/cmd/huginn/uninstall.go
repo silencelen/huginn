@@ -36,7 +36,7 @@ import (
 //	6. --all: the `Host huginn` SSH stanza, and its key if it is huginn's own
 //
 // The shell clients hand `huginn uninstall` here whenever a core is installed;
-// their own copy remains only for platforms with no core (macOS, Termux).
+// their own copy remains only for platforms with no core (Termux).
 
 // tally is one component's outcome: what went, what stays on purpose, and
 // what could not be done (the only kind that fails the run).

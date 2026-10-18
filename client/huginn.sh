@@ -3,17 +3,40 @@
 # Install: source from your ~/.bashrc:
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
-# Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
+# Self-update with:  huginn update   (from the newest release on GitHub)
 # Version: 2.5.10
 
 HUGINN_VERSION='2.5.10'
 HUGINN_REPO='silencelen/huginn'
-# Where `huginn update` may fetch a replacement for THIS FILE, which it then
-# sources into the live shell. Pinned, and deliberately NOT $HUGINN_HOST:
-# that variable answers "which box do I drive", and letting it also answer
-# "whose code do I run" means a typo, a second host or a test alias silently
-# becomes a code source. Override needs HUGINN_UPDATE_HOST set on purpose.
-HUGINN_UPDATE_HOST_DEFAULT='huginn'
+# Client code - this file, and the runners it installs - comes from the newest
+# cli-v release on GitHub: a tagged build, never a moving branch. Only
+# HUGINN_UPDATE_HOST, set on purpose, names a different source: an SSH host whose
+# /usr/local/share/huginn-cli holds the files. Never $HUGINN_HOST: "which box do
+# I drive" must not also answer "whose code do I run".
+
+# The newest cli-v release tag, by version number, or nothing.
+_huginn_release_tag() {
+  local url="https://api.github.com/repos/$HUGINN_REPO/releases?per_page=60"
+  { curl -fsSL --max-time 20 "$url" 2>/dev/null || wget -qO- --timeout=20 "$url" 2>/dev/null; } \
+    | tr -d '\n' | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"cli-v[0-9][0-9.]*"' \
+    | sed 's/.*"cli-v\([0-9.]*\)".*/\1/' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 \
+    | sed -n 's/^\([0-9]\)/cli-v\1/p'
+}
+
+# client/$1 into $2, from the newest release (or the HUGINN_UPDATE_HOST mirror).
+# Prints where it came from; fails without touching anything else.
+_huginn_fetch_client() {
+  local tag url
+  if [ -n "${HUGINN_UPDATE_HOST:-}" ]; then
+    scp -o BatchMode=yes "$HUGINN_UPDATE_HOST:/usr/local/share/huginn-cli/$1" "$2" && [ -s "$2" ] || return 1
+    echo "the $HUGINN_UPDATE_HOST mirror"; return 0
+  fi
+  tag="$(_huginn_release_tag)"
+  [ -n "$tag" ] || { echo "could not read the newest release from GitHub" >&2; return 1; }
+  url="https://raw.githubusercontent.com/$HUGINN_REPO/$tag/client/$1"
+  { curl -fsSL --max-time 60 -o "$2" "$url" || wget -qO "$2" --timeout=60 "$url"; } && [ -s "$2" ] || return 1
+  echo "$tag"
+}
 
 # --- this machine, as a device --------------------------------------------
 # `huginn devices` (plural) lists the machines the host knows about. `huginn
@@ -224,34 +247,14 @@ _huginn_has_url() {
 }
 
 _huginn_device_fetch() {
-  local dest tmp got= uh why=
+  local dest tmp got= why=
   dest="$(_huginn_device_runner)"
   [ "${1:-}" = force ] || [ ! -s "$dest" ] || return 0
   mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
-  # ⚠ EACH SOURCE IS VALIDATED INSIDE ITS OWN BRANCH, so a bad answer from one
-  # really does fall through to the other. This side always checked gh's EXIT
-  # status (the ps1 twin did not, which is the whole of #112 there); what
-  # neither checked is whether a 200 is the FILE - a proxy error page is a
-  # perfectly successful fetch of something that is not JavaScript, and the
-  # syntax check sat AFTER the scp block, so it cleared `got` with the mirror
-  # already skipped and told the caller to fix a download it never made.
-  if command -v gh >/dev/null 2>&1; then
-    if gh api "repos/$HUGINN_REPO/contents/client/huginn-device" \
-         -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
-       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
-    else why="gh did not return a usable runner"; fi
-  else
-    why="gh is not installed"
-  fi
-  if [ -z "$got" ]; then
-    # PINNED, exactly like `huginn update` and for the same reason: this
-    # downloads code that a systemd unit will then run in a loop, so the host it
-    # comes from is a trust root and not a convenience. Never $HUGINN_HOST.
-    uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-    if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn-device" "$tmp" >/dev/null 2>&1 \
-       && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
-    else why="$why; the $uh mirror did not either"; fi
-  fi
+  # A 200 is not proof of the FILE (a proxy error page is a successful fetch of
+  # something that is not JavaScript), so the syntax check is part of "got".
+  if _huginn_fetch_client huginn-device "$tmp" >/dev/null 2>&1 && node --check "$tmp" 2>/dev/null; then got=1
+  else why="no usable runner from ${HUGINN_UPDATE_HOST:+the $HUGINN_UPDATE_HOST mirror}${HUGINN_UPDATE_HOST:-the newest release}"; fi
   # Validated BEFORE installing, same as the client's own update. A truncated
   # download that systemd then restarts every ten seconds is worse than none.
   [ -n "$got" ] || {
@@ -572,7 +575,7 @@ _huginn_core() {
 _huginn_local_manager() { printf '%s' "$HOME/.huginn/huginn-local"; }
 
 _huginn_local_fetch() {
-  local f dest tmp got uh why
+  local f dest tmp got why
   # huginn-device rides along: managed mode installs a runner SERVICE, and a
   # machine that never enrolled as a claude device has no runner otherwise
   # (found wiring the desktop door - enrolment died on a bare spawn error).
@@ -580,24 +583,9 @@ _huginn_local_fetch() {
     dest="$HOME/.huginn/$f"; got=; why=
     [ "${1:-}" = force ] || [ ! -s "$dest" ] || continue
     mkdir -p "$HOME/.huginn"; tmp="$dest.tmp.js"
-    # Each source validated inside its own branch - see _huginn_device_fetch.
-    if command -v gh >/dev/null 2>&1; then
-      if gh api "repos/$HUGINN_REPO/contents/client/$f" \
-           -H "Accept: application/vnd.github.raw" >"$tmp" 2>/dev/null \
-         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
-      else why="gh did not return a usable $f"; fi
-    else
-      why="gh is not installed"
-    fi
-    if [ -z "$got" ]; then
-      # PINNED, like the device runner and `huginn update`: this downloads code
-      # a service will run in a loop, so the source is a trust root. Never
-      # $HUGINN_HOST.
-      uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
-      if scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/$f" "$tmp" >/dev/null 2>&1 \
-         && [ -s "$tmp" ] && node --check "$tmp" 2>/dev/null; then got=1
-      else why="$why; the $uh mirror did not either"; fi
-    fi
+    # Validated before it replaces anything - see _huginn_device_fetch.
+    if _huginn_fetch_client "$f" "$tmp" >/dev/null 2>&1 && node --check "$tmp" 2>/dev/null; then got=1
+    else why="no usable $f from ${HUGINN_UPDATE_HOST:+the $HUGINN_UPDATE_HOST mirror}${HUGINN_UPDATE_HOST:-the newest release}"; fi
     [ -n "$got" ] || {
       echo "huginn local: could not fetch $f ($why)" >&2
       rm -f "$tmp"; return 1; }
@@ -701,7 +689,7 @@ _huginn_uninstall() {
   # With a core installed, the CORE owns the uninstall: the whole stack, top
   # down - the desktop app, the local tier, the device, the core, this CLI
   # (owner rule 2026-10-15: the core includes the CLI; the desktop sits on it).
-  # Everything below remains for platforms with no core (macOS, Termux).
+  # Everything below remains for platforms with no core (Termux).
   local core
   if [ "$(uname -o 2>/dev/null)" != Android ] && core="$(_huginn_core_bin)"; then
     "$core" uninstall "$@"
@@ -1577,7 +1565,7 @@ _huginn_help_body() {
                               for attaching and the session verbs, on a
                               machine set up from the desktop or a package
   huginn main                 attach/create the live 'main' session
-                              (run claude inside)
+                              (Claude Code starts in a new one)
   huginn <name>               a separate named session
   huginn attach <name>        that session even when its name is a verb
                               (update, solo...)
@@ -1620,6 +1608,8 @@ _huginn_help_body() {
                               (Linux) | --logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
   huginn core start           start it now if it is set up but not running
+  huginn core pair --url URL  pair it with the server at URL
+                              (https://<server>:8787); asks for the token
   huginn core update          take the newest core release (restarts the core)
   huginn core route           the addresses huginn core reaches huginn on, and
                               their health [add <url> | remove <url> |
@@ -1629,13 +1619,12 @@ _huginn_help_body() {
                               sees
   huginn device on            offer this machine
                               [--scope look|work|own] [--root DIR]
-                              [--url URL: the daemon's address, when ssh
-                              cannot say]
+                              [--name NAME: how it is listed]
                               [--act-while-locked | --no-act-while-locked:
                               whether a lock screen withdraws 'act' on this
                               machine (default: it does)]
   huginn device off           stop offering it
-  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device update        fetch a newer runner from the newest release
   huginn device serve         the runner itself - what the service starts
   huginn device unit          print what keeps the runner up: a systemd unit
                               [--system], or on Windows a scheduled task that
@@ -1663,11 +1652,10 @@ _huginn_help_body() {
                               'claude --resume' command  [--now: skip wrap-up]
   huginn archive              what has been archived, and how to bring it back
   huginn revive <id|name>     bring an archived session back to life
-  huginn -p "question"        one-shot headless query: reasoning + memory +
-                              web, and nothing that can change anything
+  huginn -p "question"        one-shot headless query: reasoning, reading and
+                              the web, and nothing that can change anything
                               (Bash/Edit/Write are denied)
-  huginn -y "task"            one-shot that may use tools
-                              (bash/files/web + memory)
+  huginn -y "task"            one-shot that may use tools (bash, files, web)
   huginn usage [args]         Claude Code token/cost report (ccusage; default:
                               daily), e.g. huginn usage monthly | session |
                               blocks | blocks --live
@@ -1678,7 +1666,8 @@ _huginn_help_body() {
                               build (Windows, Debian, Arch, portable)
   huginn desktop win|linux|arch|portable
                               just that build's url, bare, for scripting
-  huginn desktop install      Linux: install or repair the per-user,
+  huginn desktop install      install or repair the desktop app: the
+                              Windows installer, or on Linux the per-user,
                               self-updating build (no root; any distro)
   huginn desktop uninstall    Linux: remove that install (keeps settings)
   huginn desktop update       update the installed desktop app to the newest
@@ -1686,17 +1675,17 @@ _huginn_help_body() {
                               the Debian/Arch package with sudo)
   huginn update               update everything huginn on this machine: this
                               client, huginn core, the desktop app and the
-                              local-AI tier (whichever are installed). The
-                              client comes from the repo
-                              ($HUGINN_REPO); without gh, from the
-                              PINNED ${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT} mirror, never from
-                              \$HUGINN_HOST${HUGINN_HOST:+, which is $HUGINN_HOST here}:
-                              the box you point at must not become a source
-                              of code this shell runs
+                              local-AI tier (whichever are installed), from
+                              the newest release of $HUGINN_REPO.
+                              Not from \$HUGINN_HOST${HUGINN_HOST:+, which is $HUGINN_HOST here}:
+                              the box you drive is not a source of code this
+                              shell runs (HUGINN_UPDATE_HOST=host
+                              names a mirror on purpose)
   huginn uninstall            remove the whole stack, top down: the desktop
                               app, the local-AI tier, this machine's device
                               row, huginn core and this CLI [--all also takes
-                              the SSH stanza + huginn's own key]
+                              the SSH stanza + huginn's own key; --yes: do
+                              not ask first]
   huginn version              show client version
   huginn help | ? | /help     this help
 
@@ -1705,7 +1694,7 @@ _huginn_help_body() {
   Session names are lowercase letters, digits, '_' and '-' (no dots, spaces
   or *), up to 50 characters, and must start with a letter, digit or '_'.
   Case-insensitive ('Test' and 'test' are the same session).
-  In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
+  In a session: claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.
   Reattach from any device.
   Host via the 'huginn' SSH alias; override with \$HUGINN_HOST.
@@ -1828,24 +1817,16 @@ EOF
     update)
       local dest="${BASH_SOURCE[0]:-$HOME/.huginn/huginn.sh}" tmp got='' src='' t0=$SECONDS log newv
       tmp="$dest.tmp"; log="$(mktemp)"
-      local uh="${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}"
       _huginn_ui_head "huginn update"
-      # gh's answer goes to $tmp, its complaints to the log - never mixed.
-      if command -v gh >/dev/null 2>&1 && _huginn_ui_spin client "fetching" "$log" \
-           bash -c 'gh api "repos/$1/contents/client/huginn.sh" -H "Accept: application/vnd.github.raw" > "$2"' _ "$HUGINN_REPO" "$tmp" \
-         && [ -s "$tmp" ]; then
-        got=1; src="from GitHub"
+      [ -n "${HUGINN_UPDATE_HOST:-}" ] \
+        && _huginn_ui_line warn client "HUGINN_UPDATE_HOST is set: trusting $HUGINN_UPDATE_HOST for this client's code"
+      # The file goes to $tmp; where it came from (or why not) to the log.
+      if _huginn_ui_spin client "fetching" "$log" _huginn_fetch_client huginn.sh "$tmp"; then
+        got=1; src="from $(tail -1 "$log")"
       fi
       if [ -z "$got" ]; then
-        [ "$uh" = "$HUGINN_UPDATE_HOST_DEFAULT" ] \
-          || _huginn_ui_line warn client "HUGINN_UPDATE_HOST is set: trusting $uh for this client's code"
-        if _huginn_ui_spin client "fetching from the $uh mirror" "$log" scp -o BatchMode=yes "$uh:/usr/local/share/huginn-cli/huginn.sh" "$tmp"; then
-          got=1; src="from the $uh mirror"
-        fi
-      fi
-      if [ -z "$got" ]; then
-        rm -f "$tmp" "$log" 2>/dev/null
-        _huginn_ui_line fail client "update failed: gh unavailable or errored, and the $uh mirror did not answer either"; return 1
+        _huginn_ui_line fail client "update failed: $(tail -1 "$log" 2>/dev/null || echo 'no answer')"
+        rm -f "$tmp" "$log" 2>/dev/null; return 1
       fi
       if ! bash -n "$tmp" 2>/dev/null; then
         rm -f "$tmp" "$log"; _huginn_ui_line fail client "the downloaded client failed its syntax check - kept $HUGINN_VERSION"; return 1
@@ -2147,23 +2128,21 @@ EOF
       local mode="$1"; shift
       [ "$#" -gt 0 ] || { echo "usage: huginn $mode \"your prompt\"" >&2; return 1; }
       local q="$*"; q=${q//\'/\'\\\'\'}            # POSIX single-quote escape
-      # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
-      # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
-      # The DISALLOWED deny-list is the real fence - --allowedTools only
-      # auto-approves, so without it a -p query could still be granted Bash.
-      # The flag is assembled HERE and interpolated into the remote command, so the
-      # quoting is bash SYNTAX on the host. Building it into a remote variable and
-      # expanding it unquoted (the 0.8.0 pre-release form) word-split it into
-      # `'Bash` `Edit` `Write` `NotebookEdit'` - literal quotes, no valid tool name,
-      # so nothing was actually denied.
-      local tools dflag
+      # The server's huginn-ask runs the turn with the same fence as a chat in the
+      # apps (-p = ask: read, search, web, Bash/Edit/Write denied; -y = act), plus
+      # the server's own extra tools, persona and working directory. A server too
+      # old to carry it gets the same fence inline, with the persona from where
+      # older servers kept it. The deny-list is the real fence: --allowedTools only
+      # auto-approves. It is assembled HERE, so its quoting is bash SYNTAX on the
+      # host; expanding it from a remote variable word-splits it into
+      # `'Bash` `Edit` `Write` `NotebookEdit'`, which denies nothing.
+      local tools dflag sub
       if [ "$mode" = "-y" ]; then
-        tools="Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace"; dflag=""
+        sub=act; tools="Skill Bash Read Edit Write Glob Grep WebFetch WebSearch"; dflag=""
       else
-        tools="Skill mcp__mempalace WebFetch WebSearch"; dflag="--disallowedTools 'Bash Edit Write NotebookEdit'"
+        sub=ask; tools="Skill WebFetch WebSearch"; dflag="--disallowedTools 'Bash Edit Write NotebookEdit'"
       fi
-      # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
-      ssh -T "$H" "cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' $dflag; else echo '$q' | claude -p; fi" ;;
+      ssh -T "$H" "if command -v huginn-ask >/dev/null 2>&1; then echo '$q' | huginn-ask $sub; else cd \"\${HUGINN_WORKDIR:-\$HOME}\" 2>/dev/null || cd \"\$HOME\"; P=\"\$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)\"; if [ -n \"\$P\" ]; then echo '$q' | claude -p --append-system-prompt \"\$P\" --allowedTools '$tools' $dflag; else echo '$q' | claude -p --allowedTools '$tools' $dflag; fi; fi" ;;
     *)
       _huginn_valid_name "$1" || { _huginn_bad_name "$1"
         echo "        Did you mean a subcommand? Try 'huginn help'." >&2; return 1; }
