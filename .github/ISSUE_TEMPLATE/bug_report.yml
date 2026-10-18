@@ -1,7 +1,12 @@
-name: 🐞 Bug report
-description: Something in Huginn isn't working as expected
+name: Bug report
+description: Something in Huginn does not work as expected
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Questions and setup help belong in [Discussions](https://github.com/silencelen/huginn/discussions).
+        Security issues: report them privately (Security, then Report a vulnerability).
   - type: textarea
     id: what
     attributes:
@@ -14,31 +19,43 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. On the host: ...
+        1. On the server: ...
         2. On the client: huginn ...
         3. ...
     validations:
       required: true
   - type: dropdown
-    id: client
+    id: part
     attributes:
-      label: Client
-      options: [Windows PowerShell, bash (Linux/macOS), Termux (Android), other]
+      label: Which part?
+      multiple: true
+      options:
+        - Server install or daemon (huginn-appd)
+        - huginn command (bash)
+        - huginn command (PowerShell)
+        - huginn core or the console
+        - Desktop app (Windows)
+        - Desktop app (Linux)
+        - Android app
+        - Documentation
     validations:
       required: true
-  - type: input
-    id: host
-    attributes:
-      label: Host OS / type
-      placeholder: "Debian 13 LXC / Ubuntu 24.04 VM / Raspberry Pi OS / ..."
   - type: textarea
     id: versions
     attributes:
       label: Versions
-      description: Output of `huginn status`, plus `tmux -V` and `claude --version` on the host.
-      render: shell
-  - type: textarea
-    id: extra
+      description: |
+        `huginn version` and `huginn core status` on the client; `huginn status` (or `huginn-status` on the server); the app version from its settings.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: platform
     attributes:
-      label: Anything else?
-      description: Logs, screenshots, your SSH alias (redact hosts/keys).
+      label: Platforms
+      placeholder: "Server: Debian 13 container. Client: Windows 11 / Ubuntu 24.04 / Android 15"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: For the daemon, `journalctl -u huginn-appd -t huginn-appd -n 100`. Remove tokens, addresses and names you do not want public.
