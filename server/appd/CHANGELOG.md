@@ -45,6 +45,11 @@ version number collided. Entries below are reconstructed from the shipping commi
   `/etc` as a session can, and `ip` and `ss` work in them. Add your own drop-in for a stricter
   sandbox.
 
+### Fixed
+- Sessions list correctly on a server whose system locale is not UTF-8 (a stock Debian
+  container sets `LANG=C`). Every session used to come back under a mangled name the apps could
+  not open. Sessions the daemon starts now get a UTF-8 locale.
+
 ### Upgrading
 - To keep extra tools, a persona at a custom path, or Proxmox-style fix lines, set the matching
   variable in `/etc/systemd/system/huginn-appd.service.d/site.conf`.
