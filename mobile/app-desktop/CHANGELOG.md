@@ -22,10 +22,10 @@ Carries core 2.5.9. Desktop 2.5.8 was never released: its changes ship here.
   folder to SYSTEM, the Administrators and you. huginn core locks the token copy each time it hands
   it over. See core 2.5.9.
 
-From the owner's eighth recorded setup run on PC01:
+From a test setup run on Windows:
 
 ### Changed
-- **One icon, and a clear way back** (owner). Where huginn core is installed, this app never shows
+- **One icon, and a clear way back.** Where huginn core is installed, this app never shows
   its own older tray icon. Hiding core's icon ("Hide this icon") used to bring that one up in its
   place. **Settings > Appearance & behaviour > Tray icon** now shows or hides core's icon at once.
   Hidden, it comes back at the next sign-in or from that switch. With it hidden, closing the window
@@ -33,10 +33,10 @@ From the owner's eighth recorded setup run on PC01:
 
 ## 2.5.7
 
-Carries core 2.5.7. From the owner's sixth recorded setup run on PC01.
+Carries core 2.5.7. From a test setup run on Windows.
 
 ### Changed
-- **One tray icon, one menu** (owner). While huginn core's tray icon is there, it carries this app's
+- **One tray icon, one menu.** While huginn core's tray icon is there, it carries this app's
   Close to tray and Quit Huginn, and this app shows no icon of its own. **Close to tray now works
   with it:** closing the window hides it, and the tray's Open Huginn brings it back. Before, closing
   always quit while the core's tray was attached. The app's own icon still appears wherever the core
@@ -50,10 +50,10 @@ Carries core 2.5.7. From the owner's sixth recorded setup run on PC01.
 
 ## 2.5.6
 
-Carries core 2.5.6. From the owner's fifth recorded setup run on PC01.
+Carries core 2.5.6. From a test setup run on Windows.
 
 ### Changed
-- **Local AI can finish in the background while setup carries on** (owner). A model download can
+- **Local AI can finish in the background while setup carries on.** A model download can
   take a long while, more so on a bigger machine. Once it starts, the step offers **Continue setup**,
   and says you can go on now or wait and watch it. The card shows one bar for the whole install,
   with how much is done, how fast and about how long is left (`1240 of 2568 MB, 2.3 MB/s, about
@@ -77,7 +77,7 @@ Carries core 2.5.6. From the owner's fifth recorded setup run on PC01.
 
 ## 2.5.5
 
-Carries core 2.5.5. From the owner's fourth recorded setup run on PC01, which went 7 of 7.
+Carries core 2.5.5. From a test setup run on Windows.
 
 ### Fixed
 - **The first launch opens maximized, the way Windows snaps a window,** not as a window bigger
@@ -102,7 +102,7 @@ Carries core 2.5.5. From the owner's fourth recorded setup run on PC01, which we
 
 ## 2.5.4
 
-Carries core 2.5.4. From the owner's third recorded setup run on PC01.
+Carries core 2.5.4. From a test setup run on Windows.
 
 ### Fixed
 - **Clicking setup's test notification no longer opens an empty "Untitled - not found" chat.**
@@ -130,7 +130,7 @@ Carries core 2.5.4. From the owner's third recorded setup run on PC01.
 
 ## 2.5.3
 
-Carries core 2.5.3. From the owner's two recorded setup runs on PC01.
+Carries core 2.5.3. From test setup runs on Windows.
 
 ### Changed
 - **Setup re-checks what it shows.**
@@ -176,8 +176,8 @@ Carries core 2.5.2.
 
 ## 2.5.1
 
-Carries core 2.5.1. **The app now goes through huginn core** (docs/DESKTOP-VIA-CORE.md, owner
-decision 2026-10-16): it no longer holds the appd token.
+Carries core 2.5.1. **The app now goes through huginn core** (docs/DESKTOP-VIA-CORE.md, decided
+2026-10-16): it no longer holds the appd token.
 
 ### Changed
 - **One link per machine: huginn core's.**
@@ -314,7 +314,7 @@ for the CLI 2.1.1 core fix, and this release carries core 2.1.1.
 ### Changed
 - **The app no longer runs work itself.** "Available to huginn" now drives `huginn core`, a
   per-user background service that starts at boot. This machine stays available with the window
-  closed and nobody signed in, which is how RIG kept dropping off. The app's old built-in runner
+  closed and nobody signed in, which is how a GPU workstation kept dropping off. The app's old built-in runner
   and lock probe are removed. Settings shows the core's status and sends changes to it over a
   local socket that only you can open.
 - **Every desktop build carries its core.** The Windows installer installs it per-user. The Linux
@@ -322,7 +322,7 @@ for the CLI 2.1.1 core fix, and this release carries core 2.1.1.
   If no core is running, Settings shows **Set up huginn core**, which starts it at boot (one UAC
   prompt on Windows).
 - **Remove this computer** now also makes the core forget its pairing.
-- **The Windows installer, the app launcher and the bundled core are Authenticode-signed** (home.arpa
+- **The Windows installer, the app launcher and the bundled core are Authenticode-signed** (a private
   domain CA for now; see the CLI changelog for why).
 
 ## 1.13.0
@@ -395,7 +395,7 @@ for the CLI 2.1.1 core fix, and this release carries core 2.1.1.
 - **A scope change reaches huginn.** The device runner captured the scope once at enrolment and
   re-sent that on every beat, so changing Look → Own in Settings never left the machine until the
   app restarted, and huginn kept refusing Act with "enrolled as look" while Settings showed Own.
-  The beat now reads the current scope, and a change is beaten straight away. (RIG's row read
+  The beat now reads the current scope, and a change is beaten straight away. (A GPU workstation's row read
   `look` for exactly this reason.)
 - **The device runner survives the tray.** Its supervisor is restarted from an always-on ticker,
   not only from the window's poll, and it catches Errors as well as Exceptions. A device that
@@ -417,7 +417,7 @@ for the CLI 2.1.1 core fix, and this release carries core 2.1.1.
   desk's whole list, so deleting a dead route clears it on the daemon. Only routes you added,
   the one in use, and ones that have actually worked are reported; the old Tailscale address an
   upgrade added to the book, which no longer exists, no longer makes every app add fail.
-- **Apps: a route the host does not check is named.** A route like `huginn.home.arpa`, which the
+- **Apps: a route the host does not check is named.** A route like `huginn.example.net`, which the
   Apps check does not use (it checks only loopback, private LAN, tailnet and mesh addresses and
   names with no dot), is held back and said in a line at the bottom of the Apps page instead of
   vanishing silently.
@@ -514,7 +514,7 @@ about it. Both fixes are the shared code, so the phone has them too.
 - **Project sessions are not on the Sessions page.** A lead or a member lives on its project's
   dashboard and nowhere else; the list, its rail badge and the count in the status line show
   only the sessions outside every project, plus one line under the rows — *"3 sessions are in
-  projects"* — that opens Projects. The dashboard-app lead sat in this list between two hand-made
+  projects"* — that opens Projects. A project's lead sat in this list between two hand-made
   sessions and read as a third, unrelated one that had failed to do something. The command
   palette still knows every session. Rows carry the daemon's own join (appd 3.7.0), and the
   names off the project tree cover a daemon older than that.
@@ -959,7 +959,7 @@ Attaching a page is a thing you ask for, not a thing on the screen.
 
 ## 0.15.0
 
-The devnotes wave: everything on the owner's list — pages you keep, a place to
+A round of requested features: pages you keep, a place to
 rest in a long run, honest budgets, and clean exits.
 
 - **Pages**: a rail view for all of them, and a side panel that slides in
@@ -1281,7 +1281,7 @@ the Electron client's go to `/v1/desktop` and the two never mix — see
 ## 0.8.7
 
 ### Fixed
-- **The live pane kept resizing the owner's real terminal, and everything attached to it saw it.**
+- **The live pane kept resizing your real terminal, and everything attached to it saw it.**
   Reported as wrong wrapping, jumping, garbled content and live typing not working — on the phone
   and the desktop at once, which is the tell: they share the tmux window, so one client reporting
   a bad geometry breaks it for both.

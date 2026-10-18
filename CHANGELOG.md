@@ -25,7 +25,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
   - Users could also add files to every folder there, beside a model server that runs as
     LocalSystem.
 
-  Found by the docs and security review, confirmed on PC01.
+  Found by the docs and security review, confirmed on a Windows laptop.
   - `huginn local on` and `huginn local update` now lock the folder tree before anything is
     downloaded or unpacked. Only SYSTEM, the Administrators and the person who set it up can open
     it, and that person can change only `device\`, where huginn core reseeds the token. An install
@@ -39,10 +39,10 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [2.5.8] - 2026-10-17
 
-From the owner's eighth recorded install on PC01.
+From a test install on Windows.
 
 ### Fixed
-- **Terminal setup finds an address that SSH reaches.** On PC01, `192.168.1.20` (the address
+- **Terminal setup finds an address that SSH reaches.** On a Windows laptop, `192.168.1.20` (the address
   people know, and what DNS gives) carries only huginn's own port from its VLAN, while
   `192.168.10.20` carries SSH. The terminal path paired, but could never attach. Once paired,
   `huginn setup ssh` asks huginn for its own addresses (appd 3.12.1). It tries SSH's port on each,
@@ -56,8 +56,8 @@ From the owner's eighth recorded install on PC01.
 
 ## [2.5.7] - 2026-10-17
 
-From the owner's sixth and seventh recorded installs on PC01. The sixth confirmed the uninstall no
-longer opens a "ping" window. The seventh took the terminal-only path, without the desktop app.
+From test installs on Windows. One confirmed the uninstall no
+longer opens a "ping" window. Another took the terminal-only path, without the desktop app.
 
 ### Fixed
 - **`huginn uninstall` removes local AI on Windows.** Once its services stopped, the model server
@@ -70,7 +70,7 @@ longer opens a "ping" window. The seventh took the terminal-only path, without t
 - **No visible console during uninstall.** The elevated step that deletes the boot task runs hidden.
   The visible window showed nothing, and a click on it paused the step.
 - **No Linux `systemctl` hints on Windows** when local AI is turned off.
-- **Terminal setup pairs without SSH** (run 7: the host refuses port 22 from PC01). When SSH to
+- **Terminal setup pairs without SSH** (a test install: the host refuses port 22 from a Windows laptop). When SSH to
   the host does not answer, setup asks for huginn's token, typed or pasted and never shown, and
   pairs over huginn's own port. Then it goes on to offer the device and local AI. `huginn core
   install` does the same instead of printing a raw `ssh: connect … timed out`. Before, nothing
@@ -83,7 +83,7 @@ longer opens a "ping" window. The seventh took the terminal-only path, without t
 - **`huginn core pair` no longer shows the token as it is typed or pasted.**
 
 ### Changed
-- **One tray icon, one menu** (owner). huginn core's tray icon now carries the desktop app's items
+- **One tray icon, one menu.** huginn core's tray icon now carries the desktop app's items
   while the app is open: **Close to tray** and **Quit Huginn**, under Open Huginn and the sessions
   that need you. The app no longer needs an icon of its own beside it. Clicks reach the app through
   the core (`POST /core/gui`), sent once and never replayed to an app that connects later. Open
@@ -95,7 +95,7 @@ longer opens a "ping" window. The seventh took the terminal-only path, without t
 
 ## [2.5.6] - 2026-10-17
 
-From the owner's fifth recorded install on PC01.
+From a test install on Windows.
 
 ### Changed
 - **Local AI downloads report every percent, with how much and how fast**
@@ -104,7 +104,7 @@ From the owner's fifth recorded install on PC01.
 
 ## [2.5.5] - 2026-10-17
 
-From the owner's fourth recorded install on PC01.
+From a test install on Windows.
 
 ### Fixed
 - **No empty "ping" terminal after `huginn uninstall` on Windows.** The step that removes the
@@ -117,7 +117,7 @@ From the owner's fourth recorded install on PC01.
 
 ## [2.5.4] - 2026-10-16
 
-From the owner's third recorded install on PC01.
+From a test install on Windows.
 
 ### Fixed
 - **The desktop app no longer runs as administrator when it is installed from an administrator
@@ -138,7 +138,7 @@ From the owner's third recorded install on PC01.
   queues every start of the core's boot task. `huginn core install` now runs `huginn core start`
   itself when the core does not answer after the task is registered. It runs unelevated, so the
   core never runs as administrator, and starts the core directly when the task is held back. Until
-  now, the desktop's setup then found no core (PC01).
+  now, the desktop's setup then found no core (on a Windows laptop).
 - **A fresh `huginn desktop install` no longer pre-answers the desktop's setup.** The silent
   installer wrote its components page's defaults (local AI off, start at sign-in off), and the
   app showed those steps as "skipped", answers nobody gave. That file is removed before the app
@@ -147,7 +147,7 @@ From the owner's third recorded install on PC01.
 ## [2.5.2] - 2026-10-16
 
 ### Changed
-- **The installers ask about the desktop app first, before any configuration** (owner rule):
+- **The installers ask about the desktop app first, before any configuration**:
   - **Desktop:** they install huginn core (which carries the CLI) and the desktop app, then open
     it. The app's setup window walks through the rest (huginn's address, the token, this machine
     as a device) and configures the core with it. Nothing is paired in the terminal.
@@ -162,7 +162,7 @@ From the owner's third recorded install on PC01.
     saved the address it was typed, but no token yet.
   - The core then reported itself paired, so nothing ever paired it properly.
   - The desktop's setup accepted the token, but its device step failed with "no appd token"
-    (PC01).
+    (on a Windows laptop).
   - The import now takes an address only together with its token, and the core counts as paired
     only when it holds both.
 
@@ -177,7 +177,7 @@ From the owner's third recorded install on PC01.
 
 ## [2.5.0] - 2026-10-16
 
-The core side of "the desktop goes through huginn core" (docs/DESKTOP-VIA-CORE.md, owner decision
+The core side of "the desktop goes through huginn core" (docs/DESKTOP-VIA-CORE.md, decided
 2026-10-16): the desktop app will stop holding the appd token and send everything through the core
 on the same machine. This release makes the core able to carry all of it. The desktop release that
 uses it comes next; until then, nothing changes for the desktop.
@@ -233,7 +233,7 @@ uses it comes next; until then, nothing changes for the desktop.
 ### Fixed
 - **Installing Huginn Desktop downgraded the core.** The desktop's installer runs the core it
   carries (`core self-install`) without comparing versions, so installing Desktop 2.3.6 after the
-  2.4.1 one-liner put core 2.3.6 back (PC01).
+  2.4.1 one-liner put core 2.3.6 back (on a Windows laptop).
   - `core self-install` now keeps a newer installed core and exits 0, saying so (`--force`
     overrides).
   - An older copy's `core install` hands the install to the newer core.
@@ -350,7 +350,7 @@ uses it comes next; until then, nothing changes for the desktop.
   the tray in the same second as Explorer. The tray got a blank, unclickable icon in before the
   taskbar was ready, never finished setting up, and never connected to the core. It also kept the
   one-tray lock, so the Startup-shortcut fallback stepped aside and there was no working tray at
-  all (PC01, 2026-10-16). Three changes:
+  all (on a Windows laptop, 2026-10-16). Three changes:
   - the task now starts the tray 10 seconds after sign-in, still minutes ahead of the Startup
     folder;
   - the tray waits for the taskbar before adding its icon;
@@ -383,7 +383,7 @@ uses it comes next; until then, nothing changes for the desktop.
 ### Changed
 - **Windows: the tray appears seconds after sign-in.** Windows runs Startup-folder shortcuts only
   after it has worked through every other app's startup entry one by one, each allowed up to
-  30 seconds. On PC01 the tray appeared 3.5 minutes after sign-in. huginn core now also
+  30 seconds. On a Windows laptop the tray appeared 3.5 minutes after sign-in. huginn core now also
   registers a per-user "Huginn Tray" task triggered at your logon and run in your session, with no
   administrator prompt. The Startup shortcut stays as the fallback, and the one-tray lock keeps it
   to one icon. Existing installs get the task on their next update, unless you removed the tray's
@@ -395,7 +395,7 @@ uses it comes next; until then, nothing changes for the desktop.
 - **Windows: `huginn update` no longer fails with "Access is denied" when an older huginn window is
   still open.** An update sets the running `huginn.exe` aside as `huginn.exe.old`. A console window
   left open across two updates still runs from the previous `.old`, which can then be neither deleted
-  nor replaced (PC01, 2026-10-16). The update now uses a unique name when `.old` is held, and
+  nor replaced (on a Windows laptop, 2026-10-16). The update now uses a unique name when `.old` is held, and
   removes every leftover it can on later runs.
 - `huginn core status` says whether a tray is **attached** (the core's own answer), and the service
   line now reads `tray at login`. The old `tray yes` line meant only that the tray starts at login,
@@ -407,7 +407,7 @@ uses it comes next; until then, nothing changes for the desktop.
 - **Windows: an update on battery no longer leaves huginn core stopped.** With Energy Saver on, which
   Windows 11 switches on at 20% battery, Task Scheduler launched every start of the "Huginn Core" task
   and then held it queued, so the restart an update asks for never happened. The core stayed down
-  until the laptop was charged (PC01, 2026-10-16). When the task has not started the core within
+  until the laptop was charged (on a Windows laptop, 2026-10-16). When the task has not started the core within
   20 seconds, the update now starts it directly for this login. The queued task steps aside when it
   finally runs, and the next boot is the task's again. The same happens when the domain controller
   cannot be reached at wake.
@@ -494,7 +494,7 @@ huginn core is the product, and it includes the CLI. The desktop app is a layer 
   seconds while it closes its event streams. Task Scheduler ignores a start request for a task that
   is still running, so the one `schtasks /Run` sent in that window did nothing and the core stayed
   down until the task's next repeat. The update now waits for the old process to exit and repeats
-  the start until the new core answers. Found on PC01: 2.1.1's own code left the core down; the
+  the start until the new core answers. Found on a Windows laptop: 2.1.1's own code left the core down; the
   fix restarted it in 9 s, twice, with the tray handing itself over each time.
 
 ## [2.1.1] - 2026-10-15
@@ -595,17 +595,17 @@ huginn core, phase 2: the tray and notifications, and updating the core in place
   engine.** It allows effort only from appd's own levels, and model only as a plain identifier.
   On Windows, Go runs a batch file through `cmd.exe`, so a model value such as `opus&calc.exe`
   would have run a second command and gotten around read-only scope. That required a compromised
-  host or edited chat state (scan F1, medium). An npm `claude.cmd` still works through `node cli.js`
+  host or edited chat state (found by a security review, medium). An npm `claude.cmd` still works through `node cli.js`
   when `cli.js` sits beside it.
 - **Remove this computer fails, instead of reporting success, when an installed core does not
-  confirm it forgot its token** (scan F2). Press Remove again once the core answers.
+  confirm it forgot its token** (found by a security review). Press Remove again once the core answers.
 - **`huginn core install --logon password` no longer puts the password on a command line.** The
-  password reaches PowerShell on stdin, and the prompt does not echo it (scan F3).
-- Documented: plain loopback HTTP has no peer check (docs/TLS.md, scan F4).
+  password reaches PowerShell on stdin, and the prompt does not echo it (found by a security review).
+- Documented: plain loopback HTTP has no peer check (docs/TLS.md, from a security review).
 - **The Windows core is Authenticode-signed** (`scripts/sign-windows.sh`, by `core/build.sh` and
   `release-desktop.sh`, which refuses to release unsigned). Windows Defender's behaviour model
   quarantined the unsigned core as `Behavior:Win32/Persistence.A!ml` when it re-registered its boot
-  task. The certificate is issued by the home.arpa domain CA, so domain-joined machines trust it; a
+  task. The certificate is issued by a private domain CA, so domain-joined machines trust it; a
   publicly trusted certificate is planned.
 
 ### Fixed
@@ -811,7 +811,7 @@ described the name it had just refused as valid, and colour in a pipe.
   `~/.claude/projects` from the process's home and ignored
   `HUGINN_APPD_CLAUDE_DIR`, so a private daemon — the CLI gate, the route
   suites, a review's own scratch daemon — wrote its fixture transcript into the
-  **owner's real** transcript store, and the "does Claude Code still have its
+  **user's real** transcript store, and the "does Claude Code still have its
   own copy?" guard asked about that store as well.
 
 ### Changed
@@ -873,7 +873,7 @@ from the PowerShell client was indistinguishable from success.
 
 ### Changed
 - `spawn` no longer takes `<member>:<role>` pairs or `--prompt`. The members are the LEAD's plan
-  and spawn is the owner approving it; a client that re-sent the roles would be a second opinion
+  and spawn is the user approving it; a client that re-sent the roles would be a second opinion
   about the plan on screen. The old spelling is refused by name.
 - Help in both clients: session names may contain `-` (true since 1.3.0, and the refusal text
   already said so), the pinned update mirror is named instead of printing a blank, the Projects
@@ -1346,12 +1346,12 @@ is useless. `client/huginn-device` now has a section in `scripts/test-client.sh`
 
 ### Added
 - **`huginn -p` and `-y` can now use the host's skills.** Both modes grant `Skill`, so a
-  one-shot query can load `host-ops`, `incident-triage`, `memory-ops` and the rest
+  one-shot query can load the host's project skills
   instead of re-deriving what they already document. A skill is markdown instructions, not
   a capability: invoking one cannot exceed the tools already granted, and `-p` keeps its
   deny list (`Bash Edit Write NotebookEdit`), so the ask/act line has not moved.
   Skills are cwd-scoped and resolve because the host runs these in `$HUGINN_WORKDIR`
-  (`/root/projects/app`) — verified by a headless run outside the project seeing none of them.
+  (a project repo) — verified by a headless run outside the project seeing none of them.
 
 ## [0.8.0] - 2026-08-14
 
@@ -1438,8 +1438,8 @@ Fixes found by an adversarially-verified review of the huginn node.
 
 ### Fixed
 - **Exact tmux targets (`-t =name`).** tmux resolves targets by exact match, then
-  *prefix*, then glob — and a unique prefix resolves silently, so `huginn kill andvari`
-  could destroy a session named `andvariautofill`. Kill, rename, and the reconnect
+  *prefix*, then glob — and a unique prefix resolves silently, so `huginn kill api`
+  could destroy a session named `api-refactor`. Kill, rename, and the reconnect
   client-count all anchor with `=` now; a typo fails loudly instead of hitting a
   neighbor.
 - **Reconnect no longer resurrects a killed session.** Killing a session from one device
