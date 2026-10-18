@@ -75,6 +75,19 @@ if [ "$PROMPT" = "-" ]; then PROMPT=$(cat); fi
 
 py() { python3 -c "$1" 2>/dev/null; }
 
+# ONE definition for every string from the daemon that reaches the terminal:
+# the answer on stdout and the refusals on stderr. The answer is model text, and
+# a model writes what it read - an ESC [ 2K or an OSC 52 in a log it was asked
+# to summarise comes back out verbatim, and the terminal executes it. So C0 and
+# C1 controls become spaces, the rule huginn-archive and its siblings apply.
+# Unlike theirs, newline and tab survive: an answer is prose and code, not a
+# one-line label. (scripts/test-llm-output.sh feeds it the sequences.)
+CLEAN_PY='
+CTRL = dict.fromkeys([c for c in list(range(0, 32)) + list(range(127, 160)) if c not in (9, 10)], 32)
+def clean(v):
+    return str(v).translate(CTRL)
+'
+
 # Default model: the first AVAILABLE local row — the same door a person's
 # "+ Local" button opens. --model pins a specific machine's row.
 if [ -z "$MODEL" ]; then
@@ -91,7 +104,8 @@ CHAT=$(appd_curl -s -m 15 -X POST "$API/v1/chats" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE")")
 CID=$(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('id',''))")
 if [ -z "$CID" ]; then
-  echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "$CLEAN_PY
+import json,sys; print(clean(json.load(sys.stdin).get('error','?')))")" >&2
   exit 1
 fi
 
@@ -116,7 +130,8 @@ trap cleanup EXIT
 SENT=$(appd_curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT")")
 printf '%s' "$SENT" | grep -q '"ok":true' || {
-  echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "$CLEAN_PY
+import json,sys; print(clean(json.load(sys.stdin).get('error','?')))")" >&2
   exit 1; }
 
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
@@ -126,11 +141,11 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   RUN=$(printf '%s' "$R" | py "import json,sys; print(json.load(sys.stdin).get('running'))")
   if [ "$RUN" = "False" ]; then
     SETTLED=1   # the run finished on its own; DELETE will not 409, no cancel needed
-    ANSWER=$(printf '%s' "$R" | py "
+    ANSWER=$(printf '%s' "$R" | py "$CLEAN_PY
 import json,sys
 c = json.load(sys.stdin)
 a = [m for m in c.get('messages',[]) if m.get('type')=='assistant']
-print((a[-1].get('text') or '') if a else '')")
+print(clean((a[-1].get('text') or '') if a else ''))")
     if [ -n "$ANSWER" ]; then printf '%s\n' "$ANSWER"; exit 0; fi
     echo "huginn-llm: the run finished with no answer (see the chat with --keep)" >&2
     exit 1
