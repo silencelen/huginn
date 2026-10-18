@@ -171,6 +171,45 @@ tty="${info%%|*}"
 sess="${info#*|}"
 [ -n "$sess" ] || sess="claude"
 
+# --- a compaction puts back the state it interrupted ------------------------
+# An idle compaction ("Compacted while idle, before the prompt cache expired")
+# fires PreCompact, SessionStart(compact) and PostCompact with no turn around
+# them, and its trigger is `auto`, the same as a compaction mid-turn. The
+# PostCompact `running` was therefore the last word and the session read as
+# working until the next prompt. So PreCompact keeps the state it found in the
+# marker below and PostCompact puts it back: mid-turn that state is `running` and
+# nothing changes; idle, it is `idle`. A manual /compact only ever runs between
+# turns. A marker older than appd's own five-minute limit is not trusted.
+STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
+COMPACT_DIR="$STATE_DIR/.compacting"
+_fresh_marker() { [ -n "$(find "$COMPACT_DIR/$sess" -mmin -5 2>/dev/null)" ]; }
+prior=
+case "$event" in
+  PreCompact)
+    trig=
+    if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+      trig="$(printf '%s' "$payload" | jq -r '.trigger // empty' 2>/dev/null)"
+    fi
+    if [ "$trig" = manual ]; then
+      prior=idle
+    elif [ -r "$STATE_DIR/$sess" ]; then
+      prior="$(jq -r '.state // empty' "$STATE_DIR/$sess" 2>/dev/null)" || prior=
+      [ -n "$prior" ] || prior="$(head -c 32 "$STATE_DIR/$sess" 2>/dev/null | tr -d '[:space:]')"
+      # A second PreCompact for the same compaction finds the first one's
+      # `running`; the first one's finding stands.
+      if [ "$prior" = running ] && [ -s "$COMPACT_DIR/$sess" ] && _fresh_marker; then
+        prior="$(head -c 16 "$COMPACT_DIR/$sess" 2>/dev/null)"
+      fi
+    fi ;;
+  PostCompact)
+    if _fresh_marker; then
+      case "$(head -c 16 "$COMPACT_DIR/$sess" 2>/dev/null)" in
+        idle)      icon="$ICON_IDLE"; st=idle ;;
+        attention) icon="$ICON_NEEDYOU"; st=attention ;;
+      esac
+    fi ;;
+esac
+
 # Record the same state for machine consumers (huginn-appd's sessions list —
 # the Huginn Android app): one file per session in /run/huginn-claude-state/.
 # Ephemeral by design (tmpfs, cleared on reboot); cleared on SessionEnd.
@@ -181,7 +220,6 @@ sess="${info#*|}"
 # ~/.claude/projects/*.jsonl instead of scraping the pane — there is no other
 # way to learn which transcript belongs to which tmux session. Without jq it
 # degrades to the bare state word, which readers still accept.
-STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
 if [ -n "$st" ]; then
   # Owner-only: the file names enumerate every live session and each body carries
   # that session's transcript path and cwd, i.e. the whole project layout. Under
@@ -212,8 +250,8 @@ fi
 # --- compaction marker ------------------------------------------------------
 # PreCompact starts it, PostCompact/Stop/SessionEnd clear it. huginn-appd reads
 # STATE_DIR/compacting/<sess> to show a "compacting…" indicator reliably (the
-# pane spinner only shows it while a screen is actually being captured). No jq
-# needed — it is presence-only.
+# pane spinner only shows it while a screen is actually being captured). appd
+# reads presence only; the body is the state word PostCompact restores (above).
 # ⚠ THE LEADING DOT IS LOAD-BEARING. These directories sit in the SAME namespace
 # as the flat per-session state files written above, and a session may legitimately
 # be called `ask`, `plan` or `compacting` — at which point one half or the other
@@ -222,12 +260,11 @@ fi
 # every sidecar write on the host dies on ENOTDIR and no session gets a prompt
 # sidecar at all. A leading dot is outside appd's name rule, so the collision
 # cannot happen. appd reads the dotted directories and still clears the old ones.
-COMPACT_DIR="$STATE_DIR/.compacting"
 case "$event" in
   PreCompact)
     umask 077
     mkdir -p "$COMPACT_DIR" 2>/dev/null && chmod 700 "$COMPACT_DIR" 2>/dev/null
-    : > "$COMPACT_DIR/$sess" 2>/dev/null ;;
+    printf '%s' "$prior" > "$COMPACT_DIR/$sess" 2>/dev/null ;;
   PostCompact|Stop|SessionEnd)
     rm -f "$COMPACT_DIR/$sess" 2>/dev/null ;;
 esac
