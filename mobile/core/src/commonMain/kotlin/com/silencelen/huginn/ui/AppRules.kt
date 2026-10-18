@@ -230,8 +230,22 @@ object AppRules {
         // An ADVISORY address says so, because a reader of a red row needs to know
         // which lines are the reason and which are merely news (appd 3.9).
         val tag = if (address.required == false) " · not required" else ""
-        return "${address.addr} — $why$tag"
+        return "${address.addr} — $why$tag${savedOnWords(address)}"
     }
+
+    /** " · saved on DATATREEX" for a failing address a device saved, or "". */
+    fun savedOnWords(address: AppAddress): String {
+        if (address.ok || address.pinnedBy.isEmpty()) return ""
+        val names = address.pinnedBy.map { it.name?.trim()?.takeIf { n -> n.isNotEmpty() } ?: "a device" }.distinct()
+        return " · saved on ${names.joinToString(", ")}"
+    }
+
+    /**
+     * Whether this address may be forgotten from the Apps page: it failed, and
+     * devices SAVED it. Forgetting removes it from huginn's own list of reported
+     * routes. It runs none of the fix lines; those stay copy-only.
+     */
+    fun forgettable(address: AppAddress): Boolean = !address.ok && address.pinnedBy.isNotEmpty()
 
     /** How many addresses one row may list for itself — the daemon's `MAX_APP_ADDRS`, mirrored. */
     const val MAX_APP_ADDRS: Int = 8

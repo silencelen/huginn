@@ -1229,6 +1229,16 @@ class AppStore(
     }
 
     /**
+     * Forget a failing route devices saved, then check the red rows again, so the
+     * page turns green now rather than at the daemon's next sweep.
+     */
+    suspend fun forgetRoute(addr: String) {
+        runCatching { client.forgetRoute(addr) }
+            .onSuccess { _apps.value.apps.filter { it.reachable.ok == false }.forEach { probeApp(it.id) } }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /**
      * Add an app.
      *
      * ⚠⚠ THE 422 IS PUBLISHED, NOT NOTED (decision 54). It is the daemon saying
@@ -1433,6 +1443,11 @@ class AppStore(
     private var routesReporting = false
     private val _appsRouteNotice = MutableStateFlow<String?>(null)
     val appsRouteNotice: StateFlow<String?> = _appsRouteNotice.asStateFlow()
+    /** This computer's name, which the Apps page shows beside a route it saved. */
+    private fun deviceName(): String? =
+        (System.getenv("COMPUTERNAME") ?: System.getenv("HOSTNAME"))?.trim()?.takeIf { it.isNotEmpty() }
+            ?: runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrNull()
+
     private fun reportRoutesOnce() {
         val report = AppRules.routeReport(_routeBook.value, _routeHealth.value)
         synchronized(routesLock) {
@@ -1441,7 +1456,7 @@ class AppStore(
         }
         scope.launch {
             try {
-                runCatching { client.reportRoutes(report.hosts) }
+                runCatching { client.reportRoutes(report.hosts, deviceName()) }
                     .onSuccess { answer ->
                         synchronized(routesLock) {
                             if (!answer.supported) routesUnsupported = true else routesReportedAs = report.hosts

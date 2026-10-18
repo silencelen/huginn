@@ -87,6 +87,12 @@ fun AppsView(
     /** Hands a failing row's fix lines to the shell's clipboard. */
     onCopyFix: ((String) -> Unit)? = null,
     /**
+     * Forgets a failing address that devices SAVED (appd 3.13.2). Null hides the
+     * control. It removes the address from huginn's own list of reported routes
+     * and runs none of the fix lines, which stay copy-only.
+     */
+    onForgetRoute: ((String) -> Unit)? = null,
+    /**
      * Whether THIS view owns the scroll.
      *
      * ⚠ EXACTLY ONE OWNER PER SHELL, and the default is "not me" because the
@@ -123,6 +129,7 @@ fun AppsView(
                     onProbe = onProbe,
                     onEdit = onEdit,
                     onCopyFix = onCopyFix,
+                    onForgetRoute = onForgetRoute,
                 )
             }
             HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
@@ -161,6 +168,7 @@ fun AppRow(
     onProbe: ((App) -> Unit)? = null,
     onEdit: ((App) -> Unit)? = null,
     onCopyFix: ((String) -> Unit)? = null,
+    onForgetRoute: ((String) -> Unit)? = null,
 ) {
     var open by remember(app.id) { mutableStateOf(false) }
     val expandable = AppRules.expandable(app)
@@ -196,7 +204,7 @@ fun AppRow(
                 onProbe?.let { probe -> RowVerb("Check now") { probe(app) } }
                 onEdit?.let { edit -> RowVerb("Edit") { edit(app) } }
             }
-            if (expandable && open) AppFixPanel(app, onCopyFix)
+            if (expandable && open) AppFixPanel(app, onCopyFix, onForgetRoute)
         },
     )
 }
@@ -212,9 +220,14 @@ fun AppRow(
  * [AppRules.FIX_NEVER_RUN] a panel with one control reads as one somebody forgot
  * to finish, and somebody would eventually finish it — which is why that
  * sentence and the verbatim lines are both asserted by `AppFixCopyTest`.
+ *
+ * The one other control is Forget, on an ADDRESS line and never on the fix lines:
+ * it removes a route a device saved from huginn's own list (appd 3.13.2), which
+ * is the daemon's data rather than this host's units or another machine's
+ * firewall, and it is the only fix for a retired address.
  */
 @Composable
-private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?) {
+private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?, onForgetRoute: ((String) -> Unit)? = null) {
     val lines = AppRules.fixLines(app)
     val addresses = app.reachable.addresses
     Spacer(Modifier.height(6.dp))
@@ -233,14 +246,25 @@ private fun AppFixPanel(app: App, onCopy: ((String) -> Unit)?) {
                 Spacer(Modifier.height(2.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
                     addresses.forEach { addr ->
-                        Text(
-                            AppRules.addressWords(addr),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (addr.ok) MaterialTheme.colorScheme.onSurfaceVariant
-                            else MaterialTheme.colorScheme.error,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                AppRules.addressWords(addr),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (addr.ok) MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            // A saved route that does not answer is usually a retired
+                            // one. Forgetting it is huginn's own data, so it may have a
+                            // control here; the fix lines below still have only Copy.
+                            if (onForgetRoute != null && AppRules.forgettable(addr)) {
+                                TextButton(onClick = { onForgetRoute(addr.addr) }) {
+                                    Text("Forget", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
                     }
                 }
             }

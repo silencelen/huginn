@@ -2426,8 +2426,13 @@ class HuginnClient(
      * refused (`refused`), and a 404 is an older daemon with nothing to report to
      * (`supported = false`) — both are answers a caller has something to say about.
      */
-    suspend fun reportRoutes(hosts: List<String>): RouteReportAnswer {
-        val body = buildJsonObject { put("addrs", JsonArray(hosts.map { JsonPrimitive(it) })) }
+    suspend fun reportRoutes(hosts: List<String>, deviceName: String? = null): RouteReportAnswer {
+        // The device's own name rides along (appd 3.13.2), so a saved route that
+        // stops answering can be shown as "saved on DATATREEX" instead of as an id.
+        val body = buildJsonObject {
+            put("addrs", JsonArray(hosts.map { JsonPrimitive(it) }))
+            deviceName?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", JsonPrimitive(it.take(40))) }
+        }
         val resp = http.request { build("/v1/apps/routes", HttpMethod.Put, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         return when {
@@ -2466,6 +2471,15 @@ class HuginnClient(
      * promise of one.
      */
     suspend fun probeApp(id: String): App = decode(post("/v1/apps/${seg(id)}/probe"))
+
+    /**
+     * Forget a route devices reported (appd 3.13.2): it stops being required of
+     * every app. For a retired address; a device that still saves it reports it
+     * again at its next launch, which is why the Apps page names that device.
+     */
+    suspend fun forgetRoute(addr: String) {
+        call("/v1/apps/routes/${seg(addr)}", HttpMethod.Delete)
+    }
 
     /**
      * The app's favicon, as the daemon cached it on probe.

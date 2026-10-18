@@ -102,6 +102,8 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val routeHealth: String = "",
         /** The first-launch local-AI offer card: shown once, dismissed forever. */
         val localOfferSeen: Boolean = false,
+        /** The build that last opened its window here; see [FirstFrames]. */
+        val lastLaunchBuild: String = "",
         val clientId: String = "",
         val notifyEnabled: Boolean = true,
         val watchEnabled: Boolean = true,
@@ -424,6 +426,13 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     override suspend fun setTlsPins(value: String) {
         _tlsPins.value = value
         mutate { it.copy(tlsPins = value) }
+    }
+
+    fun lastLaunchBuildNow(): String = synchronized(lock) { stored.lastLaunchBuild }
+
+    fun setLastLaunchBuild(build: String) {
+        if (synchronized(lock) { stored.lastLaunchBuild } == build) return
+        mutate { it.copy(lastLaunchBuild = build) }
     }
 
     private val _localOfferSeen = kotlinx.coroutines.flow.MutableStateFlow(stored.localOfferSeen)

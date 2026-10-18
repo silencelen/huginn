@@ -94,6 +94,7 @@ import com.silencelen.huginn.desktop.ui.match
 import com.silencelen.huginn.desktop.ui.padPanelFits
 import com.silencelen.huginn.desktop.ui.padPanelHasHome
 import com.silencelen.huginn.desktop.ui.padPanelShowing
+import com.silencelen.huginn.desktop.update.BuildInfo
 
 /**
  * The Compose Multiplatform desktop client for huginn-appd.
@@ -744,16 +745,9 @@ fun main(args: Array<String>) {
                 window.minimumSize = java.awt.Dimension(WindowLayout.MIN_W, WindowLayout.MIN_H)
             }
 
-            // ⚠ GARBLED FIRST FRAMES. On the first launch after an install or an
-            // update the window could show garbled or black patches until it was
-            // re-maximized or touched (Windows 11, 250% scaling, Direct3D; seen on
-            // the built-in screen and with an external monitor). A cold start is
-            // slow, and frames drawn while the window is still settling (shown,
-            // maximized, its scale read) stay on screen until something asks for
-            // another. So the window asks a few times in its first seconds: a
-            // repaint re-reads the scale and redraws the whole surface, which is
-            // what the manual re-maximize did. The renderer and scale are logged,
-            // so a report says which path drew it (HUGINN_RENDER_API overrides).
+            // ⚠ GARBLED FIRST FRAMES: see [FirstFrames]. The renderer and scale are
+            // logged on every launch, so a report says which path drew it
+            // (HUGINN_RENDER_API overrides the renderer).
             LaunchedEffect(Unit) {
                 // A fallback (Direct3D refused, OpenGL tried) is said when it happens.
                 window.onRenderApiChanged { AppLog.info("render", "renderer is now ${window.renderApi}") }
@@ -764,11 +758,25 @@ fun main(args: Array<String>) {
                     "api=$api scale=$scale bounds=${window.bounds.width}x${window.bounds.height} " +
                         "maximized=${window.extendedState and java.awt.Frame.MAXIMIZED_BOTH == java.awt.Frame.MAXIMIZED_BOTH}",
                 )
-                for (wait in longArrayOf(300, 1_200, 3_000, 6_000)) {
-                    delay(wait)
-                    window.contentPane.revalidate()
-                    window.contentPane.repaint()
+                val build = FirstFrames.build(BuildInfo.VERSION, FirstFrames.launcherModifiedMs())
+                if (FirstFrames.needsSettle(settings.lastLaunchBuildNow(), build)) {
+                    delay(FirstFrames.SETTLE_AFTER_MS)
+                    // What the person did by hand: out of maximized and back in, or
+                    // for a floating window one pixel wider and back. Either is a real
+                    // resize, which a repaint is not.
+                    if (windowState.placement == WindowPlacement.Maximized) {
+                        windowState.placement = WindowPlacement.Floating
+                        delay(200)
+                        windowState.placement = WindowPlacement.Maximized
+                    } else {
+                        val size = windowState.size
+                        windowState.size = DpSize(size.width + 1.dp, size.height)
+                        delay(200)
+                        windowState.size = size
+                    }
+                    AppLog.info("render", "first launch of ${BuildInfo.VERSION}: resized once to settle the surface")
                 }
+                settings.setLastLaunchBuild(build)
             }
 
             val windowInfo = LocalWindowInfo.current

@@ -47,6 +47,7 @@ fun AppsScreen(
     onOpen: (App) -> Unit,
     onProbe: (App) -> Unit,
     onCopyFix: (String) -> Unit,
+    onForgetRoute: ((String) -> Unit)? = null,
     /**
      * The daemon's answer to the last add, or null while none is outstanding.
      *
@@ -95,6 +96,7 @@ fun AppsScreen(
             onProbe = onProbe,
             onEdit = { editing = it },
             onCopyFix = onCopyFix,
+            onForgetRoute = onForgetRoute,
             // ⚠ THIS DESTINATION IS THE SCROLL. Nothing else on it scrolls — a
             // failing row's fix lines and its only control, Copy fix, were simply
             // off the bottom of the phone.

@@ -3163,7 +3163,19 @@ data class AppAddress(
      * red or an add refused. Null from an older daemon, where every address counted.
      */
     val required: Boolean? = null,
+    /**
+     * The devices that SAVED this address as a route to huginn (appd 3.13.2).
+     * Empty for an address nobody saved (an arrival, this host's own). On a
+     * failing address it is the answer to "which device do I fix": a retired
+     * route, a dead VPN address say, is fixed on the device or forgotten here,
+     * never by a bind or a firewall line.
+     */
+    val pinnedBy: List<RoutePinner> = emptyList(),
 )
+
+/** A device that saved an address as a route to huginn: its id, and the name it gave. */
+@Serializable
+data class RoutePinner(val client: String = "", val name: String? = null)
 
 /**
  * Whether the app answers where a phone or a laptop would ask for it — and, when

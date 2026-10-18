@@ -2743,6 +2743,22 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Forget a failing route devices saved, then check the red rows again, so the
+     * page turns green now rather than at the daemon's next sweep.
+     */
+    fun forgetRoute(addr: String) {
+        viewModelScope.launch {
+            awaitReady()
+            runCatching { client.forgetRoute(addr) }
+                .onSuccess {
+                    _toast.value = "Forgot $addr"
+                    _apps.value.apps.filter { it.reachable.ok == false }.forEach { probeApp(it.id) }
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     private fun landAppRow(row: App) {
         _apps.value = _apps.value.let { list ->
             list.copy(apps = list.apps.map { if (it.id == row.id) row else it })
@@ -2782,7 +2798,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (report.hosts == routesReportedAs) return
         routesReporting = true
         viewModelScope.launch {
-            runCatching { client.reportRoutes(report.hosts) }
+            // The phone's model, shown beside a route it saved on the Apps page.
+            runCatching { client.reportRoutes(report.hosts, android.os.Build.MODEL) }
                 .onSuccess { answer ->
                     if (!answer.supported) routesUnsupported = true
                     else routesReportedAs = report.hosts

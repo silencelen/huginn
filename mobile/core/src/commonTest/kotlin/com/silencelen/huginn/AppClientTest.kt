@@ -186,6 +186,35 @@ class AppClientTest {
     }
 
     @Test
+    fun `a route report names this device, and forgetting a route is one DELETE`() = runTest {
+        val c = client { respond("""{"fresh":[],"gone":[],"refused":[],"reported":[],"requiredAddresses":["127.0.0.1"],"forgotten":"100.101.102.103","from":[]}""", HttpStatusCode.OK) }
+        c.reportRoutes(listOf("192.168.1.20"), deviceName = " workstation ")
+        assertEquals("""{"addrs":["192.168.1.20"],"name":"workstation"}""", (seen.last().body as io.ktor.http.content.TextContent).text)
+        c.reportRoutes(listOf("192.168.1.20"), deviceName = "  ")
+        assertEquals("""{"addrs":["192.168.1.20"]}""", (seen.last().body as io.ktor.http.content.TextContent).text, "a blank name is left out")
+        c.forgetRoute("100.101.102.103")
+        assertEquals("DELETE", seen.last().method.value)
+        assertEquals("/v1/apps/routes/100.101.102.103", seen.last().url.encodedPath)
+        c.forgetRoute("fd00::1")
+        val v6 = seen.last().url.encodedPath
+        assertTrue(v6 == "/v1/apps/routes/fd00::1" || v6 == "/v1/apps/routes/fd00%3A%3A1", "a v6 address travels as one segment: $v6")
+    }
+
+    @Test
+    fun `a saved route that fails says which device saved it, and only that one can be forgotten`() {
+        val saved = com.silencelen.huginn.data.AppAddress(
+            addr = "100.101.102.103", ok = false, error = "no route", required = true,
+            pinnedBy = listOf(com.silencelen.huginn.data.RoutePinner("desk-1", "workstation"), com.silencelen.huginn.data.RoutePinner("old")),
+        )
+        assertEquals("100.101.102.103 — no route · saved on workstation, a device", com.silencelen.huginn.ui.AppRules.addressWords(saved))
+        assertTrue(com.silencelen.huginn.ui.AppRules.forgettable(saved))
+        val arrival = saved.copy(pinnedBy = emptyList())
+        assertEquals("100.101.102.103 — no route", com.silencelen.huginn.ui.AppRules.addressWords(arrival))
+        assertFalse(com.silencelen.huginn.ui.AppRules.forgettable(arrival), "nothing saved it, so nothing to forget")
+        assertFalse(com.silencelen.huginn.ui.AppRules.forgettable(saved.copy(ok = true)), "an answering route is fine")
+    }
+
+    @Test
     fun `the list says what is required and who reported each route, and an address says whether it counts`() = runTest {
         val c = client {
             respond(

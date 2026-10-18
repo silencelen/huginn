@@ -138,6 +138,7 @@ fun AppsPane(store: AppStore) {
                     onProbe = { a -> scope.launch { store.probeApp(a.id) } },
                     onEdit = { editing = it },
                     onCopyFix = { copy(it) },
+                    onForgetRoute = { addr -> scope.launch { store.forgetRoute(addr) } },
                     header = null,
                 )
             }

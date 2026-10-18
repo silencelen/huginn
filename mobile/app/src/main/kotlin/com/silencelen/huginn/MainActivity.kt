@@ -1805,6 +1805,7 @@ fun HuginnApp(
                 // sometimes add firewall lines on pve1; this app runs
                 // neither, ever.
                 onCopyFix = { text -> vm.copy(text, "the fix") },
+                onForgetRoute = { addr -> vm.forgetRoute(addr) },
                 addAnswer = appAdd,
                 onAdd = { form -> vm.addApp(form) },
                 onAddSettled = { vm.clearAppAdd() },
