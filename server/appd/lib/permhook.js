@@ -51,8 +51,24 @@ function pidAlive(pid) {
 
 const stripAnsi = (s) => String(s || '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
 const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-/** No whitespace at all: a pane wraps long commands, a wrap inserts a break. */
-const squash = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+/**
+ * The dialog's wrapped command lines, butted back into one string so the same
+ * command wrapped across pane rows compares equal to the one on a single line.
+ * The TUI hard-wraps a long command mid-token (no hyphen) and pads each line by
+ * one column, so drop that one-space pad and the line breaks and keep EVERY
+ * other character — spaces and case included.
+ *
+ * ⚠ THIS IS THE AUTHORIZATION BINDING; it must be LOSSLESS about spaces and
+ * case. The old `squash()` deleted all whitespace and lowercased, which made
+ * different commands — `rm -rf ~/tmp/x` and `rm -rf ~ /tmp/x` — compare equal, so
+ * a tap meant for the dialog on screen could approve a different, unseen live
+ * request (claude-security 2026-10-18, F20). `joinBlock` strips the dialog pad;
+ * `joinLines` does not. A wrapped-but-identical command still matches; a command
+ * that differs by a single space no longer does.
+ */
+const joinLines = (s) => String(s || '').split('\n').map((l) => l.replace(/\s+$/, '')).join('');
+const joinBlock = (s) => String(s || '').split('\n')
+  .map((l) => l.replace(/\s+$/, '').replace(/^ /, '')).join('');
 
 /** Requests whose hook process is still alive, oldest first. Never throws. */
 function liveRequests(stateDir, name, { alive = pidAlive, now = Date.now() } = {}) {
@@ -131,7 +147,7 @@ function matchesPrompt(req, prompt, region) {
   if (labels[0] !== 'Yes' || !labels.includes('No')) return false;
   const cmd = req.input && typeof req.input.command === 'string' ? req.input.command : '';
   const block = dialogCommandBlock(region);
-  return !!cmd && block != null && squash(block) === squash(cmd);
+  return !!cmd && block != null && joinBlock(block) === joinLines(cmd);
 }
 
 /**
