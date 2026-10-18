@@ -19,26 +19,30 @@ import kotlin.test.assertTrue
  * somebody could be talked into typing.
  *
  * Each case below is a CLASS of address, not an example, because the rule is
- * about shape: https anywhere, plain http only to loopback — and since appd 3.11
- * (docs/dev/protocol-tls.md) every other http address is STORED AS https rather than refused,
- * because the TLS proof is what now keeps the bearer from a stranger.
+ * about shape: https anywhere — and since appd 3.11 (docs/dev/protocol-tls.md) every
+ * http address is STORED AS https rather than refused, because the TLS proof is
+ * what now keeps the bearer from a stranger. Loopback included (security scan
+ * F9): only HUGINN_APPD_PLAINTEXT=local keeps a loopback address plain.
  */
 class RouteGuardTest {
 
     // -------------------------------------------------------------- allowed
 
     @Test
-    fun `plain http survives only to loopback, and every other http is upgraded`() {
-        val kept = mapOf(
+    fun `every http is upgraded, loopback included, and the badge stays`() = withPlaintextLoopback(on = false) {
+        val loopback = mapOf(
             "http://127.0.0.1:8787" to RouteKind.LOCAL,
             "http://127.1.2.3:8787" to RouteKind.LOCAL,
             "http://localhost:8787" to RouteKind.LOCAL,
             "http://[::1]:8787" to RouteKind.LOCAL,
         )
-        for ((url, kind) in kept) {
+        for ((url, kind) in loopback) {
             assertTrue(RouteGuard.isAllowed(url), url)
-            assertEquals(url, RouteGuard.normalize(url), "loopback keeps plain http: $url")
+            assertEquals("https://" + url.removePrefix("http://"), RouteGuard.normalize(url), "loopback is proved too: $url")
             assertEquals(kind, RouteGuard.kindOf(url), "badge for $url")
+            withPlaintextLoopback {
+                assertEquals(url, RouteGuard.normalize(url), "kept plain only by HUGINN_APPD_PLAINTEXT=local: $url")
+            }
         }
         // ⚠ The badge still says what KIND of path it is; only the scheme moved.
         val upgraded = mapOf(
@@ -107,7 +111,9 @@ class RouteGuardTest {
         assertTrue(RouteGuard.isAllowed("192.168.1.20:8787"))
         assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
         assertEquals("https://192.168.1.20:8787", RouteGuard.require(" 192.168.1.20:8787/ "))
-        assertEquals("http://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"))
+        withPlaintextLoopback(on = false) {
+            assertEquals("https://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"), "this machine too (scan F9)")
+        }
     }
 
     @Test
@@ -155,7 +161,7 @@ class RouteGuardTest {
         // exact sentence, with no way to learn why.
         assertEquals(
             "refusing that server address — it must be a bare host and port, like 192.0.2.10:8787 " +
-                "or https://huginn.example.net:8787 (huginn always connects over https, except to this machine)",
+                "or https://huginn.example.net:8787 (huginn always connects over https)",
             RouteGuard.REFUSED,
         )
         val e = assertFailsWith<IllegalArgumentException> { RouteGuard.require("http://example.com/admin") }

@@ -84,11 +84,21 @@ class HuginnClientTest {
         assertEquals("https://192.168.1.20:8787/v1/ping", seen.single().url.toString())
     }
 
-    /** Loopback is the one place plain http survives (TLS.md rule 6). */
+    /**
+     * Loopback is dialled over https too (security scan F9): a port on this
+     * machine proves nothing about who holds it. Only HUGINN_APPD_PLAINTEXT=local
+     * keeps it plain.
+     */
     @Test
-    fun `a loopback base URL stays plain http`() = runTest {
-        client(base = "http://127.0.0.1:8787") { respond("""{"ok":true}""") }.ping()
-        assertEquals("http://127.0.0.1:8787/v1/ping", seen.single().url.toString())
+    fun `a loopback base URL is dialled as https too`() = runTest {
+        withPlaintextLoopback(on = false) {
+            client(base = "http://127.0.0.1:8787") { respond("""{"ok":true}""") }.ping()
+            assertEquals("https://127.0.0.1:8787/v1/ping", seen.single().url.toString())
+        }
+        withPlaintextLoopback {
+            client(base = "http://127.0.0.1:8787") { respond("""{"ok":true}""") }.ping()
+            assertEquals("http://127.0.0.1:8787/v1/ping", seen.last().url.toString(), "kept plain only by the switch")
+        }
     }
 
     /**
@@ -305,8 +315,12 @@ class HuginnClientTest {
         assertEquals(HuginnClient.WATCH_READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
     }
 
+    // The probes below run on PLAIN http, which only HUGINN_APPD_PLAINTEXT=local
+    // leaves a route on since loopback is proved too (scan F9); the TLS probe
+    // has its own tests in DaemonTlsTest and TlsTransportIntegrationTest.
+
     @Test
-    fun `a route probe gives up faster than a real call`() = runTest {
+    fun `a route probe gives up faster than a real call`() = runTest { withPlaintextLoopback {
         val answered = client { respond("", HttpStatusCode.Unauthorized) }
             .probe("http://127.0.0.1:8787")
         // A bare 401 with no body and no version header is NOT the daemon's
@@ -316,7 +330,7 @@ class HuginnClientTest {
         assertEquals(HuginnClient.PROBE_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
         assertEquals("GET", seen.last().method.value)
         assertNull(seen.last().headers[HttpHeaders.Authorization], "probing must not depend on the token being right")
-    }
+    } }
 
     /**
      * ⚠ A SOCKET IS NOT A DAEMON. The probe used to count ANY completed HTTP
@@ -327,7 +341,7 @@ class HuginnClientTest {
      * response.
      */
     @Test
-    fun `a stranger answering HTTP is not a daemon`() = runTest {
+    fun `a stranger answering HTTP is not a daemon`() = runTest { withPlaintextLoopback {
         assertFalse(
             client { respond("<html>NAS login</html>", HttpStatusCode.OK) }.probe("http://127.0.0.1:8787"),
             "a 200 of somebody else's web page is not huginn",
@@ -344,7 +358,7 @@ class HuginnClientTest {
             client { respond("", HttpStatusCode.OK) }.probeDaemon("http://127.0.0.1:8787").answered,
             "and an empty 200 is nobody at all",
         )
-    }
+    } }
 
     /**
      * ⚠⚠ THE FINGERPRINT NO LONGER DECIDES (D-1, decision 58). Both of these
@@ -354,21 +368,23 @@ class HuginnClientTest {
      * the challenge answers it.
      */
     @Test
-    fun `the daemon's own refusal is a fingerprint, not adoption`() = runTest {
+    fun `the daemon's own refusal is a fingerprint, not adoption`() = runTest { withPlaintextLoopback {
         val c = client { respondError(HttpStatusCode.Unauthorized, """{"error":"unauthorized"}""") }
         assertFalse(c.probe("http://127.0.0.1:8787"), "a 401 nobody can attribute proves nothing")
         val probe = c.probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven)
         assertTrue(probe.answered, "but it is still huginn-shaped, and the reader is told so")
         assertNull(seen.last().headers[HttpHeaders.Authorization], "a probe must never carry the bearer")
+        // Plain http has no certificate to bind a proof to, and the legacy proof
+        // is relayable: the challenge is not even asked.
         assertTrue(
-            seen.any { it.url.encodedPath == "/v1/challenge" },
-            "and the challenge is what was asked first: ${seen.map { it.url.encodedPath }}",
+            seen.none { it.url.encodedPath == "/v1/challenge" },
+            "plain http asked the challenge: ${seen.map { it.url.encodedPath }}",
         )
-    }
+    } }
 
     @Test
-    fun `the version header is a fingerprint, not adoption`() = runTest {
+    fun `the version header is a fingerprint, not adoption`() = runTest { withPlaintextLoopback {
         val head = headersOf("X-Huginn-Appd", "3.3.0")
         // A thirty-line impostor prints exactly this. It must not win a route.
         assertFalse(
@@ -384,42 +400,66 @@ class HuginnClientTest {
         // reads any more.
         assertTrue(HuginnClient.answersLikeDaemon("3.3.0", 401, ""))
         assertFalse(HuginnClient.answersLikeDaemon(null, 401, "Unauthorized"))
+    } }
+
+    /**
+     * The bound proof adopts the daemon, a loopback one included, and the PROBE
+     * ITSELF carries no bearer: the point of the handshake is that the token
+     * stays here until the far end has shown it already has one.
+     */
+    @Test
+    fun `a daemon on loopback that makes the bound proof is adopted, without ever being sent the token`() = runTest {
+        withPlaintextLoopback(on = false) {
+            val token = "test-token"
+            val t = mockTransport(token) { request -> seen += request; respond("{}", HttpStatusCode.OK) }
+            val probe = HuginnClient(baseUrlProvider = { "http://appd.test" }, tokenProvider = { token }, transport = t)
+                .probeDaemon("http://127.0.0.1:8787")
+            assertTrue(probe.proven)
+            assertTrue(probe.secure, "over TLS on the same port")
+            assertEquals("3.11.0", probe.version)
+            assertEquals(1, t.probes.size)
+            assertTrue(seen.isEmpty(), "the probe never touched the channel that carries the bearer")
+        }
     }
 
     /**
-     * The challenge proves the daemon, and the PROBE ITSELF still carries no
-     * bearer: the point of the handshake is that the token stays here until the
-     * far end has shown it already has one.
+     * ⚠⚠ SECURITY SCAN F9. The legacy proof — an HMAC over the bare nonce — used
+     * to adopt a plain-http loopback route. The daemon answers that challenge
+     * for anybody, so whatever held the port could relay it from the daemon's
+     * own address and be adopted, then handed the bearer. It adopts nothing
+     * now, not even under the switch that keeps a loopback route plain.
      */
     @Test
-    fun `a daemon that answers the challenge is adopted, without ever being sent the token`() = runTest {
-        val token = "test-token"
-        val c = HuginnClient(
-            baseUrlProvider = { "http://appd.test" },
-            tokenProvider = { token },
-            transport = mockTransport(token) { request ->
-                seen += request
-                val nonce = request.url.parameters["nonce"] ?: ""
-                respond(
-                    """{"proof":"${com.silencelen.huginn.data.DaemonChallenge.proof(token, nonce)}","version":"3.6.0"}""",
-                    HttpStatusCode.OK,
-                )
-            },
-        )
-        val probe = c.probeDaemon("http://127.0.0.1:8787")
-        assertTrue(probe.proven)
-        assertEquals("3.6.0", probe.version)
-        assertEquals(1, seen.size, "one request in the happy path, not two")
-        assertEquals("/v1/challenge", seen.last().url.encodedPath)
-        assertNull(seen.last().headers[HttpHeaders.Authorization], "and never the bearer")
+    fun `a relayed legacy proof over plain http is not adoption, even under the switch`() = runTest {
+        withPlaintextLoopback {
+            val token = "test-token"
+            val c = HuginnClient(
+                baseUrlProvider = { "http://appd.test" },
+                tokenProvider = { token },
+                transport = mockTransport(token) { request ->
+                    seen += request
+                    val nonce = request.url.parameters["nonce"] ?: ""
+                    respond(
+                        """{"proof":"${com.silencelen.huginn.data.DaemonChallenge.proof(token, nonce)}","version":"3.13.0"}""",
+                        HttpStatusCode.OK,
+                        headersOf(HuginnClient.APPD_HEADER, "3.13.0"),
+                    )
+                },
+            )
+            val probe = c.probeDaemon("http://127.0.0.1:8787")
+            assertFalse(probe.proven, "the legacy proof proves the daemon exists, not who is on this port")
+            assertFalse(c.probe("http://127.0.0.1:8787"), "and adoption reads `proven`")
+            assertTrue(probe.answered, "still huginn-shaped, and said so")
+            assertTrue(seen.none { it.headers[HttpHeaders.Authorization] != null }, "and never the bearer")
+        }
     }
 
     @Test
-    fun `a probe that throws is a route that is not there`() = runTest {
+    fun `a probe that throws is a route that is not there`() = runTest { withPlaintextLoopback {
         val answered = client { throw kotlinx.io.IOException("no route to host") }
             .probe("http://127.0.0.1:8787")
         assertFalse(answered)
-    }
+    } }
 
     // ------------------------------------------------------- failures
 
@@ -1137,12 +1177,15 @@ class DaemonProbeTest {
         transport = mockTransport("test-token") { request -> seen += request; respond(request) },
     )
 
+    // Over plain http, which only HUGINN_APPD_PLAINTEXT=local leaves a (loopback)
+    // route on: nothing there can be proved, so the step says what answered and
+    // stops. Over TLS the same daemon is "too old" (DaemonTlsTest).
     @Test
-    fun `an older daemon answers, cannot prove, and the step says exactly that`() = runTest {
-        // appd before 3.6.0: the version header on a token-gated 401, and a 404
-        // on the challenge route it does not have. A REAL daemon — and
-        // indistinguishable from an impostor, which is why the sentence stops at
-        // what is known and the ROUTE step makes the reader choose.
+    fun `an older daemon answers, cannot prove, and the step says exactly that`() = runTest { withPlaintextLoopback {
+        // appd before 3.6.0: the version header on a token-gated 401. A REAL
+        // daemon — and indistinguishable from an impostor, which is why the
+        // sentence stops at what is known and the ROUTE step makes the reader
+        // choose.
         val probe = client {
             respond(
                 """{"error":"unauthorized"}""",
@@ -1159,45 +1202,41 @@ class DaemonProbeTest {
             HuginnClient.probeWords(probe).contains(DaemonChallenge.NOT_PROVEN),
             HuginnClient.probeWords(probe),
         )
-    }
+        assertTrue(HuginnClient.probeWords(probe).contains("HUGINN_APPD_PLAINTEXT=local"), "and says why")
+    } }
 
     @Test
-    fun `a daemon too old to stamp the header answers but proves nothing`() = runTest {
+    fun `a daemon too old to stamp the header answers but proves nothing`() = runTest { withPlaintextLoopback {
         val probe = client { respond("""{"error":"unauthorized"}""", HttpStatusCode.Unauthorized) }
             .probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven)
         assertTrue(probe.answered, "the JSON error shape is the older marker and still identifies it")
         assertNull(probe.version)
         assertTrue(HuginnClient.probeWords(probe).contains(DaemonChallenge.NOT_PROVEN))
-    }
+    } }
 
     @Test
-    fun `the proof is what makes the words say it proved anything`() = runTest {
+    fun `the proof is what makes the words say it proved anything`() = runTest { withPlaintextLoopback(on = false) {
+        // A daemon on this machine, proved over TLS like any other (scan F9).
         val probe = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "test-token" },
-            transport = mockTransport("test-token") { request ->
-                seen += request
-                respond(
-                    """{"proof":"${DaemonChallenge.proof("test-token", request.url.parameters["nonce"] ?: "")}","version":"3.6.0"}""",
-                    HttpStatusCode.OK,
-                )
-            },
+            transport = mockTransport("test-token") { request -> seen += request; respond("{}", HttpStatusCode.OK) },
         ).probeDaemon("http://127.0.0.1:8787")
         assertTrue(probe.proven)
         assertEquals(
-            "appd 3.6.0 answered at 127.0.0.1:8787, and proved it",
+            "appd 3.11.0 answered at 127.0.0.1:8787, and proved it",
             HuginnClient.probeWords(probe),
             "the step prints the world's own words, not a paraphrase",
         )
-    }
+    } }
 
     @Test
-    fun `a stranger at that address is not the daemon`() = runTest {
+    fun `a stranger at that address is not the daemon`() = runTest { withPlaintextLoopback {
         val probe = client { respond("<html>NAS login</html>", HttpStatusCode.OK) }
             .probeDaemon("http://127.0.0.1:8787")
         assertFalse(probe.proven, "a 200 of somebody else's web page is not huginn")
-    }
+    } }
 
     @Test
     fun `an empty route is a state rather than an address`() = runTest {

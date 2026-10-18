@@ -129,13 +129,28 @@ class DaemonTlsTest {
 
     // ------------------------------------------------------------ the URL rule
 
+    /**
+     * Security scan F9: loopback has no identity. Any app on a phone (or any
+     * account on a desktop) can hold the port of a port-forward or of the daemon
+     * while it is down, so a loopback route is dialled over https and proved
+     * like any other.
+     */
     @Test
-    fun `plain http survives only to loopback`() {
-        assertEquals("http://127.0.0.1:8787", DaemonTls.secureUrl("http://127.0.0.1:8787"))
-        assertEquals("http://127.8.9.10:8787", DaemonTls.secureUrl("http://127.8.9.10:8787"))
-        assertEquals("http://localhost:8787", DaemonTls.secureUrl("http://localhost:8787"))
-        assertEquals("http://[::1]:8787", DaemonTls.secureUrl("http://[::1]:8787"))
-        assertEquals("http://[0:0:0:0:0:0:0:1]:8787", DaemonTls.secureUrl("http://[0:0:0:0:0:0:0:1]:8787"))
+    fun `every http is dialled as https, loopback included`() = withPlaintextLoopback(on = false) {
+        assertEquals("https://127.0.0.1:8787", DaemonTls.secureUrl("http://127.0.0.1:8787"))
+        assertEquals("https://127.8.9.10:8787", DaemonTls.secureUrl("http://127.8.9.10:8787"))
+        assertEquals("https://localhost:8787", DaemonTls.secureUrl("http://localhost:8787"))
+        assertEquals("https://[::1]:8787", DaemonTls.secureUrl("http://[::1]:8787"))
+        assertEquals("https://[0:0:0:0:0:0:0:1]:8787", DaemonTls.secureUrl("http://[0:0:0:0:0:0:0:1]:8787"))
+        assertEquals("https://127.0.0.1:8787", DaemonTls.secureUrl("127.0.0.1:8787"), "a bare loopback authority too")
+
+        // The one way back, and only for loopback: HUGINN_APPD_PLAINTEXT=local
+        // (or huginn core's own local socket, which never dials the host).
+        assertEquals("http://127.0.0.1:8787", DaemonTls.secureUrl("http://127.0.0.1:8787", plaintext = true))
+        assertEquals("http://[::1]:8787", DaemonTls.secureUrl("http://[::1]:8787", plaintext = true))
+        assertEquals("https://192.168.10.20:8787", DaemonTls.secureUrl("http://192.168.10.20:8787", plaintext = true))
+        assertEquals("https://app.localhost:8787", DaemonTls.secureUrl("http://app.localhost:8787", plaintext = true))
+        assertEquals("https://127.0.0.1:8787", DaemonTls.secureUrl("https://127.0.0.1:8787", plaintext = true), "never a downgrade")
 
         assertEquals("https://192.168.10.20:8787", DaemonTls.secureUrl("http://192.168.10.20:8787"))
         assertEquals("https://10.0.0.5:8787", DaemonTls.secureUrl("10.0.0.5:8787"), "a bare authority is http, then upgraded")
@@ -151,11 +166,15 @@ class DaemonTlsTest {
 
     /** Rule 6: the STORED form is the upgraded one, so the reader sees https. */
     @Test
-    fun `routes are stored upgraded`() {
+    fun `routes are stored upgraded`() = withPlaintextLoopback(on = false) {
         assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("http://192.168.1.20:8787/"))
         assertEquals("https://[fd00::1]:8787", RouteGuard.normalize("http://[FD00::1]:8787"))
-        assertEquals("http://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"))
-        assertEquals("http://[::1]:8787", RouteGuard.normalize("http://[::1]:8787"))
+        assertEquals("https://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"), "loopback too (scan F9)")
+        assertEquals("https://[::1]:8787", RouteGuard.normalize("http://[::1]:8787"))
+        withPlaintextLoopback {
+            assertEquals("http://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"), "kept plain only by the switch")
+            assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("http://192.168.1.20:8787"), "and only for loopback")
+        }
         assertEquals("https://example.com", RouteGuard.normalize("http://example.com"))
         assertTrue(RouteGuard.isAllowed("http://example.com"), "upgraded, not refused: the proof guards the token now")
         assertFalse(RouteGuard.isAllowed("http://user:pw@127.0.0.1"), "the shape rules still hold")
@@ -321,12 +340,100 @@ class DaemonTlsTest {
         assertEquals(listOf(MockTransport.TEST_FP), pins.pinsFor(tok))
     }
 
+    // ------------------------------------------------ loopback (scan F9)
+
+    /**
+     * A route that is a port-forward on this machine (`adb reverse`, an SSH
+     * app) or the daemon itself: proved over TLS on the same port, pinned, and
+     * only then sent the bearer. It used to go out in plain http, unproved.
+     */
     @Test
-    fun `loopback stays plain and is never proved`() = runTest {
-        val t = daemon()
-        client(t, base = "http://127.0.0.1:8787").ping()
-        assertTrue(t.probes.isEmpty())
-        assertEquals("http://127.0.0.1:8787/v1/ping", seen.single().url.toString())
+    fun `a loopback route is proved like any other, and only then sent the bearer`() = runTest {
+        withPlaintextLoopback(on = false) {
+            val t = daemon()
+            val pins = PinBook()
+            client(t, pins, base = "http://127.0.0.1:8787").ping()
+            assertEquals(1, t.probes.size, "one proof")
+            assertTrue(t.probes.single().startsWith("https://127.0.0.1:8787/v1/challenge?nonce="), t.probes.single())
+            assertEquals(listOf(MockTransport.TEST_FP), pins.pinsFor(token))
+            assertEquals("https://127.0.0.1:8787/v1/ping", seen.single().url.toString())
+            assertEquals("Bearer $token", seen.single().headers[HttpHeaders.Authorization])
+        }
+    }
+
+    /**
+     * What binds the forward's port while it is down: another app on the phone.
+     * A plain-http listener answers the TLS hello in plain text; a TLS one can
+     * only relay the daemon's proof, which is over another certificate. Neither
+     * is sent anything that carries the bearer.
+     */
+    @Test
+    fun `a loopback squatter never sees the bearer`() = runTest {
+        withPlaintextLoopback(on = false) {
+            val t = daemon()
+            t.probeAnswer = { TlsProbeReply(null, 200, """{"ok":true}""", "9.9.9", notTls = true) }
+            val plain = assertFailsWith<DaemonTlsException> { client(t, base = "http://127.0.0.1:8787").ping() }
+            assertEquals(DaemonTlsException.Kind.TOO_OLD, plain.kind)
+            assertEquals(DaemonTls.TOO_OLD + DaemonTls.LOOPBACK_HINT, plain.message, "and says what else it can be, here")
+
+            t.probeAnswer = { url ->
+                val legacy = com.silencelen.huginn.data.DaemonChallenge.proof(token, MockTransport.nonceOf(url))
+                TlsProbeReply("22".repeat(32), 200, """{"proof":"$legacy","version":"3.13.0"}""", "3.13.0")
+            }
+            val relay = assertFailsWith<DaemonTlsException> { client(t, base = "http://127.0.0.1:8787").ping() }
+            assertEquals(DaemonTlsException.Kind.INTERCEPTED, relay.kind)
+
+            val probe = client(t).probeDaemon("http://127.0.0.1:8787")
+            assertFalse(probe.proven, "a relayed legacy proof proves nothing, on loopback too")
+            assertTrue(seen.isEmpty(), "not one bearer-carrying request was made: $seen")
+        }
+    }
+
+    /** The escape hatch is the old behaviour on purpose: plain, unproved, loopback only. */
+    @Test
+    fun `HUGINN_APPD_PLAINTEXT=local keeps loopback plain and reaches no other host`() = runTest {
+        withPlaintextLoopback {
+            val t = daemon()
+            client(t, base = "http://127.0.0.1:8787").ping()
+            assertTrue(t.probes.isEmpty(), "plain http has no certificate to prove")
+            assertEquals("http://127.0.0.1:8787/v1/ping", seen.single().url.toString())
+            assertEquals("Bearer $token", seen.single().headers[HttpHeaders.Authorization], "the opted-in request")
+
+            client(t, base = "http://192.168.10.20:8787").ping()
+            assertEquals("https://192.168.10.20:8787/v1/ping", seen.last().url.toString(), "never another host")
+            assertEquals(1, t.probes.size, "which is proved as ever")
+
+            val probe = client(t).probeDaemon("http://127.0.0.1:8787")
+            assertFalse(probe.proven, "a plain route is never adopted on its own say-so")
+            assertFalse(probe.secure)
+        }
+        assertEquals(null, withPlaintextLoopback { DaemonTls.plainRefusal("127.0.0.1") })
+        assertTrue(withPlaintextLoopback { DaemonTls.plainRefusal("192.168.10.20") }!!.contains("loopback only"))
+        assertTrue(withPlaintextLoopback(on = false) { DaemonTls.plainRefusal("127.0.0.1") }!!.contains("${DaemonTls.PLAINTEXT_ENV}=local"))
+    }
+
+    /**
+     * The desktop through huginn core: the core's transport never dials the
+     * host, it hands the request to the core's local socket, and the core proves
+     * the daemon itself. Its loopback base must stay as it is (and the app holds
+     * no token to send).
+     */
+    @Test
+    fun `through huginn core a loopback base is neither upgraded nor proved`() = runTest {
+        withPlaintextLoopback(on = false) {
+            val direct = daemon()
+            val viaCore = mutableListOf<HttpRequestData>()
+            val core = MockTransport(token = "") { request ->
+                viaCore += request
+                respond("""{"ok":true,"version":"3.11.0"}""", HttpStatusCode.OK)
+            }
+            HuginnClient(
+                baseUrlProvider = { "http://127.0.0.1/appd" }, tokenProvider = { "" },
+                transport = direct, coreTransport = core, useCore = { true },
+            ).ping()
+            assertEquals("http://127.0.0.1/appd/v1/ping", viaCore.single().url.toString())
+            assertTrue(core.probes.isEmpty() && direct.probes.isEmpty() && seen.isEmpty())
+        }
     }
 
     @Test

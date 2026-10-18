@@ -10,6 +10,9 @@ actual fun huginnHttpEngine(): HttpClientEngine = OkHttp.create()
 
 actual fun huginnTransport(): DaemonTransport = OkHttpDaemonTransport()
 
+/** Never: every app on the phone shares its loopback (see the expect). */
+internal actual fun plaintextLoopbackSwitch(): Boolean = false
+
 actual val huginnIoDispatcher: CoroutineDispatcher get() = Dispatchers.IO
 
 /**

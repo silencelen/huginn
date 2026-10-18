@@ -1,5 +1,6 @@
 package com.silencelen.huginn.data
 
+import com.silencelen.huginn.withPlaintextLoopback
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import com.sun.net.httpserver.HttpsConfigurator
@@ -30,8 +31,9 @@ import kotlin.test.assertTrue
  * every JDK that can run this suite, and the server is `com.sun.net.httpserver`;
  * no new test dependency, and nothing here talks to anything but 127.0.0.1.
  *
- * The client is pointed at `https://127.0.0.1:<port>` explicitly: loopback is the
- * one place the URL rule KEEPS plain http, so an http URL would never reach TLS.
+ * Most tests point the client at `https://127.0.0.1:<port>`; the loopback ones
+ * (security scan F9) use `http://127.0.0.1:<port>`, which is dialled over TLS on
+ * the same port exactly like any other address.
  */
 class TlsTransportIntegrationTest {
 
@@ -168,8 +170,80 @@ class TlsTransportIntegrationTest {
         servers += s
         val e = assertFailsWith<DaemonTlsException> { client(s.address.port, PinBook()).ping() }
         assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
-        assertEquals(DaemonTls.TOO_OLD, e.message)
+        // The contract's sentence, and (this is 127.0.0.1) the other thing it can be.
+        assertEquals(DaemonTls.TOO_OLD + DaemonTls.LOOPBACK_HINT, e.message)
         assertTrue(bearersReceived.isEmpty(), "not over https, not over a downgrade: $bearersReceived")
+    }
+
+    // ------------------------------------------------ loopback (security scan F9)
+
+    /** A daemon on this machine, or a port-forward to one: TLS on the same port, proved first. */
+    @Test
+    fun `a loopback http address is dialled over TLS, proved, and only then sent the bearer`() = runBlocking {
+        withPlaintextLoopback(on = false) {
+            val c = cert("loopback")
+            val port = daemon(c)
+            val pins = PinBook()
+            val client = HuginnClient(
+                baseUrlProvider = { "http://127.0.0.1:$port" }, tokenProvider = { token },
+                transport = OkHttpDaemonTransport(), pins = pins,
+            )
+            assertTrue(client.ping().ok)
+            assertEquals(listOf(c.fp), pins.pinsFor(token))
+            assertTrue(authSeenOnChallenge.isEmpty(), "the probe never carried the bearer: $authSeenOnChallenge")
+            assertEquals(listOf("Bearer $token"), bearersReceived.toList())
+        }
+    }
+
+    /**
+     * What binds a loopback port while the forward or the daemon is down: any
+     * other app on the phone, any other account on a desktop. Plain http,
+     * answering like a daemon, recording what it is sent. It used to be sent the
+     * bearer on the very first call.
+     */
+    @Test
+    fun `a plain-http squatter on a loopback port is never sent the bearer`() = runBlocking {
+        withPlaintextLoopback(on = false) {
+            val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            s.createContext("/") { ex ->
+                ex.requestHeaders.getFirst("Authorization")?.let { bearersReceived += it }
+                ex.send(200, """{"ok":true,"version":"3.13.0"}""", appd = "3.13.0")
+            }
+            s.start()
+            servers += s
+            val client = HuginnClient(
+                baseUrlProvider = { "http://127.0.0.1:${s.address.port}" }, tokenProvider = { token },
+                transport = OkHttpDaemonTransport(), pins = PinBook(),
+            )
+            val e = assertFailsWith<DaemonTlsException> { client.ping() }
+            assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
+            assertTrue(e.message!!.startsWith(DaemonTls.TOO_OLD) && e.message!!.endsWith(DaemonTls.LOOPBACK_HINT), e.message)
+            assertTrue(bearersReceived.isEmpty(), "the squatter was handed: $bearersReceived")
+        }
+    }
+
+    /**
+     * The relay the scan describes: a squatter that forwards the challenge to
+     * the daemon's real address and hands back the legacy proof, which the
+     * daemon gives anybody. It used to make the route read as proved.
+     */
+    @Test
+    fun `a relayed legacy proof on a loopback http address adopts nothing`() = runBlocking {
+        withPlaintextLoopback(on = false) {
+            val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            s.createContext("/") { ex ->
+                ex.requestHeaders.getFirst("Authorization")?.let { bearersReceived += it }
+                val nonce = ex.requestURI.rawQuery.orEmpty().substringAfter("nonce=", "").substringBefore('&')
+                ex.send(200, """{"proof":"${DaemonChallenge.proof(token, nonce)}","version":"3.13.0"}""", appd = "3.13.0")
+            }
+            s.start()
+            servers += s
+            val pins = PinBook()
+            val probe = client(s.address.port, pins).probeDaemon("http://127.0.0.1:${s.address.port}")
+            assertTrue(!probe.proven, "a relayed legacy proof read as proved: $probe")
+            assertTrue(pins.pinsFor(token).isEmpty())
+            assertTrue(bearersReceived.isEmpty(), "and nothing carried the bearer: $bearersReceived")
+        }
     }
 
     @Test

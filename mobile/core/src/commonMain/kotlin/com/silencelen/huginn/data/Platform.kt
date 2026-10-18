@@ -37,6 +37,19 @@ expect fun huginnHttpEngine(): HttpClientEngine
 expect fun huginnTransport(): DaemonTransport
 
 /**
+ * Whether this process may send the bearer over plain HTTP to a daemon on this
+ * machine: true only for `HUGINN_APPD_PLAINTEXT=local` in the environment of a
+ * desktop (JVM) process. Read once, into [DaemonTls.plaintextLoopback]; see
+ * there for why it exists and why it is off by default.
+ *
+ * ⚠ ALWAYS FALSE ON ANDROID. Every installed app shares the phone's loopback,
+ * so a port there proves nothing at all (security scan F9), and an Android app
+ * has no environment a person sets: a switch nobody can see is one nobody can
+ * be held to having turned on.
+ */
+internal expect fun plaintextLoopbackSwitch(): Boolean
+
+/**
  * Where the SSE readers parse.
  *
  * Ktor never blocks a thread on a socket, so this is not about avoiding a

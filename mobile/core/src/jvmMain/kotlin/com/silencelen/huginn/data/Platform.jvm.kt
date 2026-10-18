@@ -10,6 +10,10 @@ actual fun huginnHttpEngine(): HttpClientEngine = OkHttp.create()
 
 actual fun huginnTransport(): DaemonTransport = OkHttpDaemonTransport()
 
+/** `HUGINN_APPD_PLAINTEXT=local` in this process's environment, and nothing else. */
+internal actual fun plaintextLoopbackSwitch(): Boolean =
+    System.getenv(DaemonTls.PLAINTEXT_ENV)?.trim()?.equals("local", ignoreCase = true) == true
+
 actual val huginnIoDispatcher: CoroutineDispatcher get() = Dispatchers.IO
 
 /**
