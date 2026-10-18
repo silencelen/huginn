@@ -114,6 +114,9 @@ const CONF_FILE = path.join(CONF_DIR, 'device.json');
 const TOKEN_FILE = path.join(CONF_DIR, 'appd-token');
 
 const DEFAULTS = {
+  // Dialled as https://127.0.0.1:8787 and proved (upgradeUrl), like any stored
+  // http:// url. Spelled as it always was because huginn core's first-start
+  // import mirrors this default, and normalises it the same way.
   url: 'http://127.0.0.1:8787',
   name: null,
   // `work` and not `own`, because a default is what people keep. Widening is a
@@ -565,6 +568,14 @@ const gateLocked = (lock, actWhileLocked) => !!lock && actWhileLocked !== true;
 // on a flat LAN or hotel Wi-Fi. So none of this is optional — there is no
 // setting that re-enables cleartext to a remote host, and a failed proof never
 // falls back to anything.
+//
+// ⚠ AND A DAEMON ON THIS MACHINE IS PROVED THE SAME WAY (security scan F13).
+// Loopback used to skip the proof and the pin: the token went in cleartext to
+// whatever held 127.0.0.1:8787, and the work that listener handed back was run.
+// Any account on the machine can bind that port while appd restarts, so
+// loopback has no identity to rely on. appd answers TLS on the same port, so a
+// loopback http:// is dialled as https:// and proved like any other address;
+// PLAINTEXT_ENV below is the one, explicit way back to plain http.
 
 const TLS_PREFIX = 'huginn-tls-v1:';
 const MAX_PINS = 4;
@@ -589,28 +600,84 @@ function leafFp(sock) {
   return c && c.fingerprint256 ? c.fingerprint256.replace(/:/g, '').toLowerCase() : null;
 }
 
-/** Loopback is the one place plain HTTP is allowed: it never leaves the box. */
+/**
+ * The ONE switch that lets this runner send the token over plain HTTP, and only
+ * to a daemon on this machine: HUGINN_APPD_PLAINTEXT=local. Unset (the
+ * default), empty or anything else, the token goes only over a TLS channel the
+ * daemon has proved, loopback included.
+ *
+ * ⚠ IT MIRRORS THE DAEMON'S OWN SWITCH. appd is told who may speak plain HTTP
+ * to it by the same variable (server/appd/lib/tls.js plaintextPolicy: `local`
+ * answers plain HTTP from loopback only). Here `local` is the other half: a
+ * loopback http:// url stays plain and carries the token with nothing checking
+ * who answers, as it did before loopback was proved. `any` means nothing to a
+ * client: no setting may put the token in cleartext on a wire.
+ *
+ * ⚠ OFF BY DEFAULT, UNLIKE THE DAEMON'S, because a loopback port proves nothing
+ * about who holds it. It exists only for a daemon here that has no TLS (one
+ * older than 3.11), and belongs in the environment of the unit that runs this
+ * (`Environment=` in the systemd unit), never in device.json.
+ */
+const PLAINTEXT_ENV = 'HUGINN_APPD_PLAINTEXT';
+const plaintextLoopback = () => String(process.env[PLAINTEXT_ENV] || '').trim().toLowerCase() === 'local';
+
+/**
+ * This machine: `localhost`, 127.0.0.0/8 and ::1. The only host plain HTTP may
+ * ever reach, and only under PLAINTEXT_ENV: a loopback address never leaves the
+ * box, but nothing proves who is listening on it.
+ */
 function isLoopbackHost(h) {
   const x = String(h || '').toLowerCase().replace(/^\[|\]$/g, '');
   return x === 'localhost' || x === '::1' || /^127\.\d+\.\d+\.\d+$/.test(x);
 }
 
 /**
- * The url this runner actually dials: a remote http:// becomes https:// on the
- * same host and port (rule 6). Unparsable input comes back untouched so
- * urlRefusal still gets to name it.
+ * The url this runner actually dials: every http:// becomes https:// on the
+ * same host and port (rule 6), a daemon on this machine included; the one
+ * exception is a loopback http:// under HUGINN_APPD_PLAINTEXT=local. Unparsable
+ * input comes back untouched so urlRefusal still gets to name it.
  *
  * ⚠ AN UPGRADE, NOT A REFUSAL. Every `huginn device on` before 3.11 wrote
- * http://<lan-ip>:8787, and those machines update the runner in place; refusing
- * the stored url would strand every one of them, while upgrading reaches the
- * same daemon on the same port (it sniffs the first byte for TLS).
+ * http://<lan-ip>:8787, a runner on the server itself (and the default below)
+ * http://127.0.0.1:8787, and those machines update the runner in place;
+ * refusing the stored url would strand every one of them, while upgrading
+ * reaches the same daemon on the same port (it sniffs the first byte for TLS).
  */
 function upgradeUrl(u) {
   let p;
   try { p = new URL(u); } catch { return u; }
-  if (p.protocol !== 'http:' || isLoopbackHost(p.hostname)) return u;
+  if (p.protocol !== 'http:') return u;
+  if (isLoopbackHost(p.hostname) && plaintextLoopback()) return u;
   p.protocol = 'https:';
   return p.toString().replace(/\/$/, '');
+}
+
+/**
+ * Why the token may not go to `u` over plain http, or null: only to loopback,
+ * and only under PLAINTEXT_ENV. upgradeUrl() has already dialled everything
+ * else as https://; this is the re-check at the socket, so no path can put the
+ * token on the wire unproved.
+ */
+function plainRefusal(u) {
+  if (!isLoopbackHost(u.hostname)) return `refusing plain http to ${u.host}: cleartext is for loopback only`;
+  if (!plaintextLoopback()) {
+    return `refusing plain http to ${u.host}: the token goes only to a daemon that has proved itself over TLS, `
+      + `on this machine too (${PLAINTEXT_ENV}=local turns that off, for a daemon here that has no TLS)`;
+  }
+  return null;
+}
+
+/**
+ * The end of the old-daemon sentence for an address on this machine, which this
+ * runner used to reach in plain http: the port may be held by something that is
+ * not huginn, and there is one way to reach an old daemon anyway, named.
+ */
+function noTlsHint(origin) {
+  let host = '';
+  try { host = new URL(origin).hostname; } catch { /* not a url: no hint */ }
+  if (!isLoopbackHost(host)) return '';
+  return '; on this machine that is an old daemon or another program holding the port. '
+    + `To send the token in plain http to a daemon here that has no TLS, run the runner with ${PLAINTEXT_ENV}=local`;
 }
 
 /**
@@ -747,14 +814,16 @@ async function proveDaemon(origin, tok) {
   } catch (e) {
     // A pre-3.11 daemon's port speaks only HTTP: our ClientHello gets a plain
     // "400 Bad Request" back, which OpenSSL reports as a protocol error.
-    if (/^ERR_SSL_|^EPROTO$/.test(String(e.code || ''))) throw tlsError(`${OLD_DAEMON} (${origin} did not answer TLS)`, 'tlsOldDaemon');
+    if (/^ERR_SSL_|^EPROTO$/.test(String(e.code || ''))) {
+      throw tlsError(`${OLD_DAEMON} (${origin} did not answer TLS${noTlsHint(origin)})`, 'tlsOldDaemon');
+    }
     throw e;
   }
   if (r.status !== 200) throw new Error(`challenge at ${origin} answered ${r.status} ${r.body.slice(0, 200)}`);
   let body;
   try { body = JSON.parse(r.body); } catch { throw new Error(`challenge at ${origin} did not answer JSON`); }
   const t = body && body.tls;
-  if (!t || typeof t !== 'object') throw tlsError(OLD_DAEMON, 'tlsOldDaemon');
+  if (!t || typeof t !== 'object') throw tlsError(`${OLD_DAEMON}${noTlsHint(origin)}`, 'tlsOldDaemon');
   if (!seen || !proofMatches(t.proof, boundProof(tok, nonce, seen))) {
     throw tlsError(`${origin}: ${INTERCEPTED}`, 'tlsIntercepted');
   }
@@ -808,12 +877,20 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     method, timeoutMs, payload,
     headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
   };
-  // ⚠ http: here is loopback and nothing else — upgradeUrl() has already turned
-  // every remote http:// into https://. Only the pinned path ever carries the
-  // token off this box.
-  const sent = u.protocol === 'https:'
-    ? pinnedRequest(u, tok, opts)
-    : rawRequest(http, u, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${tok}` } });
+  // ⚠ ONLY THE PINNED PATH CARRIES THE TOKEN, TO THIS MACHINE TOO (security scan
+  // F13). upgradeUrl() has already turned every http:// into https://, a
+  // loopback one included, so plain http reaches here only under
+  // HUGINN_APPD_PLAINTEXT=local, and plainRefusal() says no to anything else.
+  // Nothing a listener that has not proved itself answers is ever acted on:
+  // there is no answer, because it is never sent a request.
+  let sent;
+  if (u.protocol === 'https:') {
+    sent = pinnedRequest(u, tok, opts);
+  } else {
+    const why = plainRefusal(u);
+    if (why) return Promise.reject(tlsError(why, 'plainRefused'));
+    sent = rawRequest(http, u, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${tok}` } });
+  }
   return sent.then(({ status, body: out }) => {
     if (status >= 400) throw new Error(`${method} ${u.pathname} → ${status} ${out.slice(0, 200)}`);
     return out ? JSON.parse(out) : {};
@@ -1453,10 +1530,10 @@ async function main() {
         const why = urlRefusal(conf.url);
         if (why) { console.error(`huginn-device on: ${why}`); process.exit(2); }
         // Upgraded BEFORE it is written down, so device.json says https:// for
-        // any daemon that is not on this machine. See upgradeUrl.
+        // every daemon, one on this machine included. See upgradeUrl.
         const up = upgradeUrl(conf.url);
         if (up !== conf.url) {
-          console.log(`  ${conf.url} is not this machine, so the token only travels over TLS: using ${up}`);
+          console.log(`  the token only travels over TLS, to a daemon that proves itself first: using ${up}`);
           conf.url = up;
         }
       }
@@ -1715,6 +1792,6 @@ if (require.main === module) {
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
     permanent, authFailed, noTokenError, retryDelayMs,
     boundProof, proofMatches, upgradeUrl, isLoopbackHost, pinsFor, addPin, pinTag, proveDaemon, api, loadConf,
-    MAX_PINS, INTERCEPTED, OLD_DAEMON,
+    MAX_PINS, INTERCEPTED, OLD_DAEMON, PLAINTEXT_ENV, plaintextLoopback, plainRefusal, enrol,
   };
 }
