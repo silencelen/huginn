@@ -119,9 +119,13 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
     val viaCore = store.viaCore
     if (viaCore != null && (step == SetupStep.ROUTE || step == SetupStep.TOKEN)) {
         // Through huginn core, the address and the token are the core's
-        // (docs/DESKTOP-VIA-CORE.md): there is nothing here to type.
+        // (docs/DESKTOP-VIA-CORE.md): there is nothing here to type. The address
+        // is read from the core NOW, not the one this run started with: a core
+        // paired again since showed one address here and another beside it.
+        var url by remember(viaCore) { mutableStateOf(viaCore.url) }
+        LaunchedEffect(viaCore) { DesktopSetupProbes.coreUrl(viaCore)?.let { url = it } }
         Text(
-            if (step == SetupStep.ROUTE) "huginn core reaches huginn at ${viaCore.url}, and keeps its other addresses (Settings > Host)."
+            if (step == SetupStep.ROUTE) "huginn core reaches huginn at $url, and keeps its other addresses (Settings > Host)."
             else "huginn core holds the token; this app keeps none of its own.",
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -250,7 +254,7 @@ class DesktopSetupProbes(
 ) : SetupProbes {
 
     override suspend fun live(step: SetupStep): StepStatus? = when (step) {
-        SetupStep.ROUTE -> store.viaCore?.let { StepStatus.Passed("huginn core reaches huginn at ${it.url}") }
+        SetupStep.ROUTE -> store.viaCore?.let { StepStatus.Passed("huginn core reaches huginn at ${coreUrl(it) ?: it.url}") }
         SetupStep.TOKEN -> store.viaCore?.let { StepStatus.Passed("huginn core holds the token") }
         SetupStep.DEVICE -> store.coreDevice.status.value.takeIf { it.enrolled }
             ?.let { StepStatus.Passed(it.note.ifBlank { "enrolled, waiting for work" }) }
@@ -264,7 +268,7 @@ class DesktopSetupProbes(
     }
 
     override suspend fun route(): Result<String> = runCatching {
-        store.viaCore?.let { return@runCatching "through huginn core ${it.coreVersion}, at ${it.url}" }
+        store.viaCore?.let { return@runCatching "through huginn core ${it.coreVersion}, at ${coreUrl(it) ?: it.url}" }
         // The field first, as the token step does: what the reader typed is
         // what gets checked, without a second button to commit it.
         val typed = SetupDrafts.address.trim()
@@ -403,9 +407,14 @@ class DesktopSetupProbes(
         if (on) Autostart.enable() else Autostart.disable()
     }
 
-    private companion object {
-        const val DEFAULT_CLAUDE = "claude"
-        const val ENROL_TIMEOUT_MS = 25_000L
+    companion object {
+        /** The address huginn core is paired with right now, or null when it does not answer. */
+        suspend fun coreUrl(via: com.silencelen.huginn.desktop.core.CoreBoot.Outcome.ViaCore): String? =
+            runCatching { com.silencelen.huginn.desktop.core.CoreClient(via.socket).status().url }
+                .getOrNull()?.takeIf { it.isNotBlank() }
+
+        private const val DEFAULT_CLAUDE = "claude"
+        private const val ENROL_TIMEOUT_MS = 25_000L
 
         /**
          * ⚠ A DEAD TARGET, ON PURPOSE AND WITHDRAWN.
@@ -416,6 +425,6 @@ class DesktopSetupProbes(
          * backend that cannot withdraw it expires on its own, and the worst
          * outcome of a click is the Chats list.
          */
-        val TEST_TARGET = NavTarget.SETUP_TEST
+        private val TEST_TARGET = NavTarget.SETUP_TEST
     }
 }

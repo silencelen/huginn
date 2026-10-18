@@ -648,7 +648,7 @@ private fun SessionHeader(
             // Permission mode has no slash command that sets it; Shift+Tab cycles it,
             // which is exactly what the key bar sends.
             ControlAction(
-                mode?.replaceFirstChar { it.uppercase() } ?: "Mode",
+                com.silencelen.huginn.ui.ModelLabels.permissionMode(mode) ?: "Mode",
                 Modifier.padding(start = 6.dp),
                 onClick = onCycleMode,
             )

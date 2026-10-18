@@ -212,7 +212,14 @@ fun main(args: Array<String>) {
     // 1.2.0 made a fresh install an empty route book plus `NO_ROUTE` precisely
     // so a first run is distinguishable from an upgrade; an install that has
     // finished the flow once is never raised again, however empty its book.
-    setup.open(routeBookEmpty = settings.routeBookNow().routes.isEmpty())
+    // ⚠ AND A DESKTOP THAT HUGINN CORE CARRIES IS CONNECTED, whatever its own
+    // book says: the core holds the addresses now, so this app's book stays
+    // empty, and setup came back on every launch until all seven steps were
+    // done (2.5.9).
+    setup.open(routeBookEmpty = SetupController.neverConnected(
+        routeBookEmpty = settings.routeBookNow().routes.isEmpty(),
+        viaCore = link is com.silencelen.huginn.desktop.core.CoreBoot.Outcome.ViaCore,
+    ))
 
     // Window control, held OUTSIDE the composition because the tray, an
     // activation and a second launch all have to reach it — and two of those can

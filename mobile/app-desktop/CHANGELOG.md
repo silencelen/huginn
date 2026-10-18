@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.5.10
+
+Carries core 2.5.10.
+
+### Fixed
+- **Setup no longer opens on every launch** when huginn core carries the app. The app's own address
+  list stays empty in that case, which read as a first run until all seven steps were done.
+- **Setup's address step shows huginn core's current address.** After a re-pairing it showed the
+  old one beside the new one.
+- **The Mode button reads "Accept edits", "Plan", "Bypass permissions"**, not "AcceptEdits".
+
 ## 2.5.9
 
 Carries core 2.5.9. Desktop 2.5.8 was never released: its changes ship here.
