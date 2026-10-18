@@ -109,6 +109,15 @@ func core(args []string) int {
 		return 0
 	case "route", "routes":
 		return coreRoute(args[1:])
+	case "update":
+		// Taking the newest release is the CLI's job (it fetches, verifies and
+		// self-installs); from fish, cmd.exe or a script this binary is what
+		// runs, and it printed its usage and exited 2.
+		if code, ok := forwardToClient(append([]string{"core"}, args...)); ok {
+			return code
+		}
+		fmt.Fprintln(os.Stderr, "huginn core update runs through the CLI, which is not installed here: run the installer one-liner again, which takes the newest release")
+		return 2
 	case "self-install":
 		_, force := hasFlag(args, "--force")
 		if have := newerInstalled(); have != "" && !force {
