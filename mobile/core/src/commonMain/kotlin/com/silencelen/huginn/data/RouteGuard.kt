@@ -17,16 +17,18 @@ package com.silencelen.huginn.data
  * - `https://` anywhere. Since appd 3.11 every route is TLS, pinned by the
  *   token-bound proof of `docs/dev/protocol-tls.md`, so the host stops mattering to the
  *   bearer: an address that cannot prove it holds the token never sees it.
- * - `http://` ONLY to loopback (`127.0.0.0/8`, `::1`, `localhost`) — the one
- *   place there is no wire to read it off.
- * - ⚠⚠ EVERY OTHER `http://` IS STORED AS `https://` ON THE SAME AUTHORITY
- *   (TLS.md rule 6), not refused. Until 3.11 plain http was allowed to RFC1918,
- *   CGNAT, ULA and `*.ts.net` on the theory that those networks were the trust
+ * - ⚠⚠ EVERY `http://` IS STORED AS `https://` ON THE SAME AUTHORITY (TLS.md
+ *   rule 6), not refused. Until 3.11 plain http was allowed to RFC1918, CGNAT,
+ *   ULA and `*.ts.net` on the theory that those networks were the trust
  *   boundary; that only ever held for an owner running Tailscale or a mesh, and
  *   huginn is public — a flat home LAN or café Wi-Fi is exactly where a bearer in
  *   cleartext gets read. Upgrading in [normalize] means a typed `192.168.1.5:8787`
  *   and a migrated `http://…` both land as what is actually dialled, so the
  *   settings screen shows `https://` and never a scheme the client will not use.
+ * - ⚠ LOOPBACK INCLUDED (security scan F9). `127.0.0.1` kept plain http on the
+ *   theory that there is no wire; but any app on the phone, or any account on a
+ *   desktop, can hold a loopback port while a forward or the daemon is down, and
+ *   was handed the bearer. Only [DaemonTls.plaintextLoopback] keeps one plain.
  *
  * Two smaller rules, both inherited from the desktop's version and both
  * load-bearing:
@@ -55,7 +57,7 @@ object RouteGuard {
      */
     const val REFUSED: String =
         "refusing that server address — it must be a bare host and port, like 192.0.2.10:8787 " +
-            "or https://huginn.example.net:8787 (huginn always connects over https, except to this machine)"
+            "or https://huginn.example.net:8787 (huginn always connects over https)"
 
     /** The address as it is stored: trimmed, no trailing slash, scheme explicit. */
     fun normalize(raw: String): String {
@@ -65,9 +67,9 @@ object RouteGuard {
 
     /**
      * Whether [raw] is a usable address at all. Every well-formed one is, since
-     * [parse] upgrades plain http to https for anything but loopback — the rule
-     * that used to refuse `http://` to a public name is now the rule that never
-     * sends anything there in cleartext.
+     * [parse] upgrades plain http to https, loopback included — the rule that
+     * used to refuse `http://` to a public name is now the rule that never sends
+     * anything there in cleartext.
      */
     fun isAllowed(raw: String): Boolean = parse(raw) != null
 
@@ -133,7 +135,7 @@ object RouteGuard {
             lower.startsWith("https://") -> { scheme = "https"; rest = trimmed.substring(8) }
             lower.startsWith("http://") -> { scheme = "http"; rest = trimmed.substring(7) }
             // No scheme means http, the same assumption HuginnClient makes — and
-            // then upgraded below like any other http, unless it is loopback.
+            // then upgraded below like any other http.
             "://" in trimmed -> return null
             else -> { scheme = "http"; rest = trimmed }
         }
@@ -182,8 +184,10 @@ object RouteGuard {
             if (n !in 1..65535) return null
             n
         }
-        // ⚠ THE UPGRADE (TLS.md rule 6). Plain http survives only to loopback.
-        val secure = if (scheme == "http" && !DaemonTls.isLoopbackHost(host)) "https" else scheme
+        // ⚠ THE UPGRADE (TLS.md rule 6), loopback included: plain http survives
+        // only to loopback under DaemonTls.plaintextLoopback.
+        val plainKept = scheme == "http" && DaemonTls.plaintextLoopback && DaemonTls.isLoopbackHost(host)
+        val secure = if (scheme == "http" && !plainKept) "https" else scheme
         return Parts(secure, host.lowercase(), port, classify(host.lowercase()))
     }
 

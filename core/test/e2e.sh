@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/../.." && pwd)"
 T="$(mktemp -d)"; FAILS=0
 ok()  { echo "PASS  $*"; }
 bad() { echo "FAIL  $*"; FAILS=$((FAILS+1)); }
-cleanup() { kill "${SUP:-}" 2>/dev/null; kill "${CORE:-}" "${APPD:-}" 2>/dev/null; pkill -f "$T/home/.local/share/huginn/versions/" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-e2e-$$" kill-server 2>/dev/null; rm -rf "$T"; }
+cleanup() { kill "${SUP:-}" 2>/dev/null; kill "${CORE:-}" "${APPD:-}" "${SQ:-}" 2>/dev/null; pkill -f "$T/home/.local/share/huginn/versions/" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-e2e-$$" kill-server 2>/dev/null; rm -rf "$T"; }
 trap cleanup EXIT
 
 (cd "$REPO/core" && go build -o "$T/huginn" ./cmd/huginn \
@@ -48,8 +48,44 @@ start_core
 [ "$(stat -c %a "$XDG_RUNTIME_DIR/huginn")" = 700 ] && ok "runtime dir 0700" || bad "runtime dir mode"
 
 grep -q "not paired" <<< "$("$T/huginn" core status)" && ok "status says not paired" || bad "status before pairing"
+
+# Security scan F8: a loopback port proves nothing about who holds it. A plain
+# http listener on 127.0.0.1 (what any account here could bind while appd
+# restarts) answering like a daemon must never be handed the token: the core
+# dials it over TLS, the proof fails, and nothing is paired.
+python3 - "$T/squatter.log" "$T/squatter.port" <<'PY' &
+import http.server, sys
+log, portf = sys.argv[1], sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def _any(self):
+        with open(log, "a") as f:
+            f.write("%s %s %s\n" % (self.command, self.path, self.headers.get("Authorization") or "-"))
+        b = b'{"ok":true,"appdVersion":"9.9.9"}'
+        self.send_response(200); self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    do_GET = do_POST = _any
+    def log_message(self, *a): pass
+s = http.server.HTTPServer(("127.0.0.1", 0), H)
+open(portf, "w").write(str(s.server_address[1]))
+s.serve_forever()
+PY
+SQ=$!
+for _ in $(seq 50); do [ -s "$T/squatter.port" ] && break; sleep 0.1; done
+: >> "$T/squatter.log"
+SQOUT=$(HUGINN_APPD_TOKEN="$TOK" "$T/huginn" core pair --url "http://127.0.0.1:$(cat "$T/squatter.port")" 2>&1) \
+  && bad "paired with a loopback listener that never proved itself" || ok "a loopback squatter is refused"
+! grep -q "$TOK\|Bearer" "$T/squatter.log" && grep -q "HUGINN_APPD_PLAINTEXT=local" <<<"$SQOUT" \
+  && grep -q "not paired" <<< "$("$T/huginn" core status)" \
+  && ok "the squatter never saw the token, nothing was saved, and the refusal names the one way round it" \
+  || { bad "squatter: $(cat "$T/squatter.log") / $SQOUT"; }
+kill "$SQ" 2>/dev/null; wait "$SQ" 2>/dev/null; SQ=
+
 HUGINN_APPD_TOKEN=wrong "$T/huginn" core pair --url "$A" >/dev/null 2>&1 && bad "a wrong token paired" || ok "wrong token refused, nothing saved"
 HUGINN_APPD_TOKEN="$TOK" "$T/huginn" core pair --url "$A" && ok "paired" || bad "pair failed"
+# The http:// typed for a daemon on this machine is proved over TLS on the same
+# port, and saved in the form it is dialled, with the daemon's pin beside it.
+python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));assert c['appd']['url']=='https://127.0.0.1:$PORT' and any(c.get('pins',{}).values()),c" \
+  && ok "pairing on loopback went over TLS: core.json holds https://127.0.0.1:$PORT and the proved pin" || bad "loopback pairing was not proved: $(cat "$XDG_CONFIG_HOME/huginn/core.json")"
 [ "$(stat -c %a "$XDG_CONFIG_HOME/huginn/secrets/appd-token" 2>/dev/null)" = 600 ] && ok "token file 0600" || bad "token file mode"
 grep -q "$TOK" "$XDG_CONFIG_HOME/huginn/core.json" && bad "token leaked into core.json" || ok "core.json holds no token"
 
@@ -67,10 +103,12 @@ grep -q '^event:\|^data:' "$T/watch.out" && ok "/appd streams the watch feed" ||
 # The route book (docs/design/desktop-via-core.md): another address of the same daemon,
 # kept in core.json, used when the active one does not answer. A dead address
 # pinned (no switching) makes requests fail; unpinned, they work again.
-DEAD="http://127.0.0.1:$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"
-"$T/huginn" core route add "$DEAD" --name dead --kind lan > "$T/route.out" 2>&1
+# Typed as http://, kept as https:// (a loopback address is proved like any other).
+DEADPORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
+DEAD="https://127.0.0.1:$DEADPORT"
+"$T/huginn" core route add "http://127.0.0.1:$DEADPORT" --name dead --kind lan > "$T/route.out" 2>&1
 grep -q "$DEAD" "$T/route.out" && grep -q 'paired on' "$T/route.out" && python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));assert c['appd']['routes'][0]['url']=='$DEAD',c['appd']" \
-  && ok "core route add: kept in core.json, listed with the paired address" || { bad "core route add"; cat "$T/route.out"; }
+  && ok "core route add: kept in core.json in the form it is dialled, listed with the paired address" || { bad "core route add"; cat "$T/route.out"; }
 "$T/huginn" core route pin "$DEAD" >/dev/null 2>&1
 for _ in $(seq 50); do [ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/v1/status)" = 502 ] && break; sleep 0.1; done
 [ "$(px -o /dev/null -w '%{http_code}' http://huginn-core/appd/v1/status)" = 502 ] && ok "a pinned dead address: requests fail, nothing switches" || bad "pinned dead route still answered"
@@ -84,7 +122,7 @@ python3 -c "import json;c=json.load(open('$XDG_CONFIG_HOME/huginn/core.json'));a
 # (The core reads the tier's default place under this test's own HOME.)
 LT="$HOME/.config/huginn-local/device/appd-token"
 SEED=$(px -X POST http://huginn-core/core/local/seed)
-[ "$(cat "$LT" 2>/dev/null)" = "$TOK" ] && [ "$(stat -c %a "$LT")" = 600 ] && grep -q '"url":"http' <<<"$SEED" \
+[ "$(cat "$LT" 2>/dev/null)" = "$TOK" ] && [ "$(stat -c %a "$LT")" = 600 ] && grep -q '"url":"https://127.0.0.1:' <<<"$SEED" \
   && ok "core/local/seed: the tier's token file from the core's own store, 0600, and the address to use" || bad "local seed: $SEED"
 rm -rf "$HOME/.config/huginn-local"   # no tier here for the uninstall check below to find
 

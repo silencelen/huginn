@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/silencelen/huginn/core/internal/appd"
+	"github.com/silencelen/huginn/core/internal/appd/appdtest"
 )
 
 // The /appd proxy carries everything the desktop sends (docs/design/desktop-via-core.md,
 // "What the core's proxy carries today"): each test is one traffic kind that the
-// first, console-only proxy broke. A fake appd on loopback (plain http is allowed
-// there and only there).
+// first, console-only proxy broke. A fake appd on loopback that proves itself over
+// TLS the way appd does (appdtest), since the token goes nowhere unproved, this
+// machine included.
 
 type seen struct {
 	auth, client, notify, ctype string
@@ -27,14 +29,13 @@ type seen struct {
 func proxyRig(t *testing.T, appdH http.HandlerFunc) (*httptest.Server, *seen) {
 	t.Helper()
 	s := &seen{}
-	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fake := appdtest.NewServer(t, "core-token", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.auth, s.client, s.notify, s.ctype = r.Header.Get("Authorization"), r.Header.Get("X-Huginn-Client"), r.Header.Get("X-Huginn-Notify"), r.Header.Get("Content-Type")
 		if r.Body != nil {
 			s.n, _ = io.Copy(io.Discard, r.Body)
 		}
 		appdH(w, r)
 	}))
-	t.Cleanup(fake.Close)
 	api, err := appd.New(appd.Config{
 		URL: fake.URL, Tokens: appd.StaticToken("core-token"),
 		// The old proxy's fixed per-request limit; a forwarded request must not inherit it.

@@ -96,8 +96,8 @@ func (c *Client) forward1(ctx context.Context, method, pathQuery string, in http
 		}
 		return res, err
 	case "http":
-		if !IsLoopbackHost(target.Hostname()) {
-			return nil, fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", target.Host)
+		if err := plainRefusal(target); err != nil {
+			return nil, err
 		}
 		return c.forwardOnce(ctx, c.plainTransport(), tok, method, target, in, cr)
 	}

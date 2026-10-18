@@ -111,6 +111,11 @@ func Run(ctx context.Context, o Options) error {
 		d.migrate = d.firstStartImport(ctx)
 		logger.Printf("first start: %s", d.migrate)
 	}
+	if changed, err := upgradeStoredURLs(st); err != nil {
+		logger.Printf("could not rewrite the saved huginn addresses in the form they are dialled: %v", err)
+	} else if len(changed) > 0 {
+		logger.Printf("saved huginn addresses now in the form they are dialled (TLS, proved): %s", strings.Join(changed, ", "))
+	}
 
 	srv := ipc.New(SocketPath(o.Paths), logger)
 	d.routes(srv.Mux)
@@ -429,33 +434,38 @@ type Pair struct {
 }
 
 // pair proves the daemon with the new token BEFORE saving anything, so a typo
-// leaves the working pairing in place.
-func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
+// leaves the working pairing in place. It returns the proved fingerprint ("" for
+// plain http under HUGINN_APPD_PLAINTEXT=local) and the url as it was saved.
+func (d *Daemon) pair(ctx context.Context, p Pair) (fp, saved string, err error) {
 	url := appd.NormalizeURL(strings.TrimSpace(p.URL))
 	tok := strings.TrimSpace(p.Token)
 	if tok == "" {
-		return "", errors.New("no token given")
+		return "", "", errors.New("no token given")
 	}
 	mem := &appd.MemoryPinStore{}
 	probe, err := appd.New(appd.Config{URL: url, Tokens: appd.StaticToken(tok), Pins: mem})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer probe.Close()
 	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	fp := ""
-	if !strings.HasPrefix(url, "http://") {
+	// ⚠ PROVED ON THIS MACHINE TOO (security scan F8). Pairing used to skip the
+	// proof for any http:// url, and the status request below then handed the
+	// token to whatever held a loopback port. NormalizeURL dials a loopback
+	// http:// as https:// now, so the only url left unproved is plain http
+	// under HUGINN_APPD_PLAINTEXT=local, which has no certificate to prove.
+	if !(strings.HasPrefix(url, "http://") && appd.PlaintextLoopback()) {
 		if fp, err = probe.Prove(pctx); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	if _, err := probe.Do(pctx, "GET", "/v1/status", nil); err != nil {
-		return "", err
+		return "", "", err
 	}
 	prevTok, _ := d.secrets.Get(store.SecretToken) // read before it is replaced
 	if err := d.secrets.Set(store.SecretToken, tok); err != nil {
-		return "", fmt.Errorf("saving the token (%s): %w", d.secrets.Backend(), err)
+		return "", "", fmt.Errorf("saving the token (%s): %w", d.secrets.Backend(), err)
 	}
 	ps, _ := mem.LoadPins()
 	_, _, err = d.st.Update(func(c *store.Config) error {
@@ -478,9 +488,9 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (string, error) {
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return fp, nil
+	return fp, url, nil
 }
 
 // hasToken: the secrets store holds an appd token.
@@ -674,13 +684,13 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		fp, err := d.pair(r.Context(), p)
+		fp, saved, err := d.pair(r.Context(), p)
 		if err != nil {
 			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
 		d.restartRunner(d.ctx)
-		ipc.WriteJSON(w, 200, map[string]string{"ok": "paired", "fingerprint": fp})
+		ipc.WriteJSON(w, 200, map[string]string{"ok": "paired", "fingerprint": fp, "url": saved})
 	})
 }
 

@@ -1624,22 +1624,50 @@ rm -rf "$TD3"
 # one /etc/huginn-appd/token holds, root-equivalent on the host - in a file
 # nobody would ever look at again. Needs a listener, so it SKIPS LOUDLY rather
 # than reporting green on a box where the port is taken.
+#
+# ⚠ THE STUB DAEMONS PROVE THEMSELVES, the way appd does (docs/dev/protocol-tls.md):
+# the runner sends the token nowhere unproved, 127.0.0.1 included (scan F13), so
+# a plain-http stub would only ever hear the TLS hello. tls-stub.js serves a
+# handler over https on a throwaway self-signed pair and answers /v1/challenge
+# with the bound proof for the stub's token; the lanes below use it.
+TLS_STUB=""
+if openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=huginn-appd \
+     -keyout "$STUB_DIR/stub.key" -out "$STUB_DIR/stub.crt" >/dev/null 2>&1; then
+  TLS_STUB="$STUB_DIR/tls-stub.js"
+  cat > "$TLS_STUB" <<'JS'
+const fs = require("fs"), https = require("https"), crypto = require("crypto"), path = require("path");
+module.exports = (token, handler) => {
+  const cert = fs.readFileSync(path.join(__dirname, "stub.crt"), "utf8");
+  const key = fs.readFileSync(path.join(__dirname, "stub.key"), "utf8");
+  const fp = new crypto.X509Certificate(cert).fingerprint256.replace(/:/g, "").toLowerCase();
+  return https.createServer({ key, cert }, (q, r) => {
+    const u = new URL(q.url, "https://stub");
+    if (u.pathname !== "/v1/challenge") return handler(q, r);
+    const proof = crypto.createHmac("sha256", token).update(`huginn-tls-v1:${u.searchParams.get("nonce")}:${fp}`, "utf8").digest("hex");
+    r.writeHead(200, { "Content-Type": "application/json" });
+    r.end(JSON.stringify({ version: "3.11.0", tls: { v: 1, fp, proof } }));
+  });
+};
+JS
+fi
 TD2=$(mktemp -d)
-node -e '
-const http = require("http");
-const s = http.createServer((q, r) => { r.writeHead(200, {"Content-Type":"application/json"}); r.end("{}"); });
+SRV_PID=
+if [ -n "$TLS_STUB" ]; then
+  node -e '
+const s = require(process.argv[1])("sometoken", (q, r) => { r.writeHead(200, {"Content-Type":"application/json"}); r.end("{}"); });
 s.on("error", () => process.exit(1));
 s.listen(8791, "127.0.0.1", () => { console.log("up"); });
 setTimeout(() => process.exit(0), 20000);
-' > "$TD2/srv.log" 2>&1 &
-SRV_PID=$!
+' "$TLS_STUB" > "$TD2/srv.log" 2>&1 &
+  SRV_PID=$!
+fi
 for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q up "$TD2/srv.log" 2>/dev/null && break; sleep 0.3; done
 if ! grep -q up "$TD2/srv.log" 2>/dev/null; then
-  skip "off success path (could not listen on 127.0.0.1:8791)"
+  skip "off success path (no openssl for the stub's certificate, or could not listen on 127.0.0.1:8791)"
 else
   printf '{"id":"22222222-2222-2222-2222-222222222222","url":"http://127.0.0.1:8791","scope":"work"}\n' > "$TD2/device.json"
   printf 'sometoken\n' > "$TD2/appd-token"
-  SOFF=$(HUGINN_DEVICE_DIR="$TD2" node client/huginn-device off 2>&1)
+  SOFF=$(HUGINN_APPD_TOKEN= HUGINN_APPD_PLAINTEXT= HUGINN_DEVICE_DIR="$TD2" node client/huginn-device off 2>&1)
   grep -q "Removed from huginn" <<<"$SOFF" \
     && ok "off says so when the row really went" || bad "off on a live daemon said: $SOFF"
   [ ! -e "$TD2/device.json" ] && [ ! -e "$TD2/appd-token" ] \
@@ -1783,8 +1811,9 @@ assert.equal(r.locked(), false, "the headless runner must not start claiming a l
 # reporting green on a box where it could not bind.
 AW=$(mktemp -d)
 cat > "$AW/stub.js" <<'STUB'
-const fs = require("fs"); const http = require("http");
-const s = http.createServer((q, r) => {
+const fs = require("fs");
+// Over TLS, proving itself for the token "tok" (tls-stub.js above).
+const s = require(process.argv[4])("tok", (q, r) => {
   let b = ""; q.on("data", (c) => { b += c; });
   q.on("end", () => {
     fs.appendFileSync(process.argv[3], `${q.method} ${q.url} ${b}\n`);
@@ -1796,14 +1825,18 @@ s.on("error", () => process.exit(1));
 s.listen(0, "127.0.0.1", () => fs.writeFileSync(process.argv[2], String(s.address().port)));
 setTimeout(() => process.exit(0), 30000);
 STUB
-node "$AW/stub.js" "$AW/port" "$AW/reqs" >/dev/null 2>&1 &
-AW_PID=$!; STUB_PIDS+=("$AW_PID"); STUB_DIRS+=("$AW")
-AW_PORT=$(stub_port "$AW/port")
+AW_PORT=
+STUB_DIRS+=("$AW")
+if [ -n "$TLS_STUB" ]; then
+  node "$AW/stub.js" "$AW/port" "$AW/reqs" "$TLS_STUB" >/dev/null 2>&1 &
+  AW_PID=$!; STUB_PIDS+=("$AW_PID")
+  AW_PORT=$(stub_port "$AW/port")
+fi
 if [ -z "$AW_PORT" ]; then
-  skip "act-while-locked round trip (the stub could not bind)"
+  skip "act-while-locked round trip (no openssl for the stub's certificate, or the stub could not bind)"
 else
   printf 'tok\n' > "$AW/appd-token"
-  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on \
+  HUGINN_APPD_TOKEN= HUGINN_APPD_PLAINTEXT= HUGINN_DEVICE_DIR="$AW" node client/huginn-device on \
     --url "http://127.0.0.1:$AW_PORT" --scope own --act-while-locked >/dev/null 2>&1
   node -e '
     const fs = require("fs");
@@ -1815,7 +1848,7 @@ else
   ' "$AW/device.json" "$AW/reqs" \
     && ok "--act-while-locked is stored and enrolled with, and the reported lock stays honest" \
     || bad "--act-while-locked did not survive to the config or the wire"
-  HUGINN_DEVICE_DIR="$AW" node client/huginn-device on --no-act-while-locked >/dev/null 2>&1
+  HUGINN_APPD_TOKEN= HUGINN_APPD_PLAINTEXT= HUGINN_DEVICE_DIR="$AW" node client/huginn-device on --no-act-while-locked >/dev/null 2>&1
   node -e '
     const fs = require("fs");
     const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));

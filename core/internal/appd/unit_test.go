@@ -3,6 +3,7 @@ package appd
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,18 +45,22 @@ func TestPinTagIsKeyedAndShort(t *testing.T) {
 }
 
 func TestNormalizeURL(t *testing.T) {
+	t.Setenv(PlaintextEnv, "") // a developer's shell must not change what is tested
 	cases := map[string]string{
-		"http://192.168.1.20:8787":    "https://192.168.1.20:8787",
-		"http://[fd00::1]:8787":        "https://[fd00::1]:8787",
-		"http://huginn.lan:8787":       "https://huginn.lan:8787",
-		"http://huginn.lan:8787/":      "https://huginn.lan:8787",
-		"https://10.0.0.5:8787":        "https://10.0.0.5:8787",
-		"http://127.0.0.1:8787":        "http://127.0.0.1:8787",
-		"http://127.9.9.9:8787":        "http://127.9.9.9:8787",
-		"http://localhost:8787":        "http://localhost:8787",
-		"http://LOCALHOST:8787":        "http://LOCALHOST:8787",
-		"http://[::1]:8787":            "http://[::1]:8787",
-		"http://[0:0:0:0:0:0:0:1]:87":  "http://[0:0:0:0:0:0:0:1]:87",
+		"http://192.168.1.20:8787": "https://192.168.1.20:8787",
+		"http://[fd00::1]:8787":    "https://[fd00::1]:8787",
+		"http://huginn.lan:8787":   "https://huginn.lan:8787",
+		"http://huginn.lan:8787/":  "https://huginn.lan:8787",
+		"https://10.0.0.5:8787":    "https://10.0.0.5:8787",
+		"https://127.0.0.1:8787":   "https://127.0.0.1:8787",
+		// Loopback is proved like anything else (security scan F8): anything on
+		// this machine can hold the port while appd restarts.
+		"http://127.0.0.1:8787":        "https://127.0.0.1:8787",
+		"http://127.9.9.9:8787":        "https://127.9.9.9:8787",
+		"http://localhost:8787":        "https://localhost:8787",
+		"http://LOCALHOST:8787":        "https://LOCALHOST:8787",
+		"http://[::1]:8787":            "https://[::1]:8787",
+		"http://[0:0:0:0:0:0:0:1]:87":  "https://[0:0:0:0:0:0:0:1]:87",
 		"http://fd00::1:8787":          "http://fd00::1:8787", // unparsable: left for URLRefusal to name
 		"http://127.example.com:8787":  "https://127.example.com:8787",
 		"http://127.1:8787":            "https://127.1:8787", // not a full literal
@@ -72,6 +77,62 @@ func TestNormalizeURL(t *testing.T) {
 			t.Errorf("NormalizeURL not idempotent on %q: %q", in, got)
 		}
 	}
+}
+
+// The one escape hatch keeps a LOOPBACK http:// plain, and nothing else: not
+// a remote host, not a name that only looks local, and only for the exact
+// value `local` (the daemon's `any` means nothing on a client).
+func TestPlaintextHatchIsLoopbackOnly(t *testing.T) {
+	for _, v := range []string{"", "any", "1", "yes", "true", "loopback"} {
+		t.Setenv(PlaintextEnv, v)
+		if PlaintextLoopback() {
+			t.Errorf("%s=%q turned plain http on", PlaintextEnv, v)
+		}
+		if got := NormalizeURL("http://127.0.0.1:8787"); got != "https://127.0.0.1:8787" {
+			t.Errorf("%s=%q: loopback stayed %q", PlaintextEnv, v, got)
+		}
+	}
+	for _, v := range []string{"local", " LOCAL ", "Local"} {
+		t.Setenv(PlaintextEnv, v)
+		if !PlaintextLoopback() {
+			t.Errorf("%s=%q did not turn the hatch on", PlaintextEnv, v)
+		}
+	}
+	t.Setenv(PlaintextEnv, "local")
+	for in, want := range map[string]string{
+		"http://127.0.0.1:8787":       "http://127.0.0.1:8787",
+		"http://localhost:8787":       "http://localhost:8787",
+		"http://[::1]:8787":           "http://[::1]:8787",
+		"https://127.0.0.1:8787":      "https://127.0.0.1:8787", // never a downgrade
+		"http://192.168.1.20:8787":    "https://192.168.1.20:8787",
+		"http://x.localhost:8787":     "https://x.localhost:8787",
+		"http://127.example.com:8787": "https://127.example.com:8787",
+	} {
+		if got := NormalizeURL(in); got != want {
+			t.Errorf("with the hatch: NormalizeURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// And a Client built some other way still cannot send a remote http://.
+	if err := plainRefusal(mustURL(t, "http://192.168.1.20:8787")); err == nil {
+		t.Fatal("the hatch let plain http go to a remote host")
+	}
+	if err := plainRefusal(mustURL(t, "http://127.0.0.1:8787")); err != nil {
+		t.Fatalf("the hatch is on, loopback refused: %v", err)
+	}
+	t.Setenv(PlaintextEnv, "")
+	err := plainRefusal(mustURL(t, "http://127.0.0.1:8787"))
+	if err == nil || !strings.Contains(err.Error(), PlaintextEnv+"=local") {
+		t.Fatalf("without the hatch: %v", err)
+	}
+}
+
+func mustURL(t *testing.T, s string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }
 
 func TestURLRefusal(t *testing.T) {
@@ -105,6 +166,14 @@ func TestURLRefusal(t *testing.T) {
 	c, err := New(Config{URL: "http://192.168.1.20:8787"})
 	if err != nil || c.URL() != "https://192.168.1.20:8787" {
 		t.Fatalf("New did not upgrade: %v %v", c, err)
+	}
+	t.Setenv(PlaintextEnv, "")
+	c, err = New(Config{URL: "http://127.0.0.1:8787", Routes: []string{"http://localhost:8788"}})
+	if err != nil || c.URL() != "https://127.0.0.1:8787" {
+		t.Fatalf("New did not upgrade loopback: %v %v", c, err)
+	}
+	if r := c.Routes(); len(r) != 2 || r[1].URL != "https://localhost:8788" {
+		t.Fatalf("a loopback route was not upgraded: %+v", r)
 	}
 }
 

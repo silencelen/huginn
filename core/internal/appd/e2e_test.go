@@ -241,6 +241,7 @@ func TestE2ERealAppd(t *testing.T) {
 	tok := randToken(t)
 	a.start(tok)
 	t.Setenv(TokenEnv, "")
+	t.Setenv(PlaintextEnv, "") // a developer's shell must not change what is tested
 	pollWaitSeconds = 1
 	t.Cleanup(func() { pollWaitSeconds = 25 })
 
@@ -295,11 +296,49 @@ func TestE2ERealAppd(t *testing.T) {
 		}
 	})
 
-	t.Run("loopback plain http carries the token; a wrong token is auth", func(t *testing.T) {
+	// Security scan F8: how a core on the server itself was paired. The same
+	// port answers TLS, so the stored http:// is dialled as https://, proved
+	// and pinned like any other address before the token goes anywhere.
+	t.Run("a loopback http:// is dialled over TLS and proved; a wrong token is refused before it is sent", func(t *testing.T) {
+		t.Setenv(PlaintextEnv, "")
 		plain := fmt.Sprintf("http://127.0.0.1:%d", a.port)
-		c := client(plain)
+		fresh := &MemoryPinStore{}
+		c, err := New(Config{URL: plain, Tokens: tokens, Pins: fresh})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if c.URL() != a.url() {
+			t.Fatalf("loopback http was dialled as %s, want %s", c.URL(), a.url())
+		}
+		if _, err := c.Get(ctx, devID); err != nil {
+			t.Fatal(err)
+		}
+		if got := pinsOf(t, fresh, tok); !equal(got, []string{a.fp()}) {
+			t.Fatalf("pins = %v, want the daemon's own leaf %s", got, a.fp())
+		}
+		// A different token cannot make the proof, so it is never sent: the
+		// interception sentence with the wrong-token hint, not a 401.
+		bad, err := New(Config{URL: plain, Tokens: StaticToken(randToken(t)), Pins: &MemoryPinStore{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer bad.Close()
+		if _, err := bad.Get(ctx, devID); !errors.Is(err, ErrIntercepted) || !strings.Contains(err.Error(), tokenHint) {
+			t.Fatalf("wrong token over loopback: want the refused proof, got %v", err)
+		}
+	})
+
+	t.Run("HUGINN_APPD_PLAINTEXT=local keeps loopback plain, and a wrong token is then a 401", func(t *testing.T) {
+		t.Setenv(PlaintextEnv, "local")
+		plain := fmt.Sprintf("http://127.0.0.1:%d", a.port)
+		c, err := New(Config{URL: plain, Tokens: tokens, Pins: &MemoryPinStore{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
 		if c.URL() != plain {
-			t.Fatalf("loopback http was rewritten: %s", c.URL())
+			t.Fatalf("with the hatch, loopback http was rewritten: %s", c.URL())
 		}
 		if _, err := c.Get(ctx, devID); err != nil {
 			t.Fatal(err)
@@ -310,7 +349,7 @@ func TestE2ERealAppd(t *testing.T) {
 		}
 		defer bad.Close()
 		if _, err := bad.Get(ctx, devID); !IsAuth(err) {
-			t.Fatalf("wrong token over loopback: want auth, got %v", err)
+			t.Fatalf("wrong token over plain loopback: want auth, got %v", err)
 		}
 	})
 

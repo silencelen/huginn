@@ -24,7 +24,15 @@ import kotlin.concurrent.Volatile
  * for an owner whose network was already encrypted (Tailscale, a mesh VPN), and
  * huginn is a PUBLIC project: somebody on a flat home LAN or a café Wi-Fi gets no
  * such cover. So there is deliberately NO setting here that re-enables cleartext
- * to a remote host — the only plain-http left is loopback, where there is no wire.
+ * to a remote host.
+ *
+ * ⚠ AND LOOPBACK IS PROVED TOO (security scan F9). It used to stay plain http on
+ * the theory that there is no wire to read; but a loopback port proves nothing
+ * about who holds it: any app on a phone (a port-forward, `adb reverse`, an SSH
+ * app) or any account on a desktop can bind it while the forward or the daemon
+ * is down, and was handed the bearer. appd answers TLS on the same port, so a
+ * loopback route is dialled over https and proved like any other; the one way
+ * back is [plaintextLoopback], off by default and never on for Android.
  *
  * ⚠ WHY NOT A CA. appd mints its own self-signed certificate, so nothing can
  * vouch for it. The client checks the DAEMON instead, with the secret both ends
@@ -76,6 +84,40 @@ object DaemonTls {
 
     /** TLS.md rule 8, verbatim. */
     const val TOO_OLD: String = "the daemon is older than 3.11 and has no TLS; update it"
+
+    /**
+     * Appended to [TOO_OLD] for an address on this machine, which used to be
+     * reached in plain http: what answers there without TLS may not be huginn at
+     * all (a forward that is down, and another app or account on its port).
+     * Display only, like [TOKEN_HINT]; it changes nothing about what is refused.
+     */
+    const val LOOPBACK_HINT: String = " (on this machine that is an old daemon, or another program holding the port)"
+
+    /**
+     * The ONE switch that lets this client send the bearer over plain HTTP, and
+     * only to a daemon on this machine: `HUGINN_APPD_PLAINTEXT=local`.
+     *
+     * ⚠ IT MIRRORS THE DAEMON'S OWN SWITCH. appd is told who may speak plain
+     * HTTP to it by the same variable (`server/appd/lib/tls.js` plaintextPolicy:
+     * `local` answers plain HTTP from loopback only). On a client `local` is the
+     * other half: a loopback `http://` route stays plain and carries the bearer
+     * with nothing checking who answers. Nothing else turns it on, and no value
+     * reaches any other host.
+     */
+    const val PLAINTEXT_ENV: String = "HUGINN_APPD_PLAINTEXT"
+
+    /**
+     * Whether [PLAINTEXT_ENV] is on for this process: read once from the
+     * environment of a desktop (JVM) process ([plaintextLoopbackSwitch]), never
+     * on Android. OFF BY DEFAULT, unlike the daemon's: the client cannot tell the
+     * daemon from whatever else holds a loopback port, and it exists only for a
+     * daemon on this machine that has no TLS (one older than 3.11).
+     *
+     * Internal, and a var only so this module's tests can scope it: no shell,
+     * screen or setting can flip it.
+     */
+    @Volatile
+    internal var plaintextLoopback: Boolean = plaintextLoopbackSwitch()
 
     // ------------------------------------------------------------ the proof
 
@@ -190,7 +232,8 @@ object DaemonTls {
     // ----------------------------------------------------------- the URL rule
 
     /**
-     * Whether [host] is this machine — the only place plain http may still go.
+     * Whether [host] is this machine — the only place plain http may ever go,
+     * and only under [plaintextLoopback].
      *
      * `127.0.0.0/8`, `::1` (bracketed or not, written out or not) and the bare
      * name `localhost`. ⚠ NOT `*.localhost`: RFC 6761 asks resolvers to send it
@@ -217,16 +260,23 @@ object DaemonTls {
     }
 
     /**
-     * The URL actually dialled for [url]: `http://` stays only for loopback,
-     * every other `http://` becomes `https://` on the same authority (TLS.md
-     * rule 6). A bare authority is judged as http first — the same assumption
-     * the client has always made — and so upgraded too. `https://` is untouched.
+     * The URL actually dialled for [url]: every `http://` becomes `https://` on
+     * the same authority (TLS.md rule 6), a daemon on this machine included. A
+     * bare authority is judged as http first — the same assumption the client
+     * has always made — and so upgraded too. `https://` is untouched.
      *
-     * ⚠ THERE IS NO OPT-OUT, AND THERE MUST NEVER BE ONE. An "allow plain http"
-     * switch is a switch a phishing page can talk somebody into flipping, and its
-     * only effect is to put a root-equivalent token on the wire.
+     * The one exception is a loopback `http://` with [plaintext] on (the
+     * default is [plaintextLoopback]), which stays plain. The client's path
+     * through huginn core passes `true`: that transport never dials the host,
+     * it hands the request to the core over its local socket, and the core
+     * proves the daemon on its own link.
+     *
+     * ⚠ THERE IS NO OPT-OUT FOR ANY OTHER HOST, AND THERE MUST NEVER BE ONE. An
+     * "allow plain http" switch is a switch a phishing page can talk somebody
+     * into flipping, and its only effect is to put a root-equivalent token on
+     * the wire.
      */
-    fun secureUrl(url: String): String {
+    fun secureUrl(url: String, plaintext: Boolean = plaintextLoopback): String {
         val t = url.trim()
         if (t.isEmpty()) return t
         val lower = t.lowercase()
@@ -238,7 +288,21 @@ object DaemonTls {
         }
         val authority = rest.substringBefore('/')
         val host = hostOf(authority)
-        return if (isLoopbackHost(host)) "http://$rest" else "https://$rest"
+        return if (plaintext && isLoopbackHost(host)) "http://$rest" else "https://$rest"
+    }
+
+    /**
+     * Why a request to [host] may not carry the bearer over plain http, or null:
+     * only to loopback, and only under [plaintextLoopback]. [secureUrl] has
+     * already upgraded everything else; this is the re-check where the request
+     * leaves, so no path can send the bearer unproved.
+     */
+    fun plainRefusal(host: String): String? = when {
+        !isLoopbackHost(host) -> "refusing plain http to $host: cleartext is for loopback only"
+        !plaintextLoopback ->
+            "refusing plain http to $host: the token goes only to a daemon that has proved itself over TLS, " +
+                "on this machine too ($PLAINTEXT_ENV=local turns that off, for a daemon here that has no TLS)"
+        else -> null
     }
 
     /** The host part of an authority, brackets kept off an IPv6 literal. */
@@ -276,7 +340,12 @@ object DaemonTls {
  * matters. The message is the contract's own sentence and is shown verbatim.
  */
 class DaemonTlsException(val kind: Kind, message: String) : Exception(message) {
-    enum class Kind { INTERCEPTED, TOO_OLD }
+    /**
+     * [INTERCEPTED]: the address failed the proof. [TOO_OLD]: it cannot do TLS.
+     * [PLAINTEXT]: the request would have carried the bearer over plain http
+     * without [DaemonTls.PLAINTEXT_ENV], and was refused before it left.
+     */
+    enum class Kind { INTERCEPTED, TOO_OLD, PLAINTEXT }
 }
 
 /**

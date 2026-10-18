@@ -38,6 +38,9 @@ const TOKEN = crypto.randomBytes(32).toString('hex');
 // Set BEFORE the require: CONF_DIR is fixed when the module loads.
 process.env.HUGINN_DEVICE_DIR = DEV_DIR;
 process.env.HUGINN_APPD_TOKEN = TOKEN;
+// The one escape hatch (plain http to loopback) is off unless a test turns it
+// on: a developer's shell must not change what is tested.
+delete process.env.HUGINN_APPD_PLAINTEXT;
 const dev = require(RUNNER);
 const local = require(path.join(REPO, 'client', 'huginn-local'));
 
@@ -193,39 +196,52 @@ test('the shared test vector, byte for byte', () => {
 
 // -------------------------------------------------------------- url upgrade
 
-test('a remote http:// is dialled and stored as https://; loopback stays', () => {
-  const cases = {
+test('every http:// is dialled and stored as https://, a daemon on this machine included (scan F13)', () => {
+  const remote = {
     'http://192.168.1.20:8787': 'https://192.168.1.20:8787',
     'http://[fd00::1]:8787': 'https://[fd00::1]:8787',
     'http://huginn.lan:8787': 'https://huginn.lan:8787',
     'https://10.0.0.5:8787': 'https://10.0.0.5:8787',
-    'http://127.0.0.1:8787': 'http://127.0.0.1:8787',
-    'http://127.9.9.9:8787': 'http://127.9.9.9:8787',
-    'http://localhost:8787': 'http://localhost:8787',
-    'http://[::1]:8787': 'http://[::1]:8787',
     'http://fd00::1:8787': 'http://fd00::1:8787',   // unparsable: left for urlRefusal to name
   };
-  for (const [from, to] of Object.entries(cases)) {
+  // Loopback has no identity: anything on this machine can hold the port while
+  // appd restarts, so it is proved over TLS like anything else.
+  const loopback = {
+    'http://127.0.0.1:8787': 'https://127.0.0.1:8787',
+    'http://127.9.9.9:8787': 'https://127.9.9.9:8787',
+    'http://localhost:8787': 'https://localhost:8787',
+    'http://[::1]:8787': 'https://[::1]:8787',
+    'https://127.0.0.1:8787': 'https://127.0.0.1:8787',
+  };
+  for (const [from, to] of Object.entries({ ...remote, ...loopback })) {
     assert.equal(dev.upgradeUrl(from), to, `runner: ${from}`);
-    assert.equal(local.daemonUrl(from), to, `huginn-local agrees: ${from}`);
+    // huginn-local hands the runner the url it stores; whatever it stores, the
+    // runner dials the same thing.
+    assert.equal(dev.upgradeUrl(local.daemonUrl(from)), to, `what huginn-local stores is dialled the same: ${from}`);
   }
+  for (const [from, to] of Object.entries(remote)) assert.equal(local.daemonUrl(from), to, `huginn-local agrees: ${from}`);
   // A 127-prefixed NAME is not loopback.
   assert.equal(dev.upgradeUrl('http://127.example.com:8787'), 'https://127.example.com:8787');
 });
 
-test('a stored pre-3.11 http:// url is rewritten as https:// on load', () => {
+test('a stored http:// url is rewritten as https:// on load, a loopback one included', () => {
   writeConf({ url: 'http://192.168.1.20:8787', name: 'x' });
   assert.equal(dev.loadConf().url, 'https://192.168.1.20:8787');
   assert.equal(readConf().url, 'https://192.168.1.20:8787', 'and written back, so status shows it');
+  writeConf({ url: 'http://127.0.0.1:8787', name: 'x' });
+  assert.equal(dev.loadConf().url, 'https://127.0.0.1:8787');
+  assert.equal(readConf().url, 'https://127.0.0.1:8787', 'the host itself keeps its route, over TLS');
 });
 
-test('`on --url http://<remote>` stores https://', () => {
-  const d = fs.mkdtempSync(path.join(tmp, 'on-'));
-  // Nothing listens there: the enrolment fails, but the url is saved first.
-  spawnSync(process.execPath, [RUNNER, 'on', '--url', 'http://192.0.2.1:9'], {
-    env: { ...process.env, HUGINN_DEVICE_DIR: d }, encoding: 'utf8', timeout: 30000,
-  });
-  assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'device.json'), 'utf8')).url, 'https://192.0.2.1:9');
+test('`on --url http://<remote>` and `on --url http://127.0.0.1:<port>` store https://', () => {
+  for (const [typed, stored] of [['http://192.0.2.1:9', 'https://192.0.2.1:9'], ['http://127.0.0.1:9', 'https://127.0.0.1:9']]) {
+    const d = fs.mkdtempSync(path.join(tmp, 'on-'));
+    // Nothing listens there: the enrolment fails, but the url is saved first.
+    spawnSync(process.execPath, [RUNNER, 'on', '--url', typed], {
+      env: { ...process.env, HUGINN_DEVICE_DIR: d }, encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'device.json'), 'utf8')).url, stored, typed);
+  }
 });
 
 // --------------------------------------------------------------------- pins
@@ -314,6 +330,99 @@ test('a correct proof pins, and the pinned request carries the token', async () 
   assert.equal(fake.seen[1].auth, `Bearer ${TOKEN}`);
 });
 
+// ------------------------------------------- loopback squatters (scan F13)
+
+/**
+ * What grabs 127.0.0.1:<port> while appd is down: plain HTTP, answering every
+ * request the way a daemon would, and handing out act work to whoever polls.
+ */
+async function squatter() {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push({ url: req.url, auth: req.headers.authorization || null });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'X-Huginn-Appd': '9.9.9' });
+    res.end(JSON.stringify({ ok: true, id: 'dev1', scope: 'work', work: { id: 'w1', chatId: 'c1', prompt: 'hi', mode: 'act' } }));
+  });
+  const port = await listen(srv);
+  return { port, seen };
+}
+
+test('F13: a plain-http squatter on 127.0.0.1 is never sent the token, by any call', async () => {
+  const sq = await squatter();
+  writeConf({ url: `http://127.0.0.1:${sq.port}`, id: 'dev1', scope: 'work' });
+  assert.equal(dev.loadConf().url, `https://127.0.0.1:${sq.port}`, 'a loopback http:// is dialled as https://');
+  for (const call of [
+    () => dev.enrol(dev.loadConf()),
+    () => dev.api('GET', '/v1/devices/dev1/work?wait=1&locked=0', undefined, { timeoutMs: 5000 }),
+    () => dev.api('POST', '/v1/devices/dev1/beat', { locked: false, scope: 'work' }),
+  ]) {
+    await assert.rejects(call(), (e) => e.tlsOldDaemon === true
+      && e.message.includes(`${dev.PLAINTEXT_ENV}=local`) && /another program/.test(e.message), 'refused, and says why');
+  }
+  assert.deepEqual(sq.seen, [], 'not one request reached it, let alone a token');
+});
+
+test('F13: a TLS squatter on a loopback http:// is the interception case, and gets no token', async () => {
+  const m = mintCert('squatter');
+  const realFp = 'f'.repeat(64);
+  const fake = await fakeDaemon(m, (n) => ({
+    proof: hmac(TOKEN, n), version: '3.11.0', tls: { v: 1, fp: realFp, proof: dev.boundProof(TOKEN, n, realFp) },
+  }));
+  writeConf({ url: `http://127.0.0.1:${fake.port}` });
+  await assert.rejects(dev.api('GET', '/v1/ping'), (e) => e.tlsIntercepted === true);
+  assert.ok(fake.seen.length >= 1 && fake.seen.every((r) => r.auth === null), 'only the tokenless probe reached it');
+  assert.deepEqual(dev.pinsFor(readConf(), TOKEN), []);
+});
+
+test('F13 end to end: `serve` pointed at a loopback squatter sends no token and runs none of its work', { skip: process.platform === 'win32' }, async () => {
+  const sq = await squatter();
+  const d = fs.mkdtempSync(path.join(tmp, 'serve-'));
+  const marker = path.join(d, 'ran');
+  const claude = path.join(d, 'claude');
+  fs.writeFileSync(claude, `#!/bin/sh\ntouch '${marker}'\ncat >/dev/null\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(d, 'device.json'), JSON.stringify({
+    url: `http://127.0.0.1:${sq.port}`, id: 'dev1', scope: 'work', root: d, claude, name: 'serve-squat',
+  }));
+  const child = spawn(process.execPath, [RUNNER, 'serve'], {
+    env: { ...process.env, HUGINN_DEVICE_DIR: d }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let out = '';
+  child.stdout.on('data', (b) => { out += b; });
+  child.stderr.on('data', (b) => { out += b; });
+  try {
+    // The old runner enrolled, polled and spawned within a second or two.
+    for (let i = 0; i < 50 && !/not reaching huginn/.test(out) && !fs.existsSync(marker); i += 1) await wait(100);
+    await wait(1000);
+  } finally {
+    child.kill('SIGKILL');
+  }
+  assert.ok(!fs.existsSync(marker), `the squatter's act work was run:\n${out}`);
+  assert.deepEqual(sq.seen, [], 'nothing reached the squatter');
+  assert.match(out, /not reaching huginn: .*older than 3\.11.*HUGINN_APPD_PLAINTEXT=local/, out);
+});
+
+test('HUGINN_APPD_PLAINTEXT=local is the old behaviour, on purpose and only to loopback', async () => {
+  const sq = await squatter();
+  try {
+    process.env.HUGINN_APPD_PLAINTEXT = 'local';
+    assert.equal(dev.plaintextLoopback(), true);
+    assert.equal(dev.upgradeUrl('http://127.0.0.1:8787'), 'http://127.0.0.1:8787');
+    assert.equal(dev.upgradeUrl('http://192.168.1.20:8787'), 'https://192.168.1.20:8787', 'never another host');
+    assert.equal(dev.upgradeUrl('https://127.0.0.1:8787'), 'https://127.0.0.1:8787', 'never a downgrade');
+    assert.ok(dev.plainRefusal(new URL('http://192.0.2.1:8787')), 'the socket-side check refuses a remote host too');
+    writeConf({ url: `http://127.0.0.1:${sq.port}` });
+    await dev.api('GET', '/v1/ping');
+    assert.deepEqual(sq.seen.map((r) => r.auth), [`Bearer ${TOKEN}`], 'the opted-in plain request carries the token');
+    for (const v of ['any', '1', 'true', 'yes', '']) {
+      process.env.HUGINN_APPD_PLAINTEXT = v;
+      assert.equal(dev.plaintextLoopback(), false, `"${v}" is not the switch`);
+    }
+  } finally {
+    delete process.env.HUGINN_APPD_PLAINTEXT;
+  }
+  assert.match(dev.plainRefusal(new URL('http://127.0.0.1:1')), /HUGINN_APPD_PLAINTEXT=local/);
+});
+
 // --------------------------------------------------- end to end, real appd
 
 test('E2E: enrol against a real appd over https, pin its own certificate, long-poll', async () => {
@@ -329,6 +438,18 @@ test('E2E: enrol against a real appd over https, pin its own certificate, long-p
   assert.ok(w && typeof w === 'object', 'the long poll answers over the pinned channel');
   const st = spawnSync(process.execPath, [RUNNER, 'status'], { env: { ...process.env }, encoding: 'utf8', timeout: 30000 });
   assert.match(st.stdout, new RegExp(`tls +pinned sha256 ${appdFp()}`));
+});
+
+test('E2E F13: `on --url http://127.0.0.1:<port>` (the host itself) proves the real appd over TLS and stores https://', async () => {
+  const d = fs.mkdtempSync(path.join(tmp, 'host-'));
+  const r = spawnSync(process.execPath, [RUNNER, 'on', '--url', `http://127.0.0.1:${appdPort}`, '--scope', 'look', '--name', 'tls-host'], {
+    env: { ...process.env, HUGINN_DEVICE_DIR: d }, encoding: 'utf8', timeout: 60000,
+  });
+  assert.equal(r.status, 0, `on failed: ${r.stdout}\n${r.stderr}`);
+  const conf = JSON.parse(fs.readFileSync(path.join(d, 'device.json'), 'utf8'));
+  assert.equal(conf.url, `https://127.0.0.1:${appdPort}`, 'stored as it is dialled');
+  assert.ok(conf.id, 'enrolled');
+  assert.deepEqual(dev.pinsFor(conf, TOKEN), [appdFp()], 'the pin is the daemon\'s own leaf');
 });
 
 test('E2E MITM: a TLS relay in front of the real appd is refused, and gets no token', async () => {

@@ -67,9 +67,11 @@ import kotlinx.serialization.json.jsonPrimitive
  * — an answer an impostor without the token cannot compute. **Adoption reads
  * `proven`. Nothing else may.**
  *
- * Over https (appd 3.11+) `proven` means the CHANNEL-BOUND proof of
- * `docs/dev/protocol-tls.md`: the token holder is behind the certificate this client's own
- * handshake saw. The legacy proof only ever counts on a loopback http address.
+ * `proven` means the CHANNEL-BOUND proof of `docs/dev/protocol-tls.md` (appd 3.11+):
+ * the token holder is behind the certificate this client's own handshake saw.
+ * ⚠ The legacy proof (an HMAC over the bare nonce) NEVER counts, a loopback
+ * address included (security scan F9): the daemon hands it to anybody who asks,
+ * so whatever holds a loopback port can relay it from the daemon's own address.
  *
  * @param version the daemon's own, from the header it stamps on every response
  *   including the 401, or from the challenge's body. Null on a daemon too old to
@@ -77,7 +79,8 @@ import kotlinx.serialization.json.jsonPrimitive
  * @param answered something huginn-SHAPED is at that address. Useful to SAY
  *   (a pre-3.6 daemon 404s the challenge and is still a real daemon); never
  *   sufficient to adopt.
- * @param secure the probe ran over TLS (every address but loopback, since 3.11).
+ * @param secure the probe ran over TLS: every address, a loopback one included,
+ *   unless [DaemonTls.plaintextLoopback] kept a loopback route plain.
  * @param tooOld what answered is a daemon older than 3.11 — no TLS to prove over.
  * @param intercepted a huginn-shaped answer whose bound proof FAILED under a real
  *   token: TLS.md's interception case. Never adoptable, and said as such.
@@ -292,7 +295,12 @@ class HuginnClient(
             // as a failure: "cannot prove it is huginn" read as broken on a correct
             // address (PC01, 2026-10-16).
             if (probe.answered && probe.secure) return "$what answers at $where; the token (next) proves it is yours"
-            if (probe.answered) return "$what at $where ${DaemonChallenge.NOT_PROVEN} — a daemon older than 3.6"
+            // Plain http, which only HUGINN_APPD_PLAINTEXT=local leaves to a
+            // loopback route: no certificate to bind a proof to, and the legacy
+            // proof is relayable, so nothing here can be proved at all.
+            if (probe.answered) {
+                return "$what at $where ${DaemonChallenge.NOT_PROVEN} — plain http (${DaemonTls.PLAINTEXT_ENV}=local) has nothing to prove it with"
+            }
             return "nothing at $where answered as huginn"
         }
     }
@@ -311,7 +319,10 @@ class HuginnClient(
      * `expectSuccess = false` because this client reads the server's own error
      * text out of a non-2xx body rather than letting the plugin throw over it.
      */
-    private val http: HttpClient get() = if (coreTransport != null && useCore()) viaCore else direct
+    private val http: HttpClient get() = if (viaCoreNow()) viaCore else direct
+
+    /** Whether a request made now goes through huginn core (the desktop's [coreTransport]). */
+    private fun viaCoreNow(): Boolean = coreTransport != null && useCore()
 
     /**
      * Through huginn core: plain http over the core's local socket, so no pins
@@ -346,7 +357,17 @@ class HuginnClient(
         // fails before a byte of the body is written, so even a one-shot upload
         // stream is still unread when it is retried.
         client.plugin(HttpSend).intercept { request ->
-            if (request.url.protocol != URLProtocol.HTTPS) return@intercept execute(request)
+            if (request.url.protocol != URLProtocol.HTTPS) {
+                // ⚠ PLAIN HTTP CARRIES THE BEARER ONLY UNDER THE SWITCH, AND ONLY TO
+                // LOOPBACK (security scan F9). withScheme() dials every other
+                // http:// as https://, a loopback one included, so this is the
+                // re-check where the request leaves: refused before a byte of it
+                // is written, never sent and then regretted.
+                DaemonTls.plainRefusal(request.url.host)?.let {
+                    throw DaemonTlsException(DaemonTlsException.Kind.PLAINTEXT, it)
+                }
+                return@intercept execute(request)
+            }
             val origin = originOf(request.url.host, request.url.port)
             ensurePinned(origin)
             try {
@@ -435,7 +456,11 @@ class HuginnClient(
         val reply = transport.probe("$origin${DaemonChallenge.PATH}?nonce=$nonce", timeoutMs)
         return when (val v = DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls)) {
             is DaemonTls.Verdict.Proven -> { pins.add(token, v.fp); v.fp }
-            is DaemonTls.Verdict.TooOld -> throw DaemonTlsException(DaemonTlsException.Kind.TOO_OLD, DaemonTls.TOO_OLD)
+            is DaemonTls.Verdict.TooOld -> throw DaemonTlsException(
+                DaemonTlsException.Kind.TOO_OLD,
+                DaemonTls.TOO_OLD +
+                    if (DaemonTls.isLoopbackHost(DaemonTls.hostOf(origin.substringAfter("://")))) DaemonTls.LOOPBACK_HINT else "",
+            )
             is DaemonTls.Verdict.Unproven -> throw DaemonTlsException(
                 DaemonTlsException.Kind.INTERCEPTED,
                 DaemonTls.INTERCEPTED + if (v.echoedOurFp) DaemonTls.TOKEN_HINT else "",
@@ -447,7 +472,7 @@ class HuginnClient(
     /** Releases the engine. Optional on Android (the process owns it); the desktop client should call it. */
     fun close() {
         direct.close()
-        if (coreTransport != null && useCore()) viaCore.close()
+        if (viaCoreNow()) viaCore.close()
     }
 
     /**
@@ -480,24 +505,32 @@ class HuginnClient(
         // surfaced in the status bar as the word "v1". Said plainly instead, and
         // said here so both shells say the same thing.
         if (base.isBlank()) throw HuginnException(0, NO_ROUTE)
-        return withScheme(base) + path
+        return withScheme(base, viaCore = viaCoreNow()) + path
     }
 
     /**
      * ⚠ CASE-INSENSITIVELY. A scheme is a scheme however it is spelled, and 2.x's
      * setter only trimmed — so `HTTP://192.168.1.20:8787` was storable, and this
      * helper used to build `http://HTTP//192.168.1.20:8787/v1/ping` out of it.
+     *
+     * [viaCore]: the request goes through huginn core, whose transport never
+     * dials the host — it hands the request to the core over the core's local
+     * socket, and the core proves the daemon on its own link. Its loopback base
+     * stays plain http; nothing that dials an address takes this branch.
      */
-    private fun withScheme(base: String): String {
+    private fun withScheme(base: String, viaCore: Boolean = false): String {
         val b = base.trim().trimEnd('/')
         val schemed = b.startsWith("http://", ignoreCase = true) || b.startsWith("https://", ignoreCase = true)
         // ⚠⚠ AND UPGRADED, HERE, FOR EVERY CALLER (TLS.md rule 6). The stores
         // already hold the https form, but ten background call sites hand this
         // client whatever string they read, and an older settings file — or a
-        // rolled-back one — still says `http://192.168.x.y`. Upgrading at the
-        // last point before the socket means no path can put the bearer on the
-        // wire in cleartext to anything but this machine's own loopback.
-        return DaemonTls.secureUrl(if (schemed) b else "http://$b")
+        // rolled-back one — still says `http://192.168.x.y` or
+        // `http://127.0.0.1:8787`. Upgrading at the last point before the socket
+        // means no path can put the bearer on the wire in cleartext, to this
+        // machine's loopback included (security scan F9), unless
+        // HUGINN_APPD_PLAINTEXT=local says so.
+        val full = if (schemed) b else "http://$b"
+        return if (viaCore) DaemonTls.secureUrl(full, plaintext = true) else DaemonTls.secureUrl(full)
     }
 
     private enum class Tier { NORMAL, POLL, STREAM, WATCH }
@@ -642,39 +675,22 @@ class HuginnClient(
         // trust-anything probe connection and proves the channel (TLS.md).
         if (root.startsWith("https://")) return probeTls(root, address)
 
-        // ⚠ THE CHALLENGE FIRST, AND USUALLY THE ONLY REQUEST. A 3.6+ daemon
-        // proves itself here and there is nothing left to ask; only the failing
-        // paths — an older daemon, a stranger, a dead port — pay for the second
-        // round trip below, and those are the ones this client is not about to
-        // send a bearer to anyway.
-        val nonce = DaemonChallenge.newNonce()
-        val challenge = runCatching {
-            val resp = http.request {
-                method = HttpMethod.Get
-                url(root + DaemonChallenge.PATH + "?nonce=" + nonce.encodeURLParameter())
-                timeout {
-                    connectTimeoutMillis = PROBE_TIMEOUT_MS
-                    socketTimeoutMillis = PROBE_TIMEOUT_MS
-                    requestTimeoutMillis = PROBE_TIMEOUT_MS
-                }
-            }
-            val header = resp.headers[APPD_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
-            if (!resp.status.isSuccess()) return@runCatching Triple(false, header, true)
-            val body = runCatching { probeJson.decodeFromString<ChallengeAnswer>(resp.bodyAsText()) }.getOrNull()
-            val proven = DaemonChallenge.matches(tokenProvider(), nonce, body?.proof)
-            Triple(proven, body?.version?.takeIf { it.isNotBlank() } ?: header, true)
-        }.getOrElse { Triple(false, null, false) }
-
-        if (challenge.first) {
-            return DaemonProbe(proven = true, version = challenge.second, address = address, answered = true)
-        }
-
-        // Not proved. The remaining question is only what to SAY: an address
-        // where nothing is listening and one holding a daemon too old for the
-        // challenge are different facts, and the setup flow prints the
-        // difference. Never an input to adoption — see `DaemonProbe`.
+        // ⚠⚠ PLAIN HTTP PROVES NOTHING, SO NOTHING IS ASKED TO PROVE IT (security
+        // scan F9). Only HUGINN_APPD_PLAINTEXT=local leaves a route here, and
+        // only a loopback one. This used to ask the challenge in plain http and
+        // adopt the route on the LEGACY proof — an HMAC over the bare nonce,
+        // which the real daemon hands to anybody, so whatever held the port
+        // could relay it from the daemon's own address and read as proved. With
+        // no certificate there is nothing to bind a proof to: the route is
+        // never `proven`, and auto-switch never moves the bearer onto it.
+        //
+        // The only question left is what to SAY: an address where nothing is
+        // listening and one where something huginn-shaped answers are different
+        // facts, and the setup flow prints the difference. Never an input to
+        // adoption — see `DaemonProbe`. `direct`, because a probe dials the
+        // candidate itself, as probeTls does, whichever way requests now go.
         val fingerprint = runCatching {
-            val resp = http.request {
+            val resp = direct.request {
                 method = HttpMethod.Get
                 url("$root/v1/ping")
                 timeout {
@@ -691,7 +707,7 @@ class HuginnClient(
 
         return DaemonProbe(
             proven = false,
-            version = fingerprint.second ?: challenge.second,
+            version = fingerprint.second,
             address = address,
             answered = fingerprint.first,
         )

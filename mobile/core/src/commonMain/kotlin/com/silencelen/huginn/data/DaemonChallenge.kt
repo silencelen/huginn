@@ -27,6 +27,14 @@ import kotlin.random.Random
  * captured off somebody else's exchange answers somebody else's nonce; replaying
  * it here fails. That is the only reason this can be asked unauthenticated.
  *
+ * ⚠⚠ AND THIS PROOF ALONE NO LONGER ADOPTS ANYTHING (security scan F9). It proves
+ * that a token holder exists, not that THIS connection ends at it: the daemon
+ * answers the challenge for anybody, so whatever holds an address (a loopback
+ * port above all) can relay a fresh nonce to the daemon's real address and hand
+ * the answer back. Since appd 3.11 every route is proved with the TLS-bound
+ * proof in [DaemonTls], over the certificate this client's own handshake saw;
+ * this file keeps the HMAC and SHA-256 that proof is built from, and [NOT_PROVEN].
+ *
  * ⚠ WHY A HAND-WRITTEN SHA-256 RATHER THAN A LIBRARY. `:core` depends on
  * kotlinx-serialization, coroutines, Compose runtime/ui and ktor-client-core, and
  * none of them exposes a multiplatform MAC. The alternatives were a new

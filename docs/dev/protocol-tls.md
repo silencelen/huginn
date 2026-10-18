@@ -127,9 +127,11 @@ daemon's proof is over the real fingerprint, so relaying it does not help.
 
 1. **Hash what your own handshake saw.** Never use `tls.fp` from the response body: an interceptor
    would report the real one. It is there for logs and display only.
-2. **Never accept the legacy `proof` over TLS.** It proves the daemon, not the channel. A missing
-   `tls` object over `https://` means not proved. A `tls.v` the client does not know also means not
-   proved; the fix is to update the client.
+2. **Never accept the legacy `proof`.** It proves the daemon, not the channel, and the daemon gives
+   it to anybody who asks, so a relay can fetch it for any nonce. A missing `tls` object over
+   `https://` means not proved. A `tls.v` the client does not know also means not proved; the fix is
+   to update the client. Plain HTTP has no certificate to bind a proof to, so nothing over plain
+   HTTP is ever proved.
 3. **The probe connection carries no token and is never reused.** Open a fresh connection for the
    challenge, send no `Authorization` header, and close it after the answer. Requests that carry the
    token go through a separate client whose TLS check is the pin.
@@ -144,11 +146,17 @@ daemon's proof is over the real fingerprint, so relaying it does not help.
    handshake saw. If the proof fails, or the retry meets yet another unpinned certificate, stop and
    tell the user, word for word: *"this address could not prove it is your huginn daemon; someone may
    be intercepting the connection"*. Never fall back to plain HTTP.
-6. **Plain HTTP only to loopback.** An `http://` URL whose host is loopback (`127.0.0.0/8`, `::1`, or
-   the bare name `localhost`) stays as it is. Any other `http://` URL is dialled as `https://` on the
-   same host and port. Store the upgraded form where the client stores addresses, so the user sees
-   `https://`. Do not treat `*.localhost` or other names as loopback. There is no setting that
-   re-enables cleartext to a remote host, and there must never be one.
+6. **Every `http://` is dialled as `https://`, loopback included.** An `http://` URL is dialled as
+   `https://` on the same host and port, and a daemon on this machine is proved and pinned like any
+   other: a loopback port has no identity, and any account (or, on a phone, any app) can bind it
+   while the daemon or a port-forward is down. Store the upgraded form where the client stores
+   addresses, so the user sees `https://`. The one exception is the client setting
+   `HUGINN_APPD_PLAINTEXT=local`, which mirrors the daemon's setting of the same name: with it, an
+   `http://` URL whose host is loopback (`127.0.0.0/8`, `::1`, or the bare name `localhost`) stays
+   plain HTTP and carries the token with no peer check. It is off by default, read from the
+   environment of the process that dials, never on Android, and meant only for a daemon on this
+   machine that has no TLS. Do not treat `*.localhost` or other names as loopback. There is no
+   setting that re-enables cleartext to a remote host, and there must never be one.
 7. **Pins belong to the token.** One daemon has one certificate however many addresses (LAN, VPN,
    tunnel) reach it, so the pin set is per paired daemon, not per address. Pairing with a different
    token starts a new, empty pin set.
@@ -217,14 +225,11 @@ Because pins belong to the token, every address of one daemon is judged by the s
   different one, and every client refuses it, which is exactly what the proof is for. Use TLS
   passthrough (SNI routing without termination), or give the daemon the CA-issued certificate
   directly with `HUGINN_APPD_TLS_CERT` and `HUGINN_APPD_TLS_KEY`.
-- **The Android app cannot speak plain HTTP to `[::1]`.** Its network security config
-  (`mobile/app/src/main/res/xml/network_security_config.xml`) allows cleartext only to `localhost`
-  and `127.0.0.1`. Use `http://127.0.0.1:<port>` on the phone.
-- **Plain loopback HTTP has no peer check.** A client configured with `http://127.0.0.1:<port>` (for
-  example huginn core or the device runner on the server itself) sends the token to whatever listens
-  on that port. Another local account that binds the port while the daemon restarts could read it.
-  This applies only on the server: every remote address is upgraded to HTTPS and proved. Where it
-  matters, point the local client at the server's own LAN address over `https://` instead.
+- **`HUGINN_APPD_PLAINTEXT=local` has no peer check.** A client run with it sends the token to
+  whatever listens on the loopback port, and another local account that binds the port while the
+  daemon restarts could read it. Leave it unset: the daemon serves TLS on loopback too, and huginn
+  core, the device runner and the apps prove it there. The host-side tools in `server/bin` still
+  speak plain HTTP to `127.0.0.1`, with the same limit.
 
 See [../security.md](../security.md) for the daemon's wider threat model.
 
@@ -267,6 +272,11 @@ Beyond the vector, the suites test the behaviour end to end:
   same properties over real JVM handshakes.
 - `scripts/test-device-tls.js`: a real daemon from the tree behind a real TLS relay, with everything
   the relay decrypted searched for the token.
+- Loopback, in all three clients (`core/internal/appd/loopback_test.go`, the loopback tests in
+  `DaemonTlsTest.kt` and `TlsTransportIntegrationTest.kt`, and `scripts/test-device-tls.js`): a
+  plain-HTTP listener on a loopback port, answering like a daemon, never receives an
+  `Authorization` header, a relayed legacy proof is never adopted, and the device runner runs none
+  of the work such a listener hands out.
 
 If you change the proof input, give it a new `tls.v`: every client refuses a version it does not
 know. Keep the vector in all four suites. See [testing.md](testing.md) for running the gates.
