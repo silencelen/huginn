@@ -80,15 +80,17 @@ so the computer keeps serving when you sign out. Without it, or if the prompt is
 are installed as user services and Huginn turns on *linger* for your account so they keep
 running after you sign out; the output says which one you got.
 
-**Windows**, from a terminal opened with **Run as administrator**:
+**Windows**:
 
 ```powershell
 huginn local on
 ```
 
 On Windows the services always run as LocalSystem, so the computer serves with nobody signed in.
-That needs administrator rights once for `on`, and again for `off` and `update`. The client
-installer and the desktop app ask for administrator approval themselves.
+That needs administrator rights for `on`, `off`, `update` and `persist`: from a normal terminal
+each one asks for approval once and runs in an administrator window of its own, which shows its
+progress and stays open if something fails (since 2.5.10). The client installer and the desktop
+app ask for approval the same way.
 
 `huginn local on` prints the plan and asks before it installs anything; `--yes` skips the
 question. The client installer offers local AI only on a computer with a supported GPU. In the

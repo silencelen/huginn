@@ -6,6 +6,8 @@ the `huginn` command, or watch and answer it from the desktop app and the Androi
 
 Every session has a name. You can run as many as you like side by side; each one is independent.
 
+<img src="../../assets/screenshots/desktop-waiting.png" alt="The desktop app with a session open whose Claude Code is asking permission to run a command; a bar says Claude is asking a question" width="760">
+
 ## Open a session
 
 ```bash
@@ -24,6 +26,8 @@ huginn attach update        # a session whose name is also a huginn verb
 A new session starts Claude Code for you. When you exit Claude Code, the session stays open with
 a login shell in it, where you can run `claude` again or `claude --resume` to pick up an earlier
 conversation. Attaching to a session that already exists drops you into it exactly as it is.
+
+<img src="../../assets/screenshots/demo.gif" alt="A terminal: huginn ls lists three sessions; huginn opens the console; the sessions screen opens the one waiting on a permission prompt; Alt-d detaches back to the console while the session keeps running" width="760">
 
 Attaching needs SSH access to the server (the `Host huginn` entry the client installer writes).
 On a computer set up from the desktop app, run `huginn setup ssh` once first; see
@@ -61,6 +65,11 @@ prints every session on the server with its window count, when it was created, a
 Claude Code sign-in, sessions and disk.
 
 Tab completion in bash and PowerShell completes verbs, sub-verbs and the names of live sessions.
+
+The console's sessions screen shows the same list with each session's state and title, and the
+last lines of the one that needs you:
+
+<img src="../../assets/screenshots/console-sessions.png" alt="The console sessions screen: three sessions marked needs you, working and waiting, with the waiting prompt's last two lines below" width="760">
 
 ## Inside a session
 

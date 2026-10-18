@@ -1,42 +1,39 @@
-# Huginn demo — generate a GIF with VHS (https://github.com/charmbracelet/vhs):
-#     vhs assets/demo.tape        ->  writes docs/demo.gif
+# Huginn demo GIF, rendered with VHS (https://github.com/charmbracelet/vhs):
 #
-# Prereq: the `huginn` command installed and a reachable host (edit nothing if your
-# `Host huginn` SSH alias is set up; otherwise set HUGINN_HOST first).
-# This drives real commands, so it shows your actual node. Tweak freely.
+#     vhs assets/demo.tape          writes assets/screenshots/demo.gif
 #
-# Note: a real link drop (laptop sleep / Wi-Fi flap) can't be scripted here, so the
-# auto-reconnect beat below is narrated. Live, the attach re-runs itself and drops
-# you back into the same session within ~45s of waking.
+# Needs a machine with the huginn command paired to a server that has a few sessions running,
+# and IBM Plex Mono installed. It drives real commands against that server, so the GIF shows
+# whatever sessions are there.
 
-Output docs/demo.gif
+Output assets/screenshots/demo.gif
 
 Set Shell bash
-Set FontSize 20
-Set Width 1100
-Set Height 640
-Set Padding 24
-Set Theme "Catppuccin Mocha"
-Set TypingSpeed 60ms
+Set FontFamily "IBM Plex Mono"
+Set FontSize 17
+Set Width 1180
+Set Height 660
+Set Padding 22
+Set Framerate 24
+Set TypingSpeed 55ms
+Set Theme {"name": "Huginn Moss & Heather", "background": "#141615", "foreground": "#E2E6E1", "selection": "#2C4035", "cursor": "#7CB98E", "black": "#3A423E", "red": "#D65A62", "green": "#7CB98E", "yellow": "#D4B872", "blue": "#6C9BD6", "magenta": "#A98BD6", "cyan": "#5EB5B0", "white": "#C8CDC9", "brightBlack": "#747D77", "brightRed": "#EE757D", "brightGreen": "#C4CF7A", "brightYellow": "#E8D07E", "brightBlue": "#86B5E6", "brightMagenta": "#B49CDB", "brightCyan": "#80CFC9", "brightWhite": "#E2E6E1"}
 
+# Without a UTF-8 locale the console draws its 7-bit fallback art.
 Hide
-Type "clear" Enter
+Type "export PS1='$ ' COLORTERM=truecolor LANG=C.UTF-8; clear" Enter
 Show
 
-Type "# one command, from any device" Enter Sleep 800ms
-Type "huginn status" Sleep 400ms Enter Sleep 2.5s
+# The sessions on the server, from any machine.
+Type "huginn ls" Sleep 300ms Enter Sleep 2.5s
 
-Type "" Enter
-Type "# a named session -> the terminal tab becomes 'huginn:costtracking'" Enter Sleep 800ms
-Type "huginn list" Sleep 400ms Enter Sleep 2s
+# The console: what needs you is at the top.
+Type "huginn" Sleep 300ms Enter Sleep 3.5s
 
-Type "" Enter
-Type "# close the lid mid-task? it keeps running on the host." Enter Sleep 700ms
-Type "# wake the laptop and huginn auto-reconnects you, right where you left off." Enter Sleep 1.8s
+# Sessions, then open the one that is waiting.
+Type "1" Sleep 2.5s
+Enter Sleep 4s
 
-Type "" Enter
-Type "# resume full-screen, detaching other devices" Enter Sleep 600ms
-Type "huginn solo" Sleep 600ms Enter Sleep 2.5s
+# Detach: the session keeps running on the server.
+Alt+d Sleep 2.5s
 
-# (you're now attached to the live Claude Code tmux session)
-Sleep 1.5s
+Type "q" Sleep 1s

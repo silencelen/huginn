@@ -12,6 +12,8 @@ huginn console      # opens it by name
 Every `huginn <verb>` keeps working as before; the console is another way in, not a replacement.
 Each screen names the command that does the same thing at the bottom (`same as: huginn devices`).
 
+<img src="../../assets/screenshots/console-home.png" alt="The console home screen: the huginn wordmark, one session that needs you, and the numbered list of screens with their counts" width="760">
+
 ## What it needs
 
 - **huginn core 2.3 or later, installed and running** on this computer. The console gets all its
