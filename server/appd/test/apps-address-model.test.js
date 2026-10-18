@@ -105,16 +105,17 @@ test('overlapping adds and a delete during an add all stay applied', async () =>
   const dir = tmpDir('race');
   try {
     const store = mkStore(dir, { fetch: fakeFetch(['127.0.0.1'], { delayMs: 150 }) });
-    store.list();   // seed
+    store.list();
+    assert.equal(true, (await store.add({ name: 'victim', url: 'http://127.0.0.1:9999/' })).ok, 'precondition: a row to delete');
     const [a, b, c] = await Promise.all(['alpha', 'beta', 'gamma'].map((n) =>
       store.add({ name: n, url: 'http://127.0.0.1:9999/' })));
     assert.deepEqual([true, true, true], [a.ok, b.ok, c.ok]);
     const pending = store.add({ name: 'delta', url: 'http://127.0.0.1:9999/' });
-    assert.equal(true, store.remove('atlas').ok, 'a delete while delta probes');
+    assert.equal(true, store.remove('victim').ok, 'a delete while delta probes');
     assert.equal(true, (await pending).ok);
     const ids = store.list().map((r) => r.id);
     for (const id of ['alpha', 'beta', 'gamma', 'delta']) assert.ok(ids.includes(id), `${id} kept: ${ids}`);
-    assert.ok(!ids.includes('atlas'), `the delete stays applied: ${ids}`);
+    assert.ok(!ids.includes('victim'), `the delete stays applied: ${ids}`);
 
     const twice = await Promise.all([1, 2].map(() => store.add({ name: 'same', url: 'http://127.0.0.1:9999/' })));
     assert.deepEqual([201, 409], twice.map((r) => (r.ok ? 201 : r.status)).sort(), 'two adds of one id: one wins, one is told');
@@ -275,10 +276,12 @@ test('a rollback to appd 3.8 cannot erase reported routes or a row\'s own addres
   }
 });
 
-test('fields this version does not know survive its rewrite of the store', () => {
+test('fields this version does not know survive its rewrite of the store', async () => {
   const dir = tmpDir('unknown');
   try {
-    mkStore(dir).list();
+    const first = mkStore(dir, { fetch: fakeFetch(['127.0.0.1']) });
+    first.list();
+    for (const name of ['one', 'two']) assert.equal(true, (await first.add({ name, url: 'http://127.0.0.1:9999/' })).ok);
     const raw = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
     raw.fromTheFuture = { keep: true };
     raw.consoles[0].futureField = 7;

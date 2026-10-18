@@ -1721,29 +1721,26 @@ test('the journal speaks on a state CHANGE and is quiet otherwise', () => {
 
 // --------------------------------------------------------------- the store
 
-test('the store seeds once, and an owner who empties it is not argued with', () => {
+test('a new store starts empty: a new server serves nothing it was not given', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-store-'));
   try {
     const store = appsLib.createStore({ dir, fetch: async () => { throw new Error('no probing'); } });
     store.stop();
-    assert.equal(4, store.list().length, 'the first list seeds the contract’s four');
-    for (const c of store.list()) store.remove(c.id);
-    assert.equal(0, store.list().length);
-    assert.equal(0, store.list().length, 'and listing again does not put them back');
+    assert.equal(0, store.list().length, 'the first list writes an empty registry');
+    assert.equal(0, store.list().length, 'and listing again adds nothing');
+    assert.equal(true, JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8')).seeded, 'recorded as created');
     assert.equal(0o600, fs.statSync(appsLib.storePath(dir)).mode & 0o777, 'tmp+rename at 0600 like every other store here');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test('a store that has never existed seeds straight at the address it was given', () => {
+test('a store that has never existed pre-fills nothing, whatever address it was given', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-seedaddr-'));
   try {
     const store = appsLib.createStore({ dir, hostAddr: '127.0.0.1', fetch: async () => { throw new Error('no probing'); } });
     store.stop();
-    assert.deepEqual([
-      'http://127.0.0.1:8088/', 'http://127.0.0.1:8091/', 'http://127.0.0.1:8092/', 'http://127.0.0.1:8093/',
-    ], store.list().map((c) => c.url));
+    assert.deepEqual([], store.list().map((c) => c.url));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1807,7 +1804,8 @@ test('an observation is never written to disk, because it stops being true', asy
       dir, icons: false, hostAddr: '', fetch: async () => new Response('ok', { status: 200 }),
     });
     store.stop();
-    store.list();                                                     // the seed writes
+    store.list();                                                     // the first list writes
+    assert.equal(true, (await store.add({ name: 'atlas', url: 'http://huginn:8088/' })).ok, 'precondition: a row');
     const probed = await store.probeNow('atlas');
     assert.equal(true, probed.up, 'precondition: there is an observation to leak');
     await store.add({ name: 'Extra', url: 'http://huginn:9100/' });   // an add writes
