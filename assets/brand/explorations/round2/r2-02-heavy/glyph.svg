@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  <!-- Huginn glyph tile, r2-02-heavy: the container is the ink, the raven is the hole. The hole is THIS variant's head cut in the same 8 facets as mark-16 (hook knee (52,24), culmen to the crown (30,16), nape (16,22), neck down to the bottom edge, breast (47,50), chin (38,32), flat gonys to the tip (57,32)); the breast opens onto the bottom edge so the bird rises out of the ground. The eye is a 4x4 cell of ink at x 28-32, y 24-28: whole pixels at 16, 32 and 64. ONE evenodd path (container - raven + eye); viewBox 0 0 64 64; rx 14. Tint it by state in the tray. -->
-  <path fill="#161310" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M57,32 L52,24 L30,16 L16,22 L12,64 L44,64 L47,50 L38,32 Z M28,24 h4 v4 h-4 Z"/>
-</svg>

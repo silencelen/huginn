@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  <!-- Circle container: same head and eye cell; the breast is closed by an arc of radius 28 about the
-       centre so the ring keeps 4 units of ink everywhere (an opening onto the bottom edge thinned it to a
-       sliver at the corners). For avatar slots that crop to a disc. -->
-  <path fill="#161310" fill-rule="evenodd" d="M32,0 A32,32 0 1 1 32,64 A32,32 0 1 1 32,0 Z M55,29 L38,33 C37,36 39,41 44,46 C48,51 44.4,49.6 43.4,57.6 A28,28 0 0 1 18,56.2 C16,46.2 12,42 14,32 C14.5,22 19,18 22,18 L32,18 C34,18 34,20 35,21 L52,27 C53.6,27.6 55,27.8 55,29 Z M28,24 h4 v4 h-4 Z"/>
-</svg>

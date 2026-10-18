@@ -220,9 +220,9 @@ func TestEveryFrameFits(t *testing.T) {
 func TestArtMatchesBrand(t *testing.T) {
 	for _, f := range []string{"perch-upright.txt", "perch-upright-ascii.txt"} {
 		a, _ := os.ReadFile(filepath.Join("art", f))
-		b, err := os.ReadFile(filepath.Join("..", "..", "..", "assets", "brand", "explorations", "round5", f))
+		b, err := os.ReadFile(filepath.Join("..", "..", "..", "assets", "brand", "source", "round5", f))
 		if err != nil || string(a) != string(b) {
-			t.Errorf("art/%s differs from assets/brand/explorations/round5/%s: copy it again", f, f)
+			t.Errorf("art/%s differs from assets/brand/source/round5/%s: copy it again", f, f)
 		}
 	}
 }

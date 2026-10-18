@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Status-bar icon: the brand's small form, the raven cut out of a rounded tile
-     (explorations/round3/fold-system/glyph-c.svg), single colour because Android
+     (source/round3/fold-system/glyph-c.svg), single colour because Android
      tints and shrinks it to ~24dp. The eye is a 4x4 cell on whole pixels so it is
      exactly one pixel at 16 and the bird still reads as a bird in a tile. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

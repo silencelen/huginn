@@ -12,7 +12,7 @@ object Ansi {
 
     val palette: List<Color> = buildList {
         // 0-15: the brand's ANSI-16, Moss & Heather
-        // (assets/brand/explorations/color/color-04-moss-heather/terminal/moss-heather.ansi.json).
+        // (assets/brand/source/color/color-04-moss-heather/terminal/moss-heather.ansi.json).
         // Four slots ARE app tokens, by rule (round 7, 2026-10-13): brightRed = error,
         // brightCyan = stateSuccess, brightYellow = stateAttention, brightMagenta =
         // stateInfo, so the terminal view and the app never show two reds. Every slot but black is

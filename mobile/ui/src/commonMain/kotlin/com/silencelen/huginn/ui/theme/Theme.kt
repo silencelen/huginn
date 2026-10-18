@@ -37,7 +37,7 @@ import com.silencelen.huginn.ui.VerbTone
 // night, on a phone, next to a laptop running the same sessions) but light is
 // fully styled because Android will hand us either.
 //
-// Every value here is a token from assets/brand/explorations/color/
+// Every value here is a token from assets/brand/source/color/
 // color-04-moss-heather/tokens.json, proved by that folder's contrast.txt: text
 // >= 4.5:1 on every tier it sits on, UI >= 3:1, the state ladder 12 L* apart.
 // assets/brand/BRAND.md section 4 is the rule book; change the tokens there and

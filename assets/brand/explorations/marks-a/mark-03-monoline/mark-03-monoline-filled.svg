@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
-  <!-- Filled companion of mark-03-monoline for 20 px and smaller, where a 2px stroke closes up. Same outline, filled, stroke kept
-       so the footprint matches the stroke icon exactly; no eye (sub-pixel there). -->
-  <path d="M22 10.5 C19.5 7.5 15.5 5 11.5 5 C9 5 7.8 7 7.5 9.5 L2 19.5 L6 17.5 L9 16.3 C12 17.5 15.6 16.2 16.6 12.4 Z"/>
-</svg>

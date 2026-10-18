@@ -7,7 +7,7 @@
        <circle class="lid"> (eye = hole centre 51.75,26.3 r 3.2, in the translate(2,11)
        group). The lid is r 3.9, deliberately larger than the hole: it must cover the
        hole's own anti-aliased rim (clipping it to the hole leaves a ring; measured in
-       explorations/anim-vector/anim-01-blink/README.md).
+       source/anim-vector/anim-01-blink/README.md).
        Timeline: 12 s loop. Blinks at 0.00 s, 3.90 s, and a double at 8.20 s + 8.58 s.
        One blink = close 100 ms (ease-in) / hold 60 ms / open 160 ms (ease-out).
        Resting state (no animation, reduced motion): the static mark. -->

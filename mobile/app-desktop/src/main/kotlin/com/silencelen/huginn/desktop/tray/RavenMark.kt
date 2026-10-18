@@ -90,7 +90,7 @@ object RavenMark {
 
     /**
      * The brand's small form: the raven cut out of a rounded tile
-     * (`explorations/round3/fold-system/glyph-c.svg`, 64-unit box, corner
+     * (`source/round3/fold-system/glyph-c.svg`, 64-unit box, corner
      * radius 14, the bird at 0.84 with its fold, the eye a 4x4 cell on whole
      * pixels so it is exactly one pixel at 16). One evenodd shape: fill it in
      * the state colour and the raven is the ground showing through.

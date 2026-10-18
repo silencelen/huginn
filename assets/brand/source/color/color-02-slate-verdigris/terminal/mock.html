@@ -1,0 +1,44 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Slate & Verdigris terminal</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet"><style>
+*{box-sizing:border-box} body{margin:0;font-family:Inter, 'Segoe UI', Roboto, 'DejaVu Sans', sans-serif}
+.win{margin:28px auto 0;width:1120px;border-radius:8px;overflow:hidden;border:1px solid #3A424B}
+.tabs{height:36px;display:flex;align-items:flex-end;padding:0 10px;gap:2px;font-size:12px}
+.tab{padding:7px 14px 8px;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:8px}
+.tab i{width:7px;height:7px;border-radius:50%;display:inline-block}
+pre{margin:0;font-family:'JetBrains Mono', 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;font-variant-ligatures:none;font-size:13.5px;line-height:1.5;padding:16px 20px 12px;white-space:pre}
+.status{font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace;font-size:13.5px;line-height:1.5;display:flex;white-space:pre}
+.strip{display:grid;grid-template-columns:repeat(8,1fr);gap:0;font-family:'JetBrains Mono', 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, monospace;font-variant-ligatures:none;font-size:10.5px}
+.strip div{height:46px;padding:5px 8px;line-height:1.25}
+.cap{width:1120px;margin:14px auto 26px;font-size:12px;font-family:Inter, 'Segoe UI', Roboto, 'DejaVu Sans', sans-serif;line-height:1.5}
+.cap .g{font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace}
+b{font-weight:700}
+</style></head><body style="background:#22272E;color:#9DA6AE"><div class="win"><div class="tabs" style="background:#1B1F25;color:#9DA6AE"><div class="tab" style="background:#14171C;color:#E4E2DC"><i style="background:#5DBBA6"></i>costtracking</div><div class="tab"><i style="background:#EFD3A0"></i>brandbook</div><div class="tab"><i style="border:1px solid #6F7983"></i>notes</div><div class="tab" style="padding:7px 10px 8px">+</div><span style="margin-left:auto;padding:0 6px 9px;font-size:11px">Slate & Verdigris</span></div><pre style="background:#14171C;color:#E4E2DC"><span style="color:#6F7983">~/huginn</span> <span style="color:#86B36A">feat/brand-colour</span> <span style="color:#6F7983">$</span> git status
+On branch <span style="color:#5DBBA6">feat/brand-colour</span>
+Changes to be committed:
+  <span style="color:#6F7983">(use "git restore --staged <file>..." to unstage)</span>
+        <span style="color:#86B36A">modified:   mobile/ui/src/commonMain/kotlin/com/silencelen/huginn/ui/theme/Theme.kt</span>
+        <span style="color:#86B36A">new file:   assets/brand/source/color/README.md</span>
+Changes not staged for commit:
+        <span style="color:#D9636A">modified:   assets/demo.tape</span>
+        <span style="color:#D9636A">modified:   server/tmux.conf</span>
+Untracked files:
+        <span style="color:#D9636A">docs/palette.md</span>
+
+<span style="color:#6F7983">~/huginn</span> <span style="color:#86B36A">feat/brand-colour</span> <span style="color:#6F7983">$</span> npm test
+<span style="color:#6F7983">> huginn@1.4.0 test</span>
+<span style="color:#86B36A">ok</span>    palette: every text pair >= 4.5:1               <span style="color:#6F7983">12 ms</span>
+<span style="color:#86B36A">ok</span>    palette: tray states >= 12 L* apart            <span style="color:#6F7983">3 ms</span>
+<span style="color:#86B36A">ok</span>    tmux: status-left is single-width glyphs       <span style="color:#6F7983">1 ms</span>
+<span style="color:#D9636A;font-weight:700">FAIL</span>  demo.tape: theme is still Catppuccin Mocha      <span style="color:#6F7983">0 ms</span>
+      <span style="color:#D9636A">expected</span> <span style="color:#D4B06A">Huginn Slate & Verdigris</span>  <span style="color:#D9636A">received</span> <span style="color:#D4B06A">Catppuccin Mocha</span>
+<span style="color:#D4B06A">warn</span>  Ansi.kt: palette[0..15] differs from slate-verdigris.ansi.json
+<span style="color:#E4E2DC;font-weight:700">3 passed</span>, <span style="color:#E8767A;font-weight:700">1 failed</span>, <span style="color:#EFD3A0">1 warning</span>  <span style="color:#6F7983">(4 total, 16 ms)</span>
+
+<span style="color:#6F7983">~/huginn</span> <span style="color:#86B36A">feat/brand-colour</span> <span style="color:#6F7983">$</span> huginn status
+<span style="color:#7FD0BE;font-family:'DejaVu Sans Mono', 'Cascadia Mono', Menlo, Consolas, monospace">◢▆█▀</span> <span style="color:#7FD0BE;font-weight:700">huginn</span> <span style="color:#6F7983">- thought, on call from anywhere.</span>
+<span style="color:#7FD0BE;font-weight:700">host</span>      ravenhost       <span style="color:#6F7983">up 12d 4h  appd 1.4.0  3 devices</span>
+<span style="color:#7FD0BE;font-weight:700">sessions</span>  3
+  costtracking   <span style="color:#5DBBA6">working</span>    claude  <span style="color:#6F7983">12m   phone + desktop</span>
+  brandbook      <span style="color:#EFD3A0;font-weight:700">attention</span>  <span style="color:#EFD3A0">permission: Edit Theme.kt</span>
+  scratch        <span style="color:#6F7983">idle</span>       <span style="color:#6F7983">2h</span>
+<span style="color:#A9C97E">ok</span> link up   <span style="color:#EFD3A0">warn</span> 1 device stale   <span style="color:#E8767A">error</span> none   <span style="color:#A98BD1">llm</span> local tier off
+<span style="color:#6F7983">~/huginn</span> <span style="color:#86B36A">feat/brand-colour</span> <span style="color:#6F7983">$</span> <span style="background:#5DBBA6;color:#14171C">&nbsp;</span></pre><div class="status" style="background:#1B1F25;color:#9DA6AE"><span style="background:#2A3038;color:#5DBBA6;font-weight:700"> ◢▆█▀ </span><span style="background:#2A3038;color:#E4E2DC;font-weight:700">costtracking </span><span style="color:#2A3038">&#9612;</span><span style="color:#E4E2DC;font-weight:700"> 1:claude </span><span style="color:#5DBBA6">&#9612;</span><span> 2:bash </span><span> 3:logs </span><span style="flex:1"></span><span style="color:#6F7983">Alt-d:detach  Alt-o:solo  ^b[:scroll </span><span> ravenhost </span><span style="color:#5DBBA6;font-weight:700"> 23:41 </span></div><div class="strip"><div style="background:#3A424B;color:#E4E2DC">black<br>#3A424B<br>1.8:1</div><div style="background:#D9636A;color:#14171C">red<br>#D9636A<br>5.1:1</div><div style="background:#86B36A;color:#14171C">green<br>#86B36A<br>7.4:1</div><div style="background:#D4B06A;color:#14171C">yellow<br>#D4B06A<br>8.7:1</div><div style="background:#6A9ED8;color:#14171C">blue<br>#6A9ED8<br>6.4:1</div><div style="background:#A98BD1;color:#14171C">magenta<br>#A98BD1<br>6.2:1</div><div style="background:#5DBBA6;color:#14171C">cyan<br>#5DBBA6<br>7.8:1</div><div style="background:#C9CDCF;color:#14171C">white<br>#C9CDCF<br>11.2:1</div><div style="background:#6F7983;color:#14171C">brightBlack<br>#6F7983<br>4.1:1</div><div style="background:#E8767A;color:#14171C">brightRed<br>#E8767A<br>6.2:1</div><div style="background:#A9C97E;color:#14171C">brightGreen<br>#A9C97E<br>9.7:1</div><div style="background:#EFD3A0;color:#14171C">brightYellow<br>#EFD3A0<br>12.4:1</div><div style="background:#86B8E8;color:#14171C">brightBlue<br>#86B8E8<br>8.6:1</div><div style="background:#B9A3E3;color:#14171C">brightMagenta<br>#B9A3E3<br>8.0:1</div><div style="background:#7FD0BE;color:#14171C">brightCyan<br>#7FD0BE<br>10.0:1</div><div style="background:#E4E2DC;color:#14171C">brightWhite<br>#E4E2DC<br>13.9:1</div></div></div><div class="cap">ANSI-16 of <b>color-02-slate-verdigris</b> on its ground #14171C; every slot but black is >= 3:1 (see slate-verdigris.ansi.json). The tab strip is drawn in the direction's own tiers with the state dots; the bottom row is the tmux status line from tmux.conf.snippet. The one-row raven <span class="g">◢▆█▀</span> is the ascii dimension's pick (ascii-03-compact), four single-width cells, set here in DejaVu Sans Mono, which has U+25E2.</div></body></html>

@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 108 108">
-  <!-- App-icon master for mark-03-monoline, built from the FILLED companion (a stroke icon is a weak launcher icon):
-       ink on the bone tile, the 24 grid scaled x3.6 (10% inset). -->
-  <rect width="108" height="108" fill="#E8E2DA"/>
-  <g transform="translate(10.8,10.8) scale(3.6)" fill="#161310" stroke="#161310" stroke-width="2" stroke-linejoin="round">
-    <path d="M22 10.5 C19.5 7.5 15.5 5 11.5 5 C9 5 7.8 7 7.5 9.5 L2 19.5 L6 17.5 L9 16.3 C12 17.5 15.6 16.2 16.6 12.4 Z"/>
-  </g>
-</svg>
