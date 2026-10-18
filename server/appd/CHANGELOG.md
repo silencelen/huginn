@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.12.1 — 2026-10-17
+
+### Added
+- **`/v1/status` lists the host's own addresses** (`addresses`: not loopback, not link-local,
+  IPv4 first). A client that knows huginn by one address can find another that its network lets
+  ssh through. On PC01, `192.168.1.20` carries only huginn's port from VLAN 7, and
+  `192.168.10.20` carries ssh. `huginn setup ssh` (CLI 2.5.8) uses it. Behind the token, like the
+  rest of status: huginn is single-user, and whoever sets up a client has the same authority over
+  the host (owner).
+
 ## 3.12.0 — 2026-10-13
 
 ### Changed

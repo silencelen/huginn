@@ -8,6 +8,23 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.8] - 2026-10-17
+
+From the owner's eighth recorded install on PC01.
+
+### Fixed
+- **Terminal setup finds an address that SSH reaches.** On PC01, `192.168.1.20` (the address
+  people know, and what DNS gives) carries only huginn's own port from its VLAN, while
+  `192.168.10.20` carries SSH. The terminal path paired, but could never attach. Once paired,
+  `huginn setup ssh` asks huginn for its own addresses (appd 3.12.1). It tries SSH's port on each,
+  preferring one on this computer's own network, and points `Host huginn` at the first that
+  answers. It only edits a stanza that names one of huginn's own addresses. The installers run it
+  themselves when SSH did not answer.
+
+### Added
+- **`huginn core tray show`** starts the tray icon now and returns: the way back after "Hide this
+  icon", and what the desktop app's new Tray icon switch runs.
+
 ## [2.5.7] - 2026-10-17
 
 From the owner's sixth and seventh recorded installs on PC01. The sixth confirmed the uninstall no

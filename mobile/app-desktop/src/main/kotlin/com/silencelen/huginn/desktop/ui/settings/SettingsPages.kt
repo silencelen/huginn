@@ -582,6 +582,13 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
 fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
     val closeToTray by store.settings.closeToTray.collectAsState()
     val coreTray by store.coreDevice.coreTray.collectAsState()
+    val coreInstalled = remember(coreTray) { com.silencelen.huginn.desktop.core.CoreSetup.installedBinary() != null }
+    // Where huginn core is installed its icon is the only one (Main.kt), so a
+    // hidden icon means no tray to close to.
+    val trayHere = coreTray || (isTraySupported && !coreInstalled)
+    val scope = rememberCoroutineScope()
+    var trayNote by remember { mutableStateOf<String?>(null) }
+    var trayBusy by remember { mutableStateOf(false) }
 
     SettingsToggleRow(
         id = "appearance.close-to-tray",
@@ -593,6 +600,9 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         // "leaves huginn running in the tray" on a box where closing the window
         // ends the process — verified, it was gone.
         summary = when {
+            coreInstalled && !coreTray ->
+                "The tray icon is hidden, so closing the window quits Huginn; huginn core keeps running. " +
+                    "Show the icon below to close to it."
             !isTraySupported && !coreTray ->
                 "There is no system tray on this computer, so closing the window quits huginn " +
                     "and the watch stream stops with it."
@@ -610,8 +620,34 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         // it greys out and the summary above says why. The VALUE is untouched: a
         // laptop that gains a tray (a different desktop session, a Windows
         // install) gets back exactly the answer its owner last gave.
-        enabled = isTraySupported,
+        enabled = trayHere,
     )
+    // The way back after "Hide this icon" (owner, 2026-10-17), and the way to
+    // hide it from here. Only where huginn core is installed: elsewhere this
+    // app's own icon follows Close to tray.
+    if (coreInstalled) {
+        SettingsToggleRow(
+            id = "appearance.tray-icon",
+            title = "Tray icon",
+            checked = coreTray,
+            enabled = !trayBusy,
+            onCheckedChange = { on ->
+                trayBusy = true
+                trayNote = null
+                scope.launch {
+                    store.coreDevice.setTrayIcon(on).onFailure { trayNote = it.message }
+                    trayBusy = false
+                }
+            },
+            summary = trayNote ?: if (coreTray) {
+                "huginn core's icon in the notification area: Open Huginn, what needs you, Close to tray and Quit Huginn."
+            } else {
+                "Hidden. It comes back at your next sign-in, or when you turn this on."
+            },
+            highlighted = SettingsRowStyle.isHighlighted("appearance.tray-icon", mark),
+            modifier = revealMark("appearance.tray-icon"),
+        )
+    }
     SettingsNavRow(
         id = "appearance.shortcuts",
         title = "Keyboard shortcuts",

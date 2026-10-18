@@ -63,6 +63,18 @@ internal object CoreSetup {
         return Ran(p.exitValue(), out.trim())
     }
 
+    /**
+     * Settings' "Tray icon" switch, turned on: `huginn core tray show` starts
+     * the core's icon now, detached, and returns.
+     */
+    suspend fun showTray(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bin = installedBinary() ?: error("huginn core is not installed")
+            val r = run(listOf(bin.toString(), "core", "tray", "show"), timeoutS = 30)
+            check(r.exit == 0) { r.output.lines().lastOrNull { it.isNotBlank() } ?: "could not start the tray icon (exit ${r.exit})" }
+        }
+    }
+
     /** The version an installed core reports (`huginn version`), or null. */
     fun installedVersion(bin: Path): String? =
         runCatching { VERSION_LINE.find(run(listOf(bin.toString(), "version"), timeoutS = 15).output)?.groupValues?.get(1) }.getOrNull()

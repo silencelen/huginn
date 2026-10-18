@@ -19,6 +19,10 @@ const (
 	// POST /core/gui. Never retained: a stored "quit" would close every app
 	// that connects later.
 	EventGUICmd = "gui.cmd"
+	// EventTrayCmd is {"cmd":"hide"} for the tray, sent by the desktop app's
+	// Settings switch through POST /core/tray. Never retained, for the same
+	// reason as EventGUICmd.
+	EventTrayCmd = "tray.cmd"
 )
 
 // GUI is the desktop app as the tray needs to know it.

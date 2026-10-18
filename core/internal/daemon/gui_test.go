@@ -127,3 +127,31 @@ func TestTrayReachesTheAppThroughTheCore(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// The desktop app's "Tray icon" switch: off sends the tray one hide, never
+// replayed to a tray that starts later (that one is the switch turned on).
+func TestTrayHideReachesTheTrayOnce(t *testing.T) {
+	srv := guiRig(t)
+	if c := post(t, srv, "/core/tray", `{"cmd":"hide"}`); c != 409 {
+		t.Fatalf("no tray: got %d, want 409", c)
+	}
+	tray := subscribe(t, srv, "role=tray&deliver=0")
+	deadline := time.Now().Add(2 * time.Second)
+	for post(t, srv, "/core/tray", `{"cmd":"hide"}`) != 202 {
+		if time.Now().After(deadline) {
+			t.Fatal("the tray attached and hide was still refused")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d := tray.next("tray.cmd", 2*time.Second); !strings.Contains(d, `"hide"`) {
+		t.Fatalf("the tray never got hide: %q", d)
+	}
+	later := subscribe(t, srv, "role=tray&deliver=0")
+	if d := later.next("tray.cmd", 500*time.Millisecond); d != "" {
+		t.Fatalf("a tray started later was replayed the hide: %q", d)
+	}
+	if c := post(t, srv, "/core/tray", `{"cmd":"rm"}`); c != 400 {
+		t.Fatalf("unknown command: got %d, want 400", c)
+	}
+}
+

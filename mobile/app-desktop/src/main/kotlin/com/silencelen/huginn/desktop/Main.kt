@@ -538,12 +538,19 @@ fun main(args: Array<String>) {
         }
 
         val coreTray by store.coreDevice.coreTray.collectAsState()
-        // A window hidden behind the core's tray must not be stranded when that
-        // tray goes and this machine has no tray of its own to bring it back.
-        LaunchedEffect(coreTray) {
-            if (!coreTray && !isTraySupported && !windowVisible.value) windowVisible.value = true
+        // ⚠ ONE ICON (owner, 2026-10-17). Where huginn core is installed, its
+        // icon is the only one: hiding it ("Hide this icon") used to bring this
+        // app's own older icon up in its place, with no clear way back. The way
+        // back is Settings > Appearance > Tray icon. This app's own icon is for a
+        // machine with no core.
+        val coreInstalled = remember(coreTray) { com.silencelen.huginn.desktop.core.CoreSetup.installedBinary() != null }
+        val ownTray = isTraySupported && !coreTray && !coreInstalled
+        // A window hidden behind a tray must not be stranded when that tray
+        // goes and nothing else can bring it back.
+        LaunchedEffect(coreTray, ownTray) {
+            if (!coreTray && !ownTray && !windowVisible.value) windowVisible.value = true
         }
-        if (isTraySupported && !coreTray) {
+        if (ownTray) {
             Tray(
                 icon = TrayIcons.painter(summary.state),
                 state = trayState,
@@ -594,7 +601,7 @@ fun main(args: Array<String>) {
                 // 2026-10-17, which retires D6's "closing quits"): that tray's menu
                 // carries this app's Close to tray and Quit Huginn, and its Open
                 // Huginn brings the window back.
-                if (closeToTray && (coreTray || isTraySupported)) windowVisible.value = false else quit()
+                if (closeToTray && (coreTray || ownTray)) windowVisible.value = false else quit()
             },
             state = windowState,
             visible = visible,
@@ -644,7 +651,7 @@ fun main(args: Array<String>) {
                     // note at the foot of this file; it fires only while the
                     // window has focus, which makes it a hide and not a summon.
                     shortcut == Shortcut.HIDE_TO_TRAY -> {
-                        if (store.coreDevice.coreTray.value || isTraySupported) windowVisible.value = false
+                        if (coreTray || ownTray) windowVisible.value = false
                         true
                     }
                     shortcut == Shortcut.PALETTE -> { paletteOpen.value = true; true }

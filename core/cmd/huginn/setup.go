@@ -4,12 +4,15 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/ui"
@@ -38,7 +41,12 @@ func setup(args []string) int {
 	cfg := filepath.Join(sshDir, "config")
 	alias := envOr("HUGINN_HOST", "huginn")
 	u := ui.New()
-	u.Head("huginn setup ssh")
+	// Inside an installer's block (HUGINN_SETUP=1) its lines join that block:
+	// no title, no closing sentence.
+	inBlock := os.Getenv("HUGINN_SETUP") == "1"
+	if !inBlock {
+		u.Head("huginn setup ssh")
+	}
 
 	if _, err := exec.LookPath("ssh"); err != nil {
 		if runtime.GOOS == "windows" {
@@ -51,7 +59,9 @@ func setup(args []string) int {
 	}
 	key := filepath.Join(sshDir, "id_ed25519")
 	if hn, ok := stanzaHost(cfg, alias); ok {
-		u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s is already in %s - kept as it is", alias, hn, tilde(home, cfg)))
+		if !inBlock { // an installer's block has just said it
+			u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s is already in %s - kept as it is", alias, hn, tilde(home, cfg)))
+		}
 		*host = hn
 		if k := stanzaKey(cfg, alias, home); k != "" {
 			key = k
@@ -92,6 +102,25 @@ func setup(args []string) int {
 	}
 
 	why := sshTrust(alias)
+	if strings.HasPrefix(why, "unreachable") {
+		// The address this computer knows huginn by may not carry ssh from
+		// here (PC01, 2026-10-17: 192.168.1.20 carries only huginn's port
+		// from its VLAN; 192.168.10.20 carries ssh). huginn lists its own
+		// addresses to the paired core; the first that answers on port 22 is
+		// the same host, so the stanza is pointed at it.
+		if alt, all := sshAddress(*host); alt != "" {
+			if repointStanza(cfg, alias, *host, alt, all) {
+				u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s: %s does not answer ssh from here, and %s is the same huginn", alias, alt, *host, alt))
+				*host = alt
+				why = sshTrust(alias)
+			} else {
+				u.Line(ui.Warn, "ssh", fmt.Sprintf("%s does not answer ssh from here, but %s (the same huginn) does", *host, alt))
+				u.Note(fmt.Sprintf("'Host %s' in %s names a host this did not write; set its HostName to %s", alias, tilde(home, cfg), alt))
+			}
+		} else if len(all) > 0 {
+			u.Note("None of huginn's addresses (" + strings.Join(all, ", ") + ") answers ssh from here.")
+		}
+	}
 	if why == "hostkey" && isTerminal(os.Stdin) {
 		// A host this computer has never seen: ssh's own question, with the
 		// host's fingerprint, answered by the person. Public-key only, so
@@ -111,20 +140,141 @@ func setup(args []string) int {
 		u.Say("  echo '" + strings.TrimSpace(string(pub)) + "' >> ~/.ssh/authorized_keys")
 		u.Say("")
 	}
-	if why != "ok" && why != "changed" && isTerminal(os.Stdin) {
-		u.Prompt("Press Enter when that is done (Ctrl-C to finish later) ")
+	// Waiting only when there is something to do on the host: nothing answering
+	// at all has nothing to wait for (run 7).
+	if why != "ok" && why != "changed" && !strings.HasPrefix(why, "unreachable") && isTerminal(os.Stdin) {
+		u.Prompt("Press Enter once the key is added (Ctrl-C to finish later) ")
 		bufio.NewReader(os.Stdin).ReadString('\n')
 		why = sshTrust(alias)
 		showTrust(u, why, *host)
 	}
+	if inBlock {
+		if why != "ok" {
+			return 1
+		}
+		return 0
+	}
 	if why != "ok" {
 		u.Say("")
-		u.Say("Once the host accepts the key, `huginn ls` and `huginn attach` work; check with: huginn status")
+		if strings.HasPrefix(why, "unreachable") {
+			u.Say("Attaching from a terminal needs ssh to the host; everything else uses huginn's own port.")
+		} else {
+			u.Say("Once the host accepts the key, `huginn ls` and `huginn attach` work; check with: huginn status")
+		}
 		return 1
 	}
 	u.Say("")
 	u.Say("SSH works: `huginn ls`, `huginn attach <name>` and plain `huginn` (the console) can attach.")
 	return 0
+}
+
+// sshAddress: huginn's own addresses, as it lists them to the paired core
+// (appd 3.12.1+, /v1/status), and the first of them other than host that
+// answers on port 22 from here ("" when none does, or huginn did not say).
+func sshAddress(host string) (string, []string) {
+	var st struct {
+		Addresses []string `json:"addresses"`
+	}
+	if _, err := call(http.MethodGet, "/appd/v1/status", nil, &st); err != nil {
+		return "", nil
+	}
+	type res struct {
+		i  int
+		ok bool
+	}
+	ch := make(chan res, len(st.Addresses))
+	for i, a := range st.Addresses {
+		go func(i int, a string) {
+			if a == host {
+				ch <- res{i, false}
+				return
+			}
+			c, err := net.DialTimeout("tcp", net.JoinHostPort(a, "22"), 3*time.Second)
+			if err == nil {
+				c.Close()
+			}
+			ch <- res{i, err == nil}
+		}(i, a)
+	}
+	ok := make([]bool, len(st.Addresses))
+	for range st.Addresses {
+		r := <-ch
+		ok[r.i] = r.ok
+	}
+	// One on this computer's own network first (PC01: 192.168.10.20 beside
+	// its 192.168.10.172, rather than the mesh address that also answers).
+	local := localNets()
+	for _, near := range []bool{true, false} {
+		for i, a := range st.Addresses {
+			if ok[i] && (!near || sameNet(a, local)) {
+				return a, st.Addresses
+			}
+		}
+	}
+	return "", st.Addresses
+}
+
+// localNets: this computer's own IPv4 networks.
+func localNets() []*net.IPNet {
+	var out []*net.IPNet
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && !n.IP.IsLoopback() && !n.IP.IsLinkLocalUnicast() {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+func sameNet(addr string, nets []*net.IPNet) bool {
+	ip := net.ParseIP(addr)
+	for _, n := range nets {
+		if ip != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// repointStanza changes the HostName of the `Host <alias>` stanza from old to
+// to - only when old names this huginn (one of its own addresses, or the
+// address the core is paired with): a stanza naming something else is a
+// person's own, and is never edited. Reports whether it changed the file.
+func repointStanza(cfg, alias, old, to string, huginns []string) bool {
+	ours := old == pairedHost()
+	for _, a := range huginns {
+		ours = ours || a == old
+	}
+	if !ours {
+		return false
+	}
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(b), "\n")
+	in, changed := false, false
+	for i, line := range lines {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		if strings.EqualFold(f[0], "host") {
+			in = false
+			for _, h := range f[1:] {
+				in = in || h == alias
+			}
+			continue
+		}
+		if in && len(f) >= 2 && strings.EqualFold(f[0], "hostname") && f[1] == old {
+			lines[i] = strings.Replace(line, old, to, 1)
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	return os.WriteFile(cfg, []byte(strings.Join(lines, "\n")), 0o600) == nil
 }
 
 // sshTrust asks the host, never prompting, whether it takes this computer's

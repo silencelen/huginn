@@ -677,6 +677,15 @@ object SettingsCatalog {
                 keywords = listOf("tray", "close", "minimise", "minimize", "background", "quit"),
                 surface = Surface.DESKTOP,
             ),
+            // One icon (owner, 2026-10-17): huginn core's, which "Hide this icon"
+            // takes away. This is the way to bring it back, and to hide it.
+            SettingsItem(
+                id = "appearance.tray-icon",
+                title = "Tray icon",
+                summary = "Whether huginn core's icon shows in the notification area.",
+                keywords = listOf("tray", "icon", "notification area", "system tray", "hide", "show", "bring back"),
+                surface = Surface.DESKTOP,
+            ),
             SettingsItem(
                 id = "appearance.terminal-text-size",
                 title = "Terminal text size",

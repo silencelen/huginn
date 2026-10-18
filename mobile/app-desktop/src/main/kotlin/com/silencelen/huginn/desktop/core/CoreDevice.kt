@@ -253,6 +253,15 @@ class CoreDevice internal constructor(
         }
     }
 
+    /**
+     * Settings' "Tray icon" switch (owner, 2026-10-17: one icon, and a clear way
+     * to bring it back after "Hide this icon"). On starts the core's icon; off
+     * takes it away until the next sign-in.
+     */
+    suspend fun setTrayIcon(on: Boolean): Result<Unit> =
+        if (on) CoreSetup.showTray()
+        else runCatching { (client ?: clientFor() ?: error(NOT_AVAILABLE)).hideTray() }
+
     companion object {
         const val RECONNECT_MS = 3_000L
         /** How long a core may be gone before the window is handed to the gate: an update restarts it. */

@@ -129,7 +129,7 @@ func (r *role) ready() {
 	r.quitApp.Hide()
 	// It was "Quit tray": next to the app's "Quit Huginn" that read as the
 	// same thing (run 6). It only takes this icon away until the next sign-in.
-	quit := systray.AddMenuItem("Hide this icon", "huginn core keeps running; the icon comes back at your next sign-in")
+	quit := systray.AddMenuItem("Hide this icon", "huginn core keeps running; the icon comes back at your next sign-in, or from Huginn's Settings > Appearance & behaviour")
 
 	go func() {
 		for range r.open.ClickedCh {
@@ -385,6 +385,11 @@ func (r *role) showGUI(g traystate.GUI) {
 
 func (r *role) handle(event string, data []byte) {
 	switch event {
+	case traystate.EventTrayCmd:
+		// The desktop app's "Tray icon" switch, turned off.
+		if strings.Contains(string(data), `"hide"`) {
+			systray.Quit()
+		}
 	case traystate.EventGUI:
 		var g traystate.GUI
 		if json.Unmarshal(data, &g) == nil {
