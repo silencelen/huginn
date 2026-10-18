@@ -205,9 +205,13 @@ cd mobile
 ./gradlew :app:assembleDebug
 ```
 
-The debug build is signed with the checked-in `mobile/app/debug.keystore`, so every machine
-produces APKs with the same certificate and a debug build can update another debug build. The
-build copies the APK into `mobile/dist/` as `Huginn-debug-<versionCode>-<timestamp>.apk`.
+The debug build is signed with your own debug key when `~/.huginn-app/debug-keystore.properties`
+exists (or the file `HUGINN_DEBUG_KEYSTORE_PROPERTIES` names), holding the same four keys as the
+release file below. Copy that key to every machine you build on and their debug builds update
+each other. Without it, Android's per-machine default debug key signs, and a debug build updates
+only debug builds from the same machine. No key is checked in: one in a public repository would
+let anyone sign an update over a debug install. The build copies the APK into `mobile/dist/` as
+`Huginn-debug-<versionCode>-<timestamp>.apk`.
 
 `./gradlew :app:assembleRelease` signs with your own key when
 `~/.huginn-app/keystore.properties` exists (or the file `HUGINN_KEYSTORE_PROPERTIES` names). It

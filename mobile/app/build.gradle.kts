@@ -23,6 +23,20 @@ val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
 }
 
+// The DEBUG key lives outside the repo too: ~/.huginn-app/debug-keystore.properties, or
+// the file HUGINN_DEBUG_KEYSTORE_PROPERTIES names, with the same four keys. It used to
+// be checked in, and a key in a public tree is anyone's key: an APK signed with it
+// installs as an update over any debug build and inherits its data, the daemon token
+// included. Without the file, AGP's per-machine default debug key signs, so a debug
+// build updates only debug builds made on the same machine.
+val debugKeystorePropsFile = file(
+    System.getenv("HUGINN_DEBUG_KEYSTORE_PROPERTIES")
+        ?: "${System.getProperty("user.home")}/.huginn-app/debug-keystore.properties"
+)
+val debugKeystoreProps = Properties().apply {
+    if (debugKeystorePropsFile.exists()) debugKeystorePropsFile.inputStream().use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -67,14 +81,16 @@ android {
     }
 
     signingConfigs {
-        // Explicit, checked-in debug keystore so local debug builds are
-        // machine-independent (same lesson as devstore/andvari: AGP's
-        // per-machine default keystore breaks update continuity).
-        getByName("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "androiddebug"
-            keyAlias = "androiddebugkey"
-            keyPassword = "androiddebug"
+        // A debug key shared by every build machine keeps debug builds updating each
+        // other (AGP's per-machine default breaks that), so one is used when it is
+        // configured; see debugKeystorePropsFile above for where it lives.
+        if (debugKeystorePropsFile.exists()) {
+            getByName("debug") {
+                storeFile = file(debugKeystoreProps.getProperty("storeFile"))
+                storePassword = debugKeystoreProps.getProperty("storePassword")
+                keyAlias = debugKeystoreProps.getProperty("keyAlias")
+                keyPassword = debugKeystoreProps.getProperty("keyPassword")
+            }
         }
         if (keystorePropsFile.exists()) {
             create("release") {
