@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# huginn-ask - one headless Claude Code turn, fenced exactly like a chat in the apps.
+#
+#   echo "question" | huginn-ask ask      what `huginn -p` runs: read, search, the web;
+#                                         Bash, Edit, Write and NotebookEdit denied
+#   echo "task"     | huginn-ask act      what `huginn -y` runs: also Bash, Edit, Write
+#
+# HOST-SIDE ON PURPOSE, like huginn-status beside it: the bash and PowerShell
+# clients both ssh here, so the tool fence exists once on the host, next to the
+# daemon whose chats it has to match (server/appd TOOLS and DISALLOWED). The
+# fence always applies; it does not depend on a persona being present.
+#
+# Shared with huginn-appd, read from its unit so there is one place to set them
+# (/etc/systemd/system/huginn-appd.service.d/site.conf):
+#   HUGINN_APPD_EXTRA_TOOLS   extra tools granted in both modes (e.g. MCP tools)
+#   HUGINN_APPD_PERSONA_FILE  persona appended to the system prompt
+#                             (default /etc/huginn/persona.md; no file, no persona)
+#   HUGINN_APPD_WORKDIR       where the turn runs, unless HUGINN_WORKDIR is set
+#
+# The prompt is read from stdin, never from argv, so no quoting reaches a shell.
+set -uo pipefail
+
+case "${1:-}" in
+  ask|act) mode="$1" ;;
+  -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "usage: huginn-ask ask|act   (the prompt on stdin)" >&2; exit 2 ;;
+esac
+command -v claude >/dev/null 2>&1 || { echo "huginn-ask: claude is not installed on this host" >&2; exit 127; }
+
+unit_env() {
+  systemctl show huginn-appd -p Environment --value 2>/dev/null \
+    | tr ' ' '\n' | sed -n "s/^$1=//p" | tail -1 || true
+}
+
+extra=""
+for t in ${HUGINN_APPD_EXTRA_TOOLS:-$(unit_env HUGINN_APPD_EXTRA_TOOLS)}; do
+  # The daemon drops anything not shaped like a tool name; so does this.
+  [[ "$t" =~ ^[A-Za-z0-9_.:*()-]+$ ]] && extra="$extra $t"
+done
+
+if [ "$mode" = act ]; then
+  tools="Skill Bash Read Edit Write Glob Grep WebFetch WebSearch$extra"
+  deny=()
+else
+  tools="Skill WebFetch WebSearch$extra"
+  deny=(--disallowedTools "Bash Edit Write NotebookEdit")
+fi
+
+persona=""
+for f in "${HUGINN_APPD_PERSONA_FILE:-$(unit_env HUGINN_APPD_PERSONA_FILE)}" \
+         /etc/huginn/persona.md /usr/local/share/huginn-cli/persona.md; do
+  [ -n "$f" ] && [ -r "$f" ] && { persona="$(cat "$f")"; break; }
+done
+args=(-p --allowedTools "$tools" "${deny[@]}")
+[ -n "$persona" ] && args+=(--append-system-prompt "$persona")
+
+dir="${HUGINN_WORKDIR:-$(unit_env HUGINN_APPD_WORKDIR)}"
+cd "${dir:-$HOME}" 2>/dev/null || cd "$HOME" || exit 1
+exec claude "${args[@]}"

@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
-# Huginn server setup — turn a fresh Debian/Ubuntu host into a Huginn node.
-# Installs Node + Claude Code + tmux, then the cc launcher, huginn-status, and tmux.conf.
-# Run as root (or with sudo) on the host:  sudo bash server/setup.sh
+# Huginn Server setup: turn a fresh Debian or Ubuntu machine into a Huginn server.
+#
+#   sudo bash server/setup.sh          (or: curl -fsSL .../server/get.sh | sudo bash)
+#
+# Installs Node.js, Claude Code, tmux and the host tools, the tuned tmux config,
+# the terminal-title hooks, and huginn-appd (the daemon the clients pair with),
+# then prints what to do next. Safe to re-run: it is also how a server is updated.
+#
+#   HUGINN_WORKDIR=/path   where sessions and chats start (default: root's home)
+#   HUGINN_NO_DAEMON=1     terminal-only server: skip huginn-appd
+#   HUGINN_FORCE=1         overwrite host tools that were edited in place
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -13,7 +21,10 @@ fi
 echo "[huginn] installing base packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q
-apt-get install -y -q curl git tmux ca-certificates jq locales
+# python3: the host tools that render reports (headroom, rounds, archive,
+# devices) are python. openssl: the daemon's token and TLS certificate.
+# iproute2/procps: ss and pgrep, used by the install checks.
+apt-get install -y -q curl git tmux ca-certificates jq locales python3 openssl iproute2 procps
 
 # locale (silence the perl warnings)
 if ! locale -a 2>/dev/null | grep -qi 'en_US.utf8'; then
@@ -21,10 +32,12 @@ if ! locale -a 2>/dev/null | grep -qi 'en_US.utf8'; then
   locale-gen en_US.UTF-8 >/dev/null 2>&1 || true
 fi
 
-# Node 20+ (NodeSource) if missing
-if ! command -v node >/dev/null 2>&1; then
-  echo "[huginn] installing Node 20..."
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null
+# Node.js 22 (NodeSource) when there is none, or an older one than the daemon
+# is tested on.
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "[huginn] installing Node.js 22..."
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null
   apt-get install -y -q nodejs
 fi
 
@@ -32,6 +45,11 @@ fi
 if ! command -v claude >/dev/null 2>&1; then
   echo "[huginn] installing Claude Code..."
   npm install -g @anthropic-ai/claude-code
+fi
+# ccusage: the token and cost report behind `huginn usage` and the apps' usage view.
+if ! command -v ccusage >/dev/null 2>&1; then
+  echo "[huginn] installing ccusage..."
+  npm install -g ccusage >/dev/null 2>&1 || echo "[huginn] ccusage did not install - 'huginn usage' will be unavailable" >&2
 fi
 
 # server scripts — never a SILENT downgrade. server/bin has drifted behind
@@ -73,6 +91,8 @@ install_script "$HERE/bin/huginn-archive"      /usr/local/bin/huginn-archive
 # bash+python of its siblings because it POSTs JSON built out of argv.
 install_script "$HERE/bin/huginn-projects"     /usr/local/bin/huginn-projects
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
+install_script "$HERE/bin/huginn-llm"          /usr/local/bin/huginn-llm
+install_script "$HERE/bin/huginn-ask"          /usr/local/bin/huginn-ask
 # The state table every renderer above reads its marks, words and colour slots
 # from: server/lib/state-table.json and the readers generated from it (bash,
 # python, node). Beside the renderers in the tree; here on a host, where they
@@ -120,20 +140,39 @@ else
   echo "[huginn] jq not found - skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
 fi
 
+# huginn-appd: the daemon huginn core, the console and the desktop and Android
+# apps pair with. Skipped for a terminal-only server.
+if [ "${HUGINN_NO_DAEMON:-}" != 1 ]; then
+  echo "[huginn] installing huginn-appd..."
+  HUGINN_WORKDIR="${HUGINN_WORKDIR:-}" bash "$HERE/appd/install.sh"
+fi
+
 echo
 echo "[huginn] done."
 echo "   node   = $(node -v)"
 echo "   claude = $(claude --version 2>/dev/null | head -1)"
 if [ -n "$SKIPPED" ]; then
   echo
-  echo "[huginn] NOT installed, host copy is newer:$SKIPPED" >&2
-  echo "[huginn] diff each against $HERE/bin/ and fold the host's fixes back into the repo," >&2
-  echo "[huginn] or re-run with HUGINN_FORCE=1 to overwrite them." >&2
+  echo "[huginn] NOT installed, the copy on this machine was edited and is newer:$SKIPPED" >&2
+  echo "[huginn] compare each with $HERE/bin/, or re-run with HUGINN_FORCE=1 to overwrite them." >&2
 fi
+
+ADDRS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v -e '^$' -e '^127\.' -e '^fe80' | head -3 | paste -sd' ')"
 echo
 echo "Next steps:"
-echo "  1. Run 'claude' once to authenticate (Max/Pro subscription, or set ANTHROPIC_API_KEY)."
-echo "  2. Add each device's SSH public key to ~/.ssh/authorized_keys on this host."
-echo "  3. (optional) export HUGINN_WORKDIR=/path/to/project in the login shell to set"
-echo "     where sessions open (default: \$HOME)."
-echo "  4. Install the client command on your devices (see client/)."
+echo "  1. Sign Claude Code in, once:   claude"
+echo "     (a Claude Pro or Max subscription, or set ANTHROPIC_API_KEY)"
+echo "  2. On each computer you will use, install the Huginn client:"
+echo "       Linux, Termux:  curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh | sh"
+echo "       Windows:        irm https://raw.githubusercontent.com/silencelen/huginn/main/client/get.ps1 | iex"
+echo "     When it asks for the server, give this machine's address: ${ADDRS:-<the IP address or name of this machine>}"
+if [ "${HUGINN_NO_DAEMON:-}" != 1 ]; then
+  echo "  3. Pairing asks for the access token. Print it here with:   cat /etc/huginn-appd/token"
+  echo "     It grants full control of this machine: paste it only into your own devices."
+  echo
+  echo "Clients reach this server on port 22 (SSH) and 8787 (huginn-appd, HTTPS)."
+  echo "Keep both on your own network or VPN; do not expose them to the internet."
+else
+  echo
+  echo "Terminal-only server (HUGINN_NO_DAEMON=1): clients reach it over SSH, port 22."
+fi
