@@ -340,25 +340,6 @@ test('a verdict with nothing but loopback required says so instead of vouching f
   assert.match(r.note, /also not answering at 127\.0\.0\.2/);
 });
 
-test('a seed row is this host\'s app wherever its URL points; a lookalike on another port is not', () => {
-  // 2026-10-02: the live seeds carry the retired tailnet IP 100.101.102.103.
-  assert.equal(true, appsLib.isSeedRow({ id: 'atlas', url: 'http://100.101.102.103:8088/' }));
-  assert.equal(false, appsLib.isSeedRow({ id: 'atlas', url: 'http://192.168.10.50:9999/' }));
-  assert.equal(false, appsLib.isSeedRow({ id: 'other', url: 'http://100.101.102.103:8088/' }));
-  const dir = tmpDir('seedlocal');
-  try {
-    const store = mkStore(dir);
-    store.list();
-    const plan = store.addressSet({ id: 'jotter', url: 'http://100.101.102.103:8091/', addresses: [] });
-    assert.equal(undefined, plan.remote, 'judged as this host, by loopback and reported routes');
-    assert.ok(plan.required.includes('127.0.0.1'));
-    const far = store.addressSet({ id: 'x', url: 'http://100.101.102.103:8091/', addresses: [] });
-    assert.equal('100.101.102.103', far.remote, 'the same URL on a non-seed row is somebody else\'s');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 // ------------------------------------- which device saved a route, and forgetting it
 
 test('a report can name its device; the name survives a restart and a report without one', () => {

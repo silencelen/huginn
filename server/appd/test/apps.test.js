@@ -352,26 +352,7 @@ test('the row asks TWO questions — is it alive, and can this host\u2019s clien
 
 // ------------------------------------------------------------- the seed list
 
-test('the seed is the contract’s four pages, at the address the daemon was handed', () => {
-  // ⚠ D10, AND THE REASON THIS TAKES AN ADDRESS AT ALL. The four seeded units
-  // bind this host's TAILNET address; the name `huginn` resolves to its LAN
-  // address. A seed pinned to the name therefore addresses an interface on
-  // which none of them listen — `curl http://huginn:8088/` answers nothing
-  // while `curl http://100.101.102.103:8088/` answers 200 — so every row read
-  // "not answering from the host" forever, in the one deployment that has these
-  // units. The probe could never pass, whatever anybody did.
-  const seeded = appsLib.seedApps('100.101.102.103', 100);
-  assert.deepEqual(['atlas', 'jotter', 'board', 'bursar'], seeded.map((c) => c.id));
-  assert.deepEqual(
-    ['http://100.101.102.103:8088/', 'http://100.101.102.103:8091/',
-      'http://100.101.102.103:8092/', 'http://100.101.102.103:8093/'],
-    seeded.map((c) => c.url),
-    'the address the daemon itself binds — the one interface these units are on',
-  );
-  for (const c of seeded) assert.equal(null, appsLib.urlProblem(c.url), `${c.id} must pass the daemon's own rule`);
-});
-
-test('the seed address is chosen from what the daemon can offer, skipping the wildcard it binds', () => {
+test('the daemon\'s own address is chosen from what it can offer, skipping the wildcard it binds', () => {
   // ⚠ THE CASE THE LIVE HOST IS IN. huginn-appd's unit sets
   // HUGINN_APPD_BIND=0.0.0.0 so the tailnet, mesh and loopback pins a client
   // holds all reach one listener. A fix that read only the bind would resolve
@@ -386,92 +367,15 @@ test('the seed address is chosen from what the daemon can offer, skipping the wi
   assert.equal('', appsLib.pickHostAddr('fe80::1%eth0'), 'a link-local with a zone id means nothing to another process');
 });
 
-test('the wildcard the daemon binds seeds the fallback, not a URL nothing can open', () => {
-  assert.equal('http://huginn:8088/', appsLib.seedApps(appsLib.pickHostAddr('0.0.0.0'), 100)[0].url);
-  assert.equal('http://100.101.102.103:8088/',
-    appsLib.seedApps(appsLib.pickHostAddr('0.0.0.0', '100.101.102.103'), 100)[0].url);
-});
-
-test('a daemon that knows no address of its own falls back to the host name rather than inventing one', () => {
-  // The fallback is the OLD seed, exactly: a host that cannot say where it is
-  // should write what it used to write, not a guess and not an empty row.
-  for (const nothing of [undefined, null, '', '   ', 42]) {
-    assert.deepEqual(
-      ['http://huginn:8088/', 'http://huginn:8091/', 'http://huginn:8092/', 'http://huginn:8093/'],
-      appsLib.seedApps(nothing, 100).map((c) => c.url),
-      `${JSON.stringify(nothing)} is not an address`,
-    );
-  }
-});
-
-test('an address the daemon would refuse on a typed row cannot arrive through the seed either', () => {
-  // `HUGINN_APPD_BIND=0.0.0.0` is a legal way to start this daemon and a
-  // meaningless thing to put in a URL. The seed is not exempt from the rule
-  // every other row in this registry is judged by.
-  for (const bad of ['0.0.0.0', '::', 'example.com', '8.8.8.8']) {
-    assert.equal('http://huginn:8088/', appsLib.seedApps(bad, 100)[0].url, `${bad} must not be seeded`);
-  }
-});
-
-// ------------------------------------------------- re-seeding an existing store
-
-test('a row still carrying the old seeded address is re-pointed; one the owner edited is not', () => {
-  // The fix has to reach the stores that already exist — a daemon that only
-  // seeds correctly on a host that has never run it leaves every real
-  // installation with four rows that can never answer. The line between "the
-  // old seed wrote this" and "the owner chose this" is the EXACT previous
-  // literal, and nothing looser: a path, a port or a host of their own is them
-  // speaking, and this must never overwrite it.
-  const list = [
-    appsLib.buildRecord({ id: 'atlas', name: 'Atlas map', url: 'http://huginn:8088/' }, 100),
-    appsLib.buildRecord({ id: 'jotter', name: 'jotter notes', url: 'http://huginn:9099/' }, 100),
-    appsLib.buildRecord({ id: 'board', name: 'PCB board view', url: 'http://huginn:8092/boards' }, 100),
-    appsLib.buildRecord({ id: 'bursar', name: 'Bursar ledger', url: 'http://127.0.0.1:8093/' }, 100),
-    appsLib.buildRecord({ id: 'mine', name: 'Something of my own', url: 'http://huginn:8088/' }, 100),
-  ];
-  const r = appsLib.migrateSeedUrls(list, '100.101.102.103');
-  assert.deepEqual(['atlas'], r.changed, 'only a seed row still holding the literal the old seed wrote');
-  assert.equal('http://100.101.102.103:8088/', r.apps[0].url);
-  assert.equal(2, r.apps[0].version, 'the address moved, so a client holding version 1 is holding a stale row');
-  assert.equal('http://huginn:9099/', r.apps[1].url, 'a re-pointed row is the owner speaking');
-  assert.equal('http://huginn:8092/boards', r.apps[2].url, 'and so is a row with a path on it');
-  assert.equal('http://127.0.0.1:8093/', r.apps[3].url, 'and so is a row already moved by hand');
-  assert.equal('http://huginn:8088/', r.apps[4].url, 'a row the owner made is not a seed row, whatever it points at');
-});
-
-test('re-seeding twice changes nothing the second time', () => {
-  const once = appsLib.migrateSeedUrls(appsLib.seedApps(null, 100), '100.101.102.103');
-  assert.equal(4, once.changed.length, 'precondition: a pre-D10 store is four stale rows');
-  assert.deepEqual([], appsLib.migrateSeedUrls(once.apps, '100.101.102.103').changed,
-    'the file is rewritten once, not on every load');
-});
-
-test('an existing seed row learns the unit behind it, and a unit the owner typed is theirs', () => {
-  // ⚠ THE FIX HAS TO REACH THE STORES THAT ALREADY EXIST. A row written by a
-  // pre-3.5 daemon has no unit, falls into the no-unit branch of fixLines, and
-  // asks the owner to work out what to edit — on the one host where the daemon
-  // knows. Separate from the URL migration because an address is a CHOICE and a
-  // unit is a fact about this host.
-  const list = [
-    appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/' }, 100),
-    appsLib.buildRecord({ id: 'board', name: 'Board', url: 'http://100.101.102.103:8092/', unit: 'mine.service' }, 100),
-    appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.101.102.103:9100/' }, 100),
-  ];
-  const r = appsLib.migrateSeedUnits(list);
-  assert.deepEqual(['atlas'], r.changed, 'only a seed row that has none');
-  assert.equal('atlas.service', r.apps[0].unit);
-  assert.equal(2, r.apps[0].version, 'the row changed, so a client holding version 1 is holding a stale one');
-  assert.equal('mine.service', r.apps[1].unit, 'a unit the owner typed is never overwritten');
-  assert.equal('', r.apps[2].unit, 'and a row that is not one of the four is left alone');
-  assert.deepEqual([], appsLib.migrateSeedUnits(r.apps).changed, 'and it runs once, not on every load');
-});
-
-test('a daemon with no address of its own re-points nothing', () => {
-  assert.deepEqual([], appsLib.migrateSeedUrls(appsLib.seedApps(null, 100), '').changed,
-    'there is nowhere better to move them to, so they are left alone');
-  assert.deepEqual([], appsLib.migrateSeedUrls(appsLib.seedApps(null, 100), '0.0.0.0').changed,
-    'and a wildcard bind is not an address either');
-});
+// Four ordinary rows, for the tests that need a realistic list.
+function sampleApps(host, now) {
+  return [
+    { id: 'atlas', port: 8088, name: 'Atlas map', kind: 'docs', unit: 'atlas.service', notes: 'A static documentation site.' },
+    { id: 'jotter', port: 8091, name: 'jotter notes', kind: 'lab', unit: 'jotter.service', notes: 'A small web app in development.' },
+    { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool', unit: 'boardserver.service', notes: 'A circuit board viewer.' },
+    { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar.service', notes: 'A simulator in development.' },
+  ].map((u) => appsLib.buildRecord({ id: u.id, name: u.name, url: `http://${host}:${u.port}/`, kind: u.kind, notes: u.notes, unit: u.unit }, now));
+}
 
 // -------------------------------- the 3.4 wire, for the alias (decision 56)
 
@@ -493,7 +397,7 @@ test('the alias body is the 3.4 body, key for key against a capture of it', () =
   // un-updated app 3.5.x and desktop 1.5.x, and each one decodes an EMPTY list:
   // a feature that has silently lost its contents, which is worse than the 404
   // the alias exists to avoid, because a 404 at least hides the surface.
-  const rows = appsLib.seedApps('100.101.102.103', 1789000000).map((rec, i) => appsLib.appRow(rec, {
+  const rows = sampleApps('100.101.102.103', 1789000000).map((rec, i) => appsLib.appRow(rec, {
     up: [true, true, false, null][i],
     lastProbeAt: [1789459940, 1789459940, 1789459940, 0][i],
     latencyMs: [12, 48, 2000, null][i],
@@ -617,21 +521,17 @@ test('one firewall line per FAILING address, and none for the ones that answered
     'and a row that passes carries no lines at all — that was the old card’s whole problem');
 });
 
-test('bursar keeps the one true half of the D11 claim: where its bind actually lives', () => {
-  // ⚠ D11. The old card EXEMPTED bursar as "already binds 0.0.0.0" while its
-  // own firewall step opened 8093 — two halves of one card disagreeing about one
-  // service. `ss -ltn` says 100.101.102.103:8093: the 0.0.0.0 in sim/app.py is the
-  // fallback for a host with no tailscale address, not what it does here. What
-  // survives is directions, not an exemption: `systemctl edit bursar.service`
-  // would edit the wrong file.
+test('a unit\'s fix line asks for the edit and never claims the unit is done already', () => {
+  // ⚠ D11. An old card EXEMPTED one unit as "already binds 0.0.0.0" while its own
+  // firewall step opened the port: two halves of one card disagreeing about one
+  // service, and the daemon was wrong about it. Directions, never exemptions.
   const rec = appsLib.buildRecord({
     id: 'bursar', name: 'Bursar ledger', url: 'http://100.101.102.103:8093/', unit: 'bursar.service',
   }, 100);
   const fix = fixPve(rec, [{ addr: '100.101.102.103', ok: true }, { addr: '192.168.1.20', ok: false }]);
-  assert.ok(fix.some((l) => l.includes('sim/app.py')), `the bind note must ride the line: ${fix.join(' | ')}`);
-  assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar.service')), 'and it is still asked for');
+  assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar.service')), `the edit is asked for: ${fix.join(' | ')}`);
   assert.ok(!/\balready\b/i.test(fix.join(' ')),
-    'no unit is claimed to be done already — this daemon cannot see any host but its own, and was wrong about this one');
+    'no unit is claimed to be done already — this daemon cannot see any host but its own');
 });
 
 test('a row whose address is nonsense still produces lines rather than an exception', () => {
@@ -1009,19 +909,6 @@ test('a unit name is refused rather than coerced, because it ends up in a root c
   assert.ok(appsLib.unitProblem('../../etc/passwd'));
   assert.ok(appsLib.unitProblem('a'.repeat(100)));
   assert.equal('', appsLib.cleanUnit('atlas.service && curl evil'), 'and cleanUnit drops what it cannot vouch for');
-});
-
-test('the seed rows name the unit that serves each one', () => {
-  // Without this the four rows this host ships with would fall into the
-  // no-unit branch above and ask the owner to work out what to edit — on the
-  // one deployment where the daemon knows the answer.
-  const byId = Object.fromEntries(appsLib.seedApps('100.101.102.103', 100).map((r) => [r.id, r.unit]));
-  assert.deepEqual({
-    atlas: 'atlas.service',
-    jotter: 'jotter.service',
-    board: 'boardserver.service',
-    bursar: 'bursar.service',
-  }, byId);
 });
 
 test('the marker is the owner’s word, and the daemon never writes it', () => {
@@ -1760,51 +1647,6 @@ test('a store that has never existed pre-fills nothing, whatever address it was 
     const store = appsLib.createStore({ dir, hostAddr: '127.0.0.1', fetch: async () => { throw new Error('no probing'); } });
     store.stop();
     assert.deepEqual([], store.list().map((c) => c.url));
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('the store re-points the rows a pre-D10 daemon wrote, once, and says so', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-reseed-'));
-  try {
-    // Exactly what a daemon before this fix left on disk.
-    appsLib.writeEnvelope(dir, { schema: appsLib.SCHEMA, seeded: true, consoles: appsLib.seedApps(null, 100) });
-    const lines = [];
-    const store = appsLib.createStore({
-      dir,
-      hostAddr: '100.101.102.103',
-      log: (l) => lines.push(l),
-      fetch: async () => { throw new Error('no probing'); },
-    });
-    store.stop();
-    assert.deepEqual([
-      'http://100.101.102.103:8088/', 'http://100.101.102.103:8091/',
-      'http://100.101.102.103:8092/', 'http://100.101.102.103:8093/',
-    ], store.list().map((c) => c.url));
-    const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
-    assert.equal('http://100.101.102.103:8088/', onDisk.consoles[0].url, 'and it survived the trip through the file');
-    assert.equal(1, lines.length, `one journal line, not one per load — got ${JSON.stringify(lines)}`);
-
-    // ⚠ load() is called by every read path here. A migration that fired on each
-    // one would rewrite the store forever and log forever with it.
-    store.list(); store.rows(); store.get('atlas');
-    assert.equal(1, lines.length, 'said once');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a row the owner re-pointed survives a daemon that learned its own address', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'consoles-reseed-'));
-  try {
-    const seeded = appsLib.seedApps(null, 100);
-    seeded[1] = appsLib.buildRecord({ ...seeded[1], url: 'http://huginn:8091/trainer' }, 100);
-    appsLib.writeEnvelope(dir, { schema: appsLib.SCHEMA, seeded: true, consoles: seeded });
-    const store = appsLib.createStore({ dir, hostAddr: '100.101.102.103', fetch: async () => { throw new Error('no probing'); } });
-    store.stop();
-    assert.equal('http://huginn:8091/trainer', store.get('jotter').url, 'their edit is not a seed to be re-applied');
-    assert.equal('http://100.101.102.103:8088/', store.get('atlas').url, 'and its untouched sibling still moves');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

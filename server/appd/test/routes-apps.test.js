@@ -54,12 +54,9 @@ const appsLib = require('../lib/apps');
 const PORT = 10700 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 
-// ⚠ AND ONE FIXED PORT OUTSIDE THE TABLE: 8088, on LOOPBACK. The seed's ports
-// are not negotiable — they are atlas, the trainer, the board view and the sim
-// — so proving a re-pointed seed row can actually be probed means listening on
-// one of them at the address the daemon binds. 127.0.0.1:8088 is free on this
-// host for exactly the reason D10 exists: the real atlas is on the TAILNET
-// address only.
+// ⚠ AND ONE FIXED PORT OUTSIDE THE TABLE: 8088, on LOOPBACK, where a stand-in
+// answers for the `atlas` row, so a probe of an app on this host has something
+// real to reach at the address the daemon binds.
 const SEED_PORT = 8088;
 
 // ⚠⚠ AND ONE PORT THAT MUST STAY DEAD. A row that proves "the sweep MARKS an
@@ -128,15 +125,13 @@ before(async () => {
   await new Promise((r) => hangServer.listen(0, '127.0.0.1', r));
   hangPort = hangServer.address().port;
 
-  // A stand-in for atlas, on the seed's own port at the address this daemon
-  // binds, so a re-pointed seed row has something real to answer it.
+  // A stand-in for atlas, at the address this daemon binds.
   //
-  // ⚠ AND IT IS ALLOWED TO LOSE THE RACE. The moment atlas.service is rebound to
-  // 0.0.0.0 — the remedy this feature prints — the real atlas holds this port on
-  // every address and the stand-in cannot have it. That is not a failure: what
-  // the two tests below need is that SOMETHING answers on 127.0.0.1:8088, and
-  // the thing that took the port is the thing the row names. Any other error is
-  // still thrown, because it means something unexplained holds the port.
+  // ⚠ AND IT IS ALLOWED TO LOSE THE RACE. A host that runs something on 0.0.0.0
+  // port 8088 holds this port on every address and the stand-in cannot have it.
+  // That is not a failure: what the tests below need is that SOMETHING answers
+  // on 127.0.0.1:8088. Any other error is still thrown, because it means
+  // something unexplained holds the port.
   seedServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('atlas'); });
   await new Promise((resolve, reject) => {
     seedServer.once('error', (e) => {
@@ -156,17 +151,12 @@ before(async () => {
         url: `http://127.0.0.1:${okPort}/`, notes: 'fixture' }, 1789460000),
       appsLib.buildRecord({ id: 'hang', name: 'A page that hangs', kind: 'lab',
         url: `http://127.0.0.1:${hangPort}/`, notes: 'fixture' }, 1789460000),
-      // What a daemon BEFORE D10 left on disk: the seed pinned to a name that
-      // resolves to an interface none of the four units listen on. These are
-      // safe to probe either way — nothing answers on 192.168.1.20 at these
-      // ports — and the daemon must re-point them onto the address it binds.
+      // Two apps on this host, with the units that serve them: one where the
+      // stand-in above answers, one it does not.
       appsLib.buildRecord({ id: 'atlas', name: 'Atlas map', kind: 'docs',
-        url: 'http://huginn:8088/', notes: 'the old seed' }, 1789460000),
+        url: `http://127.0.0.1:${SEED_PORT}/`, unit: 'atlas.service', notes: 'fixture' }, 1789460000),
       appsLib.buildRecord({ id: 'board', name: 'PCB board view', kind: 'tool',
-        url: 'http://huginn:8092/', notes: 'the old seed' }, 1789460000),
-      // And one the OWNER re-pointed, which must come through untouched.
-      appsLib.buildRecord({ id: 'jotter', name: 'jotter notes', kind: 'lab',
-        url: 'http://huginn:8091/owner-edited', notes: 'their edit' }, 1789460000),
+        url: 'http://127.0.0.1:8092/', unit: 'boardserver.service', notes: 'fixture' }, 1789460000),
       // A row that CANNOT be reached, whatever state the host is in — see
       // [DEAD_PORT]. It carries a unit so its fix lines are the exact ones.
       appsLib.buildRecord({ id: 'stale', name: 'A page that moved', kind: 'tool',
@@ -381,33 +371,12 @@ test('the list answers at the speed of a file read, not at the speed of the netw
   assert.ok(Date.now() - started < 1_500, `the list took ${Date.now() - started}ms`);
 });
 
-// ------------------------------------------------------- the seeded addresses
+// ------------------------------------------------------- an app on this host
 
-test('the rows the old seed wrote are re-pointed at the address this daemon binds', async () => {
-  // ⚠ D10 AT THE ROUTE. `http://huginn:8088/` resolves to this host's LAN
-  // address; the four seeded units bind its TAILNET address, so the old seed
-  // named an interface nothing listens on and every row read "not answering
-  // from the host" forever. This daemon binds 127.0.0.1 (HUGINN_APPD_BIND in
-  // `before`), so that is where its seed rows belong.
-  const body = await list();
-  assert.equal(`http://127.0.0.1:${SEED_PORT}/`, rowOf(body, 'atlas').url);
-  assert.equal('http://127.0.0.1:8092/', rowOf(body, 'board').url);
-  assert.equal('http://huginn:8091/owner-edited', rowOf(body, 'jotter').url,
-    'a row the owner re-pointed is never moved, whatever it points at');
-  // Both seed migrations have run on this store: the address moved on the two
-  // rows still holding the old literal, and all three seed rows learned the
-  // unit that serves them (they were written here without one, as a pre-3.5
-  // daemon would have).
-  assert.equal(3, rowOf(body, 'atlas').version, 'the address moved and the unit landed, so the version moved twice');
-  assert.equal(2, rowOf(body, 'jotter').version,
-    'a row the owner re-pointed still learns its unit — that is a fact about this host, not a choice about an address');
-  assert.equal(1, rowOf(body, 'alive').version, 'and a row that is not one of the four is left entirely alone');
-});
-
-test('a re-pointed seed row can actually be probed, which is the entire point of moving it', async () => {
+test('an app on this host can actually be probed', async () => {
   const r = await api('/v1/apps/atlas/probe', { method: 'POST' });
   assert.equal(200, r.status, JSON.stringify(r.body));
-  assert.equal(true, r.body.up, 'the stand-in on the seeded address answered — at http://huginn:8088/ nothing ever would');
+  assert.equal(true, r.body.up, 'the stand-in at the address this daemon binds answered');
   assert.equal(200, r.body.httpStatus);
   assert.equal(true, rowOf(await list(), 'atlas').up, 'and the list carries it');
 });
@@ -469,7 +438,7 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
   assert.equal(false, rowOf(await list(), 'stale').reachable.ok, 'and the list carries the mark');
 });
 
-test('the seeded rows name the unit that serves each one, so the fix line is exact', async () => {
+test('a row names the unit that serves it, so the fix line is exact', async () => {
   const body = await list();
   assert.equal('atlas.service', rowOf(body, 'atlas').unit);
   assert.equal('boardserver.service', rowOf(body, 'board').unit);
