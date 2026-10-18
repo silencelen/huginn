@@ -49,7 +49,7 @@ class HeadroomNoticesTest {
      * exactly two, both bounded, neither of them free text. That last part is the
      * owner's rule and the reason a notification button works on a locked phone
      * at all, so it is asserted structurally: `PostArgs.replyChat` is what makes
-     * `post` attach a `RemoteInput` and the AppLock gate behind it, and a
+     * `post` attach a `RemoteInput` (the app lock is ReplyReceiver's gate), and a
      * headroom notice must never carry one.
      */
     @Test

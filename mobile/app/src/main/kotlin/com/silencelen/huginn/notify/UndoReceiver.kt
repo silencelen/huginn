@@ -26,7 +26,10 @@ import kotlinx.coroutines.withTimeoutOrNull
  * Every verb here is a BOUNDED CHOICE with a fixed label. Nothing typed by anyone
  * travels through this receiver, so — exactly as with the answer buttons — it
  * carries no authentication requirement. The chat reply box remains the only
- * free-text path off the shade and keeps its own AppLock gate.
+ * free-text path off the shade. Its own `setAuthenticationRequired` asks only for
+ * the DEVICE to be unlocked; the app lock is enforced by not offering the box
+ * while the lock is on and by [ReplyReceiver] refusing to send while the app is
+ * locked (see [replyGate]).
  */
 class UndoReceiver : BroadcastReceiver() {
 

@@ -6,6 +6,10 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import com.silencelen.huginn.data.SettingsStore
+import com.silencelen.huginn.data.lockEnabledOrLocked
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 /**
  * Locking the app behind the device's own credential.
@@ -86,6 +90,22 @@ object AppLock {
         if (now < awayAt) return true
         return now - awayAt >= graceMs
     }
+
+    /**
+     * Whether the lock is ON, for code that runs without an activity: a push, a
+     * notification's receiver.
+     *
+     * ⚠ NOT [enabledCache] ALONE. The cache is filled by MainActivity and the
+     * view model, and a process started to deliver a push or a reply has run
+     * neither, so it says "off" whatever the setting is. "Off" is therefore
+     * confirmed against the store, and a store that cannot be read counts as ON,
+     * the same fail-closed read the two activities make.
+     */
+    suspend fun enabledFromStore(context: Context): Boolean =
+        enabledCache || lockEnabledOrLocked { SettingsStore(context.applicationContext).appLock.first() }
+
+    /** [enabledFromStore] for a caller that is not suspending: a few milliseconds' read. */
+    fun enabledNow(context: Context): Boolean = enabledCache || runBlocking { enabledFromStore(context) }
 
     /** A lock is only offerable when the device has something to unlock WITH. */
     fun canLock(context: Context): Boolean {

@@ -3,12 +3,15 @@ package com.silencelen.huginn.desktop.notify
 import java.io.File
 import java.net.InetAddress
 import java.net.Socket
+import com.silencelen.huginn.desktop.PrivateFiles
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -43,6 +46,39 @@ class SingleInstanceTest {
         assertEquals("ok", send(secret, SingleInstance.QUIT))
         assertNotNull(quits.poll(3, TimeUnit.SECONDS), "the quit request did not reach onQuit")
         assertNull(urls.poll(300, TimeUnit.MILLISECONDS), "the quit request must not be handled as a link")
+    }
+
+    private fun mode(f: File): String = PosixFilePermissions.toString(Files.getPosixFilePermissions(f.toPath()))
+
+    @Test
+    fun `the record is 0600 in a 0700 directory`() {
+        // It used to be written at the umask (0644) inside a mkdirs() directory
+        // (0755) and narrowed afterwards; an account watching the directory could
+        // open it in between and keep reading the secret.
+        if (!PrivateFiles.posix) return
+        val config = File(dir, "fresh/huginn-desktop-kt")
+        held = assertNotNull(SingleInstance.claimOrForward(config, null))
+        assertEquals("rwx------", mode(config))
+        assertEquals("rw-------", mode(File(config, "instance.lock")))
+    }
+
+    @Test
+    fun `a stale record is replaced, never written through`() {
+        // A record left by a crash, at the old 0644, must not be the file the new
+        // secret is written into: the observer is a second name for it.
+        if (!PrivateFiles.posix) return
+        val lock = File(dir, "instance.lock").apply { writeText("1\nstale\n") }
+        Files.setPosixFilePermissions(lock.toPath(), PosixFilePermissions.fromString("rw-r--r--"))
+        val observer = File(dir, "observer")
+        Files.createLink(observer.toPath(), lock.toPath())
+
+        held = assertNotNull(SingleInstance.claimOrForward(dir, null))
+
+        assertEquals("1\nstale\n", observer.readText(), "the new secret went into the old file")
+        val (port, secret) = lock.readLines()
+        assertNotEquals("1", port)
+        assertEquals(24, secret.length)
+        assertEquals("rw-------", mode(lock))
     }
 
     @Test

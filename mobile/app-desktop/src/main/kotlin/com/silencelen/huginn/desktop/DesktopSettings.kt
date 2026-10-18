@@ -17,8 +17,6 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
 import java.nio.file.Files
-import java.nio.file.StandardCopyOption
-import java.nio.file.AtomicMoveNotSupportedException
 
 /**
  * The desktop half of [HuginnSettings]: one JSON file under the user config dir.
@@ -878,14 +876,14 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         // and "my token vanished" is unanswerable without one.
         if (file.exists() && file.length() > 0L) {
             runCatching {
-                val salvage = file.copyTo(File(file.parentFile, file.name + ".corrupt"), overwrite = true)
-                // ⚠ AND AS PRIVATE AS WHAT IT COPIED. Kotlin's copyTo is delete +
-                // stream copy, so the new file takes the process UMASK rather than
-                // the source's mode: 0644 at the usual 022, in a 0755 config dir,
-                // beside a deliberately 0600 original — carrying the same
-                // plaintext root-equivalent daemon bearer, with nothing in the app
-                // that ever removes or re-restricts it.
-                restrictToOwner(salvage)
+                // ⚠ AND AS PRIVATE AS WHAT IT COPIED, FROM ITS FIRST BYTE. Kotlin's
+                // copyTo is delete + stream copy, so the copy took the process
+                // UMASK rather than the source's mode — 0644 at the usual 022 —
+                // carrying the same plaintext root-equivalent daemon bearer. It
+                // was narrowed to 0600 afterwards, and "afterwards" is a window
+                // another account can open the file in. PrivateFiles creates it
+                // 0600 and only then writes into it.
+                PrivateFiles.replace(File(file.parentFile, file.name + ".corrupt"), file.readBytes())
             }
         }
         Stored()
@@ -912,42 +910,26 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
      * The failure is no longer swallowed either: a settings file that cannot be
      * written is worth a line in the log, since the alternative is a person
      * typing a token in three times and being told nothing.
+     *
+     * ⚠ AND THE TEMP FILE IS PRIVATE BEFORE IT HOLDS ANYTHING. It used to be
+     * written with the process umask (0644 at the usual 022) inside a directory
+     * `mkdirs()` made 0755, and narrowed to 0600 only after the whole object —
+     * plaintext bearer included — was in it. Every drag, draft and navigation
+     * rewrites this file, so that was a window another local account got to try
+     * many times a session. [PrivateFiles] makes the directory 0700 and the temp
+     * file 0600 in the create call itself (and keeps Windows exactly as it was).
      */
     private fun save(value: Stored) {
         try {
-            file.parentFile?.mkdirs()
-            val tmp = File(file.parentFile, file.name + ".tmp")
-            tmp.writeText(json.encodeToString(Stored.serializer(), value))
-            restrictToOwner(tmp)
-            try {
-                Files.move(
-                    tmp.toPath(), file.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE,
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                // Some filesystems (and some network mounts) cannot do it
-                // atomically. A replaced file beats a file that never changes.
-                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-            restrictToOwner(file)
+            file.parentFile?.let(PrivateFiles::dir)
+            PrivateFiles.replace(
+                file,
+                json.encodeToString(Stored.serializer(), value).toByteArray(Charsets.UTF_8),
+                tmp = File(file.parentFile, file.name + ".tmp"),
+            )
         } catch (t: Throwable) {
             System.err.println("[huginn] could not write settings to ${file.absolutePath}: $t")
         }
-    }
-
-    /**
-     * Owner-only, without making the file read-only.
-     *
-     * `setWritable(false, false)` sets the READ-ONLY ATTRIBUTE on Windows rather
-     * than clearing a group/other bit, which is the second half of how the token
-     * was lost: a read-only destination cannot be replaced. On Windows the file
-     * already sits under the user's own profile, so the POSIX dance is skipped
-     * entirely rather than being run for a permission model that is not there.
-     */
-    private fun restrictToOwner(f: File) {
-        if (System.getProperty("os.name").orEmpty().startsWith("Windows", ignoreCase = true)) return
-        f.setReadable(false, false); f.setWritable(false, false)
-        f.setReadable(true, true); f.setWritable(true, true)
     }
 
     /**

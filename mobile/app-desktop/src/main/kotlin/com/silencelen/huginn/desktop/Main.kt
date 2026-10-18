@@ -35,7 +35,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.drop
 import com.silencelen.huginn.data.TlsPins
-import com.silencelen.huginn.desktop.notify.Activation
+import com.silencelen.huginn.desktop.notify.ActivationNonces
+import com.silencelen.huginn.desktop.notify.ActivationStep
 import com.silencelen.huginn.desktop.notify.Activations
 import com.silencelen.huginn.desktop.notify.NavTarget
 import com.silencelen.huginn.desktop.notify.NoNotifier
@@ -256,6 +257,12 @@ fun main(args: Array<String>) {
         }
     }
 
+    // The nonces this run's toasts carry. In memory only, on purpose: a
+    // `huginn://answer` or `huginn://undo` acts only when its nonce is in here,
+    // so a forged link, or one from a toast an earlier run posted, opens the
+    // session instead (see Activations.resolve).
+    val nonces = ActivationNonces()
+
     val router = NotifyRouter(
         scope = scope,
         notifier = { if (store.coreDevice.coreTray.value) NoNotifier else notifier },
@@ -264,6 +271,7 @@ fun main(args: Array<String>) {
         fetchPrompt = { name -> runCatching { store.client.screen(name).prompt }.getOrNull() },
         enabled = { settings.notifyEnabledNow() },
         focusedTarget = ::focusedTarget,
+        nonces = nonces,
     )
 
     // The core suppresses a toast for what this window is showing (its rules
@@ -292,7 +300,8 @@ fun main(args: Array<String>) {
         router.onViewed(target)
     }
 
-    fun answerFromActivation(a: Activation.Answer) {
+    /** Only ever reached through [Activations.resolve], with a nonce this run issued. */
+    fun answerFromActivation(a: ActivationStep.Answer) {
         scope.launch {
             val outcome = runCatching { store.client.answerPrompt(a.session, a.option, a.fingerprint) }
                 .fold(
@@ -330,7 +339,7 @@ fun main(args: Array<String>) {
      * report it as done. [HeadroomRules.undoWords] is the one place those two
      * outcomes are told apart.
      */
-    fun undoFromActivation(a: Activation.Undo) {
+    fun undoFromActivation(a: ActivationStep.Undo) {
         scope.launch {
             val outcome = runCatching { store.client.undoLadder(a.session) }
                 .fold(
@@ -351,19 +360,32 @@ fun main(args: Array<String>) {
     }
 
     fun handle(url: String?) {
-        when (val activation = Activations.parse(url)) {
-            // Includes an activation that was REFUSED — most importantly an
-            // `answer` with no fingerprint. Bringing the window up is the right
-            // response to that: the reader gets to see the question and decide,
-            // and nothing was typed on their behalf.
-            null -> summon()
-            is Activation.Open -> navigate(activation.target)
-            is Activation.Answer -> answerFromActivation(activation)
-            is Activation.Undo -> undoFromActivation(activation)
+        when (val step = Activations.resolve(url, nonces)) {
+            // A URL that was refused outright. Bringing the window up is the
+            // right response: nothing was typed on the reader's behalf.
+            ActivationStep.Summon -> summon()
+            // Includes every `answer` and `undo` that was NOT acted on: no nonce,
+            // a nonce this run never issued (a forged link, or a toast from before
+            // a restart), one already used, or one past its TTL. The window comes
+            // up on the session, the reader sees the question and clicks there.
+            is ActivationStep.Navigate -> {
+                // The name came from whoever built the link: bounded, and no
+                // control characters, so it cannot write lines of its own.
+                step.refused?.let {
+                    val who = step.target.id.take(40).map { c -> if (c.isISOControl()) '?' else c }.joinToString("")
+                    AppLog.info("notify", "$who: $it")
+                }
+                navigate(step.target)
+            }
+            is ActivationStep.Answer -> answerFromActivation(step)
+            is ActivationStep.Undo -> undoFromActivation(step)
             // Dismissal, and nothing else: no window, no navigation. "OK" on a
             // downgrade means "I have read that" — moving the reader somewhere is
-            // a different verb wearing the same word.
-            is Activation.Ack -> notifier.withdraw(activation.key)
+            // a different verb wearing the same word. Its Undo goes with it.
+            is ActivationStep.Dismiss -> {
+                nonces.revoke(step.key)
+                notifier.withdraw(step.key)
+            }
         }
     }
 

@@ -1007,6 +1007,19 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (_drafts.value.containsKey(key)) setDraft(key, "")
     }
 
+    /** Takes a held shade reply into the drafts; registered once they are loaded. */
+    private val heldReplySink: (String, String) -> Unit = { key, draft ->
+        viewModelScope.launch { setDraft(key, draft) }
+    }
+
+    override fun onCleared() {
+        // A cleared model is not where a held reply should go (nor kept alive by it).
+        if (com.silencelen.huginn.notify.HeldReplies.sink === heldReplySink) {
+            com.silencelen.huginn.notify.HeldReplies.sink = null
+        }
+        super.onCleared()
+    }
+
     /**
      * The long-press verbs, bound to a target's composer.
      *
@@ -1079,6 +1092,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _notifyEnabled.value = settings.notifyEnabled.first()
             _watchEnabled.value = settings.watchEnabled.first()
             _drafts.value = settings.drafts.first()
+            // A shade reply the app lock held back is written to the store this
+            // model has just read, and this model writes its own drafts back over
+            // the store. So it is handed over here as well (ReplyReceiver).
+            com.silencelen.huginn.notify.HeldReplies.sink = heldReplySink
             _lastOpenSession.value = settings.lastOpenSession.first()
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()

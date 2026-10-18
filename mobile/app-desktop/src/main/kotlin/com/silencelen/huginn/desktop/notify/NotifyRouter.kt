@@ -28,6 +28,11 @@ import kotlinx.coroutines.launch
  * moved on AND the session is no longer waiting. Both halves: a bumped generation
  * alone is ordinary (digests arrive constantly), and a stale session state alone
  * cannot happen without one.
+ *
+ * It also keeps [nonces] in step with the screen: a toast whose buttons act for
+ * the owner (answer, undo) gets a fresh nonce when it is posted, and loses it when
+ * it is replaced or taken down, so a button that is no longer showing cannot be
+ * pressed by a link that copied it.
  */
 class NotifyRouter(
     private val scope: CoroutineScope,
@@ -38,6 +43,8 @@ class NotifyRouter(
     private val enabled: () -> Boolean,
     /** What the reader is looking at right now, or null when the window is not focused. */
     private val focusedTarget: () -> NavTarget?,
+    /** This process's toast nonces; [Activations.resolve] redeems them. */
+    private val nonces: ActivationNonces = ActivationNonces(),
 ) {
 
     private val lock = Any()
@@ -67,7 +74,10 @@ class NotifyRouter(
 
         for (decision in plan.decisions) {
             when (decision) {
-                is NotifyDecision.Withdraw -> notifier().withdraw(decision.key)
+                is NotifyDecision.Withdraw -> {
+                    nonces.revoke(decision.key)
+                    notifier().withdraw(decision.key)
+                }
 
                 is NotifyDecision.Finished -> notifier().post(
                     NotifyRequest(
@@ -115,9 +125,19 @@ class NotifyRouter(
 
                 is NotifyDecision.Downgraded -> {
                     val target = NavTarget(TargetKind.SESSIONS, decision.session)
-                    notifier().post(
+                    val key = "ladder:${decision.session}"
+                    val backend = notifier()
+                    // Minted only where the button will be drawn: a nonce that no
+                    // toast carries is one nobody can press, but also one nobody needs.
+                    val undo = if (backend.supportsActions) {
+                        nonces.issue(key, ActivationNonces.Grant.Undo(decision.session))
+                    } else {
+                        nonces.revoke(key)
+                        null
+                    }
+                    backend.post(
                         NotifyRequest(
-                            key = "ladder:${decision.session}",
+                            key = key,
                             title = "${decision.session} moved to ${decision.to}",
                             // "puts it back" only once the turn it is in has
                             // ended — the /model picker cannot open inside a
@@ -130,29 +150,34 @@ class NotifyRouter(
                             // BOUNDED, and exactly two: put it back, or accept it.
                             // No free text ever reaches a toast — the owner's rule
                             // for answering from a lock screen or a notification.
-                            actions = listOf(
-                                ToastAction("Undo", Activations.undoUrl(decision.session)),
-                                ToastAction("OK", Activations.ackUrl("ladder:${decision.session}")),
+                            actions = if (undo == null) emptyList() else listOf(
+                                ToastAction("Undo", Activations.undoUrl(decision.session, undo)),
+                                ToastAction("OK", Activations.ackUrl(key)),
                             ),
                         )
                     )
                 }
 
-                is NotifyDecision.LadderUp -> notifier().post(
-                    NotifyRequest(
-                        key = "ladder:${decision.session}",
-                        title = "${decision.session} is back on its own model",
-                        body = "Its window reset.",
-                        urgent = false,
-                        target = NavTarget(TargetKind.SESSIONS, decision.session),
+                is NotifyDecision.LadderUp -> {
+                    // Replaces the downgrade toast, and with it any Undo it offered.
+                    nonces.revoke("ladder:${decision.session}")
+                    notifier().post(
+                        NotifyRequest(
+                            key = "ladder:${decision.session}",
+                            title = "${decision.session} is back on its own model",
+                            body = "Its window reset.",
+                            urgent = false,
+                            target = NavTarget(TargetKind.SESSIONS, decision.session),
+                        )
                     )
-                )
+                }
             }
         }
     }
 
     /** Opening a target reads as acknowledgement — the same rule the phone uses. */
     fun onViewed(target: NavTarget) {
+        nonces.revoke(target.key)
         notifier().withdraw(target.key)
     }
 
@@ -177,6 +202,17 @@ class NotifyRouter(
             prompt?.multiSelect == true -> emptyList()
             else -> prompt?.options.orEmpty().map { AnswerOption(it.number, it.label) }
         }
+        // ONE NONCE PER TOAST, for exactly the question and the options it shows.
+        // This toast replaces any earlier one under the same key, so that one's
+        // nonce goes now; a toast without buttons carries none at all.
+        val fp = prompt?.fingerprint
+        val nonce = if (options.isEmpty() || fp.isNullOrEmpty()) {
+            nonces.revoke(target.key)
+            null
+        } else {
+            val offered = options.take(MAX_ANSWER_BUTTONS).map { it.number }.toSet()
+            nonces.issue(target.key, ActivationNonces.Grant.Answer(session, fp, offered))
+        }
 
         backend.post(
             NotifyRequest(
@@ -186,7 +222,8 @@ class NotifyRouter(
                 urgent = true,
                 target = target,
                 options = options,
-                fingerprint = prompt?.fingerprint,
+                fingerprint = fp,
+                nonce = nonce,
             )
         )
     }

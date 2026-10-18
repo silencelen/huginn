@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.notify
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import org.w3c.dom.Element
 
@@ -25,7 +26,8 @@ import org.w3c.dom.Element
  *
  * The assertion at the end of every case is the same one: the triple that comes
  * back out is exactly the triple `HuginnClient.answerPrompt(session, option, fp)`
- * takes — the identical call the in-app answer makes from `SessionController`.
+ * takes — the identical call the in-app answer makes from `SessionController` —
+ * plus the toast's nonce, which is what lets [Activations.resolve] make that call.
  * One transport, whether the owner clicks in the window or on the toast.
  */
 class ToastActivationRoundTripTest {
@@ -34,6 +36,7 @@ class ToastActivationRoundTripTest {
         options: List<AnswerOption>,
         fingerprint: String? = "fp-abc123",
         session: String = "jotter",
+        nonce: String? = NONCE,
     ) = NotifyRequest(
         key = "sess:$session",
         title = session,
@@ -42,7 +45,12 @@ class ToastActivationRoundTripTest {
         target = NavTarget(TargetKind.SESSIONS, session),
         options = options,
         fingerprint = fingerprint,
+        nonce = nonce,
     )
+
+    private companion object {
+        const val NONCE = "n0nce-_AZaz09"
+    }
 
     /** The `arguments` of every `<action>`, as the shell would receive them. */
     private fun actionUrls(xml: String): List<String> {
@@ -73,7 +81,7 @@ class ToastActivationRoundTripTest {
         assertEquals(3, urls.size, xml)
         urls.forEachIndexed { i, url ->
             assertEquals(
-                Activation.Answer("jotter", i + 1, "fp-abc123"),
+                Activation.Answer("jotter", i + 1, "fp-abc123", NONCE),
                 Activations.parse(url),
                 "button ${i + 1} did not round-trip: <$url>",
             )
@@ -93,7 +101,7 @@ class ToastActivationRoundTripTest {
         val xml = WindowsToastNotifier.attentionXml(request(options))
         val urls = actionUrls(xml)
         urls.forEachIndexed { i, url ->
-            assertEquals(Activation.Answer("jotter", i + 1, "fp-abc123"), Activations.parse(url))
+            assertEquals(Activation.Answer("jotter", i + 1, "fp-abc123", NONCE), Activations.parse(url))
         }
         // And the labels survive the XML escaping intact, numbered the way the
         // owner reads them off the pane.
@@ -111,7 +119,7 @@ class ToastActivationRoundTripTest {
             )
             val url = actionUrls(xml).single()
             assertEquals(
-                Activation.Answer(name, 2, "fp-abc123"),
+                Activation.Answer(name, 2, "fp-abc123", NONCE),
                 Activations.parse(url),
                 "session <$name> did not round-trip through <$url>",
             )
@@ -128,7 +136,7 @@ class ToastActivationRoundTripTest {
             )
             val url = actionUrls(xml).single()
             assertEquals(
-                Activation.Answer("jotter", 1, fp),
+                Activation.Answer("jotter", 1, fp, NONCE),
                 Activations.parse(url),
                 "fingerprint <$fp> did not round-trip through <$url>",
             )
@@ -171,6 +179,33 @@ class ToastActivationRoundTripTest {
     }
 
     @Test
+    fun `NO NONCE MEANS NO BUTTONS AT ALL`() {
+        // A button without one is a link anything on the machine could have
+        // built, and the running app would open the session rather than answer.
+        val xml = WindowsToastNotifier.attentionXml(
+            request(listOf(AnswerOption(1, "Yes"), AnswerOption(2, "No")), nonce = null),
+        )
+        assertEquals(emptyList(), actionUrls(xml))
+    }
+
+    @Test
+    fun `a button press resolves to the answer only with this run's nonce`() {
+        // The whole chain: the nonce the router would mint, the XML, the URL the
+        // shell hands back, and the gate in front of answerPrompt.
+        val nonces = ActivationNonces()
+        val nonce = nonces.issue("sess:jotter", ActivationNonces.Grant.Answer("jotter", "fp-abc123", setOf(1, 2)))
+        val xml = WindowsToastNotifier.attentionXml(
+            request(listOf(AnswerOption(1, "Yes"), AnswerOption(2, "No")), nonce = nonce),
+        )
+        val urls = actionUrls(xml)
+        assertEquals(ActivationStep.Answer("jotter", 2, "fp-abc123"), Activations.resolve(urls[1], nonces))
+        // The toast is spent: its other button now only opens the session.
+        assertIs<ActivationStep.Navigate>(Activations.resolve(urls[0], nonces))
+        // And a restart forgets it entirely.
+        assertIs<ActivationStep.Navigate>(Activations.resolve(urls[1], ActivationNonces()))
+    }
+
+    @Test
     fun `at most three answer buttons, which is the bounded-choice cap`() {
         val many = (1..7).map { AnswerOption(it, "option $it") }
         assertEquals(3, actionUrls(WindowsToastNotifier.attentionXml(request(many))).size)
@@ -185,12 +220,12 @@ class ToastActivationRoundTripTest {
             urgent = false,
             target = NavTarget(TargetKind.SESSIONS, "jotter"),
             actions = listOf(
-                ToastAction("Undo", Activations.undoUrl("jotter")),
+                ToastAction("Undo", Activations.undoUrl("jotter", NONCE)),
                 ToastAction("OK", Activations.ackUrl("sess:jotter")),
             ),
         )
         val urls = actionUrls(WindowsToastNotifier.finishedXml(req))
-        assertEquals(Activation.Undo("jotter"), Activations.parse(urls[0]))
+        assertEquals(Activation.Undo("jotter", NONCE), Activations.parse(urls[0]))
         assertEquals(Activation.Ack("sess:jotter"), Activations.parse(urls[1]))
     }
 
@@ -203,6 +238,6 @@ class ToastActivationRoundTripTest {
         // The whole point: an unescapable character in tool output used to be a
         // toast that never appeared. Parsing at all is the assertion.
         val urls = actionUrls(WindowsToastNotifier.attentionXml(req))
-        assertEquals(Activation.Answer("jotter", 1, "fp-abc123"), Activations.parse(urls.single()))
+        assertEquals(Activation.Answer("jotter", 1, "fp-abc123", NONCE), Activations.parse(urls.single()))
     }
 }

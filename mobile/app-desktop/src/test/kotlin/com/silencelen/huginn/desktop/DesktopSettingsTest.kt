@@ -136,6 +136,57 @@ class DesktopSettingsTest {
         )
     }
 
+    // ------------------------------------------- owner-only from the start
+
+    private fun mode(f: File): String =
+        java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(f.toPath()))
+
+    private val posix: Boolean get() = PrivateFiles.posix
+
+    @Test
+    fun `a config directory this app creates is 0700, not the umask's 0755`() = runBlocking {
+        // `mkdirs()` made it at the umask, so the directory holding the bearer
+        // was listable by every account and watchable for each new temp file.
+        if (!posix) return@runBlocking
+        val root = Files.createTempDirectory("huginn-settings-dir").toFile().also { dirs += it }
+        val file = File(root, "xdg/huginn-desktop-kt/settings.json")
+        DesktopSettings(file).setToken("x")
+        assertEquals("rwx------", mode(file.parentFile))
+        assertEquals("rw-------", mode(file))
+    }
+
+    @Test
+    fun `an existing config directory left at 0755 is narrowed on the next save`() = runBlocking {
+        if (!posix) return@runBlocking
+        val file = freshFile()
+        Files.setPosixFilePermissions(file.parentFile.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"))
+        DesktopSettings(file).setToken("x")
+        assertEquals("rwx------", mode(file.parentFile))
+    }
+
+    @Test
+    fun `the token never lands in a temp file this save did not create`() = runBlocking {
+        // A settings.json.tmp already there (a crash's leftover, at the old 0644)
+        // used to be opened and filled with the whole object — bearer included —
+        // before anything narrowed it. The observer is a second name for that old
+        // file; it must not end up holding the token.
+        if (!posix) return@runBlocking
+        val file = freshFile()
+        // Constructed FIRST: building the store already saves once (it mints the
+        // client id), and that save would move a planted file out of the way.
+        val settings = DesktopSettings(file)
+        val stale = File(file.parentFile, file.name + ".tmp").apply { writeText("{}") }
+        Files.setPosixFilePermissions(stale.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"))
+        val observer = File(file.parentFile, "observer")
+        Files.createLink(observer.toPath(), stale.toPath())
+
+        settings.setToken("the-secret-token")
+
+        assertFalse(observer.readText().contains("the-secret-token"), "the token was written into a pre-existing file")
+        assertTrue(file.readText().contains("the-secret-token"))
+        assertEquals("rw-------", mode(file))
+    }
+
     // ------------------------------------------------------------- landing
 
     @Test
