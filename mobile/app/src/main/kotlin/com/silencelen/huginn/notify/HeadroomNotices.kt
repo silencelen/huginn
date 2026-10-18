@@ -41,8 +41,9 @@ import kotlinx.serialization.json.jsonObject
  * Every action here is a BOUNDED CHOICE with a fixed label: Undo, OK, Back to
  * Fable, Stay. None of them carries free text, so none of them needs
  * authentication — that is the whole reason the owner's rule allows buttons on a
- * session notification at all. A free-text path into a pane would need the
- * AppLock gate in front of it, and there is no such path here.
+ * session notification at all. A free-text path would need the app lock in front
+ * of it, the way the chat reply box has it ([replyGate]), and there is no such
+ * path here.
  */
 object HeadroomNotices {
 
@@ -121,9 +122,10 @@ object HeadroomNotices {
      * in the world to add by accident later:
      *
      * - `replyChat` is null, and that is what keeps a free-text box off these
-     *   notifications. `post` attaches a `RemoteInput` — and the AppLock gate in
-     *   front of it — only when a chat is named, so a headroom notice cannot grow
-     *   one without this field changing.
+     *   notifications. `post` attaches a `RemoteInput` only when a chat is named
+     *   (and only while the app lock is off; [ReplyReceiver] re-checks the lock
+     *   before it sends), so a headroom notice cannot grow one without this field
+     *   changing.
      * - `answers` is empty and `fingerprint` is null: an answer selects a ROW of a
      *   pane dialog and is refused without that dialog's fingerprint. A headroom
      *   button answers no dialog, so carrying either would be a fingerprint that

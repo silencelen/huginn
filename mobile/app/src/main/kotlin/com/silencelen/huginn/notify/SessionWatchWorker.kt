@@ -270,6 +270,8 @@ class SessionWatchWorker(
          *        whose text is posted to that chat — so answering a finished chat
          *        costs a swipe-down and a sentence rather than unlocking, finding
          *        the app, finding the chat and scrolling to the bottom of it.
+         *        While the app lock is on it carries "Open Huginn to reply"
+         *        instead (see [chatReplyAction]).
          * @param actions bounded headroom buttons (Undo · OK, Back to Fable ·
          *        Stay). Unlike [answers] these carry no fingerprint, because
          *        there is no pane question they could answer stale — they reach
@@ -463,7 +465,16 @@ class SessionWatchWorker(
             // A session that is asking something the buttons cannot express is
             // answered by opening the app, which is one tap away on the same
             // notification.
-            if (replyChat != null) {
+            //
+            // ⚠ AND NOT WHILE THE APP LOCK IS ON. The box's own gate asks for the
+            // DEVICE to be unlocked, never Huginn, so on a phone handed over
+            // unlocked it was free text to Claude past the app lock. With the
+            // lock on the notification offers "Open Huginn to reply" instead,
+            // which opens to the lock and then to this chat; ReplyReceiver
+            // refuses to send for a box posted before the lock was turned on.
+            if (replyChat != null && chatReplyAction(AppLock.enabledNow(context)) == ChatReplyAction.OPEN_TO_REPLY) {
+                builder.addAction(0, ReplyReceiver.OPEN_TO_REPLY, pending)
+            } else if (replyChat != null) {
                 val remote = RemoteInput.Builder(ReplyReceiver.KEY_REPLY)
                     .setLabel("Reply to huginn")
                     .build()
@@ -493,7 +504,8 @@ class SessionWatchWorker(
                         // the owner set for sessions, met here rather than by dropping
                         // the feature. The ANSWER buttons deliberately carry no such
                         // requirement: a choice among offered options is bounded, which
-                        // is exactly why it needs no login.
+                        // is exactly why it needs no login. (The DEVICE unlock only;
+                        // the app lock is the branch above and ReplyReceiver's gate.)
                         .setAuthenticationRequired(true)
                         .build()
                 )
