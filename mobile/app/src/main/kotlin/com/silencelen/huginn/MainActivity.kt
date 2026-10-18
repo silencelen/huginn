@@ -1340,6 +1340,7 @@ fun HuginnApp(
                     // unfolding the phone is not.
                     if (stillHere()) return@onDispose
                     vm.clearAttachment(HuginnViewModel.chatDraftKey(id))
+                    vm.dropChatIfLeftEmpty(id)
                 }
             }
             // A turn boundary — the transcript grew and nothing is in flight — is
@@ -1432,6 +1433,7 @@ fun HuginnApp(
             SessionsScreen(
                 sessions = split.outside,
                 inProjects = split.inProjects.size,
+                projectCount = projects.size,
                 twoPane = twoPane,
                 onOpenProjects = if (projectDoors.sessionsIcon) ({
                     vm.refreshProjects(); dest = Dest.Projects

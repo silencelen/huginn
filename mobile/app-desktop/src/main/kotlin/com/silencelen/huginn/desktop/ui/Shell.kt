@@ -542,6 +542,7 @@ fun Shell(store: AppStore) {
                                     View.SESSIONS -> SessionsList(
                                         sessions = listedSessions,
                                         inProjects = sessionSplit.inProjects.size,
+                                        projectCount = projects.size,
                                         onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
                                         loaded = sessionsLoaded,
                                         activeName = sessionName,

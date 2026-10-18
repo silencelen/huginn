@@ -105,6 +105,8 @@ fun SessionsScreen(
     // How many project sessions this list does NOT draw — see
     // ProjectRules.splitByProject; they are on the Projects page and nowhere else.
     inProjects: Int = 0,
+    // How many projects they are in: the number the line says (owner, 2026-10-17).
+    projectCount: Int = 0,
     /** The way to the whole tree. Null hides it — see projectEntries. */
     onOpenProjects: (() -> Unit)? = null,
 ) {
@@ -157,7 +159,7 @@ fun SessionsScreen(
                 verticalArrangement = Arrangement.Center,
             ) {
                 EmptyState("No sessions", "Create one and it opens Claude Code on the host, same as cc.")
-                if (inProjects > 0) InProjectsLine(inProjects, onOpenProjects)
+                if (inProjects > 0) InProjectsLine(inProjects, projectCount, onOpenProjects)
                 if (archiveAvailable == true) {
                     ArchivedSessionsSection(
                         rows = archives,
@@ -203,7 +205,7 @@ fun SessionsScreen(
                 items(ordered, key = { it.name }) { s -> row(s, Modifier.animateItem()) }
                 // The project sessions are not in this list, and this is the one
                 // line that says so — see InProjectsLine.
-                if (inProjects > 0) item(key = "in-projects") { InProjectsLine(inProjects, onOpenProjects) }
+                if (inProjects > 0) item(key = "in-projects") { InProjectsLine(inProjects, projectCount, onOpenProjects) }
                 // At the BOTTOM of the live list, collapsed, rather than a fifth
                 // bottom tab. An archive is a footnote to the sessions list —
                 // somewhere you look once a week — and the tab bar already holds
@@ -567,8 +569,8 @@ private fun SessionRow(
  * will never appear.
  */
 @Composable
-private fun InProjectsLine(count: Int, onOpenProjects: (() -> Unit)?) {
-    val words = ProjectRules.hiddenWords(count) ?: return
+private fun InProjectsLine(count: Int, projects: Int, onOpenProjects: (() -> Unit)?) {
+    val words = ProjectRules.hiddenWords(count, projects) ?: return
     Row(
         Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

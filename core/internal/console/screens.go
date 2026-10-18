@@ -153,9 +153,9 @@ func (m *model) sectionSummary(s screen) string {
 				parts = append(parts, t.glyph(st)+" "+t.dim.Render(fmt.Sprintf("%d %s", n[st], stateWords[st])))
 			}
 		}
-		if inProj > 0 {
-			parts = append(parts, t.dim.Render(fmt.Sprintf("%d in projects", inProj)))
-		}
+		// Sessions in projects are counted on the projects row right below,
+		// as projects (owner, 2026-10-17), not again here as sessions.
+		_ = inProj
 		return strings.Join(parts, "  ")
 	case scrChats:
 		run := 0
@@ -287,7 +287,8 @@ func (m *model) sessionsView() string {
 		b.WriteString("  " + mark + row + "\n")
 	}
 	if inProj > 0 {
-		b.WriteString("    " + t.dim.Render(fmt.Sprintf("%d more in projects", inProj)) + "\n")
+		// Where the rest went, counted as projects (owner, 2026-10-17).
+		b.WriteString("    " + t.dim.Render(projectsWords(len(m.data.lists.projects))) + "\n")
 	}
 	// The selected session, in a few lines.
 	s := vis[cur]
@@ -685,3 +686,14 @@ func (m *model) laterView() string {
 }
 
 var _ = lipgloss.Width
+
+// projectsWords: "more in 1 project" / "more in N projects"; at least one,
+// since sessions marked for a project are only hidden when there is one (the
+// list may not have loaded yet).
+func projectsWords(n int) string {
+	if n <= 1 {
+		return "more in 1 project"
+	}
+	return fmt.Sprintf("more in %d projects", n)
+}
+

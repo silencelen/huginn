@@ -1839,6 +1839,17 @@ class HuginnClient(
         call("/v1/chats/${seg(id)}", HttpMethod.Delete)
     }
 
+    /**
+     * Delete this chat only if nothing was ever sent in it: what leaving an
+     * empty chat does. The daemon decides (appd 3.13.1) and answers 409 when
+     * the chat is not empty, which this reports as a [HuginnError] like any
+     * refusal; an older daemon ignores the query and would delete regardless,
+     * so callers check [com.silencelen.huginn.ui.ChatRules.leftEmpty] first.
+     */
+    suspend fun deleteChatIfEmpty(id: String) {
+        call("/v1/chats/${seg(id)}?ifEmpty=1", HttpMethod.Delete)
+    }
+
     suspend fun cancelChat(id: String) {
         post("/v1/chats/${seg(id)}/cancel")
     }

@@ -321,11 +321,15 @@ object ProjectRules {
     /**
      * The one line under the Sessions list that says where the rest went, or
      * null when nothing is hidden — a list with nothing to admit says nothing.
+     *
+     * It counts PROJECTS, the thing the button beside it opens and the rail
+     * counts (owner, 2026-10-17): "8 sessions are in projects" next to a
+     * Projects tab reading 2 made two numbers for one place.
      */
-    fun hiddenWords(count: Int): String? = when {
-        count <= 0 -> null
-        count == 1 -> "1 session is in a project"
-        else -> "$count sessions are in projects"
+    fun hiddenWords(hiddenSessions: Int, projects: Int): String? = when {
+        hiddenSessions <= 0 -> null
+        projects <= 1 -> "1 project"
+        else -> "$projects projects"
     }
 
     // ------------------------------------------------ the proposal, as read

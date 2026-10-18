@@ -4472,6 +4472,24 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      *
      * Null [chat] means "no chat at all" — leaving the chat surface entirely.
      */
+    /**
+     * The reader LEFT [id] — not a rotate or a fold, which rebuild the screen
+     * onto the same chat — and a chat left empty is deleted rather than kept as
+     * a blank row in the list. [com.silencelen.huginn.ui.ChatRules.leftEmpty]
+     * decides from the list's row and the draft; the daemon checks the message
+     * log again before deleting anything.
+     */
+    fun dropChatIfLeftEmpty(id: String) {
+        val row = _chats.value.firstOrNull { it.id == id }
+        if (!com.silencelen.huginn.ui.ChatRules.leftEmpty(row, _drafts.value[chatDraftKey(id)].orEmpty())) return
+        viewModelScope.launch {
+            // A 409 (something arrived in it) or a 404 (already gone) leaves the
+            // list as the refresh finds it; neither is the reader's problem.
+            runCatching { client.deleteChatIfEmpty(id) }
+            refreshChats()
+        }
+    }
+
     fun detachStream(chat: String? = null) {
         if (!detachWanted(chat, openChatId)) return
         openChatId = null

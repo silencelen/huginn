@@ -4,6 +4,7 @@ import com.silencelen.huginn.data.Chat
 import com.silencelen.huginn.ui.ChatRules
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -76,5 +77,27 @@ class ChatRulesTest {
             ChatRules.listLabel(chat(title = "bounce the creative server", turns = 2)),
         )
         assertEquals(ChatRules.EMPTY, ChatRules.listLabel(chat(title = "   ")), "a blank title is not a title")
+    }
+
+    // Leaving a chat nobody wrote in deletes it; anything at all in it keeps it.
+    @Test
+    fun `a chat left with nothing in it is left empty`() {
+        assertTrue(ChatRules.leftEmpty(Chat(id = "c"), draft = ""))
+        assertTrue(ChatRules.leftEmpty(Chat(id = "c", title = "named at creation"), draft = "  "))
+    }
+
+    @Test
+    fun `anything sent, queued, running or drafted keeps the chat`() {
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c", turns = 1), ""))
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c", pending = 1), ""))
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c", running = true), ""))
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c", claudeSessionId = "s"), ""))
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c", lastSnippet = "hi"), ""))
+        assertFalse(ChatRules.leftEmpty(Chat(id = "c"), draft = "half a thought"))
+    }
+
+    @Test
+    fun `a chat the list does not show yet is not judged`() {
+        assertFalse(ChatRules.leftEmpty(null, ""))
     }
 }
