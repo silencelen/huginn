@@ -50,7 +50,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ -n "${HUGINN_SGR_INFO:-}" ]; then
 else
   C=''; G=''; R=''; Y=''; Z=''
 fi
-# Optional companion memory node ("Memhost"): set HUGINN_MEMPALACE_HOST
+# Optional companion memory node: set HUGINN_MEMPALACE_HOST
 # (user@host) and optionally HUGINN_MEMPALACE_MARKER (a rebuild-in-progress
 # marker file on that host) in the login environment to enable the probe.
 MEMPALACE_HOST="${HUGINN_MEMPALACE_HOST:-}"

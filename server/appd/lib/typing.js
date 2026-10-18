@@ -671,7 +671,7 @@ function pasteProbe(text) { return squashPane(text).slice(0, 32); }
  * nowhere on screen. The head probe alone read that as "never appeared"; the
  * recovery saw a non-empty box and chose 'leave'; no Enter was pressed. Three
  * of the five journal lines in five days (`homead`, `tailscale`,
- * `bursarxledger`) show the tail of the owner's own message in the box.
+ * `bursarxledger`) show the tail of the person's own message in the box.
  *
  * The tail is as unmistakable as the head for the same reason, and a message
  * short enough for the two to overlap yields one probe, not two.
