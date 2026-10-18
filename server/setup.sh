@@ -102,43 +102,127 @@ for f in state-table.json state-table.sh state-table.py state-table.js; do
   install_script "$HERE/lib/$f" "/usr/local/lib/huginn/$f" 0644
 done
 
+# BEGIN huginn-home-writes - everything this script writes in HUGINN_HOME, and
+# the only part of it scripts/test-home-writes.sh runs, against a scratch home.
+# It reads HERE and HUGINN_HOME, and writes nowhere but HUGINN_HOME.
+#
+# ⚠ ROOT WRITES INTO SOMEBODY ELSE'S HOME HERE. HUGINN_HOME is root's own home by
+# default, but it may be a non-root account's, and that account controls every
+# name under it. A symlink at .tmux.conf.pre-huginn or at
+# .claude/settings.json.huginn-new turned the plain `cp` and `>` this step used
+# into a root write wherever the link pointed, and a settings.json linked to a
+# root-only JSON file came back out as a world-readable copy inside the home.
+# So now:
+#   - every read and write of a path in the home runs AS THE HOME'S OWNER
+#     (runuser, else setpriv), and the kernel holds it to that account's rights;
+#   - a path that is a symlink, or that anybody else owns, is refused rather
+#     than followed, with what to do about it, and the rest of setup carries on;
+#   - the merged settings land through a mktemp file beside the target and a
+#     rename, so there is no name chosen in advance to plant anything at.
+# For root's own home, the normal case, the owner is root and what is written is
+# what it always was.
+TARGET_HOME="${HUGINN_HOME:-/root}"
+[ -d "$TARGET_HOME" ] || { echo "[huginn] HUGINN_HOME=$TARGET_HOME is not a directory" >&2; exit 1; }
+HOME_UID="$(stat -L -c %u -- "$TARGET_HOME")"
+HOME_USER="$(getent passwd "$HOME_UID" | cut -d: -f1)" || HOME_USER=
+HOME_AS=""
+HOME_AS_WHY=""
+if [ "$HOME_UID" = "$(id -u)" ]; then HOME_AS=self
+elif [ -z "$HOME_USER" ]; then HOME_AS_WHY="the home belongs to uid $HOME_UID, which has no account here to write as"
+elif command -v runuser >/dev/null 2>&1; then HOME_AS=runuser
+elif command -v setpriv >/dev/null 2>&1; then HOME_AS=setpriv
+else HOME_AS_WHY="the home belongs to $HOME_USER, and there is neither runuser nor setpriv here to write as $HOME_USER"
+fi
+HOME_REFUSED=
+
+as_home_owner() {   # "$@", as the account that owns TARGET_HOME
+  case "$HOME_AS" in
+    self)    "$@" ;;
+    runuser) runuser -u "$HOME_USER" -- "$@" ;;
+    setpriv) setpriv --reuid="$HOME_UID" --regid="$(id -g "$HOME_USER")" --init-groups -- "$@" ;;
+    *)       return 1 ;;
+  esac
+}
+
+home_path_ok() {    # 0 when $1, a path in TARGET_HOME, may be written; else why not
+  local why
+  if [ -z "$HOME_AS" ]; then
+    why="$HOME_AS_WHY"
+  elif [ -L "$1" ]; then
+    why="it is a symlink, and nothing in HUGINN_HOME is written through one"
+  elif [ -e "$1" ] && [ "$(stat -c %u -- "$1")" != "$HOME_UID" ]; then
+    why="it belongs to uid $(stat -c %u -- "$1"), not to ${HOME_USER:-uid $HOME_UID}, the home's owner - chown it, then re-run"
+  else
+    return 0
+  fi
+  echo "[huginn] NOT writing $1: $why" >&2
+  HOME_REFUSED="$HOME_REFUSED $1"
+  return 1
+}
+
+home_replace() {    # stdin -> $1, as the owner: a mktemp file beside it, its mode, a rename
+  as_home_owner sh -c '
+    t="$(mktemp "$1.huginn-new.XXXXXX")" || exit 1
+    if cat > "$t" && chmod "$(stat -c %a -- "$1")" "$t" && mv -f -- "$t" "$1"; then exit 0; fi
+    rm -f -- "$t"; exit 1' sh "$1"
+}
+
 # tmux config — installed for root by default; for a non-root login user, copy
 # server/tmux.conf to that user's ~/.tmux.conf instead. (Ships allow-passthrough on,
 # which the tab-title hook needs to push state out through tmux.)
 # Someone who has carried the same tmux bindings for years should not lose them to
-# a documented setup step, so an existing config that differs is kept alongside.
+# a documented setup step, so an existing config that differs is kept alongside -
+# and is not replaced at all when that copy cannot be made safely.
 # Same idempotency rule as the hook merge below: identical content backs up nothing.
-TARGET_HOME="${HUGINN_HOME:-/root}"
+# The source is read by root and handed over on stdin: the checkout may sit where
+# the home's owner cannot read it.
 TMUXRC="$TARGET_HOME/.tmux.conf"
-if [ -e "$TMUXRC" ] && ! cmp -s "$HERE/tmux.conf" "$TMUXRC"; then
-  cp -p "$TMUXRC" "$TMUXRC.pre-huginn"
-  echo "[huginn] your existing $TMUXRC was saved as $TMUXRC.pre-huginn"
+if home_path_ok "$TMUXRC"; then
+  TMUXRC_WRITE=1
+  if [ -e "$TMUXRC" ] && ! as_home_owner cmp -s - "$TMUXRC" < "$HERE/tmux.conf"; then
+    if home_path_ok "$TMUXRC.pre-huginn"; then
+      as_home_owner cp -p "$TMUXRC" "$TMUXRC.pre-huginn"
+      echo "[huginn] your existing $TMUXRC was saved as $TMUXRC.pre-huginn"
+    else
+      TMUXRC_WRITE=
+    fi
+  fi
+  [ -z "$TMUXRC_WRITE" ] || as_home_owner sh -c 'cat > "$1"' sh "$TMUXRC" < "$HERE/tmux.conf"
 fi
-cp "$HERE/tmux.conf" "$TMUXRC"
 
 # Terminal-title hooks — merge server/claude-hooks.json into the target user's
 # ~/.claude/settings.json so the tab title reflects Claude's state (running / needs
 # you / waiting). Idempotent: strips any prior huginn-claude-title hooks first, and
 # preserves every other hook already configured. Skipped if jq is unavailable.
+# The file is read as its owner, merged here, and written back as its owner; one
+# that jq cannot parse is left exactly as it was.
 if command -v jq >/dev/null 2>&1; then
   echo "[huginn] wiring terminal-title hooks into $TARGET_HOME/.claude/settings.json ..."
-  mkdir -p "$TARGET_HOME/.claude"
   SETTINGS="$TARGET_HOME/.claude/settings.json"
-  [ -s "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  jq 'del(._comment) | with_entries(.value |= map(.hooks |= map(.command |= ("/usr/local/bin/" + .))))' \
-     "$HERE/claude-hooks.json" > "$SETTINGS.huginn-add"
-  jq --slurpfile add "$SETTINGS.huginn-add" '
-    .hooks = ( (.hooks // {})
-      | with_entries( .value |= ( map( .hooks |= map(select((.command // "") | test("huginn-claude-title") | not)) )
-                                  | map(select((.hooks | length) > 0)) ) )
-      | with_entries(select((.value | length) > 0)) )
-    | reduce ($add[0] | to_entries[]) as $e (.;
-        .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value) )
-  ' "$SETTINGS" > "$SETTINGS.huginn-new" && mv "$SETTINGS.huginn-new" "$SETTINGS"
-  rm -f "$SETTINGS.huginn-add"
+  if home_path_ok "$TARGET_HOME/.claude"; then
+    as_home_owner mkdir -p "$TARGET_HOME/.claude"
+    if home_path_ok "$SETTINGS"; then
+      as_home_owner sh -c '[ -s "$1" ] || echo "{}" > "$1"' sh "$SETTINGS"
+      if MERGED="$(as_home_owner cat -- "$SETTINGS" | jq --slurpfile add <(
+          jq 'del(._comment) | with_entries(.value |= map(.hooks |= map(.command |= ("/usr/local/bin/" + .))))' \
+             "$HERE/claude-hooks.json") '
+        .hooks = ( (.hooks // {})
+          | with_entries( .value |= ( map( .hooks |= map(select((.command // "") | test("huginn-claude-title") | not)) )
+                                      | map(select((.hooks | length) > 0)) ) )
+          | with_entries(select((.value | length) > 0)) )
+        | reduce ($add[0] | to_entries[]) as $e (.;
+            .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value) )
+      ')"; then
+        printf '%s\n' "$MERGED" | home_replace "$SETTINGS"
+      else
+        echo "[huginn] $SETTINGS did not merge (is it JSON?) - left as it was; merge server/claude-hooks.json by hand." >&2
+      fi
+    fi
+  fi
 else
   echo "[huginn] jq not found - skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
 fi
+# END huginn-home-writes
 
 # huginn-appd: the daemon huginn core, the console and the desktop and Android
 # apps pair with. Skipped for a terminal-only server.
@@ -155,6 +239,11 @@ if [ -n "$SKIPPED" ]; then
   echo
   echo "[huginn] NOT installed, the copy on this machine was edited and is newer:$SKIPPED" >&2
   echo "[huginn] compare each with $HERE/bin/, or re-run with HUGINN_FORCE=1 to overwrite them." >&2
+fi
+if [ -n "$HOME_REFUSED" ]; then
+  echo
+  echo "[huginn] NOT written, as it was not safe to write as root in $TARGET_HOME:$HOME_REFUSED" >&2
+  echo "[huginn] fix each as said above and re-run; server/tmux.conf and server/claude-hooks.json are what they would have held." >&2
 fi
 
 ADDRS="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v -e '^$' -e '^127\.' -e '^fe80' | head -3 | paste -sd' ')"
