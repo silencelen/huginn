@@ -10,7 +10,7 @@ import (
 )
 
 // POST /core/local/seed hands the local-AI tier its appd token (owner
-// decision 2026-10-16, docs/DESKTOP-VIA-CORE.md): the core writes the file
+// decision 2026-10-16, docs/design/desktop-via-core.md): the core writes the file
 // the tier's runner reads, from its own secrets store, so the token never
 // passes through the desktop. The answer names the address the tier should
 // be turned on with (`huginn-local on --url`): the one the core uses now.

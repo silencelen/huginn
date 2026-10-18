@@ -1,5 +1,5 @@
 // Package appd is the core's client for huginn-appd: TLS pinned by a
-// token-bound proof (docs/TLS.md is the contract), token resolution, and the
+// token-bound proof (docs/dev/protocol-tls.md is the contract), token resolution, and the
 // small typed API the device runner speaks.
 //
 // ⚠ THE TOKEN IS ROOT ON THE HOST, AND THIS CLIENT SENDS IT ON EVERY REQUEST.

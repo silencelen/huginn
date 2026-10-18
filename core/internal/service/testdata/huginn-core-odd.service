@@ -1,7 +1,7 @@
 # Written by `huginn core install`; removed by `huginn core uninstall`.
 [Unit]
 Description=huginn core (device runner and appd link)
-Documentation=https://github.com/silencelen/huginn/blob/main/docs/CORE-ARCHITECTURE.md
+Documentation=https://github.com/silencelen/huginn/blob/main/docs/install/clients.md
 
 [Service]
 Type=simple

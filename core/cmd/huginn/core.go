@@ -81,7 +81,7 @@ func core(args []string) int {
 			fmt.Println("started the tray icon")
 			return 0
 		}
-		// The tray role (docs/CORE-ARCHITECTURE.md §3.1): started at graphical
+		// The tray role (docs/design/core.md §3.1): started at graphical
 		// login, draws the icon and posts notifications that `core run` decides.
 		//
 		// --at-login: started by the "Huginn Tray" logon task. The tray at

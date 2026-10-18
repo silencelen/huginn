@@ -81,9 +81,9 @@ data class CoreRoutes(val autoSwitch: Boolean = true, val routes: List<CoreRoute
 data class CoreLocalSeed(val url: String, val dir: String = "", val tokenFile: String = "")
 
 /**
- * HTTP to `huginn core` over its AF_UNIX socket (docs/CORE-ARCHITECTURE.md §5):
+ * HTTP to `huginn core` over its AF_UNIX socket (docs/design/core.md §5):
  * the core's own routes (`/core/…`). Everything this app asks appd goes through the
- * core's `/appd/…` proxy instead, on [CoreDaemonTransport] (docs/DESKTOP-VIA-CORE.md).
+ * core's `/appd/…` proxy instead, on [CoreDaemonTransport] (docs/design/desktop-via-core.md).
  */
 internal class CoreClient(private val socket: Path) {
     /** Bump with `version.Proto` in Go. */

@@ -14,7 +14,7 @@ import (
 
 // `huginn core route [list] | add URL [--name N] [--kind K] | remove URL |
 // pin URL|none | auto on|off` — the route book (the paired daemon's other
-// addresses, docs/DESKTOP-VIA-CORE.md), the same one the desktop shows in
+// addresses, docs/design/desktop-via-core.md), the same one the desktop shows in
 // Settings > Host.
 func coreRoute(args []string) int {
 	sub := "list"

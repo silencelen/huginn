@@ -11,7 +11,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/store"
 )
 
-// The route book (docs/DESKTOP-VIA-CORE.md): the paired daemon's other
+// The route book (docs/design/desktop-via-core.md): the paired daemon's other
 // addresses, which the appd client switches between (appd/routes.go). It is
 // kept in core.json; /core/routes reads and edits it; the desktop shows it in
 // Settings > Host; `huginn core route` is the same thing in a terminal.

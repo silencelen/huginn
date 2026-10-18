@@ -203,7 +203,7 @@ test('one elevation, preferring the desktop prompt, and null is a real answer', 
 // session without a tty agent) pkexec exits non-zero and a WORKING sudo sat
 // unused: `on --system` downgraded to a user unit + linger, `update` hard-aborted
 // "nothing was changed", and `persist` tore the user units down and put them
-// back. CHANGELOG.md, docs/LOCAL-TIER.md and LocalServe.kt all document
+// back. CHANGELOG.md, docs/design/local-tier.md and LocalServe.kt all document
 // "pkexec, then sudo" as a chain.
 test('a pkexec that cannot ASK falls through to sudo', () => {
   shim({

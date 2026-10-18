@@ -11,7 +11,7 @@ import kotlin.concurrent.Volatile
 /**
  * ─── TLS TO THE DAEMON, PINNED BY A PROOF ONLY THE TOKEN CAN MAKE ──────────
  *
- * `docs/TLS.md` is the contract; this file is the client's half of it, and the
+ * `docs/dev/protocol-tls.md` is the contract; this file is the client's half of it, and the
  * part of it that is PURE — the HMAC input, the verdict on a challenge answer,
  * the pin-set rules and the URL rule — so all of it is decided by a test in
  * `commonTest` rather than by whichever platform happens to be running. The

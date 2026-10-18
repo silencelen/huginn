@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Since appd 3.11 huginn talks to its daemon over TLS only (docs/TLS.md), and
+  Since appd 3.11 huginn talks to its daemon over TLS only (docs/dev/protocol-tls.md), and
   this file is the platform's half of "no setting re-enables cleartext to a
   remote host": plain HTTP is refused app-wide by the OS, below anything the
   app's own code could get wrong, with loopback the single exception.

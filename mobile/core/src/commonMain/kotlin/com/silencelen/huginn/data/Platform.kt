@@ -21,7 +21,7 @@ expect fun huginnHttpEngine(): HttpClientEngine
 
 /**
  * The channels every [HuginnClient] talks to the daemon through — see
- * [DaemonTransport] and `docs/TLS.md`.
+ * [DaemonTransport] and `docs/dev/protocol-tls.md`.
  *
  * ⚠ NOT [huginnHttpEngine]. That one is the ordinary engine (system CAs,
  * hostname verification) for talking to github.com; this one refuses every

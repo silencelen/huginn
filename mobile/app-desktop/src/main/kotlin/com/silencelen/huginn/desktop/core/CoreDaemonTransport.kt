@@ -12,7 +12,7 @@ import java.nio.file.Path
 
 /**
  * Everything this app asks huginn goes THROUGH huginn core (owner decision
- * 2026-10-16, docs/DESKTOP-VIA-CORE.md): `HuginnClient` keeps every call it
+ * 2026-10-16, docs/design/desktop-via-core.md): `HuginnClient` keeps every call it
  * makes, and this transport carries them to the core's `/appd/…` proxy over the
  * core's AF_UNIX socket instead of to appd over TLS.
  *

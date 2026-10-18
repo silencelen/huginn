@@ -1,5 +1,5 @@
 // Package ipc is the core's local API: HTTP/1.1 over an AF_UNIX socket that
-// only this user can open (docs/CORE-ARCHITECTURE.md §5).
+// only this user can open (docs/design/core.md §5).
 //
 // Three layers keep other users out, because each one alone has a way to fail:
 // the runtime directory is 0700 (Windows: a user-only ACL), the socket file is

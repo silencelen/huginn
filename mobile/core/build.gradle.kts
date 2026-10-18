@@ -52,7 +52,7 @@ kotlin {
             implementation(libs.ktor.client.okhttp)
         }
         // ⚠ ONE SOURCE ROOT COMPILED INTO BOTH TARGETS: the TLS transport of
-        // docs/TLS.md (a pinning trust manager and a trust-anything probe). It is
+        // docs/dev/protocol-tls.md (a pinning trust manager and a trust-anything probe). It is
         // plain JSSE + OkHttp on the phone and the desktop alike, and the
         // security-critical half of the scheme must not exist as two copies that
         // can drift. An extra srcDir rather than an intermediate `jvmShared`

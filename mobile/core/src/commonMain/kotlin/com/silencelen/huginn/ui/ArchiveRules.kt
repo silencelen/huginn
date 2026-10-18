@@ -7,7 +7,7 @@ import com.silencelen.huginn.data.ArchivedSession
  * each one.
  *
  * In `:core` rather than in the section that draws it, for the reason
- * `docs/ADDING-A-FEATURE.md` gives: both shells list these rows, and a bucketing
+ * `docs/dev/kotlin-clients.md` gives: both shells list these rows, and a bucketing
  * rule written twice is a rule the two apps will eventually disagree about. The
  * nearest precedent is [ScratchpadRules.ordered] — and the interesting thing
  * about this one is that it takes the OPPOSITE decision, deliberately.

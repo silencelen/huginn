@@ -1,6 +1,6 @@
 // Package daemon assembles `huginn core run`: the store, the token, the appd
 // client, the device runner and the IPC server, for one OS user
-// (docs/CORE-ARCHITECTURE.md §3, P1).
+// (docs/design/core.md §3, P1).
 package daemon
 
 import (

@@ -169,7 +169,7 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # `hostname` happens to say. $1 = the ssh alias; prints https://<authority>:8787
 # (http:// only for the host's own loopback).
 #
-# ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/TLS.md). The
+# ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/dev/protocol-tls.md). The
 # runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
 # request, and a device enrolled from here is usually on a flat LAN with no VPN
 # under it. The runner would upgrade a remote http:// on its own anyway (rule 6:
@@ -330,7 +330,7 @@ _huginn_device() {
 # its own pinned runtime/model manifest, so what it may install is decided by
 # the release you are running, never by whatever an endpoint serves today.
 # --------------------------------------------------------------- huginn core
-# The Go core (docs/CORE-ARCHITECTURE.md): one binary per user that runs act
+# The Go core (docs/design/core.md): one binary per user that runs act
 # mode at boot, with nobody signed in. While it exists, `huginn device` is a
 # door to it and the Node runner is not used. The binary is NAMED huginn too, so
 # it is always run by PATH, never by bare name - inside this function a bare

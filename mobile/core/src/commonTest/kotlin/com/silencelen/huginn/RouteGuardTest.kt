@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  *
  * Each case below is a CLASS of address, not an example, because the rule is
  * about shape: https anywhere, plain http only to loopback — and since appd 3.11
- * (docs/TLS.md) every other http address is STORED AS https rather than refused,
+ * (docs/dev/protocol-tls.md) every other http address is STORED AS https rather than refused,
  * because the TLS proof is what now keeps the bearer from a stranger.
  */
 class RouteGuardTest {

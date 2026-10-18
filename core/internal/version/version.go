@@ -2,7 +2,7 @@
 package version
 
 // Version is the lockstep client version (core + GUI ship together; D10 in
-// docs/CORE-ARCHITECTURE.md). Release tooling stamps it with -ldflags -X.
+// docs/design/core.md). Release tooling stamps it with -ldflags -X.
 var Version = "2.0.0-dev"
 
 // Proto is the IPC protocol version, sent as X-Huginn-Core-Proto on every

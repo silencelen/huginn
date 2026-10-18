@@ -40,7 +40,7 @@ data class DeviceStatus(
 enum class CoreGate { CHECKING, READY, NOT_SET_UP, NOT_RUNNING }
 
 /**
- * "Available to huginn", driven by `huginn core` (docs/CORE-ARCHITECTURE.md P1).
+ * "Available to huginn", driven by `huginn core` (docs/design/core.md P1).
  *
  * ⚠ THE APP NO LONGER RUNS WORK. Its old runner lived only while this window's
  * JVM did, and the JVM lives only while somebody is signed in — which is how
@@ -61,7 +61,7 @@ class CoreDevice internal constructor(
 
     /**
      * True while `huginn core tray` is attached: the core then owns the tray and
-     * the notifications (docs/CORE-ARCHITECTURE.md D5), and this window stands
+     * the notifications (docs/design/core.md D5), and this window stands
      * its own down — no second icon, no second copy of every toast, no claim
      * against appd, and closing the window quits (D6).
      */

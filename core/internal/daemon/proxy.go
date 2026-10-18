@@ -10,7 +10,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/ipc"
 )
 
-// /appd/* is the front ends' way to appd (D12, docs/DESKTOP-VIA-CORE.md): the
+// /appd/* is the front ends' way to appd (D12, docs/design/desktop-via-core.md): the
 // console and the desktop ask the core, and the core answers with its own
 // token over its own proven, pinned route. The token never leaves this
 // process, and there is one TLS and pinning implementation, not one per front

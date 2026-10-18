@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// The route book (docs/DESKTOP-VIA-CORE.md, owner decision 2026-10-16): one
+// The route book (docs/design/desktop-via-core.md, owner decision 2026-10-16): one
 // daemon, several addresses — its LAN address at home, its mesh address away,
 // a tailnet name — and the core uses whichever answers. The desktop kept this
 // list itself until the core became its only way to huginn.

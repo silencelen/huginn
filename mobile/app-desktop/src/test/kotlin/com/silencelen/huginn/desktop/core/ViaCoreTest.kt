@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 
 /**
- * The whole way, for real (docs/DESKTOP-VIA-CORE.md): this app's own link is
+ * The whole way, for real (docs/design/desktop-via-core.md): this app's own link is
  * handed to a real huginn core (built from this tree), and then a real
  * HuginnClient call goes app -> CoreDaemonTransport -> the core's socket -> its
  * /appd proxy -> a fake appd on loopback. appd must see the CORE'S token and

@@ -15,7 +15,7 @@ package com.silencelen.huginn.data
  * A HOST LIST CANNOT SURVIVE user-added routes, so this is a SHAPE rule instead:
  *
  * - `https://` anywhere. Since appd 3.11 every route is TLS, pinned by the
- *   token-bound proof of `docs/TLS.md`, so the host stops mattering to the
+ *   token-bound proof of `docs/dev/protocol-tls.md`, so the host stops mattering to the
  *   bearer: an address that cannot prove it holds the token never sees it.
  * - `http://` ONLY to loopback (`127.0.0.0/8`, `::1`, `localhost`) — the one
  *   place there is no wire to read it off.

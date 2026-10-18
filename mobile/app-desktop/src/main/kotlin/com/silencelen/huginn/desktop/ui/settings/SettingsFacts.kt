@@ -37,7 +37,7 @@ data class SettingsFacts(
     val devices: List<Device> = emptyList(),
     val route: String = "",
     val tokenSet: Boolean = false,
-    /** huginn core carries this app's link and holds the token (docs/DESKTOP-VIA-CORE.md). */
+    /** huginn core carries this app's link and holds the token (docs/design/desktop-via-core.md). */
     val viaCore: Boolean = false,
     /** This window has been attended recently — the other half of "claiming". */
     val present: Boolean = false,

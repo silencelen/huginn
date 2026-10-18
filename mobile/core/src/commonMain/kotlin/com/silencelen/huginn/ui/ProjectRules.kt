@@ -20,7 +20,7 @@ import kotlinx.serialization.json.jsonObject
  * What a project row says, what order its members are in, and which of them the
  * owner is being asked about.
  *
- * In `:core` for the reason `docs/ADDING-A-FEATURE.md` gives and [ArchiveRules]
+ * In `:core` for the reason `docs/dev/kotlin-clients.md` gives and [ArchiveRules]
  * repeats: both shells draw these rows, and a rollup written twice is a sentence
  * the two apps will eventually disagree about in front of the same cluster.
  *

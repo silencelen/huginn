@@ -1,7 +1,7 @@
 // Package traystate is the contract between the core (`huginn core run`, which
 // watches appd and decides) and the tray role (`huginn core tray`, which shows):
 // two event kinds on /core/events. Types only, so both sides agree by
-// construction (docs/CORE-ARCHITECTURE.md §3.1).
+// construction (docs/design/core.md §3.1).
 package traystate
 
 // Event names on /core/events.

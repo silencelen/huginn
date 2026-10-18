@@ -1,6 +1,6 @@
 // Package store holds the core's per-user configuration (core.json), its
 // secrets (OS keyring, 0600-file fallback) and the one-time import of what the
-// desktop and the Node runner left on disk. See docs/CORE-ARCHITECTURE.md
+// desktop and the Node runner left on disk. See docs/design/core.md
 // D11, D13 and §7.1.
 package store
 

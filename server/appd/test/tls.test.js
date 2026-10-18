@@ -13,7 +13,7 @@ const T = require('../lib/tls');
 
 const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'appd-tls-'));
 
-test('the bound proof matches the vector every client asserts (docs/TLS.md)', () => {
+test('the bound proof matches the vector every client asserts (docs/dev/protocol-tls.md)', () => {
   assert.equal(
     T.boundProof('a'.repeat(64), '00112233445566778899aabbccddeeff', '0'.repeat(64)),
     '5b9228510040befc78c4c4314d23a489b93f403581f0fc85e291e013160240f2');

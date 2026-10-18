@@ -55,7 +55,7 @@ type section struct {
 	ready bool   // built in this release
 }
 
-// sections, in the design's stable numbering (docs/CONSOLE.md §5).
+// sections, in the design's stable numbering (docs/design/console.md §5).
 var sections = []section{
 	{scrSessions, "1", "sessions", "huginn ls", true},
 	{scrChats, "2", "chats", "the desktop or phone app", true},

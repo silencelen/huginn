@@ -8,7 +8,7 @@
 #     > File google-services.json is missing.
 #
 # That file is per-deployment and gitignored on purpose (mobile/.gitignore says
-# so, and mobile/README.md says which .example to copy), so autobuild — which
+# so, and docs/dev/building.md says which .example to copy), so autobuild — which
 # takes the tree exactly as checked out — can never satisfy it. Default setup has
 # no place to put a build step, so the choice was to lose Kotlin scanning
 # entirely or to own the build. This owns the build.

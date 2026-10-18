@@ -21,7 +21,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/version"
 )
 
-// The upgrade path (docs/CORE-ARCHITECTURE.md §13): every way a newer core
+// The upgrade path (docs/design/core.md §13): every way a newer core
 // reaches a machine — `huginn core update`, `huginn update`, the desktop app's
 // bundled core, the bootstrap one-liners — ends in `huginn core self-install`
 // run by the new binary. That is where the running core is restarted onto it,

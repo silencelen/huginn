@@ -369,7 +369,7 @@ class DesktopSettingsTest {
         val book = DesktopSettings(file).routeBookNow()
         assertEquals(listOf("192.168.1.20:8787"), book.routes.map { it.name }, "the stored address, and nothing added")
         assertEquals(AppdRoutes.MIGRATED_ID, book.activeId)
-        assertEquals("https://192.168.1.20:8787", book.activeUrl, "the same address, upgraded (docs/TLS.md)")
+        assertEquals("https://192.168.1.20:8787", book.activeUrl, "the same address, upgraded (docs/dev/protocol-tls.md)")
         assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")
     }
 
@@ -490,7 +490,7 @@ class DesktopSettingsTest {
     /**
      * ⚠ A plain-http public host in a hand-edited file is no longer dropped —
      * it is read back as https, so nothing is ever dialled in the clear and the
-     * bearer waits for the TLS proof (docs/TLS.md rule 6).
+     * bearer waits for the TLS proof (docs/dev/protocol-tls.md rule 6).
      */
     @Test
     fun `a hand-edited plain-http host is read back as https`() {
@@ -502,7 +502,7 @@ class DesktopSettingsTest {
         assertEquals("https://10.0.0.5:8787", DesktopSettings(file).baseUrlNow())
     }
 
-    /** docs/TLS.md rule 7: pins survive a relaunch, and belong to the token. */
+    /** docs/dev/protocol-tls.md rule 7: pins survive a relaunch, and belong to the token. */
     @Test
     fun `TLS pins persist across a relaunch and are cleared by a new token`() {
         val file = freshFile()

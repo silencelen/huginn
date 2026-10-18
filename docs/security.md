@@ -5,7 +5,7 @@ harden a server. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 ## The trust model
 
-Huginn is single-user: one server, one owner, one access token. The server runs Claude Code as
+Huginn is single-user: one server, one person, one access token. The server runs Claude Code as
 root, so anything that can drive a session can do anything root can do on that machine. Huginn
 does not try to contain that from inside. The isolation boundary is the machine itself, which is
 why the server belongs on a dedicated virtual machine, container or computer with nothing else of
@@ -154,8 +154,9 @@ A computer can serve local models to Huginn (`huginn local on`). When you turn i
 - its runner keeps its own copy of the access token in the local-AI directory
   (`~/.config/huginn-local/device/` on Linux, `%ProgramData%\huginn-local\device\` on Windows).
   `huginn local off` removes it.
-  On Windows that directory is under `%ProgramData%`; serve local AI only from a computer whose
-  other accounts you trust.
+  On Windows that directory is under `%ProgramData%`. Since 2.5.9 it is locked to SYSTEM,
+  Administrators and the installing user; on a PC that already served local AI with an older
+  release, run `huginn local update` once to apply the lock.
 
 ## The daemon's sandbox
 

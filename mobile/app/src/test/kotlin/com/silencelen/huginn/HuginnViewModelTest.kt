@@ -292,7 +292,7 @@ class HuginnViewModelTest {
     }
 
     /**
-     * docs/TLS.md: the interception and too-old refusals are the contract's own
+     * docs/dev/protocol-tls.md: the interception and too-old refusals are the contract's own
      * sentences and reach the banner whole — the generic "ssl/certificate"
      * mapping must not soften "someone may be intercepting" into "could not be
      * set up".

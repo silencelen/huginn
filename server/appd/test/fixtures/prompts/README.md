@@ -5,7 +5,7 @@ Real `tmux capture-pane -p -e` output from a **throwaway** `claude` session
 **80x24** unless the name says `-46`. These are the regression net for
 `lib/pane.js` `detectPrompt`/`parseStatusLine`/`parseSpinner` and for
 `lib/ask.js` fusion. Do not hand-edit — recapture from a real session if the
-harness TUI changes (see the capture recipe in `docs/HARNESS.md`).
+harness TUI changes (see the capture recipe in `docs/dev/claude-code-integration.md`).
 
 Each capture was taken in the same shell command as a sentinel `grep`, so a
 mistimed capture failed loudly instead of becoming a fixture.

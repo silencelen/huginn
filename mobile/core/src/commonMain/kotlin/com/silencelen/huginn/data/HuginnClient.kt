@@ -68,7 +68,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * `proven`. Nothing else may.**
  *
  * Over https (appd 3.11+) `proven` means the CHANNEL-BOUND proof of
- * `docs/TLS.md`: the token holder is behind the certificate this client's own
+ * `docs/dev/protocol-tls.md`: the token holder is behind the certificate this client's own
  * handshake saw. The legacy proof only ever counts on a loopback http address.
  *
  * @param version the daemon's own, from the header it stamps on every response
@@ -131,7 +131,7 @@ class HuginnClient(
     private val pins: PinBook = PinBook.process,
     /**
      * The desktop's second way to huginn: through huginn core on this machine
-     * (docs/DESKTOP-VIA-CORE.md). Null on the phone, which has no core.
+     * (docs/design/desktop-via-core.md). Null on the phone, which has no core.
      */
     private val coreTransport: DaemonTransport? = null,
     /**

@@ -1,6 +1,6 @@
 // Package console is `huginn console`: the interactive terminal for huginn
 // core. Bare `huginn` opens it in an interactive terminal; every `huginn <verb>`
-// keeps working as before (docs/CONSOLE.md).
+// keeps working as before (docs/design/console.md).
 package console
 
 import (

@@ -41,7 +41,7 @@ $t = Join-Path ([IO.Path]::GetTempPath()) ("huginn-get-" + [guid]::NewGuid().ToS
 New-Item -ItemType Directory -Force $t | Out-Null
 foreach ($f in 'install.ps1', 'huginn.ps1') {
   # ASCII on purpose: these files are 7-bit, and PS 5.1 reads a BOM-less file
-  # as the ANSI code page (see docs/ARCHITECTURE.md).
+  # as the ANSI code page (see docs/dev/architecture.md).
   $body = Invoke-WebRequest "https://raw.githubusercontent.com/$repo/$tag/client/$f" -UseBasicParsing
   $text = if ($body.Content -is [byte[]]) { [Text.Encoding]::ASCII.GetString($body.Content) } else { $body.Content }
   Set-Content -Path (Join-Path $t $f) -Value $text -Encoding ascii

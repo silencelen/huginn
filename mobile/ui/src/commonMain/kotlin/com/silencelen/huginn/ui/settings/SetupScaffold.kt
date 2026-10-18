@@ -46,7 +46,7 @@ import com.silencelen.huginn.settings.StepStatus
  * ⚠ IT HOSTS THE EXISTING CONTROLS RATHER THAN COPYING THEM. Every step body is
  * supplied by the shell and is the SAME composable the matching Settings row
  * draws: the route list, the token field, the device form, the local-AI consent
- * card. That is `docs/ADDING-A-FEATURE.md`'s one-composable rule, and here it
+ * card. That is `docs/dev/kotlin-clients.md`'s one-composable rule, and here it
  * buys something specific — a wizard with its own copies of four controls is a
  * second place for the route guard's refusal, the consent card's sizes and the
  * device scopes to drift, and the drift would only ever be visible on a screen
