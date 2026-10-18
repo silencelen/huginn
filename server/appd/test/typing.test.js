@@ -814,8 +814,8 @@ test('tmux WRAPPING a long message does not hide it from the settle check', () =
  * the settle check said "never appeared", the recovery found a non-empty box and
  * chose 'leave', and no Enter was ever pressed: the message sat in the box until
  * the owner opened the Screen tab and sent it by hand. Four of the five "never
- * appeared" lines in the journal over five days (jnetad 09-27, workxhuginn
- * 09-28, tailscale 09-30, btc15minxledger 10-02) are exactly these two shapes.
+ * appeared" lines in the journal over five days (homead 09-27, devxapp
+ * 09-28, tailscale 09-30, bursarxledger 10-02) are exactly these two shapes.
  * It "did not always happen" because it is a function of message LENGTH.
  */
 // ⚠ Non-repeating, like a real brief: a text that repeats its opening sentence

@@ -196,17 +196,17 @@ test('a kind the caller TYPED and got wrong is a 400, the same as a project kind
 });
 
 test('a name is one line with no control characters in it', () => {
-  assert.equal('Bursar ledger', appsLib.cleanName('  BTC\t15m\nsimulator  '));
+  assert.equal('Bursar ledger', appsLib.cleanName('  Bursar\t\nledger  '));
   assert.equal('a'.repeat(appsLib.MAX_NAME), appsLib.cleanName('a'.repeat(200)));
   assert.ok(appsLib.nameProblem(''), 'an app with no name is not a row anybody can find again');
   assert.ok(appsLib.nameProblem('a'.repeat(appsLib.MAX_NAME + 1)));
 });
 
 test('an id is a route segment, unique, and derived from the name when none is given', () => {
-  assert.equal('btc-15m-simulator', appsLib.idFor('Bursar ledger'));
+  assert.equal('bursar-ledger', appsLib.idFor('Bursar ledger'));
   assert.equal(null, appsLib.idProblem('atlas', []));
   assert.ok(appsLib.idProblem('atlas', ['atlas']), 'two rows with one id is a PATCH that edits either');
-  assert.ok(appsLib.idProblem('Armap', []), 'uppercase is not the grammar');
+  assert.ok(appsLib.idProblem('Atlas', []), 'uppercase is not the grammar');
   assert.ok(appsLib.idProblem('../etc', []), 'an id is a path segment in every route below');
   assert.ok(appsLib.idProblem('-lead', []));
 });
@@ -236,20 +236,20 @@ test('add stops at the cap rather than growing a list nobody can read', () => {
 
 test('rename keeps the id, the address and the probe’s meaning, and bumps the version', () => {
   const list = BASE_LIST();
-  const r = appsLib.rename(list, 'architecture-map', 'Armap');
+  const r = appsLib.rename(list, 'atlas-map', 'Atlas');
   assert.equal(true, r.ok);
-  assert.equal('Armap', r.app.name);
-  assert.equal('architecture-map', r.app.id, 'the id is the route segment and never moves');
+  assert.equal('Atlas', r.app.name);
+  assert.equal('atlas-map', r.app.id, 'the id is the route segment and never moves');
   assert.equal('http://huginn:8088/', r.app.url);
   assert.equal(2, r.app.version);
   assert.equal(false, r.urlChanged, 'a rename does not invalidate an observation');
   assert.equal(1, r.apps.length);
-  assert.equal('Armap', appsLib.findApp(r.apps, 'architecture-map').name, 'and it is in the list, not only in the answer');
+  assert.equal('Atlas', appsLib.findApp(r.apps, 'atlas-map').name, 'and it is in the list, not only in the answer');
 });
 
 test('re-pointing a console marks the observation stale, because the old latency is about a different address', () => {
   const list = BASE_LIST();
-  const r = appsLib.setUrl(list, 'architecture-map', 'http://huginn:8188/');
+  const r = appsLib.setUrl(list, 'atlas-map', 'http://huginn:8188/');
   assert.equal(true, r.ok);
   assert.equal('http://huginn:8188/', r.app.url);
   assert.equal(true, r.urlChanged);
@@ -259,35 +259,35 @@ test('an edit against a stale version is refused WITH the current row', () => {
   // The scratchpad contract: 409 carrying the object, because an editor that
   // collided has to show what it collided with. A guard that answered with a
   // bare sentence would leave the client with two versions and no way to pick.
-  const list = appsLib.rename(BASE_LIST(), 'architecture-map', 'Armap').apps;   // version is now 2
-  const r = appsLib.patch(list, 'architecture-map', { version: 1, name: 'Stale edit' });
+  const list = appsLib.rename(BASE_LIST(), 'atlas-map', 'Atlas').apps;   // version is now 2
+  const r = appsLib.patch(list, 'atlas-map', { version: 1, name: 'Stale edit' });
   assert.equal(false, r.ok);
   assert.equal(409, r.status);
-  assert.equal('Armap', r.app.name, 'the CURRENT row travels with the refusal');
+  assert.equal('Atlas', r.app.name, 'the CURRENT row travels with the refusal');
   assert.equal(2, r.app.version);
   // And the losing edit changed nothing.
-  assert.equal('Armap', appsLib.findApp(list, 'architecture-map').name);
+  assert.equal('Atlas', appsLib.findApp(list, 'atlas-map').name);
 });
 
 test('a write with no version at all is a 400, never an unguarded overwrite', () => {
-  const r = appsLib.patch(BASE_LIST(), 'architecture-map', { name: 'No guard' });
+  const r = appsLib.patch(BASE_LIST(), 'atlas-map', { name: 'No guard' });
   assert.equal(false, r.ok);
   assert.equal(400, r.status);
 });
 
 test('remove takes the row out and says which one it was', () => {
   const list = BASE_LIST();
-  const r = appsLib.remove(list, 'architecture-map');
+  const r = appsLib.remove(list, 'atlas-map');
   assert.equal(true, r.ok);
   assert.equal(0, r.apps.length);
-  assert.equal('architecture-map', r.app.id);
-  assert.equal(404, appsLib.remove(r.apps, 'architecture-map').status, 'and removing it twice is a 404, not a second success');
+  assert.equal('atlas-map', r.app.id);
+  assert.equal(404, appsLib.remove(r.apps, 'atlas-map').status, 'and removing it twice is a 404, not a second success');
 });
 
 // -------------------------------------------------------------------- rows
 
 test('an app that has never been probed says so — null, which is not false', () => {
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://huginn:8088/' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://huginn:8088/' }, 100);
   const row = appsLib.appRow(rec, undefined);
   assert.equal(null, row.up, '`up:false` would draw this as an outage on a daemon that started 200ms ago');
   assert.equal(0, row.lastProbeAt);
@@ -308,7 +308,7 @@ test('an app that has never been probed says so — null, which is not false', (
  * when somebody looked at it.
  */
 test('A STORED ROW\'S addedAt IS STICKY — a read never re-stamps it', () => {
-  const stored = { id: 'atlas', name: 'Armap', url: 'http://huginn:8088/', kind: 'docs', notes: '', version: 1 };
+  const stored = { id: 'atlas', name: 'Atlas', url: 'http://huginn:8088/', kind: 'docs', notes: '', version: 1 };
   const first = appsLib.appRow(stored, undefined).addedAt;
   const second = appsLib.appRow(stored, undefined).addedAt;
   assert.equal(first, second, 'two reads of one record cannot disagree about when it was added');
@@ -339,7 +339,7 @@ test('the row asks TWO questions — is it alive, and can this host\u2019s clien
   // holding it could not open the page and the list said so only in general.
   // Now the row itself carries the per-address answer, so a client never has to
   // decide which of two fields it believes.
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://huginn:8088/' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://huginn:8088/' }, 100);
   const row = appsLib.appRow(rec, { up: true, lastProbeAt: 5, latencyMs: 3, httpStatus: 200 }, {
     icon: true,
     reachable: { ok: false, checkedAt: 7, addresses: [{ addr: '192.168.1.20', ok: false, error: 'connection refused' }], fix: ['x'] },
@@ -453,7 +453,7 @@ test('an existing seed row learns the unit behind it, and a unit the owner typed
   // knows. Separate from the URL migration because an address is a CHOICE and a
   // unit is a fact about this host.
   const list = [
-    appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/' }, 100),
+    appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/' }, 100),
     appsLib.buildRecord({ id: 'board', name: 'Board', url: 'http://100.101.102.103:8092/', unit: 'mine.service' }, 100),
     appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.101.102.103:9100/' }, 100),
   ];
@@ -599,7 +599,7 @@ test('a row with no unit still gets an instruction, naming the address it does a
 });
 
 test('one firewall line per FAILING address, and none for the ones that answered', () => {
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   const fix = fixPve(rec, [
     { addr: '100.101.102.103', ok: true },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
@@ -651,7 +651,7 @@ test('nothing in the fix lines is a verb this daemon could run', () => {
   // Decision 47 as a property: the payload is data. If a future edit added an
   // endpoint or a shell string the daemon executes, it would have to add a way
   // to run one here first, and this fails when it does.
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   for (const line of fixPve(rec, [{ addr: '192.168.1.20', ok: false }])) {
     assert.equal('string', typeof line, 'every element is text, never a { run } of any kind');
   }
@@ -689,7 +689,7 @@ test('a tailnet client is emitted as itself, and loopback is recorded but never 
   // see which client the daemon is talking about. A LOOPBACK remote is the
   // opposite: `-source 127.0.0.1` in a bridge firewall is a rule that can never
   // match anything, which is the same defect this change exists to remove.
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['100.101.102.104', '127.0.0.1'],
   });
@@ -704,7 +704,7 @@ test('three clients in one /24 collapse to the /24; two stay as themselves', () 
   // that differ in the last octet are three rules somebody has to maintain. Two
   // is not a pattern — widening on two would open a /24 on the strength of a
   // coincidence.
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   const three = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['192.168.1.131', '192.168.1.44', '192.168.1.77'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
@@ -731,7 +731,7 @@ test('an address no client has arrived from gets a COMMENT, never an invented so
   // arrival address but never seen a client on it has nothing true to put after
   // `-source`, and the old code's answer — the arrival address — was a rule that
   // could not match. A comment is followable; a wrong rule is not.
-  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {});
   assert.ok(fix.includes('# no client has reached huginn on 192.168.1.20 yet — add its network here'),
     `the comment names the arrival it is about: ${fix.join(' | ')}`);
@@ -1116,7 +1116,7 @@ test('the probe hands the CLIENTS to the fix lines, not the addresses it dialled
   // the probe reaches the fix lines with a LAN arrival — the one shape that
   // earns a firewall rule — without this unit test dialling a LAN address.
   const rec = appsLib.buildRecord({
-    id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service',
+    id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service',
   }, 100);
   const r = await appsLib.reachabilityProbe(rec, ['192.168.1.20'], {
     fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
@@ -1809,7 +1809,7 @@ test('an observation is never written to disk, because it stops being true', asy
     const probed = await store.probeNow('atlas');
     assert.equal(true, probed.up, 'precondition: there is an observation to leak');
     await store.add({ name: 'Extra', url: 'http://huginn:9100/' });   // an add writes
-    store.patch('atlas', { version: 1, name: 'Armap' });               // a patch writes
+    store.patch('atlas', { version: 1, name: 'Atlas' });               // a patch writes
 
     const raw = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
     for (const c of raw.consoles) {

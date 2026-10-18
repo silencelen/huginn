@@ -978,7 +978,7 @@ class DesktopSurfaceTest {
         assertTrue(sessionAddressable("_scratch_1"))
         // The route regexes are case-permissive, so an uppercase name routes
         // fine and must not be marked broken.
-        assertTrue(sessionAddressable("JTyper"))
+        assertTrue(sessionAddressable("Jotter"))
     }
 
     @Test

@@ -95,7 +95,7 @@ test('a page holding the closing marker gets a tag on BOTH ends', () => {
 test('a whole pasted FRAME inside a page survives intact', () => {
   // The realistic shape: somebody keeps a page of things they were sent, and one
   // of them was a message that had a page attached to it.
-  const inner = '[Scratchpad "Hostnames"]\nheimdall\n[End scratchpad]';
+  const inner = '[Scratchpad "Hostnames"]\npve1\n[End scratchpad]';
   const composed = s.composeForChat({ name: 'Archive', content: inner }, 'and this one', 'deadbe');
   assert.ok(composed.startsWith('[Scratchpad "Archive" #deadbe]\n'));
   assert.ok(composed.includes(`\n${inner}\n[End scratchpad #deadbe]\n\nand this one`));

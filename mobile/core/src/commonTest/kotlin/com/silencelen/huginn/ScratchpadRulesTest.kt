@@ -146,7 +146,7 @@ class ScratchpadRulesTest {
 
     @Test
     fun `a chat message collapses to a pill and the sender's own words`() {
-        val wire = "[Scratchpad \"Hostnames\"]\nheimdall\nskybox\n[End scratchpad]\n\nwhich one is the standby?"
+        val wire = "[Scratchpad \"Hostnames\"]\npve1\nstandby\n[End scratchpad]\n\nwhich one is the standby?"
         assertEquals("Page: Hostnames\nwhich one is the standby?", ScratchpadRules.collapse(wire))
     }
 
@@ -201,14 +201,14 @@ class ScratchpadRulesTest {
         // when the group did not participate. In Java — Kotlin's Regex — the same
         // backreference FAILS, so a literal port would stop collapsing every
         // untagged frame and leave a raw marker in the sender's own message.
-        val plain = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nwhich one?"
+        val plain = "[Scratchpad \"Hostnames\"]\npve1\n[End scratchpad]\n\nwhich one?"
         assertEquals("Page: Hostnames\nwhich one?", ScratchpadRules.collapse(plain))
         assertEquals("Hostnames", ScratchpadRules.referencedName(plain))
     }
 
     @Test
     fun `the name travels out of the frame, for a chip that says which page`() {
-        val wire = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nhello"
+        val wire = "[Scratchpad \"Hostnames\"]\npve1\n[End scratchpad]\n\nhello"
         assertEquals("Hostnames", ScratchpadRules.referencedName(wire))
         assertNull(ScratchpadRules.referencedName("hello"))
     }
@@ -217,7 +217,7 @@ class ScratchpadRulesTest {
     fun `a page and a photo in one message both collapse`() {
         // Both markers are the daemon's plumbing and neither is what the person
         // said; displayText is the one place a reader's message is assembled.
-        val wire = "[Scratchpad \"Hostnames\"]\nheimdall\n[End scratchpad]\n\nlook at this\n\n" +
+        val wire = "[Scratchpad \"Hostnames\"]\npve1\n[End scratchpad]\n\nlook at this\n\n" +
             AttachmentText.marker("/var/lib/huginn-appd/uploads/up-1-ab.jpg")
         assertEquals("Page: Hostnames\nlook at this\n\nPhoto attached", AttachmentText.displayText(wire))
     }

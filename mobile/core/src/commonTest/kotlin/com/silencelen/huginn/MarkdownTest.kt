@@ -261,7 +261,7 @@ class TailRevisionTest {
             | # | Item | What I need |
             |---|---|---|
             | 1 | Storage cleanup | Which tiers to execute |
-            | 3 | Skybox repair | Hands-on at the box |
+            | 3 | Standby repair | Hands-on at the box |
             """.trimIndent()
         )
         val t = b.single() as MdBlock.Table

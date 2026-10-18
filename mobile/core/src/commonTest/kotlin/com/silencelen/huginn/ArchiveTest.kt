@@ -113,9 +113,9 @@ class ArchiveTest {
         // wire as its own fact rather than being inferred from ok:true.
         val r = json.decodeFromString(
             ReviveResult.serializer(),
-            """{"ok":true,"name":"jtyper2","resumed":false,"restoredTranscript":false}""",
+            """{"ok":true,"name":"jotter2","resumed":false,"restoredTranscript":false}""",
         )
-        assertEquals("jtyper2", r.name, "the name tmux ACTUALLY used, which may not be the old one")
+        assertEquals("jotter2", r.name, "the name tmux ACTUALLY used, which may not be the old one")
         assertFalse(r.resumed)
     }
 
@@ -151,7 +151,7 @@ class ArchiveTest {
         // read. The host refuses it too; this is what keeps the button away.
         assertFalse(ArchiveRules.canRevive(row(live = true)))
         assertTrue(ArchiveRules.canRevive(row(live = false)))
-        assertEquals("jtyper2", ArchiveRules.liveName(row(live = true, tmuxName = "jotter", revivedAs = "jtyper2")))
+        assertEquals("jotter2", ArchiveRules.liveName(row(live = true, tmuxName = "jotter", revivedAs = "jotter2")))
         assertNull(ArchiveRules.liveName(row(live = false, tmuxName = "jotter")))
     }
 
@@ -234,11 +234,11 @@ class ArchiveTest {
         // A tmux name is reused within hours on this host; an id is the
         // conversation. Addressing either route by name is how a revive brings
         // back a stranger.
-        val c = client { respond("""{"ok":true,"name":"jtyper2","resumed":true}""",
+        val c = client { respond("""{"ok":true,"name":"jotter2","resumed":true}""",
             HttpStatusCode.Created, headersOf(HttpHeaders.ContentType, "application/json")) }
         val r = c.reviveArchive("0123abcd-0000-4000-8000-00000000abcd")
         assertEquals("https://appd.test/v1/archive/0123abcd-0000-4000-8000-00000000abcd/revive", seen.last().url.toString())
-        assertEquals("jtyper2", r.name)
+        assertEquals("jotter2", r.name)
 
         client { respond("""{"ok":true}""", HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json")) }
             .deleteArchive("0123abcd-0000-4000-8000-00000000abcd")
