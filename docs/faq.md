@@ -130,6 +130,12 @@ token, which you print on the server with `cat /etc/huginn-appd/token`).
 The computer was set up from the desktop app, which does not need SSH. Run `huginn setup ssh` once
 to add the SSH key and the `Host huginn` entry that attaching uses.
 
+### The desktop window shows black or garbled areas.
+
+Since desktop 2.6.1 the window repaints itself in its first seconds, which clears what some
+displays showed after an install or an update. If it still draws wrongly, start it with
+`HUGINN_RENDER_API=SOFTWARE` (or `OPENGL`); see [environment variables](reference/environment.md#the-desktop-app).
+
 ### Does this work with the Claude Code IDE extensions?
 
 Huginn runs Claude Code in the terminal on your server. IDE integrations are separate and run

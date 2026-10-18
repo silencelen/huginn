@@ -48,6 +48,12 @@ unanswered question is answered no. See [Install the clients](../install/clients
 The server's address itself is the argument on Linux (`sh -s -- <server>`) and `HUGINN_HOST` on
 Windows (in a session you then close, or clear it afterwards; see `HUGINN_HOST` above).
 
+## The desktop app
+
+| Variable | Default | Effect | Where |
+|---|---|---|---|
+| `HUGINN_RENDER_API` | automatic | The renderer the desktop app draws with, for a display that shows the window wrongly: for example `OPENGL` or `SOFTWARE`. The app's log records the renderer, scale and window size at start. | desktop |
+
 ## Updates
 
 | Variable | Default | Effect | Where |
