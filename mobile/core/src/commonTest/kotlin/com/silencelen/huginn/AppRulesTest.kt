@@ -44,7 +44,7 @@ class AppRulesTest {
         name = "Atlas map",
         url = url,
         kind = kind,
-        notes = "Static atlas dashboard.",
+        notes = "A static documentation site.",
         unit = "atlas.service",
         addedAt = nowSec - 86_400,
         version = 3,
@@ -406,8 +406,8 @@ class AppRulesTest {
 
     @Test
     fun `the subtitle carries the kind, the unit and the note`() {
-        assertEquals("dashboard · atlas.service · Static atlas dashboard.", AppRules.subtitle(app()))
-        assertEquals("other · Static atlas dashboard.", AppRules.subtitle(app(kind = "hardware").copy(unit = null)))
+        assertEquals("dashboard · atlas.service · A static documentation site.", AppRules.subtitle(app()))
+        assertEquals("other · A static documentation site.", AppRules.subtitle(app(kind = "hardware").copy(unit = null)))
     }
 
     /**
@@ -417,11 +417,11 @@ class AppRulesTest {
     @Test
     fun `an empty unit reads as no unit, not as an empty one`() {
         assertEquals(
-            "dashboard · Static atlas dashboard.",
+            "dashboard · A static documentation site.",
             AppRules.subtitle(app().copy(unit = "")),
         )
         assertEquals(
-            "dashboard · Static atlas dashboard.",
+            "dashboard · A static documentation site.",
             AppRules.subtitle(app().copy(unit = null)),
         )
         assertEquals(

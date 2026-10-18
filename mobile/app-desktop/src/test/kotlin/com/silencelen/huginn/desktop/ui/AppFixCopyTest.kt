@@ -44,7 +44,7 @@ class AppFixCopyTest {
         name = "jotter notes",
         url = "http://huginn:8091/",
         kind = "lab",
-        notes = "Blind test + chat + hole-fill flywheel.",
+        notes = "A small web app in development.",
         unit = "jotter.service",
         addedAt = 1_789_000_000,
         version = 2,

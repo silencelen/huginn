@@ -948,13 +948,13 @@ function isSeedRow(rec) {
 
 const SEED_UNITS = [
   { id: 'atlas', port: 8088, name: 'Atlas map', kind: 'docs', unit: 'atlas.service',
-    notes: 'Static atlas dashboard (docs/current/atlas).' },
+    notes: 'A static documentation site.' },
   { id: 'jotter', port: 8091, name: 'jotter notes', kind: 'lab', unit: 'jotter.service',
-    notes: 'Blind test + chat + hole-fill flywheel.' },
+    notes: 'A small web app in development.' },
   { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool', unit: 'boardserver.service',
-    notes: 'Live KiCad board review (buildbox renders).' },
+    notes: 'A circuit board viewer.' },
   { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar.service',
-    notes: 'Paper-trading sim for the 15-minute lab.' },
+    notes: 'A simulator in development.' },
 ];
 
 /**
