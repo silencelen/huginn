@@ -2695,11 +2695,14 @@ function createStore(opts = {}) {
 
   function load() {
     const env = readStore();
-    // First ever list: seed, once, and record that it happened.
+    // First ever list: an EMPTY registry, recorded as created. A new server
+    // serves nothing yet, and the apps it does serve are the operator's to add.
+    // (`seeded: true` keeps its meaning for the migrations below: "the first
+    // list happened". Stores from builds that pre-filled rows keep theirs.)
     if (!env) {
       ensureLoaded();
       const seeded = {
-        schema: SCHEMA, seeded: true, consoles: seedApps(hostAddr, stamp()), clientAddresses: addrEntries(),
+        schema: SCHEMA, seeded: true, consoles: [], clientAddresses: addrEntries(),
         // ⚠ AND THE ROUTES (2026-10-02): this write used to leave them out, so a
         // route reported before the first list was gone after a restart.
         reportedAddresses: reportedEntries(),

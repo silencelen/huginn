@@ -36,6 +36,8 @@ version number collided. Entries below are reconstructed from the shipping commi
   `HUGINN_APPD_EXTRA_TOOLS` to add them.
 - The Apps fix lines write neutral firewall rules by default instead of one deployment's
   Proxmox file.
+- A new server's Apps list starts empty. Earlier builds pre-filled it with four pages from one
+  development host, which could never answer anywhere else.
 
 ### Upgrading
 - To keep extra tools, a persona at a custom path, or Proxmox-style fix lines, set the matching
