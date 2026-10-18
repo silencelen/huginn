@@ -1,7 +1,7 @@
  (!> huginn  >  chats                                               host huginn · core 2.3.0 · live
                                                                                                    
-  > o Kalshi sizing                  ask  Half Kelly keeps the drawdown under 50%.         9m      
-    * Restart the arr stack          act  Restarting sonarr…                               now     
+  > o Budget review                  ask  Fixed costs stay under a third of the total.     9m      
+    * Restart the web stack          act  Restarting the web server…                       now     
     o Drive every volume             ask  All disks healthy.                               2h      
                                                                                                    
                                                                                                    

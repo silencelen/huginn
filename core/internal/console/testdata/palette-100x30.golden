@@ -14,14 +14,14 @@
     core                                 screen · 9                                                
     help                                 screen · ?                                                
     attach main                          attach · waiting · Inbox triage                           
-    attach widgets                       attach · needs you · Ship 0.8.0 to the Fold?              
+    attach widgets                       attach · needs you · Ship 0.8.0 to the phone?             
     attach build                         attach · working · Release the desktop                    
     attach scratch                       attach · shell                                            
-    attach osid-lead                     attach · waiting · lead                                   
-    chat Kalshi sizing                   open · ask                                                
-    chat Restart the arr stack           open · act                                                
+    attach docs-lead                     attach · waiting · lead                                   
+    chat Budget review                   open · ask                                                
+    chat Restart the web stack           open · act                                                
     chat Drive every volume              open · ask                                                
-    project widgetshub                   dashboard · active                                        
+    project website                      dashboard · active                                        
     round Morning briefing               rounds · Daily at 7:00 AM                                 
                                                                                                    
                                                                                                    

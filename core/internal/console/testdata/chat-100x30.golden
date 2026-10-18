@@ -1,13 +1,13 @@
  (!> huginn  >  chat                                                host huginn · core 2.3.0 · live
                                                                                                    
-  Kalshi sizing  ask                                                                               
+  Budget review  ask                                                                               
                                                                                                    
   you                                                                                              
-  How big should each bet be?                                                                      
+  How much should go to fixed costs?                                                               
   > Read  /srv/btc15m/config.yaml                                                                  
                                                                                                    
   huginn                                                                                           
-  Half Kelly keeps the drawdown under 50%, which matches your halt rule.                           
+  A third keeps the budget flexible, which matches your rule.                                      
   + done · 2 turns · $0.04                                                                         
                                                                                                    
                                                                                                    
