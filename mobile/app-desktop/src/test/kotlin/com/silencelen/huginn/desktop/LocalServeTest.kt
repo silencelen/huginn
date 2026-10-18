@@ -283,4 +283,80 @@ class LocalServeTest {
         assertTrue(LocalServe.cmdArgSafe("https://huginn.example:8787"))
         assertTrue(LocalServe.cmdArgSafe("https://huginn.example&hostname"))
     }
+
+    // ------------------------------------------------ token seeding (F17)
+
+    @Test
+    fun `the elevated cmd hands the manager the staged token path, after the lock not before`() {
+        // The token is root-equivalent on the host. The unelevated app must not
+        // write it into ProgramData (inherited Users-read until lockTree); it
+        // stages it owner-only and the elevated manager reads it from
+        // HUGINN_SEED_TOKEN_FILE and writes it AFTER lockTree.
+        val text = LocalServe.elevatedCmdText(
+            "C:\\node.exe",
+            File("C:\\huginn-local"),
+            listOf("on", "--yes", "--url", "https://huginn.example:8787"),
+            File("C:\\activate.log"),
+            File("C:\\Users\\o\\AppData\\Local\\Temp\\.huginn-seed-42.tmp"),
+        )
+        assertTrue(
+            "set \"HUGINN_SEED_TOKEN_FILE=C:\\Users\\o\\AppData\\Local\\Temp\\.huginn-seed-42.tmp\"\r\n" in text,
+            text,
+        )
+        // The set line precedes the node line, so the env is in force for it.
+        assertTrue(text.indexOf("HUGINN_SEED_TOKEN_FILE") < text.indexOf("node.exe"), text)
+        // With no staged token (e.g. the via-core path), no set line at all.
+        val none = LocalServe.elevatedCmdText(
+            "C:\\node.exe", File("C:\\huginn-local"),
+            listOf("off"), File("C:\\activate.log"),
+        )
+        assertFalse(none.contains("HUGINN_SEED_TOKEN_FILE"), none)
+    }
+
+    @Test
+    fun `a staging path carrying cmd syntax is refused, not interpolated`() {
+        assertFailsWith<IllegalArgumentException> {
+            LocalServe.elevatedCmdText(
+                "C:\\node.exe", File("C:\\huginn-local"),
+                listOf("on", "--yes"), File("C:\\activate.log"),
+                File("C:\\Temp\\%PATH%.tmp"),
+            )
+        }
+    }
+
+    @Test
+    fun `the POSIX token write is 0600 at creation and replaces atomically`() {
+        if (System.getProperty("os.name")?.startsWith("Windows") == true) return
+        val dir = java.nio.file.Files.createTempDirectory("ls-seed").toFile()
+        val tok = File(File(dir, "device"), "appd-token")
+        val old = try {
+            // A wide umask is exactly when writeText-then-chmod is briefly
+            // group/other-readable; the fix creates with the mode.
+            LocalServe.writeOwnerOnlyPosix(tok, "first-token")
+            java.nio.file.Files.getPosixFilePermissions(tok.toPath())
+        } catch (e: UnsupportedOperationException) {
+            return // not a POSIX filesystem
+        }
+        assertEquals(
+            setOf(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+            ),
+            old,
+        )
+        assertEquals("first-token", tok.readText())
+        // A rotated token replaces it and stays 0600.
+        LocalServe.writeOwnerOnlyPosix(tok, "second-token")
+        assertEquals("second-token", tok.readText())
+        assertEquals(
+            setOf(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+            ),
+            java.nio.file.Files.getPosixFilePermissions(tok.toPath()),
+        )
+        // No temp residue in device\.
+        val residue = File(dir, "device").listFiles()?.filter { it.name.contains(".tmp") } ?: emptyList()
+        assertTrue(residue.isEmpty(), "left a temp behind: $residue")
+    }
 }

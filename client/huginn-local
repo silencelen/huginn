@@ -926,33 +926,198 @@ function refuseUnelevated(doing) {
   process.exit(1);
 }
 
+// The well-known Windows SIDs the tree is locked to.
+const WIN_SID = { SYSTEM: 'S-1-5-18', ADMINS: 'S-1-5-32-544' };
+
+/** This account's SID, read with whoami; '' when it cannot be learned. */
+function currentUserSid() {
+  try {
+    const r = spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' });
+    return ((r.stdout || '').match(/"(S-1-[0-9-]+)"/) || [])[1] || '';
+  } catch { return ''; }
+}
+
 /**
- * Windows: the tier's directory under ProgramData, locked to SYSTEM, the
- * Administrators and the person who set it up (read; and change on device\,
- * where huginn core reseeds the token). ProgramData's defaults gave every
- * account on the PC read on the appd token beside the runner, and the right to
- * ADD files to every folder here - beside a model server that runs as
- * LocalSystem (security review, 2026-10-17). Run elevated, before anything is
- * downloaded or unpacked; the api-key keeps its own SYSTEM-only ACL.
+ * May a pre-existing tree with this owner be adopted? Only SYSTEM, the
+ * Administrators, or the installing account — a standard user may create a
+ * subfolder of ProgramData, so a tree owned by anyone else is an attacker's
+ * plant, not ours. Pure.
+ */
+function ownerTrusted(ownerSid, installerSid) {
+  if (!ownerSid) return false;
+  return ownerSid === WIN_SID.SYSTEM || ownerSid === WIN_SID.ADMINS
+    || (!!installerSid && ownerSid === installerSid);
+}
+
+/**
+ * The exact icacls argument-lists lockTree runs, in order — pure, so the whole
+ * sequence can be asserted off a Windows box. The ORDER is the security:
+ *
+ *   1. the Administrators OWN the whole tree — this strips the implicit
+ *      WRITE_DAC a pre-creator holds through ownership, so nothing they do
+ *      after this can re-open the DACL;
+ *   2. /reset discards EVERY explicit ACE on every object, including the
+ *      inheritable full-control entry an attacker planted as the creator
+ *      (/inheritance:r alone would leave it — it removes only INHERITED ACEs);
+ *   3. /inheritance:r + /grant:r sets exactly the three trustees and removes
+ *      the inherited Users:read, across the whole tree (/t) so an adopted
+ *      dir's existing children are relocked too;
+ *   4. device\ is widened to change (M) for the installer, where huginn core
+ *      reseeds the token as the user.
+ */
+function lockTreeSteps(dir, sid) {
+  const dev = path.join(dir, 'device');
+  const grant = [dir, '/inheritance:r',
+    '/grant:r', `*${WIN_SID.SYSTEM}:(OI)(CI)F`,
+    '/grant:r', `*${WIN_SID.ADMINS}:(OI)(CI)F`];
+  if (sid) grant.push('/grant:r', `*${sid}:(OI)(CI)RX`);
+  grant.push('/t', '/c', '/q');
+  const steps = [
+    ['icacls', [dir, '/setowner', `*${WIN_SID.ADMINS}`, '/t', '/c', '/q']],
+    ['icacls', [dir, '/reset', '/t', '/c', '/q']],
+    ['icacls', grant],
+  ];
+  if (sid) steps.push(['icacls', [dev, '/grant:r', `*${sid}:(OI)(CI)M`, '/t', '/c', '/q']]);
+  return steps;
+}
+
+/** Which SIDs in a locked DACL are not ones we granted? Pure (verify step). */
+function aclSidsUnexpected(sids, installerSid) {
+  const ok = new Set([WIN_SID.SYSTEM, WIN_SID.ADMINS]);
+  if (installerSid) ok.add(installerSid);
+  return (sids || []).filter((s) => !ok.has(s));
+}
+
+/** Parse the stable OWNER=/PROTECTED=/ACE= lines winAclInfo asks PowerShell for. Pure. */
+function parseAclLines(text) {
+  const info = { ownerSid: '', protected: false, sids: [] };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('OWNER=')) info.ownerSid = line.slice(6).trim();
+    else if (line.startsWith('PROTECTED=')) info.protected = /^(true|1|yes)$/i.test(line.slice(10).trim());
+    else if (line.startsWith('ACE=')) { const s = line.slice(4).trim(); if (s) info.sids.push(s); }
+  }
+  return info;
+}
+
+/**
+ * Does the locked tree actually look locked? Returns null when it does, or the
+ * one sentence that is wrong — the owner was never reset, inheritance is still
+ * on, or an account we did not grant still has an ACE. Pure, so the decision is
+ * tested without a Windows box. A null `info` means the ACL could not be read,
+ * which is a soft failure (verify warns; see lockTree).
+ */
+function verifyLockDecision(info, installerSid) {
+  if (!info) return 'could not read the locked ACL';
+  if (!info.protected) return 'inheritance is still enabled on the tree';
+  const okOwner = info.ownerSid === WIN_SID.SYSTEM || info.ownerSid === WIN_SID.ADMINS
+    || (!!installerSid && info.ownerSid === installerSid);
+  if (!okOwner) return `the tree is still owned by ${info.ownerSid || '(unknown)'}`;
+  const bad = aclSidsUnexpected(info.sids, installerSid);
+  if (bad.length) return `an account we did not grant still has access: ${bad.join(', ')}`;
+  return null;
+}
+
+/** Read the dir's owner SID, protected flag and DACL SIDs via PowerShell Get-Acl. */
+function winAclInfo(dir) {
+  const q = String(dir).replace(/'/g, "''");
+  const script =
+    `$ErrorActionPreference='Stop';$a=Get-Acl -LiteralPath '${q}';` +
+    `'OWNER=' + $a.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;` +
+    `'PROTECTED=' + $a.AreAccessRulesProtected;` +
+    `foreach($r in $a.Access){try{'ACE=' + $r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value}catch{'ACE=' + $r.IdentityReference.Value}}`;
+  const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' });
+  if (!r || r.status !== 0) return null;
+  return parseAclLines(r.stdout);
+}
+
+/**
+ * Windows: the tier's directory under ProgramData, OWNED by the Administrators
+ * and locked to SYSTEM, the Administrators and the person who set it up (read;
+ * and change on device\, where huginn core reseeds the token). ProgramData's
+ * defaults gave every account on the PC read on the appd token beside the
+ * runner, and the right to ADD files to every folder here - beside a model
+ * server that runs as LocalSystem (security review, 2026-10-17). A standard
+ * user may also pre-create this folder and keep an explicit ACE and ownership
+ * on the files a LocalSystem service then runs (2026-10-18, F14) - so this
+ * takes ownership and wipes every explicit ACE, not only the inherited ones,
+ * then verifies the result. Run elevated, before anything is downloaded or
+ * unpacked; the api-key keeps its own SYSTEM-only ACL.
  */
 function lockTree() {
   if (process.platform !== 'win32') return;
   const dir = localDir();
   fs.mkdirSync(path.join(dir, 'device'), { recursive: true });
-  let sid = '';
-  try {
-    const r = spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' });
-    sid = ((r.stdout || '').match(/"(S-1-[0-9-]+)"/) || [])[1] || '';
-  } catch { /* none */ }
-  const run = (args) => spawnSync('icacls', args, { encoding: 'utf8' });
-  const root = [dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '/grant:r', '*S-1-5-32-544:(OI)(CI)F'];
-  if (sid) root.push('/grant:r', `*${sid}:(OI)(CI)RX`);
-  const a = run(root);
-  if (a.status !== 0) throw new Error(`could not lock ${dir}: ${(a.stderr || a.stdout || '').trim()}`);
-  if (sid) {
-    const b = run([path.join(dir, 'device'), '/grant', `*${sid}:(OI)(CI)M`]);
-    if (b.status !== 0) throw new Error(`could not open ${path.join(dir, 'device')} to you: ${(b.stderr || b.stdout || '').trim()}`);
+  const sid = currentUserSid();
+  for (const [cmd, args] of lockTreeSteps(dir, sid)) {
+    const r = spawnSync(cmd, args, { encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`could not lock ${dir} (${cmd} ${args[1] || ''}): ${(r.stderr || r.stdout || '').trim()}`);
   }
+  // Verify owner + DACL. A definite violation is fatal; an ACL we simply could
+  // not read (no PowerShell, a locale that breaks Translate) is a warning, not
+  // a false refusal of an otherwise-locked install.
+  const info = winAclInfo(dir);
+  const bad = verifyLockDecision(info, sid);
+  if (info && bad) throw new Error(`locked ${dir} but it did not verify: ${bad}`);
+  if (!info) console.error(`  warn    locked ${dir} but could not read back its ACL to verify — check it by hand (icacls "${dir}")`);
+}
+
+/**
+ * Write the appd token into device\ AFTER the tree is locked, when the wrapper
+ * or the desktop staged it in an owner-only file in the user's profile and
+ * handed its path over (HUGINN_SEED_TOKEN_FILE). The token is root-equivalent
+ * on the host, so it is never written into ProgramData before lockTree has run
+ * (2026-10-18, F2/F17): the staging file is read here, written through a random
+ * O_EXCL temp that inherits device\'s locked DACL (0600 on POSIX), renamed into
+ * place, and the staging copy is shredded. Returns true when it seeded.
+ *
+ * Unset env is the old path (the bash client and pre-fix wrappers write the
+ * token themselves); lockTree has already relocked whatever is there.
+ */
+function seedTokenFromStage() {
+  const src = process.env.HUGINN_SEED_TOKEN_FILE;
+  if (!src) return false;
+  let tok;
+  try { tok = fs.readFileSync(src, 'utf8'); }
+  catch (e) { throw new Error(`could not read the staged appd token at ${src}: ${e.message}`); }
+  tok = tok.trim();
+  if (!tok) throw new Error(`the staged appd token at ${src} is empty`);
+  writeTokenSecure(P('device', 'appd-token'), tok);
+  try { fs.rmSync(src, { force: true }); } catch { /* best effort — it was owner-only */ }
+  return true;
+}
+
+/** icacls the token file to SYSTEM read, the Administrators, and the installer. */
+function restrictTokenFileWin(file) {
+  const sid = currentUserSid();
+  const grant = [file, '/inheritance:r', '/grant:r', `*${WIN_SID.SYSTEM}:R`, '/grant:r', `*${WIN_SID.ADMINS}:F`];
+  if (sid) grant.push('/grant:r', `*${sid}:R`);
+  grant.push('/c', '/q');
+  spawnSync('icacls', grant, { encoding: 'utf8' });
+}
+
+/**
+ * Write a secret to dest through a RANDOM temp created O_EXCL (never reuse a
+ * planted file) in the containing dir, then rename over. On Windows the dir is
+ * already locked, so the temp inherits an owner-only DACL; it is pinned
+ * explicitly as well. On POSIX the 0600 is set at creation, not chmod'd after.
+ */
+function writeTokenSecure(dest, tok) {
+  const dir = path.dirname(dest);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `.appd-token.${crypto.randomBytes(12).toString('hex')}.tmp`);
+  const fd = fs.openSync(tmp, 'wx', 0o600); // wx = O_CREAT|O_EXCL
+  try {
+    fs.writeSync(fd, tok);
+    fs.closeSync(fd);
+  } catch (e) {
+    try { fs.closeSync(fd); } catch { /* already closed */ }
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best effort */ }
+    throw e;
+  }
+  if (process.platform === 'win32') restrictTokenFileWin(tmp);
+  fs.renameSync(tmp, dest);
+  if (process.platform === 'win32') restrictTokenFileWin(dest);
 }
 
 function installServiceLinux(which, { system }) {
@@ -1178,6 +1343,7 @@ async function cmdOn(flags) {
   refuseUnelevated('turning on');
   if (resolveSystemInstall(flags) === 'done') return;
   lockTree();
+  seedTokenFromStage(); // only after the tree is locked; no-op unless one was staged
   const det = detectClass();
   if (det.refuse && !flags.adapter) { console.error(`refused: ${det.refuse}`); process.exit(1); }
   if (flags.class) {
@@ -1641,6 +1807,7 @@ async function cmdUpdate(flags) {
   if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
   refuseUnelevated('updating');
   lockTree(); // an install from before the lock gets it here
+  seedTokenFromStage(); // and a token staged for this run lands only now
   // A system unit cannot be restarted from an unprivileged shell, and this
   // verb ends in a restart — so the whole update takes the same ONE prompt
   // the install took rather than failing at its last step with the new
@@ -1999,5 +2166,9 @@ if (require.main === module) {
     setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
     persistenceVerdict, probeInstall, elevator, elevators, elevateOnce, updateElevationRefusal,
     elevationArgv, unitFile, persistSteps, servicePlanLine, daemonUrl, lockTree,
+    // The ProgramData lock + token-seed logic, pure parts exported for tests
+    // (owner/ACE decisions, the icacls step sequence, ACL-verify parsing).
+    WIN_SID, ownerTrusted, lockTreeSteps, aclSidsUnexpected, parseAclLines,
+    verifyLockDecision, seedTokenFromStage, writeTokenSecure,
   };
 }
