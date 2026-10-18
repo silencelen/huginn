@@ -59,10 +59,10 @@ version number collided. Entries below are reconstructed from the shipping commi
 ### Added
 - **`/v1/status` lists the host's own addresses** (`addresses`: not loopback, not link-local,
   IPv4 first). A client that knows huginn by one address can find another that its network lets
-  ssh through. On PRESTIGE, `192.168.2.117` carries only huginn's port from VLAN 7, and
-  `192.168.7.117` carries ssh. `huginn setup ssh` (CLI 2.5.8) uses it. Behind the token, like the
+  ssh through. On a Windows laptop, `192.168.1.20` carries only huginn's port from the laptop's VLAN, and
+  `192.168.10.20` carries ssh. `huginn setup ssh` (CLI 2.5.8) uses it. Behind the token, like the
   rest of status: huginn is single-user, and whoever sets up a client has the same authority over
-  the host (owner).
+  the host.
 
 ## 3.12.0 — 2026-10-13
 
@@ -117,14 +117,14 @@ their own, or a 3.11 daemon refuses them. To deploy the daemon before every clie
 
 ### Fixed
 - **A device that restarts mid-run is free again on its next poll, not two hours later.** A run that
-  rebooted its own machine (an act chat on stigo that said "reboot the machine", and did) could never
+  rebooted its own machine (an act chat on a Linux laptop that said "reboot the machine", and did) could never
   report back, and nothing else ended it: every heartbeat from the restarted runner refreshed the
   orphan's liveness, so the silence timer never fired, and Stop was carried on that heartbeat to a
-  runner that had never heard of the run. The device answered *"stigo is already running something"*
+  runner that had never heard of the run. The device answered *"laptop is already running something"*
   to every new job until the 2-hour hard cap. Both runners take one job at a time and ask for work
   only while idle, so the daemon now treats a poll from a device that still holds a handed-over run
   as the device saying it no longer has it: the run settles with a readable reason
-  (*"stigo: it asked for new work while this run was still with it — the runner restarted (or the
+  (*"laptop: it asked for new work while this run was still with it — the runner restarted (or the
   machine rebooted) mid-run"*), and a pending Stop lands at the same moment. A heartbeat alone still
   settles nothing, and a run that is queued but not yet handed over is left alone.
 
@@ -174,11 +174,11 @@ their own, or a 3.11 daemon refuses them. To deploy the daemon before every clie
   file): a PermissionRequest hook ALSO fires in headless `claude -p`, which then waits on it, so cron
   runs and nested children return at once. Measured on Claude Code 2.1.296: answering at the keyboard
   does not stop a waiting hook, so a request file proves only that a hook is alive; matching is exact and
-  must be unique. (The pre-release `/claude-security scan changes` found that a first cut matching a
+  must be unique. (A pre-release security review found that a first cut matching a
   40-character prefix or a file basename, with newest-wins, could hand a Yes to an unseen twin request
   from a parallel subagent — fixed before release.)
-- **API lane for suggested replies** (`lib/apilane.js`). Max plans now include a monthly Claude
-  Platform API credit that pays for the Messages API but not for Claude Code, so the caged
+- **API lane for suggested replies** (`lib/apilane.js`). Claude Platform API
+  credit pays for the Messages API but not for Claude Code, so the caged
   `claude -p --tools ''` call behind suggestions was spending subscription headroom on work that needs
   no harness. With `HUGINN_API_KEY_FILE` set (a file holding the key, or with
   `HUGINN_API_KEY_VAR=NAME` an env-file read in place), suggestions go to `claude-haiku-5-5` on the
@@ -209,12 +209,12 @@ their own, or a 3.11 daemon refuses them. To deploy the daemon before every clie
 ## 3.10.0 — 2026-10-03
 
 ### Added
-- **Watched devices.** `PATCH /v1/devices/:id {"watch": true}` marks a machine the owner expects to be
+- **Watched devices.** `PATCH /v1/devices/:id {"watch": true}` marks a machine you expect to be
   always on. When a watched device has not checked in for ten minutes the daemon sends one Telegram
   statement through the existing outbound-only path, and one more when it checks in again; a machine
   that flaps is not reported again for six hours, and what has been said survives a restart
   (`device-watch.json`). Watched rows are never pruned. `huginn devices watch <name> on|off` sets it
-  from either CLI. Until now nothing anywhere said a device had gone: RAGNAR's local-AI row sat
+  from either CLI. Until now nothing anywhere said a device had gone: a Windows desktop's local-AI row sat
   offline for a week pointed at a retired address while its Windows service read "Running".
 
 ### Changed
@@ -271,7 +271,7 @@ Fixes to the Apps address model from the 2026-10-02 breaker round.
   reports stays.
 - **A route the daemon will not check is refused by name.** `PUT /v1/apps/routes` answers 400
   with `refused: [{addr, why}]` for a host outside the app-URL host rule (for example
-  `huginn.jnet.ad`) and changes nothing. Before, the host was dropped from a 200 without a
+  `huginn.example.net`) and changes nothing. Before, the host was dropped from a 200 without a
   word. Dotted names the rule allows (`*.ts.net`, `*.localhost`) are accepted.
 - **One device cannot push out another's routes.** The cap is now 8 routes per device (the
   phone's own pin limit; a report over it is a 400) and 16 devices, rather than one pool of
@@ -310,15 +310,15 @@ Fixes to the Apps address model from the 2026-10-02 breaker round.
 
 - **A route report with one bad host still applies the good ones.** An all-or-nothing refusal was
   tried first in this round and caught in review: 3.9.0 phones and desktops send every pinned host
-  unfiltered and never read the reply, so one name like `huginn.jnet.ad` would have cost such a
+  unfiltered and never read the reply, so one name like `huginn.example.net` would have cost such a
   device every route it has. The valid hosts are applied and the refused ones are named in the 200.
 - **The four built-in apps are judged as this host's apps wherever their address points.** The live
-  rows still carry the retired Tailscale address `100.97.198.90`; the new "app on another host"
+  rows still carry the retired Tailscale address `100.64.0.20`; the new "app on another host"
   rule would otherwise have checked them as some other machine's pages once that address aged out.
 
 ## 3.9.0 — 2026-10-01
 
-The owner's second report of a first message that "sits in the Screen tab's box unsent"
+A second report of a first message that "sits in the Screen tab's box unsent"
 (the first was 3.0.7 / 3.1.x). Measured against claude 2.1.280 on the pane sizes the live
 sessions actually have, with the daemon's own paste path and no Enter: it is a function of
 message LENGTH, which is why it did not always happen.
@@ -329,8 +329,7 @@ message LENGTH, which is why it did not always happen.
   past the box's ~7 rows scrolls the box, so the caret row shows the middle of the text and the
   first 32 characters the probe looked for are off screen. Both read as "pasted text never
   appeared"; the recovery then found a non-empty box, chose 'leave' and pressed no Enter.
-  Four of the five such journal lines in five days (`jnetad`, `workxhuginn`, `tailscale`,
-  `btc15minxledger`) are these. The suffix is optional now, and the probe is both ends of the
+  Four of the five such journal lines in five days are these. The suffix is optional now, and the probe is both ends of the
   message — the box may be showing either. `lib/typing.js` `pasteProbes` / `probeSeen`;
   the four readers (`pasteLanded`, `pasteIndistinguishable`, `composerCleared`,
   `composerHoldsDraft`) share it. Fixtures are the real captures.
@@ -341,7 +340,7 @@ message LENGTH, which is why it did not always happen.
   launch that died to the shell is refused as one when it expires. `HUGINN_APPD_STARTUP_GRACE_MS`
   still overrides.
 - **Apps: required addresses are loopback + reported routes + the row's own list; arrivals are
-  advisory** (owner decision 2026-10-01). `PUT /v1/apps/routes {addrs}` is how a client reports
+  advisory** (decided 2026-10-01). `PUT /v1/apps/routes {addrs}` is how a client reports
   the hosts of its pinned routes (kept 30 days, with who reported each, `reportedAddresses` in the
   envelope); `GET /v1/apps` adds `requiredAddresses` and `reportedRoutes`; a row carries
   `addresses` (its own extras, ≤8, `addresses` on POST/PATCH, 400 on nonsense). The probe plans
@@ -401,19 +400,19 @@ things it showed.
   `{id, name, slug, role, lead}` for a lead or a member, `null` for a session outside every
   project. The join is the daemon's (the store, by tmux name; an archived project claims
   nothing), so a client can keep project sessions off its Sessions page without reading every
-  project's detail first — which is what app 3.8 and desktop 1.8 do. The widgetshub lead sat in
+  project's detail first — which is what app 3.8 and desktop 1.8 do. A project's lead sat in
   the desktop's Sessions list between two hand-made sessions and read as a third, unrelated one
   that had failed to do something.
-- **The lead is told to say where the owner approves.** The manifest contract now asks for one or
+- **The lead is told to say where the user approves.** The manifest contract now asks for one or
   two plain sentences before the block — the proposal is ready, and nothing starts until it is
   approved from Projects (Spawn) or `huginn projects spawn <slug>` — because the clients draw the
   block itself as a card and nobody reads it as prose. The first lead ended its turn with the
-  JSON and the owner was left to guess what came next.
+  JSON and the user was left to guess what came next.
 - **A project with no directory gets its own.** `POST /v1/projects` without `cwd` makes
   `<projects dir>/<slug>` (default `~/projects`; `HUGINN_APPD_PROJECTS_DIR`) and starts the lead
   there, and `GET /v1/projects` reports the directory as `dir` so a client can say the path before
   the project exists. The first project ever run defaulted to the daemon's working directory —
-  the owner's ops repo — and its lead made a nested repo there. The trust check now reads up the
+  a project repo — and its lead made a nested repo there. The trust check now reads up the
   tree the way Claude Code does (a subdirectory of a trusted directory opens with no dialog,
   checked on 2.1.258), so the projects directory is trusted once and every project under it is
   covered; the daemon still never writes `~/.claude.json`.
@@ -448,7 +447,7 @@ that was telling a reader something untrue.
   written by a later daemon that learned a sixth kind renders with the wrong label rather than not
   at all.
 - **The apps 422 fix block stops sending readers to the wrong machine.** Two defects in one block.
-  It printed `# on heimdall — /etc/pve/firewall/117.fw` and then had nothing to put under it
+  It printed a header naming the hypervisor and the guest's Proxmox firewall file, and then had nothing to put under it
   whenever every failing address was loopback — which is every fresh install and every daemon
   reached through an ssh tunnel; the header now appears only when a line belongs in that file. And
   an address that TIMED OUT was handed `bind 0.0.0.0`: a timeout means the connection was not
@@ -539,7 +538,7 @@ that was telling a reader something untrue.
   `modal`.
 - **A project message relayed by huginn arrives as a system note.** `POST /v1/projects/:id/message`
   pastes a frame rather than using Claude Code's native peer channel, so the member's transcript
-  drew the OWNER'S relay as the member's own bubble, safety paragraph and all. The frame now names
+  drew the USER'S relay as the member's own bubble, safety paragraph and all. The frame now names
   the project and the reader recognises it: `kind:"system"` with `project:{id, name, from}`. Frames
   written by 3.5.x still render as notes, with a null id.
 - **A brand-new session stops saying its transcript "is gone".** The state file carries a transcript
@@ -607,13 +606,13 @@ that was telling a reader something untrue.
   daemon itself relayed. A box holding text is the person's for a minute after their last key; a box
   reading empty for five seconds; nobody typing means no hold.
 - **A person's messages never wait for a turn again.** The one-per-boundary rule from 3.4.0 made
-  follow-up messages wait out whole turns — fifty-five deep on the owner's session behind a turn
+  follow-up messages wait out whole turns — fifty-five deep on one session behind a turn
   that ran for minutes. Restored to the 3.0.3 contract: a person's message is delivered at once and
   Claude Code queues it, as it always did.
 - **A message pressed again just after it was delivered is still the same press.** The duplicate
   check now also covers a copy delivered within the last thirty seconds, for messages long enough
   to be one specific message (twenty characters) — `yes` twice remains two answers.
-- ⚠ Queued sends live in memory: the fifty-five held on the owner's session are dropped by this
+- ⚠ Queued sends live in memory: the fifty-five held on that session are dropped by this
   restart rather than delivered in a burst.
 
 ## 3.5.0 — 2026-09-18
@@ -639,7 +638,7 @@ that was telling a reader something untrue.
   window always fires first.) The same message pressed
   again while the first copy is still queued no longer queues twice — `/keys` answers
   `duplicate: true` with the first copy's place. Fixes the 2026-09-19 incident where one message
-  arrived three times and one arrival was submitted welded to the owner's half-typed draft.
+  arrived three times and one arrival was submitted welded to the user's half-typed draft.
 - **A device may keep acting while its screen is locked** (`actWhileLocked`, on registration and on
   the beat): `effectiveScope` and the can-run check honour it, and the "is locked" refusal is only
   said when unlocking would help. Absent stays absent.
@@ -657,7 +656,7 @@ that was telling a reader something untrue.
   `huginn`, which resolves to a LAN interface none of the four units listen on, so every row read
   "not answering from the host" forever. Seeds are written with the daemon's own address (the bind,
   or the tailnet address when the bind is a wildcard); an existing store is re-pointed on the next
-  start for rows still carrying the old literal, never for a row the owner edited. The rebind card
+  start for rows still carrying the old literal, never for a row the user edited. The rebind card
   lists all four units — it used to exempt one as "already binds 0.0.0.0" while opening its port in
   the firewall step anyway — and says where the probe runs, so `up` cannot be read as "your phone
   can open this".
@@ -691,9 +690,9 @@ Wave 3 — Projects and Consoles — and the daemon's share of a 99-finding edge
   liveness probe as seen FROM THE HOST — bounded at 2 s, so a page that accepts connections and
   never answers reads as down instead of hanging the request; `up` is null until the first probe.
   `POST`/`PATCH`/`DELETE` edit the list (per-row `version`, 409 with the current row),
-  `POST …/:id/probe` checks one on demand. The rebind and the four heimdall firewall rules that
+  `POST …/:id/probe` checks one on demand. The rebind and the four hypervisor firewall rules that
   would make these openable from a phone ride the list as an approval card the app shows and
-  nothing executes; it says `applied: false` until the owner runs them and touches
+  nothing executes; it says `applied: false` until the user runs them and touches
   `consoles-rebind-applied`.
 - **A send never goes where it should not.** Composer text that starts "1." no longer reads as a
   dialog (it held every send forever); a tall question dialog is a modal at any pane height; a
@@ -795,8 +794,8 @@ Wave 3 — Projects and Consoles — and the daemon's share of a 99-finding edge
   891 transcripts: 65 user bubbles reclassified, nothing else moved.
 - **A paste is confirmed on screen before Enter is pressed.** Measured against the real Claude Code:
   bytes that arrive 0.8–2 s before the composer paints sit in the box unsent, and 3.0.7's 20-second
-  grace could expire and deliberately paste into a pane it had just found empty (it did, on the
-  owner's own session at 23:54:49). Every send now waits — 50 ms polls, 3 s bound — until the
+  grace could expire and deliberately paste into a pane it had just found empty (it did, on a
+  live session at 23:54:49). Every send now waits — 50 ms polls, 3 s bound — until the
   composer visibly holds the text or a `[Pasted text]` marker, then presses Enter, then confirms
   the composer let go within a second; otherwise it writes a grep-able journal line with the pane's
   bottom rows. The composer is the LAST caret on screen, never the bottom region: a submitted
@@ -1091,7 +1090,7 @@ The Electron desktop client is deleted, and its update channel with it.
   was still intact after every Compose release, and a test that neither channel
   could reach the other's files — all of it protected one thing: a running
   program being handed an "update" that replaced it with a different
-  application. That program no longer exists in the repo, by owner directive on
+  application. That program no longer exists in the repo, by maintainer decision on
   2026-08-27 — strictly Compose. A guard with nothing behind it stops being a
   guard and becomes a rule that fails a release for the wrong reason.
 - Installed Electron copies are not migrated, and now never will be: the
@@ -1164,7 +1163,7 @@ rows that leave when their machine does.
 
 ## 2.78.0 — 2026-08-25
 
-- Refusals and host badges name the MACHINE a person knows ("DATATREEX"),
+- Refusals and host badges name the MACHINE a person knows ("DESKTOP"),
   never the "-llm" serving credential the UI no longer shows anywhere:
   hostNameFor, canServe, canRun and the wrong-model refusal all resolve
   through the machine key when a claude sibling names the box.
@@ -1188,7 +1187,7 @@ rows that leave when their machine does.
   enrolments into one object with capability facets. The rows themselves stay
   separate where authority is decided: the serving credential can never gain
   claude reach, and nothing about routing changed.
-- Catalog rows are titled by the machine's own name ("Qwen3 8B - DATATREEX"),
+- Catalog rows are titled by the machine's own name ("Qwen3 8B - DESKTOP"),
   not the serving credential's - the `-llm` names are internal labels.
 
 ## 2.75.0 — 2026-08-25
@@ -1501,7 +1500,7 @@ parallel agents, every finding refuted by an independent skeptic before it count
 held: 18,000 DST-crossing fires across 25 zones, the 364-row scope/lock/mode grant matrix, and
 every status/notify combination came back correct. These are the bookkeeping AROUND it, and they
 all failed in the same direction — **the surfaces showed a clean week while the work had not
-happened, had happened twice, or had happened after the owner pressed stop.**
+happened, had happened twice, or had happened after the user pressed stop.**
 
 ### Fixed
 - **A scheduled fire that is refused is now a recorded run.** It used to be one log line. Eight
@@ -1515,7 +1514,7 @@ happened, had happened twice, or had happened after the owner pressed stop.**
   arrangement.
 - **Cancelling a remote job now takes the work back.** `cancelRun` killed a process a remote run
   does not have and left the item in the device's queue, so the machine was handed it on its next
-  poll — up to 25s away, or hours for a sleeping laptop — and ran the owner's `act` prompt for
+  poll — up to 25s away, or hours for a sleeping laptop — and ran the user's `act` prompt for
   real with full grants, while the chat said it had been cancelled. A run withdrawn before handover
   now settles immediately instead of sitting at "stopping" until the silence timer fires.
 - **A work item can no longer outlive its run.** `loseRemoteRun` deleted the run and left the queue
@@ -1535,7 +1534,7 @@ happened, had happened twice, or had happened after the owner pressed stop.**
   it used to file "did not finish" over the top of "7 of 7 backups verified".
 - **The seal survives a message typed mid-run.** `settleRun` held a snapshot from before
   `finishRoundRun` wrote it, so any queued message erased `sealed`, the verdict and `endedAt` — the
-  chat reopened and the owner's next question was filed as the Round's official report. Verbatim
+  chat reopened and the user's next question was filed as the Round's official report. Verbatim
   the failure `reconcileInterruptedRuns` comment says was already fixed.
 - **`PATCH /v1/rounds/:id` re-reads after the body arrives.** It loaded the Round before the await,
   and a phone sends the whole prompt on save, so the window was every edit. A run finishing inside
@@ -1668,7 +1667,7 @@ Seven regression tests, six of which fail against the previous build.
   prompt-cards are untouched.
   - **The daemon sends a request, never a permission.** No tool grants travel in a work item;
     the device builds its own argv from its own scope. Otherwise one leaked bearer token would
-    stop meaning "this host" and start meaning "the owner's PC". There is a test asserting the
+    stop meaning "this host" and start meaning "the user's PC". There is a test asserting the
     absence.
   - Pull, not push: a device needs no inbound port and no static address, so a laptop away
     from home behaves exactly like the desktop next door.

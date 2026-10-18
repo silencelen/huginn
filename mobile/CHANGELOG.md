@@ -80,7 +80,7 @@
   phone's whole list, so deleting a dead route clears it on the daemon. Only routes you added,
   the one in use, and ones that have actually worked are reported; the old Tailscale address an
   upgrade added to the book, which no longer exists, no longer makes every app add fail.
-- **Apps: a route the host does not check is named.** A route like `huginn.jnet.ad`, which the
+- **Apps: a route the host does not check is named.** A route like `huginn.example.net`, which the
   Apps check does not use (it checks only loopback, private LAN, tailnet and mesh addresses and
   names with no dot), is held back and said in a line at the bottom of the Apps page instead of
   vanishing silently.
@@ -166,7 +166,7 @@ the transcript got wrong about it.
 - **Project sessions are not on the Sessions page.** A lead or a member lives on its project's
   dashboard and nowhere else; the list shows the sessions outside every project and one line
   under them — *"3 sessions are in projects"* — that opens Projects. The 3.5 headings put a copy
-  of each member in the main list, where the widgetshub lead read as a second, unrelated session
+  of each member in the main list, where a project's lead read as a second, unrelated session
   that had failed to do something. Rows carry the daemon's own join (appd 3.7.0), and the names
   off the project tree cover a daemon older than that.
 - **A lead's proposal is a card in the transcript, not a paragraph of JSON.** The fence that
@@ -321,12 +321,12 @@ Apps, and the notes from the review walk.
 ## 3.5.2 — 2026-09-18
 
 - The route form's placeholder is `huginn.example.net` instead of an `example.ts.net` name: the
-  devstore's string scan reads any `.ts.net` host in the APK as a private endpoint and held 3.5.1
+  a self-hosted app store's string scan reads any `.ts.net` host in the APK as a private endpoint and held 3.5.1
   back at last-known-good. Same RFC 2606 example domain, nothing else changes.
 
 ## 3.5.1 — 2026-09-18
 
-A read-only walk of 3.5.0 on the Fold, and what it found.
+A read-only walk of 3.5.0 on a phone, and what it found.
 
 - **A table in an answer draws as a table**, scrolling sideways on its own instead of spilling raw
   pipes down the conversation.
@@ -444,7 +444,7 @@ Connectivity becomes a list you keep, and the pages stop floating.
 
 ## 3.1.1 — 2026-09-15
 
-A walk over 3.1.0 on a Fold's cover screen, and what it found.
+A walk over 3.1.0 on a foldable phone's cover screen, and what it found.
 
 - **The stream picker's chips say which agent, not what it was told.** They were labelled with the
   agent's PROMPT, and a fan-out hands every sibling the same opening paragraph — so nine finished
@@ -595,7 +595,7 @@ Attaching a page is a thing you ask for, not a thing on the screen.
 
 ## 2.85.0 — 2026-08-27
 
-The devnotes wave: everything on the owner's list — pages you keep, a place to
+A round of requested features: pages you keep, a place to
 rest in a long run, honest budgets, and clean exits.
 
 ### Added
@@ -682,12 +682,12 @@ every finding adversarially verified against the code before it was fixed.
 
 ### Changed
 - **One machine, one card.** A PC that both runs work and serves local AI
-  used to appear twice in Devices ("DATATREEX" and "datatreex-llm"). It is
+  used to appear twice in Devices ("DESKTOP" and "desktop-llm"). It is
   now one card, named the way you know the box, with each capability on its
   own line — what it will do as a device, and what it serves as local AI.
   Ask/Act belong to the work capability; Forget takes away everything the
   box holds. Chat model menus title local rows by the machine's own name
-  too ("Qwen3 8B — DATATREEX").
+  too ("Qwen3 8B — DESKTOP").
 
 ## 2.80.0 — 2026-08-25
 
@@ -849,7 +849,7 @@ every finding adversarially verified against the code before it was fixed.
 ## 2.71.0 — 2026-08-24
 
 ### Fixed
-- **The live pane kept resizing the owner's real terminal, and everything attached to it saw it.**
+- **The live pane kept resizing your real terminal, and everything attached to it saw it.**
   Reported as wrong wrapping, jumping, garbled content and live typing not working — on the phone
   and the desktop at once, which is the tell: they share the tmux window, so one client reporting
   a bad geometry breaks it for both.
@@ -1057,7 +1057,7 @@ No daemon change: appd stays at 2.59.x.
 
 Settings gains a **Software update** section: the app checks the project's public
 GitHub releases, and — on your tap — downloads a newer build, verifies its sha256,
-and hands it to the system installer. It is no longer tied to the devstore; the
+and hands it to the system installer. It is no longer tied to a self-hosted app store; the
 check never downloads on its own, and nothing installs without your confirmation
 and Android's own "install unknown apps" prompt.
 
@@ -1111,7 +1111,7 @@ was light-on-dark — a bone-white raven is not a raven.
 
 Everywhere the app shows an identity, it is the same bird now: the launcher
 icon (with a proper Android 13 themed/monochrome variant, which the old icon
-never had), the status-bar notification silhouette, and the devstore listing.
+never had), the status-bar notification silhouette, and the self-hosted app store's listing.
 The canonical mark lives at `assets/brand/raven.svg`; every platform's icon
 derives from that one path, so the phone, the desktop client and the CLI all
 say Huginn the same way.
@@ -1554,7 +1554,7 @@ Answer a session's question in tmux, or from another device, and the phone's
 host would refuse, since the question it referred to no longer exists. huginn
 now pushes a silent resolution the moment a waiting question is handled, and the
 phone takes the stale notification down. Nothing appears; something disappears.
-Telegram never carries these — "andrev answered" arriving as a message would be
+Telegram never carries these — "main answered" arriving as a message would be
 noise about something you yourself just did.
 
 Two companions to that:
@@ -1683,12 +1683,12 @@ and leaving no evidence the send worked. Tapping it opens that chat.
 
 ### Tapping a notification works while the app is already open
 The notifications launch SINGLE_TOP, so a tap on an app that is already running
-delivers to `onNewIntent` — which nothing read. Tapping "andrev needs you" did
+delivers to `onNewIntent` — which nothing read. Tapping "main needs you" did
 nothing at all whenever the app happened to be foregrounded, which is exactly
 when you are most likely to tap one. Fixed for sessions and chats alike.
 
 ### The overnight wake-up cadence was backwards
-Measured on the owner's phone, 02:00-06:00: **33 wake-ups**, in the hours with
+Measured on a test phone, 02:00-06:00: **33 wake-ups**, in the hours with
 the least to report. The alarm relaxed to hourly only while a push had arrived
 in the last two hours, and a quiet night sends no pushes — so silence was read
 as failure and the alarm tightened to ten minutes precisely when nothing was
@@ -2126,7 +2126,7 @@ the main thread. Workflow tool calls keep their named cards. Both conversation
 surfaces, sessions and chats, share the rendering.
 
 ### Unfolded, the app becomes two panes
-On a Z Fold's inner screen (or any window ≥700dp) the bottom bar becomes a rail and
+On a foldable phone's inner screen (or any window ≥700dp) the bottom bar becomes a rail and
 the list screens become list-plus-detail: chats on the left, the open chat on the
 right, same for sessions, with the selected row highlighted. Status and Settings keep
 a readable measure instead of stretching. Folded, everything is exactly as before.
@@ -2243,7 +2243,7 @@ mechanisms the app had. WorkManager's periodic check is *deferred* while the dev
 is idle — it does not run and then catch up, it waits for the screen to come on. The
 foreground service keeps its process alive but loses network access, so its
 connection dies and every retry fails silently. Nothing reported a fault; it simply
-went quiet. (The same is true of devstore's six-hourly update check, for the same
+went quiet. (The same is true of a self-hosted app store's six-hourly update check, for the same
 reason.)
 
 Three things changed, each fixing a different way it failed:
@@ -2777,9 +2777,9 @@ Same signing key as 1.0.0, so this updates in place.
 First release. Replaces driving huginn from a tmux session in Termux.
 
 ### Chats
-- Headless Claude Code conversations that run on huginn in `~/netplan`, streamed
+- Headless Claude Code conversations that run on huginn in the working directory, streamed
   token by token over SSE.
-- Two modes, chosen per chat: **Ask** has reasoning and MemPalace memory but no
+- Two modes, chosen per chat: **Ask** has reasoning and memory-server recall but no
   tools (the CLI's `huginn -p`), **Act** also reads and writes files, runs
   commands and fetches the web (`huginn -y`).
 - Transcripts and Claude session IDs live on the server, so a chat resumes with
@@ -2791,14 +2791,14 @@ First release. Replaces driving huginn from a tmux session in Termux.
 - The real tmux sessions on huginn, the same list `huginn ls` prints.
 - Each row carries the live state the Claude hooks record: working, needs you, or
   waiting.
-- Create a session (opens Claude Code in `~/netplan`, exactly like `cc`) or end one.
+- Create a session (opens Claude Code in the working directory, exactly like `cc`) or end one.
 
 ### Terminal
 - Renders the pane with colour, and a key row for what a phone keyboard cannot
   send: Esc, Shift+Tab, arrows, Ctrl-C/D/L/R, PgUp/PgDn.
 
 ### Status
-- Host health: uptime, load, disk, Claude Code version, MemPalace reachability.
+- Host health: uptime, load, disk, Claude Code version, memory-server reachability.
 
 ### Notes
 - Tailnet only. `huginn-appd` binds huginn's Tailscale address and every request
