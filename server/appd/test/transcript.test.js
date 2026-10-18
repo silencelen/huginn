@@ -24,7 +24,7 @@ test('normalizes a full turn: user, thinking, tool with its result, answer', () 
   const p = writeFixture([
     { type: 'user', message: { content: 'check the disk' }, timestamp: T, isSidechain: false },
     {
-      type: 'assistant', timestamp: T, isSidechain: false, gitBranch: 'main', cwd: '/root/netplan',
+      type: 'assistant', timestamp: T, isSidechain: false, gitBranch: 'main', cwd: '/root/projects/app',
       message: {
         model: 'claude-fable-5',
         content: [
@@ -1101,7 +1101,7 @@ test('a skill body injected by the Skill tool is never a user bubble', () => {
   const users = t.events.filter((e) => e.kind === 'user');
   // Exactly one thing in this window was said by a person.
   assert.deepEqual(users.map((e) => e.text),
-    ['checking on the meshmonitor and the pihole DNS monitor-down alert']);
+    ['checking on the DNS monitor-down alert']);
   // ...and neither skill's instructions leaked into the conversation anywhere.
   const all = t.events.map((e) => e.text || '').join('\n');
   assert.ok(!/Base directory for this skill/.test(all), 'project-skill body leaked');
@@ -1115,7 +1115,7 @@ test('a Skill invocation renders as ONE non-user event, naming the skill', () =>
   assert.deepEqual(skills.map((e) => e.detail), ['incident-triage', 'workflow-authoring']);
   // Opened, the card is the invocation: the prompt that asked for it and the
   // CLI's own confirmation. Never the raw input JSON, which is what it showed.
-  assert.match(skills[0].input, /^Kuma monitor-down spam/);
+  assert.match(skills[0].input, /^monitor-down alerts/);
   assert.match(skills[0].result, /^Launching skill: incident-triage/);
   assert.equal(skills[1].input, '', 'no args means nothing behind the tap, not "{}"');
   // Two invocations, two events, and the whole window is four events plus them.
@@ -1130,7 +1130,7 @@ test('a skill whose Skill call is above the window still leaves a chip', () => {
   const p = writeFixture([
     {
       type: 'user', timestamp: T, isMeta: true, sourceToolUseID: 'toolu_gone',
-      message: { content: [{ type: 'text', text: 'Base directory for this skill: /root/netplan/.claude/skills/incident-triage\n\n# Incident triage\n' }] },
+      message: { content: [{ type: 'text', text: 'Base directory for this skill: /root/projects/app/.claude/skills/incident-triage\n\n# Incident triage\n' }] },
     },
     {
       type: 'user', timestamp: T, isMeta: true, sourceToolUseID: 'toolu_gone2',
@@ -1197,7 +1197,7 @@ test('injectedByTool keys on the field, not on isMeta', () => {
 });
 
 test('skillNameFromBody takes the directory, or admits it does not know', () => {
-  assert.equal(skillNameFromBody('Base directory for this skill: /root/netplan/.claude/skills/bybrynn-deploy\n\n# x'), 'bybrynn-deploy');
+  assert.equal(skillNameFromBody('Base directory for this skill: /root/projects/app/.claude/skills/example-site-deploy\n\n# x'), 'example-site-deploy');
   assert.equal(skillNameFromBody('Base directory for this skill: /tmp/scratch/skills/kratos-kvm/'), 'kratos-kvm');
   assert.equal(skillNameFromBody('# Workflow authoring reference\n\nA workflow...'), '');
   for (const bad of ['', null, undefined, 42]) assert.equal(skillNameFromBody(bad), '');

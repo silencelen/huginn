@@ -1120,7 +1120,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
               // This card is the WHOLE of what a skill load shows now, so it has
               // to say which skill: `digestToolInput` found no field it knows
               // and fell back to dumping the JSON, which read as
-              // `Skill {"skill":"incident-triage","args":"Kuma monitor-down…`.
+              // `Skill {"skill":"incident-triage","args":"monitor-down alerts…`.
               // Name on the card, the prompt that invoked it behind the tap.
               if (b.input && typeof b.input.skill === 'string') ev.detail = clip(b.input.skill, 80);
               ev.input = b.input && typeof b.input.args === 'string' ? clip(b.input.args, 400) : '';

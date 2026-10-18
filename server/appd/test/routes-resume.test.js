@@ -387,7 +387,7 @@ process.stdin.on('end', () => {
   // Keyed on the TEXT, not on a run counter: the files' tests share one stub and
   // one log, and "the first run ever" is not the same as "the run that is meant
   // to hit the limit".
-  const limited = /immich backup/.test(stdin) && !argv.includes('--resume');
+  const limited = /photo backup/.test(stdin) && !argv.includes('--resume');
   // The MEASURED Fable-weekly apology, which names no clock at all. That is the
   // shape that leaves a stall with nothing to wait for.
   const noClock = /fable credits/.test(stdin) && !argv.includes('--resume');
@@ -597,7 +597,7 @@ test('a chat whose turn died on the limit is re-run with --resume and the SAME t
   const before = claudeRuns().length;
   const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
   const chatId = made.body.id;
-  const TEXT = 'check whether the immich backup finished';
+  const TEXT = 'check whether the photo backup finished';
   await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: TEXT }) });
   await until(async () => claudeRuns().length > before, 45_000, 'the first run');
 
@@ -794,7 +794,7 @@ test('a Round run that dies on the limit files ONE run, after the re-run', async
     body: JSON.stringify({
       title: 'Immich backup check',
       // The marker the stub reads: this run's first attempt dies on the limit.
-      prompt: 'verify the immich backup ran',
+      prompt: 'verify the photo backup ran',
       schedule: { kind: 'weekly', days: [0], at: '19:00', tz: LA },
     }),
   });
@@ -1040,7 +1040,7 @@ test('a stalled chat does not drain its queue into the dry window (#39)', async 
   const before = claudeRuns().length;
   const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) });
   const chatId = made.body.id;
-  const A = 'take your time with the immich backup and say when it finished';
+  const A = 'take your time with the photo backup and say when it finished';
   const B = 'and then tell me how full the disk is';
   await api(`/v1/chats/${chatId}/messages`, { method: 'POST', body: JSON.stringify({ text: A }) });
   // Queued behind the run that is about to die on the limit.
