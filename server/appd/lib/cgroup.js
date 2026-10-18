@@ -24,9 +24,9 @@
  *     be read on their own with `journalctl -u huginn-appd -t huginn-appd`. A
  *     child's genuine errors are still in the unit's journal, under its own
  *     identifier, which is where they belong — nothing is filtered away.
- *   * `ensureTmuxServerScope` already starts a NEW server in `huginn-tmux.scope`
- *     for exactly this family of reasons (a deploy's SIGTERM, ProtectSystem
- *     leaking into panes). It deliberately leaves a RUNNING server where it is,
+ *   * `ensureTmuxServer` starts a NEW server as `huginn-tmux.service` for exactly
+ *     this family of reasons (a restart's SIGTERM, the daemon's sandbox leaking
+ *     into sessions). It deliberately leaves a RUNNING server where it is,
  *     because moving one strands its children — so a server inherited before that
  *     existed stays in the unit's cgroup indefinitely, and nothing said so. That
  *     is one journal line, written once, with the remedy in it.
@@ -91,12 +91,13 @@ function sameCgroup(oursText, theirsText) {
  * The one line an operator needs when the unit's journal is full of other
  * people's programs.
  */
-function foreignJournalLogLine(unit, scope) {
+function foreignJournalLogLine(unit, tmuxUnit) {
   return `tmux: the server shares this daemon's cgroup (${unit || 'this unit'}), so everything `
     + `running in a session — Claude Code, and anything it starts — files its syslog under `
-    + `\`journalctl -u huginn-appd\`. PowerShell alone writes whole script bodies there. `
-    + `Read this daemon's own lines with \`journalctl -u huginn-appd -t huginn-appd\`; the durable `
-    + `fix is to let the tmux server restart into ${scope}.scope once no sessions are left.`;
+    + `\`journalctl -u huginn-appd\`, and sessions started from the apps share the daemon's `
+    + `read-only view of /usr, /etc and /opt. Read this daemon's own lines with `
+    + `\`journalctl -u huginn-appd -t huginn-appd\`; the durable fix is to let the tmux server `
+    + `restart as ${tmuxUnit}.service once no sessions are left.`;
 }
 
 module.exports = { cgroupPath, unitOf, sameCgroup, foreignJournalLogLine };

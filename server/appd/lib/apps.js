@@ -1128,14 +1128,27 @@ function migrateSeedUnits(list) {
 // ------------------------------------------- the fix lines (decisions 54, 55)
 
 /**
- * heimdall's firewall file for THIS container. Another machine's file.
+ * How the firewall half of a fix is written. The firewall that matters is often on
+ * another machine (a hypervisor, a router), so huginn never edits one: it says what
+ * to add and where. HUGINN_APPD_FIREWALL picks the dialect:
  *
- * ⚠ huginn has no business editing /etc/pve/firewall/117.fw and this daemon has
- * no code that could (w3-delta §4, risk 8: "nothing in Wave 3 may touch heimdall
- * or run systemctl edit"). The name travels as text because naming the file is
- * half of what makes the step followable.
+ *   generic (default)  one neutral line per rule, `allow tcp from <client> to port
+ *                      <port>`, under a header saying where it belongs
+ *   proxmox            Proxmox VE guest-firewall lines (`IN ACCEPT -source ...`),
+ *                      under a header naming HUGINN_APPD_FIREWALL_FILE on
+ *                      HUGINN_APPD_FIREWALL_HOST
+ *
+ * The values only ever become text in the payload; nothing here runs them.
  */
-const FIREWALL_FILE = '/etc/pve/firewall/117.fw';
+function firewallStyle(env = process.env) {
+  const text = (v, dflt) => String(v || dflt).replace(/[^\x20-\x7e]/g, '').trim() || dflt;
+  return {
+    kind: String(env.HUGINN_APPD_FIREWALL || '').trim().toLowerCase() === 'proxmox' ? 'proxmox' : 'generic',
+    host: text(env.HUGINN_APPD_FIREWALL_HOST, 'the Proxmox host'),
+    file: text(env.HUGINN_APPD_FIREWALL_FILE, '/etc/pve/firewall/<vmid>.fw'),
+  };
+}
+const FIREWALL = firewallStyle();
 
 /** The host an app's address names, or '' — never a throw. */
 function hostnameOf(rawUrl) {
@@ -1168,15 +1181,15 @@ function portOf(rawUrl) {
  *      all of them. `systemctl edit <unit>` when the row knows its unit, and a
  *      sentence naming the address it does answer on when it does not, because
  *      "bind 0.0.0.0" with no idea what to edit is not an instruction.
- *   2. the FIREWALL, on heimdall — one line per address that failed.
+ *   2. the FIREWALL, wherever it is — one line per address that failed, in the
+ *      dialect [firewallStyle] picks.
  *
- * ⚠⚠ THE `-source` IS THE CLIENT, NOT THE ADDRESS IT ARRIVED ON. Until 3.5.2
- * this emitted the ARRIVAL address, which is one of huginn's own (192.168.2.117,
- * 127.0.0.1) — a rule in CT 117's firewall file sourced from CT 117's own IP
- * matches no packet that was ever addressed to it, so every line the feature
- * produced was inert while reading as a fix. `remotes` is the other end of the
- * socket, learned the same way and kept per arrival: for the LAN side of this
- * host that is 192.168.2.131, the Yggdrasil gateway NATting the phones.
+ * ⚠⚠ THE SOURCE IS THE CLIENT, NOT THE ADDRESS IT ARRIVED ON. Until 3.5.2 this
+ * emitted the ARRIVAL address, which is one of huginn's own (its LAN address,
+ * 127.0.0.1) — a rule sourced from the host's own IP matches no packet that was
+ * ever addressed to it, so every line the feature produced was inert while
+ * reading as a fix. `remotes` is the other end of the socket, learned the same
+ * way and kept per arrival (behind a NAT gateway, that is the gateway).
  *
  * ⚠ AND WHEN IT DOES NOT KNOW, IT SAYS SO. An arrival address nobody has ever
  * been seen on gets a COMMENT naming it, not a guessed source — a wrong rule is
@@ -1187,7 +1200,7 @@ function portOf(rawUrl) {
  * ⚠ EVERY RETURNED ELEMENT IS A STRING. There is no verb in this payload, no
  * route that takes one, and a test asserts this file holds no way to run one.
  */
-function fixLines(rec, addresses = [], remotes = {}) {
+function fixLines(rec, addresses = [], remotes = {}, fw = FIREWALL) {
   const seen = Array.isArray(addresses) ? addresses : [];
   const failed = seen.filter((a) => a && a.ok === false);
   if (!failed.length) return [];
@@ -1252,12 +1265,9 @@ function fixLines(rec, addresses = [], remotes = {}) {
   for (const row of failed) {
     const addr = row.addr;
     // ⚠ A FAILING LOOPBACK ARRIVAL NEEDS NO RULE, AND SAYING SO IS THE FIX.
-    // Loopback never crosses the veth chain, so nothing in 117.fw has any say
-    // over it: once step 1 binds the unit to 0.0.0.0 it answers on 127.0.0.1 by
-    // itself. Verified on the live retrofit — rebinding jtyper-trainer and
-    // boardserver, with `-source 192.168.2.131` added on heimdall for the LAN,
-    // left all three of 100.97.198.90, 127.0.0.1 and 192.168.2.117 reading ok.
-    // A rule here would be a third inert line pasted into a root shell.
+    // Loopback never leaves the host, so no firewall has any say over it: once
+    // step 1 binds the unit to 0.0.0.0 it answers on 127.0.0.1 by itself. A rule
+    // here would be an inert line pasted into a root shell.
     if (hostClass(addr) === 'loopback') { section.push(loopbackNeedsNoRule(addr, reachedButSilent(row))); continue; }
     openTheFile = true;
     const known = remotesOf(remotes, addr);
@@ -1267,7 +1277,9 @@ function fixLines(rec, addresses = [], remotes = {}) {
       continue;
     }
     for (const src of sources) {
-      const line = `IN ACCEPT -source ${src} -p tcp -dport ${port} -log nolog`;
+      const line = fw.kind === 'proxmox'
+        ? `IN ACCEPT -source ${src} -p tcp -dport ${port} -log nolog`
+        : `allow tcp from ${src} to port ${port}`;
       if (said.has(line)) continue;
       said.add(line);
       section.push(line);
@@ -1280,7 +1292,11 @@ function fixLines(rec, addresses = [], remotes = {}) {
   // the header stood over nothing but the sentence saying there was nothing to
   // do. `openTheFile` is the honest test: a rule to add, or a placeholder naming
   // the source the reader has to fill in. Loopback is neither.
-  if (openTheFile) out.push(`# on heimdall — ${FIREWALL_FILE}`);
+  if (openTheFile) {
+    out.push(fw.kind === 'proxmox'
+      ? `# on ${fw.host} — ${fw.file}`
+      : '# in the firewall that filters traffic to this host, if there is one');
+  }
   out.push(...section);
   return out;
 }
@@ -3007,7 +3023,7 @@ module.exports = {
   cleanAddrs, addrsProblem, splitAddressSet, isBodyObject, REFUSED_BODY, REFUSED_ADDR, reportedClientId,
   SIDECAR_NAME, sidecarPath, readSidecar,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
-  REBIND_MARKER_NAME, STORE_NAME, SCHEMA, FIREWALL_FILE, UNIT_BIND_NOTES,
+  REBIND_MARKER_NAME, STORE_NAME, SCHEMA, firewallStyle, UNIT_BIND_NOTES,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,
   oneLine, cleanName, cleanKind, kindProblem, cleanUnit, idFor,
   hostClass, parseAppUrl, urlProblem, normalizeUrl,

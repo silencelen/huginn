@@ -9,6 +9,38 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.0 — 2026-10-17
+
+### Added
+- `server/appd/install.sh` installs or updates the daemon in one step: files, access token,
+  systemd unit, hardening drop-in, a `site.conf` written once, Claude Code hooks, and a loopback
+  HTTP and HTTPS check. `server/setup.sh` runs it on a new server; `deploy.sh` runs it after its
+  test gate.
+- `HUGINN_APPD_EXTRA_TOOLS`: tools this server adds to every chat and round (for example an MCP
+  server's tools).
+- `HUGINN_APPD_PERSONA_FILE`: an optional persona appended to the system prompt of chats and
+  rounds. Defaults to `/etc/huginn/persona.md`; the pre-3.13 path is still read.
+- `HUGINN_APPD_FIREWALL` (`generic` or `proxmox`), with `HUGINN_APPD_FIREWALL_HOST` and
+  `HUGINN_APPD_FIREWALL_FILE`, sets how the Apps fix lines write firewall rules.
+
+### Changed
+- The tmux server, when the daemon has to start it, runs as its own transient service
+  (`huginn-tmux.service`). Sessions started from the apps can now write to `/usr`, `/etc` and
+  `/opt` like sessions started over SSH, and they no longer share the daemon's cgroup. A server
+  that is already running is left where it is; it moves after its last session ends.
+- The unit sets `KillMode=process`, so restarting or updating the daemon never ends sessions,
+  and no longer names a working directory specific to one deployment.
+- With `HUGINN_APPD_BIND` unset the daemon listens on every interface. It used to pick the
+  Tailscale address when Tailscale was running, which left loopback unanswered.
+- Chats and rounds no longer grant a memory server's tools by default; set
+  `HUGINN_APPD_EXTRA_TOOLS` to add them.
+- The Apps fix lines write neutral firewall rules by default instead of one deployment's
+  Proxmox file.
+
+### Upgrading
+- To keep extra tools, a persona at a custom path, or Proxmox-style fix lines, set the matching
+  variable in `/etc/systemd/system/huginn-appd.service.d/site.conf`.
+
 ## 3.12.1 — 2026-10-17
 
 ### Added

@@ -102,7 +102,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.12.1';
+const VERSION = '3.13.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -190,7 +190,23 @@ const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || '/run/huginn-claude-state
 // socket, i.e. exactly the production behaviour. `-L` (not TMUX_TMPDIR) because
 // an inherited $TMUX from the launching pane overrides TMUX_TMPDIR but not -L.
 const TMUX_SOCKET = process.env.HUGINN_APPD_TMUX_SOCKET || '';
-const PERSONA_FILE = '/usr/local/share/huginn-cli/persona.md';
+/**
+ * An optional operator persona, appended to the system prompt of every chat and
+ * round: HUGINN_APPD_PERSONA_FILE when set, else /etc/huginn/persona.md, else the
+ * path servers before 3.13 used. Read on every run, so adding or editing it needs
+ * no restart. No file, no persona.
+ */
+const PERSONA_FILES = [
+  process.env.HUGINN_APPD_PERSONA_FILE,
+  '/etc/huginn/persona.md',
+  '/usr/local/share/huginn-cli/persona.md',
+].filter(Boolean);
+function readPersona() {
+  for (const f of PERSONA_FILES) {
+    try { return fs.readFileSync(f, 'utf8'); } catch { /* next */ }
+  }
+  return '';
+}
 const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
 /**
  * Where a project goes when the owner names no directory: `<PROJECTS_HOME>/<slug>`,
@@ -221,6 +237,13 @@ const MEMPALACE_MARKER = (() => {
 const MAX_CONCURRENT_RUNS = 3;
 const RUN_HARD_CAP_MS = 2 * 60 * 60 * 1000; // 2 h — safety net, not a feature
 
+// Tools this server adds to every chat and round, space-separated: an MCP
+// server's tools, for example (`mcp__memory`). None on a new server. Each entry is
+// one tool name; anything that is not shaped like one is dropped, since it ends up
+// in an argv.
+const EXTRA_TOOLS = (process.env.HUGINN_APPD_EXTRA_TOOLS || '')
+  .split(/\s+/).filter((t) => /^[A-Za-z0-9_.:*()-]+$/.test(t));
+
 // Tool sets mirror the huginn CLI exactly: `-p` (ask) vs `-y` (act).
 const TOOLS = {
   // --allowedTools AUTO-APPROVES; it does not restrict. In -p mode the read-only
@@ -238,11 +261,10 @@ const TOOLS = {
   //
   // Skill is granted to BOTH: a skill is markdown instructions, not a capability —
   // invoking one cannot exceed the tools already granted, and ask's deny list still
-  // holds. Without it the host's 23 project skills are invisible to phone and
-  // desktop chats, which was the state until 2026-08-14. They load only because
-  // HUGINN_APPD_WORKDIR points at the project; skills are cwd-scoped.
-  ask: 'Skill mcp__mempalace WebFetch WebSearch',
-  act: 'Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace',
+  // holds. Without it the project's skills are invisible to app chats. They load
+  // only because HUGINN_APPD_WORKDIR points at the project; skills are cwd-scoped.
+  ask: ['Skill', 'WebFetch', 'WebSearch', ...EXTRA_TOOLS].join(' '),
+  act: ['Skill', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', ...EXTRA_TOOLS].join(' '),
 };
 
 // The deny half, which allowedTools cannot express. Measured 2026-07-28, one
@@ -1456,66 +1478,77 @@ async function listSessions({ preview = false } = {}) {
 }
 
 /**
- * The scope the tmux server should live in, so that a session's lifetime is not
- * tied to this daemon's.
+ * The systemd unit the tmux server runs in when this daemon starts it, so that a
+ * session's lifetime and filesystem are not this daemon's.
  */
-const TMUX_SCOPE = 'huginn-tmux';
+const TMUX_UNIT = 'huginn-tmux';
 
 /**
- * Make sure the tmux server exists OUTSIDE this daemon's cgroup before a session
- * is created in it.
+ * Make sure a tmux server exists, started OUTSIDE this daemon, before a session is
+ * created in it.
  *
  * `tmux new-session` starts the server if none is running, and the server
- * daemonises from that call — inheriting whatever cgroup and mount namespace the
- * caller had. When the caller is this daemon, two things follow that nobody asked
- * for, and both were measured on the author's host (2026-08-23):
+ * daemonises from that call, inheriting the caller's cgroup AND mount namespace.
+ * When the caller is this daemon, two things follow:
  *
- *   * `systemctl restart huginn-appd` with the default KillMode=control-group
- *     SIGTERMs the whole cgroup, so a routine deploy killed the tmux server and
- *     every Claude Code session on the box — and reported success. A KillMode
- *     drop-in is the floor under this; putting the server somewhere else is the
- *     actual fix.
- *   * the sessions inherit ProtectSystem=strict, so /opt is READ-ONLY inside them
- *     while the host itself is perfectly writable — an EROFS that costs an hour
- *     every time somebody meets it for the first time.
+ *   * the default KillMode would SIGTERM the server and every Claude Code session
+ *     on a restart or update (the unit sets KillMode=process as the floor);
+ *   * every session inherits the unit's sandbox (ProtectSystem=strict), so /usr,
+ *     /etc and /opt are READ-ONLY inside sessions started from the apps, while the
+ *     same commands work in a session started over SSH.
  *
- * A transient scope answers both: the server owns its own cgroup and gets the
- * host's real namespace, and every session the server forks afterwards belongs to
- * the SERVER, not to us.
+ * So the server is started as a transient SERVICE: PID 1 forks it, in the host's
+ * real namespace and its own cgroup, and every session it forks afterwards
+ * belongs to it. Two details carry the whole fix:
  *
- * A running server is left exactly where it is. Cgroup membership is per-process,
- * so moving a live server would strand every session's processes behind it — the
- * migration has to happen when there is nothing to migrate.
+ *   * a service, not `systemd-run --scope`. A scope wraps the CALLING process, so
+ *     it would keep this daemon's namespace and only move the cgroup;
+ *   * `exit-empty off` in the same command. `tmux start-server` alone exits at
+ *     once when there are no sessions, and the `new-session` that follows would
+ *     then start a fresh server inside this daemon after all.
  *
- * Best effort by design: if systemd-run is unavailable or refuses, the old
- * inherited-server behaviour still works. Degraded is better than no sessions.
+ * A running server is left where it is: moving one would strand its sessions.
+ * One started by `cc` over SSH is already outside this daemon, so it is fine.
+ *
+ * Best effort by design: without systemd-run (a container without systemd, a
+ * test), the server starts the old way. Degraded is better than no sessions.
  */
-async function ensureTmuxServerScope() {
+/** Whether `tmux ls` failed because no server exists (see [ensureTmuxServer]). */
+function noTmuxServer(stderr) {
+  return /no server running|error connecting to .*\((No such file or directory|Connection refused)\)/i
+    .test(String(stderr || ''));
+}
+
+async function ensureTmuxServer() {
   const probe = await run('tmux', ['ls']);
-  // Only "no server running" means there is nothing there. Any other failure is a
-  // failure to OBSERVE, and starting a second server on a bad read is worse than
-  // doing nothing.
-  if (!probe.err || !/no server running/i.test(probe.stderr || '')) {
-    // A server that is already up is LEFT WHERE IT IS, which is right and is also
-    // why one inherited before this function existed stays in our cgroup for the
-    // life of the host — with every session's syslog filed under this unit and
-    // nothing saying so. See lib/cgroup.js (M5).
+  // Only "there is no server" means there is nothing there, and tmux says it two
+  // ways: "no server running on <socket>" when a stale socket file is left, and
+  // "error connecting to <socket> (No such file or directory)" when there is no
+  // socket at all, which is every fresh boot, since /tmp starts empty. Any other
+  // failure is a failure to OBSERVE, and starting a second server on a bad read
+  // is worse than doing nothing.
+  if (!probe.err || !noTmuxServer(probe.stderr)) {
     await noteTmuxServerCgroup();
     return;
   }
 
-  // An isolated test socket wants a plain private server, NOT the shared
-  // huginn-tmux.scope: that unit name is global, so wrapping a per-pid test
-  // server in it would collide with (or be blocked by) the live daemon's scope.
+  // An isolated test socket wants a plain private server, NOT the shared unit:
+  // its name is global, so a per-pid test server in it would collide with the
+  // live daemon's.
   if (TMUX_SOCKET) { await run('tmux', ['start-server']); return; }
 
-  const r = await run('systemd-run',
-    ['--scope', '--quiet', '--collect', `--unit=${TMUX_SCOPE}`, 'tmux', 'start-server']);
+  const r = await run('systemd-run', [
+    `--unit=${TMUX_UNIT}`, '--collect', '--quiet', '--service-type=forking',
+    `--setenv=HOME=${process.env.HOME || '/root'}`,
+    `--setenv=PATH=${process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'}`,
+    `--setenv=LANG=${process.env.LANG || 'C.UTF-8'}`,
+    'tmux', 'start-server', ';', 'set-option', '-g', 'exit-empty', 'off',
+  ]);
   if (r.err) {
-    log(`tmux: could not start the server in its own scope (${(r.stderr || r.err.message || '').trim().slice(0, 120)}); it will inherit this daemon's`);
+    log(`tmux: could not start the server as ${TMUX_UNIT}.service (${(r.stderr || r.err.message || '').trim().slice(0, 120)}); it will run inside this daemon`);
     return;
   }
-  log(`tmux: server started in ${TMUX_SCOPE}.scope, independent of this daemon`);
+  log(`tmux: server started as ${TMUX_UNIT}.service, independent of this daemon`);
 }
 
 /**
@@ -1540,7 +1573,7 @@ async function noteTmuxServerCgroup() {
   try { ours = fs.readFileSync('/proc/self/cgroup', 'utf8'); } catch { return; }
   try { them = fs.readFileSync(`/proc/${theirs}/cgroup`, 'utf8'); } catch { return; }
   if (!cgroupLib.sameCgroup(ours, them)) return;
-  log(cgroupLib.foreignJournalLogLine(cgroupLib.unitOf(ours), TMUX_SCOPE));
+  log(cgroupLib.foreignJournalLogLine(cgroupLib.unitOf(ours), TMUX_UNIT));
 }
 
 /**
@@ -3260,7 +3293,7 @@ async function restoreSessionsAfterReboot() {
   const plan = sessreg.restorePlan(loadRegistry(), new Set());
   if (!plan.length) return;
   log(`session restore: tmux server is gone (reboot?); ${plan.length} recorded session(s) to bring back`);
-  await ensureTmuxServerScope();
+  await ensureTmuxServer();
 
   let restored = 0, fresh = 0;
   for (const entry of plan) {
@@ -3998,8 +4031,7 @@ function startRun(meta, userText) {
   else if (downgrade) args.push('--model', downgrade);
   if (meta.effort) args.push('--effort', meta.effort);
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
-  let persona = '';
-  try { persona = fs.readFileSync(PERSONA_FILE, 'utf8'); } catch { /* interactive-only host */ }
+  const persona = readPersona();
   if (persona) args.push('--append-system-prompt', persona);
   args.push('--allowedTools', TOOLS[meta.mode] || TOOLS.ask);
   const denied = DISALLOWED[meta.mode] ?? DISALLOWED.ask;
@@ -6255,7 +6287,7 @@ function claudeLaunchCommand({ claudeName, persona, model, effort }) {
  * composer instead of being typed into an empty pty.
  */
 async function launchProjectSession(tmuxName, cwd, command) {
-  await ensureTmuxServerScope();
+  await ensureTmuxServer();
   // Whatever the last holder of this name left behind goes before the new
   // session can be observed — the create route's own first move.
   clearSessionState(tmuxName);
@@ -10540,6 +10572,7 @@ async function handleRequest(req, res) {
       loginStartedFrom = fingerprint(cur);
       const existed = await sessionExists(name);
       if (!existed) {
+        await ensureTmuxServer();
         const r = await run('tmux',
           ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude auth login; echo; echo "[done] press enter"; read _']);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim() || r.err.message}`);
@@ -10709,7 +10742,7 @@ async function handleRequest(req, res) {
       clearSessionState(name);
       // Before the session exists, never after: the server's cgroup is decided by
       // whoever starts it, and that is a one-time choice per server lifetime.
-      await ensureTmuxServerScope();
+      await ensureTmuxServer();
       // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
       // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
       // call that makes it. The old shape asked afterwards with
@@ -12576,7 +12609,7 @@ async function handleRequest(req, res) {
       // create route does it, and for the same reason: the new session must not be
       // observed through a corpse's state file.
       clearSessionState(want);
-      await ensureTmuxServerScope();
+      await ensureTmuxServer();
       // ⚠ `-P -F '#S'`, for the same reason as the create route: tmux PRINTS the
       // name it gave the session. `want` can still carry a '.' here even though
       // the name rule bans them — it comes off an archive card an older daemon
@@ -13963,18 +13996,14 @@ function tailnetAddr() {
   });
 }
 
-// The bind: HUGINN_APPD_BIND when set (the deployed drop-in says 0.0.0.0 so the
-// LAN, the mesh gateway and loopback all reach one listener); otherwise the
-// tailnet address while tailscaled is up; otherwise every interface, said in the
-// log. Every route is bearer-gated, so a wider bind is not a wider door — whereas
-// a daemon that exited because `tailscale ip -4` had nothing to say was restarted
-// forever by systemd (StartLimitIntervalSec=0) and never served anybody.
+// The bind: HUGINN_APPD_BIND when set, otherwise every interface, so the LAN, a
+// VPN and loopback all reach one listener. Every route is bearer-gated and TLS
+// protected, so a wider bind is not a wider door. Loopback matters: the host-side
+// tools (huginn-headroom, huginn-archive, the install check) dial 127.0.0.1, so a
+// narrowed bind must keep it. Before 3.13 an unset bind meant the tailnet address
+// when tailscaled was up, which left loopback unanswered on such hosts.
 function resolveBind() {
-  if (process.env.HUGINN_APPD_BIND) return Promise.resolve(process.env.HUGINN_APPD_BIND);
-  return tailnetAddr().catch(() => {
-    log('bind: no HUGINN_APPD_BIND and no tailnet address — binding 0.0.0.0 (set HUGINN_APPD_BIND to narrow it)');
-    return '0.0.0.0';
-  });
+  return Promise.resolve(process.env.HUGINN_APPD_BIND || '0.0.0.0');
 }
 
 /**
@@ -14011,9 +14040,10 @@ if (process.argv.includes('--seed-headroom-defaults')) {
 
 resolveBind().then(async (bind) => {
   // Where the apps seed points. The bind first, because a daemon bound to a
-  // real address is already answering the question; `tailscale ip -4` only when
-  // it is a wildcard, and never fatally.
-  SELF_ADDR = appsLib.pickHostAddr(bind) || appsLib.pickHostAddr(await tailnetAddr().catch(() => ''));
+  // real address is already answering the question; then this host's own first
+  // address; `tailscale ip -4` last, and never fatally.
+  SELF_ADDR = appsLib.pickHostAddr(bind, ...hostAddresses())
+    || appsLib.pickHostAddr(await tailnetAddr().catch(() => ''));
   // Recover from a previous crash BEFORE serving: a session left at `window-size
   // manual` by a killed daemon would otherwise keep a laptop's window shrunken
   // with nothing left to release it.

@@ -53,7 +53,7 @@ test('the mode is stated as a capability, both ways', () => {
   assert.match(act, /MAY change things/);
   // The toolsets, mirroring huginn-appd's TOOLS: a rewrite that tells an ask Round
   // to run a shell command is a Round that fails every week with nobody watching.
-  assert.match(ask, /ask {2}— Skill, mempalace .*WebFetch, WebSearch/);
+  assert.match(ask, /ask {2}— Skill, WebFetch, WebSearch/);
   assert.match(ask, /act {2}— all of those plus Bash, Read, Edit, Write, Glob, Grep/);
 });
 
