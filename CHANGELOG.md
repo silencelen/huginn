@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.10] - 2026-10-17
+
+### Changed
+- **`huginn local on`, `off`, `update` and `persist` ask for administrator approval on Windows**
+  instead of refusing. One approval prompt runs the command in an administrator window that shows
+  its progress and stays open if it fails.
+
 ## [2.5.9] - 2026-10-17
 
 ### Security
