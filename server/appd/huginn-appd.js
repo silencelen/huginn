@@ -1493,9 +1493,9 @@ const TMUX_UNIT = 'huginn-tmux';
  *
  *   * the default KillMode would SIGTERM the server and every Claude Code session
  *     on a restart or update (the unit sets KillMode=process as the floor);
- *   * every session inherits the unit's sandbox (ProtectSystem=strict), so /usr,
- *     /etc and /opt are READ-ONLY inside sessions started from the apps, while the
- *     same commands work in a session started over SSH.
+ *   * every session inherits the unit's sandbox: under a stricter drop-in
+ *     (ProtectSystem=strict), /usr, /etc and /opt are READ-ONLY inside sessions
+ *     started from the apps, while the same commands work over SSH.
  *
  * So the server is started as a transient SERVICE: PID 1 forks it, in the host's
  * real namespace and its own cgroup, and every session it forks afterwards
@@ -6882,10 +6882,9 @@ function hostAddresses() {
       for (const a of list || []) if (a && !a.internal) found.push(a.address);
     }
   } catch {
-    // ⚠ THE SERVICE CANNOT ENUMERATE ITS INTERFACES: the unit's
-    // RestrictAddressFamilies leaves out AF_NETLINK, which libuv's
-    // interface listing needs, and it throws. /proc says the same thing
-    // without a socket.
+    // A unit sandboxed with RestrictAddressFamilies but without AF_NETLINK
+    // (an operator's stricter drop-in) cannot enumerate its interfaces: libuv
+    // needs netlink, and it throws. /proc says the same thing without a socket.
     found = procAddresses();
   }
   const out = [];
@@ -7017,9 +7016,13 @@ function noteClient(req, kind) {
   clientDirty = true;
 }
 
+// A server that has never saved this state has alerts ON: push to the apps is the
+// main way a waiting session reaches a phone, and it must not wait for a switch
+// that, before 3.13, the apps only offered when an alert relay script existed.
+// The relay is an optional extra channel; a saved choice (on or off) is kept.
 function loadAlertState() {
   try { return JSON.parse(fs.readFileSync(ALERT_STATE, 'utf8')); }
-  catch { return { enabled: false, sent: {}, prev: null, delivered: 0, lastAt: null }; }
+  catch { return { enabled: true, sent: {}, prev: null, delivered: 0, lastAt: null }; }
 }
 function saveAlertState(st) {
   try {

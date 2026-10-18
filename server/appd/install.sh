@@ -75,9 +75,9 @@ if [ ! -e "$DROPIN_DIR/site.conf" ]; then
 fi
 systemctl daemon-reload
 
-# The data directory must exist before the first start: the hardening drop-in's
-# ReadWritePaths names it, and systemd refuses to start a unit whose sandbox
-# points at a missing path (status 226/NAMESPACE, before the daemon runs at all).
+# The data directory exists, private, before the first start. (A drop-in that adds
+# ProtectSystem=strict with a ReadWritePaths= list naming it would otherwise stop
+# the unit at 226/NAMESPACE before the daemon runs at all.)
 DATA_DIR="${HUGINN_APPD_DATA:-$(systemctl show huginn-appd -p Environment --value 2>/dev/null \
   | tr ' ' '\n' | sed -n 's/^HUGINN_APPD_DATA=//p' | tail -1)}"
 install -d -m 0700 "${DATA_DIR:-/var/lib/huginn-appd}"
