@@ -385,25 +385,59 @@ function detectPrompt(lines) {
 // throws the turn away, and because it writes nothing to the shared
 // `~/.claude/settings.json` that every concurrent session on this host reads.
 //
-// ⚠ THE HEADING IS THE GATE, exactly as it is for the model picker, and it is
-// NARROW on purpose. A session discussing its own usage limits will say "Fable"
-// and "usage credits" in the same sentence — that is ordinary prose, and a
-// numbered list under it is not a dialog. So the gate is the copy's own shape,
-// both measured spellings (native-rl §7):
+// ⚠ THE DIALOG'S OWN SHAPE IS THE GATE — not the mere presence of words on the
+// pane. This dialog is the ONLY prompt appd will press a key on by itself, so
+// recognising the wrong thing approves something no one chose. The old gate was
+// `plain.some(line matches the heading)` over the WHOLE pane plus "any option
+// whose label contains 'for this session'". Both halves are attacker-reachable:
+// a prompt-injected model prints the heading as prose and issues a Bash command
+// whose "Yes, and don't ask again … for this session" row carries the phrase, so
+// the gate fired on a real permission dialog and the backstop pressed Yes on it
+// (claude-security 2026-10-18, F7). So the gate is now the consent dialog's
+// exact measured rows (native-rl §7, fixture fable-consent-80):
 //
-//     Fable limit reached · continuing on <M> uses usage credits, …
-//     <Model> now uses usage credits · …
+//     Fable limit reached · continuing on <M> uses usage credits      (heading)
+//   1. Continue on <M> (uses usage credits)
+//   2. Switch to <M> for this session                                 (recommended)
+//   3. Cancel
 //
-// on ONE line. Verified against the prose case in pane.test.js, which mentions
-// both words and must NOT be recommended.
+// — option 1 as "Continue on … (uses usage credits)", the recommended row as
+// "Switch to … for this session", and the heading found ONLY in the block
+// directly above option 1. A session merely DISCUSSING its limits, and any
+// Yes/No permission dialog, fail every one of those.
 const CONSENT_HEAD_RE = /\bfable\b/i;
 const CONSENT_CREDITS_RE = /\busage credits\b/i;
 const CONSENT_COPY_RE = /\blimit reached\b|\bnow uses usage credits\b/i;
-// The row that changes the model for this session only. Never the one that
-// mentions credits — "Continue on Fable 5.1 (uses usage credits)" also contains
-// the word "session" in some renderings, and recommending THAT row would be
-// recommending the charge.
-const CONSENT_SESSION_ROW_RE = /\bfor this session\b/i;
+// Option 1 of the real dialog: continue AND pay. Anchored, so "Yes" is not it.
+const CONSENT_CONTINUE_ROW_RE = /^continue on .+\(uses usage credits\)\s*$/i;
+// The recommended row: switch the model for this session only. Anchored to the
+// whole label, so a permission dialog's "Yes, and don't ask again … for this
+// session" — which merely CONTAINS the phrase — is not mistaken for it.
+const CONSENT_SESSION_ROW_RE = /^switch to .+\bfor this session\b\s*$/i;
+// The permission dialog's shape (Yes / … / No). The backstop never answers one.
+const PERM_YES_RE = /^yes\b/i;
+const PERM_NO_RE = /^no\b/i;
+// '❯'/'>' caret, then "1." — used to locate the live dialog's first option so
+// the heading is read from its own region rather than from anywhere on the pane.
+const CONSENT_OPT1_RE = /^\s*(?:[❯>]\s*)?1[.)]\s/;
+
+/** Is the consent heading in the block DIRECTLY above option 1 (its own region,
+ *  below the top rule) — never in prose or a command echoed elsewhere? */
+function consentHeadingInRegion(plain) {
+  let i = -1;
+  for (let k = plain.length - 1; k >= 0; k--) {
+    if (CONSENT_OPT1_RE.test(plain[k])) { i = k; break; }
+  }
+  if (i < 0) return false;
+  for (let k = i - 1, seen = 0; k >= 0 && seen < 6; k--) {
+    const t = plain[k];
+    if (!t.trim()) continue;            // blank filler inside the dialog
+    if (RULE_RE.test(t)) break;         // the dialog's top border: stop here
+    seen++;
+    if (CONSENT_HEAD_RE.test(t) && CONSENT_CREDITS_RE.test(t) && CONSENT_COPY_RE.test(t)) return true;
+  }
+  return false;
+}
 
 /**
  * The row appd would pick on this dialog, or null when it is not that dialog.
@@ -413,11 +447,18 @@ const CONSENT_SESSION_ROW_RE = /\bfor this session\b/i;
  */
 function consentRecommended(plain, opts) {
   if (!Array.isArray(opts) || opts.length < 2) return null;
-  const isConsent = plain.some((l) => CONSENT_HEAD_RE.test(l)
-    && CONSENT_CREDITS_RE.test(l) && CONSENT_COPY_RE.test(l));
-  if (!isConsent) return null;
-  const row = opts.find((o) => CONSENT_SESSION_ROW_RE.test(o.label) && !CONSENT_CREDITS_RE.test(o.label));
-  return row ? row.number : null;
+  const labels = opts.map((o) => String(o.label || ''));
+  // ⚠ NEVER a permission dialog. Its rows are Yes / Yes, and don't ask again … /
+  // No, and that "don't ask again" is the owner's standing approval — the one
+  // thing the backstop must never press on its own (claude-security F7).
+  if (PERM_YES_RE.test(labels[0] || '') && labels.some((l) => PERM_NO_RE.test(l))) return null;
+  // Both of the consent dialog's own rows must be present, by their exact shape.
+  if (!labels.some((l) => CONSENT_CONTINUE_ROW_RE.test(l))) return null;
+  const row = opts.find((o) => CONSENT_SESSION_ROW_RE.test(o.label));
+  if (!row) return null;
+  // And the heading, read only from the dialog's own region.
+  if (!consentHeadingInRegion(plain)) return null;
+  return row.number;
 }
 
 /**
