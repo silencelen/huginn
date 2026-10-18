@@ -7,13 +7,11 @@
 
 $script:HUGINN_VERSION = '2.5.10'
 $script:HUGINN_REPO    = 'silencelen/huginn'
-# Where `huginn update` may fetch a replacement for THIS FILE, which is then loaded
-# into the shell. Pinned, and deliberately NOT $HUGINN_HOST: that variable answers
-# "which box do I drive", and letting it also answer "whose code do I run" means a
-# typo, a second host or a test alias silently becomes a code source. Override needs
-# HUGINN_UPDATE_HOST set on purpose. (Ported from huginn.sh, where this shipped in
-# 0.6.1 -- the PowerShell client kept fetching from $HUGINN_HOST until 0.8.2.)
-$script:HUGINN_UPDATE_HOST_DEFAULT = 'huginn'
+# Client code - this file, and the runners it installs - comes from the newest
+# cli-v release on GitHub: a tagged build, never a moving branch. Only
+# HUGINN_UPDATE_HOST, set on purpose, names a different source: an SSH host whose
+# /usr/local/share/huginn-cli holds the files. Never $HUGINN_HOST: "which box do
+# I drive" must not also answer "whose code do I run".
 
 # ONE session-name rule for the whole product: lowercase letters, digits, '_'
 # and '-', starting with a letter, digit or '_', at most 50 characters. Compared
@@ -367,57 +365,59 @@ function _Huginn-AppdError {
 #     huginn.ps1 IS pure ASCII): these runners are not - they carry ⚠ and → in
 #     strings a person reads - so the console is also asked to hand us UTF-8
 #     rather than the OEM code page. Node strips the BOM a 5.1 Set-Content adds.
-function _Huginn-FetchFile {
-  param([string]$RepoPath, [string]$MirrorPath, [string]$Dest, [string]$Label, [string]$UpdateHost)
-  $tmp = "$Dest.tmp.js"      # .js: modern node refuses to PARSE an unknown extension
-  $why = @()
-  $got = $false
-  if (Get-Command gh -ErrorAction SilentlyContinue) {
-    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-    $enc = $null
-    try { $enc = [Console]::OutputEncoding; [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch {}
-    gh api "repos/$script:HUGINN_REPO/contents/$RepoPath" -H "Accept: application/vnd.github.raw" 2>$null |
-      Set-Content -Path $tmp -Encoding utf8
-    $rc = $LASTEXITCODE
-    if ($enc) { try { [Console]::OutputEncoding = $enc } catch {} }
-    if ($rc -ne 0) { $why += "gh exited $rc" }
-    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += 'gh returned nothing' }
-    else {
-      node --check $tmp 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += 'what gh returned is not valid JavaScript' }
-    }
-  } else { $why += 'gh is not installed' }
-  if (-not $got) {
-    # PINNED, exactly like `huginn update` and for the same reason: this
-    # downloads code a service will then run in a loop, so the host it comes
-    # from is a trust root, never $HUGINN_HOST.
-    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-    scp -o BatchMode=yes "${UpdateHost}:$MirrorPath" $tmp 2>$null | Out-Null
-    $rc = $LASTEXITCODE
-    if ($rc -ne 0) { $why += "scp from $UpdateHost exited $rc" }
-    elseif (-not (Test-Path $tmp) -or (Get-Item $tmp).Length -eq 0) { $why += "the $UpdateHost mirror returned nothing" }
-    else {
-      node --check $tmp 2>$null | Out-Null
-      if ($LASTEXITCODE -eq 0) { $got = $true } else { $why += "what the $UpdateHost mirror returned is not valid JavaScript" }
+# The newest cli-v release tag, by version number, or $null.
+function _Huginn-ReleaseTag {
+  $body = _Huginn-Get "https://api.github.com/repos/$script:HUGINN_REPO/releases?per_page=60"
+  if (-not $body) { return $null }
+  try { $rels = $body | ConvertFrom-Json } catch { return $null }
+  $best = $null; $bestV = $null
+  foreach ($r in @($rels)) {
+    if ([string]$r.tag_name -match '^cli-v(\d+\.\d+\.\d+)$') {
+      $v = [version]$Matches[1]
+      if (-not $bestV -or $v -gt $bestV) { $bestV = $v; $best = [string]$r.tag_name }
     }
   }
-  if ($got) {
-    # Validated BEFORE installing: a truncated download that a service then
-    # restarts every ten seconds is worse than no runner at all.
-    Move-Item -Force $tmp $Dest
-    return $true
+  return $best
+}
+
+# client/<file> into $Dest from the newest release, or from the HUGINN_UPDATE_HOST
+# mirror when that is set. Returns where it came from, or $null (with $why set
+# in the caller's scope via the -Why reference).
+function _Huginn-FetchClient {
+  param([string]$File, [string]$Dest, [ref]$Why)
+  Remove-Item -Force -ErrorAction SilentlyContinue $Dest
+  if ($env:HUGINN_UPDATE_HOST) {
+    scp -o BatchMode=yes "$($env:HUGINN_UPDATE_HOST):/usr/local/share/huginn-cli/$File" $Dest 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $Dest) -and (Get-Item $Dest).Length -gt 0) { return "the $($env:HUGINN_UPDATE_HOST) mirror" }
+    $Why.Value = "the $($env:HUGINN_UPDATE_HOST) mirror did not return $File"; return $null
+  }
+  $tag = _Huginn-ReleaseTag
+  if (-not $tag) { $Why.Value = 'could not read the newest release from GitHub'; return $null }
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/$script:HUGINN_REPO/$tag/client/$File" `
+      -OutFile $Dest -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
+  } catch { $Why.Value = "could not download $File from $tag"; return $null }
+  if (-not (Test-Path $Dest) -or (Get-Item $Dest).Length -eq 0) { $Why.Value = "$tag returned an empty $File"; return $null }
+  return $tag
+}
+
+function _Huginn-FetchFile {
+  param([string]$RepoPath, [string]$Dest, [string]$Label)
+  $tmp = "$Dest.tmp.js"      # .js: modern node refuses to PARSE an unknown extension
+  $why = ''
+  $file = Split-Path -Leaf $RepoPath
+  if (_Huginn-FetchClient -File $file -Dest $tmp -Why ([ref]$why)) {
+    # Validated BEFORE installing: a truncated download (or a proxy's error page)
+    # that a service then restarts every ten seconds is worse than no runner.
+    node --check $tmp 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Move-Item -Force $tmp $Dest; return $true }
+    $why = "what came back is not valid JavaScript"
   }
   Remove-Item -Force -ErrorAction SilentlyContinue $tmp
-  # ⚠ AND A FETCH THAT FAILED IS A FAILURE. This was the last Write-Host-and-
-  # return-normally path in the file (the rest went in 1.5.0): `huginn device
-  # update` with no gh and no mirror printed "could not fetch huginn-device" on
-  # the HOST stream and left $? True and $LASTEXITCODE 0, so a Windows script or
-  # a `&&` chain read "the runner was not installed" as "the runner is
-  # installed". The caller in `local` even tested the return value - and then
-  # `return`ed, which is also a success. One terminating refusal, same as every
-  # other one here; the sentence is unchanged, and now lands where 2>$null and
-  # $err can reach it.
-  _Huginn-Fail ("{0}: could not fetch {1} ({2})" -f $Label, (Split-Path -Leaf $RepoPath), ($why -join '; '))
+  # A fetch that failed is a failure, never a quiet return: callers and scripts
+  # must see it (`&&` chains, $?).
+  _Huginn-Fail ("{0}: could not fetch {1} ({2})" -f $Label, $file, $why)
 }
 
 # The daemon URL this machine should be enrolled with, worked out from the ssh
@@ -1145,7 +1145,7 @@ function _Huginn-HelpBody {
                               for attaching and the session verbs, on a
                               machine set up from the desktop or a package
   huginn main                 attach/create the live 'main' session
-                              (run claude inside)
+                              (Claude Code starts in a new one)
   huginn <name>               a separate named session
   huginn attach <name>        that session even when its name is a verb
                               (update, solo...)
@@ -1188,6 +1188,8 @@ function _Huginn-HelpBody {
                               (Linux) | --logon s4u|password: Windows only]
   huginn core status          is the core running and paired, what it offers
   huginn core start           start it now if it is set up but not running
+  huginn core pair --url URL  pair it with the server at URL
+                              (https://<server>:8787); asks for the token
   huginn core update          take the newest core release (restarts the core)
   huginn core route           the addresses huginn core reaches huginn on, and
                               their health [add <url> | remove <url> |
@@ -1197,13 +1199,12 @@ function _Huginn-HelpBody {
                               sees
   huginn device on            offer this machine
                               [--scope look|work|own] [--root DIR]
-                              [--url URL: the daemon's address, when ssh
-                              cannot say]
+                              [--name NAME: how it is listed]
                               [--act-while-locked | --no-act-while-locked:
                               whether a lock screen withdraws 'act' on this
                               machine (default: it does)]
   huginn device off           stop offering it
-  huginn device update        fetch a newer runner from the pinned mirror
+  huginn device update        fetch a newer runner from the newest release
   huginn device serve         the runner itself - what the service starts
   huginn device unit          print what keeps the runner up: a systemd unit
                               [--system], or on Windows a scheduled task that
@@ -1231,11 +1232,10 @@ function _Huginn-HelpBody {
                               'claude --resume' command  [--now: skip wrap-up]
   huginn archive              what has been archived, and how to bring it back
   huginn revive <id|name>     bring an archived session back to life
-  huginn -p "question"        one-shot headless query: reasoning + memory +
-                              web, and nothing that can change anything
+  huginn -p "question"        one-shot headless query: reasoning, reading and
+                              the web, and nothing that can change anything
                               (Bash/Edit/Write are denied)
-  huginn -y "task"            one-shot that may use tools
-                              (bash/files/web + memory)
+  huginn -y "task"            one-shot that may use tools (bash, files, web)
   huginn usage [args]         Claude Code token/cost report (ccusage; default:
                               daily), e.g. huginn usage monthly | session |
                               blocks | blocks --live
@@ -1246,7 +1246,8 @@ function _Huginn-HelpBody {
                               build (Windows, Debian, Arch, portable)
   huginn desktop win|linux|arch|portable
                               just that build's url, bare, for scripting
-  huginn desktop install      Linux: install or repair the per-user,
+  huginn desktop install      install or repair the desktop app: the
+                              Windows installer, or on Linux the per-user,
                               self-updating build (no root; any distro)
   huginn desktop uninstall    Linux: remove that install (keeps settings)
   huginn desktop update       update the installed desktop app to the newest
@@ -1254,17 +1255,17 @@ function _Huginn-HelpBody {
                               the Debian/Arch package with sudo)
   huginn update               update everything huginn on this machine: this
                               client, huginn core, the desktop app and the
-                              local-AI tier (whichever are installed). The
-                              client comes from the repo
-                              ($script:HUGINN_REPO); without gh, from the
-                              PINNED $(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }) mirror, never from
-                              `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }):
-                              the box you point at must not become a source
-                              of code this shell runs
+                              local-AI tier (whichever are installed), from
+                              the newest release of $script:HUGINN_REPO.
+                              Not from `$env:HUGINN_HOST$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" }):
+                              the box you drive is not a source of code this
+                              shell runs (`$env:HUGINN_UPDATE_HOST='host'
+                              names a mirror on purpose)
   huginn uninstall            remove the whole stack, top down: the desktop
                               app, the local-AI tier, this machine's device
                               row, huginn core and this CLI [--all also takes
-                              the SSH stanza + huginn's own key]
+                              the SSH stanza + huginn's own key; --yes: do
+                              not ask first]
   huginn version              show client version
   huginn help | ? | /help     this help
 
@@ -1273,7 +1274,7 @@ function _Huginn-HelpBody {
   Session names are lowercase letters, digits, '_' and '-' (no dots, spaces
   or *), up to 50 characters, and must start with a letter, digit or '_'.
   Case-insensitive ('Test' and 'test' are the same session).
-  In a session: run claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
+  In a session: claude / claude --resume.  Detach: Alt-d (or Ctrl-b d).
   Alt-o = detach all OTHER clients (full screen).  Ctrl-b [ = scroll.
   Reattach from any device.
   Host via the 'huginn' SSH alias; override with `$env:HUGINN_HOST.
@@ -1406,27 +1407,13 @@ function huginn {
     $tmp  = "$dest.tmp"
     $got  = $false; $src = ''
     $t0 = [Diagnostics.Stopwatch]::StartNew()
-    $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
     _Huginn-UiHead 'huginn update'
-    $gh = Get-Command gh -ErrorAction SilentlyContinue
-    if ($gh) {
-      # gh's answer to $tmp, its complaints to a separate file - never mixed.
-      $err = "$tmp.err"
-      try {
-        $p = Start-Process -FilePath $gh.Source -ArgumentList @('api', "repos/$script:HUGINN_REPO/contents/client/huginn.ps1", '-H', '"Accept: application/vnd.github.raw"') `
-               -NoNewWindow -PassThru -RedirectStandardOutput $tmp -RedirectStandardError $err
-        $null = $p.Handle; $fr = @(_Huginn-UiFrames); $i = 0
-        while (-not $p.HasExited) { if (_Huginn-UiTty) { _Huginn-UiLive $fr[$i % $fr.Count] 'client' 'fetching' }; $i++; Start-Sleep -Milliseconds 125 }
-        $p.WaitForExit(); _Huginn-UiClear
-        if ($p.ExitCode -eq 0 -and (Test-Path $tmp) -and (Get-Item $tmp).Length -gt 2000) { $got = $true; $src = 'from GitHub' }
-      } catch {}
-      Remove-Item $err -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $got) {
-      if ($uh -ne $script:HUGINN_UPDATE_HOST_DEFAULT) { _Huginn-UiLine 'warn' 'client' "HUGINN_UPDATE_HOST is set: trusting $uh for this client's code" }
-      scp -o BatchMode=yes "${uh}:/usr/local/share/huginn-cli/huginn.ps1" $tmp 2>$null
-      if ($LASTEXITCODE -eq 0) { $got = $true; $src = "from the $uh mirror" }
-    }
+    if ($env:HUGINN_UPDATE_HOST) { _Huginn-UiLine 'warn' 'client' "HUGINN_UPDATE_HOST is set: trusting $($env:HUGINN_UPDATE_HOST) for this client's code" }
+    $why = ''
+    if (_Huginn-UiTty) { _Huginn-UiLive (@(_Huginn-UiFrames))[0] 'client' 'fetching' }
+    $from = _Huginn-FetchClient -File 'huginn.ps1' -Dest $tmp -Why ([ref]$why)
+    _Huginn-UiClear
+    if ($from -and (Get-Item $tmp).Length -gt 2000) { $got = $true; $src = "from $from" }
     if ($got) {
       try {
         $raw = Get-Content $tmp -Raw
@@ -1442,7 +1429,7 @@ function huginn {
       }
     }
     if (Test-Path $tmp) { Remove-Item -Force $tmp -ErrorAction SilentlyContinue }
-    if (-not $got) { _Huginn-Fail "huginn: update failed (gh and the $uh mirror both came back empty)" }
+    if (-not $got) { _Huginn-Fail "huginn: update failed ($(if ($why) { $why } else { 'the download was empty' }))" }
     # Every huginn component on this machine follows, not only the CLI (owner,
     # 2026-10-16): run by the NEW client, in a child shell, since this session
     # still holds the old one.
@@ -1611,10 +1598,7 @@ function huginn {
       New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
       New-Item -ItemType Directory -Force -Path $dir | Out-Null
       if ($sub -eq 'update' -or -not (Test-Path $runner)) {
-        $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-        _Huginn-FetchFile -RepoPath 'client/huginn-device' `
-          -MirrorPath '/usr/local/share/huginn-cli/huginn-device' `
-          -Dest $runner -Label 'huginn device' -UpdateHost $uh | Out-Null
+        _Huginn-FetchFile -RepoPath 'client/huginn-device' -Dest $runner -Label 'huginn device' | Out-Null
       }
       if ($sub -eq 'update') {
         if (Test-Path $runner) { Write-Host "huginn device: runner is now $(node $runner version)" }
@@ -1708,13 +1692,8 @@ function huginn {
       foreach ($f in 'huginn-local', 'huginn-llm-shim', 'huginn-device') {
         $dest = Join-Path $HOME ".huginn/$f"
         if ($sub -eq 'update' -or -not (Test-Path $dest)) {
-          $uh = if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT }
-          # Throws when it could not fetch (see _Huginn-FetchFile) - there is
-          # nothing left to test, and a `return` here used to turn that into a
-          # success.
-          _Huginn-FetchFile -RepoPath "client/$f" `
-            -MirrorPath "/usr/local/share/huginn-cli/$f" `
-            -Dest $dest -Label 'huginn local' -UpdateHost $uh | Out-Null
+          # Throws when it could not fetch (see _Huginn-FetchFile).
+          _Huginn-FetchFile -RepoPath "client/$f" -Dest $dest -Label 'huginn local' | Out-Null
         }
       }
       if ($sub -eq 'plan') { node $mgr plan @rest; return }
@@ -1956,17 +1935,17 @@ function huginn {
   } elseif ($args[0] -eq '-p' -or $args[0] -eq '-y') {
     if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn $($args[0]) ""your prompt""" }
     $q = ($args[1..($args.Count - 1)] -join ' '); $esc = $q -replace "'", "'\''"  # POSIX single-quote escape
-    # Kept in step with huginn-appd's ask/act tool sets (server/appd TOOLS/
-    # DISALLOWED): -p is read-only reasoning + web + memory, -y may also mutate.
-    # The DISALLOWED deny-list is the real fence - --allowedTools only auto-approves,
-    # so without it a -p query could still be granted Bash.
-    # The flag is assembled HERE and interpolated into the remote script, so its
-    # quoting is bash SYNTAX on the host. Assembling it in a remote variable and
-    # expanding that unquoted word-splits it into `'Bash` `Edit` `Write`
-    # `NotebookEdit'` - literal quotes, no valid tool name, nothing actually denied.
-    $tools = if ($args[0] -eq '-y') { "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace" } else { "Skill mcp__mempalace WebFetch WebSearch" }
+    # The server's huginn-ask runs the turn with the same fence as a chat in the
+    # apps (-p = ask: read, search, web, Bash/Edit/Write denied; -y = act), plus
+    # the server's own extra tools, persona and working directory. A server too
+    # old to carry it gets the same fence inline, with the persona from where
+    # older servers kept it. The deny-list is the real fence: --allowedTools only
+    # auto-approves. It is assembled HERE, so its quoting is bash SYNTAX on the
+    # host; expanding it from a remote variable word-splits it into
+    # `'Bash` `Edit` `Write` `NotebookEdit'`, which denies nothing.
+    $sub = if ($args[0] -eq '-y') { 'act' } else { 'ask' }
+    $tools = if ($args[0] -eq '-y') { "Skill Bash Read Edit Write Glob Grep WebFetch WebSearch" } else { "Skill WebFetch WebSearch" }
     $dflag = if ($args[0] -eq '-y') { '' } else { "--disallowedTools 'Bash Edit Write NotebookEdit'" }
-    # Persona-aware: if the host carries persona.md, inject it + memory tools; else plain headless query.
     #
     # The remote script is base64'd rather than passed as a quoted argument.
     # Windows PowerShell 5.1 mangles embedded double quotes when marshalling
@@ -1976,12 +1955,16 @@ function huginn {
     # a bare `claude -p` with NO persona and NO --allowedTools. Base64 puts only
     # [A-Za-z0-9+/=] on the command line, so 5.1 and 7.x behave identically.
     $remoteScript = @"
+if command -v huginn-ask >/dev/null 2>&1; then
+  echo '$esc' | huginn-ask $sub
+  exit
+fi
 cd "`${HUGINN_WORKDIR:-`$HOME}" 2>/dev/null || cd "`$HOME"
 P="`$(cat /usr/local/share/huginn-cli/persona.md 2>/dev/null)"
 if [ -n "`$P" ]; then
   echo '$esc' | claude -p --append-system-prompt "`$P" --allowedTools '$tools' $dflag
 else
-  echo '$esc' | claude -p
+  echo '$esc' | claude -p --allowedTools '$tools' $dflag
 fi
 "@
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($remoteScript -replace "`r`n", "`n")))

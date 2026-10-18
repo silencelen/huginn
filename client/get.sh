@@ -14,7 +14,7 @@
 #  - no: onboards here in the terminal: the client (the same install.sh a clone
 #    runs, from the newest cli-v release - never from a moving branch: key,
 #    `Host huginn`, the host's trust in the key), huginn core, paired with the
-#    host (not on Termux or macOS, where it cannot run), then the device and
+#    host (not on Termux, where it cannot run), then the device and
 #    local-AI questions.
 # The questions can be answered up front: HUGINN_GUI, HUGINN_DEVICE,
 # HUGINN_LOCAL = y|n; with no terminal to ask on, an unanswered one is a no.
@@ -53,6 +53,7 @@ ask() {   # $1 = question, $2 = preset answer (env), default no
 get() { if command -v curl >/dev/null 2>&1; then curl -fsSL --max-time 60 "$1"; else wget -qO- --timeout=60 "$1"; fi; }
 
 printf '%s(o>%s huginn setup\n' "$(color 95)" "$(color 0)" >&2
+[ "$(uname -s 2>/dev/null)" = Darwin ] && die platform "macOS is not supported (Linux, Windows and Termux are)"
 command -v bash >/dev/null 2>&1 || die needs "bash (Termux: pkg install bash)"
 
 # The newest cli-v tag, by semver - the release a reviewed client is pinned to.
@@ -80,10 +81,9 @@ yes_no() {   # $1 = question, $2 = preset, $3 = default (y|n)
   case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 in_huginn() { bash -c '. "$HOME/.huginn/huginn.sh"; huginn "$@"' _ "$@"; }
-# Where huginn core can run: not Termux (the phone app is the device there),
-# not macOS (no core build yet).
+# Where huginn core can run: not Termux (the phone app is the device there).
 CAN_CORE=1
-case "$(uname -s 2>/dev/null)/$(uname -o 2>/dev/null)" in */Android*|Darwin/*) CAN_CORE="" ;; esac
+case "$(uname -o 2>/dev/null)" in *Android*) CAN_CORE="" ;; esac
 
 # THE FIRST QUESTION, before any configuration (owner rule 2026-10-16): with the
 # desktop app, its window walks the person through the rest and configures
@@ -121,8 +121,7 @@ else
   ssh -o BatchMode=yes -o ConnectTimeout=8 huginn true 2>/dev/null && TRUSTED=1
   # huginn core IS the product (owner rule 2026-10-15): the CLI rides inside it.
   if [ -z "$CAN_CORE" ]; then
-    case "$(uname -s 2>/dev/null)" in Darwin) line skip core "has no macOS build yet: this Mac uses the CLI" ;;
-      *) line skip core "does not run on Termux: this phone uses the CLI (the huginn app is the device)" ;; esac
+    line skip core "does not run on Termux: this phone uses the CLI (the huginn app is the device)"
   else
     # Its own lines join this block: download, binary, service, linger, tray,
     # and pairing - which, without ssh to the host, asks for the token (run 7).
@@ -171,11 +170,12 @@ elif [ -n "$CORE" ] && [ -z "$PAIRED" ]; then
   say "huginn is installed, but huginn core is not paired with huginn yet (above says why)."
   say "Pair it any time:  huginn core pair --url ${HUGINN_APPD_URL:-https://<host>:8787}   (asks for the token)"
   say "then offer this machine:  huginn device on"
-elif [ -z "$CORE" ] && [ -z "$(uname -o 2>/dev/null | grep Android)" ] && [ "$(uname -s)" != Darwin ]; then
+elif [ -z "$CORE" ] && [ -z "$(uname -o 2>/dev/null | grep Android)" ]; then
   say "The CLI is installed, but huginn core is not (above says why): huginn core install"
 else
   say "huginn is set up. Open a new terminal and run:  huginn"
-  say "That opens the console; huginn help lists every command."
+  if [ -n "$CAN_CORE" ]; then say "That opens the console; huginn help lists every command."
+  else say "That attaches to your main session; huginn help lists every command."; fi
   [ -n "$GUI" ] || [ -n "$TRUSTED" ] || say "$(color 90)Attaching to sessions from a terminal needs ssh to the host; set that up any time with: huginn setup ssh$(color 0)"
 fi
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *)

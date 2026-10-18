@@ -533,7 +533,7 @@ func printServiceStatus() {
 // $HUGINN_APPD_TOKEN, never argv (argv is world-readable in the process list).
 func corePair(args []string) int {
 	fs := flag.NewFlagSet("core pair", flag.ContinueOnError)
-	url := fs.String("url", "", "huginn address, e.g. https://192.168.10.20:8787")
+	url := fs.String("url", "", "the server's address, e.g. https://192.168.1.20:8787")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

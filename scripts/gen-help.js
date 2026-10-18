@@ -44,7 +44,6 @@ const LANGS = {
     esc: (s) => s.replace(/\\/g, '\\\\').replace(/\$/g, '\\$').replace(/`/g, '\\`'),
     ph: {
       REPO: ['$HUGINN_REPO', 'silencelen/huginn'],
-      UPDATE_HOST: ['${HUGINN_UPDATE_HOST:-$HUGINN_UPDATE_HOST_DEFAULT}', 'huginn'],
       HOST_VAR: ['\\$HUGINN_HOST', '$HUGINN_HOST'],
       HOST_HERE: ['${HUGINN_HOST:+, which is $HUGINN_HOST here}', ', which is huginn here'],
     },
@@ -54,7 +53,6 @@ const LANGS = {
     esc: (s) => s.replace(/`/g, '``').replace(/\$/g, '`$'),
     ph: {
       REPO: ['$script:HUGINN_REPO', 'silencelen/huginn'],
-      UPDATE_HOST: ['$(if ($env:HUGINN_UPDATE_HOST) { $env:HUGINN_UPDATE_HOST } else { $script:HUGINN_UPDATE_HOST_DEFAULT })', 'huginn'],
       HOST_VAR: ['`$env:HUGINN_HOST', '$env:HUGINN_HOST'],
       HOST_HERE: ['$(if ($env:HUGINN_HOST) { ", which is $env:HUGINN_HOST here" })', ', which is huginn here'],
     },

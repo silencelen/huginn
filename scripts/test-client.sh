@@ -200,14 +200,19 @@ STUB
   grep -q -- "--disallowedTools 'Bash Edit Write NotebookEdit'" <<<"$P" \
     && ok "-p carries a correctly quoted deny-list" \
     || bad "-p deny-list is malformed: $(grep -o -- '--disallowedTools.*' <<<"$P" | head -1)"
-  grep -q -- "--allowedTools 'Skill mcp__mempalace WebFetch WebSearch'" <<<"$P" \
-    && ok "-p allow-list is read-only + web + memory + Skill" || bad "-p allow-list wrong"
+  grep -q -- "--allowedTools 'Skill WebFetch WebSearch'" <<<"$P" \
+    && ok "-p fallback allow-list is read-only + web + Skill" || bad "-p allow-list wrong"
+  grep -q -- "huginn-ask ask" <<<"$P" \
+    && ok "-p goes through the server's huginn-ask when it has one" || bad "-p does not try huginn-ask ask"
+  grep -q -- "mcp__" <<<"$P" && bad "-p grants an MCP tool of its own" || ok "-p grants no MCP tool of its own"
 
   Y=$(emit 'huginn -y "q"')
   grep -q -- "--disallowedTools" <<<"$Y" \
     && bad "-y must NOT carry a deny-list" || ok "-y carries no deny-list"
-  grep -q -- "--allowedTools 'Skill Bash Read Edit Write Glob Grep WebFetch WebSearch mcp__mempalace'" <<<"$Y" \
-    && ok "-y allow-list may mutate (+ Skill)" || bad "-y allow-list wrong"
+  grep -q -- "--allowedTools 'Skill Bash Read Edit Write Glob Grep WebFetch WebSearch'" <<<"$Y" \
+    && ok "-y fallback allow-list may mutate (+ Skill)" || bad "-y allow-list wrong"
+  grep -q -- "huginn-ask act" <<<"$Y" \
+    && ok "-y goes through the server's huginn-ask when it has one" || bad "-y does not try huginn-ask act"
 
   E=$(emit 'huginn end testsess')
   grep -q "POST .*/v1/sessions/testsess/soft-end" <<<"$E" \
@@ -301,8 +306,10 @@ SP=$(semit 'huginn -p "q"')
 grep -q -- "--disallowedTools 'Bash Edit Write NotebookEdit'" <<<"$SP" \
   && ok "sh: -p carries a correctly quoted deny-list" \
   || bad "sh: -p deny-list malformed/missing"
-grep -q -- "--allowedTools 'Skill mcp__mempalace WebFetch WebSearch'" <<<"$SP" \
+grep -q -- "--allowedTools 'Skill WebFetch WebSearch'" <<<"$SP" \
   && ok "sh: -p allow-list matches the ps1 client" || bad "sh: -p allow-list differs from ps1"
+grep -q -- "huginn-ask ask" <<<"$SP" \
+  && ok "sh: -p goes through the server's huginn-ask when it has one" || bad "sh: -p does not try huginn-ask ask"
 
 SY=$(semit 'huginn -y "q"')
 if grep -q -- "--disallowedTools" <<<"$SY"; then bad "sh: -y must NOT carry a deny-list"; else ok "sh: -y carries no deny-list"; fi
@@ -491,35 +498,38 @@ APSSH
   fi
 fi
 
-echo "[5d/8] the runner fetch really tries the mirror"
-# ⚠ WHY: both runner fetches gated on `Length -gt 0` alone - never on
-# $LASTEXITCODE, never on validity - BEFORE the `if (-not $got) { scp ... }`
-# mirror block. `gh api` prints its error JSON to STDOUT (401 with a bad token =
-# 112 bytes, 404 for a renamed path = 127 bytes, both exit 1), so a FAILED fetch
-# still set $got, the mirror was SKIPPED, the later `node --check` cleared $got,
-# and the user was told "gh and the mirror both failed" about a mirror that was
-# never contacted. On stock Windows PowerShell 5.1 the second half compounds it:
-# `>` is Out-File, default -Encoding unicode, i.e. UTF-16LE + BOM, which node
-# cannot parse - so `huginn device on` and `huginn local on|update|plan` failed
-# 100% of the time on a 5.1 box with gh installed and authenticated.
-#
-# The 5.1 encoding half is settled by Microsoft's documentation plus the
-# mechanism (a UTF-16LE+BOM file passes a length gate and fails `node --check`,
-# verified). What is driven here is the ORDERING half, which is platform
-# independent, plus the source property that no fetch uses `>` any more.
+echo "[5d/8] client code comes from the newest release, checked before it is used"
+# Client files (the runner, the local-tier manager and shim, the client itself)
+# are fetched from the newest cli-v release on GitHub - never from a moving
+# branch - and syntax-checked before they replace anything: a 200 can carry a
+# proxy's error page. The SSH mirror is a source only when HUGINN_UPDATE_HOST is
+# set on purpose; without it there is no silent fallback to another host.
+# Stubbed end to end (curl/wget for bash, Invoke-WebRequest for PowerShell), so
+# nothing here reaches the network.
 FT=$(mktemp -d); STUB_DIRS+=("$FT")
-cat > "$FT/gh" <<'GHSTUB'
+cat > "$FT/curl" <<'CURLSTUB'
 #!/usr/bin/env bash
-printf 'gh %s\n' "$*" >> "$FETCH_LOG"
-case "${GH_MODE:-errbody}" in
-  # What the real gh does on a bad token / renamed path: the error JSON goes to
-  # STDOUT and the exit code is 1.
-  errbody) echo '{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}'; exit 1 ;;
-  # HTTP 200 carrying something that is not the file (a proxy page, a truncation).
-  junk)    echo 'this is ) not javascript'; exit 0 ;;
-  ok)      echo 'if (process.argv[2] === "version") console.log("1.0.0-gh");'; exit 0 ;;
+printf 'curl %s\n' "$*" >> "$FETCH_LOG"
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    --max-time) shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[ "${REL_MODE:-ok}" = down ] && exit 22
+case "$url" in
+  *api.github.com*) echo '[{"tag_name":"cli-v9.9.8"},{"tag_name":"desktop-v9.9.99"},{"tag_name":"cli-v9.9.10"}]' ;;
+  *raw.githubusercontent.com*)
+    if [ "${REL_MODE:-ok}" = junk ]; then body='this is ) not javascript'
+    else body='if (process.argv[2] === "version") console.log("1.0.0-rel");'; fi
+    if [ -n "$out" ]; then printf '%s\n' "$body" > "$out"; else printf '%s\n' "$body"; fi ;;
+  *) exit 22 ;;
 esac
-GHSTUB
+CURLSTUB
+printf '#!/bin/sh\necho "wget $*" >> "$FETCH_LOG"; exit 4\n' > "$FT/wget"
 cat > "$FT/scp" <<'SCPSTUB'
 #!/usr/bin/env bash
 printf 'scp %s\n' "$*" >> "$FETCH_LOG"
@@ -528,82 +538,95 @@ dest="${!#}"
 printf 'if (process.argv[2] === "version") console.log("9.9.9-scp");\n' > "$dest"
 exit 0
 SCPSTUB
-chmod +x "$FT/gh" "$FT/scp"
+chmod +x "$FT/curl" "$FT/wget" "$FT/scp"
 # Set out here, not inside the runners: they execute in a command substitution,
 # whose exports never reach this shell - and the assertions read the log.
 export FETCH_LOG="$FT/log"
 
-# The POSIX twin already gated on gh's EXIT status, so it never skipped the
-# mirror for an error body. What it also never checked was whether a 200 is the
-# FILE: a proxy error page is a successful fetch of something that is not
-# JavaScript, and that skipped the mirror on both sides.
-sh_fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+sh_fetch_run () {   # $1 = huginn command, $2 = REL_MODE, $3 = HUGINN_UPDATE_HOST, $4 = SCP_MODE
   rm -rf "$FT/shhome"; mkdir -p "$FT/shhome"
   : > "$FETCH_LOG"
-  ( export PATH="$FT:$PATH" HOME="$FT/shhome" GH_MODE="$2" SCP_MODE="${3:-ok}"
+  ( export PATH="$FT:$PATH" HOME="$FT/shhome" REL_MODE="$2" SCP_MODE="${4:-ok}"
+    if [ -n "${3:-}" ]; then export HUGINN_UPDATE_HOST="$3"; else unset HUGINN_UPDATE_HOST; fi
     . "$PWD/client/huginn.sh" >/dev/null 2>&1
-    eval "$1" ) 2>&1
+    eval "$1"; echo "RC=$?" ) 2>&1
 }
-SHJ=$(sh_fetch_run 'huginn device update' junk ok)
-grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$SHJ" \
-  && ok "sh: a 200 that is not JavaScript falls through to the mirror" \
+SHO=$(sh_fetch_run 'huginn device update' ok)
+grep -q 'raw.githubusercontent.com/silencelen/huginn/cli-v9.9.10/client/huginn-device' "$FETCH_LOG" \
+  && ok "sh: the runner comes from the NEWEST cli-v tag (by version, not list order)" \
+  || bad "sh: device update fetched: $(cat "$FETCH_LOG")"
+grep -q '1.0.0-rel' <<<"$SHO" && ! grep -q '^scp ' "$FETCH_LOG" \
+  && ok "sh: and installs it without touching any SSH host" || bad "sh: device update said: $SHO / log: $(cat "$FETCH_LOG")"
+grep -q 'contents/client' client/huginn.sh \
+  && bad "sh: a fetch still reads the default branch through the contents API" \
+  || ok "sh: nothing reads client code from the default branch"
+SHJ=$(sh_fetch_run 'huginn device update' junk)
+! grep -q '^scp ' "$FETCH_LOG" && grep -q 'newest release' <<<"$SHJ" && grep -q 'RC=1' <<<"$SHJ" \
+  && ok "sh: a 200 that is not JavaScript is refused, not installed, and no other host is tried" \
   || bad "sh: device update on a junk body said: $SHJ / log: $(cat "$FETCH_LOG")"
-SHB=$(sh_fetch_run 'huginn device update' errbody fail)
-grep -q 'gh' <<<"$SHB" && grep -q 'mirror' <<<"$SHB" \
-  && ok "sh: when both fail, the message names which source failed" \
-  || bad "sh: both-failed message was: $SHB"
+SHM=$(sh_fetch_run 'huginn device update' ok mirrorhost)
+grep -q '^scp .*mirrorhost:/usr/local/share/huginn-cli/huginn-device' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$SHM" \
+  && ! grep -q 'raw.githubusercontent' "$FETCH_LOG" \
+  && ok "sh: HUGINN_UPDATE_HOST, set on purpose, is the source instead" \
+  || bad "sh: device update with a mirror said: $SHM / log: $(cat "$FETCH_LOG")"
+SHB=$(sh_fetch_run 'huginn device update' ok mirrorhost fail)
+grep -q 'mirrorhost mirror' <<<"$SHB" && grep -q 'RC=1' <<<"$SHB" \
+  && ok "sh: a failing mirror is named, and the command fails" || bad "sh: mirror-failed message was: $SHB"
 
 if ! command -v pwsh >/dev/null 2>&1; then
-  skip "ps1 runner-fetch checks (no pwsh)"
+  skip "ps1 client-fetch checks (no pwsh)"
 else
-  fetch_run () {   # $1 = huginn command, $2 = GH_MODE, $3 = SCP_MODE
+  # PowerShell resolves a FUNCTION before a cmdlet of the same name, so this
+  # stands in for the network inside one pwsh invocation.
+  PS_IWR='function global:Invoke-WebRequest { [CmdletBinding()] param([string]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$TimeoutSec)
+    Add-Content -Path $env:FETCH_LOG -Value "iwr $Uri"
+    if ($env:REL_MODE -eq "down") { throw "offline" }
+    if ($Uri -like "*api.github.com*") { return [pscustomobject]@{ Content = "[{""tag_name"":""cli-v9.9.8""},{""tag_name"":""cli-v9.9.10""}]" } }
+    $body = if ($env:REL_MODE -eq "junk") { "this is ) not javascript" } else { "if (process.argv[2] === ""version"") console.log(""1.0.0-rel"");" }
+    Set-Content -Path $OutFile -Value $body -Encoding ascii }'
+  fetch_run () {   # $1 = huginn command, $2 = REL_MODE, $3 = HUGINN_UPDATE_HOST, $4 = SCP_MODE
     rm -rf "$FT/home"; mkdir -p "$FT/home"
     : > "$FETCH_LOG"
-    HOME="$FT/home" GH_MODE="$2" SCP_MODE="${3:-ok}" PATH="$FT:$PATH" \
-      pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
+    HOME="$FT/home" REL_MODE="$2" HUGINN_UPDATE_HOST="${3:-}" SCP_MODE="${4:-ok}" PATH="$FT:$PATH" \
+      pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $PS_IWR; $1" 2>&1 | tr -d '\r'
   }
-  FR=$(fetch_run 'huginn device update' errbody ok)
-  grep -q '^scp ' "$FETCH_LOG" \
-    && ok "ps1: a gh error BODY does not count as a fetch - the mirror is contacted" \
-    || bad "ps1: device update with a failing gh never ran scp; log: $(cat "$FETCH_LOG") / said: $FR"
-  grep -q '9.9.9-scp' <<<"$FR" \
-    && ok "ps1: and the runner installed is the mirror's" || bad "ps1: device update said: $FR"
-  FJ=$(fetch_run 'huginn device update' junk ok)
-  grep -q '^scp ' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$FJ" \
-    && ok "ps1: a 200 that is not JavaScript also falls through to the mirror" \
+  FO=$(fetch_run 'huginn device update' ok)
+  grep -q 'iwr https://raw.githubusercontent.com/silencelen/huginn/cli-v9.9.10/client/huginn-device' "$FETCH_LOG" \
+    && ok "ps1: the runner comes from the NEWEST cli-v tag" || bad "ps1: device update fetched: $(cat "$FETCH_LOG")"
+  grep -q '1.0.0-rel' <<<"$FO" && ! grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: and installs it without touching any SSH host" || bad "ps1: device update said: $FO"
+  # ⚠ READ THROUGH try/catch, NOT OFF THE ERROR RENDERER: PowerShell wraps and
+  # colours a terminating error's text; a caller catches it or reads the code.
+  FJ=$(fetch_run 'try { huginn device update } catch { Write-Host "REFUSED: $_" }; Write-Host "RC=$LASTEXITCODE"' junk)
+  grep -q 'REFUSED:' <<<"$FJ" && grep -q 'not valid JavaScript' <<<"$FJ" && ! grep -q '^scp ' "$FETCH_LOG" \
+    && ok "ps1: a 200 that is not JavaScript is refused, and no other host is tried" \
     || bad "ps1: device update on a junk body said: $FJ / log: $(cat "$FETCH_LOG")"
-  # ⚠ READ THROUGH try/catch, NOT OFF THE ERROR RENDERER. Since the fetch
-  # refusal became a terminating error (it used to print and return SUCCESS),
-  # the sentence arrives inside PowerShell's error view - which wraps it at the
-  # console width, prefixes continuation lines with '|', and threads ANSI colour
-  # THROUGH THE MIDDLE of it, so 'scp from huginn exited 1' came back as
-  # "scp from<esc>[0m ... <esc>[31;1mhuginn exited 1". None of that is ours to
-  # fix and none of it is what a caller reads: a script catches the error, or
-  # looks at the exit code.
-  FB=$(fetch_run 'try { huginn device update } catch { Write-Host "REFUSED: $_" }; Write-Host "RC=$LASTEXITCODE"' errbody fail)
-  grep -q 'REFUSED:' <<<"$FB" && grep -q 'gh exited 1' <<<"$FB" && grep -qE 'scp from [^ ]+ exited' <<<"$FB" \
-    && ok "ps1: when both fail, the message names which source failed and how" \
-    || bad "ps1: both-failed message was: $FB"
-  # AND IT IS A FAILURE. The whole of M3: a refusal that leaves $LASTEXITCODE 0
-  # is read by a script, a CI step or a && chain as a success - here, as "the
-  # runner was installed" when nothing was fetched at all.
-  grep -q 'RC=1' <<<"$FB" \
-    && ok "ps1: and a fetch that fetched nothing sets \$LASTEXITCODE" \
-    || bad "ps1: device update with no source left: $(grep -o 'RC=[0-9]*' <<<"$FB")"
-  FBU=$(fetch_run 'huginn device update' errbody fail >/dev/null 2>&1; echo "exit=$?")
+  # AND IT IS A FAILURE: a refusal that leaves $LASTEXITCODE 0 reads as "the
+  # runner was installed" to a script or a && chain.
+  grep -q 'RC=1' <<<"$FJ" \
+    && ok "ps1: and a fetch that installed nothing sets \$LASTEXITCODE" \
+    || bad "ps1: refused fetch left: $(grep -o 'RC=[0-9]*' <<<"$FJ")"
+  FBU=$(fetch_run 'huginn device update' down >/dev/null 2>&1; echo "exit=$?")
   grep -q 'exit=1' <<<"$FBU" \
     && ok "ps1: and uncaught, the whole pwsh invocation fails" \
     || bad "ps1: an uncaught fetch refusal left pwsh at $FBU"
-  FL=$(fetch_run 'huginn local plan' errbody ok)
-  grep -q '^scp ' "$FETCH_LOG" \
-    && ok "ps1: the local-tier fetch has the same ordering" \
-    || bad "ps1: local plan never ran scp; log: $(cat "$FETCH_LOG") / said: $FL"
-  # ⚠ AND THE SOURCE PROPERTY, because the encoding half of this cannot be run
-  # from Linux: `>` into the temp file is Out-File, and its PS 5.1 default is
-  # UTF-16LE + BOM. Nothing may redirect into a fetch temp again.
-  grep -qE 'gh api [^|]*> *\$tmp' client/huginn.ps1 \
+  FM=$(fetch_run 'huginn device update' ok mirrorhost)
+  grep -q '^scp .*mirrorhost:/usr/local/share/huginn-cli/huginn-device' "$FETCH_LOG" && grep -q '9.9.9-scp' <<<"$FM" \
+    && ok "ps1: HUGINN_UPDATE_HOST, set on purpose, is the source instead" \
+    || bad "ps1: device update with a mirror said: $FM / log: $(cat "$FETCH_LOG")"
+  FL=$(fetch_run 'huginn local plan' ok)
+  grep -q 'cli-v9.9.10/client/huginn-local' "$FETCH_LOG" \
+    && ok "ps1: the local-tier fetch uses the same source" \
+    || bad "ps1: local plan fetched: $(cat "$FETCH_LOG") / said: $FL"
+  # ⚠ AND THE SOURCE PROPERTY, because the encoding half cannot be run from
+  # Linux: `>` is Out-File, whose PS 5.1 default is UTF-16LE + BOM, which node
+  # cannot parse. Nothing may redirect into a fetch temp file.
+  grep -qE '(gh api|Invoke-WebRequest)[^|]*> *\$tmp' client/huginn.ps1 \
     && bad "ps1: a fetch still redirects with '>' - PS 5.1 writes UTF-16 there" \
     || ok "ps1: no fetch redirects into its temp file with '>'"
+  grep -q 'contents/client' client/huginn.ps1 \
+    && bad "ps1: a fetch still reads the default branch through the contents API" \
+    || ok "ps1: nothing reads client code from the default branch"
 fi
 
 echo "[5e/8] the address a device is told to dial is a URL"

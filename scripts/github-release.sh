@@ -68,7 +68,7 @@ APP_TAG="app-v"          # -> "mobile-v" once every device is past 2.73.0
 CLI_TAG="cli-v"
 
 case "$COMPONENT" in
-  core)    TAG="$CLI_TAG$VERSION";  TITLE="Huginn CLI $VERSION (Linux, macOS, Windows)"; CHANGELOG=CHANGELOG.md ;;
+  core)    TAG="$CLI_TAG$VERSION";  TITLE="Huginn CLI $VERSION (Linux, Windows)"; CHANGELOG=CHANGELOG.md ;;
   app)     TAG="$APP_TAG$VERSION";  TITLE="Huginn Mobile $VERSION (Android)";            CHANGELOG=mobile/CHANGELOG.md ;;
   # ONE build, TWO platforms — an .exe and a .deb from the same jars. That is why
   # this channel is not split into windows-v/linux-v: it would be two tags, two
