@@ -20,12 +20,12 @@
     </TimeTrigger>
     <LogonTrigger>
       <Enabled>true</Enabled>
-      <UserId>JNET\silence</UserId>
+      <UserId>HOME\alex</UserId>
     </LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <UserId>JNET\silence</UserId>
+      <UserId>HOME\alex</UserId>
       <LogonType>S4U</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>

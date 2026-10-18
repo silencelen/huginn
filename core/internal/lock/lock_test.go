@@ -12,14 +12,14 @@ import (
 // Fixtures are the literal shapes quser prints (ported from LockProbeTest.kt).
 var (
 	consoleActive = strings.ToLower(` USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
->silencelen            console             1  Active      none   9/14/2026 8:02 AM`)
+>alex                  console             1  Active      none   9/14/2026 8:02 AM`)
 	rdpActive = strings.ToLower(` USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
->silencelen            rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM`)
+>alex                  rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM`)
 	rdpDisconnected = strings.ToLower(` USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
- silencelen                                1  Disc         1:20  9/14/2026 8:02 AM`)
+ alex                                      1  Disc         1:20  9/14/2026 8:02 AM`)
 	noUser = "no user exists for *"
 	both   = strings.ToLower(` USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME
->silencelen            rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM
+>alex                  rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM
  someone                                   3  Disc         1:20  9/13/2026 1:00 PM`)
 )
 
@@ -77,7 +77,7 @@ func TestWindowsReading(t *testing.T) {
 }
 
 func TestParseWindows(t *testing.T) {
-	out := "LOGONUI 1\r\nQUSER\r\n USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME\r\n>silencelen            rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM\r\n"
+	out := "LOGONUI 1\r\nQUSER\r\n USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME\r\n>alex                  rdp-tcp#7           2  Active          .  9/14/2026 8:02 AM\r\n"
 	if r := ParseWindows(out); r.Reading != Unlocked {
 		t.Fatalf("%+v", r)
 	}
@@ -102,7 +102,7 @@ func TestReadingFence(t *testing.T) {
 
 // The Omarchy capture from the brief: a wayland user session on seat0 and
 // the user manager's own session.
-const omarchyList = "1 1000 silence seat0 1197 user tty1 no -\n2 1000 silence - 1207 manager - no -\n"
+const omarchyList = "1 1000 alex seat0 1197 user tty1 no -\n2 1000 alex - 1207 manager - no -\n"
 
 var omarchyShow = map[string]string{
 	"1": "Type=wayland\nClass=user\nState=active\nLockedHint=no\nRemote=no\n",
@@ -111,11 +111,11 @@ var omarchyShow = map[string]string{
 
 func TestParseListSessions(t *testing.T) {
 	ss := ParseListSessions(omarchyList)
-	if len(ss) != 2 || ss[0].ID != "1" || ss[0].UID != 1000 || ss[0].User != "silence" || ss[1].ID != "2" {
+	if len(ss) != 2 || ss[0].ID != "1" || ss[0].UID != 1000 || ss[0].User != "alex" || ss[1].ID != "2" {
 		t.Fatalf("%+v", ss)
 	}
 	// Older layout, and a legend + footer that must be skipped.
-	old := "SESSION  UID USER    SEAT  TTY\n      3 1000 silence seat0 tty2\n\n1 sessions listed.\n"
+	old := "SESSION  UID USER    SEAT  TTY\n      3 1000 alex seat0 tty2\n\n1 sessions listed.\n"
 	ss = ParseListSessions(old)
 	if len(ss) != 1 || ss[0].ID != "3" {
 		t.Fatalf("old: %+v", ss)
@@ -155,7 +155,7 @@ func TestLinuxOmarchyUnlocked(t *testing.T) {
 
 func TestLinuxHeadlessIsUnknownNotLocked(t *testing.T) {
 	// A lingering service on a headless box: only the manager session.
-	p := Prober{GOOS: "linux", UID: 1000, Exec: fakeLoginctl("2 1000 silence - 1207 manager - no -\n", omarchyShow, nil)}
+	p := Prober{GOOS: "linux", UID: 1000, Exec: fakeLoginctl("2 1000 alex - 1207 manager - no -\n", omarchyShow, nil)}
 	r := p.Probe(context.Background())
 	if r.Reading != Unknown || !r.NoSession || !strings.Contains(r.Reason, "no graphical session") {
 		t.Fatalf("%+v", r)

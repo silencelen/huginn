@@ -16,7 +16,7 @@
 // itself is a schedule nobody read.
 //
 // The call is caged exactly like lib/suggest's: `--setting-sources ""` so the
-// global CLAUDE.md never leaks in (the hermod lesson — a headless claude quietly
+// global CLAUDE.md never leaks in (a headless claude otherwise quietly
 // inherits the whole persona), `--tools ""` so it cannot act, `--max-turns 1` so it
 // cannot wander, and a scratch cwd so no project instructions load. What it gets is
 // the text below and the draft; what it may do is write a reply.

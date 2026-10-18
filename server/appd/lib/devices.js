@@ -263,7 +263,7 @@ function scopeCovers(scope, needed) {
 function canRun(device, mode, now, state = null) {
   if (!device) return { ok: false, reason: 'no such device' };
   // The name a PERSON knows, when the registry is at hand: refusals about a
-  // serving row must say "DATATREEX", not the "-llm" credential the UI no
+  // serving row must say "OFFICE-PC", not the "-llm" credential the UI no
   // longer shows anywhere.
   const who = state ? machineDisplayName(state, device) : device.name;
   if (!isOnline(device, now)) return { ok: false, reason: `${who} has not checked in` };
@@ -508,7 +508,7 @@ function canServe(device, now, state = null) {
  */
 /**
  * The name a person knows the machine by: its claude row's name when the
- * machine has one ("DATATREEX"), the serving row's own name otherwise. The
+ * machine has one ("OFFICE-PC"), the serving row's own name otherwise. The
  * `-llm` names are credential labels, not what anyone calls the box.
  */
 function machineDisplayName(state, d) {

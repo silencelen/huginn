@@ -195,7 +195,7 @@ test('the shared test vector, byte for byte', () => {
 
 test('a remote http:// is dialled and stored as https://; loopback stays', () => {
   const cases = {
-    'http://192.168.2.117:8787': 'https://192.168.2.117:8787',
+    'http://192.168.1.20:8787': 'https://192.168.1.20:8787',
     'http://[fd00::1]:8787': 'https://[fd00::1]:8787',
     'http://huginn.lan:8787': 'https://huginn.lan:8787',
     'https://10.0.0.5:8787': 'https://10.0.0.5:8787',
@@ -214,9 +214,9 @@ test('a remote http:// is dialled and stored as https://; loopback stays', () =>
 });
 
 test('a stored pre-3.11 http:// url is rewritten as https:// on load', () => {
-  writeConf({ url: 'http://192.168.2.117:8787', name: 'x' });
-  assert.equal(dev.loadConf().url, 'https://192.168.2.117:8787');
-  assert.equal(readConf().url, 'https://192.168.2.117:8787', 'and written back, so status shows it');
+  writeConf({ url: 'http://192.168.1.20:8787', name: 'x' });
+  assert.equal(dev.loadConf().url, 'https://192.168.1.20:8787');
+  assert.equal(readConf().url, 'https://192.168.1.20:8787', 'and written back, so status shows it');
 });
 
 test('`on --url http://<remote>` stores https://', () => {

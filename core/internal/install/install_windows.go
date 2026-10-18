@@ -38,7 +38,7 @@ func installWindows(l Layout, src string) (Result, error) {
 			// ⚠ The aside name must be FREE. A huginn.exe.old that an older
 			// process still runs from (a console window left open across two
 			// updates) cannot be deleted, and Windows refuses to rename over
-			// it: PRESTIGE's `huginn update` failed with "Access is denied"
+			// it: a test PC's `huginn update` failed with "Access is denied"
 			// (2026-10-16). So a held .old gets a unique sibling instead.
 			aside := dst + ".old"
 			if _, err := os.Stat(aside); err == nil {
