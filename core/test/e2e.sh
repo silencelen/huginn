@@ -110,6 +110,32 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   SU2=$(HOME="$T/sshhome" PATH="$T/sshstub:$PATH" "$T/huginn" setup ssh </dev/null 2>&1); SURC=$?
   grep -q "is already in" <<<"$SU2" && grep -q 'does not know this key yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
+  # The address it is paired on does not carry ssh from here (PRESTIGE,
+  # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh points
+  # 'Host huginn' at the first that answers on port 22. The stub times out for
+  # the paired address and refuses the key everywhere else.
+  mkdir -p "$T/sshstub2" "$T/sshhome2"
+  cat > "$T/sshstub2/ssh" <<'STUB'
+#!/bin/sh
+hn="$(awk '/^Host huginn$/{f=1;next} /^Host /{f=0} f&&$1=="HostName"{print $2}' "$HOME/.ssh/config" 2>/dev/null)"
+[ "$hn" = 127.0.0.1 ] && { echo "ssh: connect to host 127.0.0.1 port 22: Connection timed out" >&2; exit 255; }
+echo "Permission denied (publickey)." >&2; exit 255
+STUB
+  chmod +x "$T/sshstub2/ssh"
+  ANY22=""
+  for a in $(px http://core/appd/v1/status | sed -n 's/.*"addresses":\[\([^]]*\)\].*/\1/p' | tr -d '"' | tr ',' ' '); do
+    case "$a" in *:*) continue ;; esac
+    timeout 3 bash -c "exec 3<>/dev/tcp/$a/22" 2>/dev/null && { ANY22="$a"; break; }
+  done
+  if [ -n "$ANY22" ]; then
+    SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
+    grep -q 'does not answer ssh from here' <<<"$SU3" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
+      && grep -q 'does not know this key yet' <<<"$SU3" \
+      && ok "setup ssh moves 'Host huginn' to another of huginn's addresses that answers ssh ($(sed -n 's/^ *HostName //p' "$T/sshhome2/.ssh/config"))" \
+      || { bad "setup ssh did not find an ssh address"; printf '%s\n' "$SU3"; }
+  else
+    echo "SKIP  no address of this host answers on port 22: the ssh-address search is untested here"
+  fi
 fi
 
 "$T/huginn" device on --scope own --name e2e-box >/dev/null || bad "device on"

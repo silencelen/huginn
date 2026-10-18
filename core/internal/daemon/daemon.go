@@ -556,6 +556,24 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 		}
 		ipc.WriteJSON(w, 200, map[string]bool{"claim": d.watch.claim()})
 	})
+	// POST /core/tray {"cmd":"hide"}: the desktop app's "Tray icon" switch
+	// taking the icon away (it comes back at the next sign-in, or from that
+	// switch, which starts `huginn core tray`). Sent once, never retained.
+	mux.HandleFunc("POST /core/tray", func(w http.ResponseWriter, r *http.Request) {
+		var c struct {
+			Cmd string `json:"cmd"`
+		}
+		if err := decode(r, &c); err != nil || c.Cmd != "hide" {
+			ipc.WriteJSON(w, 400, map[string]string{"error": "the one command is hide"})
+			return
+		}
+		if d.watch.trays.Load() == 0 {
+			ipc.WriteJSON(w, 409, map[string]string{"error": "no tray icon is showing"})
+			return
+		}
+		d.hub.Send(ipc.Event{Name: traystate.EventTrayCmd, Data: c})
+		ipc.WriteJSON(w, 202, map[string]bool{"sent": true})
+	})
 	// POST /core/gui {"cmd":"open"|"quit"|"closeToTray", "value":bool, "url":"huginn://…"}:
 	// the tray's menu acting on the desktop app. Sent once, never retained.
 	mux.HandleFunc("POST /core/gui", func(w http.ResponseWriter, r *http.Request) {

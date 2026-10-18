@@ -145,6 +145,9 @@ internal class CoreClient(private val socket: Path) {
     @Serializable
     private data class Presence(val focused: String?, val closeToTray: Boolean)
 
+    /** Settings' "Tray icon" switch, turned off: the core tells its tray to go. */
+    suspend fun hideTray() { call("POST", "/core/tray", """{"cmd":"hide"}""") }
+
     /** Forget the pairing (Settings → Remove this computer). */
     suspend fun unpair() { call("POST", "/core/unpair", "{}") }
 

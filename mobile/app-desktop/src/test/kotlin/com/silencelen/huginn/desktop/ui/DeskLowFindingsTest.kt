@@ -45,8 +45,12 @@ class DeskLowFindingsTest {
     fun `close to tray is dead on a machine with no tray`() {
         val src = source("ui", "settings", "SettingsPages.kt")
         val row = src.substringAfter("id = \"appearance.close-to-tray\"").substringBefore("SettingsNavRow(")
+        // Since 2.5.8 "the machine" includes huginn core's icon (owner,
+        // 2026-10-17): no tray on this computer, or core's icon hidden, and
+        // there is nothing to close to.
         assertTrue(
-            row.contains("enabled = isTraySupported"),
+            row.contains("enabled = trayHere") &&
+                src.contains("val trayHere = coreTray || (isTraySupported && !coreInstalled)"),
             "the switch must follow the machine, like its summary already does",
         )
         assertTrue(

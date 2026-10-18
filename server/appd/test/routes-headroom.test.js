@@ -506,6 +506,20 @@ test('/v1/autoswitch keeps `last.at` in SECONDS, and loses none of the row', asy
   assert.equal(typeof hr.arbiter.lastResumeAt, 'number', 'and lastResumeAt is a NUMBER, never null');
 });
 
+test('/v1/status lists the host\'s own addresses, without loopback (3.12.1)', async () => {
+  // A computer that knows huginn by one address finds one its network lets ssh
+  // through (PRESTIGE, 2026-10-17). Behind the token, like the rest of status.
+  const { body } = await api('/v1/status');
+  assert.ok(Array.isArray(body.addresses), 'addresses is a list');
+  for (const a of body.addresses) {
+    assert.ok(!/^127\./.test(a) && a !== '::1', `loopback is not an address to reach this host by: ${a}`);
+    assert.ok(!/^169\.254\./.test(a) && !/^fe80:/i.test(a), `link-local is not either: ${a}`);
+  }
+  const v4 = body.addresses.findIndex((a) => !a.includes(':'));
+  const v6 = body.addresses.findIndex((a) => a.includes(':'));
+  if (v4 >= 0 && v6 >= 0) assert.ok(v4 < v6, 'IPv4 first');
+});
+
 test('/v1/status carries the one-line summary the pill draws', async () => {
   setUsage({ session: 4, weekly_all: 8, weekly_fable: 61 });
   await tick({});

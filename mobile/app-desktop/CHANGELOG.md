@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.5.8
+
+Carries core 2.5.8. From the owner's eighth recorded setup run on PRESTIGE.
+
+### Changed
+- **One icon, and a clear way back** (owner). Where huginn core is installed, this app never shows
+  its own older tray icon. Hiding core's icon ("Hide this icon") used to bring that one up in its
+  place. **Settings > Appearance & behaviour > Tray icon** now shows or hides core's icon at once.
+  Hidden, it comes back at the next sign-in or from that switch. With it hidden, closing the window
+  quits Huginn (huginn core keeps running), and the Close to tray row says so.
+
 ## 2.5.7
 
 Carries core 2.5.7. From the owner's sixth recorded setup run on PRESTIGE.

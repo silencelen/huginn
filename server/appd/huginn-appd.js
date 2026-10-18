@@ -102,7 +102,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.12.0';
+const VERSION = '3.12.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -6833,6 +6833,61 @@ function saveQuickActions(rec) {
   return rec;
 }
 
+/**
+ * This host's own addresses, for clients to reach it by: a computer that knows
+ * huginn by one address can find another that its network lets ssh through
+ * (PRESTIGE, 2026-10-17: 192.168.2.117 carries only huginn's port from VLAN 7,
+ * 192.168.7.117 carries ssh). Not loopback, not link-local.
+ *
+ * Behind the token, like everything on /v1/status: huginn is a single-user
+ * application, and whoever sets up a client holds the same authority over this
+ * host as the person running it (owner, 2026-10-17).
+ */
+function hostAddresses() {
+  let found = [];
+  try {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const a of list || []) if (a && !a.internal) found.push(a.address);
+    }
+  } catch {
+    // ⚠ THE SERVICE CANNOT ENUMERATE ITS INTERFACES: the unit's
+    // RestrictAddressFamilies leaves out AF_NETLINK, which libuv's
+    // interface listing needs, and it throws. /proc says the same thing
+    // without a socket.
+    found = procAddresses();
+  }
+  const out = [];
+  for (const a of found) {
+    if (/^127\./.test(a) || a === '::1' || /^169\.254\./.test(a) || /^fe80:/i.test(a)) continue;
+    if (!out.includes(a)) out.push(a);
+  }
+  // IPv4 first: the address people type, and the one ssh configs name.
+  return out.sort((x, y) => (x.includes(':') ? 1 : 0) - (y.includes(':') ? 1 : 0));
+}
+
+/** This host's addresses from /proc: the IPv4 local routes, the global IPv6s. */
+function procAddresses(read = (f) => fs.readFileSync(f, 'utf8')) {
+  const out = [];
+  try {
+    const lines = read('/proc/net/fib_trie').split('\n');
+    for (let i = 1; i < lines.length; i++) {
+      if (!/\/32 host LOCAL/.test(lines[i])) continue;
+      const m = /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\s*$/.exec(lines[i - 1]);
+      if (m) out.push(m[1]);
+    }
+  } catch { /* no IPv4 table */ }
+  try {
+    for (const l of read('/proc/net/if_inet6').split('\n')) {
+      const f = l.trim().split(/\s+/);
+      if (f.length < 4 || f[3] !== '00') continue; // global scope only
+      const hex = f[0].match(/.{4}/g);
+      if (!hex || hex.length !== 8) continue;
+      try { out.push(new URL(`http://[${hex.join(':')}]`).hostname.replace(/^\[|\]$/g, '')); } catch { /* skip */ }
+    }
+  } catch { /* no IPv6 */ }
+  return out;
+}
+
 async function statusPayload() {
   const [ver, mp, df, sessions] = await Promise.all([
     claudeVersion(), mempalaceState(),
@@ -6847,6 +6902,7 @@ async function statusPayload() {
   }
   return {
     host: os.hostname(),
+    addresses: hostAddresses(),
     appdVersion: VERSION,
     uptimeSec: Math.floor(os.uptime()),
     load: os.loadavg().map((x) => Math.round(x * 100) / 100),
@@ -10034,12 +10090,13 @@ async function handleRequest(req, res) {
       // tell without being told. Additive: the Ping model's fields are all
       // nullable-with-defaults, so an older client ignores it.
       //
-      // ⚠ ONLY THE ADDRESS THE CALLER ALREADY DIALLED — the local end of their
-      // own socket. A LIST of the daemon's other addresses would be a disclosure
-      // even behind the token, and belongs on /v1/status, which already carries
-      // the hostname. (Ping IS authenticated; `authorized()` runs above it with
-      // no exemption. The unauthenticated route is /v1/challenge, which returns
-      // before that check — see the block above.)
+      // ONLY THE ADDRESS THE CALLER ALREADY DIALLED — the local end of their
+      // own socket. The daemon's other addresses are on /v1/status
+      // (`addresses`, since 3.12.1): huginn is single-user, and a token holder
+      // has the same authority over this host as its owner (owner, 2026-10-17).
+      // (Ping IS authenticated; `authorized()` runs above it with no exemption.
+      // The unauthenticated route is /v1/challenge, which returns before that
+      // check — see the block above.)
       const via = { addr: req.socket.localAddress || null, port: req.socket.localPort || null };
       return sendJson(res, 200, { ok: true, version: VERSION, host: os.hostname(), via, secure: Boolean(req.socket.encrypted) });
     }

@@ -23,6 +23,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/ipc"
+	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/service"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/tray"
@@ -57,6 +58,29 @@ func core(args []string) int {
 	case "pair":
 		return corePair(args[1:])
 	case "tray":
+		// `core tray show`: start the icon now, detached, and return - the
+		// desktop app's "Tray icon" switch turned on (and a person's way back
+		// after "Hide this icon"). Not as administrator, and only where a
+		// desktop session can show it.
+		if len(args) > 1 && args[1] == "show" {
+			var st struct {
+				Tray bool `json:"tray"`
+			}
+			if _, err := call(http.MethodGet, "/core/status", nil, &st); err == nil && st.Tray {
+				fmt.Println("the tray icon is already showing")
+				return 0
+			}
+			if !proc.InteractiveSession() || proc.Elevated() {
+				fmt.Fprintln(os.Stderr, "huginn core tray show: run it from your own desktop session, not as administrator")
+				return 1
+			}
+			if err := proc.StartDetached(stableBinary(), "core", "tray"); err != nil {
+				fmt.Fprintln(os.Stderr, "huginn core tray show: "+err.Error())
+				return 1
+			}
+			fmt.Println("started the tray icon")
+			return 0
+		}
 		// The tray role (docs/CORE-ARCHITECTURE.md §3.1): started at graphical
 		// login, draws the icon and posts notifications that `core run` decides.
 		//
