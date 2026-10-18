@@ -31,6 +31,25 @@ object ModelLabels {
     /** The reason the mode control is pinned on a local chat. One string, both platforms. */
     const val LOCAL_ASK_ONLY = "local models are Ask-only"
 
+    /**
+     * A session's permission mode as people read it: Claude Code reports
+     * "acceptEdits", "bypassPermissions", and the Mode button printed that with
+     * its first letter raised ("AcceptEdits"). Unknown modes are split at their
+     * capitals the same way, so a new one still reads as words.
+     */
+    fun permissionMode(mode: String?): String? {
+        val m = mode?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return when (m) {
+            "default" -> "Default"
+            "acceptEdits" -> "Accept edits"
+            "plan" -> "Plan"
+            "bypassPermissions" -> "Bypass permissions"
+            "dontAsk" -> "Don't ask"
+            "auto" -> "Auto"
+            else -> m.replace(Regex("(?<=[a-z])(?=[A-Z])"), " ").lowercase().replaceFirstChar { it.uppercase() }
+        }
+    }
+
     /** `xhigh` reads as `Xhigh`; an unknown or missing level falls back to the word. */
     fun effort(effort: String?): String =
         effort?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Effort"

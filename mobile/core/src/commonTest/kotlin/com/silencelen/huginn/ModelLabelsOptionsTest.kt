@@ -125,4 +125,14 @@ class ModelLabelsOptionsTest {
         val rows = ModelLabels.options(gone, PickerSite.CHAT, current = "local-gpubox-qwen3-8b", started = true)
         assertEquals(listOf("local-gpubox-qwen3-8b"), rows.map { it.first })
     }
+
+    @Test
+    fun permissionModesReadAsWords() {
+        // The Mode button printed "AcceptEdits" (2.5.9).
+        assertEquals("Accept edits", ModelLabels.permissionMode("acceptEdits"))
+        assertEquals("Bypass permissions", ModelLabels.permissionMode("bypassPermissions"))
+        assertEquals("Plan", ModelLabels.permissionMode("plan"))
+        assertEquals("Some new mode", ModelLabels.permissionMode("someNewMode"))
+        assertEquals(null, ModelLabels.permissionMode(" "))
+    }
 }

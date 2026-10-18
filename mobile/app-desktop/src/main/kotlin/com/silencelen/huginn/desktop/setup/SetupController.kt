@@ -452,6 +452,14 @@ class SetupController(
         fun interested(routeBookEmpty: Boolean, setupDone: Boolean, hasPreAnswers: Boolean): Boolean =
             !setupDone && (routeBookEmpty || hasPreAnswers)
 
+        /**
+         * Whether this install has never been connected: an empty route book of
+         * its own AND no huginn core carrying it. Through the core the book stays
+         * empty by design (the core holds the addresses), so emptiness alone
+         * raised setup on every launch.
+         */
+        fun neverConnected(routeBookEmpty: Boolean, viaCore: Boolean): Boolean = routeBookEmpty && !viaCore
+
         const val NOTIFY_ASK: String =
             "A test notification has just been posted. Did it appear on this screen?"
 

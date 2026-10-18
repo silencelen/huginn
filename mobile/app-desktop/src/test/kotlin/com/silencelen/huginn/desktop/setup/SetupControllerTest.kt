@@ -447,4 +447,16 @@ class SetupControllerTest {
         c.working(SetupStep.LOCAL_AI, "anything")
         assertEquals(StepStatus.Passed("serving"), c.state.value.statusOf(SetupStep.LOCAL_AI))
     }
+
+    /**
+     * Through huginn core this app's own route book stays empty by design, and
+     * an empty book read as "never connected": setup opened on every launch
+     * until all seven steps were done (2.5.9).
+     */
+    @Test
+    fun `a desktop huginn core carries is connected, whatever its own book says`() {
+        assertTrue(SetupController.neverConnected(routeBookEmpty = true, viaCore = false))
+        assertFalse(SetupController.neverConnected(routeBookEmpty = true, viaCore = true))
+        assertFalse(SetupController.neverConnected(routeBookEmpty = false, viaCore = false))
+    }
 }
