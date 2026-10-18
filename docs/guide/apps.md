@@ -14,8 +14,8 @@ session and chat runs on the server, and closing an app never stops one.
 ## Sessions
 
 The Sessions list shows every tmux session on the server, the same list `huginn ls` prints. Each
-row carries a state, the session's title, its last activity, how much of its context window is
-used, and how long ago it changed.
+row carries a state, the session's title, how much of its context window is used, and its last
+activity: its last message or tool call, not the last time its screen redrew.
 
 | State | Meaning |
 |---|---|
@@ -43,6 +43,10 @@ your messages, Claude's answers, its thinking, each tool call folded together wi
 and the output of subagents and workflows. Code blocks, commands and diffs are syntax
 highlighted. When a session fans out to subagents, a picker above the conversation lets you
 follow any one of them.
+
+Long blocks fold: a paste, a message from another session, a subagent's report and the summary
+Claude Code writes after compacting each show as a card with a label and its first line. Tap or
+click one to open it.
 
 - **Sending.** Type in the composer and send. If a question or dialog is on screen, your message
   waits until it is answered, then goes in.

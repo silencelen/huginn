@@ -5,7 +5,8 @@ terminal, only the question and the answer. Use one for a question or a small ta
 [session](sessions.md) for long, interactive work you may want to watch or steer.
 
 You start chats in the [apps](apps.md) (**New chat**) and, as one-shots, from any terminal with
-`huginn -p` and `huginn -y`.
+`huginn -p` and `huginn -y`. A new chat you leave without sending anything is deleted; one with
+an unsent draft is kept.
 
 ## Ask and Act
 
