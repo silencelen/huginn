@@ -1701,26 +1701,46 @@ function huginn {
       $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
              elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
              else                       { 'C:\ProgramData\huginn-local' }
-      New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
+      # The appd token is root-equivalent on the host, so it is NOT written into
+      # ProgramData here: that tree inherits BUILTIN\Users:read until
+      # huginn-local's lockTree runs, and a token placed before it is readable by
+      # every account on the PC for the whole run - downloads included - and
+      # indefinitely if the run aborts before lockTree (2026-10-18, F2). Instead
+      # it is staged owner-only in THIS user's profile and handed to the elevated
+      # manager through HUGINN_SEED_TOKEN_FILE; the manager writes it into
+      # device\ only AFTER lockTree, via a temp that already carries the locked
+      # DACL, and shreds the stage. An install that already holds a token is left
+      # for lockTree to relock.
       $tokfile = Join-Path $dir 'device/appd-token'
+      $seed = $null
       if (-not (Test-Path $tokfile)) {
+        $tok = ''
         $old = Join-Path $HOME '.config/huginn/appd-token'
-        if (Test-Path $old) { Copy-Item $old $tokfile }
-        else {
-          $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
-          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
-          else { _Huginn-Fail "huginn local: could not read the appd token from $H" }
-        }
+        if (Test-Path $old) { $tok = Get-Content -Raw -Path $old }
+        if (-not "$tok".Trim()) { $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join '' }
+        if (-not "$tok".Trim()) { _Huginn-Fail "huginn local: could not read the appd token from $H" }
+        $hd = Join-Path $HOME '.huginn'
+        New-Item -ItemType Directory -Force -Path $hd | Out-Null
+        $seed = Join-Path $hd ('.seed-' + [IO.Path]::GetRandomFileName())
+        Set-Content -NoNewline -Path $seed -Value "$tok".Trim()
+        # Owner-only. The profile already denies other standard users; pin it.
+        $me = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+        icacls $seed /inheritance:r /grant:r "*${me}:F" /c /q | Out-Null
       }
       $env:HUGINN_LOCAL_DIR = $dir
-      if (_Huginn-HasUrl $rest) { node $mgr on @rest; return }
-      $srv = _Huginn-SrvUrl $H
-      if (-not $srv) {
-        _Huginn-Fail ("huginn local: could not work out how to reach $H's daemon`n" +
-                      "              (no ssh address to go on, and $H named no global IPv4)`n" +
-                      "              say it yourself: huginn local on --url https://<host>:8787")
+      try {
+        if ($seed) { $env:HUGINN_SEED_TOKEN_FILE = $seed }
+        if (_Huginn-HasUrl $rest) { node $mgr on @rest; return }
+        $srv = _Huginn-SrvUrl $H
+        if (-not $srv) {
+          _Huginn-Fail ("huginn local: could not work out how to reach $H's daemon`n" +
+                        "              (no ssh address to go on, and $H named no global IPv4)`n" +
+                        "              say it yourself: huginn local on --url https://<host>:8787")
+        }
+        node $mgr on --url $srv @rest
+      } finally {
+        if ($seed) { Remove-Item Env:\HUGINN_SEED_TOKEN_FILE -ErrorAction SilentlyContinue }
       }
-      node $mgr on --url $srv @rest
     } elseif (Test-Path $mgr) {
       node $mgr $sub @rest
     } else {
