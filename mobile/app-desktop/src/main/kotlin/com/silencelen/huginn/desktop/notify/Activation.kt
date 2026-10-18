@@ -52,24 +52,25 @@ sealed interface Activation {
     data class Open(val target: NavTarget) : Activation
 
     /**
-     * [fingerprint] is non-null BY CONSTRUCTION. See [Activations.parse]: an
-     * answer without one is not a degraded activation, it is a refused one, and
-     * making the field nullable here would move that decision to every call site.
+     * [fingerprint] and [nonce] are non-null BY CONSTRUCTION. See
+     * [Activations.parse]: an answer missing either is not a degraded answer, it
+     * is navigation, and making the fields nullable here would move that decision
+     * to every call site. A parsed Answer is still only a CLAIM: [Activations.resolve]
+     * acts on it only when [nonce] is one this process issued for exactly this.
      */
-    data class Answer(val session: String, val option: Int, val fingerprint: String) : Activation
+    data class Answer(val session: String, val option: Int, val fingerprint: String, val nonce: String) : Activation
 
     /**
      * Put a session back on the model the ladder moved it off.
      *
-     * NO FINGERPRINT, and that is not an oversight. The rule on `answer` is that
-     * an unstamped link approves whatever question happens to be on the pane at
-     * that instant, which on a root-equivalent host is an arbitrary tool-use
-     * approval. This verb has no such reach: its whole effect is to ask the daemon
-     * to put ONE NAMED session back on the model it was already using, which is
-     * neither destructive nor privileged, and the worst a forged link achieves is
-     * a model change the owner can make from the header in one click.
+     * NONCED, like [Answer]. It used to carry nothing but the session name, on
+     * the reasoning that a model change is neither destructive nor privileged.
+     * But anyone can fire a scheme URL, and this one spends the owner's Fable
+     * window and stops the ladder moving the session for ten minutes. So it is
+     * acted on only with a nonce from the toast that offered it; otherwise it
+     * opens the session, where the model is one click away in the header.
      */
-    data class Undo(val session: String) : Activation
+    data class Undo(val session: String, val nonce: String) : Activation
 
     /**
      * Dismiss a notification without going anywhere.
@@ -83,15 +84,41 @@ sealed interface Activation {
 }
 
 /**
+ * What the running app does with a `huginn://` URL, decided before anything is done.
+ *
+ * Kept apart from [Activation] because a parsed URL is a claim and this is the
+ * verdict on it. Only [Answer] and [Undo] act for the owner, and only
+ * [Activations.resolve] makes them.
+ */
+sealed interface ActivationStep {
+    /** Bring the window up and nothing else. */
+    data object Summon : ActivationStep
+
+    /**
+     * Bring the window up on [target]. [refused] says why, when this is an answer
+     * or an undo that was not acted on, for the log.
+     */
+    data class Navigate(val target: NavTarget, val refused: String? = null) : ActivationStep
+
+    /** The exact call the in-app answer makes: `answerPrompt(session, option, fp)`. */
+    data class Answer(val session: String, val option: Int, val fingerprint: String) : ActivationStep
+
+    data class Undo(val session: String) : ActivationStep
+
+    /** Take the notification filed under [key] down. */
+    data class Dismiss(val key: String) : ActivationStep
+}
+
+/**
  * `huginn://` — how a toast button, a browser link or another copy of this app
  * reaches the running instance.
  *
- * Two verbs:
+ * Four verbs:
  * ```
- * huginn://open?view=chats|sessions&id=…      focus + navigate
- * huginn://answer?session=…&option=N&fp=…     answer a pane prompt
- * huginn://undo?session=…                     put a laddered session back
- * huginn://ack?key=…                          take a notification down
+ * huginn://open?view=chats|sessions&id=…               focus + navigate
+ * huginn://answer?session=…&option=N&fp=…&nonce=…      answer a pane prompt
+ * huginn://undo?session=…&nonce=…                      put a laddered session back
+ * huginn://ack?key=…                                   take a notification down
  * ```
  *
  * Pure and side-effect free on purpose — every rule below is a security rule, and
@@ -106,15 +133,19 @@ object Activations {
     /**
      * Parses one URL, or refuses it.
      *
-     * THE FINGERPRINT IS MANDATORY ON `answer`, and that single line is the whole
-     * security story of this verb. Anything running on this machine can fire a
-     * scheme URL — a local process, a background tab, a link the owner clicks —
-     * and huginn's host is root-equivalent. Without a fingerprint the daemon
-     * answers whatever question happens to be on the pane at that instant, so a
-     * forged link approves an arbitrary tool-use prompt. With it, the answer only
-     * lands if it matches the exact question this app was showing when it built
-     * the toast; anything else comes back 409 and nothing is typed.
+     * AN `answer` OR `undo` WITHOUT A NONCE IS NAVIGATION. Anything running on
+     * this machine can fire a scheme URL — a local process, a background tab, a
+     * link the owner clicks — and huginn's host is root-equivalent. The
+     * fingerprint does not stop that: it is an unkeyed hash of the question and
+     * its options, so anyone who can predict a stock dialog can compute it, and
+     * a link carrying only a fingerprint once approved whatever it named. So both
+     * verbs need a nonce as well, and a link without one comes back as
+     * [Activation.Open] on the session: the window comes up there and the owner
+     * clicks. Whether a nonce that IS present is any good is [resolve]'s question.
      *
+     * THE FINGERPRINT STAYS MANDATORY ON `answer`, for its own job: the daemon
+     * types the answer only if it matches the exact question this app was showing
+     * when it built the toast; anything else comes back 409 and nothing is typed.
      * The app must never COMPUTE a fingerprint to fill the gap. It is the host's
      * identity for a question, and a second implementation of "which question is
      * this" is a second opinion — see [com.silencelen.huginn.data.PanePrompt].
@@ -142,14 +173,20 @@ object Activations {
                 val session = q["session"].orEmpty()
                 val option = q["option"]?.toIntOrNull() ?: return null
                 val fingerprint = q["fp"].orEmpty()
+                val nonce = q["nonce"].orEmpty()
                 if (session.isEmpty() || option < 1) return null
-                if (fingerprint.isEmpty()) return null
-                Activation.Answer(session, option, fingerprint)
+                if (fingerprint.isEmpty() || nonce.isEmpty()) return sessionOf(session)
+                Activation.Answer(session, option, fingerprint, nonce)
             }
 
             "undo" -> {
                 val session = q["session"].orEmpty()
-                if (session.isEmpty()) null else Activation.Undo(session)
+                val nonce = q["nonce"].orEmpty()
+                when {
+                    session.isEmpty() -> null
+                    nonce.isEmpty() -> sessionOf(session)
+                    else -> Activation.Undo(session, nonce)
+                }
             }
 
             "ack" -> {
@@ -160,6 +197,43 @@ object Activations {
             else -> null
         }
     }
+
+    private fun sessionOf(name: String): Activation = Activation.Open(NavTarget(TargetKind.SESSIONS, name))
+
+    /**
+     * What to do with [raw], which may have come from anywhere.
+     *
+     * The single place an outside URL can become an action taken for the owner,
+     * and it becomes one only when its nonce is one [nonces] issued for exactly
+     * that session, question and option, has not been used, and is younger than
+     * its TTL. Everything else that names a session opens it — including any link
+     * that STARTED this process, since a nonce from a previous run cannot be in a
+     * fresh table — so a forged or stale link is navigation, never an answer.
+     */
+    fun resolve(raw: String?, nonces: ActivationNonces): ActivationStep =
+        when (val a = parse(raw)) {
+            null -> ActivationStep.Summon
+            is Activation.Open -> ActivationStep.Navigate(a.target)
+            is Activation.Ack -> ActivationStep.Dismiss(a.key)
+            is Activation.Answer -> {
+                val v = nonces.redeemAnswer(a.nonce, a.session, a.option, a.fingerprint)
+                if (v == ActivationNonces.Verdict.ACCEPTED) {
+                    ActivationStep.Answer(a.session, a.option, a.fingerprint)
+                } else {
+                    refused(a.session, "answer", v)
+                }
+            }
+            is Activation.Undo -> {
+                val v = nonces.redeemUndo(a.nonce, a.session)
+                if (v == ActivationNonces.Verdict.ACCEPTED) ActivationStep.Undo(a.session) else refused(a.session, "undo", v)
+            }
+        }
+
+    private fun refused(session: String, verb: String, v: ActivationNonces.Verdict) =
+        ActivationStep.Navigate(
+            NavTarget(TargetKind.SESSIONS, session),
+            refused = "$verb link with ${v.name.lowercase()} nonce: opened the session instead",
+        )
 
     /**
      * Finds an activation in a launcher's argv.
@@ -190,10 +264,11 @@ object Activations {
     fun openUrl(target: NavTarget): String =
         "${PREFIX}open?view=${enc(target.kind.wire)}&id=${enc(target.id)}"
 
-    fun answerUrl(session: String, option: Int, fingerprint: String): String =
-        "${PREFIX}answer?session=${enc(session)}&option=$option&fp=${enc(fingerprint)}"
+    fun answerUrl(session: String, option: Int, fingerprint: String, nonce: String): String =
+        "${PREFIX}answer?session=${enc(session)}&option=$option&fp=${enc(fingerprint)}&nonce=${enc(nonce)}"
 
-    fun undoUrl(session: String): String = "${PREFIX}undo?session=${enc(session)}"
+    fun undoUrl(session: String, nonce: String): String =
+        "${PREFIX}undo?session=${enc(session)}&nonce=${enc(nonce)}"
 
     fun ackUrl(key: String): String = "${PREFIX}ack?key=${enc(key)}"
 

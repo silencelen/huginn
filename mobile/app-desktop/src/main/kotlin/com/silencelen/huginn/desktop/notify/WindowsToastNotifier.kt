@@ -15,9 +15,12 @@ import java.util.concurrent.TimeUnit
  * line (a question containing a quote would otherwise be a broken toast, and a
  * broken toast is a "needs you" that silently never appears).
  *
- * Buttons activate by PROTOCOL, not COM: `huginn://answer?…&fp=…`. That is what
- * makes them work from the lock screen with nothing registered but a URL scheme,
- * and the fingerprint is what makes them safe — see [Activations.parse].
+ * Buttons activate by PROTOCOL, not COM: `huginn://answer?…&fp=…&nonce=…`. That
+ * is what makes them work from the lock screen with nothing registered but a URL
+ * scheme. It is also why they need the nonce: anything can fire a protocol URL,
+ * so a button is acted on only when its nonce is one this process issued for
+ * that toast (see [ActivationNonces]); the fingerprint is the daemon's staleness
+ * check, not a proof of where the click came from.
  *
  * ### What has to be true for this to work
  *
@@ -173,11 +176,13 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
 
         internal fun attentionXml(request: NotifyRequest): String {
             // Up to three buttons, matching the phone's lock-screen split. The
-            // fingerprint rides on every one; with none, there are no buttons at all
-            // rather than buttons that answer whatever is on the pane.
+            // fingerprint and the toast's nonce ride on every one; without both,
+            // there are no buttons at all rather than buttons that answer whatever
+            // is on the pane, or that anything on the machine could press.
             val fp = request.fingerprint
-            val actions = if (fp.isNullOrEmpty()) "" else request.options.take(3).joinToString("") { o ->
-                val url = Activations.answerUrl(sessionOf(request), o.number, fp)
+            val nonce = request.nonce
+            val actions = if (fp.isNullOrEmpty() || nonce.isNullOrEmpty()) "" else request.options.take(MAX_ANSWER_BUTTONS).joinToString("") { o ->
+                val url = Activations.answerUrl(sessionOf(request), o.number, fp, nonce)
                 """<action content="${esc("${o.number}. ${o.label}".take(40))}" activationType="protocol" arguments="${esc(url)}"/>"""
             }
             return buildString {
@@ -200,7 +205,8 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
             append("</binding></visual>")
             // Actions, when the router gave any. These carry a finished URL rather
             // than a pane option, so unlike the answer buttons they need no
-            // fingerprint — see [Activation.Undo].
+            // fingerprint; the one that acts (Undo) carries its nonce in that URL
+            // already — see [Activation.Undo].
             append("<actions>${actionsXml(request)}</actions>")
             append("""<audio silent="true"/>""")
             append("</toast>")

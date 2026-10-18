@@ -4,13 +4,21 @@ package com.silencelen.huginn.desktop.notify
 data class AnswerOption(val number: Int, val label: String)
 
 /**
+ * The most answer buttons a toast draws, matching the phone's lock-screen split.
+ * A toast's nonce covers exactly these and no option past them.
+ */
+const val MAX_ANSWER_BUTTONS: Int = 3
+
+/**
  * A button that is not an answer to a pane question.
  *
  * [AnswerOption] carries a NUMBER because it selects a row of a dialog Claude
  * Code is showing, and it is refused without a fingerprint for the same reason.
  * "Undo that downgrade" is not that shape: there is no pane, no rows, and no
  * question — so it travels as a finished `huginn://` URL that this app built
- * itself, which is the only thing a toast backend can activate anyway.
+ * itself, which is the only thing a toast backend can activate anyway. A URL
+ * that acts for the owner (undo) carries its toast's nonce from
+ * [ActivationNonces], like the answer buttons do.
  *
  * Still BOUNDED: a fixed label and a URL from [Activations], never free text.
  */
@@ -45,6 +53,12 @@ data class NotifyRequest(
      * the host will type into whatever is on the pane. See [Activations.parse].
      */
     val fingerprint: String? = null,
+    /**
+     * This toast's nonce from [ActivationNonces], stamped on every answer button.
+     * Null means no answer buttons either: the fingerprint says WHICH question,
+     * and only the nonce says this app offered the answer. See [Activations.resolve].
+     */
+    val nonce: String? = null,
     /**
      * Buttons that activate a URL rather than answering a question. Rendered only
      * where [Notifier.supportsActions] is true, like [options].
