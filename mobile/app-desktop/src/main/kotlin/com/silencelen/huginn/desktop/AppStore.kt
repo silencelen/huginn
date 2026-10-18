@@ -419,7 +419,31 @@ class AppStore(
         )
     }
 
-    fun openChat(id: String?) { _view.value = View.CHATS; _chatId.value = id }
+    fun openChat(id: String?) { _view.value = View.CHATS; showChat(id) }
+
+    /**
+     * Put [id] in the chat pane, and let go of the one that was there.
+     *
+     * Every move off a chat comes through here — another chat, Escape, the
+     * Alt+arrow walk — so this is the one place that can see a chat being LEFT,
+     * and a chat left empty is deleted rather than kept as a blank row in the
+     * list. [ChatRules.leftEmpty] decides from the list's row and the draft;
+     * the daemon checks the message log again before deleting anything.
+     */
+    private fun showChat(id: String?) {
+        val leaving = _chatId.value
+        _chatId.value = id
+        if (leaving == null || leaving == id) return
+        val row = _chats.value.firstOrNull { it.id == leaving }
+        if (!com.silencelen.huginn.ui.ChatRules.leftEmpty(row, drafts[DraftBook.chatKey(leaving)])) return
+        scope.launch {
+            // A refusal (409: something arrived in it) or a 404 (already gone)
+            // leaves the list as the next poll finds it; neither is the
+            // reader's problem, so neither is reported.
+            runCatching { client.deleteChatIfEmpty(leaving) }
+            refreshChats()
+        }
+    }
     fun openSession(name: String?) {
         _view.value = View.SESSIONS
         // ⚠ THE ARCHIVE LETS GO. Both take the same detail half, and a live
@@ -461,7 +485,7 @@ class AppStore(
     /** Escape: close the open item, or fall back to the chats list. */
     fun back() {
         when (_view.value) {
-            View.CHATS -> if (_chatId.value != null) _chatId.value = null
+            View.CHATS -> if (_chatId.value != null) showChat(null)
             View.SESSIONS -> if (_sessionName.value != null) _sessionName.value = null
             // TWO STEPS OUT, in the order they were taken in: a member's session
             // first, then the project. Escape from a member landing back on the
@@ -490,7 +514,7 @@ class AppStore(
                     list.size,
                     delta,
                 )
-                list.getOrNull(i)?.let { _chatId.value = it.id }
+                list.getOrNull(i)?.let { showChat(it.id) }
             }
             View.SESSIONS -> {
                 val list = _sessions.value

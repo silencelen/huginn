@@ -131,6 +131,12 @@ data class Session(
      */
     val addressable: Boolean = true,
     val createdAt: Long = 0,
+    /**
+     * When the session last did real work, in epoch seconds: its transcript's
+     * last message, tool call or result (appd 3.13.1), and the pane's output
+     * while it is running. A plain shell session has only the pane. Before
+     * 3.13.1 this was the pane's last output, which every redraw moved.
+     */
     val activityAt: Long = 0,
     /**
      * tmux's own `session_activity`, which tracks CLIENT INTERACTION rather than
@@ -525,6 +531,15 @@ data class TranscriptEvent(
      * [RelayProject.from] set, which is the same category and less detail.
      */
     val project: RelayProject? = null,
+    /**
+     * The whole text behind a note the reader opens, when the note line is only
+     * its headline: another session's or a subagent's full report, or the
+     * summary Claude Code writes after a compaction (appd 3.13.1). Null on every
+     * other row, and on a daemon that predates it, which draws the line alone.
+     */
+    val body: String? = null,
+    /** What [body] is: `peer` (a message from another session) or `compact`. */
+    val fold: String? = null,
 )
 
 /**

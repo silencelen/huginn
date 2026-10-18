@@ -23,6 +23,20 @@ import com.silencelen.huginn.data.Chat
 object ChatRules {
 
     /**
+     * Was this chat left empty — created, never written in — so that leaving it
+     * should delete it rather than leave a blank row in the list?
+     *
+     * Asked of the chat the reader is LEAVING, from the list's own row. Nothing
+     * sent, nothing queued, nothing running and no conversation behind it; and
+     * no unsent draft either, because words typed and not yet sent are a reason
+     * to come back. The daemon checks the message log again before it deletes
+     * anything, so a list row a poll old cannot take a real conversation with it.
+     */
+    fun leftEmpty(chat: Chat?, draft: String): Boolean =
+        chat != null && !chat.running && chat.turns == 0 && chat.pending == 0 &&
+            chat.claudeSessionId == null && chat.lastSnippet == null && draft.isBlank()
+
+    /**
      * Where the daemon cuts a title — `huginn-appd.js`, `slice(0, 60)`.
      *
      * Mirrored rather than negotiated: nothing here changes the title, it only

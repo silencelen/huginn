@@ -288,6 +288,8 @@ fun SessionsList(
     // How many project sessions this list does NOT draw — they are on the
     // Projects page and nowhere else; see ProjectRules.splitByProject.
     inProjects: Int = 0,
+    // How many projects they are in: the number the line says (owner, 2026-10-17).
+    projectCount: Int = 0,
     onOpenProjects: (() -> Unit)? = null,
 ) {
     // Collapsed by default, and remembered only as long as the pane is: the
@@ -321,7 +323,7 @@ fun SessionsList(
                     "New starts one on the host with Claude Code already running in it. " +
                         "Sessions started from a terminal appear here too.",
                 )
-                InProjectsNote(inProjects, onOpenProjects)
+                InProjectsNote(inProjects, projectCount, onOpenProjects)
                 // ⚠ AND THE ARCHIVE STILL SHOWS. A host whose sessions have all
                 // been archived has an empty session list and is not an empty
                 // host; "No tmux sessions" with no way to reach what was put away
@@ -375,7 +377,7 @@ fun SessionsList(
                 }
                 // The project sessions are not in this list; this is the one line
                 // that says so.
-                if (inProjects > 0) item(key = "in-projects") { InProjectsNote(inProjects, onOpenProjects) }
+                if (inProjects > 0) item(key = "in-projects") { InProjectsNote(inProjects, projectCount, onOpenProjects) }
                 // Under the live rows, inside the same scroller — the archive is
                 // where this list ENDS, not a second pane competing with it.
                 item { archived() }
@@ -396,8 +398,8 @@ fun SessionsList(
  * the way there. Nothing is drawn when nothing is hidden.
  */
 @Composable
-private fun InProjectsNote(count: Int, onOpenProjects: (() -> Unit)?) {
-    val words = ProjectRules.hiddenWords(count) ?: return
+private fun InProjectsNote(count: Int, projects: Int, onOpenProjects: (() -> Unit)?) {
+    val words = ProjectRules.hiddenWords(count, projects) ?: return
     Row(
         Modifier.fillMaxWidth().padding(start = Space.wide, end = Space.tight, top = Space.unit, bottom = Space.unit),
         verticalAlignment = Alignment.CenterVertically,
@@ -442,7 +444,7 @@ private fun SessionRow(
             // A session mid-compaction gets the marker on the first line, where it
             // reads at a glance in the Conversations list.
             if (session.compacting) CompactingChip(Modifier.padding(start = Scale.s8))
-            Tip(timeTip("Last pane activity", session.activityAt, now)) {
+            Tip(timeTip("Last activity", session.activityAt, now)) {
                 Muted(TimeWords.short(session.activityAt, now * 1000L), Modifier.padding(start = Scale.s8))
             }
         }

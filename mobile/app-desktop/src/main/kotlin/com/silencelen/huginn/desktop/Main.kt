@@ -110,6 +110,13 @@ import com.silencelen.huginn.desktop.ui.padPanelShowing
  * is built here, before `application {}`, and merely READ from the composition.
  */
 fun main(args: Array<String>) {
+    // The renderer, chosen before anything draws: HUGINN_RENDER_API=OPENGL
+    // (or SOFTWARE_FAST, DIRECT3D) for this app only. Skiko reads
+    // SKIKO_RENDER_API too, but that is every Compose app on the machine.
+    // For telling a Direct3D fault from ours (garbled first frames, 2.6.1).
+    System.getenv("HUGINN_RENDER_API")?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }?.let {
+        System.setProperty("skiko.renderApi", it)
+    }
     val settings = DesktopSettings()
     val configDir = File(settings.path).parentFile ?: File(System.getProperty("user.home"), ".config")
 
@@ -735,6 +742,33 @@ fun main(args: Array<String>) {
             // `Toolkit.screenSize`. One unit or the other, never half of each.
             LaunchedEffect(Unit) {
                 window.minimumSize = java.awt.Dimension(WindowLayout.MIN_W, WindowLayout.MIN_H)
+            }
+
+            // ⚠ GARBLED FIRST FRAMES. On the first launch after an install or an
+            // update the window could show garbled or black patches until it was
+            // re-maximized or touched (Windows 11, 250% scaling, Direct3D; seen on
+            // the built-in screen and with an external monitor). A cold start is
+            // slow, and frames drawn while the window is still settling (shown,
+            // maximized, its scale read) stay on screen until something asks for
+            // another. So the window asks a few times in its first seconds: a
+            // repaint re-reads the scale and redraws the whole surface, which is
+            // what the manual re-maximize did. The renderer and scale are logged,
+            // so a report says which path drew it (HUGINN_RENDER_API overrides).
+            LaunchedEffect(Unit) {
+                // A fallback (Direct3D refused, OpenGL tried) is said when it happens.
+                window.onRenderApiChanged { AppLog.info("render", "renderer is now ${window.renderApi}") }
+                val api = runCatching { window.renderApi.toString() }.getOrDefault("?")
+                val scale = runCatching { window.graphicsConfiguration.defaultTransform.scaleX }.getOrDefault(1.0)
+                AppLog.info(
+                    "render",
+                    "api=$api scale=$scale bounds=${window.bounds.width}x${window.bounds.height} " +
+                        "maximized=${window.extendedState and java.awt.Frame.MAXIMIZED_BOTH == java.awt.Frame.MAXIMIZED_BOTH}",
+                )
+                for (wait in longArrayOf(300, 1_200, 3_000, 6_000)) {
+                    delay(wait)
+                    window.contentPane.revalidate()
+                    window.contentPane.repaint()
+                }
             }
 
             val windowInfo = LocalWindowInfo.current

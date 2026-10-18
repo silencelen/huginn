@@ -26,10 +26,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Summarize
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,11 +50,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
@@ -181,6 +188,10 @@ fun rowSelectionText(ev: TranscriptEvent): String = when (ev.kind) {
         ev.text?.takeIf { it.isNotBlank() },
         ev.result?.takeIf { it.isNotBlank() },
     ).joinToString("\n\n")
+    // A quote takes the pasted words, not the tags around them.
+    "user" -> WrappedText.plain(ev.text.orEmpty())
+    // A folded note quotes what it holds, not its clipped headline.
+    "system" -> ev.body?.takeIf { it.isNotBlank() } ?: ev.text.orEmpty()
     else -> ev.text.orEmpty()
 }.trim()
 
@@ -210,7 +221,7 @@ fun TranscriptEventItem(
     // own their own taps (a tool card expands) and a
     // clickable parent would take the indication for gestures it never handles.
     val host = LocalTranscriptSelection.current
-    val selectable = remember(ev.seq, ev.text, ev.result) {
+    val selectable = remember(ev.seq, ev.text, ev.result, ev.body) {
         if (host == null) "" else rowSelectionText(ev)
     }
     val press = if (host == null || selectable.isEmpty()) Modifier else Modifier.combinedClickable(
@@ -264,8 +275,23 @@ fun TranscriptEventItem(
             // `@handle` preview slugifies the slash (`sensor-board/docs` →
             // `@sensor-board-docs`), so the rendered line cannot be read back into
             // an addressable name. See TranscriptEvent.peer.
+            // A note with a body is a headline over something long — another
+            // session's report, the summary after a compaction — and opens like
+            // a thinking block instead of printing the whole thing inline.
             "system" -> if (ev.project != null) ProjectRelayNote(ev) else {
-                SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
+                val body = ev.body
+                if (!body.isNullOrBlank()) {
+                    FoldCard(
+                        label = foldLabel(ev),
+                        body = body,
+                        icon = if (ev.fold == "compact") Icons.Filled.Summarize else Icons.Filled.Forum,
+                        key = "fold:${ev.seq}:${body.hashCode()}",
+                        markdown = true,
+                        onCopy = onCopy,
+                    )
+                } else {
+                    SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
+                }
             }
             else -> Unit
         }
@@ -405,12 +431,10 @@ private fun UserBubble(text: String, queued: Boolean = false) {
                     }
                     if (remainder.isNotBlank()) {
                         Spacer(Modifier.height(6.dp))
-                        Text(remainder, style = MaterialTheme.typography.bodyMedium)
+                        UserWords(remainder)
                     }
                 } else {
-                    // Attachment markers render as what they mean, not where the
-                    // file landed on the daemon.
-                    Text(AttachmentText.displayText(text.trim()), style = MaterialTheme.typography.bodyMedium)
+                    UserWords(text.trim())
                 }
                 // Sent while Claude was mid-turn: it is waiting its turn, which is
                 // worth saying so the message does not look ignored.
@@ -425,6 +449,106 @@ private fun UserBubble(text: String, queued: Boolean = false) {
             }
         }
     }
+}
+
+/**
+ * What the person sent, as they should read it back: attachment markers as what
+ * they mean, and a paste (or a raw message from another session) folded into a
+ * card with its first line showing, instead of the markup around it.
+ */
+@Composable
+private fun UserWords(text: String) {
+    if (!WrappedText.hasWrapped(text)) {
+        Text(AttachmentText.displayText(text), style = MaterialTheme.typography.bodyMedium)
+        return
+    }
+    val segments = remember(text) { WrappedText.segments(text) }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        segments.forEachIndexed { i, seg ->
+            val label = seg.label
+            if (label == null) {
+                Text(AttachmentText.displayText(seg.text), style = MaterialTheme.typography.bodyMedium)
+            } else {
+                FoldCard(
+                    label = label,
+                    body = seg.text,
+                    icon = if (label.startsWith("Pasted")) Icons.Filled.ContentPaste else Icons.Filled.Forum,
+                    key = "paste:$i:${seg.text.hashCode()}",
+                    markdown = !label.startsWith("Pasted"),
+                    onCopy = null,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A long block drawn closed: its label and first line, opened by a tap. The same
+ * shape as [ThinkingBlock], for the same reason — the block is worth having and
+ * not worth the screen it would take.
+ *
+ * @param markdown true for text Claude wrote (a report, a summary), false for a
+ *   paste, which is whatever the person copied and is drawn as typed.
+ */
+@Composable
+private fun FoldCard(
+    label: String,
+    body: String,
+    icon: ImageVector,
+    key: String,
+    markdown: Boolean,
+    onCopy: ((String) -> Unit)?,
+) {
+    var open by rememberSaveable(key) { mutableStateOf(false) }
+    val preview = remember(body) { WrappedText.preview(body) }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().clickable { open = !open },
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = muted)
+                Spacer(Modifier.width(6.dp))
+                // One line, label first: a long sender name shortens the preview
+                // rather than pushing the chevron off the card.
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(label) }
+                        if (!open && preview.isNotEmpty()) append("   $preview")
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    if (open) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    modifier = Modifier.size(16.dp),
+                    tint = muted,
+                )
+            }
+            AnimatedVisibility(open) {
+                Box(Modifier.padding(top = 6.dp)) {
+                    if (markdown) MarkdownText(body, onCopy = onCopy)
+                    else Text(body, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A folded note's label: who sent it, or what it is. Never the clipped headline
+ * the daemon wrote for clients that cannot fold, which already repeats the body.
+ */
+fun foldLabel(ev: TranscriptEvent): String {
+    val who = ev.peer?.name?.trim()?.takeIf { it.isNotEmpty() }
+    if (ev.fold == "peer" || who != null) return "Message from ${who ?: "another session"}"
+    return ev.text?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.take(80) ?: "Details"
 }
 
 @Composable

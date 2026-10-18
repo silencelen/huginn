@@ -856,10 +856,11 @@ class ProjectRulesTest {
     }
 
     @Test
-    fun `the line under the list counts what it hid, and says nothing for nothing`() {
-        assertNull(ProjectRules.hiddenWords(0))
-        assertEquals("1 session is in a project", ProjectRules.hiddenWords(1))
-        assertEquals("3 sessions are in projects", ProjectRules.hiddenWords(3))
+    fun `the line under the list counts projects, and says nothing when nothing is hidden`() {
+        assertNull(ProjectRules.hiddenWords(0, 2))
+        assertEquals("1 project", ProjectRules.hiddenWords(3, 1))
+        assertEquals("2 projects", ProjectRules.hiddenWords(8, 2), "the projects, not the 8 sessions in them")
+        assertEquals("1 project", ProjectRules.hiddenWords(1, 0), "sessions marked for a project the list has not loaded yet")
     }
 
     // ------------------------------------------- the proposal in a transcript
