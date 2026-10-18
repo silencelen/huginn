@@ -77,7 +77,7 @@ class ChatEmptyDesktopTest {
         val text = source("app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/ui/ChatView.kt")
         assertTrue(text.contains("chatEmptyCopy("), "the empty state has two meanings and one drawing")
         assertTrue(
-            !text.contains("\"Reasoning and memory, no tools.\""),
+            !text.contains("\"Reads files and the web; changes nothing.\""),
             "the new-chat copy is the shared rule's to write, not this view's to repeat",
         )
     }

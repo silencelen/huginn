@@ -171,7 +171,7 @@ fun ChatsScreen(
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        "Ask: reasoning and memory, no tools. Act: also reads and edits files, runs commands, fetches the web.",
+                        "Ask: reads files and the web, and changes nothing. Act: also edits files and runs commands.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

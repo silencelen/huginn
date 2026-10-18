@@ -26,7 +26,7 @@ class NotifyPathTest {
     fun `a machine with nowhere to post says so plainly`() {
         assertEquals("none", Notifiers.pathWords(null))
         val why = Notifiers.pathSummary(null)
-        assertTrue(why.contains("Telegram"), "the honest half is where attention goes instead: $why")
+        assertTrue(why.contains("other devices"), "the honest half is where attention goes instead: $why")
         assertTrue(
             why.contains("tray") && why.contains("libnotify"),
             "and WHY there is no path, in the same words the log uses: $why",
@@ -92,7 +92,7 @@ class NotifyTestRefusalTest {
         val why = Notifiers.testRefusal(NoNotifier)
         assertTrue(why != null, "a no-op post must not be followed by 'did it appear?'")
         assertTrue(why.contains("tray") && why.contains("libnotify"), why)
-        assertTrue(why.contains("Telegram"), "and where attention goes instead: $why")
+        assertTrue(why.contains("other devices"), "and where attention goes instead: $why")
     }
 
     @Test
@@ -129,7 +129,7 @@ class NotifyClaimWordsTest {
             said.contains("no way to show a notification"),
             "it has to agree with the path row under it: $said",
         )
-        assertTrue(said.contains("Telegram"), "and where attention goes instead: $said")
+        assertTrue(said.contains("other devices"), "and where attention goes instead: $said")
         // ⚠ AND IT IS NOT THAT ROW'S SENTENCE VERBATIM. Two identical paragraphs
         // stacked is the other way to make a page unreadable: this row says the
         // consequence for the control it is attached to, the row below says why.
@@ -151,7 +151,7 @@ class NotifyClaimWordsTest {
     fun `unattended is unattended, and says which way attention goes`() {
         val said = Notifiers.claimWords(enabled = true, present = false, name = "libnotify")
         assertTrue(said.startsWith("not claiming"), said)
-        assertTrue(said.contains("Telegram"), said)
+        assertTrue(said.contains("other devices"), said)
     }
 
     /**
@@ -160,7 +160,7 @@ class NotifyClaimWordsTest {
      */
     @Test
     fun `turned off reads as turned off whatever the machine can do`() {
-        val off = "off — huginn falls back to Telegram"
+        val off = "off — huginn alerts your other devices instead"
         assertEquals(off, Notifiers.claimWords(enabled = false, present = true, name = "libnotify"))
         assertEquals(off, Notifiers.claimWords(enabled = false, present = false, name = null))
     }

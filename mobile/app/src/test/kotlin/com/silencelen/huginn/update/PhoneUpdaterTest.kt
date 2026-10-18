@@ -66,6 +66,22 @@ class PhoneUpdaterTest {
     )
 
     @Test
+    fun `a build with update checks off never asks the feed`() = runTest {
+        val asked = object : ReleaseFeed {
+            override val repo: String = "you/huginn"
+            override suspend fun list(perPage: Int): List<GhRelease> = error("a disabled updater listed releases")
+            override suspend fun getText(url: String): String = error("a disabled updater fetched $url")
+        }
+        val dir = tmpDir()
+        val s = PhoneUpdater(
+            installedVersionCode = 1, feed = asked, cacheDir = dir, installer = { true }, enabled = false,
+        ).check()
+        assertTrue("expected the disabled message, got $s",
+            s is AppUpdateState.Error && s.message == PhoneUpdater.DISABLED)
+        dir.deleteRecursively()
+    }
+
+    @Test
     fun `a newer release is Available but not downloaded`() = runTest {
         val dir = tmpDir()
         val payload = "apk-bytes".toByteArray()

@@ -221,9 +221,9 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
                 checked = notifyEnabled,
                 onCheckedChange = { scope.launch { settings.setNotifyEnabled(it) } },
                 summary = if (notifyEnabled) {
-                    "Attention comes here while this window is attended, instead of to Telegram."
+                    "Attention comes here while this window is attended, instead of to your other devices."
                 } else {
-                    "off — huginn falls back to Telegram"
+                    "off — huginn alerts your other devices instead"
                 },
             )
         }

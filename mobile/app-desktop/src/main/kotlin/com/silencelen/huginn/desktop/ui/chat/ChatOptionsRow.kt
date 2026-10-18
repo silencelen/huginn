@@ -99,7 +99,7 @@ fun ChatOptionsRow(
         } else {
             OptionPickerChip(
                 label = if (mode == "act") "Act" else "Ask",
-                options = listOf("ask" to "Ask — reasoning and memory, no tools", "act" to "Act — files, commands, the web"),
+                options = listOf("ask" to "Ask — reads and searches, changes nothing", "act" to "Act — files, commands, the web"),
                 enabled = enabled,
                 onPick = onMode,
             )

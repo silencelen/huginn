@@ -219,13 +219,13 @@ fun connectionTip(
     return when {
         !connected ->
             "Watch stream detached from $where.\n" +
-                "Nothing is being delivered to this window; alerts fall back to Telegram."
+                "Nothing is being delivered to this window; alerts go to your other devices."
         !notifyEnabled ->
             "Watch stream attached to $where.\n" +
-                "Notifications are switched off in Settings, so alerts go to Telegram instead."
+                "Notifications are switched off in Settings, so alerts go to your other devices instead."
         else ->
             "Watch stream attached to $where.\n" +
-                "Notifications arrive here while you are at this window; Telegram covers the rest."
+                "Notifications arrive here while you are at this window; your other devices cover the rest."
     }
 }
 

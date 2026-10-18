@@ -90,7 +90,7 @@ object Diagnostics {
             add("window visible  ${input.visible}")
             add("attended        ${input.present}")
             add("claiming route  ${input.claiming}")
-            add("desktop notifier ${input.notifier ?: "NOT WIRED (Telegram and the phone remain the only routes)"}")
+            add("desktop notifier ${input.notifier ?: "NOT WIRED (other devices and the alert relay remain the only routes)"}")
             add("")
             add("## Update")
             add("status          ${input.updateStatus}")

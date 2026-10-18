@@ -271,7 +271,7 @@ private fun AskSheet(
                 // The same words the new-chat dialog uses, so the choice reads
                 // the same everywhere it is offered.
                 Text(
-                    "Ask: reasoning and memory, no tools. Act: also reads and edits files, runs commands, fetches the web.",
+                    "Ask: reads files and the web, and changes nothing. Act: also edits files and runs commands.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
