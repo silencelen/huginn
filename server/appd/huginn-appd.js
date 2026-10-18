@@ -493,15 +493,22 @@ function readBodyRaw(req, limit = 256 * 1024) {
 }
 
 /**
- * Socket isolation for tests (see TMUX_SOCKET): pin every tmux call to a
- * private `-L` server. `-L` is a server flag, so it goes before the tmux
- * subcommand. Empty TMUX_SOCKET (production) leaves argv untouched.
+ * Global flags for every tmux call, ahead of the subcommand.
  *
- * ONE place, used by both run() and runStdin(), so a socket change lands once
+ * `-u`: a tmux client whose locale is not UTF-8 prints control characters in
+ * `-F` output as `_`, and every list this daemon parses is tab-separated. A
+ * stock Debian container hands services LANG=C, and there every session came
+ * back as one mangled, unaddressable name. `-u` makes the client UTF-8
+ * whatever the environment says.
+ *
+ * `-L`: socket isolation for tests (see TMUX_SOCKET), a private server. Empty
+ * TMUX_SOCKET (production) adds nothing.
+ *
+ * ONE place, used by both run() and runStdin(), so a flag change lands once
  * rather than in whichever of the two a later reader happened to edit.
  */
 function tmuxArgs(args) {
-  return TMUX_SOCKET ? ['-L', TMUX_SOCKET, ...args] : args;
+  return TMUX_SOCKET ? ['-u', '-L', TMUX_SOCKET, ...args] : ['-u', ...args];
 }
 
 function run(cmd, args, opts = {}) {
@@ -1541,7 +1548,8 @@ async function ensureTmuxServer() {
     `--unit=${TMUX_UNIT}`, '--collect', '--quiet', '--service-type=forking',
     `--setenv=HOME=${process.env.HOME || '/root'}`,
     `--setenv=PATH=${process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'}`,
-    `--setenv=LANG=${process.env.LANG || 'C.UTF-8'}`,
+    // Sessions inherit this. LANG=C (a stock container) would run them without UTF-8.
+    `--setenv=LANG=${/utf-?8/i.test(process.env.LANG || '') ? process.env.LANG : 'C.UTF-8'}`,
     'tmux', 'start-server', ';', 'set-option', '-g', 'exit-empty', 'off',
   ]);
   if (r.err) {
