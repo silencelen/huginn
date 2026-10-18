@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -437,9 +438,50 @@ func TestInstallWindowsPassword(t *testing.T) {
 		t.Fatalf("stdins=%q calls=%v", f.stdins, f.calls)
 	}
 	script := PasswordRegisterScript(`C:\x\task.xml`, `HOME\alex`)
-	if strings.Contains(script, "s3cret") || !strings.Contains(script, "[Console]::In.ReadLine()") || !strings.Contains(script, "-User 'HOME\\alex'") {
+	if strings.Contains(script, "s3cret") || !strings.Contains(script, "[Console]::In.ReadLine()") ||
+		!strings.Contains(script, `RegisterTaskDefinition('Huginn Core', $def, 6, 'HOME\alex', $pw, 1)`) {
 		t.Fatal(script)
 	}
+}
+
+// F24: Module Logging (event 4103) writes every value a cmdlet parameter is
+// bound to into the PowerShell log, in cleartext, so the password may go to
+// no cmdlet at all: only to the ReadLine that takes it off stdin and to the
+// Task Scheduler COM call. No -Password, no pipeline, no Verb-Noun on its way.
+func TestPasswordScriptGivesThePasswordToNoCmdlet(t *testing.T) {
+	script := PasswordRegisterScript(`C:\Users\O'Brien\AppData\Local\huginn\state\task.xml`, `HOME\o'brien`)
+	if regexp.MustCompile(`(?i)-Password\b|Register-ScheduledTask|SecureString|PSCredential|Get-Credential`).MatchString(script) {
+		t.Fatalf("the password script binds the password to a cmdlet:\n%s", script)
+	}
+	cmdlet := regexp.MustCompile(`\b[A-Za-z]+-[A-Za-z]+\b`)
+	uses := 0
+	for _, line := range strings.Split(script, "\n") {
+		if !strings.Contains(line, "$pw") {
+			continue
+		}
+		uses++
+		com := strings.HasPrefix(line, `$null = $ts.GetFolder('\').RegisterTaskDefinition(`) && !strings.Contains(line, "|") && !cmdlet.MatchString(line)
+		if line != "$pw = [Console]::In.ReadLine()" && !com {
+			t.Errorf("the password reaches something other than ReadLine and the COM call: %s", line)
+		}
+	}
+	if uses != 2 {
+		t.Errorf("$pw is on %d lines, want 2 (read, register):\n%s", uses, script)
+	}
+	// Same task as before: the staged XML, created or replaced (6, what
+	// -Force did), as the user, with a stored password (TASK_LOGON_PASSWORD).
+	for _, want := range []string{
+		`$def.XmlText = Get-Content -Raw -LiteralPath 'C:\Users\O''Brien\AppData\Local\huginn\state\task.xml'`,
+		`RegisterTaskDefinition('Huginn Core', $def, 6, 'HOME\o''brien', $pw, 1)`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %s:\n%s", want, script)
+		}
+	}
+	if got := decodeEncoded(t, EncodedCommand(script)); got != script {
+		t.Fatal("EncodedCommand does not round-trip")
+	}
+	golden(t, "task-password.ps1", script)
 }
 
 func TestInstallWindowsAccessDenied(t *testing.T) {

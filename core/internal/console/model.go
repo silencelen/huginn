@@ -235,8 +235,10 @@ func (m *model) fetch() tea.Cmd {
 	}
 }
 
+// say puts text on the footer. It is often an error's own words, which can
+// carry the server's, so it is cleaned again here.
 func (m *model) say(text string, ok bool) {
-	m.flash, m.flashOK, m.flashAt = text, ok, time.Now()
+	m.flash, m.flashOK, m.flashAt = clean(text), ok, time.Now()
 }
 
 func (m *model) act(fn func(ctx context.Context) (string, error)) tea.Cmd {
