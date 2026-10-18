@@ -1,5 +1,5 @@
 [Unit]
-Description=huginn-appd — backend for the Huginn apps (chats + tmux sessions + devices)
+Description=huginn-appd - the Huginn server daemon (sessions, chats, devices, apps API)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,30 +8,27 @@ Type=simple
 ExecStart=/usr/bin/node /opt/huginn-appd/huginn-appd.js
 Restart=on-failure
 RestartSec=3
-# The network may not be up yet right after boot — keep retrying.
+# The network may not be up yet right after boot - keep retrying.
 StartLimitIntervalSec=0
-# Deployment-specific settings (bind address, chat working directory, memory-node
-# probe, alert delivery script) belong in a drop-in, NOT here — deploy.sh rewrites
-# this unit on every deploy. See systemd.d/README.md.
-# /root/projects/app, not /root: appd resolves the host's project skills from its working
-# directory, so a bare /root silently removes all 23 of them from phone/desktop chats.
-# The live unit was hand-corrected to this; the repo lagged until 2026-08-14.
-WorkingDirectory=/root/projects/app
-Environment=NODE_ENV=production
-# ⚠ SO THE DAEMON'S OWN LINES CAN BE READ ON THEIR OWN (M5, 3.6.0). journald
-# files a syslog message under whichever unit owns the SENDER'S cgroup, and a
-# tmux server first started by this daemon daemonises into this daemon's — so
-# every Claude Code session, and everything a session runs, lands in
-# `journalctl -u huginn-appd`. PowerShell on Linux logs to syslog and writes
-# whole script bodies there; on 2026-09-19 that was most of 24 hours of this
-# unit's journal. Tagging our own stdio makes
-#   journalctl -u huginn-appd -t huginn-appd
-# the daemon's own log, while a child's genuine errors stay in the unit's
-# journal under their own identifier. Nothing is filtered away.
-SyslogIdentifier=huginn-appd
-# ccusage (and anything else resolving ~/.claude) needs HOME; systemd does not
-# set it, and without it ccusage exits with 'home directory is not set'.
+# This server's own settings (bind address, where chats run, alert script) belong
+# in a drop-in, not here: install.sh replaces this file on every update and writes
+# site.conf once. See systemd.d/README.md for every variable.
+WorkingDirectory=/root
+# ccusage, Claude Code and anything else resolving ~/.claude need HOME, and
+# systemd does not set it.
 Environment=HOME=/root
+Environment=NODE_ENV=production
+# Restarting the daemon must never end your sessions. When the daemon starts the
+# first tmux session, the tmux server daemonises into this unit's cgroup; the
+# default KillMode=control-group would then kill tmux and every Claude Code
+# session in it on each restart or update. `process` stops only the daemon. An
+# in-flight headless chat survives a restart as an orphan, which the daemon
+# records as interrupted on its next start.
+KillMode=process
+# Child processes (tmux, Claude Code, PowerShell) log to syslog under this unit.
+# Tagging the daemon's own output lets `journalctl -u huginn-appd -t huginn-appd`
+# show only the daemon, while children keep their own identifiers.
+SyslogIdentifier=huginn-appd
 
 [Install]
 WantedBy=multi-user.target

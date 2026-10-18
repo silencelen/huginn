@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Deploy huginn-appd to its runtime home and prove it came back up.
-# The daemon RUNS from /opt/huginn-appd (a plain copy, so a mid-pull repo never
-# serves half a version); this script is the only sanctioned way bits get there.
+# Redeploy huginn-appd from this checkout: the test suite as a gate, then
+# install.sh (the same install a new server gets from server/setup.sh), then the
+# GitHub release mirror. For a first install use server/setup.sh.
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST=/opt/huginn-appd
-TOKEN_FILE=/etc/huginn-appd/token
 
 # The suite is the gate, not `node --check`. Syntax alone says nothing about a lost
 # import or a broken detectPrompt/transcript reader — and those ping healthy while
@@ -107,85 +106,11 @@ echo "[deploy] appd tests: $PASSED passed"
 # number. Keep the cheap, precise check.
 node --check "$SRC/huginn-appd.js"
 
-# Nothing else in the repo creates this file, and without it the daemon exits with
-# "run deploy.sh first" — pointing at the script that had just aborted reading it.
-# A fresh host was a closed loop. Minting it here also puts the required shape in
-# one place: the daemon rejects anything under 32 chars.
-if [ ! -s "$TOKEN_FILE" ]; then
-  install -d -m 0700 "$(dirname "$TOKEN_FILE")"
-  (umask 077; openssl rand -hex 32 > "$TOKEN_FILE")
-  chmod 600 "$TOKEN_FILE"
-  echo "[deploy] minted a bearer token at $TOKEN_FILE — copy it into each client."
-  echo "[deploy] it is root-equivalent on this host; treat it like an SSH private key."
-fi
-
-install -d "$DEST/lib"
-install -m 0644 "$SRC/huginn-appd.js" "$DEST/huginn-appd.js"
-install -m 0644 "$SRC"/lib/*.js "$DEST/lib/"
-
-# The headroom gate. It is a Claude Code hook, so the path in settings.json is the
-# one the CLI execs on every spawn — which must be the DEPLOYED copy under /opt,
-# never a working tree that a mid-pull checkout can empty. 0755 because a hook
-# without its exec bit fails open, silently, exactly like a missing one.
-install -d "$DEST/hooks"
-install -m 0755 "$SRC"/hooks/* "$DEST/hooks/"
-install -m 0644 "$SRC/install-hooks.js" "$DEST/install-hooks.js"
-# WHICH SENTINEL DIRECTORY the gate must watch, as the SERVICE will see it —
-# `systemctl show`, not this shell's environment, because the knob that moves it
-# lives in a unit drop-in (Environment=HUGINN_APPD_DATA=…) that a deploy shell
-# knows nothing about. Installed without it, the hook keeps its compiled-in
-# /var/lib/huginn-appd/headroom while the daemon arms sentinels somewhere else:
-# the gate releases every spawn at waited=0 and writes its log into the
-# abandoned directory, /v1/headroom reports the sentinel armed, and there is no
-# other symptom. An explicit env var here still wins, for a hand-run deploy.
-unit_env() {
-  systemctl show huginn-appd -p Environment --value 2>/dev/null \
-    | tr ' ' '\n' | sed -n "s/^$1=//p" | tail -1 || true
-}
-HEADROOM_DIR="${HUGINN_HEADROOM_DIR:-$(unit_env HUGINN_HEADROOM_DIR)}"
-if [ -z "$HEADROOM_DIR" ]; then
-  APPD_DATA="${HUGINN_APPD_DATA:-$(unit_env HUGINN_APPD_DATA)}"
-  HEADROOM_DIR="${APPD_DATA:-/var/lib/huginn-appd}/headroom"
-fi
-echo "[deploy] gate sentinels: $HEADROOM_DIR"
-# Idempotent by `command`: a second run keeps what is there and rewrites nothing.
-# It refuses (exit 2, nothing written) on a settings file it cannot parse, and
-# that refusal must stop the deploy — a daemon that arms sentinels nothing reads
-# is a pause button wired to nothing.
-node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate" --headroom-dir "$HEADROOM_DIR"
-# The PermissionRequest hook (appd >= 3.10.1): /answer resolves a prompt through the
-# CLI's own hook when one is waiting, and falls back to keystrokes when not. Same
-# refusal rule as above.
-node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-permission-hook"
-# PostModelSwitch recorder (appd >= 3.10.2): structured confirmation for the ladder.
-node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
-
-systemctl restart huginn-appd
-TOKEN="$(cat "$TOKEN_FILE")"
-# Loopback, both protocols. Since 3.11 plain HTTP is honoured only from this host
-# (HUGINN_APPD_PLAINTEXT=local), so the old tailnet-address ping would get a 426;
-# and the https ping proves the TLS half came up too (-k is fine on loopback:
-# there is no network in between to be intercepted on).
-APPD_ADDR="${HUGINN_APPD_URL:-http://127.0.0.1:8787}"
-# ⚠ POLLED, NOT `sleep 2`. The daemon restores sessions and sweeps state before
-# it listens, and a first 3.11 start mints its certificate too — 2.7 s on
-# 2026-10-13, which failed a healthy deploy at exactly the fixed sleep. Up to 30 s.
-PING=
-for _ in $(seq 1 60); do
-  PING="$(curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "$APPD_ADDR/v1/ping" || true)"
-  [ -n "$PING" ] && break
-  sleep 0.5
-done
-echo "[deploy] $PING"
-grep -q '"ok":true' <<<"$PING" || { echo "[deploy] daemon did not come back healthy" >&2; exit 1; }
-SPING="$(curl -sfk -H "Authorization: Bearer $TOKEN" "https://127.0.0.1:8787/v1/ping")"
-grep -q '"secure":true' <<<"$SPING" || { echo "[deploy] daemon is up but its https listener did not answer" >&2; exit 1; }
-TLS_CERT="${HUGINN_APPD_TLS_CERT:-$(unit_env HUGINN_APPD_TLS_CERT)}"
-if [ -z "$TLS_CERT" ]; then
-  TLS_DATA="${HUGINN_APPD_DATA:-$(unit_env HUGINN_APPD_DATA)}"
-  TLS_CERT="${TLS_DATA:-/var/lib/huginn-appd}/tls/cert.pem"
-fi
-echo "[deploy] https ok (tls sha256 $(openssl x509 -in "$TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d : | tr A-F a-f))"
+# Everything from here to a healthy daemon is install.sh: the same steps a new
+# server runs from server/setup.sh (files to /opt, token, unit + drop-ins, the
+# Claude Code hooks, restart, loopback HTTP + HTTPS ping). One copy of the steps,
+# so a fresh install and a redeploy cannot drift apart.
+bash "$SRC/install.sh"
 
 # Mirror the release to GitHub, like ship.sh and release-desktop.sh already do.
 # Without this appd was the only component whose public Releases page did not track

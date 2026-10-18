@@ -47,7 +47,7 @@ const RUNTIME_FRAME = [
   '      <a report contract, appended by the daemon>',
   '- An unattended operator persona is supplied separately, as the system prompt.',
   '- Tools are granted by the Round\'s mode and nothing else is reachable:',
-  '      ask  — Skill, mempalace (memory search), WebFetch, WebSearch, and reading files',
+  '      ask  — Skill, WebFetch, WebSearch, reading files, and any tools this server adds',
   '      act  — all of those plus Bash, Read, Edit, Write, Glob, Grep',
   '- The run answers through a fenced report block the daemon asks for: a status, a',
   '  one-line headline, an honest goalMet, and items that each name a next step. A',

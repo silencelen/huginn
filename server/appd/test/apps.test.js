@@ -551,6 +551,15 @@ test('a bare record downgraded for the alias still has every field, with definit
 
 // ------------------------------------------- the fix lines (decisions 54, 55)
 
+// These run in the Proxmox dialect, whose lines are the most specific; the generic
+// default has its own tests after them.
+const PVE = appsLib.firewallStyle({
+  HUGINN_APPD_FIREWALL: 'proxmox',
+  HUGINN_APPD_FIREWALL_HOST: 'pve-host',
+  HUGINN_APPD_FIREWALL_FILE: '/etc/pve/firewall/100.fw',
+});
+const fixPve = (rec, addrs, remotes) => appsLib.fixLines(rec, addrs, remotes, PVE);
+
 test('a failing row carries the exact rebind and firewall lines, and only for the addresses that failed', () => {
   // ⚠ THIS IS TEXT SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES. Asserted
   // literally — not by shape — because a drifted line here is a firewall rule
@@ -559,7 +568,7 @@ test('a failing row carries the exact rebind and firewall lines, and only for th
   const rec = appsLib.buildRecord({
     id: 'jotter', name: 'jotter notes', url: 'http://100.101.102.103:8091/', unit: 'jotter.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '100.101.102.103', ok: true },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
   ], { '192.168.1.20': ['192.168.1.131'] });
@@ -568,7 +577,7 @@ test('a failing row carries the exact rebind and firewall lines, and only for th
     'systemctl edit jotter.service   # ExecStart: bind 0.0.0.0 instead of 100.101.102.103',
     'systemctl restart jotter.service',
     'ss -ltn | grep :8091',
-    '# on pve1 — /etc/pve/firewall/100.fw',
+    '# on pve-host — /etc/pve/firewall/100.fw',
     'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog',
   ], fix);
 });
@@ -578,7 +587,7 @@ test('a row with no unit still gets an instruction, naming the address it does a
   // owner added themselves has no unit on the row, and the line has to say what
   // it is replacing or it is advice rather than a fix.
   const rec = appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.101.102.103:9100/thing' }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '100.101.102.103', ok: true },
     { addr: '192.168.1.20', ok: false, error: 'no route' },
   ], { '192.168.1.20': ['192.168.1.131'] });
@@ -591,7 +600,7 @@ test('a row with no unit still gets an instruction, naming the address it does a
 
 test('one firewall line per FAILING address, and none for the ones that answered', () => {
   const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '100.101.102.103', ok: true },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
@@ -604,7 +613,7 @@ test('one firewall line per FAILING address, and none for the ones that answered
     'the tailnet client arrived somewhere that WORKS, so it needs nothing opened');
   assert.ok(fix.includes('# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'),
     `the other failing address is loopback and wants no rule at all: ${fix.join(' | ')}`);
-  assert.deepEqual([], appsLib.fixLines(rec, [{ addr: '100.101.102.103', ok: true }]),
+  assert.deepEqual([], fixPve(rec, [{ addr: '100.101.102.103', ok: true }]),
     'and a row that passes carries no lines at all — that was the old card’s whole problem');
 });
 
@@ -618,7 +627,7 @@ test('bursar keeps the one true half of the D11 claim: where its bind actually l
   const rec = appsLib.buildRecord({
     id: 'bursar', name: 'Bursar ledger', url: 'http://100.101.102.103:8093/', unit: 'bursar-sim.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [{ addr: '100.101.102.103', ok: true }, { addr: '192.168.1.20', ok: false }]);
+  const fix = fixPve(rec, [{ addr: '100.101.102.103', ok: true }, { addr: '192.168.1.20', ok: false }]);
   assert.ok(fix.some((l) => l.includes('sim/app.py')), `the bind note must ride the line: ${fix.join(' | ')}`);
   assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar-sim.service')), 'and it is still asked for');
   assert.ok(!/\balready\b/i.test(fix.join(' ')),
@@ -631,7 +640,7 @@ test('a row whose address is nonsense still produces lines rather than an except
   // exactly when somebody is looking at this list to work out what is wrong, and
   // the worst possible moment for the list route to throw.
   const rec = { id: 'broken', url: 'not a url', unit: '' };
-  const fix = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }]);
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }]);
   assert.ok(fix.length, 'it still says something');
   assert.ok(fix.some((l) => l.includes('the one address it answers on')), fix.join(' | '));
   assert.equal('', appsLib.hostnameOf('not a url'));
@@ -643,7 +652,7 @@ test('nothing in the fix lines is a verb this daemon could run', () => {
   // endpoint or a shell string the daemon executes, it would have to add a way
   // to run one here first, and this fails when it does.
   const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
-  for (const line of appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }])) {
+  for (const line of fixPve(rec, [{ addr: '192.168.1.20', ok: false }])) {
     assert.equal('string', typeof line, 'every element is text, never a { run } of any kind');
   }
   const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'apps.js'), 'utf8');
@@ -664,7 +673,7 @@ test('the firewall source is the CLIENT huginn saw, never the address it arrived
   const rec = appsLib.buildRecord({
     id: 'jotter', name: 'jotter notes', url: 'http://100.101.102.103:8091/', unit: 'jotter.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '100.101.102.103', ok: true },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
   ], { '192.168.1.20': ['192.168.1.131'] });
@@ -681,7 +690,7 @@ test('a tailnet client is emitted as itself, and loopback is recorded but never 
   // opposite: `-source 127.0.0.1` in a bridge firewall is a rule that can never
   // match anything, which is the same defect this change exists to remove.
   const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
-  const fix = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], {
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['100.101.102.104', '127.0.0.1'],
   });
   assert.ok(fix.includes('IN ACCEPT -source 100.101.102.104 -p tcp -dport 8088 -log nolog'),
@@ -696,13 +705,13 @@ test('three clients in one /24 collapse to the /24; two stay as themselves', () 
   // is not a pattern — widening on two would open a /24 on the strength of a
   // coincidence.
   const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
-  const three = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], {
+  const three = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['192.168.1.131', '192.168.1.44', '192.168.1.77'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
   assert.deepEqual(['IN ACCEPT -source 192.168.1.0/24 -p tcp -dport 8088 -log nolog'], three,
     'three in one /24 is one rule, not three');
 
-  const two = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], {
+  const two = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['192.168.1.131', '192.168.1.44'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
   assert.deepEqual([
@@ -711,7 +720,7 @@ test('three clients in one /24 collapse to the /24; two stay as themselves', () 
   ], two, 'two devices are two devices');
 
   // Different /24s are never merged, however many there are.
-  const spread = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], {
+  const spread = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
     '192.168.1.20': ['192.168.1.131', '192.168.10.54', '10.0.0.9'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
   assert.equal(3, spread.length, `three networks are three rules: ${spread.join(' | ')}`);
@@ -723,7 +732,7 @@ test('an address no client has arrived from gets a COMMENT, never an invented so
   // `-source`, and the old code's answer — the arrival address — was a rule that
   // could not match. A comment is followable; a wrong rule is not.
   const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
-  const fix = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], {});
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {});
   assert.ok(fix.includes('# no client has reached huginn on 192.168.1.20 yet — add its network here'),
     `the comment names the arrival it is about: ${fix.join(' | ')}`);
   assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT')), 'and there is no rule at all');
@@ -731,7 +740,7 @@ test('an address no client has arrived from gets a COMMENT, never an invented so
   // ⚠ THE BACKSTOP. A loopback CLIENT on one of this host's routable addresses
   // is not a source either, and the sentence has to stay true — the daemon HAS
   // seen somebody there, so "no client has reached huginn" would be a lie.
-  const onlyLocal = appsLib.fixLines(rec, [{ addr: '192.168.1.20', ok: false }], { '192.168.1.20': ['127.0.0.1'] });
+  const onlyLocal = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], { '192.168.1.20': ['127.0.0.1'] });
   assert.ok(onlyLocal.includes('# only loopback has reached huginn on 192.168.1.20 — '
     + 'a loopback client is not a firewall source, add its network here'),
   `a different, true sentence: ${onlyLocal.join(' | ')}`);
@@ -739,18 +748,15 @@ test('an address no client has arrived from gets a COMMENT, never an invented so
 });
 
 test('a failing LOOPBACK address asks for no firewall line at all, and says why', () => {
-  // ⚠⚠ LOOPBACK NEVER CROSSES THE VETH CHAIN, so nothing in 100.fw has any say
-  // over it: step 1 — binding the unit to 0.0.0.0 — is the entire remedy for
-  // this address, and it fixes itself the moment that lands. The live retrofit
-  // proved the shape: jotter-trainer and boardserver rebound to 0.0.0.0, one
-  // `-source 192.168.1.131` line added on pve1 for the LAN, and all three of
-  // 100.101.102.103, 127.0.0.1 and 192.168.1.20 came back ok. A rule for 127.0.0.1
-  // would have been a third line somebody pasted as root for no effect — the
-  // same defect as naming the arrival address, wearing a different address.
+  // ⚠⚠ LOOPBACK NEVER LEAVES THE HOST, so no firewall has any say over it:
+  // step 1 — binding the unit to 0.0.0.0 — is the entire remedy for this
+  // address, and it fixes itself the moment that lands. A rule for 127.0.0.1
+  // would be a line somebody pasted as root for no effect — the same defect as
+  // naming the arrival address, wearing a different address.
   const rec = appsLib.buildRecord({
     id: 'board', name: 'PCB board view', url: 'http://100.101.102.103:8092/', unit: 'boardserver.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
   ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
@@ -759,30 +765,30 @@ test('a failing LOOPBACK address asks for no firewall line at all, and says why'
     'systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 100.101.102.103',
     'systemctl restart boardserver.service',
     'ss -ltn | grep :8092',
-    '# on pve1 — /etc/pve/firewall/100.fw',
+    '# on pve-host — /etc/pve/firewall/100.fw',
     '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
     'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8092 -log nolog',
   ], fix, 'one rule, for the one address a rule can do anything about');
 
-  // And on its own, the pve1 half is a single line saying there is nothing
+  // And on its own, the firewall half is a single line saying there is nothing
   // to do there — not an empty section a reader has to interpret.
-  const alone = appsLib.fixLines(rec, [{ addr: '127.0.0.1', ok: false, error: 'connection refused' }],
+  const alone = fixPve(rec, [{ addr: '127.0.0.1', ok: false, error: 'connection refused' }],
     { '127.0.0.1': ['127.0.0.1'] });
   assert.ok(alone.includes('# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'));
   assert.ok(!alone.some((l) => l.startsWith('IN ACCEPT')), 'nothing for a firewall to accept');
 });
 
-test('no pve1 header when there is nothing to put in the file (L3)', () => {
+test('no firewall header when there is nothing to put in the file (L3)', () => {
   // ⚠ A HEADER IS A PROMISE THAT SOMETHING FOLLOWS IT. On a daemon whose only
   // client address is loopback — which is every fresh install, and every daemon
   // reached only over an ssh tunnel — every failing address answers to step 1
-  // alone, so the block named /etc/pve/firewall/100.fw and then had nothing to
+  // alone, so the block named the firewall file and then had nothing to
   // put in it. Correct content, and still a reader sent to another machine to
   // open a root-owned file for no reason.
   const rec = appsLib.buildRecord({
     id: 'dead', name: 'Dead', url: 'http://127.0.0.1:18899/', unit: 'rv-dead.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
   ], { '127.0.0.1': ['127.0.0.1'] });
   assert.deepEqual([
@@ -796,12 +802,40 @@ test('no pve1 header when there is nothing to put in the file (L3)', () => {
     'the file is not named when there is no line to add to it');
 
   // The header comes straight back the moment one line belongs in the file.
-  const mixed = appsLib.fixLines(rec, [
+  const mixed = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
   ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
-  assert.ok(mixed.includes('# on pve1 — /etc/pve/firewall/100.fw'));
+  assert.ok(mixed.includes('# on pve-host — /etc/pve/firewall/100.fw'));
   assert.ok(mixed.includes('IN ACCEPT -source 192.168.1.131 -p tcp -dport 18899 -log nolog'));
+});
+
+test('the default dialect writes neutral rules under a header that names no machine', () => {
+  // A new server knows nothing about the firewall in front of it, if any, so the
+  // default names no host and no file — and the rule is still the client's
+  // address and the app's port, exactly as in the Proxmox dialect.
+  const rec = appsLib.buildRecord({
+    id: 'board', name: 'Board view', url: 'http://192.168.1.10:8092/', unit: 'boardserver.service',
+  }, 100);
+  const fix = appsLib.fixLines(rec, [
+    { addr: '192.168.1.10', ok: true },
+    { addr: '10.8.0.1', ok: false, error: 'connection refused' },
+  ], { '10.8.0.1': ['10.8.0.7'] }, appsLib.firewallStyle({}));
+  assert.deepEqual(fix.slice(-2), [
+    '# in the firewall that filters traffic to this host, if there is one',
+    'allow tcp from 10.8.0.7 to port 8092',
+  ]);
+  assert.ok(!fix.some((l) => /pve|IN ACCEPT/.test(l)), 'no Proxmox syntax unless asked for');
+});
+
+test('the firewall dialect is read from the environment, defensively', () => {
+  assert.equal(appsLib.firewallStyle({}).kind, 'generic');
+  assert.equal(appsLib.firewallStyle({ HUGINN_APPD_FIREWALL: 'PROXMOX' }).kind, 'proxmox');
+  assert.equal(appsLib.firewallStyle({ HUGINN_APPD_FIREWALL: 'iptables' }).kind, 'generic', 'unknown means generic');
+  const pve = appsLib.firewallStyle({ HUGINN_APPD_FIREWALL: 'proxmox' });
+  assert.equal(pve.file, '/etc/pve/firewall/<vmid>.fw', 'a placeholder, never a guessed id');
+  assert.equal(appsLib.firewallStyle({ HUGINN_APPD_FIREWALL_HOST: 'pve\n; rm -rf /' }).host, 'pve; rm -rf /',
+    'control characters are dropped; the rest is only ever text in a payload');
 });
 
 test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', () => {
@@ -816,7 +850,7 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
   const rec = appsLib.buildRecord({
     id: 'wedged', name: 'Wedged', url: 'http://127.0.0.1:18899/', unit: 'rv-wedged.service',
   }, 100);
-  const fix = appsLib.fixLines(rec, [
+  const fix = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'timed out' },
   ], { '127.0.0.1': ['127.0.0.1'] });
   assert.ok(!fix.some((l) => /bind 0\.0\.0\.0/.test(l)), `a bind line for a timeout:\n${fix.join('\n')}`);
@@ -827,7 +861,7 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
 
   // A row with BOTH kinds of failure gets both halves, each naming its own
   // addresses — one block, two different problems, never merged.
-  const both = appsLib.fixLines(rec, [
+  const both = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'timed out' },
     { addr: '192.168.1.20', ok: false, error: 'connection refused' },
   ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
@@ -839,7 +873,7 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
   assert.ok(both.some((l) => l.startsWith('systemctl status rv-wedged.service')));
 
   // No unit on the row: still no bind advice, still something to do.
-  const noUnit = appsLib.fixLines(
+  const noUnit = fixPve(
     appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://127.0.0.1:9100/' }, 100),
     [{ addr: '127.0.0.1', ok: false, error: 'timed out' }], { '127.0.0.1': ['127.0.0.1'] },
   );
@@ -1090,10 +1124,10 @@ test('the probe hands the CLIENTS to the fix lines, not the addresses it dialled
   });
   assert.equal(false, r.ok);
   assert.deepEqual(['192.168.1.20'], r.addresses.map((a) => a.addr), 'the ARRIVAL address is what was asked');
-  assert.ok(r.fix.includes('IN ACCEPT -source 192.168.1.131 -p tcp -dport 8088 -log nolog'),
+  assert.ok(r.fix.includes('allow tcp from 192.168.1.131 to port 8088'),
     `and the CLIENT is what the rule names: ${r.fix.join(' | ')}`);
 
-  // Without the map there is nothing true to put after -source, and it says so.
+  // Without the map there is no true source to name, and it says so.
   const blind = await appsLib.reachabilityProbe(rec, ['192.168.1.20'], {
     fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
   });

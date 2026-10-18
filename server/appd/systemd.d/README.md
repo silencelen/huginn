@@ -1,26 +1,23 @@
-# Drop-ins for `huginn-appd.service`
+# huginn-appd: unit and drop-ins
 
-`deploy.sh` does NOT touch the unit — verified 2026-08-14 and still true: it installs
-huginn-appd.js, lib/*.js, hooks/* and install-hooks.js, restarts, and (since appd
-3.0.0) runs `install-hooks.js` to add the headroom gate to `~/.claude/settings.json`.
-It never writes the unit, so a direct edit is not reverted. Drop-ins are
-still the right home for policy (they survive a future unit reinstall and keep the
-unit itself generic), so anything that must survive a deploy lives
-here and is installed to `/etc/systemd/system/huginn-appd.service.d/` instead of
-being edited into the unit.
+`server/appd/install.sh` (run by `server/setup.sh`, and by `deploy.sh` after its tests)
+installs the unit and the files in this directory:
 
-⚠ The hook gate's own knobs (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
+| file | installed as | what |
+|---|---|---|
+| `../huginn-appd.service` | `/etc/systemd/system/huginn-appd.service` | the service; replaced on every install |
+| `hardening.conf` | `huginn-appd.service.d/hardening.conf` | sandboxing; replaced on every install |
+| (generated) | `huginn-appd.service.d/site.conf` | this server's own settings; written once, never overwritten |
+
+Put your own settings in `site.conf` (or another drop-in of your own) and run
+`systemctl daemon-reload && systemctl restart huginn-appd`. Installs and updates never touch
+a drop-in other than `hardening.conf`.
+
+⚠ The headroom gate's own knobs (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
 `HUGINN_GATE_POLL`, `HUGINN_GATE_STALE_S`) are **not** in the table below and a
-drop-in cannot set them:
-the gate runs as a Claude Code hook, in the CLI's environment, not the daemon's.
-`node install-hooks.js --uninstall` removes the two hook entries it added.
-
-| file | why |
-|---|---|
-| `hardening.conf` | sandboxing (added 2026-08 after the audit found the unit had none) |
-
-Not tracked here but present on the live host: `override.conf`, which sets
-`HUGINN_APPD_BIND=0.0.0.0` for the Yggdrasil LAN gateway.
+drop-in cannot set them: the gate runs as a Claude Code hook, in the CLI's environment,
+not the daemon's. `node /opt/huginn-appd/install-hooks.js --uninstall` removes the hook
+entries the installer added.
 
 ## Environment the daemon reads
 
@@ -29,7 +26,7 @@ Set any of these in a drop-in `[Service]` block (`Environment=KEY=value`):
 | var | default | what |
 |---|---|---|
 | `HUGINN_APPD_PORT` | `8787` | listen port |
-| `HUGINN_APPD_BIND` | resolved | listen address (`0.0.0.0` on this host) |
+| `HUGINN_APPD_BIND` | `0.0.0.0` | listen address. `0.0.0.0` (every interface) keeps loopback reachable; any single other address does not, and the host tools and the install check dial `127.0.0.1` |
 | `HUGINN_APPD_DATA` | `/var/lib/huginn-appd` | data root (uploads, chats, desktop channels) |
 | `HUGINN_APPD_TOKEN_FILE` | `/etc/huginn-appd/token` | bearer token file |
 | `HUGINN_APPD_PLAINTEXT` | `local` | who may use plain HTTP: `local` = loopback only (everyone else gets `426` and must use `https://`); `any` = the pre-3.11 behaviour, for a migration window only. See `docs/TLS.md` |
@@ -40,13 +37,18 @@ Set any of these in a drop-in `[Service]` block (`Environment=KEY=value`):
 | `HUGINN_APPD_SOFT_END_AUTO` | on (`0` disables) | after a soft end, end the session automatically once it settles; `0` = phrase only, end it yourself |
 | `HUGINN_APPD_UPLOAD_KEEP_DAYS` | `7` | retention for NON-image uploads; images are never pruned (they back chat-history thumbnails) |
 | `HUGINN_APPD_STATE_DIR` | `/run/huginn-claude-state` | hook state dir — a test knob; do not change in production |
-| `HUGINN_APPD_MEMPALACE_HOST` / `_MARKER` | unset | optional companion memory node probe |
-| `HUGINN_APPD_TELEGRAM_SCRIPT` | unset | optional Telegram relay for alerts |
+| `HUGINN_APPD_EXTRA_TOOLS` | unset | tools added to every chat and round, space-separated (for example an MCP server's tools, `mcp__memory`) |
+| `HUGINN_APPD_PERSONA_FILE` | `/etc/huginn/persona.md` | optional text appended to the system prompt of chats and rounds; read on every run |
+| `HUGINN_APPD_TELEGRAM_SCRIPT` | unset | optional alert relay: called as `bash <script> --message <text> --source huginn-app`; it must deliver the text and exit 0 |
+| `HUGINN_FCM_KEY` | `/etc/huginn-appd/fcm-service-account.json` | Firebase service-account key for Android push; only useful with an app built against the same Firebase project |
+| `HUGINN_APPD_FIREWALL` | `generic` | how the Apps fix lines write firewall rules: `generic`, or `proxmox` for Proxmox VE guest-firewall syntax |
+| `HUGINN_APPD_FIREWALL_HOST` / `_FILE` | placeholders | with `proxmox`: the hypervisor and the firewall file the lines name |
+| `HUGINN_APPD_MEMPALACE_HOST` / `_MARKER` | unset | optional probe of a companion memory server, reported in `/v1/status` |
 
 ### Test-only knobs — **never set these in production**
 
 Every one of these exists so the route suites can stand up a local stub instead of
-reaching `api.anthropic.com` or the owner's live `~/.claude`. They are listed here
+reaching `api.anthropic.com` or a live `~/.claude`. They are listed here
 because leaving them undocumented is how a drop-in copied out of a test header
 survives a deploy unnoticed, and the top three are handed a live credential: two
 send the OAuth **access token** in an `Authorization` header and one sends the
@@ -68,16 +70,8 @@ settles the question of whether one is in force.
 | `HUGINN_APPD_NATIVE_GRACE_MS` | `90000` | how long appd defers to the CLI's own limit wait before typing the resume phrase |
 | `HUGINN_APPD_CONSENT_GRACE_MS` | `120000` | how long an unanswered Fable consent dialog waits before appd presses the recommended row |
 
-Install or update:
-
-```sh
-sudo install -D -m 0644 systemd.d/hardening.conf \
-  /etc/systemd/system/huginn-appd.service.d/hardening.conf
-sudo systemctl daemon-reload && sudo systemctl restart huginn-appd
-```
-
-Then check the daemon can still SEE tmux sessions — that is the failure this
-directory's comments care most about, and it is silent:
+After changing a drop-in, check the daemon can still SEE tmux sessions. That is the
+failure the comments in `hardening.conf` care most about, and it is silent:
 
 ```sh
 curl -sH "Authorization: Bearer $(sudo cat /etc/huginn-appd/token)" \

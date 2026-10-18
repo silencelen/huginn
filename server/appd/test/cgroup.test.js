@@ -70,9 +70,9 @@ test('sameCgroup is true only when BOTH are readable and equal', () => {
 test('the journal line names the cause, the reading that works, and the real fix', () => {
   const line = c.foreignJournalLogLine('huginn-appd.service', 'huginn-tmux');
   assert.match(line, /huginn-appd\.service/, 'which unit is being polluted');
-  assert.match(line, /PowerShell/, 'the program an operator will actually be staring at');
+  assert.match(line, /read-only/, 'the half an operator meets first: sessions that cannot write /usr or /opt');
   assert.match(line, /journalctl -u huginn-appd -t huginn-appd/,
     'the command that reads this daemon alone — the half that works today');
-  assert.match(line, /huginn-tmux\.scope/, 'and the durable fix, by name');
+  assert.match(line, /huginn-tmux\.service/, 'and the durable fix, by name');
   assert.ok(line.length < 600, 'one line, not an essay in the journal');
 });
