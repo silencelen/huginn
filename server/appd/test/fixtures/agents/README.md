@@ -1,9 +1,10 @@
 # Subagent fixtures
 
-Real subagent transcripts, copied off this host on 2026-09-15 out of
-`~/.claude/projects/-root-projects-app/4726c1d0-…/subagents/` (CLI 2.1.258) and
-checked for email/token-shaped strings before landing here. Nothing is
-hand-written: the point of these files is that `lib/agents.js` and the
+Real subagent transcripts, captured from a working install on 2026-09-15 out of
+`~/.claude/projects/<project>/<session>/subagents/` (CLI 2.1.258) and scrubbed
+before landing here: the skill listing keeps only Claude Code's built-in skills,
+tools from private MCP servers are dropped, and the workflow member's prompt is
+a generic one. Nothing else is hand-written: the point of these files is that `lib/agents.js` and the
 `/v1/sessions/:name/agents/:agentId/transcript` route are exercised against the
 layout the CLI actually writes, including the parts no synthetic fixture would
 think to include — `attachment` records between turns, a `.meta.json` whose
@@ -27,6 +28,6 @@ Ids are the real `agent-<hex>` basenames, which is the point of them: they are
 uuid one used elsewhere in the daemon.
 
 The journal was trimmed because the original is a megabyte. Everything else is
-byte-for-byte what the CLI wrote. Copy the tree into a scratch directory before
+what the CLI wrote, re-serialised compactly where it was scrubbed. Copy the tree into a scratch directory before
 a test touches it — mtimes are what `status` and the `RECENT_S` filter read, and
 a fixture whose mtime is "whenever git checked it out" makes a flaky test.

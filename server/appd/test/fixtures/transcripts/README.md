@@ -17,7 +17,7 @@ and the five records before it are a perfectly normal turn, so "the session
 stopped" is visible ONLY in those three fields.
 
 Scrubbed: thinking signatures emptied, IPs replaced, `sessionId`/`requestId`
-replaced, long tool results clipped. The 429 record's own flags and text are
+replaced, the turn's prompt, command and output replaced with neutral ones. The 429 record's own flags and text are
 verbatim.
 
 ---
@@ -48,7 +48,7 @@ What is load-bearing, and what a hand-written fixture would miss:
   the skill's prose. Nothing in the CONTENT marks it — no wrapper tag, no
   caveat — so every machine-text heuristic sails past it and it renders as a
   multi-KB message the owner appears to have typed. **`sourceToolUseID` is the
-  only tell**, and it is exact: across all 891 transcripts on this host every
+  only tell**, and it is exact: across all 891 transcripts on the capturing host every
   one of the 65 records carrying it is a Skill body, all 65 are `user` +
   `isMeta`, and no other record type carries the field at all.
 - `isMeta` alone is NOT the tell. It also marks image captions, `/model`
@@ -58,7 +58,7 @@ What is load-bearing, and what a hand-written fixture would miss:
   `pendingTools`; finding the card it belongs to needs an index that outlives
   the result.
 - the two bodies differ: a project skill opens with `Base directory for this
-  skill: <path>` (54 of the 65 on this host), a bundled one goes straight into
+  skill: <path>` (54 of the 65 on the capturing host), a bundled one goes straight into
   its own prose with no marker and carries `turnCompanion: true`.
 
 Scrubbed: thinking signatures emptied, `sessionId`/`requestId` replaced, both
@@ -111,13 +111,13 @@ What is load-bearing, and what a hand-written fixture would miss:
 - the echo is an ordinary **`type: "user"`** record carrying the notification
   element verbatim, 45 ms after the enqueue. Nothing in the CONTENT separates it
   from the queue copy — they are byte-identical — so the pairing lives entirely
-  in `origin.kind === "task-notification"`. Exact on this host: of 955
+  in `origin.kind === "task-notification"`. Exact on the capturing host: of 955
   transcripts, 386 records carry that origin, every one has an identical enqueue
   above it, and they are exactly the 386 whose text opens `<task-notification`.
 - **only a `dequeue` produces an echo.** A notification that lands while Claude
   is still working is `remove`d into the running turn with
   `reason: "absorbed_mid_turn"` and no `user` record is ever written — 645 of
-  the 1031 notification enqueues on this host. A reader that drew the note from
+  the 1031 notification enqueues on the capturing host. A reader that drew the note from
   the echo instead would therefore lose two notifications in three, which is why
   the queue record is the copy that draws and the echo is the copy suppressed.
 - the `remove` record repeats the **whole content** verbatim; the `dequeue`
