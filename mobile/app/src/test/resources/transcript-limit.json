@@ -41,7 +41,7 @@
  "permissionMode": "auto",
  "model": "claude-fable-5-1",
  "gitBranch": "main",
- "cwd": "/root/netplan/pmanage",
+ "cwd": "/root/projects/app/pmanage",
  "effort": "xhigh",
  "lastActivityTs": 1789459800,
  "modelDisplay": "Fable 5.1",

@@ -151,12 +151,12 @@ class DesktopSettingsTest {
     @Test
     fun `the position survives a relaunch`() {
         val file = freshFile()
-        DesktopSettings(file).setLanding(View.SESSIONS, chatId = "c9", sessionName = "jtyper")
+        DesktopSettings(file).setLanding(View.SESSIONS, chatId = "c9", sessionName = "jotter")
 
         val next = DesktopSettings(file)
         assertEquals(View.SESSIONS, next.lastViewNow())
         assertEquals("c9", next.lastChatIdNow())
-        assertEquals("jtyper", next.lastSessionNameNow())
+        assertEquals("jotter", next.lastSessionNameNow())
     }
 
     @Test
@@ -337,20 +337,20 @@ class DesktopSettingsTest {
         val file = freshFile()
         val settings = DesktopSettings(file)
         val book = RouteBook()
-            .add("Tailnet", "http://100.97.198.90:8787", now = 1, id = "t")
-            .add("Mesh", "http://192.168.2.117:8787", now = 2, id = "m")
+            .add("Tailnet", "http://100.101.102.103:8787", now = 1, id = "t")
+            .add("Mesh", "http://192.168.1.20:8787", now = 2, id = "m")
 
         runBlocking { settings.setRouteBook(book) }
-        assertEquals("https://100.97.198.90:8787", settings.baseUrlNow())
-        assertTrue("\"baseUrl\": \"https://100.97.198.90:8787\"" in file.readText(), file.readText())
+        assertEquals("https://100.101.102.103:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"https://100.101.102.103:8787\"" in file.readText(), file.readText())
 
         runBlocking { settings.setRouteBook(book.activate("m")) }
-        assertEquals("https://192.168.2.117:8787", settings.baseUrlNow())
-        assertTrue("\"baseUrl\": \"https://192.168.2.117:8787\"" in file.readText(), file.readText())
+        assertEquals("https://192.168.1.20:8787", settings.baseUrlNow())
+        assertTrue("\"baseUrl\": \"https://192.168.1.20:8787\"" in file.readText(), file.readText())
 
         // And a relaunch reads it back the same way round.
         val relaunched = DesktopSettings(file)
-        assertEquals("https://192.168.2.117:8787", relaunched.baseUrlNow())
+        assertEquals("https://192.168.1.20:8787", relaunched.baseUrlNow())
         assertEquals("m", relaunched.routeBookNow().activeId)
     }
 
@@ -408,7 +408,7 @@ class DesktopSettingsTest {
     fun `a clean book carries no notice`() {
         val file = freshFile()
         val settings = DesktopSettings(file)
-        runBlocking { settings.setRouteBook(RouteBook().add("Home", "http://192.168.2.117:8787", now = 1)) }
+        runBlocking { settings.setRouteBook(RouteBook().add("Home", "http://192.168.1.20:8787", now = 1)) }
         assertEquals(null, DesktopSettings(file).routeBookNow().droppedUrl)
     }
 
@@ -484,7 +484,7 @@ class DesktopSettingsTest {
         assertEquals(emptyList(), settings.routeBookNow().routes, "the refused address was dropped on load")
         assertEquals("", settings.baseUrlNow())
         assertFalse(DesktopSettings.isAllowedBaseUrl("http://attacker.example/steal"))
-        assertTrue(DesktopSettings.isAllowedBaseUrl("http://192.168.2.117:8787"))
+        assertTrue(DesktopSettings.isAllowedBaseUrl("http://192.168.1.20:8787"))
     }
 
     /**

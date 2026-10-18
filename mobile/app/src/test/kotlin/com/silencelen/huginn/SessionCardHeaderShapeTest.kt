@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 2026-10-02 on the Fold at font scale 2.0: a Sessions card's age label vanished
+ * 2026-10-02 on a foldable at font scale 2.0: a Sessions card's age label vanished
  * on one card and was 8 px wide and 252 px tall on another, and "ctx 48%" took
  * three lines. The header Row measured the name first and gave the trailing ctx
  * and age only what was left.

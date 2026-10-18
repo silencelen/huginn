@@ -47,7 +47,7 @@
  "permissionMode": "auto",
  "model": "claude-opus-5",
  "gitBranch": "main",
- "cwd": "/root/netplan/pmanage",
+ "cwd": "/root/projects/app/pmanage",
  "effort": "high",
  "lastActivityTs": 1789459910,
  "modelDisplay": "Opus 5",

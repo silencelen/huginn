@@ -66,7 +66,7 @@ test('plaintext policy: local by default, any on request, anything else refused'
 
 test('loopback means this host only', () => {
   for (const a of ['127.0.0.1', '127.8.9.1', '::1', '::ffff:127.0.0.1']) assert.equal(T.isLoopback(a), true, a);
-  for (const a of ['192.168.7.117', '::ffff:192.168.7.117', '10.42.0.1', 'fd00::1', '', undefined, '1127.0.0.1']) {
+  for (const a of ['192.168.10.20', '::ffff:192.168.10.20', '10.42.0.1', 'fd00::1', '', undefined, '1127.0.0.1']) {
     assert.equal(T.isLoopback(a), false, String(a));
   }
 });

@@ -391,7 +391,7 @@ private fun SessionRow(
     // ctx, age and the menu trailing. The detail lines below ride ListRow's
     // `detail` slot so the frame, the inset and the selection are the house ones.
     //
-    // ⚠ THE NAME GIVES WAY, NOT THE AGE. 2026-10-02 on the Fold at font scale
+    // ⚠ THE NAME GIVES WAY, NOT THE AGE. 2026-10-02 on a foldable at font scale
     // 2.0: "now" vanished from one card and was 8 px wide and 252 px tall on
     // another, and "ctx 48%" took three lines. ListRow measures the trailing
     // group first and gives the title column (weighted) what is left; the name
@@ -562,7 +562,7 @@ private fun SessionRow(
  *
  * ⚠ A PROJECT SESSION IS NEVER ON THIS PAGE (owner rule, 2026-09-19): it is on
  * its project's dashboard and nowhere else, because a copy of it here read as
- * a second, unrelated session — the widgetshub lead sat between two hand-made
+ * a second, unrelated session — the dashboard-app lead sat between two hand-made
  * ones and looked like a session that had failed to do something. This line
  * is the list's only admission that they exist: a count, and the way there,
  * so a reader who watched a cluster spawn is not left looking for rows that

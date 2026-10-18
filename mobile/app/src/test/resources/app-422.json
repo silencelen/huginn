@@ -5,8 +5,8 @@
     "checkedAt": 1789460000,
     "addresses": [
       { "addr": "127.0.0.1:8092", "ok": true, "error": null },
-      { "addr": "192.168.7.31:8092", "ok": false, "error": "connection refused" },
-      { "addr": "100.97.198.90:8092", "ok": false, "error": "connection refused" }
+      { "addr": "192.168.10.31:8092", "ok": false, "error": "connection refused" },
+      { "addr": "100.101.102.103:8092", "ok": false, "error": "connection refused" }
     ],
     "fix": [
       "# on huginn — bind the unit to 0.0.0.0",

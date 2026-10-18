@@ -94,7 +94,7 @@ function writeTranscript(id, { cwd = tmp, extraBytes = 0, lastText = 'all green,
   const file = path.join(dir, `${id}.jsonl`);
   const stamp = new Date().toISOString();
   const lines = [
-    { type: 'ai-title', aiTitle: 'Archive session feature', timestamp: stamp, cwd, gitBranch: 'huginn3/w2-archive' },
+    { type: 'ai-title', aiTitle: 'Archive session feature', timestamp: stamp, cwd, gitBranch: 'feature/w2-archive' },
     { type: 'permission-mode', permissionMode: 'acceptEdits', timestamp: stamp, cwd },
     { type: 'user', message: { content: 'archive this when it settles' }, timestamp: stamp, cwd },
   ];
@@ -113,7 +113,7 @@ function writeTranscript(id, { cwd = tmp, extraBytes = 0, lastText = 'all green,
     message: { model: 'claude-opus-4-5', content: [{ type: 'text', text: lastText }] },
     timestamp: stamp,
     cwd,
-    gitBranch: 'huginn3/w2-archive',
+    gitBranch: 'feature/w2-archive',
   });
   fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   return file;
@@ -294,7 +294,7 @@ test('an immediate archive writes the card and ends the session', async () => {
   assert.equal(tmp, row.cwd);
   assert.equal('claude-opus-4-5', row.model);
   assert.equal('acceptEdits', row.permissionMode);
-  assert.equal('huginn3/w2-archive', row.gitBranch);
+  assert.equal('feature/w2-archive', row.gitBranch);
   assert.equal('all green, 22 tests', row.lastMessage, 'the last thing that was actually said');
   assert.ok(row.archivedAt > 0);
   assert.ok(row.endedAt > 0, 'endedAt is what separates a finished archive from a crash mid-archive');

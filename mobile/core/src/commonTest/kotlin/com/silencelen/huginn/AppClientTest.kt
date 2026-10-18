@@ -69,7 +69,7 @@ class AppClientTest {
         val c = client { request ->
             if (request.url.encodedPath == "/v1/apps") respond("""{"error":"not found"}""", HttpStatusCode.NotFound)
             else respond(
-                """{"consoles":[{"id":"armap","name":"Architecture map","url":"http://huginn:8088/",
+                """{"consoles":[{"id":"atlas","name":"Atlas map","url":"http://huginn:8088/",
                        "kind":"docs","addedAt":1789000000,"version":1,"up":true,
                        "lastProbeAt":1789459940,"latencyMs":12,"httpStatus":200,"reachableFrom":"host"}],
                    "max":32,"kinds":["dashboard","tool","docs","lab","other"],
@@ -80,7 +80,7 @@ class AppClientTest {
         }
         val list = c.apps()!!
         assertEquals(1, list.apps.size)
-        assertEquals("armap", list.apps.first().id)
+        assertEquals("atlas", list.apps.first().id)
         assertEquals(32, list.max)
         assertEquals(listOf("dashboard", "tool", "docs", "lab", "other"), list.kinds)
         assertFalse(list.apps.first().icon, "an old daemon serves no icons, so no row claims one")
@@ -94,7 +94,7 @@ class AppClientTest {
         val c = client {
             respond(
                 """{"apps":[],"max":32,"kinds":["dashboard","tool","docs","lab","other"],
-                   "retrofitApplied":false,"clientAddresses":["192.168.7.31","100.97.198.90"]}""",
+                   "retrofitApplied":false,"clientAddresses":["192.168.10.31","100.101.102.103"]}""",
                 HttpStatusCode.OK,
             )
         }
@@ -102,7 +102,7 @@ class AppClientTest {
         assertTrue(list.apps.isEmpty(), "present and empty is not absent")
         assertEquals(32, list.max)
         assertFalse(list.retrofitApplied)
-        assertEquals(listOf("192.168.7.31", "100.97.198.90"), list.clientAddresses)
+        assertEquals(listOf("192.168.10.31", "100.101.102.103"), list.clientAddresses)
         assertEquals("/v1/apps", seen.single().url.encodedPath, "the new name answered, so nothing else was asked")
     }
 
@@ -120,7 +120,7 @@ class AppClientTest {
                 """{"error":"boardserver answers here but not on the addresses your devices arrive from",
                    "reachable":{"ok":false,"checkedAt":1789460000,
                      "addresses":[{"addr":"127.0.0.1:8092","ok":true},
-                                  {"addr":"192.168.7.31:8092","ok":false,"error":"connection refused"}],
+                                  {"addr":"192.168.10.31:8092","ok":false,"error":"connection refused"}],
                      "fix":["systemctl edit boardserver.service","systemctl restart boardserver"]}}""",
                 HttpStatusCode.UnprocessableEntity,
             )
@@ -140,7 +140,7 @@ class AppClientTest {
         )
         assertEquals(2, made.reachable?.addresses?.size)
         val failed = made.reachable!!.addresses.first { !it.ok }
-        assertEquals("192.168.7.31:8092", failed.addr)
+        assertEquals("192.168.10.31:8092", failed.addr)
         assertEquals("connection refused", failed.error)
         assertEquals("POST", seen.last().method.value)
     }
@@ -173,16 +173,16 @@ class AppClientTest {
     @Test
     fun `an add carries the row's own addresses, and the pinned routes go up as one PUT`() = runTest {
         val c = client { respond("""{"id":"x","name":"X","url":"http://huginn:1/","addresses":["10.42.0.1"],"version":1}""", HttpStatusCode.Created) }
-        val made = c.createApp("X", "http://huginn:1/", addresses = listOf("10.42.0.1", "192.168.2.117"))
+        val made = c.createApp("X", "http://huginn:1/", addresses = listOf("10.42.0.1", "192.168.1.20"))
         assertEquals(listOf("10.42.0.1"), made.app!!.addresses, "the row carries what the daemon kept")
         val body = (seen.last().body as io.ktor.http.content.TextContent).text
-        assertTrue(""""addresses":["10.42.0.1","192.168.2.117"]""" in body, body)
+        assertTrue(""""addresses":["10.42.0.1","192.168.1.20"]""" in body, body)
 
-        c.reportRoutes(listOf("192.168.2.117", "100.97.198.90"))
+        c.reportRoutes(listOf("192.168.1.20", "100.101.102.103"))
         val put = seen.last()
         assertEquals("PUT", put.method.value)
         assertEquals("/v1/apps/routes", put.url.encodedPath)
-        assertEquals("""{"addrs":["192.168.2.117","100.97.198.90"]}""", (put.body as io.ktor.http.content.TextContent).text)
+        assertEquals("""{"addrs":["192.168.1.20","100.101.102.103"]}""", (put.body as io.ktor.http.content.TextContent).text)
     }
 
     @Test
@@ -191,16 +191,16 @@ class AppClientTest {
             respond(
                 """{"apps":[{"id":"a","name":"A","url":"http://huginn:1/","version":1,
                    "reachable":{"ok":true,"checkedAt":1,"addresses":[{"addr":"127.0.0.1","ok":true,"required":true},
-                   {"addr":"100.97.198.90","ok":false,"error":"timed out","required":false}],"fix":[],
-                   "note":"also not answering at 100.97.198.90 — devices have arrived there, but it is not required"}}],
-                   "max":32,"kinds":["tool"],"retrofitApplied":true,"clientAddresses":["100.97.198.90"],
-                   "requiredAddresses":["127.0.0.1","192.168.2.117"],
-                   "reportedRoutes":[{"addr":"192.168.2.117","lastSeenAt":5,"by":["fold","desk"]}]}""",
+                   {"addr":"100.101.102.103","ok":false,"error":"timed out","required":false}],"fix":[],
+                   "note":"also not answering at 100.101.102.103 — devices have arrived there, but it is not required"}}],
+                   "max":32,"kinds":["tool"],"retrofitApplied":true,"clientAddresses":["100.101.102.103"],
+                   "requiredAddresses":["127.0.0.1","192.168.1.20"],
+                   "reportedRoutes":[{"addr":"192.168.1.20","lastSeenAt":5,"by":["fold","desk"]}]}""",
                 HttpStatusCode.OK,
             )
         }
         val list = c.apps()!!
-        assertEquals(listOf("127.0.0.1", "192.168.2.117"), list.requiredAddresses)
+        assertEquals(listOf("127.0.0.1", "192.168.1.20"), list.requiredAddresses)
         assertEquals(listOf("fold", "desk"), list.reportedRoutes.single().by)
         val row = list.apps.single()
         assertEquals(true, row.reachable.ok, "an advisory miss is not a red row")
@@ -240,7 +240,7 @@ class AppClientTest {
     fun `the reachability note survives, because it is why there is no verdict`() = runTest {
         val c = client {
             respond(
-                """{"apps":[{"id":"armap","name":"Architecture map","url":"http://huginn:8088/",
+                """{"apps":[{"id":"atlas","name":"Atlas map","url":"http://huginn:8088/",
                        "unit":"","version":1,"up":null,"lastProbeAt":0,"icon":false,
                        "reachable":{"ok":null,"checkedAt":0,"addresses":[],"fix":[],
                                     "note":"no address to probe yet"}}],
@@ -273,15 +273,15 @@ class AppClientTest {
         val c = client {
             respond(
                 """{"error":"that app was edited somewhere else",
-                   "app":{"id":"armap","name":"Architecture map","url":"http://huginn:8088/",
+                   "app":{"id":"atlas","name":"Atlas map","url":"http://huginn:8088/",
                           "version":7,"up":null,"lastProbeAt":0,"icon":true}}""",
                 HttpStatusCode.Conflict,
             )
         }
-        val save = c.saveApp("armap", version = 3, name = "Armap")
+        val save = c.saveApp("atlas", version = 3, name = "Armap")
         assertTrue(save.conflict)
         assertEquals(7, save.app.version, "the editor adopts the version it was handed")
-        assertEquals("Architecture map", save.app.name)
+        assertEquals("Atlas map", save.app.name)
         assertEquals("that app was edited somewhere else", save.refusal)
         assertEquals("PATCH", seen.last().method.value)
     }
@@ -290,12 +290,12 @@ class AppClientTest {
     fun `an accepted edit is not a conflict`() = runTest {
         val c = client {
             respond(
-                """{"id":"armap","name":"Armap","url":"http://huginn:8088/","version":4,
+                """{"id":"atlas","name":"Armap","url":"http://huginn:8088/","version":4,
                    "up":true,"lastProbeAt":1789459940,"icon":true}""",
                 HttpStatusCode.OK,
             )
         }
-        val save = c.saveApp("armap", version = 3, name = "Armap")
+        val save = c.saveApp("atlas", version = 3, name = "Armap")
         assertFalse(save.conflict)
         assertEquals(4, save.app.version)
         assertNull(save.refusal)
@@ -346,13 +346,13 @@ class AppClientTest {
                 headersOf(HttpHeaders.ContentType, "image/png"),
             )
         }
-        val bytes = c.appIconBytes("armap")
+        val bytes = c.appIconBytes("atlas")
         assertEquals(4, bytes.size)
-        assertEquals("/v1/apps/armap/icon", seen.last().url.encodedPath)
+        assertEquals("/v1/apps/atlas/icon", seen.last().url.encodedPath)
         assertEquals("Bearer test-token", seen.last().headers[HttpHeaders.Authorization])
 
         val none = client { respond("""{"error":"no icon"}""", HttpStatusCode.NotFound) }
-        val e = assertFailsWith<HuginnClient.HuginnException> { none.appIconBytes("btc15m") }
+        val e = assertFailsWith<HuginnClient.HuginnException> { none.appIconBytes("bursar") }
         assertEquals(404, e.code, "the loader turns this into the initial-letter tile")
     }
 }

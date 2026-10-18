@@ -246,7 +246,7 @@ private fun statusColor(status: RoundStatus, acknowledged: Boolean): Color =
  * A Round's verdict line and its controls: side by side when both fit, the
  * verdict on a line of its own above them when they do not.
  *
- * ⚠ 2026-10-02, on the Fold at font scale 1.3 and 2.0: this was one Row with the
+ * ⚠ 2026-10-02, on a foldable at font scale 1.3 and 2.0: this was one Row with the
  * verdict as a weighted single-line Text. Weighted children are measured LAST,
  * so Pause / Run now / Edit (whose labels grow with the font) took their width
  * first and the verdict got the rest: 456 px at 1.0, 370 at 1.3, 210 at 2.0,

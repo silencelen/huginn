@@ -79,7 +79,7 @@ class SettingsDesktopTest {
             Device(id = "2", machine = "m2", scope = "look"),
             Device(id = "3", machine = "m3", scope = "own", online = true),
         ),
-        route = "http://100.97.198.90:8787",
+        route = "http://100.101.102.103:8787",
         tokenSet = true,
         present = true,
         installedVersion = "1.1.0",

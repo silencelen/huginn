@@ -311,7 +311,7 @@ object Markdown {
      * styled — for the places that render a one-line preview as plain text.
      *
      * A chats row showed `**Creative is back online at 15:05.** Both players…`
-     * and `**MemPalace on muninn upgraded 3.7.0 → 3…`: the asterisks are the
+     * and `**MemPalace on memhost upgraded 3.7.0 → 3…`: the asterisks are the
      * FIRST characters of the snippet, so the one line a reader scans a list by
      * opened with punctuation that meant nothing there. A one-line row cannot
      * carry a bold span — it is drawn with a single style — so the only honest

@@ -115,17 +115,17 @@ test('a payload travels with the buttons, so an option can actually be acted on'
   const sender = new FcmSender(writeKey());
   const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
   await sender.send('t', {
-    title: 'Moved jtyper to opus',
-    text: 'jtyper was at 94% of the Fable week',
+    title: 'Moved jotter to opus',
+    text: 'jotter was at 94% of the Fable week',
     kind: 'headroom_downgraded',
-    subject: 'jtyper',
+    subject: 'jotter',
     options: ['Undo', 'OK'],
-    payload: { session: 'jtyper', to: 'opus', from: 'fable' },
+    payload: { session: 'jotter', to: 'opus', from: 'fable' },
   }, f);
   const data = JSON.parse(f.calls[1].opts.body).message.data;
   assert.deepEqual(JSON.parse(data.options), ['Undo', 'OK']);
   assert.equal(typeof data.payload, 'string', 'FCM data is string-to-string');
-  assert.deepEqual(JSON.parse(data.payload), { session: 'jtyper', to: 'opus', from: 'fable' });
+  assert.deepEqual(JSON.parse(data.payload), { session: 'jotter', to: 'opus', from: 'fable' });
 });
 
 test('a payload that cannot be serialised costs the buttons, never the delivery', async () => {
@@ -134,8 +134,8 @@ test('a payload that cannot be serialised costs the buttons, never the delivery'
   assert.equal(payloadJson(null), '');
   assert.equal(payloadJson({}), '', 'an empty object is nothing to carry');
   assert.equal(payloadJson(['a']), '', 'the app reads an object');
-  assert.equal(payloadJson('session=jtyper'), '');
-  const cyclic = { session: 'jtyper' };
+  assert.equal(payloadJson('session=jotter'), '');
+  const cyclic = { session: 'jotter' };
   cyclic.self = cyclic;
   assert.equal(payloadJson(cyclic), '');
 
@@ -151,10 +151,10 @@ test('a question travels with its options and fingerprint', async () => {
   const sender = new FcmSender(writeKey());
   const f = stubFetch([TOKEN_OK, { status: 200, body: '{}' }]);
   await sender.send('t', {
-    title: 'jtyper needs you',
-    text: 'Do you want to create jtyper.md?',
+    title: 'jotter needs you',
+    text: 'Do you want to create jotter.md?',
     kind: 'session_attention',
-    subject: 'jtyper',
+    subject: 'jotter',
     options: [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }],
     fingerprint: 'abc123def456',
   }, f);

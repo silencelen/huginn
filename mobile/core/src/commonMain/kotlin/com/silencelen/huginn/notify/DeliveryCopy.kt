@@ -12,7 +12,7 @@ import com.silencelen.huginn.ui.agoWordsMs
  * exception's own `message` straight onto the screen:
  *
  *   Last failure yesterday: Connect timeout has expired
- *   [url=http://192.168.2.117:8787/v1/watch, connect_timeout=8000 ms]
+ *   [url=http://192.168.1.20:8787/v1/watch, connect_timeout=8000 ms]
  *
  * Three things wrong with that and only one of them is cosmetic. It is Ktor's
  * sentence, not this product's. It is unreadable as an answer to "is this

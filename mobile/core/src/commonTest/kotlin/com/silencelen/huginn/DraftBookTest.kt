@@ -123,12 +123,12 @@ class DraftBookTest {
     @Test
     fun `drafts are per target and survive a load`() = runTest {
         val settings = FakeSettings()
-        settings.seed(mapOf(DraftBook.chatKey("c1") to "one", DraftBook.sessionKey("jtyper") to "two"))
+        settings.seed(mapOf(DraftBook.chatKey("c1") to "one", DraftBook.sessionKey("jotter") to "two"))
         val book = DraftBook(settings, this)
         book.load()
 
         assertEquals("one", book[DraftBook.chatKey("c1")])
-        assertEquals("two", book[DraftBook.sessionKey("jtyper")])
+        assertEquals("two", book[DraftBook.sessionKey("jotter")])
         assertEquals("", book[DraftBook.chatKey("c2")])
     }
 
@@ -156,16 +156,16 @@ class DraftBookTest {
         // exact sequence the owner described, at the layer that has to survive it.
         book.set(DraftBook.chatKey("c1"), "half a question")
         book.flush()
-        book.set(DraftBook.sessionKey("jtyper"), "half an instruction")
+        book.set(DraftBook.sessionKey("jotter"), "half an instruction")
         book.flush()
         advanceUntilIdle()
 
         assertEquals("half a question", book[DraftBook.chatKey("c1")])
-        assertEquals("half an instruction", book[DraftBook.sessionKey("jtyper")])
+        assertEquals("half an instruction", book[DraftBook.sessionKey("jotter")])
         assertEquals(
             mapOf(
                 DraftBook.chatKey("c1") to "half a question",
-                DraftBook.sessionKey("jtyper") to "half an instruction",
+                DraftBook.sessionKey("jotter") to "half an instruction",
             ),
             settings.writes.last(),
         )

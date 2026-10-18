@@ -279,7 +279,7 @@ test('7: a draft that is a substring of the last DELIVERED message is still thei
   const name = await startPane('prior-substring');
   const priorMsg = 'look into why the nightly backup failed';
   assert.equal((await send(name, priorMsg)).body.delivered, true);
-  await assertHeldPastQuiet(name, 'nightly back', 'also what is the disk usage on heimdall');
+  await assertHeldPastQuiet(name, 'nightly back', 'also what is the disk usage on pve1');
   assert.deepEqual(submitted(name), [priorMsg], 'only the earlier message');
 });
 

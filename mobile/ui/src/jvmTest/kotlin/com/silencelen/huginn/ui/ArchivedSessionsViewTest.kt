@@ -27,8 +27,8 @@ class ArchivedSessionsViewTest {
 
     private fun row(
         title: String? = "Archive session feature",
-        tmuxName: String? = "jtyper",
-        cwd: String? = "/root/netplan",
+        tmuxName: String? = "jotter",
+        cwd: String? = "/root/projects/app",
         agoSec: Long = 7_200,
         live: Boolean = false,
         transcriptPresent: Boolean = true,
@@ -45,7 +45,7 @@ class ArchivedSessionsViewTest {
     @Test
     fun `the line says when, what it was called, and where it ran`() {
         assertEquals(
-            "archived 2h ago · jtyper · /root/netplan",
+            "archived 2h ago · jotter · /root/projects/app",
             archivedSubtitle(row(), nowMs),
         )
     }
@@ -55,8 +55,8 @@ class ArchivedSessionsViewTest {
         // Two identical strings on two lines is the row wasting half its height —
         // the rule the desktop's live session row already follows.
         assertEquals(
-            "archived 2h ago · /root/netplan",
-            archivedSubtitle(row(title = "jtyper"), nowMs),
+            "archived 2h ago · /root/projects/app",
+            archivedSubtitle(row(title = "jotter"), nowMs),
         )
     }
 
@@ -66,9 +66,9 @@ class ArchivedSessionsViewTest {
         // between two dots.
         assertEquals("archived 2h ago", archivedSubtitle(row(tmuxName = null, cwd = null), nowMs))
         // A row with no stamp at all — an older daemon, or a record written before
-        // archivedAt existed. It must not render as "archived  · jtyper".
+        // archivedAt existed. It must not render as "archived  · jotter".
         val unstamped = row().copy(archivedAt = 0)
-        assertEquals("jtyper · /root/netplan", archivedSubtitle(unstamped, nowMs))
+        assertEquals("jotter · /root/projects/app", archivedSubtitle(unstamped, nowMs))
     }
 
     // -------------------------------------------------------------- warning

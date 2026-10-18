@@ -23,7 +23,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * Layouts that were measured on the Fold at large font scales on 2026-10-02
+ * Layouts that were measured on a foldable at large font scales on 2026-10-02
  * (1080 px wide, density 2.625) and came apart. Rendered here at the same size.
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -111,7 +111,7 @@ class FontScaleLayoutTest {
     }
 
     /**
-     * 2026-10-02 on the Fold: the Sessions tab drew ~100 frames a second for as
+     * 2026-10-02 on a foldable: the Sessions tab drew ~100 frames a second for as
      * long as a session was working, every other tab 0. The breathing dot was an
      * infinite tween, which asks for a frame on every vsync. After the first
      * frames it must leave the frame clock alone between its steps.

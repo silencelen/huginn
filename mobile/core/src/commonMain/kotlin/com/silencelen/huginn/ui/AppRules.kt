@@ -287,7 +287,7 @@ object AppRules {
      * The daemon's rule, mirrored: a BARE host (no port, path, query, fragment or
      * user — 2026-10-02, `127.0.0.3#` used to be stored and probed on port 80),
      * in a class [urlProblem] allows. So `*.ts.net` and single-label names pass and
-     * `huginn.jnet.ad` does not.
+     * `huginn.home.arpa` does not.
      */
     fun addressProblem(host: String): String? {
         val h = host.trim()
@@ -356,7 +356,7 @@ object AppRules {
     /**
      * The Apps page's line about routes the daemon does not check, or null.
      *
-     * Without it a device pinned only to `huginn.jnet.ad` reads every row as
+     * Without it a device pinned only to `huginn.home.arpa` reads every row as
      * "reachable from your devices" while the address it actually dials was never
      * asked.
      */

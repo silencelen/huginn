@@ -191,8 +191,8 @@ class AttachmentImageLoader(
         private const val PATH_KEY = "path\u0000"
 
         /**
-         * And the third space. An upload called `armap`, a host path `/armap`
-         * and an app id `armap` are three different fetches from three different
+         * And the third space. An upload called `atlas`, a host path `/atlas`
+         * and an app id `atlas` are three different fetches from three different
          * routes sharing one LRU; nothing may collide across them.
          */
         private const val ICON_KEY = "icon\u0000"

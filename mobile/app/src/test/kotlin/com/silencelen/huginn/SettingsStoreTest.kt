@@ -83,8 +83,8 @@ class SettingsStoreTest {
 class SettingsStoreRoutesTest {
 
     private fun book() = RouteBook()
-        .add("Tailscale", "http://100.97.198.90:8787", now = 10)
-        .add("Home", "http://192.168.2.117:8787", now = 20)
+        .add("Tailscale", "http://100.101.102.103:8787", now = 10)
+        .add("Home", "http://192.168.1.20:8787", now = 20)
 
     @Test
     fun `the dropped-address notice survives a write and a read`() {

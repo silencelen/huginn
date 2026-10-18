@@ -24,7 +24,7 @@ class DevicesViewTest {
         locked: Boolean = false,
         actWhileLocked: Boolean? = null,
     ) = Device(
-        id = "d1", name = "PRESTIGE", platform = "windows",
+        id = "d1", name = "PC01", platform = "windows",
         scope = scope, effectiveScope = effective, online = online,
         running = running, queued = queued, version = version, lastSeen = lastSeen,
         locked = locked, actWhileLocked = actWhileLocked,
@@ -120,10 +120,10 @@ class DevicesViewTest {
         models: List<DeviceModel> = listOf(DeviceModel("qwen3-8b", "Qwen3 8B")),
         persistent: Boolean? = null,
     ) = Device(
-        id = "d2", name = "datatreex-llm", platform = "windows",
+        id = "d2", name = "deskpc-llm", platform = "windows",
         scope = "generate", effectiveScope = "generate",
         online = online, running = running, version = "0.12.1",
-        llmSlug = "datatreex-llm", models = models, persistent = persistent,
+        llmSlug = "deskpc-llm", models = models, persistent = persistent,
     )
 
     @Test
@@ -249,15 +249,15 @@ class DevicesViewTest {
     // stays per-row, which these tests assert by checking the facets keep
     // their own scopes.
 
-    private fun claudeRow(machine: String? = "datatreex") = Device(
-        id = "c1", name = "DATATREEX", platform = "windows",
+    private fun claudeRow(machine: String? = "deskpc") = Device(
+        id = "c1", name = "DESKPC", platform = "windows",
         scope = "own", effectiveScope = "own", online = true, machine = machine,
     )
 
-    private fun servingRow(machine: String? = "datatreex", online: Boolean = true) = Device(
-        id = "s1", name = "datatreex-llm", platform = "windows",
+    private fun servingRow(machine: String? = "deskpc", online: Boolean = true) = Device(
+        id = "s1", name = "deskpc-llm", platform = "windows",
         scope = "generate", effectiveScope = "generate", online = online,
-        machine = machine, llmSlug = "datatreex-llm",
+        machine = machine, llmSlug = "deskpc-llm",
         models = listOf(DeviceModel("qwen3-8b", "Qwen3 8B")),
     )
 
@@ -266,7 +266,7 @@ class DevicesViewTest {
         val groups = groupByMachine(listOf(claudeRow(), servingRow()))
         assertEquals(1, groups.size, "one box, one card")
         val g = groups.single()
-        assertEquals("DATATREEX", g.head.name, "the name a person knows the box by")
+        assertEquals("DESKPC", g.head.name, "the name a person knows the box by")
         assertEquals(listOf("own"), g.claude.map { it.scope })
         assertEquals(listOf("generate"), g.serving.map { it.scope })
     }
@@ -297,7 +297,7 @@ class DevicesViewTest {
     @Test
     fun aServeOnlyMachineIsItsOwnGroupHeadedByTheServingRow() {
         val g = groupByMachine(listOf(servingRow(machine = "lonely"))).single()
-        assertEquals("datatreex-llm", g.head.name)
+        assertEquals("deskpc-llm", g.head.name)
         assertTrue(g.claude.isEmpty())
     }
 
@@ -318,8 +318,8 @@ class DevicesViewTest {
     @Test
     fun theReadersOwnMachineKnowsItselfByKeyAndAPhoneMarksNothing() {
         val g = groupByMachine(listOf(claudeRow(), servingRow())).single()
-        assertTrue(g.isThisMachine("datatreex"), "the box the reader sits at")
-        assertFalse(g.isThisMachine("prestige"), "someone else's box is not this device")
+        assertTrue(g.isThisMachine("deskpc"), "the box the reader sits at")
+        assertFalse(g.isThisMachine("pc01"), "someone else's box is not this device")
         assertFalse(g.isThisMachine(null), "a phone (never enrolled) marks nothing")
     }
 
@@ -328,8 +328,8 @@ class DevicesViewTest {
      *
      * Centred against the whole column it landed ON the name for a machine with
      * one capability line and FLOATED between two lines for a machine with
-     * several — `brokkr` and `huginn` marked one way, DATATREEX, PRESTIGE and
-     * RAGNAR another, in a list read top to bottom for exactly that mark.
+     * several — `buildbox` and `huginn` marked one way, DESKPC, PC01 and
+     * RIG another, in a list read top to bottom for exactly that mark.
      *
      * A source grep because the failure is an alignment: there is no
      * compose-ui-test in this module (the [MarkdownTableTest] precedent).

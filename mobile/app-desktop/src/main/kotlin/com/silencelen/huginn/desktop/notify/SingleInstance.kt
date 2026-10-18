@@ -74,7 +74,7 @@ class SingleInstance private constructor(
         // QUIT, from an updater or the installer (`huginn desktop update`, the
         // NSIS installer): the app's own Quit, so it closes the way the tray's
         // "Quit Huginn" does instead of being killed — a forced kill of the JVM
-        // left the jpackage launcher showing error dialogs (PRESTIGE, 2026-10-16).
+        // left the jpackage launcher showing error dialogs (PC01, 2026-10-16).
         // Never a URL: a web page can launch huginn:// links, and only a holder of
         // this file's secret (this user) can say this.
         if (url == QUIT) {

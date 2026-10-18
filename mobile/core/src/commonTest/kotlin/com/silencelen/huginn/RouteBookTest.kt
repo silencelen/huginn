@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
 /** The list, the names, the order, the cap — and the address every worker reads. */
 class RouteBookTest {
 
-    private val lan = "https://192.168.2.117:8787"
-    private val tailnet = "https://100.97.198.90:8787"
+    private val lan = "https://192.168.1.20:8787"
+    private val tailnet = "https://100.101.102.103:8787"
     private val local = "http://127.0.0.1:8787"
 
     private fun book(vararg urls: String): RouteBook =
@@ -78,12 +78,12 @@ class RouteBookTest {
     fun `a rename persists and a blank name falls back to the address`() {
         val b = book(lan).rename("r0", "  the mesh  ")
         assertEquals("the mesh", b.routes.single().name)
-        assertEquals("192.168.2.117:8787", b.rename("r0", "   ").routes.single().name)
+        assertEquals("192.168.1.20:8787", b.rename("r0", "   ").routes.single().name)
     }
 
     @Test
     fun `an unnamed route is named after its own authority`() {
-        assertEquals("192.168.2.117:8787", RouteBook().add("", lan, now = 0).routes.single().name)
+        assertEquals("192.168.1.20:8787", RouteBook().add("", lan, now = 0).routes.single().name)
         assertEquals("localhost:8787", RouteBook().add("  ", "http://localhost:8787", now = 0).routes.single().name)
     }
 

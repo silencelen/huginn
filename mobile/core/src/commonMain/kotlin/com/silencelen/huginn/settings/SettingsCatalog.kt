@@ -391,7 +391,7 @@ object SettingsCatalog {
                 title = "Apps",
                 summary = "The pages huginn hosts itself, whether each one answers, and whether " +
                     "your devices can reach it.",
-                keywords = listOf("app", "apps", "console", "consoles", "dashboard", "page", "armap", "link", "retrofit"),
+                keywords = listOf("app", "apps", "console", "consoles", "dashboard", "page", "atlas", "link", "retrofit"),
                 // The same `/v1/status` shelf its siblings use — the probe carries
                 // no apps fact — and the shells additionally hide their own entry
                 // when neither `/v1/apps` nor `/v1/consoles` answers. `console`

@@ -272,8 +272,8 @@ fun TranscriptEventItem(
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
             // The peer's own name is passed, never parsed out of the text: the
-            // `@handle` preview slugifies the slash (`lora-stick/docs` →
-            // `@lora-stick-docs`), so the rendered line cannot be read back into
+            // `@handle` preview slugifies the slash (`sensor-board/docs` →
+            // `@sensor-board-docs`), so the rendered line cannot be read back into
             // an addressable name. See TranscriptEvent.peer.
             // A note with a body is a headline over something long — another
             // session's report, the summary after a compaction — and opens like
@@ -977,7 +977,7 @@ private fun ProjectRelayNote(ev: TranscriptEvent) {
 }
 
 /**
- * "lora-stick · from lora-stick/lead" — which project relayed this, and who sent
+ * "sensor-board · from sensor-board/lead" — which project relayed this, and who sent
  * it.
  *
  * Pure so both the line and its absence can be asserted. Null when there is no

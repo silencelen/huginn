@@ -548,13 +548,13 @@ class ApiContractTest {
         // summed across three registries — and a client that expected a member
         // array here would draw every cluster as empty.
         val proposed = list.projects.first { it.id.endsWith("a1") }
-        assertEquals("LoRa sensor stick", proposed.name)
-        assertEquals("lora-stick", proposed.slug)
+        assertEquals("Sensor board", proposed.name)
+        assertEquals("sensor-board", proposed.slug)
         assertEquals("hardware", proposed.kind)
         assertEquals("proposed", proposed.status)
         assertEquals(0, proposed.memberCount)
-        assertEquals("lora-stick-lead", proposed.lead?.name)
-        assertEquals("lora-stick/lead", proposed.lead?.claudeName)
+        assertEquals("sensor-board-lead", proposed.lead?.name)
+        assertEquals("sensor-board/lead", proposed.lead?.claudeName)
         assertEquals(java.lang.Boolean.TRUE, proposed.lead?.present)
         assertEquals(2, proposed.manifestRev)
         assertEquals(
@@ -584,7 +584,7 @@ class ApiContractTest {
         assertEquals("the lead session is gone", over.endedReason)
         // Live first, then by name: the row you tapped is the row that is there.
         assertEquals(
-            listOf("lora-stick", "statusflap", "auvik-lab"),
+            listOf("sensor-board", "statusflap", "auvik-lab"),
             ProjectRules.orderedProjects(list.projects).map { it.slug },
         )
 
@@ -603,7 +603,7 @@ class ApiContractTest {
         // answer", which a list could otherwise only learn by GETting every
         // project — and without it a row redrawn from a stale notification offers
         // Spawn on a cluster that is already running.
-        val proposal = list.projects.first { it.slug == "lora-stick" }
+        val proposal = list.projects.first { it.slug == "sensor-board" }
         assertEquals(2, proposal.manifestRev)
         assertEquals(0, proposal.spawnedRev)
         assertFalse("rev 2 has never been spawned", ProjectRules.alreadySpawned(proposal))
@@ -638,7 +638,7 @@ class ApiContractTest {
         assertEquals("statusflap", p.slug)
         assertEquals("active", p.status)
         assertTrue("the brief is the whole first message the lead got", p.brief.contains("flaps"))
-        assertEquals("/root/netplan/status-page", p.cwd)
+        assertEquals("/root/projects/app/status-page", p.cwd)
         assertEquals(4, p.rev)
 
         // The membership record: names in BOTH grammars, and how each was started.
@@ -909,7 +909,7 @@ class ApiContractTest {
         assertFalse("the retrofit is still outstanding on this host", list.retrofitApplied)
         assertEquals(
             "the addresses the rows were measured against",
-            listOf("192.168.7.31", "100.97.198.90"),
+            listOf("192.168.10.31", "100.101.102.103"),
             list.clientAddresses,
         )
         // ⚠ THE CLIENT'S COPY OF THE VOCABULARY IS THE ONE THAT DECIDES what a
@@ -922,31 +922,31 @@ class ApiContractTest {
             assertTrue("${it.id}'s kind is one the daemon can store", k != null && k in list.kinds)
         }
 
-        val armap = list.apps.first { it.id == "armap" }
-        assertEquals("http://huginn:8088/", armap.url)
-        assertEquals("armap.service", armap.unit)
-        assertEquals(3, armap.version)
-        assertTrue("this row has a favicon, so the row will ask for it", armap.icon)
+        val atlas = list.apps.first { it.id == "atlas" }
+        assertEquals("http://huginn:8088/", atlas.url)
+        assertEquals("atlas.service", atlas.unit)
+        assertEquals(3, atlas.version)
+        assertTrue("this row has a favicon, so the row will ask for it", atlas.icon)
         assertEquals(
             "up from the host · checked 1m ago",
-            AppRules.reachabilityWords(armap.up, armap.lastProbeAt, nowMs),
+            AppRules.reachabilityWords(atlas.up, atlas.lastProbeAt, nowMs),
         )
-        assertEquals("12 ms · HTTP 200", AppRules.probeDetail(armap))
-        assertNull("the seeded rows are legal addresses", AppRules.urlProblem(armap.url))
-        assertEquals(AppRules.DeviceReach.REACHABLE, AppRules.deviceReach(armap))
-        assertFalse("nothing wrong, nothing to disclose", AppRules.failing(armap))
+        assertEquals("12 ms · HTTP 200", AppRules.probeDetail(atlas))
+        assertNull("the seeded rows are legal addresses", AppRules.urlProblem(atlas.url))
+        assertEquals(AppRules.DeviceReach.REACHABLE, AppRules.deviceReach(atlas))
+        assertFalse("nothing wrong, nothing to disclose", AppRules.failing(atlas))
 
         // ⚠⚠ UP, AND STILL UNREACHABLE FROM HERE — the whole reason the second
         // axis exists (decision 54). A 403 page is UP: something answered. It
         // answered on the tailnet address and refused the connection on the LAN
         // one, so the row is up AND needs retrofit, and both have to survive.
-        val jtyper = list.apps.first { it.id == "jtyper" }
-        assertEquals(java.lang.Integer.valueOf(403), jtyper.httpStatus)
-        assertEquals(AppRules.Reach.UP, AppRules.reach(jtyper))
-        assertEquals(AppRules.DeviceReach.RETROFIT, AppRules.deviceReach(jtyper))
-        assertTrue("a failing row has something to open", AppRules.failing(jtyper))
-        assertFalse("no favicon cached, so the tile is drawn", jtyper.icon)
-        assertEquals("J", AppRules.iconInitial(jtyper))
+        val jotter = list.apps.first { it.id == "jotter" }
+        assertEquals(java.lang.Integer.valueOf(403), jotter.httpStatus)
+        assertEquals(AppRules.Reach.UP, AppRules.reach(jotter))
+        assertEquals(AppRules.DeviceReach.RETROFIT, AppRules.deviceReach(jotter))
+        assertTrue("a failing row has something to open", AppRules.failing(jotter))
+        assertFalse("no favicon cached, so the tile is drawn", jotter.icon)
+        assertEquals("J", AppRules.iconInitial(jotter))
         // ⚠ LITERALS, not a count. These are lines somebody pastes into a root
         // shell to rebind a unit, and a drifted port or a reordered pair would
         // sail through an assertion about length.
@@ -956,17 +956,17 @@ class ApiContractTest {
         assertEquals(
             listOf(
                 "# on huginn — bind the unit to 0.0.0.0",
-                "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of the tailnet address",
-                "systemctl restart jtyper-trainer",
+                "systemctl edit jotter.service   # ExecStart: bind 0.0.0.0 instead of the tailnet address",
+                "systemctl restart jotter-trainer",
                 "ss -ltnp | grep 8091",
-                "# on heimdall — allow the port in /etc/pve/firewall/117.fw",
-                "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog",
+                "# on pve1 — allow the port in /etc/pve/firewall/100.fw",
+                "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog",
             ),
-            AppRules.fixLines(jtyper),
+            AppRules.fixLines(jotter),
         )
         assertEquals(
-            "192.168.7.31:8091 — connection refused",
-            AppRules.addressWords(jtyper.reachable.addresses.first { !it.ok }),
+            "192.168.10.31:8091 — connection refused",
+            AppRules.addressWords(jotter.reachable.addresses.first { !it.ok }),
         )
 
         // Accepted the connection and never answered: down, with the elapsed time
@@ -990,7 +990,7 @@ class ApiContractTest {
         // ⚠⚠ THE THIRD STATE, AND THE WHOLE POINT OF THE FIXTURE CARRYING IT. The
         // daemon keeps probe state in memory, so after every restart EVERY row
         // looks like this. It is not a row that is down.
-        val btc = list.apps.first { it.id == "btc15m" }
+        val btc = list.apps.first { it.id == "bursar" }
         assertNull("no verdict yet", btc.up)
         assertEquals("never probed is 0, not null and never 1970", 0L, btc.lastProbeAt)
         assertEquals("not checked yet", AppRules.reachabilityWords(btc.up, btc.lastProbeAt, nowMs))
@@ -1008,7 +1008,7 @@ class ApiContractTest {
 
         // The page's one transition line.
         assertEquals(
-            "Retrofit not applied · 1 of 4 needs it · your devices arrive on 192.168.7.31, 100.97.198.90",
+            "Retrofit not applied · 1 of 4 needs it · your devices arrive on 192.168.10.31, 100.101.102.103",
             AppRules.retrofitNote(list),
         )
 
@@ -1135,17 +1135,17 @@ class ApiContractTest {
     fun `a peer message decodes as a system note that knows who sent it`() {
         val p = json.decodeFromString<TranscriptPage>(
             """{"events":[{"seq":7,"kind":"system","ts":1789459400,
-               "text":"lora-stick/docs: README.md is written.",
-               "peer":{"name":"lora-stick/docs","sessionId":"0123abcd-0000-4000-8000-00000000d004",
+               "text":"sensor-board/docs: README.md is written.",
+               "peer":{"name":"sensor-board/docs","sessionId":"0123abcd-0000-4000-8000-00000000d004",
                        "pid":41207}}],
                "nextOffset":812}""",
         )
         val e = p.events.single()
         assertEquals("system", e.kind)
         // ⚠ LABEL FROM origin.name, NOT FROM THE RENDERED PREVIEW: the @handle
-        // form slugifies the slash (`lora-stick/docs` → `@lora-stick-docs`), so
+        // form slugifies the slash (`sensor-board/docs` → `@sensor-board-docs`), so
         // the text cannot be trusted to carry the addressable name.
-        assertEquals("lora-stick/docs", e.peer?.name)
+        assertEquals("sensor-board/docs", e.peer?.name)
         assertNotNull("the sessionId is what a tap would open", e.peer?.sessionId)
         // ⚠ THE PID IS THE KERNEL-VERIFIED ONE, and the daemon sends it because it
         // is all a native peer record actually proves — the address of record is a

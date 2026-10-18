@@ -125,7 +125,7 @@ try {
       $paired = (Test-Path $cb) -and (((& $cb core status 2>$null) -join "`n") -notmatch 'not paired')
       # Paired, but ssh did not answer at the address typed: huginn lists its
       # other addresses to the core, and setup ssh points 'Host huginn' at one
-      # that carries ssh from here (PRESTIGE, 2026-10-17).
+      # that carries ssh from here (PC01, 2026-10-17).
       if ($paired -and -not $trusted) {
         & $cb setup ssh
         $trusted = ($LASTEXITCODE -eq 0)

@@ -129,8 +129,8 @@ class HuginnViewModelTest {
         // nothing owed — so no request is built at all.
         assertNull("a session that was never leased owes no release",
             PaneLease.toRelease(held = null, wanted = null))
-        assertEquals("what WAS leased is still handed back", "jtyper",
-            PaneLease.toRelease(held = "jtyper", wanted = null))
+        assertEquals("what WAS leased is still handed back", "jotter",
+            PaneLease.toRelease(held = "jotter", wanted = null))
     }
 
     // ------------------------------------------------------------ the pill
@@ -384,19 +384,19 @@ class HuginnViewModelTest {
         // and to 62 toast call sites.
         val timeout = errorTextFor(
             RuntimeException(
-                "Connect timeout has expired [url=http://192.168.2.117:8787/v1/status, " +
+                "Connect timeout has expired [url=http://192.168.1.20:8787/v1/status, " +
                     "connect_timeout=8000 ms]"
             )
         )
-        assertFalse("the daemon's host must not reach the screen", timeout.contains("192.168.2.117"))
+        assertFalse("the daemon's host must not reach the screen", timeout.contains("192.168.1.20"))
         assertFalse(timeout.contains("8787"))
         assertTrue("sentence case for a banner", timeout.first().isUpperCase())
         assertTrue(timeout.startsWith("Huginn did not answer in time"))
 
         // OkHttp does not word a refusal as "connection refused"; whatever
         // DeliveryCopy makes of it, the address must be gone.
-        val refused = errorTextFor(RuntimeException("Failed to connect to /192.168.2.117:8787"))
-        assertFalse(refused.contains("192.168.2.117"))
+        val refused = errorTextFor(RuntimeException("Failed to connect to /192.168.1.20:8787"))
+        assertFalse(refused.contains("192.168.1.20"))
         assertFalse(refused.contains("8787"))
 
         val dns = errorTextFor(RuntimeException("Unable to resolve host \"huginn.tail1234.ts.net\""))
@@ -449,11 +449,11 @@ class HuginnViewModelTest {
             },
         )
 
-        fetchStreamAgents(client, "jtyper")
+        fetchStreamAgents(client, "jotter")
 
         val asked = seen.single().url.toString().removePrefix(BASE)
         assertTrue("the folded list must be whole: $asked", "all=1" in asked)
-        assertTrue(asked, asked.startsWith("/v1/sessions/jtyper/agents"))
+        assertTrue(asked, asked.startsWith("/v1/sessions/jotter/agents"))
     }
 
     // --------------------------------------------------- the quick actions
@@ -735,7 +735,7 @@ class HuginnViewModelTest {
 class AttachmentSlotsTest {
 
     private val CHAT = "chat:1"
-    private val SESS = "sess:jtyper"
+    private val SESS = "sess:jotter"
 
     private fun AttachmentSlots.stageReady(owner: String, label: String, path: String): String {
         val id = stage(owner, label, image = true)!!

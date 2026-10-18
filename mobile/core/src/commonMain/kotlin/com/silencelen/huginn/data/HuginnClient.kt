@@ -290,7 +290,7 @@ class HuginnClient(
             // given — the setup flow's address step — not an old one.
             // So it is said as what it is - an answer waiting for the token - and not
             // as a failure: "cannot prove it is huginn" read as broken on a correct
-            // address (PRESTIGE, 2026-10-16).
+            // address (PC01, 2026-10-16).
             if (probe.answered && probe.secure) return "$what answers at $where; the token (next) proves it is yours"
             if (probe.answered) return "$what at $where ${DaemonChallenge.NOT_PROVEN} — a daemon older than 3.6"
             return "nothing at $where answered as huginn"
@@ -485,8 +485,8 @@ class HuginnClient(
 
     /**
      * ⚠ CASE-INSENSITIVELY. A scheme is a scheme however it is spelled, and 2.x's
-     * setter only trimmed — so `HTTP://192.168.2.117:8787` was storable, and this
-     * helper used to build `http://HTTP//192.168.2.117:8787/v1/ping` out of it.
+     * setter only trimmed — so `HTTP://192.168.1.20:8787` was storable, and this
+     * helper used to build `http://HTTP//192.168.1.20:8787/v1/ping` out of it.
      */
     private fun withScheme(base: String): String {
         val b = base.trim().trimEnd('/')

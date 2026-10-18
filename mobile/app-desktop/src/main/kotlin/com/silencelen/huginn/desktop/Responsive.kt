@@ -11,7 +11,7 @@ package com.silencelen.huginn.desktop
  * text field measuring 35px between two buttons that would not yield. `Ctrl+B`
  * made the app perfectly usable — the app simply never did it itself.
  *
- * The phone has had the answer since the Fold shipped: `MainActivity` asks one
+ * The phone has had the answer since the foldable layout shipped: `MainActivity` asks one
  * `BoxWithConstraints` whether it is at least 700dp across and lays out two panes
  * or one. The numbers here are that same breakpoint, arrived at from the outside,
  * so a desktop window narrowed to a phone's width gets the phone's answer — which

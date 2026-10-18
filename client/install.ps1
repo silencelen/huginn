@@ -18,7 +18,7 @@ if (-not $env:HUGINN_SETUP) { _Huginn-UiHead 'huginn client install' }
 if (-not $HuginnHost) { $HuginnHost = Read-Host '    Huginn host (its IP address or name)' }
 if (-not $HuginnHost) { _Huginn-UiLine 'fail' 'host' 'no host given - run it again with the host: -HuginnHost <host>'; throw 'huginn: no host given' }
 # People type huginn's address as they know it, https:// and :8787 included
-# (run 7: "192.168.2.117:8787" became an ssh host name that resolved nowhere).
+# (run 7: "192.168.1.20:8787" became an ssh host name that resolved nowhere).
 # ssh gets the bare host; pairing later uses the address.
 $hg = $HuginnHost.Trim()
 if ($hg -match '^(?:https?://)?(\[[^\]]+\]|[^/:]+)(?::(\d+))?(?:/.*)?$') {

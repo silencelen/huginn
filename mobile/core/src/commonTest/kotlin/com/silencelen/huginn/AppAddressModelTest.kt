@@ -83,22 +83,22 @@ class AppAddressModelTest {
 
     @Test
     fun `a route host the daemon would refuse is held back and named, not sent to be dropped`() {
-        // 2026-10-02: https://huginn.jnet.ad was sent, silently dropped by the
+        // 2026-10-02: https://huginn.home.arpa was sent, silently dropped by the
         // daemon, and the reply thrown away — nobody was told.
         val book = RouteBook(
             routes = listOf(
-                PinnedRoute(id = "a", name = "lan", url = "http://192.168.2.117:8787"),
-                PinnedRoute(id = "b", name = "jnet", url = "https://huginn.jnet.ad"),
+                PinnedRoute(id = "a", name = "lan", url = "http://192.168.1.20:8787"),
+                PinnedRoute(id = "b", name = "home", url = "https://huginn.home.arpa"),
                 PinnedRoute(id = "c", name = "ts", url = "https://huginn.tail1234.ts.net"),
             ),
             activeId = "a",
         )
         val r = AppRules.routeReport(book, emptyMap())
-        assertEquals(listOf("192.168.2.117", "huginn.tail1234.ts.net"), r.hosts)
-        assertEquals(listOf("huginn.jnet.ad"), r.refused)
+        assertEquals(listOf("192.168.1.20", "huginn.tail1234.ts.net"), r.hosts)
+        assertEquals(listOf("huginn.home.arpa"), r.refused)
         val notice = AppRules.routeNotice(r.refused)
         assertNotNull(notice)
-        assertTrue("huginn.jnet.ad" in notice, notice)
+        assertTrue("huginn.home.arpa" in notice, notice)
         assertNull(AppRules.routeNotice(emptyList()))
         assertEquals(null, AppRules.addressProblem("10.0.0.1"))
         assertNotNull(AppRules.addressProblem("127.0.0.3#"), "a bare host only, like the daemon")
@@ -128,12 +128,12 @@ class AppAddressModelTest {
     fun `a report answer says what was refused, and an older daemon is not an error`() = runTest {
         val refused = client {
             respond(
-                """{"error":"'huginn.jnet.ad' is not an address huginn can check from","refused":[{"addr":"huginn.jnet.ad","why":"x"}]}""",
+                """{"error":"'huginn.home.arpa' is not an address huginn can check from","refused":[{"addr":"huginn.home.arpa","why":"x"}]}""",
                 HttpStatusCode.BadRequest,
             )
-        }.reportRoutes(listOf("huginn.jnet.ad"))
+        }.reportRoutes(listOf("huginn.home.arpa"))
         assertTrue(refused.supported)
-        assertEquals(listOf("huginn.jnet.ad"), refused.refused)
+        assertEquals(listOf("huginn.home.arpa"), refused.refused)
 
         val old = client { respond("""{"error":"no such app"}""", HttpStatusCode.NotFound) }.reportRoutes(listOf("10.0.0.1"))
         assertFalse(old.supported, "a 3.8 daemon has no route to report to")

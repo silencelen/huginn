@@ -22,8 +22,8 @@ test('the stored command carries the cwd, because a resume in the wrong director
   // started. `claude --resume <id>` alone is a command that works and lands in
   // the wrong repository.
   assert.equal(
-    `cd '/root/netplan' && claude --resume ${ID}`,
-    archive.resumeCommand(ID, '/root/netplan'),
+    `cd '/root/projects/app' && claude --resume ${ID}`,
+    archive.resumeCommand(ID, '/root/projects/app'),
   );
 });
 
@@ -44,8 +44,8 @@ test('a directory with a space in it survives being pasted into a shell', () => 
 test('no session id means no command at all, rather than a command that cannot work', () => {
   // A pane whose title hook never fired has nothing to resume. A row offering
   // `claude --resume null` is worse than a row that says it cannot be revived.
-  assert.equal(null, archive.resumeCommand(null, '/root/netplan'));
-  assert.equal(null, archive.resumeCommand('not-a-uuid', '/root/netplan'));
+  assert.equal(null, archive.resumeCommand(null, '/root/projects/app'));
+  assert.equal(null, archive.resumeCommand('not-a-uuid', '/root/projects/app'));
   assert.equal(null, archive.resumeCommand(`--help ${ID}`, '/root'),
     'a value that starts with -- would become the next flag');
 });
@@ -59,28 +59,28 @@ test('with no cwd recorded the command still resumes, in whatever directory it i
 test('the record carries every field a client renders, definite rather than absent', () => {
   const rec = archive.buildRecord({
     claudeSessionId: ID,
-    tmuxName: 'jtyper',
+    tmuxName: 'jotter',
     title: 'Archive session feature',
-    cwd: '/root/netplan',
+    cwd: '/root/projects/app',
     model: 'claude-opus-4-5',
     effort: 'high',
     permissionMode: 'acceptEdits',
-    gitBranch: 'huginn3/w2-archive',
+    gitBranch: 'feature/w2-archive',
     archivedAt: 1_700_000_000,
     lastMessage: 'suite green, 1305 tests',
-    transcriptPath: '/root/.claude/projects/-root-netplan/x.jsonl',
+    transcriptPath: '/root/.claude/projects/-root-projects-app/x.jsonl',
     transcriptBytes: 4096,
   });
   assert.equal(ID, rec.id, 'keyed by the claude session id, never the tmux name');
   assert.equal(ID, rec.claudeSessionId);
-  assert.equal('jtyper', rec.tmuxName);
+  assert.equal('jotter', rec.tmuxName);
   assert.equal('Archive session feature', rec.title);
-  assert.equal('/root/netplan', rec.cwd);
-  assert.equal(`cd '/root/netplan' && claude --resume ${ID}`, rec.resumeCommand);
+  assert.equal('/root/projects/app', rec.cwd);
+  assert.equal(`cd '/root/projects/app' && claude --resume ${ID}`, rec.resumeCommand);
   assert.equal('claude-opus-4-5', rec.model);
   assert.equal('high', rec.effort);
   assert.equal('acceptEdits', rec.permissionMode);
-  assert.equal('huginn3/w2-archive', rec.gitBranch);
+  assert.equal('feature/w2-archive', rec.gitBranch);
   assert.equal(1_700_000_000, rec.archivedAt);
   assert.equal(4096, rec.transcriptBytes);
   assert.equal(false, rec.transcriptTruncated);
@@ -172,16 +172,16 @@ test('a revived row is not protected from the cap', () => {
 // -------------------------------------------------------------- revive name
 
 test('a revive takes the old name back when nothing else holds it', () => {
-  assert.equal('jtyper', archive.reviveName('jtyper', ['other', 'main']));
+  assert.equal('jotter', archive.reviveName('jotter', ['other', 'main']));
 });
 
 test('a taken name becomes <name>2, not a uuid and not a failure', () => {
-  assert.equal('jtyper2', archive.reviveName('jtyper', ['jtyper']));
-  assert.equal('jtyper3', archive.reviveName('jtyper', ['jtyper', 'jtyper2']));
+  assert.equal('jtyper2', archive.reviveName('jotter', ['jotter']));
+  assert.equal('jtyper3', archive.reviveName('jotter', ['jotter', 'jtyper2']));
 });
 
 test('a Set of live names is accepted as readily as an array', () => {
-  assert.equal('jtyper2', archive.reviveName('jtyper', new Set(['jtyper'])));
+  assert.equal('jtyper2', archive.reviveName('jotter', new Set(['jotter'])));
 });
 
 // ------------------------------------------------------- transcript window
@@ -239,13 +239,13 @@ test('the restored transcript goes under the config dir this daemon was TOLD to 
   // into the OWNER'S real ~/.claude/projects/, where Claude Code would then
   // happily resume it. Found in a review run, by the log line naming the real
   // path.
-  const t = archive.transcriptTarget('/scratch/claude', '/root/netplan', ID);
-  assert.equal('/scratch/claude/projects/-root-netplan', t.dir);
-  assert.equal(`/scratch/claude/projects/-root-netplan/${ID}.jsonl`, t.file);
+  const t = archive.transcriptTarget('/scratch/claude', '/root/projects/app', ID);
+  assert.equal('/scratch/claude/projects/-root-projects-app', t.dir);
+  assert.equal(`/scratch/claude/projects/-root-projects-app/${ID}.jsonl`, t.file);
   assert.equal('/scratch/claude/projects', archive.projectsRoot('/scratch/claude'));
   // And with the knob unset the answer is the real store, unchanged.
-  assert.equal(`/root/.claude/projects/-root-netplan/${ID}.jsonl`,
-    archive.transcriptTarget('/root/.claude', '/root/netplan', ID).file);
+  assert.equal(`/root/.claude/projects/-root-projects-app/${ID}.jsonl`,
+    archive.transcriptTarget('/root/.claude', '/root/projects/app', ID).file);
 });
 
 test('the slug is Claude Code\'s own: every slash in the cwd becomes a dash', () => {

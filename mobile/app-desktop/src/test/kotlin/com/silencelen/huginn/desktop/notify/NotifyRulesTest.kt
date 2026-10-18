@@ -267,7 +267,7 @@ class NotifyRulesTest {
 
     @Test
     fun `a session that ended while stalled is withdrawn, never announced as resumed`() {
-        // "Resumed: jtyper" about a session that was killed is a notification
+        // "Resumed: jotter" about a session that was killed is a notification
         // pointing at nothing, and the target it carries no longer exists.
         val base = step(
             seed(watch(sessions = mapOf("a" to "idle"), headroom = hr())),

@@ -29,7 +29,7 @@ class SessionNameRulesTest {
     fun `the names this fleet actually uses are accepted`() {
         assertNull(SessionNameRules.nameProblem("rv-phone-1"))
         assertNull(SessionNameRules.nameProblem("rvphoneproj-docs-reviewer"))
-        assertNull(SessionNameRules.nameProblem("jtyper"))
+        assertNull(SessionNameRules.nameProblem("jotter"))
         assertNull(SessionNameRules.nameProblem("_scratch"))
         assertNull(SessionNameRules.nameProblem("9lives"))
         assertNull(SessionNameRules.nameProblem("  padded  "), "the daemon trims before it judges")

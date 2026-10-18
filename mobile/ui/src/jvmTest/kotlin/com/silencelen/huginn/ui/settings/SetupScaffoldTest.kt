@@ -102,8 +102,8 @@ class SetupScaffoldTest {
     @Test
     fun `a proven step shows what proved it, never just a tick`() {
         assertEquals(
-            "appd 3.1.0 answered at 100.97.198.90:8787",
-            SetupScaffoldRules.stateWords(StepStatus.Passed("appd 3.1.0 answered at 100.97.198.90:8787")),
+            "appd 3.1.0 answered at 100.101.102.103:8787",
+            SetupScaffoldRules.stateWords(StepStatus.Passed("appd 3.1.0 answered at 100.101.102.103:8787")),
         )
         // The daemon's own refusal, verbatim — a paraphrase here would undo the
         // whole point of running the call.

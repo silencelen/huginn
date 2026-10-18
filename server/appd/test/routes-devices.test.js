@@ -78,7 +78,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function enrol(over = {}) {
   const { status, body } = await api('/v1/devices', {
     method: 'POST',
-    body: JSON.stringify({ name: 'PRESTIGE', platform: 'windows', scope: 'work', ...over }),
+    body: JSON.stringify({ name: 'PC01', platform: 'windows', scope: 'work', ...over }),
   });
   assert.equal(status, 201, JSON.stringify(body));
   return body;
@@ -175,7 +175,7 @@ after(() => {
 
 test('a device enrols and reports what it will do', async () => {
   const d = await enrol();
-  assert.equal(d.name, 'PRESTIGE');
+  assert.equal(d.name, 'PC01');
   assert.equal(d.platform, 'windows');
   assert.equal(d.scope, 'work');
   assert.equal(d.effectiveScope, 'work');
@@ -475,7 +475,7 @@ test('one machine is never asked to run two things at once', async () => {
 });
 
 test('a device that asks for work while holding a run has dropped it — the run settles (restart mid-run)', async () => {
-  // Seen live 2026-10-10 on stigo: an act chat said "reboot the machine", the
+  // Seen live 2026-10-10 on a Linux laptop: an act chat said "reboot the machine", the
   // machine did, and the run it was holding could never report. The fresh runner
   // beat every 60s, every beat refreshed the orphan, and the device answered 409
   // "already running something" to everything until the two-hour cap. Both

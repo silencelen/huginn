@@ -56,7 +56,7 @@ import androidx.compose.runtime.withFrameMillis
  * A slow breathing dot. A spinner reads as "the app is busy"; this reads as "the
  * thing over there is busy", which is the truth.
  *
- * ⚠ IN STEPS, NOT A TWEEN. 2026-10-02 on the Fold: the Sessions tab drew about
+ * ⚠ IN STEPS, NOT A TWEEN. 2026-10-02 on a foldable: the Sessions tab drew about
  * 100 frames a second for as long as any session was working, every other tab
  * 0. An infinite transition asks for a frame on every vsync, and its alpha was
  * read in composition, so every one of those frames recomposed the dot too. The

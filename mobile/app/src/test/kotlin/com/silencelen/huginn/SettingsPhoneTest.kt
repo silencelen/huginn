@@ -221,7 +221,7 @@ class SettingsPhoneTest {
         // be pasted into somebody else's chat window; a secret that travels in a
         // support report has been published.
         val f = PhoneSettingsFacts(
-            baseUrl = "http://user:$TOKEN@100.97.198.90:8787/",
+            baseUrl = "http://user:$TOKEN@100.101.102.103:8787/",
             connected = true,
             accountEmail = "alex@x",
             appVersion = "3.1.0",

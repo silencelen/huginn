@@ -161,7 +161,7 @@ class ProjectsPhoneTest {
 
     @Test
     fun `a taken slug is answered in the sheet too`() = runTest {
-        val taken = "another project already uses the name lora-stick"
+        val taken = "another project already uses the name sensor-board"
         val client = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "t" },
@@ -173,7 +173,7 @@ class ProjectsPhoneTest {
                 )
             },
         )
-        assertEquals(taken, client.createProject("LoRa sensor stick", "hardware", "b", null).refusal)
+        assertEquals(taken, client.createProject("Sensor board", "hardware", "b", null).refusal)
     }
 
     /**
@@ -242,11 +242,11 @@ class ProjectsPhoneTest {
         // LIVE FIRST, THEN BY NAME, and archived last — a place rather than a
         // feed. A tree that re-sorted by activity would move the row under the
         // finger, and the row you tapped is not the row that is there a second
-        // later. So "LoRa sensor stick" leads "Status page flap" on its name, not
+        // later. So "Sensor board" leads "Status page flap" on its name, not
         // on being busier, and the archived lab is at the bottom whatever it is
         // called.
         val ordered = ProjectRules.orderedProjects(list.projects)
-        assertEquals(listOf("LoRa sensor stick", "Status page flap", "Auvik lab"), ordered.map { it.name })
+        assertEquals(listOf("Sensor board", "Status page flap", "Auvik lab"), ordered.map { it.name })
         assertEquals("archived", ordered.last().status)
 
         val apps = json.decodeFromString(AppList.serializer(), fixture("apps.json"))
@@ -254,13 +254,13 @@ class ProjectsPhoneTest {
         // ⚠ THE THIRD STATE. `up:null` is "no verdict yet" and the daemon keeps
         // probe state in memory only, so every restart puts every row back to it.
         // Folding it to false would draw an outage on a host where nothing is wrong.
-        val unknown: App = apps.apps.single { it.id == "btc15m" }
+        val unknown: App = apps.apps.single { it.id == "bursar" }
         assertNull(unknown.up)
         assertNull("and the same for the device verdict", unknown.reachable.ok)
         // ⚠ AND THE FIX IS PER ROW NOW (decision 55). One row carries lines; the
         // others carry none, which is what makes the disclosure worth opening.
         val needsRetrofit = apps.apps.single { it.reachable.ok == false }
-        assertEquals("jtyper", needsRetrofit.id)
+        assertEquals("jotter", needsRetrofit.id)
         assertEquals(6, needsRetrofit.reachable.fix.size)
         assertTrue(
             "the `#` lines say which machine the next ones run on",

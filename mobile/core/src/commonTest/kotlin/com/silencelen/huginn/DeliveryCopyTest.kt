@@ -20,7 +20,7 @@ class DeliveryCopyTest {
 
     /** Verbatim from the phone. */
     private val ktorRaw =
-        "Connect timeout has expired [url=http://192.168.2.117:8787/v1/watch, connect_timeout=8000 ms]"
+        "Connect timeout has expired [url=http://192.168.1.20:8787/v1/watch, connect_timeout=8000 ms]"
 
     // -------------------------------------------------------------- the address
 
@@ -29,7 +29,7 @@ class DeliveryCopyTest {
         // THE ONE THAT IS NOT COSMETIC. This page gets screenshotted into chats
         // and bug reports; it printed the host's LAN address and port.
         val out = DeliveryCopy.trouble(ktorRaw)
-        assertFalse("192.168.2.117" in out, out)
+        assertFalse("192.168.1.20" in out, out)
         assertFalse("8787" in out, out)
         assertFalse("http" in out, out)
         assertFalse("url=" in out, out)
@@ -38,9 +38,9 @@ class DeliveryCopyTest {
     @Test
     fun `scrub takes out anything address-shaped, whatever wraps it`() {
         for (raw in listOf(
-            "failed: http://192.168.2.117:8787/v1/watch",
+            "failed: http://192.168.1.20:8787/v1/watch",
             "failed: https://huginn.tail1234.ts.net/v1/watch timed out",
-            "connect to 192.168.2.117:8787 refused",
+            "connect to 192.168.1.20:8787 refused",
             "unable to resolve host \"huginn.local\"",
             "no route to 10.42.0.20",
         )) {

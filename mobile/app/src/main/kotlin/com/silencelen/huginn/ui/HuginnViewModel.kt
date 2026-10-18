@@ -623,7 +623,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The wide layout's list pane, hidden (Z Fold inner screen and the like) —
+     * The wide layout's list pane, hidden (foldable inner screen and the like) —
      * the desktop's "Hide list" notch, carried over (owner, 2026-10-01). Flipped
      * in memory first, like the lock, so the notch answers the tap before
      * DataStore does.

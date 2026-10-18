@@ -41,10 +41,10 @@ class AppsViewTest {
     @Test
     fun `the card counts up, needs-retrofit and unchecked as three different things`() {
         val rows = listOf(
-            app("armap", true, deviceOk = true),
-            app("jtyper", true, deviceOk = false),
+            app("atlas", true, deviceOk = true),
+            app("jotter", true, deviceOk = false),
             app("board", false, deviceOk = null),
-            app("btc15m", null, deviceOk = null),
+            app("bursar", null, deviceOk = null),
         )
         assertEquals("2 of 4 up · 1 needs retrofit · 1 not checked", appsStatusWords(rows))
         assertEquals(
@@ -207,8 +207,8 @@ class AppsViewTest {
         // Belt and braces with AppRulesTest: this is the string the disclosure
         // actually draws, and an empty right-hand side would read as "fine".
         assertEquals(
-            "192.168.7.31:8091 — no answer",
-            com.silencelen.huginn.ui.AppRules.addressWords(AppAddress("192.168.7.31:8091", ok = false)),
+            "192.168.10.31:8091 — no answer",
+            com.silencelen.huginn.ui.AppRules.addressWords(AppAddress("192.168.10.31:8091", ok = false)),
         )
     }
 }

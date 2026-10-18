@@ -37,7 +37,7 @@ class LocalServeTest {
     // fields the desktop never reads.
     private val planC = """
         {"version":"0.12.3","dir":"/root/.config/huginn-local","platform":"linux",
-         "elevated":true,"setup":false,"deviceName":"prestige-llm",
+         "elevated":true,"setup":false,"deviceName":"pc01-llm",
          "services":["huginn-local-llm","huginn-local-runner"],"cls":"C","plan":"C",
          "downloads":[
            {"kind":"llama","name":"llama-b10628-bin-ubuntu-x64.tar.gz","bytes":17000000},
@@ -50,7 +50,7 @@ class LocalServeTest {
     fun `a serving plan decodes into the consent card's fields`() {
         val p = json.decodeFromString<LocalServe.Plan>(planC)
         assertEquals("C", p.cls)
-        assertEquals("prestige-llm", p.deviceName)
+        assertEquals("pc01-llm", p.deviceName)
         assertNull(p.refuse)
         assertEquals(2, p.downloads.size)
         assertEquals(2_497_000_000L, p.downloads[1].bytes)

@@ -77,9 +77,9 @@ class TerminalLaunchNamesTest {
 
     @Test
     fun `an ordinary name still uses the plain form an older CLI understands`() {
-        val win = TerminalLaunch.script("jtyper")
-        assertTrue("huginn attach 'jtyper'" in win && "huginn 'jtyper'" in win, win)
-        assertEquals("huginn 'jtyper'", TerminalLaunch.shellLine("jtyper"))
+        val win = TerminalLaunch.script("jotter")
+        assertTrue("huginn attach 'jotter'" in win && "huginn 'jotter'" in win, win)
+        assertEquals("huginn 'jotter'", TerminalLaunch.shellLine("jotter"))
     }
 
     @Test

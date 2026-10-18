@@ -74,7 +74,7 @@ object ModelLabels {
      * SESSION sites get Claude rows only — a session chip types `/model` into a
      * live pane, and a local row there could never work. CHAT sites also get
      * the AVAILABLE local rows (their display already names the machine, e.g.
-     * "Qwen3 8B - DATATREEX"); an unreachable machine's rows are absent, the
+     * "Qwen3 8B - DESKPC"); an unreachable machine's rows are absent, the
      * same way an offline device reads in its own list — a pickable row that
      * always fails would be the fake control this object exists to forbid.
      *
@@ -135,8 +135,8 @@ object ModelLabels {
      * whether it can be picked.
      *
      * ⚠ REACHABILITY IS CARRIED, NOT INFERRED AT THE DRAW SITE. The phone's
-     * dialog greyed the MACHINE `DATATREEX` as "not reachable" and then drew
-     * `Qwen3 8B - DATATREEX` and `Nomic Embed - DATATREEX` underneath it at full
+     * dialog greyed the MACHINE `DESKPC` as "not reachable" and then drew
+     * `Qwen3 8B - DESKPC` and `Nomic Embed - DESKPC` underneath it at full
      * brightness, as pickable options (P-21). Two rows about one machine,
      * disagreeing, four millimetres apart.
      */
@@ -182,7 +182,7 @@ object ModelLabels {
      * enrolled twice — a claude row and a `generate` row — is ONE machine wearing
      * two credentials, and the daemon says so with `Device.machine`. `available`
      * on the model row reflects only the serving credential's check-in, which is
-     * how `DATATREEX` could read "not reachable" as a machine while its models
+     * how `DESKPC` could read "not reachable" as a machine while its models
      * read as live. A machine with a row that has stopped checking in is a
      * machine in an unknown state, and the picker says the same thing about every
      * row that names it.

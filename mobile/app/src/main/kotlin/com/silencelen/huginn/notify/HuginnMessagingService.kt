@@ -299,7 +299,7 @@ class HuginnMessagingService : FirebaseMessagingService() {
         /**
          * The token from a finished `getToken()` task, or null.
          *
-         * ⚠ THE CRASH THIS EXISTS FOR (3.9.0 on the Fold, 2026-10-02): the callback
+         * ⚠ THE CRASH THIS EXISTS FOR (3.9.0 on a foldable, 2026-10-02): the callback
          * read `task.result` BEFORE asking `isSuccessful`, and `getResult()` on a
          * failed task THROWS. Play services answers `SERVICE_NOT_AVAILABLE` for a
          * minute or so after an app update, so the first launches after installing

@@ -915,7 +915,7 @@ _huginn_bad_name() {   # $1 = the name, $2 = the noun for the message
 }
 # tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
 # resolves silently, so 'huginn kill andvari' would destroy a session actually named
-# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
+# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jotter'.
 # Anchoring with '=' forces exact match (tmux(1) "exact-match"), so a typo now fails
 # loudly with "can't find session" instead of hitting the wrong session.
 _huginn_tmux_target() { printf '=%s' "$1"; }
@@ -1979,7 +1979,7 @@ EOF
             # ⚠ NEVER `pacman -U <url>`: for a remote URL pacman also fetches
             # `<file>.sig` and aborts on its 404 (these packages are unsigned; the
             # manifest's sha256 is the integrity check). A LOCAL file is judged by
-            # LocalFileSigLevel instead, which installs. Found on stigo 2026-10-14.
+            # LocalFileSigLevel instead, which installs. Found on an Arch laptop 2026-10-14.
             printf '      or:  curl -fLO %s/%s && sudo pacman -U ./%s\n' "$base" "$arch_file" "$arch_file"
           elif [ "$distro" = debian ] && [ -n "$deb_file" ] && command -v dpkg >/dev/null 2>&1; then
             printf '      or:  curl -fLO %s/%s && sudo apt install ./%s\n' "$base" "$deb_file" "$deb_file"

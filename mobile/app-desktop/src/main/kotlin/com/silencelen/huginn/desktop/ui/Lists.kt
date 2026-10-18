@@ -392,7 +392,7 @@ fun SessionsList(
  *
  * ⚠ A PROJECT SESSION IS NEVER ON THIS PAGE (owner rule, 2026-09-19): it is on
  * its project's dashboard and nowhere else, because a copy of it here read as
- * a second, unrelated session — the widgetshub lead sat in this list between
+ * a second, unrelated session — the dashboard-app lead sat in this list between
  * two hand-made ones and looked like a session that had failed to do
  * something. This is the list's only admission that they exist: a count, and
  * the way there. Nothing is drawn when nothing is hidden.

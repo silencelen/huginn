@@ -90,7 +90,7 @@ object RouteGuard {
     fun kindOf(raw: String): RouteKind = parse(raw)?.kind ?: RouteKind.CUSTOM
 
     /**
-     * `100.97.198.90:8787` — the authority and never more. Used as the default
+     * `100.101.102.103:8787` — the authority and never more. Used as the default
      * NAME of a route somebody typed without naming, and as the address line
      * under a route's name in diagnostics, so it must never carry a userinfo
      * segment: [parse] refuses one outright.

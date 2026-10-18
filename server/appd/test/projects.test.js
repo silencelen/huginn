@@ -22,7 +22,7 @@ const projects = require('../lib/projects');
 const typing = require('../lib/typing');
 
 const TAG = 'a1b2c3d4e5';
-const CWD = '/srv/lora-stick';
+const CWD = '/srv/sensor-board';
 
 function block(tag, obj) {
   return ['```huginn-project' + (tag ? ` ${tag}` : ''), JSON.stringify(obj), '```'].join('\n');
@@ -49,15 +49,15 @@ test('a slug survives tmux, and the display name it came from does not have to',
   assert.match(projects.slugProblem(''), /usable slug/);
   assert.match(projects.slugProblem('login'), /reserved/);
   assert.match(projects.slugProblem('lora', ['LORA']), /already a project/);
-  assert.equal(null, projects.slugProblem('lora-stick', ['other']));
+  assert.equal(null, projects.slugProblem('sensor-board', ['other']));
 });
 
 test('the two namespaces are composed in one place each', () => {
-  assert.equal('lora-stick-docs', projects.tmuxNameFor('lora-stick', 'docs'));
-  assert.equal('lora-stick/docs', projects.claudeNameFor('lora-stick', 'docs'));
+  assert.equal('sensor-board-docs', projects.tmuxNameFor('sensor-board', 'docs'));
+  assert.equal('sensor-board/docs', projects.claudeNameFor('sensor-board', 'docs'));
   // The tmux name has to pass the daemon's own NAME_RE, which is what makes it
   // addressable by every other route.
-  assert.match(projects.tmuxNameFor('lora-stick', 'docs'), /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/);
+  assert.match(projects.tmuxNameFor('sensor-board', 'docs'), /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/);
 });
 
 test('a role is bounded, unique, and never "lead"', () => {
@@ -182,7 +182,7 @@ test('a member cwd is inside the project, or the proposal is refused', () => {
   const m = projects.parseManifest(block(TAG, manifest(inside)), TAG, { cwd: CWD });
   assert.equal(`${CWD}/docs`, m.sessions[0].cwd);
   assert.equal(true, projects.containedIn(CWD, CWD), 'the project directory itself is inside itself');
-  assert.equal(false, projects.containedIn('/srv/lora-stick-other', CWD), 'a prefix is not a parent');
+  assert.equal(false, projects.containedIn('/srv/sensor-board-other', CWD), 'a prefix is not a parent');
 });
 
 test('an unknown model, effort or mode becomes null rather than losing the proposal', () => {
@@ -294,7 +294,7 @@ test('THE NATIVE `tmux` FIELD IS NOT A ROUTING KEY — a member joins by session
     { name: 'stick-docs', claudeSessionId: 'sid-a', state: 'running' },
   ], [
     nativeRow({ sessionId: 'sid-a', status: 'busy', tmux: 'somebody-else:@3.%3' }),
-    nativeRow({ sessionId: 'sid-stranger', status: 'idle', name: 'netplan-fd', tmux: 'stick-docs:@0.%0' }),
+    nativeRow({ sessionId: 'sid-stranger', status: 'idle', name: 'app-fd', tmux: 'stick-docs:@0.%0' }),
   ], NOW);
   const docs = rows.find((r) => r.role === 'docs');
   assert.equal('busy', docs.status, 'joined to the row whose sessionId matches, not the one claiming the pane');

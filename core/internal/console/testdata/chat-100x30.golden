@@ -4,7 +4,7 @@
                                                                                                    
   you                                                                                              
   How much should go to fixed costs?                                                               
-  > Read  /srv/btc15m/config.yaml                                                                  
+  > Read  /srv/bursar/config.yaml                                                                  
                                                                                                    
   huginn                                                                                           
   A third keeps the budget flexible, which matches your rule.                                      

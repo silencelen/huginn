@@ -82,7 +82,7 @@ class ProjectRulesTest {
         leadPresent: Boolean = true,
     ) = ProjectRow(
         id = id, name = name, slug = slug, kind = "software", status = status,
-        cwd = "/root/netplan/status-page",
+        cwd = "/root/projects/app/status-page",
         memberCount = members, alive = alive, busy = busy, waiting = waiting,
         lead = if (leadPresent) ProjectLead(name = "$slug-lead", claudeName = "$slug/lead", present = true) else null,
         manifestRev = manifestRev, manifestSummary = manifestSummary, untaggedSeen = untagged,
@@ -137,7 +137,7 @@ class ProjectRulesTest {
     fun `a project needs a name that is actually a name`() {
         assertEquals("a project needs a name", ProjectRules.nameProblem(""))
         assertEquals("a project needs a name", ProjectRules.nameProblem("   "))
-        assertNull(ProjectRules.nameProblem("LoRa sensor stick"))
+        assertNull(ProjectRules.nameProblem("Sensor board"))
     }
 
     @Test
@@ -153,7 +153,7 @@ class ProjectRulesTest {
 
     @Test
     fun `a name is one line and measured after normalisation`() {
-        assertEquals("LoRa sensor stick", ProjectRules.cleanName("LoRa\nsensor   stick"))
+        assertEquals("Sensor board", ProjectRules.cleanName("Sensor\n   board"))
         // 60 characters of name padded with tabs is a 60-character name. Measuring
         // the raw string refuses something the daemon would have taken, and there
         // is no way to argue with an editor that says no.
@@ -169,13 +169,13 @@ class ProjectRulesTest {
     fun `names collide case-insensitively, because that is how a list reads`() {
         assertEquals(
             "there is already a project with that name",
-            ProjectRules.nameProblem("lora Sensor Stick", listOf("LoRa sensor stick")),
+            ProjectRules.nameProblem("sensor BOARD", listOf("Sensor board")),
         )
     }
 
     @Test
     fun `a slug survives tmux, and the display name it came from does not have to`() {
-        assertEquals("lora-sensor-stick", ProjectRules.slugFor("LoRa Sensor Stick"))
+        assertEquals("sensor-board", ProjectRules.slugFor("Sensor Board"))
         // ⚠ NO DOTS EVER. tmux rewrites '.' to '_' and exits 0, so a name with one
         // is a name that comes back different from what was asked for.
         assertEquals("v2-1-board", ProjectRules.slugFor("v2.1 board"))
@@ -186,7 +186,7 @@ class ProjectRulesTest {
             "there is already a project with that slug",
             ProjectRules.slugProblem("lora", listOf("LORA")),
         )
-        assertNull(ProjectRules.slugProblem("lora-stick", listOf("other")))
+        assertNull(ProjectRules.slugProblem("sensor-board", listOf("other")))
         assertEquals(
             "a slug is lowercase letters, digits and dashes, 1-24 characters",
             ProjectRules.slugProblem("Not_A_Slug"),
@@ -195,8 +195,8 @@ class ProjectRulesTest {
 
     @Test
     fun `the two namespaces are composed in one place each`() {
-        assertEquals("lora-stick-docs", ProjectRules.tmuxNameFor("lora-stick", "docs"))
-        assertEquals("lora-stick/docs", ProjectRules.claudeNameFor("lora-stick", "docs"))
+        assertEquals("sensor-board-docs", ProjectRules.tmuxNameFor("sensor-board", "docs"))
+        assertEquals("sensor-board/docs", ProjectRules.claudeNameFor("sensor-board", "docs"))
     }
 
     // -------------------------------------------------------------- the role
@@ -240,10 +240,10 @@ class ProjectRulesTest {
     @Test
     fun `a directory must be absolute, and a blank one is the host's own`() {
         assertNull(ProjectRules.cwdProblem(""), "blank means the daemon's WORKDIR")
-        assertNull(ProjectRules.cwdProblem("/root/netplan"))
+        assertNull(ProjectRules.cwdProblem("/root/projects/app"))
         assertEquals(
             "a project directory must be an absolute path",
-            ProjectRules.cwdProblem("netplan/dev"),
+            ProjectRules.cwdProblem("app/dev"),
         )
     }
 
@@ -507,9 +507,9 @@ class ProjectRulesTest {
         )
         assertNull(ProjectRules.sessionCwd(ManifestSession(role = "web", firstPrompt = "go")))
         assertEquals(
-            "/root/netplan/status-page/db",
+            "/root/projects/app/status-page/db",
             ProjectRules.sessionCwd(
-                ManifestSession(role = "db", firstPrompt = "go", cwd = "/root/netplan/status-page/db"),
+                ManifestSession(role = "db", firstPrompt = "go", cwd = "/root/projects/app/status-page/db"),
             ),
         )
     }
@@ -683,8 +683,8 @@ class ProjectRulesTest {
     @Test
     fun `adoptable is every live session this project does not already hold`() {
         val members = listOf(live("lead", lead = true), live("firmware"))
-        val running = listOf("statusflap-lead", "statusflap-firmware", "scratch", "jtyper")
-        assertEquals(listOf("scratch", "jtyper"), ProjectRules.adoptable(running, members))
+        val running = listOf("statusflap-lead", "statusflap-firmware", "scratch", "jotter")
+        assertEquals(listOf("scratch", "jotter"), ProjectRules.adoptable(running, members))
     }
 
     @Test
@@ -814,8 +814,8 @@ class ProjectRulesTest {
     @Test
     fun `the daemon's own tag takes a session off the list, whatever the rows say`() {
         val tagged = sess("lora-fw", SessionProject(id = "p9", name = "LoRa", slug = "lora", role = "fw"))
-        val split = ProjectRules.splitByProject(listOf(sess("jtyper"), tagged), emptyList(), emptyMap())
-        assertEquals(listOf("jtyper"), split.outside.map { it.name })
+        val split = ProjectRules.splitByProject(listOf(sess("jotter"), tagged), emptyList(), emptyMap())
+        assertEquals(listOf("jotter"), split.outside.map { it.name })
         assertEquals(listOf("lora-fw"), split.inProjects.map { it.name })
     }
 
@@ -831,17 +831,17 @@ class ProjectRulesTest {
             lead = ProjectLead(name = "statusflap-lead"),
         )
         val members = mapOf("p1" to listOf(liveRow("lead", "statusflap-lead", lead = true), liveRow("db", "statusflap-db")))
-        val sessions = listOf(sess("jtyper"), sess("statusflap-db"), sess("statusflap-lead"), sess("statusflap-notes"))
+        val sessions = listOf(sess("jotter"), sess("statusflap-db"), sess("statusflap-lead"), sess("statusflap-notes"))
         val split = ProjectRules.splitByProject(sessions, listOf(p), members)
-        assertEquals(listOf("jtyper", "statusflap-notes"), split.outside.map { it.name }, "the prefix is not membership")
+        assertEquals(listOf("jotter", "statusflap-notes"), split.outside.map { it.name }, "the prefix is not membership")
         assertEquals(listOf("statusflap-db", "statusflap-lead"), split.inProjects.map { it.name })
     }
 
     @Test
     fun `an unfetched project still claims the lead it is certain to own`() {
         val p = ProjectRow(id = "p1", name = "LoRa", slug = "lora", status = "drafting", lead = ProjectLead(name = "lora-lead"))
-        val split = ProjectRules.splitByProject(listOf(sess("lora-lead"), sess("jtyper")), listOf(p), emptyMap())
-        assertEquals(listOf("jtyper"), split.outside.map { it.name })
+        val split = ProjectRules.splitByProject(listOf(sess("lora-lead"), sess("jotter")), listOf(p), emptyMap())
+        assertEquals(listOf("jotter"), split.outside.map { it.name })
         assertEquals(listOf("lora-lead"), split.inProjects.map { it.name })
     }
 

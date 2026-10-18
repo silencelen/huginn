@@ -27,7 +27,7 @@ class SettingsRowsTest {
      * ⚠ THE ADDRESS SHARED A ROW WITH FIVE CONTROLS AND LOST. "in use"/"Use",
      * two reorder arrows and Edit all sat beside a `weight(1f)` column at
      * `maxLines = 1`, so a perfectly ordinary pin rendered as
-     * `http://192.168.2.117:8…` — the PORT, which is the half that says whether
+     * `http://192.168.1.20:8…` — the PORT, which is the half that says whether
      * this is even the daemon's address, was the first thing cut. And the
      * witness clause joined onto the same line went with it, so the row lost
      * "last reached" entirely at exactly the moment somebody was reading the
@@ -37,12 +37,12 @@ class SettingsRowsTest {
     fun `the address keeps its port, and its witness, on its own line`() {
         val h = com.silencelen.huginn.data.RouteHealth(lastOkAt = now - 240_000)
         assertEquals(
-            "http://192.168.2.117:8787 · last reached 4m ago",
-            routeAddressLine("http://192.168.2.117:8787", h, now),
+            "http://192.168.1.20:8787 · last reached 4m ago",
+            routeAddressLine("http://192.168.1.20:8787", h, now),
         )
         assertEquals(
-            "http://192.168.2.117:8787",
-            routeAddressLine("http://192.168.2.117:8787", null, now),
+            "http://192.168.1.20:8787",
+            routeAddressLine("http://192.168.1.20:8787", null, now),
             "no probe yet says nothing rather than guessing",
         )
     }
@@ -84,7 +84,7 @@ class SettingsRowsTest {
 
     private fun book(): RouteBook = RouteBook()
         .add("Tailscale", "http://100.64.0.1:8787", now, id = "r1")
-        .add("Yggdrasil", "http://192.168.2.117:8787", now, id = "r2")
+        .add("Yggdrasil", "http://192.168.1.20:8787", now, id = "r2")
 
     /**
      * A shell exactly as fire-and-forget as both of ours were: every action
@@ -239,15 +239,15 @@ class SettingsRowsTest {
      */
     @Test
     fun `the offer names the route and asks`() {
-        val candidate = PinnedRoute(id = "yggdrasil", name = "Yggdrasil", url = "http://192.168.2.117:8787")
+        val candidate = PinnedRoute(id = "yggdrasil", name = "Yggdrasil", url = "http://192.168.1.20:8787")
         assertEquals("Yggdrasil answered — use it?", routeCandidateOffer(candidate))
     }
 
     /** A seeded pin with no name falls back to its address, never to a blank. */
     @Test
     fun `an unnamed candidate is named by its address`() {
-        val candidate = PinnedRoute(id = "x", name = "", url = "http://192.168.2.117:8787")
-        assertEquals("http://192.168.2.117:8787 answered — use it?", routeCandidateOffer(candidate))
+        val candidate = PinnedRoute(id = "x", name = "", url = "http://192.168.1.20:8787")
+        assertEquals("http://192.168.1.20:8787 answered — use it?", routeCandidateOffer(candidate))
     }
 
     /**

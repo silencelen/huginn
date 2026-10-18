@@ -29,16 +29,16 @@ const SESSION = 'sess-fable-1';
 // below).
 const SUBAGENT_PAYLOAD = {
   session_id: SESSION,
-  transcript_path: `/root/.claude/projects/-root-netplan/${SESSION}.jsonl`,
-  cwd: '/root/netplan',
+  transcript_path: `/root/.claude/projects/-root-projects-app/${SESSION}.jsonl`,
+  cwd: '/root/projects/app',
   agent_id: 'a799b9ac6c215d25e',
   agent_type: 'workflow-subagent',
   hook_event_name: 'SubagentStart',
 };
 const PRETOOL_PAYLOAD = {
   session_id: SESSION,
-  transcript_path: `/root/.claude/projects/-root-netplan/${SESSION}.jsonl`,
-  cwd: '/root/netplan',
+  transcript_path: `/root/.claude/projects/-root-projects-app/${SESSION}.jsonl`,
+  cwd: '/root/projects/app',
   hook_event_name: 'PreToolUse',
   tool_name: 'Agent',
   tool_input: {

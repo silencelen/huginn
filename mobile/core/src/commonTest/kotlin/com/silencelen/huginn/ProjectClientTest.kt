@@ -115,7 +115,7 @@ class ProjectClientTest {
         val c = client {
             respond(
                 """{"id":"6f0d2c41-0000-4000-8000-0000000000a1","name":"w3 verify","slug":"w3-verify",
-                   "kind":"infra","status":"drafting","brief":"check the wave","cwd":"/root/netplan",
+                   "kind":"infra","status":"drafting","brief":"check the wave","cwd":"/root/projects/app",
                    "createdAt":1789459900,"updatedAt":1789459900,"rev":1,
                    "lead":{"role":"lead","name":"w3-verify-lead","claudeName":"w3-verify/lead","sessionId":null},
                    "members":[]}""",

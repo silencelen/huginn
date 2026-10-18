@@ -18,12 +18,12 @@ class MarkdownTest {
 
     @Test
     fun `a fenced block becomes a code block with its language`() {
-        val b = Markdown.parse("Run this:\n\n```bash\ncd /root/netplan\ngit status\n```\n")
+        val b = Markdown.parse("Run this:\n\n```bash\ncd /root/projects/app\ngit status\n```\n")
         assertEquals(2, b.size)
         assertTrue(b[0] is MdBlock.Paragraph)
         val code = b[1] as MdBlock.Code
         assertEquals("bash", code.lang)
-        assertEquals("cd /root/netplan\ngit status", code.code)
+        assertEquals("cd /root/projects/app\ngit status", code.code)
     }
 
     @Test
@@ -318,14 +318,14 @@ class TailRevisionTest {
         // "**Creative is back online at 15:05.** Both players…" — the row is one
         // style, so the asterisks were simply the first two characters.
         assertEquals(
-            "Creative is back online at 15:05. Both players (silencelen, buttbuster420) are on it.",
+            "Creative is back online at 15:05. Both players (alex, sam) are on it.",
             Markdown.plainInline(
-                "**Creative is back online at 15:05.** Both players (silencelen, buttbuster420) are on it.",
+                "**Creative is back online at 15:05.** Both players (alex, sam) are on it.",
             ),
         )
         assertEquals(
-            "MemPalace on muninn upgraded 3.7.0 → 3.8.0",
-            Markdown.plainInline("**MemPalace on muninn upgraded 3.7.0 → 3.8.0**"),
+            "MemPalace on memhost upgraded 3.7.0 → 3.8.0",
+            Markdown.plainInline("**MemPalace on memhost upgraded 3.7.0 → 3.8.0**"),
         )
     }
 

@@ -16,7 +16,7 @@ class SettingsCodecTest {
     @Test
     fun `drafts survive a round trip`() {
         val drafts = mapOf(
-            "sess:jtyper" to "half a thought",
+            "sess:jotter" to "half a thought",
             "chat:86ed1440-e7ad-4dc4-aa2d-1d2142c570a1" to "line one\nline two",
         )
         assertEquals(drafts, SettingsCodec.decodeDrafts(SettingsCodec.encodeDrafts(drafts)))

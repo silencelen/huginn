@@ -243,7 +243,7 @@ private fun routeWord(f: PhoneSettingsFacts): String? =
     f.routeName.takeIf { it.isNotBlank() } ?: f.baseUrl.takeIf { it.isNotBlank() }?.let { hostOf(it) }
 
 /**
- * The host part of a base URL — `100.97.198.90:8787` — and never more.
+ * The host part of a base URL — `100.101.102.103:8787` — and never more.
  *
  * A base URL cannot carry a bearer in this app (the token is a separate setting
  * and a separate header), but a person can paste anything into that field, so

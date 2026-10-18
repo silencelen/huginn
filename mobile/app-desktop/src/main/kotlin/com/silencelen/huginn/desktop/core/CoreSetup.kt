@@ -133,7 +133,7 @@ internal object CoreSetup {
      * Starts an installed core that is not running: `huginn core start`, which
      * uses the boot service and, on Windows, starts the core directly when Task
      * Scheduler holds the task back (Energy Saver on battery queued every start
-     * on PRESTIGE, 2026-10-16). No prompt on either platform.
+     * on PC01, 2026-10-16). No prompt on either platform.
      */
     suspend fun startService(): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {

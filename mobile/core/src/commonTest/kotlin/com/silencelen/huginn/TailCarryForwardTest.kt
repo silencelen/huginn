@@ -32,7 +32,7 @@ class TailCarryForwardTest {
             effort = "high",
             title = "the session",
             gitBranch = "main",
-            cwd = "/root/netplan",
+            cwd = "/root/projects/app",
         )
         // What a tail read looks like when its window held only assistant text.
         val tail = TranscriptPage()
@@ -46,7 +46,7 @@ class TailCarryForwardTest {
         assertEquals("high", merged.effort)
         assertEquals("the session", merged.title)
         assertEquals("main", merged.gitBranch)
-        assertEquals("/root/netplan", merged.cwd)
+        assertEquals("/root/projects/app", merged.cwd)
     }
 
     @Test

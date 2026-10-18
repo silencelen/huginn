@@ -22,13 +22,13 @@ import org.junit.Test
 class ProjectNoticesTest {
 
     private val payload =
-        """{"projectId":"6f0d2c41-0000-4000-8000-0000000000a1","manifestRev":"2","name":"LoRa sensor stick"}"""
+        """{"projectId":"6f0d2c41-0000-4000-8000-0000000000a1","manifestRev":"2","name":"Sensor board"}"""
 
     @Test
     fun `a proposal carries Spawn and Discard, and nothing else`() {
         val n = ProjectNotices.fromPush(
             kind = ProjectNotices.KIND_PROPOSED,
-            title = "LoRa sensor stick has a proposal",
+            title = "Sensor board has a proposal",
             text = "two sessions: docs writes the README, fw brings up the radio",
             subject = null,
             payload = payload,
@@ -101,8 +101,8 @@ class ProjectNoticesTest {
     /** Anything that is not a proposal is not this object's business. */
     @Test
     fun `other kinds are left alone`() {
-        assertNull(ProjectNotices.fromPush("session_attention", "t", "x", "jtyper", null))
-        assertNull(ProjectNotices.fromPush("headroom_downgraded", "t", "x", "jtyper", null))
+        assertNull(ProjectNotices.fromPush("session_attention", "t", "x", "jotter", null))
+        assertNull(ProjectNotices.fromPush("headroom_downgraded", "t", "x", "jotter", null))
         // And a proposal with no project id is refused rather than drawn: its
         // buttons would address nothing.
         assertNull(ProjectNotices.fromPush(ProjectNotices.KIND_PROPOSED, "t", "x", null, null))
@@ -123,9 +123,9 @@ class ProjectNoticesTest {
 
         val silent = ProjectNotices.fromPush(
             ProjectNotices.KIND_PROPOSED, "", "", null,
-            """{"projectId":"p1","manifestRev":"3","name":"LoRa sensor stick"}""",
+            """{"projectId":"p1","manifestRev":"3","name":"Sensor board"}""",
         )!!
-        assertTrue(silent.title.contains("LoRa sensor stick"))
+        assertTrue(silent.title.contains("Sensor board"))
         assertTrue(silent.text.isNotBlank())
     }
 }

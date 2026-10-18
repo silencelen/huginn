@@ -551,8 +551,8 @@ test('explain answers with exactly what decide would have said', () => {
 
 test('explain names the session it moved', () => {
   assert.match(
-    h.explain({ active: fableRed(94), candidates: [], sessions: [sess({ name: 'jtyper' })], now: NOW, settings: S(), state: {} }),
-    /jtyper: fable -> opus at 94%/,
+    h.explain({ active: fableRed(94), candidates: [], sessions: [sess({ name: 'jotter' })], now: NOW, settings: S(), state: {} }),
+    /jotter: fable -> opus at 94%/,
   );
 });
 

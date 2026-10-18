@@ -40,21 +40,21 @@ test('an npm claude.cmd shim runs the cli.js beside it, never a shell', () => {
 
 test('unit --windows prints a scheduled task that runs as the account, forever, at boot', () => {
   const r = spawnSync(process.execPath, [RUNNER, 'unit', '--windows',
-    '--user', 'JNET\\silence', '--home', 'C:\\Users\\silence.JNET',
-    '--node', 'C:\\Program Files\\nodejs\\node.exe', '--self', 'C:\\Users\\silence.JNET\\.huginn\\huginn-device',
-    '--conf-dir', 'C:\\Users\\silence.JNET\\.config\\huginn', '--name', 'RAGNAR'], { encoding: 'utf8' });
+    '--user', 'HOME\alex', '--home', 'C:\\Users\\alex.HOME',
+    '--node', 'C:\\Program Files\\nodejs\\node.exe', '--self', 'C:\\Users\\alex.HOME\\.huginn\\huginn-device',
+    '--conf-dir', 'C:\\Users\\alex.HOME\\.config\\huginn', '--name', 'RIG'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const out = r.stdout;
-  assert.match(out, /\$user = 'JNET\\silence'/, 'the account, quoted for PowerShell');
+  assert.match(out, /\$user = 'HOME\alex'/, 'the account, quoted for PowerShell');
   assert.match(out, /Get-Credential/, 'the password is asked for, never written');
   assert.ok(!/-Password '/.test(out), 'and never appears as a literal');
   assert.match(out, /New-ScheduledTaskTrigger -AtStartup/);
   assert.match(out, /-ExecutionTimeLimit \(New-TimeSpan -Seconds 0\)/, 'the 72-hour default stop is off');
   assert.match(out, /-RestartCount 999/);
   assert.match(out, /-MultipleInstances IgnoreNew/, 'never two runners under one id');
-  assert.match(out, /set HUGINN_DEVICE_DIR=C:\\Users\\silence\.JNET\\\.config\\huginn/, 'the wrapper carries the config dir');
-  assert.match(out, /set USERPROFILE=C:\\Users\\silence\.JNET/, 'and the profile claude\'s login lives in');
-  assert.match(out, /"C:\\Program Files\\nodejs\\node\.exe" "C:\\Users\\silence\.JNET\\\.huginn\\huginn-device" serve/);
+  assert.match(out, /set HUGINN_DEVICE_DIR=C:\\Users\\alex\.HOME\\\.config\\huginn/, 'the wrapper carries the config dir');
+  assert.match(out, /set USERPROFILE=C:\\Users\\alex\.HOME/, 'and the profile claude\'s login lives in');
+  assert.match(out, /"C:\\Program Files\\nodejs\\node\.exe" "C:\\Users\\alex\.HOME\\\.huginn\\huginn-device" serve/);
   assert.match(out, /Unregister-ScheduledTask/, 'the undo is printed with it');
 });
 

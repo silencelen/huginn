@@ -14,10 +14,10 @@ const reg = require('../lib/session-registry');
 const UUID = '2f9a1c4e-1111-2222-3333-abcdef012345';
 
 test('mergeLive records a session it has not seen before', () => {
-  const out = reg.mergeLive({}, [{ name: 'dev', createdAt: 5, cwd: '/root/netplan' }], 100);
+  const out = reg.mergeLive({}, [{ name: 'dev', createdAt: 5, cwd: '/root/projects/app' }], 100);
   assert.deepEqual(Object.keys(out), ['dev']);
   assert.equal(out.dev.createdAt, 5);
-  assert.equal(out.dev.cwd, '/root/netplan');
+  assert.equal(out.dev.cwd, '/root/projects/app');
   assert.equal(out.dev.claudeSessionId, null);
   assert.equal(out.dev.updatedAt, 100);
 });

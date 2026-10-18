@@ -64,9 +64,9 @@ class SetupFlowTest {
 
     @Test
     fun `passing a step records what proved it and unblocks advancing`() {
-        var s = SetupFlow.pass(fresh(), "appd 3.1.0 answered at 100.97.198.90")
+        var s = SetupFlow.pass(fresh(), "appd 3.1.0 answered at 100.101.102.103")
         assertEquals(
-            StepStatus.Passed("appd 3.1.0 answered at 100.97.198.90"),
+            StepStatus.Passed("appd 3.1.0 answered at 100.101.102.103"),
             s.statusOf(SetupStep.ROUTE),
         )
         assertTrue(SetupFlow.canAdvance(s))
@@ -275,7 +275,7 @@ class SetupFlowTest {
     @Test
     fun `progress survives the round trip through the settings file`() {
         var s = SetupFlow.fromPreAnswers("""{"features":{"device":true,"localAi":false}}""")
-        s = SetupFlow.pass(s, "appd 3.1.0 answered at 100.97.198.90:8787")
+        s = SetupFlow.pass(s, "appd 3.1.0 answered at 100.101.102.103:8787")
         s = SetupFlow.next(s)
         s = SetupFlow.fail(s, "401 unauthorized: bearer rejected")
         s = SetupFlow.next(s)

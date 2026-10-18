@@ -146,17 +146,17 @@ test("the arbiter line uses the daemon's OWN field names", { skip: !HAVE_PY && '
     ...base,
     arbiter: {
       ...base.arbiter,
-      lastAction: { type: 'ladder_down', at: NOW - 20 * 60_000, name: 'jtyper', from: 'fable', to: 'opus' },
-      why: 'jtyper: fable -> opus at 94% of the Fable week',
+      lastAction: { type: 'ladder_down', at: NOW - 20 * 60_000, name: 'jotter', from: 'fable', to: 'opus' },
+      why: 'jotter: fable -> opus at 94% of the Fable week',
     },
   });
   const line = out.split('\n').find((l) => l.includes('Arbiter:'));
   assert.ok(line, out);
   assert.match(line, /ladder down/, 'the action, not the word "acted"');
-  assert.match(line, /on jtyper/, 'and WHICH session — `name`, not `session`');
+  assert.match(line, /on jotter/, 'and WHICH session — `name`, not `session`');
   assert.match(line, /-> opus/);
   assert.match(line, /20m ago/, 'and a time that actually ages');
-  assert.match(out, /why: jtyper: fable -> opus/);
+  assert.match(out, /why: jotter: fable -> opus/);
 });
 
 test('a sentinel and a held spawn render their ms `since`', { skip: !HAVE_PY && 'no python3' }, () => {
@@ -175,9 +175,9 @@ test('a laddered session shows when it was moved', { skip: !HAVE_PY && 'no pytho
   const out = render({
     ...base,
     sessions: [{
-      name: 'jtyper', family: 'opus', autoResume: true, stalled: false,
+      name: 'jotter', family: 'opus', autoResume: true, stalled: false,
       ladder: { from: 'fable', to: 'opus', at: NOW - 3 * 3600_000, delivery: 'confirmed' },
     }],
   });
-  assert.match(out, /jtyper: fable -> opus {2}\(confirmed, 3h ago\)/);
+  assert.match(out, /jotter: fable -> opus {2}\(confirmed, 3h ago\)/);
 });

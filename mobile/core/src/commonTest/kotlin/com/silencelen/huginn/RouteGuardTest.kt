@@ -43,10 +43,10 @@ class RouteGuardTest {
         // ⚠ The badge still says what KIND of path it is; only the scheme moved.
         val upgraded = mapOf(
             "http://10.0.0.9:8787" to RouteKind.LAN,
-            "http://192.168.2.117:8787" to RouteKind.LAN,
+            "http://192.168.1.20:8787" to RouteKind.LAN,
             "http://172.16.0.4:8787" to RouteKind.LAN,
             "http://172.31.255.254:8787" to RouteKind.LAN,
-            "http://100.97.198.90:8787" to RouteKind.TAILNET,
+            "http://100.101.102.103:8787" to RouteKind.TAILNET,
             "http://100.64.0.1:8787" to RouteKind.TAILNET,
             "http://100.127.255.255:8787" to RouteKind.TAILNET,
             "http://huginn.tailnet-1234.ts.net:8787" to RouteKind.TAILNET,
@@ -104,9 +104,9 @@ class RouteGuardTest {
     @Test
     fun `a bare address is judged as http and stored with the scheme spelled out`() {
         assertEquals("https://example.com:8787", RouteGuard.normalize("example.com:8787"), "a bare public name is upgraded, not trusted in clear")
-        assertTrue(RouteGuard.isAllowed("192.168.2.117:8787"))
-        assertEquals("https://192.168.2.117:8787", RouteGuard.normalize("192.168.2.117:8787"))
-        assertEquals("https://192.168.2.117:8787", RouteGuard.require(" 192.168.2.117:8787/ "))
+        assertTrue(RouteGuard.isAllowed("192.168.1.20:8787"))
+        assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
+        assertEquals("https://192.168.1.20:8787", RouteGuard.require(" 192.168.1.20:8787/ "))
         assertEquals("http://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"))
     }
 
@@ -191,7 +191,7 @@ class RouteGuardTest {
 
     @Test
     fun `the authority is the authority and never more`() {
-        assertEquals("100.97.198.90:8787", RouteGuard.authorityOf("http://100.97.198.90:8787/"))
+        assertEquals("100.101.102.103:8787", RouteGuard.authorityOf("http://100.101.102.103:8787/"))
         assertEquals("localhost", RouteGuard.authorityOf("http://localhost"))
         assertEquals("[::1]:8787", RouteGuard.authorityOf("http://[::1]:8787"))
         assertEquals("", RouteGuard.authorityOf("http://user@127.0.0.1"), "a refused address has no authority to give")

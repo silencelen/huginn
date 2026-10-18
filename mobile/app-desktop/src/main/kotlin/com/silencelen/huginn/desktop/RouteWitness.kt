@@ -47,7 +47,7 @@ object RouteWitness {
      * made explicit so `http://host` and `http://host:80` are one place.
      *
      * Deliberately NOT a full URL comparison: the route book holds a base
-     * (`192.168.2.117:8787`, `https://huginn.example`) and what arrives here is a
+     * (`192.168.1.20:8787`, `https://huginn.example`) and what arrives here is a
      * request for `/v1/chats` on it. Matching the authority is the question being
      * asked — "did this response come from where we are pinned" — and it is the
      * only part of the two strings that describes the same thing.

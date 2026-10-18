@@ -421,11 +421,11 @@ class DesktopSurfaceTest {
 
     @Test
     fun `the connection tip says what it means for notifications`() {
-        val on = connectionTip(true, "http://100.97.198.90:8787", notifyEnabled = true)
-        assertTrue(on.startsWith("Watch stream attached to 100.97.198.90:8787"), on)
+        val on = connectionTip(true, "http://100.101.102.103:8787", notifyEnabled = true)
+        assertTrue(on.startsWith("Watch stream attached to 100.101.102.103:8787"), on)
         assertTrue(on.contains("Notifications arrive here"), on)
 
-        val off = connectionTip(false, "http://100.97.198.90:8787", notifyEnabled = true)
+        val off = connectionTip(false, "http://100.101.102.103:8787", notifyEnabled = true)
         assertTrue(off.contains("detached"), off)
         assertTrue(off.contains("other devices"), off)
 
@@ -442,11 +442,11 @@ class DesktopSurfaceTest {
      */
     @Test
     fun `the connection tip leads with the route's name when it has one`() {
-        val named = connectionTip(true, "http://192.168.2.117:8787", notifyEnabled = true, routeName = "the mesh")
-        assertTrue(named.startsWith("Watch stream attached to the mesh · 192.168.2.117:8787"), named)
+        val named = connectionTip(true, "http://192.168.1.20:8787", notifyEnabled = true, routeName = "the mesh")
+        assertTrue(named.startsWith("Watch stream attached to the mesh · 192.168.1.20:8787"), named)
 
-        val unnamed = connectionTip(true, "http://192.168.2.117:8787", notifyEnabled = true, routeName = "")
-        assertTrue(unnamed.startsWith("Watch stream attached to 192.168.2.117:8787"), unnamed)
+        val unnamed = connectionTip(true, "http://192.168.1.20:8787", notifyEnabled = true, routeName = "")
+        assertTrue(unnamed.startsWith("Watch stream attached to 192.168.1.20:8787"), unnamed)
         assertTrue(!unnamed.contains(" · "), "no dangling separator when there is no name: $unnamed")
     }
 
@@ -973,7 +973,7 @@ class DesktopSurfaceTest {
 
     @Test
     fun `an ordinary name, in any case, opens`() {
-        assertTrue(sessionAddressable("jtyper"))
+        assertTrue(sessionAddressable("jotter"))
         assertTrue(sessionAddressable("api-v2"))
         assertTrue(sessionAddressable("_scratch_1"))
         // The route regexes are case-permissive, so an uppercase name routes
@@ -1046,7 +1046,7 @@ class DesktopSurfaceTest {
         assertFalse(SESSION_NAME.matches("my.session"))
         assertFalse(SESSION_NAME.matches("notes.old"))
         assertTrue(SESSION_NAME.matches("api-v2"), "'-' survives tmux untouched")
-        assertTrue(SESSION_NAME.matches("jtyper"))
+        assertTrue(SESSION_NAME.matches("jotter"))
         assertTrue(SESSION_NAME.matches("_scratch_1"))
         assertFalse(SESSION_NAME.matches("-lead"), "must start with a letter or digit")
         assertFalse(SESSION_NAME.matches(""))

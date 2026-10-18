@@ -14,10 +14,10 @@ class EscalationTest {
     @Test
     fun theDraftCarriesTheModelTheRolesAndAnOpenEnding() {
         val d = Escalation.draft(
-            "Qwen3 4B - PRESTIGE",
+            "Qwen3 4B - PC01",
             listOf("User" to "what is a monad", "Assistant" to "a monoid in the category of endofunctors"),
         )
-        assertTrue("Qwen3 4B - PRESTIGE" in d)
+        assertTrue("Qwen3 4B - PC01" in d)
         assertTrue("User: what is a monad" in d)
         assertTrue("Assistant: a monoid" in d)
         assertTrue(d.endsWith("Pick this up from here: "), "open-ended, so the person must write the ask")
@@ -26,7 +26,7 @@ class EscalationTest {
     @Test
     fun aLongConversationKeepsItsTailNotItsHead() {
         val turns = (1..400).map { "User" to "turn number $it with some padding text to grow the body" }
-        val d = Escalation.draft("Qwen3 8B - DATATREEX", turns)
+        val d = Escalation.draft("Qwen3 8B - DESKPC", turns)
         assertTrue("turn number 400" in d, "the newest turn survives")
         assertTrue("turn number 1 " !in d, "the oldest is what the cap spends")
         assertTrue("…" in d, "truncation is visible, never silent")

@@ -18,7 +18,7 @@ import kotlin.test.assertTrue
 class CoreBootTest {
     private class FakeCore(
         var present: Boolean = true,
-        var st: CoreStatus = CoreStatus(version = "2.5.1", paired = true, url = "https://192.168.7.117:8787", pins = listOf("aa11")),
+        var st: CoreStatus = CoreStatus(version = "2.5.1", paired = true, url = "https://192.168.10.20:8787", pins = listOf("aa11")),
         var reachable: Boolean = true,
         var pairFails: Boolean = false,
     ) : CoreBoot.Ops {
@@ -36,9 +36,9 @@ class CoreBootTest {
         override suspend fun appdThroughCore() = reachable
     }
 
-    private val mesh = PinnedRoute(id = "r1", name = "yggdrasil", url = "https://192.168.2.117:8787", kind = RouteKind.MESH)
+    private val mesh = PinnedRoute(id = "r1", name = "yggdrasil", url = "https://192.168.1.20:8787", kind = RouteKind.MESH)
     private fun own(token: String = "tok", pins: List<String> = listOf("aa11")) =
-        CoreBoot.OwnLink(baseUrl = "https://192.168.2.117:8787", token = token, routes = listOf(mesh), pins = pins)
+        CoreBoot.OwnLink(baseUrl = "https://192.168.1.20:8787", token = token, routes = listOf(mesh), pins = pins)
 
     private fun decide(core: FakeCore, link: CoreBoot.OwnLink): Pair<CoreBoot.Outcome, Boolean> {
         var cleared = false
@@ -63,7 +63,7 @@ class CoreBootTest {
     }
 
     @Test
-    fun `the same huginn on another address (PRESTIGE's LAN and mesh) is handed over, then deleted`() {
+    fun `the same huginn on another address (PC01's LAN and mesh) is handed over, then deleted`() {
         val core = FakeCore()
         val (o, cleared) = decide(core, own())
         assertIs<CoreBoot.Outcome.ViaCore>(o)
@@ -76,7 +76,7 @@ class CoreBootTest {
         val core = FakeCore(st = CoreStatus(version = "2.5.1", paired = false))
         val (o, cleared) = decide(core, own())
         assertIs<CoreBoot.Outcome.ViaCore>(o)
-        assertEquals(listOf("https://192.168.2.117:8787" to "tok"), core.paired)
+        assertEquals(listOf("https://192.168.1.20:8787" to "tok"), core.paired)
         assertTrue(cleared)
     }
 

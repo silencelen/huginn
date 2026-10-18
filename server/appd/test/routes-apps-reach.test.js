@@ -19,7 +19,7 @@
 // the difference a rebind makes.
 //
 // SAFETY: every address here is loopback and every port is this file's own or in
-// its block, so nothing can reach the operator's real armap, trainer, board view
+// its block, so nothing can reach the operator's real atlas, trainer, board view
 // or sim — those are on the tailnet address only.
 
 const { test, before, after } = require('node:test');
@@ -122,15 +122,15 @@ before(async () => {
     seeded: true,
     // What a daemon that has been running for a while knows: two addresses
     // clients arrived on, one of them not seen for longer than the TTL.
-    // ⚠ AND WHO ARRIVED ON THEM. 192.168.2.131 is the shape this host actually
+    // ⚠ AND WHO ARRIVED ON THEM. 192.168.1.131 is the shape this host actually
     // has: the Yggdrasil LAN gateway NATs every phone on the LAN side, so that
     // is the address the daemon sees on the far end of the socket and the only
-    // one a firewall rule on heimdall could ever match.
+    // one a firewall rule on pve1 could ever match.
     clientAddresses: [
-      { addr: '127.0.0.2', lastSeenAt: now - 60, remotes: [{ addr: '192.168.2.131', lastSeenAt: now - 60 }] },
+      { addr: '127.0.0.2', lastSeenAt: now - 60, remotes: [{ addr: '192.168.1.131', lastSeenAt: now - 60 }] },
       { addr: '10.9.9.9',
         lastSeenAt: now - appsLib.CLIENT_ADDR_TTL_SEC - 3600,
-        remotes: [{ addr: '192.168.2.44', lastSeenAt: now - 60 }] },
+        remotes: [{ addr: '192.168.1.44', lastSeenAt: now - 60 }] },
     ],
     consoles: [
       appsLib.buildRecord({ id: 'onebound', name: 'Bound to one address', kind: 'tool',
@@ -203,10 +203,10 @@ test('the daemon checks against the addresses clients arrive on, plus its own', 
   // ⚠ AND THE CLIENTS GO WITH IT. A remote is remembered FOR an arrival; when
   // the arrival expires there is no address left for its clients to be clients
   // of, and a stale one would come back as a firewall source months later.
-  assert.deepEqual(['192.168.2.131'], body.clientRemotes['127.0.0.2'],
+  assert.deepEqual(['192.168.1.131'], body.clientRemotes['127.0.0.2'],
     `who the daemon has seen on 127.0.0.2: ${JSON.stringify(body.clientRemotes)}`);
   assert.deepEqual(['127.0.0.1'], body.clientRemotes['127.0.0.1'], 'and this suite, on the address it dials');
-  assert.ok(!('10.9.9.9' in body.clientRemotes), 'the expired arrival took 192.168.2.44 with it');
+  assert.ok(!('10.9.9.9' in body.clientRemotes), 'the expired arrival took 192.168.1.44 with it');
 });
 
 test('a REPORTED route is required of every app, says who reported it, and rides the list', async () => {
@@ -214,10 +214,10 @@ test('a REPORTED route is required of every app, says who reported it, and rides
   // rest still applies — 3.9.0 answered 200 with the host silently missing, and
   // an all-or-nothing 400 would have cost an unfiltering 3.9.0 client every route.
   const refused = await api('/v1/apps/routes', {
-    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8', 'huginn.jnet.ad'] }),
+    method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2', '8.8.8.8', 'huginn.home.arpa'] }),
   });
   assert.equal(200, refused.status, JSON.stringify(refused.body));
-  assert.deepEqual(['8.8.8.8', 'huginn.jnet.ad'], refused.body.refused.map((r) => r.addr));
+  assert.deepEqual(['8.8.8.8', 'huginn.home.arpa'], refused.body.refused.map((r) => r.addr));
   assert.ok(refused.body.requiredAddresses.includes('127.0.0.2'), 'the valid host was applied');
   const again = await api('/v1/apps/routes', {
     method: 'PUT', headers: { 'x-huginn-client': 'suite-desk' }, body: JSON.stringify({ addrs: ['127.0.0.2'] }),
@@ -255,7 +255,7 @@ test('a row bound to one of this host’s addresses is UNREACHABLE, with the lin
   assert.equal('connection refused', byAddr['127.0.0.2'].error, 'and it says why');
 
   // ⚠⚠ AND THERE IS NO FIREWALL HALF. 127.0.0.2 is LOOPBACK: it never crosses
-  // the veth chain, so 117.fw has no say over it and the rebind above is the
+  // the veth chain, so 100.fw has no say over it and the rebind above is the
   // entire remedy. The old code put `-source 127.0.0.2` here — an arrival
   // address, one of THIS host's own, in a rule that could never match anything —
   // which is the defect 3.5.2 removed. 3.6.1 removed the other half: the header
@@ -268,7 +268,7 @@ test('a row bound to one of this host’s addresses is UNREACHABLE, with the lin
     `ss -ltn | grep :${onePort}`,
     '# 127.0.0.2 passes on its own once the unit binds 0.0.0.0',
   ], r.body.reachable.fix, 'the exact lines, for THIS row, against THIS address');
-  assert.ok(!r.body.reachable.fix.some((l) => l.includes('117.fw')),
+  assert.ok(!r.body.reachable.fix.some((l) => l.includes('100.fw')),
     'and no header over an empty section');
   assert.ok(!r.body.reachable.fix.some((l) => l.startsWith('IN ACCEPT')),
     'an arrival address is never a -source, and a loopback one wants no rule at all');
