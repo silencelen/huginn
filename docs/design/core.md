@@ -125,7 +125,7 @@ offers to install the service at the moment it matters.
 | Notify rules, router, enrichment | `NotifyRules.kt` / `NotifyRouter.kt` | core | `NotifyRules` is pure; ported with its tests. |
 | Toasts, libnotify, balloons | desktop `Notifiers` | tray role | WinRT toasts; AUMID unchanged. |
 | Tray icon and menu | Compose `Tray` | tray role | Icons rendered from the brand raven at build time. |
-| `huginn://` scheme | `SchemeRegistrar` plus `Activation` | tray role and core | `answer`/`undo` need the token, so the core performs them. The mandatory fingerprint rule is kept. |
+| `huginn://` scheme | `SchemeRegistrar` plus `Activation` | tray role and core | `answer`/`undo` need the token, so the core performs them. The rule is kept: a link acts only with the nonce of the toast that issued it, and the fingerprint stays the daemon's staleness check. |
 | Single instance | loopback socket plus `instance.lock` | core IPC | The GUI asks the core whether a window is open; the core focuses it. |
 | Autostart | desktop writes a Startup `.lnk` / `autostart/*.desktop` | core installer | |
 | Self-update | `DesktopUpdater` and `huginn update` / `CliSync` | core updater | One version, one trust root. `CliSync` deleted. |

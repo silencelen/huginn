@@ -205,10 +205,14 @@ must keep them.
   client will show the alert, which suppresses the fallback relay. Send it only while a person is
   present and the client can actually deliver. A parked SSE carries the header it was opened with,
   so reconnect it when presence changes.
-- **`huginn://answer` requires a fingerprint.** The desktop's parser (`Activations.parse`) refuses
-  a link without one, and the app never computes one to fill the gap; a fingerprint that no longer
-  matches the question on the pane comes back `409` and nothing is typed. Without it, any local process or clicked web link could approve
-  whatever prompt is on the pane.
+- **A `huginn://answer` or `huginn://undo` link acts only with this instance's nonce.** The
+  fingerprint (`fp`) is the daemon's staleness check, an unkeyed hash of the question and options
+  that anyone can compute, so it proves nothing about who sent the link. Each toast that carries
+  buttons gets a random per-toast nonce (`ActivationNonces`), held only in memory, single use, five
+  minutes. `Activations.resolve` answers or undoes only on a nonce this process issued; any other
+  link (no nonce, unknown, expired, after a restart, from a browser or another program) opens the
+  session instead, and the owner clicks in the app. A fingerprint that no longer matches the pane
+  still comes back `409` and nothing is typed.
 - **The update source is fixed at build time,** never read from a setting
   (`GithubReleases.REPO`; for the Android app, the `huginn.updateRepo` Gradle property described in
   [building.md](building.md)).
