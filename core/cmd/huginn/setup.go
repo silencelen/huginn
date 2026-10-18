@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -168,6 +170,10 @@ func setup(args []string) int {
 	return 0
 }
 
+// sshPort is where sshAddress knocks; a var so a test can stand a listener in
+// for sshd.
+var sshPort = "22"
+
 // sshAddress: huginn's own addresses, as it lists them to the paired core
 // (appd 3.12.1+, /v1/status), and the first of them other than host that
 // answers on port 22 from here ("" when none does, or huginn did not say).
@@ -178,6 +184,9 @@ func sshAddress(host string) (string, []string) {
 	if _, err := call(http.MethodGet, "/appd/v1/status", nil, &st); err != nil {
 		return "", nil
 	}
+	// Only a plain address is tried, printed or passed on to be written into
+	// ~/.ssh/config. The dial below is no check (security scan F12).
+	st.Addresses = slices.DeleteFunc(st.Addresses, func(a string) bool { return !plainHost(a) })
 	type res struct {
 		i  int
 		ok bool
@@ -189,7 +198,7 @@ func sshAddress(host string) (string, []string) {
 				ch <- res{i, false}
 				return
 			}
-			c, err := net.DialTimeout("tcp", net.JoinHostPort(a, "22"), 3*time.Second)
+			c, err := net.DialTimeout("tcp", net.JoinHostPort(a, sshPort), 3*time.Second)
 			if err == nil {
 				c.Close()
 			}
@@ -212,6 +221,35 @@ func sshAddress(host string) (string, []string) {
 		}
 	}
 	return "", st.Addresses
+}
+
+// plainHost: s can stand alone as a HostName value in ssh_config. It must be
+// an IP address with no zone, or a DNS name made of letters, digits and
+// hyphens: labels of 1-63 bytes, 253 in all, and a last label that is not all
+// digits (a resolver reads that as a number). Nothing else is accepted. A line
+// break or a space would start a new line or argument, ssh expands '%' as a
+// token, and quotes, '#' and '=' change how the line is read.
+// ⚠ A successful dial proves nothing here. Go reads any text after '%' as an
+// IPv6 zone, line breaks included, and still connects.
+func plainHost(s string) bool {
+	if a, err := netip.ParseAddr(s); err == nil {
+		return a.Zone() == ""
+	}
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	labels := strings.Split(s, ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(l); i++ {
+			if c := l[i]; !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return strings.Trim(labels[len(labels)-1], "0123456789") != ""
 }
 
 // localNets: this computer's own IPv4 networks.
@@ -240,7 +278,12 @@ func sameNet(addr string, nets []*net.IPNet) bool {
 // to - only when old names this huginn (one of its own addresses, or the
 // address the core is paired with): a stanza naming something else is a
 // person's own, and is never edited. Reports whether it changed the file.
+// to must be a plain host (plainHost), whatever the caller checked: never a
+// line break, which would add lines of its own to the stanza.
 func repointStanza(cfg, alias, old, to string, huginns []string) bool {
+	if strings.ContainsAny(to, "\r\n") || !plainHost(to) {
+		return false
+	}
 	ours := old == pairedHost()
 	for _, a := range huginns {
 		ours = ours || a == old
@@ -267,7 +310,10 @@ func repointStanza(cfg, alias, old, to string, huginns []string) bool {
 			continue
 		}
 		if in && len(f) >= 2 && strings.EqualFold(f[0], "hostname") && f[1] == old {
-			lines[i] = strings.Replace(line, old, to, 1)
+			// The value, not the first match on the line: `hostname name`
+			// would otherwise lose part of its keyword.
+			k := strings.Index(line, f[0]) + len(f[0])
+			lines[i] = line[:k] + strings.Replace(line[k:], old, to, 1)
 			changed = true
 		}
 	}
