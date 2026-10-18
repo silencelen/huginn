@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## 3.12.0 — 2026-10-18
+
+### Changed
+- **No built-in server addresses.** A fresh install starts with none; an upgrade keeps the address
+  it was using and adds nothing.
+- **"Message me when a session needs me" is available whenever the server can push or has an alert
+  relay**, and says which it will use. It used to need a relay script and promised one service.
+- Alert copy names "your other devices" or "huginn's alert relay". Ask mode is described as it is:
+  it reads files and the web and changes nothing.
+- **Self-built APKs can point updates elsewhere.** `-Phuginn.updateRepo=owner/repo` sets the release
+  feed, and an empty value turns update checks off. Official builds are unchanged.
+
 ## 3.11.1 — 2026-10-13
 
 ### Fixes to the new skin

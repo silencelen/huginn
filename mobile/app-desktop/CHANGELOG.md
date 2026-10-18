@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 2.6.0
+
+Carries core 2.6.0.
+
+### Changed
+- **No built-in server addresses.** A fresh install starts with none; an upgrade keeps the address
+  it was using and adds nothing.
+- The local-AI manager, shim and runner are downloaded from the newest `cli-v` release instead of
+  the default branch.
+- Alert copy names "your other devices" or "huginn's alert relay" instead of one messaging service.
+  Ask mode is described as it is: it reads files and the web and changes nothing.
+
 ## 2.5.10
 
 Carries core 2.5.10.
