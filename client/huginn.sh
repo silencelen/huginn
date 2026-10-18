@@ -167,7 +167,7 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # address THIS machine just reached the host at, which is better than choosing on
 # the device's behalf between a LAN address, a tailnet name and whatever
 # `hostname` happens to say. $1 = the ssh alias; prints https://<authority>:8787
-# (http:// only for the host's own loopback).
+# (http://127.0.0.1 only when the host is proved to be this machine).
 #
 # ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/dev/protocol-tls.md). The
 # runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
@@ -207,28 +207,39 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # does have to dial the daemon directly. A device enrolled from here and one
 # enrolled from an app can therefore hold different addresses for the same
 # daemon; fix that in the app's route book, or with `--url` here.
+#
+# ⚠ A LOOPBACK ADDRESS ON THE LINK IS NOT PROOF THAT THE HOST IS THIS MACHINE.
+# A tunnel or proxy that ends on the host's own loopback (a reverse ssh tunnel,
+# cloudflared, frp, sslh) makes sshd report 127.0.0.1 too - and a 127.* answer
+# used to become http://127.x:8787 on the spot, so a laptop was enrolled at ITS
+# OWN loopback and the runner sent the root-equivalent token in cleartext, every
+# 15 seconds, to whatever local account or sandboxed app bound that port. So a
+# loopback answer gets the same machine-id test as no answer at all, and when
+# the test does not prove it, it is no answer: the host is asked for an address
+# it holds, or the caller refuses and names --url.
 _huginn_srv_url() {
   local H="$1" a v4 there here
   a="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}' | tr -d '[:space:]')"
   case "$a" in
-    '')
-      # Nothing to learn from the link. Is the host this very machine?
+    ''|127.*|::1|::ffff:127.*)
+      # Nothing to learn from the link, or only that it ended on the host's own
+      # loopback. Either way: is the host this very machine? Only then is the
+      # daemon on OUR loopback, where plain HTTP never leaves the box - and it
+      # is 127.0.0.1 whatever the link said, because that is the address appd
+      # always answers on (::1 too: appd binds IPv4, see the bracketing note).
       there="$(ssh -T "$H" 'cat /etc/machine-id 2>/dev/null' 2>/dev/null | tr -d '[:space:]')"
       here="$(cat /etc/machine-id 2>/dev/null | tr -d '[:space:]')"
       if [ -n "$there" ] && [ "$there" = "$here" ]; then
         printf 'http://127.0.0.1:8787'; return 0
-      fi ;;
-    # The host's own loopback (an alias pointing at this machine): plain HTTP
-    # is the one thing that stays, because it never leaves the box. ::1 maps to
-    # 127.0.0.1 because appd binds IPv4 (see the bracketing note above).
-    127.*) printf 'http://%s:8787' "$a"; return 0 ;;
-    ::1) printf 'http://127.0.0.1:8787'; return 0 ;;
+      fi
+      a= ;;
     *:*) ;;
     *) printf 'https://%s:8787' "$a"; return 0 ;;
   esac
   v4="$(ssh -T "$H" "ip -4 -o addr show scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1" \
         2>/dev/null | tr -d '[:space:]')"
   case "$v4" in
+    127.*) ;;   # never a routable answer, whatever the host printed
     [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'https://%s:8787' "$v4"; return 0 ;;
   esac
   [ -n "$a" ] || return 1
@@ -2157,16 +2168,41 @@ rcc()     { huginn "$@"; }
 # Live session names come from the host (tmux ls). We cache them in-memory for a
 # few seconds so repeated <Tab> doesn't ssh on every keystroke; BatchMode keeps a
 # missing key/agent from hanging the prompt, ConnectTimeout bounds a slow link.
+#
+# ⚠ A SESSION NAME IS THE HOST'S DATA, AND COMPLETION USED TO RUN IT. The names
+# went into `compgen -W`, which expands every word of its list - command,
+# parameter and arithmetic substitution included - so a session renamed on the
+# host to `$(...)` ran that command HERE, as this user, the moment somebody
+# pressed Tab after `huginn ` or `huginn kill `. tmux rewrites only '.' and ':',
+# and the daemon's name check never runs for a session made with tmux directly.
+# Completion also inserts what it offers verbatim, so a name holding ';' was a
+# command line waiting for Enter. So only names that pass _huginn_valid_name
+# are printed, and they are matched by plain prefix comparison: nothing the
+# host sends is expanded, and nothing is offered that this client could not
+# have typed itself. The cache keeps the RAW list, because _huginn_bad_name
+# uses it to tell a live-but-unaddressable session from a typo.
 _HUGINN_SESS_CACHE=
 _HUGINN_SESS_TS=0
 _huginn_sessions() {
-  local H="${HUGINN_HOST:-huginn}" now
+  local H="${HUGINN_HOST:-huginn}" now s
   now=$(date +%s 2>/dev/null || echo 0)
   if [ -z "$_HUGINN_SESS_CACHE" ] || [ "$(( now - _HUGINN_SESS_TS ))" -ge 5 ]; then
     _HUGINN_SESS_CACHE=$(ssh -T -o BatchMode=yes -o ConnectTimeout=2 "$H" "tmux ls -F '#S' 2>/dev/null" 2>/dev/null)
     _HUGINN_SESS_TS=$now
   fi
-  printf '%s\n' "$_HUGINN_SESS_CACHE"
+  while IFS= read -r s; do
+    _huginn_valid_name "$s" && printf '%s\n' "$s"
+  done <<<"$_HUGINN_SESS_CACHE"
+  return 0
+}
+# Append to COMPREPLY every live session name that starts with $1. A loop and
+# a quoted [[ == "$1"* ]] on purpose, never compgen -W: see the note above.
+_huginn_complete_sessions() {
+  local s
+  while IFS= read -r s; do
+    [ -n "$s" ] && [[ "$s" == "$1"* ]] && COMPREPLY+=("$s")
+  done < <(_huginn_sessions)
+  return 0
 }
 # ⚠ EVERY VERB THAT TAKES SUB-VERBS HAS TO BE HERE, and `projects` was not:
 # `huginn projects <TAB>` completed to NOTHING while `device` and `local` beside
@@ -2179,13 +2215,17 @@ _huginn_complete() {
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
   cmds="console setup list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
+  COMPREPLY=()
   if [ "$COMP_CWORD" -eq 1 ]; then
-    # first word: subcommands + live session names (bare name attaches to it)
-    mapfile -t COMPREPLY < <(compgen -W "$cmds $(_huginn_sessions)" -- "$cur")
+    # first word: subcommands + live session names (bare name attaches to it).
+    # The subcommands are this file's own words, so compgen may have them; the
+    # session names are the host's, so it may not (see _huginn_sessions).
+    mapfile -t COMPREPLY < <(compgen -W "$cmds" -- "$cur")
+    _huginn_complete_sessions "$cur"
   else
     case "$prev" in
       kill|end|archive|solo|attach|rename|mv)   # these take an existing session name
-        mapfile -t COMPREPLY < <(compgen -W "$(_huginn_sessions)" -- "$cur") ;;
+        _huginn_complete_sessions "$cur" ;;
       usage|cost|ccusage)    # date shortcuts + raw report names
         mapfile -t COMPREPLY < <(compgen -W "today yesterday week month daily monthly weekly session blocks statusline" -- "$cur") ;;
       desktop)

@@ -424,8 +424,8 @@ function _Huginn-FetchFile {
 # link it has ALREADY been trusted on. $SSH_CONNECTION's third field is the
 # address THIS machine just reached the host at, which is better than choosing
 # on the device's behalf between a LAN address, a tailnet name and whatever
-# `hostname` happens to say. Returns https://<authority>:8787 (http:// only for
-# the host's own loopback).
+# `hostname` happens to say. Returns https://<authority>:8787, and never a
+# loopback url (see the last note).
 #
 # ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/dev/protocol-tls.md). The
 # runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
@@ -433,7 +433,6 @@ function _Huginn-FetchFile {
 # under it. The runner would upgrade a remote http:// on its own anyway (rule 6:
 # no setting re-enables cleartext to a remote host); building https:// here is
 # so what the person reads in `huginn device status` is what is actually dialled.
-# Loopback stays http://: the daemon answers plain HTTP from 127.0.0.0/8 only.
 #
 # ⚠ IT IS A BARE ADDRESS, AND A BARE IPv6 LITERAL IS NOT A URL.
 # `http://fd00::1:8787` has no valid port, so `huginn device on` / `huginn local
@@ -453,9 +452,17 @@ function _Huginn-FetchFile {
 # above threw outright when the probe came back with fewer than three fields.
 # It is empty in two ordinary situations: a shell running ON the host itself,
 # and an sshd whose ForceCommand/Match wrapper does not pass the variable on.
-# Both can be answered - ask the host for an address it actually holds, and use
-# loopback when the host IS this machine - and only when nothing can be learned
-# at all is it a refusal, with `--url` named.
+# Both can be answered by asking the host for an address it actually holds, and
+# only when it names none is it a refusal, with `--url` named.
+#
+# ⚠ AND NEVER LOOPBACK. This is the Windows client and the huginn host is a
+# Linux box, so the host is never this machine (and Windows has no
+# /etc/machine-id that could prove otherwise). A 127.* or ::1 answer means a
+# tunnel or proxy that ends on the HOST's loopback (a reverse ssh tunnel,
+# cloudflared, sslh), and it used to become http://127.x:8787 anyway:
+# the device was enrolled at ITS OWN loopback, and the runner sent the
+# root-equivalent token in cleartext, every 15 seconds, to whatever local
+# account or app bound that port. A loopback answer is now no answer at all.
 #
 # NOTE ON ROUTES: the apps pin a ROUTE BOOK (several addresses per daemon, tried
 # in order, with a witness). This client deliberately has none - it is an ssh
@@ -466,23 +473,10 @@ function _Huginn-SrvUrl {
   param([string]$H)
   $conn = @(((ssh -T $H 'echo $SSH_CONNECTION') -join ' ') -split '\s+' | Where-Object { $_ })
   $a = if ($conn.Count -ge 3) { [string]$conn[2] } else { '' }
-  if (-not $a) {
-    # Nothing to learn from the link. Is the host this very machine? (No
-    # /etc/machine-id on Windows, where the answer is always no.)
-    $there = ((ssh -T $H 'cat /etc/machine-id 2>/dev/null') -join '').Trim()
-    $here = ''
-    try { if (Test-Path '/etc/machine-id') { $here = (Get-Content '/etc/machine-id' -Raw).Trim() } } catch {}
-    if ($there -and $here -and ($there -ceq $here)) { return 'http://127.0.0.1:8787' }
-  } elseif ($a -like '127.*') {
-    # The host's own loopback (an alias pointing at this machine): plain HTTP
-    # is the one thing that stays, because it never leaves the box.
-    return "http://${a}:8787"
-  } elseif ($a -eq '::1') {
-    # 127.0.0.1, not [::1]: appd binds IPv4 (see the bracketing note above).
-    return 'http://127.0.0.1:8787'
-  } elseif ($a -notmatch ':') { return "https://${a}:8787" }
+  if ($a -like '127.*' -or $a -eq '::1' -or $a -like '::ffff:127.*') { $a = '' }
+  if ($a -and $a -notmatch ':') { return "https://${a}:8787" }
   $v4 = ((ssh -T $H "ip -4 -o addr show scope global 2>/dev/null | awk '{print `$4}' | cut -d/ -f1 | head -1") -join '').Trim()
-  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$') { return "https://${v4}:8787" }
+  if ($v4 -match '^\d+\.\d+\.\d+\.\d+$' -and $v4 -notlike '127.*') { return "https://${v4}:8787" }
   if (-not $a) { return $null }
   return "https://[$a]:8787"
 }
@@ -1980,6 +1974,14 @@ Set-Alias rcc huginn
 # Live session names from the host (tmux ls), cached in-memory for a few seconds so
 # repeated Tab doesn't ssh every keystroke. BatchMode stops a missing key from hanging
 # the prompt; ConnectTimeout bounds a slow link.
+#
+# ⚠ A SESSION NAME IS THE HOST'S DATA, AND COMPLETION PUT IT ON THE COMMAND LINE.
+# Each name went in verbatim and unquoted as CompletionText, so a session renamed
+# on the host to `x;<anything>` or `$(...)` became live PowerShell at this prompt,
+# run on Enter before huginn ever saw an argument. tmux rewrites only '.' and ':',
+# and the daemon's name check never runs for a session made with tmux directly.
+# So only names that pass _Huginn-ValidName are returned, and the completer below
+# single-quotes what it inserts.
 $script:HUGINN_SESS_CACHE = @()
 $script:HUGINN_SESS_TS    = [datetime]::MinValue
 function _Huginn-Sessions {
@@ -1988,7 +1990,7 @@ function _Huginn-Sessions {
     $script:HUGINN_SESS_CACHE = @(ssh -T -o BatchMode=yes -o ConnectTimeout=2 $H "tmux ls -F '#S' 2>/dev/null" 2>$null)
     $script:HUGINN_SESS_TS    = Get-Date
   }
-  return $script:HUGINN_SESS_CACHE
+  return @($script:HUGINN_SESS_CACHE | Where-Object { _Huginn-ValidName ([string]$_) })
 }
 Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   param($word, $ast, $pos)
@@ -2005,10 +2007,13 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
   $prev = if ($typed.Count -ge 1) { $typed[-1] } else { '' }
+  $sessions = @()
   if ($typed.Count -eq 0) {
-    $candidates = $cmds + @(_Huginn-Sessions)          # first word: subcommands + sessions
+    $candidates = $cmds                                # first word: subcommands + sessions
+    $sessions = @(_Huginn-Sessions | Where-Object { $_ -notin $cmds })
   } elseif ($prev -in 'kill', 'end', 'archive', 'solo', 'attach', 'rename', 'mv') {
-    $candidates = @(_Huginn-Sessions)                  # these take an existing session name
+    $candidates = @()                                  # these take an existing session name
+    $sessions = @(_Huginn-Sessions)
   } elseif ($prev -in 'usage', 'cost', 'ccusage') {
     $candidates = 'today', 'yesterday', 'week', 'month', 'daily', 'monthly', 'weekly', 'session', 'blocks', 'statusline'
   } elseif ($prev -in 'today', 'yesterday', 'week', 'month') {
@@ -2034,4 +2039,11 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   }
   $candidates | Where-Object { $_ -like "$word*" } |
     ForEach-Object { [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_) }
+  # A session name is the host's, so it goes in single-quoted, every quote
+  # character PowerShell honours doubled: inserted text that cannot be evaluated
+  # even if a name ever got past _Huginn-ValidName. The list shows it bare.
+  $sessions | Where-Object { $_ -like "$word*" } | ForEach-Object {
+    $q = "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent([string]$_) + "'"
+    [System.Management.Automation.CompletionResult]::new($q, $_, 'ParameterValue', $_)
+  }
 }

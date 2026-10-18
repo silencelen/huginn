@@ -652,6 +652,7 @@ case "$cmd" in
   *'/etc/huginn-appd/token'*) echo 'gate-token' ;;
   *SSH_CONNECTION*)           echo "$SSHCONN" ;;
   *'ip -4'*)                  [ -n "${HOSTV4:-}" ] && echo "$HOSTV4" ;;
+  *'/etc/machine-id'*)        [ -n "${HOSTMID:-}" ] && echo "$HOSTMID" ;;
 esac
 exit 0
 USSH
@@ -663,9 +664,10 @@ url_home () {   # a home whose ~/.huginn already holds runners that print argv
     printf 'console.log(process.argv.slice(2).join(" "));\n' > "$UT/home/.huginn/$f"
   done
 }
-url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4
+url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4,
+              # $4 = the host's /etc/machine-id (none when empty)
   url_home
-  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}"
+  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HOSTMID="${4:-}"
     export HUGINN_LOCAL_DIR="$UT/home/localdir"
     . "$PWD/client/huginn.sh" >/dev/null 2>&1
     eval "$1" ) 2>&1
@@ -682,21 +684,49 @@ U4=$(url_sh 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '10.0.0.5')
 grep -q -- '--url https://192.168.1.20:8787' <<<"$U4" \
   && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
 # ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/dev/protocol-tls.md rule 6): the runner
-# carries the root-equivalent token, and the address is a LAN/mesh one. Only the
-# host's own loopback stays http://, because plain HTTP never leaves the box.
-ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
-grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB" \
-  && ok "sh: a loopback ssh path stays http:// (the one cleartext case)" || bad "sh: loopback passed: $ULB"
-ULB6=$(url_sh 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
-grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB6" \
-  && ok "sh: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "sh: ::1 passed: $ULB6"
+# carries the root-equivalent token, and the address is a LAN/mesh one. Only a
+# host PROVED to be this machine gets http://127.0.0.1, because plain HTTP to our
+# own loopback never leaves the box.
+#
+# ⚠ AND A LOOPBACK LINK IS NOT THAT PROOF. A tunnel or proxy that ends on the
+# HOST's loopback (a reverse ssh tunnel, cloudflared, sslh) makes sshd report
+# 127.0.0.1 as well, and a 127.* answer used to become http://127.0.0.1:8787 on
+# the spot: a laptop enrolled at ITS OWN loopback, its runner sending the token
+# in cleartext every 15 seconds to whatever bound that port there. So loopback is
+# kept only when the host's machine-id is this machine's; the ps1 client, whose
+# host is never this machine, never builds a loopback url at all.
+if [ -s /etc/machine-id ]; then HEREMID=$(tr -d '[:space:]' < /etc/machine-id); else HEREMID=; fi
+# Differs from this machine's in every digit, so it can never match it.
+OTHERMID=$(printf '%s' "${HEREMID:-0123456789abcdef0123456789abcdef}" | tr '0-9a-f' '1-9a-f0')
+for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22'; do
+  ULB=$(url_sh 'huginn device on' "$conn" '192.0.2.10' "$OTHERMID")
+  grep -q -- '--url https://192.0.2.10:8787' <<<"$ULB" && ! grep -qE '127\.0\.0\.|\[::1\]' <<<"$ULB" \
+    && ok "sh: a loopback link ($conn) from ANOTHER machine dials the host's own address" \
+    || bad "sh: a loopback link from another machine passed: $ULB"
+done
+ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '192.0.2.10' '')
+grep -q -- '--url https://192.0.2.10:8787' <<<"$ULB" \
+  && ok "sh: and so does one whose host has no machine-id to compare" || bad "sh: loopback, no host machine-id, passed: $ULB"
+ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '' "$OTHERMID")
+! grep -q '^on ' <<<"$ULB" && grep -q 'say it yourself: huginn device on --url' <<<"$ULB" \
+  && ok "sh: and with no address to be had, it refuses and names --url" || bad "sh: loopback, no host v4, said: $ULB"
+if [ -n "$HEREMID" ]; then
+  for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22' ''; do
+    ULB=$(url_sh 'huginn device on' "$conn" '192.0.2.10' "$HEREMID")
+    grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB" \
+      && ok "sh: a host that IS this machine stays http://127.0.0.1 (link: '${conn:-none}')" \
+      || bad "sh: same machine, link '${conn:-none}', passed: $ULB"
+  done
+else
+  skip "sh: same-machine loopback (no /etc/machine-id here)"
+fi
 UL=$(url_sh 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
 grep -q -- '--url https://10.0.0.5:8787' <<<"$UL" \
   && ok "sh: and huginn local on builds the same url" || bad "sh: local on passed: $UL"
 if command -v pwsh >/dev/null 2>&1; then
   url_ps () {
     url_home
-    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
+    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HOSTMID="${4:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
       PATH="$UT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
   }
   P6=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
@@ -710,12 +740,21 @@ if command -v pwsh >/dev/null 2>&1; then
   P4=$(url_ps 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '')
   grep -q -- '--url https://192.168.1.20:8787' <<<"$P4" \
     && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
-  PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
-  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB" \
-    && ok "ps1: a loopback ssh path stays http:// (the one cleartext case)" || bad "ps1: loopback passed: $PLB"
-  PLB6=$(url_ps 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
-  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB6" \
-    && ok "ps1: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "ps1: ::1 passed: $PLB6"
+  # Never loopback from this client - not even when the machine-ids match, which
+  # only pwsh on Linux could ever see.
+  for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22' ''; do
+    for whose in another this; do
+      if [ "$whose" = this ]; then mid="$HEREMID"; else mid="$OTHERMID"; fi
+      [ -n "$mid" ] || continue
+      PLB=$(url_ps 'huginn device on' "$conn" '192.0.2.10' "$mid")
+      grep -q -- '--url https://192.0.2.10:8787' <<<"$PLB" && ! grep -qE '127\.0\.0\.|\[::1\]' <<<"$PLB" \
+        && ok "ps1: link '${conn:-none}', $whose machine's id: the host's own address, never loopback" \
+        || bad "ps1: link '${conn:-none}', $whose machine's id, passed: $PLB"
+    done
+  done
+  PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '' "$OTHERMID")
+  ! grep -q '^on ' <<<"$PLB" && grep -q 'say it yourself: huginn device on --url' <<<"$PLB" \
+    && ok "ps1: and with no address to be had, it refuses and names --url" || bad "ps1: loopback, no host v4, said: $PLB"
   PL=$(url_ps 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
   grep -q -- '--url https://10.0.0.5:8787' <<<"$PL" \
     && ok "ps1: and huginn local on builds the same url" || bad "ps1: local on passed: $PL"
@@ -973,6 +1012,111 @@ else
     && ok "ps1: a bare attach is a usage line, not main" || bad "ps1: bare attach sent: $A / said: $(cat "$AT/out")"
   pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; if (Get-Command _Huginn-AttachNamed -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >/dev/null 2>&1 \
     && ok "ps1: _Huginn-AttachNamed exists (the desktop's probe)" || bad "ps1: no _Huginn-AttachNamed - the desktop will refuse verb names"
+fi
+
+echo "[5i/8] tab completion offers the host's session names, and never runs one"
+# ⚠ WHY: the names are `tmux ls` output FROM THE HOST, and anything there that
+# runs tmux as the session user can rename a session - a prompt-injected Claude
+# session included. tmux rewrites only '.' and ':', and the daemon's name check
+# never runs for a session made with tmux directly. The bash completer handed the
+# names to `compgen -W`, which EXPANDS its word list, so a session called
+# `$(...)` ran that command on this machine at the first Tab after `huginn ` or
+# `huginn kill `. The PowerShell completer inserted them unquoted, so `x;<code>`
+# ran on Enter. Both now offer only names the session-name rule accepts; bash
+# matches them by plain prefix and PowerShell inserts them single-quoted.
+#
+# What is asserted is what completion offers BEYOND what it offers with no
+# sessions at all, so the verb list is not copied here to drift.
+CT=$(mktemp -d); STUB_DIRS+=("$CT"); mkdir -p "$CT/cwd"
+CMARK="$CT/pwned-$RANDOM$RANDOM"
+cat > "$CT/ssh" <<'STUB'
+#!/usr/bin/env bash
+case "${!#}" in *'tmux ls'*) [ -n "${SESSIONS:-}" ] && printf '%s\n' "$SESSIONS" ;; esac
+exit 0
+STUB
+chmod +x "$CT/ssh"
+CHOSTILE="main
+build-box
+\$(touch $CMARK)
+\`touch $CMARK\`
+x;touch $CMARK
+x;Write-Host pwned
+\$((6*7))"
+comp_sh () {   # $1 = what the host's tmux ls prints, $2 = COMP_CWORD, then COMP_WORDS
+  local sess="$1"; shift
+  ( set +u; export PATH="$CT:$PATH" SESSIONS="$sess"
+    . "$PWD/client/huginn.sh" >/dev/null 2>&1
+    COMP_CWORD="$1"; shift; COMP_WORDS=("$@")
+    _huginn_complete >/dev/null 2>&1
+    [ "${#COMPREPLY[@]}" -gt 0 ] && printf '%s\n' "${COMPREPLY[@]}" ) | LC_ALL=C sort -u
+}
+beyond () { LC_ALL=C comm -13 <(printf '%s\n' "$1") <(printf '%s\n' "$2") | tr '\n' ' ' | sed 's/ $//'; }
+for v in '' attach kill end archive solo rename mv; do
+  rm -f "$CMARK"
+  if [ -z "$v" ]; then w=(1 huginn ''); else w=(2 huginn "$v" ''); fi
+  got=$(comp_sh "$CHOSTILE" "${w[@]}")
+  extra=$(beyond "$(comp_sh '' "${w[@]}")" "$got")
+  if [ -e "$CMARK" ]; then bad "sh: 'huginn${v:+ $v} <Tab>' RAN a session name as code on this machine"
+  elif [ "$extra" = "build-box main" ]; then ok "sh: 'huginn${v:+ $v} <Tab>' offers the two real names and runs nothing"
+  else bad "sh: 'huginn${v:+ $v} <Tab>' offered beyond the verbs: $extra"; fi
+done
+got=$(comp_sh "$CHOSTILE" 2 huginn kill b)
+[ "$got" = build-box ] && ok "sh: a prefix still narrows the names" || bad "sh: 'huginn kill b<Tab>' offered: $got"
+got=$(comp_sh "$CHOSTILE" 1 huginn x)
+[ -z "$got" ] && ok "sh: a name the rule refuses is never offered, even on its own prefix" \
+  || bad "sh: 'huginn x<Tab>' offered: $(tr '\n' ' ' <<<"$got")"
+if ! command -v pwsh >/dev/null 2>&1; then
+  skip "ps1 completion (no pwsh)"
+else
+  # Driven through TabExpansion2, which is what the prompt itself calls. Each row:
+  # the input, a CompletionText it offered, and whether that text - put on the
+  # line where the prompt would put it - parses as ONE inert argument (a string
+  # constant or a -flag naming itself) rather than as anything that evaluates.
+  cat > "$CT/comp.ps1" <<'PS'
+param([string]$Client)
+. $Client
+$L = [System.Management.Automation.Language.Parser]
+foreach ($in in @('huginn ', 'huginn attach ', 'huginn kill ', 'huginn end ', 'huginn archive ',
+                  'huginn solo ', 'huginn rename ', 'huginn mv ', 'huginn kill b', 'huginn x')) {
+  $r = TabExpansion2 -inputScript $in -cursorColumn $in.Length
+  foreach ($m in $r.CompletionMatches) {
+    $line = $in.Substring(0, $r.ReplacementIndex) + $m.CompletionText
+    $t = $null; $e = $null
+    $ast = $L::ParseInput($line, [ref]$t, [ref]$e)
+    $c = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+    $last = if ($c.Count -eq 1) { $c[0].CommandElements[-1] } else { $null }
+    $inert = ($e.Count -eq 0) -and ($ast.EndBlock.Statements.Count -eq 1) -and ($c.Count -eq 1) -and (
+      (($last -is [System.Management.Automation.Language.StringConstantExpressionAst]) -and ($last.Value -ceq $m.ListItemText)) -or
+      (($last -is [System.Management.Automation.Language.CommandParameterAst]) -and (('-' + $last.ParameterName) -ceq $m.ListItemText)))
+    "{0}`t{1}`t{2}" -f $in.TrimEnd(), $m.CompletionText, $(if ($inert) { 'inert' } else { 'CODE' })
+  }
+}
+PS
+  comp_ps () {   # $1 = what the host's tmux ls prints. Run from an empty directory:
+                 # a completer that offers nothing falls back to file names.
+    local client="$PWD/client/huginn.ps1"
+    ( cd "$CT/cwd" && PATH="$CT:$PATH" SESSIONS="$1" pwsh -NoProfile -File "$CT/comp.ps1" "$client" 2>&1 ) | tr -d '\r'
+  }
+  rm -f "$CMARK"
+  PBASE=$(comp_ps ''); PGOT=$(comp_ps "$CHOSTILE")
+  [ ! -e "$CMARK" ] && ok "ps1: completing ran nothing" || bad "ps1: completion RAN a session name as code"
+  offered () { awk -F'\t' -v k="$2" '$1 == k { print $2 }' <<<"$1" | LC_ALL=C sort -u; }
+  for v in '' attach kill end archive solo rename mv; do
+    extra=$(beyond "$(offered "$PBASE" "huginn${v:+ $v}")" "$(offered "$PGOT" "huginn${v:+ $v}")")
+    [ "$extra" = "'build-box' 'main'" ] \
+      && ok "ps1: 'huginn${v:+ $v} <Tab>' offers the two real names, single-quoted, and nothing else" \
+      || bad "ps1: 'huginn${v:+ $v} <Tab>' offered beyond the verbs: $extra"
+  done
+  got=$(offered "$PGOT" 'huginn kill b')
+  [ "$got" = "'build-box'" ] && ok "ps1: a prefix still narrows the names" || bad "ps1: 'huginn kill b<Tab>' offered: $got"
+  got=$(offered "$PGOT" 'huginn x')
+  [ -z "$got" ] && ok "ps1: a name the rule refuses is never offered, even on its own prefix" \
+    || bad "ps1: 'huginn x<Tab>' offered: $(tr '\n' ' ' <<<"$got")"
+  if [ -n "$PGOT" ] && ! grep -qv $'\tinert$' <<<"$PGOT"; then
+    ok "ps1: every completion offered parses as one inert argument"
+  else
+    bad "ps1: completions that would evaluate on Enter: $(grep -v $'\tinert$' <<<"$PGOT" | tr '\n' ' ')"
+  fi
 fi
 
 echo "[6/8] desktop links come from GitHub, and reach it WITHOUT the host"
