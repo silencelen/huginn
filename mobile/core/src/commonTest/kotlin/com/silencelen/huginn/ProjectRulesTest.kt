@@ -153,7 +153,7 @@ class ProjectRulesTest {
 
     @Test
     fun `a name is one line and measured after normalisation`() {
-        assertEquals("Sensor board", ProjectRules.cleanName("LoRa\nsensor   stick"))
+        assertEquals("Sensor board", ProjectRules.cleanName("Sensor\n   board"))
         // 60 characters of name padded with tabs is a 60-character name. Measuring
         // the raw string refuses something the daemon would have taken, and there
         // is no way to argue with an editor that says no.
@@ -169,13 +169,13 @@ class ProjectRulesTest {
     fun `names collide case-insensitively, because that is how a list reads`() {
         assertEquals(
             "there is already a project with that name",
-            ProjectRules.nameProblem("lora Sensor Stick", listOf("Sensor board")),
+            ProjectRules.nameProblem("sensor BOARD", listOf("Sensor board")),
         )
     }
 
     @Test
     fun `a slug survives tmux, and the display name it came from does not have to`() {
-        assertEquals("lora-sensor-stick", ProjectRules.slugFor("LoRa Sensor Stick"))
+        assertEquals("sensor-board", ProjectRules.slugFor("Sensor Board"))
         // ⚠ NO DOTS EVER. tmux rewrites '.' to '_' and exits 0, so a name with one
         // is a name that comes back different from what was asked for.
         assertEquals("v2-1-board", ProjectRules.slugFor("v2.1 board"))
@@ -243,7 +243,7 @@ class ProjectRulesTest {
         assertNull(ProjectRules.cwdProblem("/root/projects/app"))
         assertEquals(
             "a project directory must be an absolute path",
-            ProjectRules.cwdProblem("the ops repo/dev"),
+            ProjectRules.cwdProblem("app/dev"),
         )
     }
 

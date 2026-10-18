@@ -40,12 +40,12 @@ test('an npm claude.cmd shim runs the cli.js beside it, never a shell', () => {
 
 test('unit --windows prints a scheduled task that runs as the account, forever, at boot', () => {
   const r = spawnSync(process.execPath, [RUNNER, 'unit', '--windows',
-    '--user', 'HOME\\alex', '--home', 'C:\\Users\\alex.HOME',
+    '--user', 'HOME\alex', '--home', 'C:\\Users\\alex.HOME',
     '--node', 'C:\\Program Files\\nodejs\\node.exe', '--self', 'C:\\Users\\alex.HOME\\.huginn\\huginn-device',
     '--conf-dir', 'C:\\Users\\alex.HOME\\.config\\huginn', '--name', 'RIG'], { encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
   const out = r.stdout;
-  assert.match(out, /\$user = 'HOME\\alex'/, 'the account, quoted for PowerShell');
+  assert.match(out, /\$user = 'HOME\alex'/, 'the account, quoted for PowerShell');
   assert.match(out, /Get-Credential/, 'the password is asked for, never written');
   assert.ok(!/-Password '/.test(out), 'and never appears as a literal');
   assert.match(out, /New-ScheduledTaskTrigger -AtStartup/);

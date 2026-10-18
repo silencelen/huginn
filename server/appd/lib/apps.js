@@ -953,7 +953,7 @@ const SEED_UNITS = [
     notes: 'A small web app in development.' },
   { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool', unit: 'boardserver.service',
     notes: 'A circuit board viewer.' },
-  { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar-sim.service',
+  { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar.service',
     notes: 'A simulator in development.' },
 ];
 
@@ -961,15 +961,15 @@ const SEED_UNITS = [
  * Where a unit's bind actually lives, when it is not in the unit file.
  *
  * ⚠ ONE ENTRY, AND IT IS THE D11 SCAR. The old card carried a per-unit claim
- * that bursar-sim "already falls back to 0.0.0.0" and therefore needed no
+ * that bursar "already falls back to 0.0.0.0" and therefore needed no
  * rebind; `ss -ltn` said `100.101.102.103:8093`, because that fallback is what
  * sim/app.py does when the host has NO tailscale address. The claim is gone; what
  * survives is the only part of it that was true and useful — `systemctl edit
- * bursar-sim.service` would edit the wrong thing, so the line says where to look
+ * bursar.service` would edit the wrong thing, so the line says where to look
  * instead. This map holds directions, never exemptions.
  */
 const UNIT_BIND_NOTES = {
-  'bursar-sim.service': 'its bind is in sim/app.py, not the unit',
+  'bursar.service': 'its bind is in sim/app.py, not the unit',
 };
 
 /**

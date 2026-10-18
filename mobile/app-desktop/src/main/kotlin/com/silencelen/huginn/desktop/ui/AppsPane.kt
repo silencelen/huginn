@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
  *
  * ⚠⚠ NOTHING HERE APPLIES THE RETROFIT. A failing row discloses the systemd
  * change on the huginn host and the firewall lines on pve1; both are
- * owner-run, in a the ops repo session, and the only control the panel has is Copy
+ * owner-run, in a session on the host, and the only control the panel has is Copy
  * (decisions 47 and 55). The clipboard is this window's entire contribution.
  */
 @Composable

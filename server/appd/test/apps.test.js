@@ -618,18 +618,18 @@ test('one firewall line per FAILING address, and none for the ones that answered
 });
 
 test('bursar keeps the one true half of the D11 claim: where its bind actually lives', () => {
-  // ⚠ D11. The old card EXEMPTED bursar-sim as "already binds 0.0.0.0" while its
+  // ⚠ D11. The old card EXEMPTED bursar as "already binds 0.0.0.0" while its
   // own firewall step opened 8093 — two halves of one card disagreeing about one
   // service. `ss -ltn` says 100.101.102.103:8093: the 0.0.0.0 in sim/app.py is the
   // fallback for a host with no tailscale address, not what it does here. What
-  // survives is directions, not an exemption: `systemctl edit bursar-sim.service`
+  // survives is directions, not an exemption: `systemctl edit bursar.service`
   // would edit the wrong file.
   const rec = appsLib.buildRecord({
-    id: 'bursar', name: 'Bursar ledger', url: 'http://100.101.102.103:8093/', unit: 'bursar-sim.service',
+    id: 'bursar', name: 'Bursar ledger', url: 'http://100.101.102.103:8093/', unit: 'bursar.service',
   }, 100);
   const fix = fixPve(rec, [{ addr: '100.101.102.103', ok: true }, { addr: '192.168.1.20', ok: false }]);
   assert.ok(fix.some((l) => l.includes('sim/app.py')), `the bind note must ride the line: ${fix.join(' | ')}`);
-  assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar-sim.service')), 'and it is still asked for');
+  assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar.service')), 'and it is still asked for');
   assert.ok(!/\balready\b/i.test(fix.join(' ')),
     'no unit is claimed to be done already — this daemon cannot see any host but its own, and was wrong about this one');
 });
@@ -1020,7 +1020,7 @@ test('the seed rows name the unit that serves each one', () => {
     atlas: 'atlas.service',
     jotter: 'jotter.service',
     board: 'boardserver.service',
-    bursar: 'bursar-sim.service',
+    bursar: 'bursar.service',
   }, byId);
 });
 
@@ -1036,7 +1036,7 @@ test('the marker is the owner’s word, and the daemon never writes it', () => {
     assert.equal(false, fs.existsSync(appsLib.markerPath(dir)),
       'the marker does not — a daemon that wrote it would be claiming credit');
 
-    fs.writeFileSync(appsLib.markerPath(dir), '');   // the owner, after a the ops repo session
+    fs.writeFileSync(appsLib.markerPath(dir), '');   // the owner, after a session on the host
     assert.equal(true, store.retrofitApplied(), 'and it flips without a restart');
     assert.equal(appsLib.REBIND_MARKER_NAME, 'consoles-rebind-applied',
       'the NAME never changed — renaming it would silently un-apply every owner who already ran it');

@@ -225,7 +225,7 @@ test('a message is NOT submitted into a pane that has dropped to a shell (#15)',
   // bytes. The route answered 200 and /typing reported no error.
   const { name, out } = mkShellPane('shellfall');
   writeState(name, 'idle');
-  await paneShows(name, /the ops repo#/);
+  await paneShows(name, /app#/);
   const { status, body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'please rewrite > notes.txt tomorrow', keys: ['Enter'] }),
   });
@@ -243,7 +243,7 @@ test('text WITHOUT Enter still reaches a shell pane (#15)', async () => {
   // driving a shell deliberately must keep working.
   const { name, out } = mkShellPane('shellnoenter');
   writeState(name, 'idle');
-  await paneShows(name, /the ops repo#/);
+  await paneShows(name, /app#/);
   const { status, body } = await api(`/v1/sessions/${name}/keys`, {
     method: 'POST', body: JSON.stringify({ text: 'ls -la' }),
   });

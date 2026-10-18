@@ -1979,7 +1979,7 @@ EOF
             # ⚠ NEVER `pacman -U <url>`: for a remote URL pacman also fetches
             # `<file>.sig` and aborts on its 404 (these packages are unsigned; the
             # manifest's sha256 is the integrity check). A LOCAL file is judged by
-            # LocalFileSigLevel instead, which installs. Found on a Linux laptop 2026-10-14.
+            # LocalFileSigLevel instead, which installs. Found on an Arch laptop 2026-10-14.
             printf '      or:  curl -fLO %s/%s && sudo pacman -U ./%s\n' "$base" "$arch_file" "$arch_file"
           elif [ "$distro" = debian ] && [ -n "$deb_file" ] && command -v dpkg >/dev/null 2>&1; then
             printf '      or:  curl -fLO %s/%s && sudo apt install ./%s\n' "$base" "$deb_file" "$deb_file"

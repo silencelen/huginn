@@ -13242,7 +13242,7 @@ async function handleRequest(req, res) {
     // key. Nothing else forks.
     //
     // ⚠ NOTHING IN HERE RUNS ANYTHING. The rebind and the pve1 firewall
-    // lines are the OWNER's to run in a the ops repo session (decision 47); since
+    // lines are the OWNER's to run in a session on the host (decision 47); since
     // 3.5.0 they ride the FAILING ROW as `reachable.fix` (decision 55) instead of
     // one card at the top of the list. They are strings all the way down.
     //
