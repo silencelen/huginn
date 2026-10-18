@@ -62,7 +62,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  * list, the token field, the claude-path field, the device form, the local-AI
  * consent card and the notification claim below are the SAME composables the
  * matching Settings rows draw, wired to the same state and the same callbacks.
- * That is `docs/ADDING-A-FEATURE.md`'s rule, and here it stops a specific class
+ * That is `docs/dev/kotlin-clients.md`'s rule, and here it stops a specific class
  * of drift: a wizard with its own route field would be a second home for
  * `RouteGuard`'s refusal, and a wizard with its own consent card would be a
  * second place to get a download size wrong — both on a screen people see once,
@@ -119,7 +119,7 @@ private fun ColumnScope.StepBody(store: AppStore, step: SetupStep) {
     val viaCore = store.viaCore
     if (viaCore != null && (step == SetupStep.ROUTE || step == SetupStep.TOKEN)) {
         // Through huginn core, the address and the token are the core's
-        // (docs/DESKTOP-VIA-CORE.md): there is nothing here to type. The address
+        // (docs/design/desktop-via-core.md): there is nothing here to type. The address
         // is read from the core NOW, not the one this run started with: a core
         // paired again since showed one address here and another beside it.
         var url by remember(viaCore) { mutableStateOf(viaCore.url) }

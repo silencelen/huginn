@@ -32,7 +32,7 @@ import kotlin.random.Random
  * none of them exposes a multiplatform MAC. The alternatives were a new
  * third-party crypto dependency in a PUBLIC repo for one 32-byte hash, or a third
  * `expect`/`actual` pair (the project has two, both in `data/Platform.kt`, and
- * `docs/ADDING-A-FEATURE.md` says that number should stay small). Ninety lines of
+ * `docs/dev/kotlin-clients.md` says that number should stay small). Ninety lines of
  * FIPS 180-4 pinned by the RFC 4231 vectors in `DaemonChallengeTest` is the
  * smaller liability: it is a pure function of its inputs, it has no key
  * management, and its correctness is decidable by a test rather than by trust.

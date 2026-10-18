@@ -45,7 +45,7 @@ Set any of these in a drop-in `[Service]` block (`Environment=KEY=value`):
 | `HUGINN_APPD_BIND` | `0.0.0.0` | listen address. `0.0.0.0` (every interface) keeps loopback reachable; any single other address does not, and the host tools and the install check dial `127.0.0.1` |
 | `HUGINN_APPD_DATA` | `/var/lib/huginn-appd` | data root (uploads, chats, desktop channels) |
 | `HUGINN_APPD_TOKEN_FILE` | `/etc/huginn-appd/token` | bearer token file |
-| `HUGINN_APPD_PLAINTEXT` | `local` | who may use plain HTTP: `local` = loopback only (everyone else gets `426` and must use `https://`); `any` = the pre-3.11 behaviour, for a migration window only. See `docs/TLS.md` |
+| `HUGINN_APPD_PLAINTEXT` | `local` | who may use plain HTTP: `local` = loopback only (everyone else gets `426` and must use `https://`); `any` = the pre-3.11 behaviour, for a migration window only. See `docs/dev/protocol-tls.md` |
 | `HUGINN_APPD_TLS_CERT` / `HUGINN_APPD_TLS_KEY` | minted | a CA-issued certificate and key to serve instead of the self-signed pair appd mints into `$HUGINN_APPD_DATA/tls/` on first start; set both or neither |
 | `HUGINN_APPD_WORKDIR` | `$HOME` | cwd for spawned `claude` chats |
 | `HUGINN_APPD_PROJECTS_DIR` | `$HOME/projects` | where a project with no directory of its own is made (`<dir>/<slug>`); trust it in Claude Code once and every project under it is covered |

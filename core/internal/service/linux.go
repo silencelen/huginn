@@ -70,7 +70,7 @@ func UnitText(binary, home string) string {
 	b.WriteString("# Written by `huginn core install`; removed by `huginn core uninstall`.\n")
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=huginn core (device runner and appd link)\n")
-	b.WriteString("Documentation=https://github.com/silencelen/huginn/blob/main/docs/CORE-ARCHITECTURE.md\n")
+	b.WriteString("Documentation=https://github.com/silencelen/huginn/blob/main/docs/install/clients.md\n")
 	b.WriteString("\n[Service]\n")
 	b.WriteString("Type=simple\n")
 	b.WriteString("ExecStart=" + systemdExecQuote(binary) + " core run\n")

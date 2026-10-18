@@ -10,7 +10,7 @@ import java.nio.file.Path
 
 /**
  * Whether THIS RUN of the app goes through huginn core (owner decision
- * 2026-10-16, docs/DESKTOP-VIA-CORE.md), decided once, before `AppStore`
+ * 2026-10-16, docs/design/desktop-via-core.md), decided once, before `AppStore`
  * builds its one `HuginnClient`: the client's engine is built once, so the
  * link is a property of the run, not of a moment.
  *

@@ -3,7 +3,7 @@
 // Package tray is the tray role: `huginn core tray`, started at graphical
 // login. It draws the icon and menu and posts OS notifications, all decided by
 // `huginn core run` and read from its /core/events stream — the role holds no
-// token, no appd connection and no rules of its own (docs/CORE-ARCHITECTURE.md
+// token, no appd connection and no rules of its own (docs/design/core.md
 // §3.1). Why a separate process: a boot-time Windows task runs in session 0,
 // which has no tray and cannot show a toast; and a crash in UI code must not
 // take the device runner down.

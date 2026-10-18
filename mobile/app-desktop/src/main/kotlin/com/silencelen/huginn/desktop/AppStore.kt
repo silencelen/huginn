@@ -246,7 +246,7 @@ class AppStore(
         // watch stream finally ends. It reads the response and returns it
         // untouched.
         //
-        // ⚠ THROUGH THE TRANSPORT, NOT AS AN ENGINE (docs/TLS.md). This used to
+        // ⚠ THROUGH THE TRANSPORT, NOT AS AN ENGINE (docs/dev/protocol-tls.md). This used to
         // be a bare `OkHttp.create { … }` — an engine trusting the system CAs and
         // nothing about huginn, which since 3.11 would carry the bearer to any
         // certificate. The transport's hook runs before it installs the pinning
@@ -588,7 +588,7 @@ class AppStore(
 
     /**
      * This machine's device, as `huginn core` runs it. The app no longer runs
-     * work itself (docs/CORE-ARCHITECTURE.md P1): the core is a per-user service
+     * work itself (docs/design/core.md P1): the core is a per-user service
      * that starts at boot, and this is the door to it.
      */
     val coreDevice: CoreDevice by lazy { CoreDevice(scope, settings) }

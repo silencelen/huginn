@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// The shared docs/TLS.md vector: every implementation asserts this value, so
+// The shared docs/dev/protocol-tls.md vector: every implementation asserts this value, so
 // they agree byte for byte.
 func TestBoundProofVector(t *testing.T) {
 	v := BoundProof(strings.Repeat("a", 64), "00112233445566778899aabbccddeeff", strings.Repeat("0", 64))

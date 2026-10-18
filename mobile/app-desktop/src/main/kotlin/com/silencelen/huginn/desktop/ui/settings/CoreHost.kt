@@ -25,7 +25,7 @@ import java.time.Duration
 import java.time.Instant
 
 /**
- * Settings > Host while huginn core carries this app (docs/DESKTOP-VIA-CORE.md):
+ * Settings > Host while huginn core carries this app (docs/design/desktop-via-core.md):
  * the link is the core's, so this page shows the core's route book - the
  * addresses it reaches huginn on, which one is in use, how each last went - and
  * edits it there (`/core/routes`, the same book `huginn core route` shows).

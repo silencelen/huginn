@@ -66,8 +66,8 @@ test('nothing in the daemon tree says /v1/ping is unauthenticated (L1)', () => {
     `these still claim /v1/ping needs no token:\n  ${guilty.join('\n  ')}`);
 });
 
-test('the README API table says ping is authenticated and challenge is not (L1)', () => {
-  const readme = fs.readFileSync(path.join(REPO, 'mobile', 'README.md'), 'utf8');
+test('the API reference says ping is authenticated and challenge is not (L1)', () => {
+  const readme = fs.readFileSync(path.join(REPO, 'docs', 'reference', 'api.md'), 'utf8');
   const ping = readme.split('\n').find((l) => /\|\s*`\/v1\/ping`\s*\|/.test(l));
   assert.ok(ping, 'the API table still has a /v1/ping row');
   assert.match(ping, /requires the bearer token/i,

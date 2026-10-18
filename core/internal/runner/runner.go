@@ -1,6 +1,6 @@
 // Package runner is the device runner: it offers this machine to huginn as a
 // place to run work. Ported from client/huginn-device (Node) and the desktop's
-// DeviceRunner.kt, which it replaces (docs/CORE-ARCHITECTURE.md P1).
+// DeviceRunner.kt, which it replaces (docs/design/core.md P1).
 //
 // THE TRANSPORT IS A PULL. The runner opens outbound connections and listens on
 // nothing, which is why it works the same on a box in the next room and a laptop

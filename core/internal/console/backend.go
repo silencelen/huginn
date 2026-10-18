@@ -91,7 +91,7 @@ func (b *backend) get(ctx context.Context, path string, out any) error {
 	return b.do(ctx, http.MethodGet, path, nil, out)
 }
 
-// ---- shapes (appd 3.12; see mobile/README.md § API) --------------------------
+// ---- shapes (appd 3.12; see docs/reference/api.md § API) --------------------------
 
 type coreStatus struct {
 	Version string `json:"version"`

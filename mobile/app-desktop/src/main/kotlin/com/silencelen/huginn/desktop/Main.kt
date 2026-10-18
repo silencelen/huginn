@@ -126,7 +126,7 @@ fun main(args: Array<String>) {
     // route) must not take the poll loop and the UI's coroutines down with it.
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     // Through huginn core, or this app's own link, for this whole run - decided
-    // before the one client is built (docs/DESKTOP-VIA-CORE.md). An app that
+    // before the one client is built (docs/design/desktop-via-core.md). An app that
     // still holds its own token hands it to the core here, once.
     val link = CoreBoot.decide(
         CoreBoot.OwnLink(

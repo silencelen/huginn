@@ -96,7 +96,7 @@ interface HuginnSettings {
 
     /**
      * The daemon's proved certificate fingerprints, [TlsPins]-encoded — see
-     * `docs/TLS.md` and [PinBook].
+     * `docs/dev/protocol-tls.md` and [PinBook].
      *
      * ⚠⚠ CLEARED WHENEVER THE TOKEN CHANGES (TLS.md rule 7). Each store's
      * [setToken] does it; [TlsPins] also carries a tag of the token it was

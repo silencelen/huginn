@@ -20,7 +20,7 @@ import (
 var update = flag.Bool("update", false, "rewrite the golden files")
 
 // A fake core: /core/* and /appd/v1/* on a unix socket, synthetic data shaped
-// like appd 3.12's (field names from mobile/README.md; seconds vs ms as there).
+// like appd 3.12's (field names from docs/reference/api.md; seconds vs ms as there).
 func fakeCore(t *testing.T, paired bool) string {
 	t.Helper()
 	now := time.Now().Unix()

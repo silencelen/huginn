@@ -133,7 +133,7 @@ class SettingsRowsTest {
         // The rename is the casualty when this is two writes: the URL write was
         // computed on the book as it stood BEFORE the rename, and lands last.
         assertEquals("the mesh", r.name, "the new name must survive a same-Save address change")
-        assertEquals("https://100.64.0.9:8787", r.url, "and so must the new address (stored upgraded, docs/TLS.md)")
+        assertEquals("https://100.64.0.9:8787", r.url, "and so must the new address (stored upgraded, docs/dev/protocol-tls.md)")
     }
 
     @Test

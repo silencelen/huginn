@@ -610,7 +610,7 @@ function effortDecision(v) {
 
 // Session names: the cc contract — letters, digits, underscore and dash,
 // canonically lowercase. (Not "letters/digits/underscore": the dash has been
-// legal since 1.3.0, and mobile/README.md's API table says so.)
+// legal since 1.3.0, and docs/reference/api.md's API table says so.)
 /**
  * The session names this daemon will route to.
  *

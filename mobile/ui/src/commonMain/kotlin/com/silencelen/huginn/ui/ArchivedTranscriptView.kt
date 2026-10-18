@@ -41,7 +41,7 @@ import com.silencelen.huginn.ui.theme.LocalHuginnColors
  * would be a second opinion about a thing with real consequences (a second
  * Claude appending to one jsonl) inside a view whose whole job is to be inert.
  *
- * WHY IN `:ui` RATHER THAN TWICE. `docs/ADDING-A-FEATURE.md`'s rule: the rows are
+ * WHY IN `:ui` RATHER THAN TWICE. `docs/dev/kotlin-clients.md`'s rule: the rows are
  * already one composable ([TranscriptRowItem]) and all either shell adds is a
  * frame. The phone opens it as a child destination, the desktop in its detail
  * pane, and neither owns a pixel of what is inside.

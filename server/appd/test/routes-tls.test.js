@@ -1,5 +1,5 @@
 'use strict';
-// The daemon behind TLS (docs/TLS.md): the bound challenge, the pinned bearer
+// The daemon behind TLS (docs/dev/protocol-tls.md): the bound challenge, the pinned bearer
 // channel, and the plaintext policy — against throwaway daemons on their own
 // ports, data dirs and tmux sockets, like every other routes-* test.
 const { test, after } = require('node:test');

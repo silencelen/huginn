@@ -12,7 +12,7 @@ import kotlin.test.assertTrue
 
 /**
  * Whether a run goes through huginn core, and the hand-over of this app's own
- * link to it (CoreBoot, docs/DESKTOP-VIA-CORE.md). The rule that matters most:
+ * link to it (CoreBoot, docs/design/desktop-via-core.md). The rule that matters most:
  * this app's token is deleted ONLY after a request through the core worked.
  */
 class CoreBootTest {

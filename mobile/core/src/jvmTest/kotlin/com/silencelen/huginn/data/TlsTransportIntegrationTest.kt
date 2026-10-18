@@ -21,7 +21,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- * docs/TLS.md against REAL sockets: the production [OkHttpDaemonTransport] (the
+ * docs/dev/protocol-tls.md against REAL sockets: the production [OkHttpDaemonTransport] (the
  * pinning trust manager, the trust-anything probe, the plain-text fallback that
  * only names an old daemon) talking to a JDK `HttpsServer` with a self-signed
  * certificate — the same shape appd 3.11 serves.

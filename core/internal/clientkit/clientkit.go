@@ -1,4 +1,4 @@
-// Package clientkit is the shell client the core carries (docs/CORE-ARCHITECTURE.md
+// Package clientkit is the shell client the core carries (docs/design/core.md
 // §13, owner rule 2026-10-15: "the core includes the CLI"). Every way the core
 // arrives on a machine — the one-liners, `huginn core update`, the desktop's
 // bundled core — ends in `core self-install`, which lays the client down from

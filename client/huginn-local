@@ -413,7 +413,7 @@ function elevationArgv(tool, argv, env) {
  * ssh session without a tty agent - pkexec exits non-zero and a WORKING sudo sat
  * unused: `on --system` announced a downgrade to a user unit + linger, `update`
  * hard-aborted "nothing was changed", and `persist` tore the user units down and
- * reinstated them. CHANGELOG.md, docs/LOCAL-TIER.md and LocalServe.kt all
+ * reinstated them. CHANGELOG.md, docs/design/local-tier.md and LocalServe.kt all
  * document "pkexec, then sudo" as a chain.
  *
  * ⚠ AND IT STOPS AT A DISMISSED DIALOG. pkexec exits 126 when the person closed
@@ -1054,7 +1054,7 @@ async function health(conf) {
 
 /**
  * The daemon url as it is stored: a remote http:// becomes https:// on the same
- * host and port; loopback stays (docs/TLS.md rule 6).
+ * host and port; loopback stays (docs/dev/protocol-tls.md rule 6).
  *
  * ⚠ THIS FILE NEVER DIALS appd. It hands the url to huginn-device, which does
  * the proof and the pinning and would upgrade it anyway. The upgrade is here so

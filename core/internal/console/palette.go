@@ -131,7 +131,7 @@ func (m *model) archiveRows() (out []archived) {
 
 // ---- : palette ------------------------------------------------------------------
 //
-// `:` is the bridge to the CLI (docs/CONSOLE.md §6): it finds screens,
+// `:` is the bridge to the CLI (docs/design/console.md §6): it finds screens,
 // sessions, chats, projects, rounds and actions by fuzzy name, and anything
 // else typed there runs as `huginn <that>` with the real terminal.
 

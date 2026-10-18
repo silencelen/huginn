@@ -14,7 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// The parity screens (docs/CONSOLE.md phase 3): chats, projects, rounds,
+// The parity screens (docs/design/console.md phase 3): chats, projects, rounds,
 // archive, settings.
 
 // ---- shapes ---------------------------------------------------------------------

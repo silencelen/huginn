@@ -30,7 +30,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     // Reads app/google-services.json and generates the Firebase config resources.
     // That file is untracked and per-deployment: copy google-services.json.example
-    // and fill it from your own Firebase project (see mobile/README.md).
+    // and fill it from your own Firebase project (see docs/install/android.md).
     alias(libs.plugins.google.services)
 }
 

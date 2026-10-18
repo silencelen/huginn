@@ -299,7 +299,7 @@ module.exports = {
 
 // ---------------------------------------------------------------- go table
 //
-// The Go core (core/, docs/CORE-ARCHITECTURE.md) is the runner that replaces the
+// The Go core (core/, docs/design/core.md) is the runner that replaces the
 // Node one, so it carries the whole table, tools and refusals included. Generated
 // rather than embedded with go:embed for the Kotlin reason: the policy is part of
 // the signed binary, not a file beside it that could be swapped.

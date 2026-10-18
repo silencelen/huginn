@@ -681,7 +681,7 @@ grep -q -- '--url https://\[fd00::1\]:8787' <<<"$U6B" \
 U4=$(url_sh 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '10.0.0.5')
 grep -q -- '--url https://192.168.1.20:8787' <<<"$U4" \
   && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
-# ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/TLS.md rule 6): the runner
+# ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/dev/protocol-tls.md rule 6): the runner
 # carries the root-equivalent token, and the address is a LAN/mesh one. Only the
 # host's own loopback stays http://, because plain HTTP never leaves the box.
 ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
@@ -1361,7 +1361,7 @@ echo "[7/8] the headless runner (client/huginn-device)"
 # costs the most, because there is no human to notice the advice is useless.
 node --check client/huginn-device && ok "huginn-device parses" || bad "huginn-device does not parse"
 
-# ⚠ THE TLS PIN (appd 3.11, docs/TLS.md). The runner sends the root-equivalent
+# ⚠ THE TLS PIN (appd 3.11, docs/dev/protocol-tls.md). The runner sends the root-equivalent
 # token on every request, from machines with no VPN under them. This suite holds
 # the shared vector, the impostor cases (proof over another cert, legacy-only
 # answer over https, an HTTP-only daemon), the url upgrade, pin rotation/cap/

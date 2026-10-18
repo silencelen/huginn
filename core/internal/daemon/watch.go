@@ -22,7 +22,7 @@ import (
 
 // watcher follows appd's /v1/watch stream and turns each digest into what the
 // tray role shows: a Summary for the icon and menu, and Notices to post or take
-// down (docs/CORE-ARCHITECTURE.md §4, D14). The rules are internal/notify — a
+// down (docs/design/core.md §4, D14). The rules are internal/notify — a
 // port of the desktop's, with its tests — so the phone, the old desktop and the
 // core cannot disagree about what "needs you" or "finished" means.
 type watcher struct {

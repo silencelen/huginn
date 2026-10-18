@@ -551,7 +551,7 @@ const gateLocked = (lock, actWhileLocked) => !!lock && actWhileLocked !== true;
 //
 // ⚠ THE TOKEN IS ROOT ON THE HOST, AND THIS RUNNER SENDS IT ON EVERY REQUEST.
 // Since appd 3.11 the daemon speaks https on its usual port with a certificate
-// it minted itself (docs/TLS.md is the contract; read it before changing any of
+// it minted itself (docs/dev/protocol-tls.md is the contract; read it before changing any of
 // this). There is no CA to check a self-signed certificate against, so the
 // runner checks the DAEMON instead, with the token it already holds and never
 // sending it:

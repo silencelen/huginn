@@ -1,6 +1,6 @@
 // huginn — the core binary. P1 scope: `huginn core …` and `huginn device …`;
 // the interactive front (attach, remote verbs) stays in huginn.sh / huginn.ps1
-// until P3. See docs/CORE-ARCHITECTURE.md.
+// until P3. See docs/design/core.md.
 package main
 
 import (

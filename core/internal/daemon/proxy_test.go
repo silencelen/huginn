@@ -14,7 +14,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/appd"
 )
 
-// The /appd proxy carries everything the desktop sends (docs/DESKTOP-VIA-CORE.md,
+// The /appd proxy carries everything the desktop sends (docs/design/desktop-via-core.md,
 // "What the core's proxy carries today"): each test is one traffic kind that the
 // first, console-only proxy broke. A fake appd on loopback (plain http is allowed
 // there and only there).

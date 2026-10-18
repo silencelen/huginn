@@ -25,7 +25,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The client half of docs/TLS.md, held to the contract line by line.
+ * The client half of docs/dev/protocol-tls.md, held to the contract line by line.
  *
  * ⚠ THE VECTOR IS THE CONTRACT. The same value is asserted by the daemon's
  * `server/appd/test/tls.test.js` and by every other client, so a client that

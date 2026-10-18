@@ -153,7 +153,7 @@ class SettingsStoreRoutesTest {
         assertTrue("the stored address is pinned", migrated.routes.isNotEmpty())
     }
 
-    /** docs/TLS.md rule 6: an install stored on plain http reads back as https. */
+    /** docs/dev/protocol-tls.md rule 6: an install stored on plain http reads back as https. */
     @Test
     fun `a stored plain-http route reads back upgraded`() {
         val p = mutablePreferencesOf()
@@ -169,7 +169,7 @@ class SettingsStoreRoutesTest {
         // The one row that is not behaviour-identical: an address the old
         // free-text field accepted and the guard refuses — since 3.11 that is a
         // SHAPE refusal (here a path); a plain-http hostname is upgraded to
-        // https instead (docs/TLS.md). It must come back as a notice with NO
+        // https instead (docs/dev/protocol-tls.md). It must come back as a notice with NO
         // active route, and now it must still be there after a restart.
         val p = mutablePreferencesOf()
         p[stringPreferencesKey("base_url")] = "http://huginn.lan:8787/api"

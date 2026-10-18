@@ -1,5 +1,5 @@
 'use strict';
-// huginn-device's half of the TLS contract (docs/TLS.md). Run with:
+// huginn-device's half of the TLS contract (docs/dev/protocol-tls.md). Run with:
 //   node --test scripts/test-device-tls.js
 //
 // WHY THIS FILE EXISTS. The runner sends /etc/huginn-appd/token — root on the

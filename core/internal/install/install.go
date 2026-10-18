@@ -1,5 +1,5 @@
 // Package install puts the running huginn binary into the per-user layout
-// (docs/CORE-ARCHITECTURE.md §7.1) — the one implementation behind the
+// (docs/design/core.md §7.1) — the one implementation behind the
 // bootstrap scripts, the desktop's "Set up huginn core" button and the
 // packages, so they cannot drift apart.
 //

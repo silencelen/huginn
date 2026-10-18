@@ -64,7 +64,7 @@ px http://huginn-core/appd/v1/status | grep -q '"appdVersion"' && ok "/appd/v1/s
 timeout 3 curl -sN --unix-socket "$SOCK" -H 'X-Huginn-Core-Proto: 1' 'http://huginn-core/appd/v1/watch?stream=1' > "$T/watch.out" 2>/dev/null
 grep -q '^event:\|^data:' "$T/watch.out" && ok "/appd streams the watch feed" || { bad "/appd stream"; head -c 300 "$T/watch.out"; }
 
-# The route book (docs/DESKTOP-VIA-CORE.md): another address of the same daemon,
+# The route book (docs/design/desktop-via-core.md): another address of the same daemon,
 # kept in core.json, used when the active one does not answer. A dead address
 # pinned (no switching) makes requests fail; unpinned, they work again.
 DEAD="http://127.0.0.1:$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')"

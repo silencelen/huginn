@@ -31,7 +31,7 @@ const GEN = path.join(REPO, 'scripts/gen-device-policy.js');
 
 // HUGINN_DEVICE_BIN points the print-argv half of this file at another runner —
 // the Go core's `huginn device print-argv`, which keeps the same contract (§9.6
-// of docs/CORE-ARCHITECTURE.md) so this matrix can hold it to the table too.
+// of docs/design/core.md) so this matrix can hold it to the table too.
 // Unset, it is the Node runner, as it always was. The tests that require() the
 // Node runner's internals stay about the Node runner either way.
 const BIN = process.env.HUGINN_DEVICE_BIN;

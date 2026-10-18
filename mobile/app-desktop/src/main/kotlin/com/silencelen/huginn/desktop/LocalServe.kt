@@ -307,7 +307,7 @@ object LocalServe {
     }
 
     /**
-     * [enable] through huginn core (docs/DESKTOP-VIA-CORE.md): the core writes the
+     * [enable] through huginn core (docs/design/desktop-via-core.md): the core writes the
      * tier's token file from its own store and names the address to use
      * (`POST /core/local/seed`), so the token never passes through this app.
      * The rest is [enable]'s: `on --yes`, elevated on Windows.

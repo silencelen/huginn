@@ -99,7 +99,7 @@ object DeliveryCopy {
         fun has(vararg needles: String) = needles.any { it in t }
         return when {
             raw.isBlank() -> ""
-            // ⚠ FIRST, AND VERBATIM: the two TLS refusals of docs/TLS.md are
+            // ⚠ FIRST, AND VERBATIM: the two TLS refusals of docs/dev/protocol-tls.md are
             // already household sentences, written to be shown as they are. The
             // "ssl"/"certificate" branch below would otherwise swallow the
             // interception one into a vague "could not be set up", which is the

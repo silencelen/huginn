@@ -70,7 +70,7 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val token: String = "",
         /**
          * The daemon's proved TLS fingerprints, [com.silencelen.huginn.data.TlsPins]-
-         * encoded. ⚠ Cleared with the token — see [setToken] and docs/TLS.md.
+         * encoded. ⚠ Cleared with the token — see [setToken] and docs/dev/protocol-tls.md.
          */
         val tlsPins: String = "",
         /** Pre-routes. Read once, to migrate; never written again. */

@@ -1,6 +1,6 @@
 // Package localtier knows where the local-AI tier (client/huginn-local) lives
 // and how its runner gets the appd token: the file the manager reads, which
-// the CLI wrapper, the desktop and now the core write (docs/DESKTOP-VIA-CORE.md).
+// the CLI wrapper, the desktop and now the core write (docs/design/desktop-via-core.md).
 package localtier
 
 import (
