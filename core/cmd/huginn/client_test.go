@@ -44,3 +44,23 @@ func TestForwardToClient(t *testing.T) {
 		t.Fatal("clientScript did not find ~/.huginn/huginn.sh")
 	}
 }
+
+// `huginn core update` from a shell that is not the client's (fish, cmd.exe,
+// a script) reaches the client as `core update`, instead of printing usage.
+func TestCoreUpdateGoesThroughTheClient(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.MkdirAll(filepath.Join(home, ".huginn"), 0o755)
+	stub := `huginn() { printf '%s|' "$@" > "$HOME/out"; return 0; }` + "\n"
+	os.WriteFile(filepath.Join(home, ".huginn", "huginn.sh"), []byte(stub), 0o644)
+	if code := core([]string{"update"}); code != 0 {
+		t.Fatalf("core update: exit %d", code)
+	}
+	if b, _ := os.ReadFile(filepath.Join(home, "out")); string(b) != "core|update|" {
+		t.Fatalf("the client saw %q, want core|update|", string(b))
+	}
+}
+
