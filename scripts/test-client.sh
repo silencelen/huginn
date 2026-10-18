@@ -678,8 +678,8 @@ U6B=$(url_sh 'huginn device on' 'fd00::2 5000 fd00::1 22' '')
 grep -q -- '--url https://\[fd00::1\]:8787' <<<"$U6B" \
   && ok "sh: and with no IPv4 to be had, the v6 literal is BRACKETED" \
   || bad "sh: device on over IPv6 with no v4 passed: $U6B"
-U4=$(url_sh 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '10.0.0.5')
-grep -q -- '--url https://192.168.2.117:8787' <<<"$U4" \
+U4=$(url_sh 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '10.0.0.5')
+grep -q -- '--url https://192.168.1.20:8787' <<<"$U4" \
   && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
 # ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/dev/protocol-tls.md rule 6): the runner
 # carries the root-equivalent token, and the address is a LAN/mesh one. Only the
@@ -707,8 +707,8 @@ if command -v pwsh >/dev/null 2>&1; then
   grep -q -- '--url https://\[fd00::1\]:8787' <<<"$P6B" \
     && ok "ps1: and with no IPv4 to be had, the v6 literal is BRACKETED" \
     || bad "ps1: device on over IPv6 with no v4 passed: $P6B"
-  P4=$(url_ps 'huginn device on' '192.168.2.50 5000 192.168.2.117 22' '')
-  grep -q -- '--url https://192.168.2.117:8787' <<<"$P4" \
+  P4=$(url_ps 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '')
+  grep -q -- '--url https://192.168.1.20:8787' <<<"$P4" \
     && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
   PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
   grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB" \
@@ -1290,7 +1290,7 @@ echo "[6d/8] the one-line installers (get.sh, get.ps1)"
 sh -n client/get.sh && ok "get.sh parses as POSIX sh" || bad "get.sh does not parse"
 # WHY: PowerShell names are case-insensitive. get.ps1's `$gui = $false` wrote
 # "False" into its own [string]$Gui parameter, so the desktop question was
-# never asked on Windows (PRESTIGE, 2026-10-16). No assignment may reuse a
+# never asked on Windows (2026-10-16). No assignment may reuse a
 # parameter's name.
 GP_CLOBBER="$(python3 - <<'PY'
 import re
@@ -1999,15 +1999,15 @@ python3 - "$AR_PF" "${HUGINN_TEST_ARCHIVE_PORT:-0}" <<'ARSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 ROWS = {"max": 64, "archives": [
-    {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "jtyper",
-     "title": "Archive session feature", "cwd": "/root/netplan", "model": "claude-opus-4-5",
-     "resumeCommand": "cd '/root/netplan' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
+    {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "trainer",
+     "title": "Archive session feature", "cwd": "/root/projects/app", "model": "claude-opus-4-5",
+     "resumeCommand": "cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
      "archivedAt": 1, "endedAt": 2, "lastMessage": "suite green",
      "transcriptBytes": 4096, "transcriptTruncated": False,
      "revivedAt": None, "revivedAs": None, "live": False, "transcriptPresent": True},
     {"id": "2222abcd-0000-4000-8000-00000000abcd", "tmuxName": "swept",
-     "title": "Old conversation", "cwd": "/root/netplan",
-     "resumeCommand": "cd '/root/netplan' && claude --resume 2222abcd-0000-4000-8000-00000000abcd",
+     "title": "Old conversation", "cwd": "/root/projects/app",
+     "resumeCommand": "cd '/root/projects/app' && claude --resume 2222abcd-0000-4000-8000-00000000abcd",
      "archivedAt": 1, "endedAt": 2, "lastMessage": "",
      "transcriptBytes": 0, "transcriptTruncated": False,
      "revivedAt": None, "revivedAs": None, "live": False, "transcriptPresent": False}]}
@@ -2020,7 +2020,7 @@ class H(BaseHTTPRequestHandler):
         self._send(200, ROWS) if self.path == "/v1/archive" else self._send(404, {"error": "no"})
     def do_POST(self):
         if self.path.endswith("/revive"):
-            self._send(201, {"ok": True, "name": "jtyper2", "resumed": True, "restoredTranscript": True})
+            self._send(201, {"ok": True, "name": "trainer2", "resumed": True, "restoredTranscript": True})
         elif "attention" in self.path:
             self._send(409, {"error": "answer the waiting question first, then archive the session"})
         else:
@@ -2052,8 +2052,8 @@ else
   grep -q "answer the waiting question first" <<<"$AR_409" \
     && ok "a refused archive repeats the daemon's sentence, not a client guess" \
     || bad "archive refusal was rewritten client-side: $AR_409"
-  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive jtyper 2>&1)
-  grep -q "revived as jtyper2" <<<"$AR_REV" \
+  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive trainer 2>&1)
+  grep -q "revived as trainer2" <<<"$AR_REV" \
     && ok "revive resolves a NAME to an id host-side and reports the name it got" \
     || bad "revive by name did not work: $AR_REV"
   # A name nobody archived must not become a POST at all.
@@ -2130,21 +2130,21 @@ chmod +x "$PJT/ssh"
 PJSH=$( export SSH_LOG="$PJT/log"; : > "$SSH_LOG"
         ( export PATH="$PJT:$PATH"
           . "$PWD/client/huginn.sh" >/dev/null 2>&1
-          huginn projects; huginn projects show lora; huginn projects --json ) >/dev/null 2>&1
+          huginn projects; huginn projects show sensor; huginn projects --json ) >/dev/null 2>&1
         cat "$SSH_LOG" )
 grep -q -- '-T .* huginn-projects$' <<<"$PJSH" \
   && ok "sh: bare projects ssh -T's the renderer with NO empty argument" \
   || bad "sh: bare projects sent: $PJSH"
-grep -q -- 'huginn-projects show lora' <<<"$PJSH" && grep -q -- 'huginn-projects --json' <<<"$PJSH" \
+grep -q -- 'huginn-projects show sensor' <<<"$PJSH" && grep -q -- 'huginn-projects --json' <<<"$PJSH" \
   && ok "sh: projects carries its sub-verb and --json" || bad "sh: projects sent: $PJSH"
 if command -v pwsh >/dev/null 2>&1; then
   PJPS=$( export SSH_LOG="$PJT/log2"; : > "$SSH_LOG"
           PATH="$PJT:$PATH" pwsh -NoProfile -Command \
-            ". $PWD/client/huginn.ps1; huginn projects; huginn projects show lora; huginn projects --json" >/dev/null 2>&1
+            ". $PWD/client/huginn.ps1; huginn projects; huginn projects show sensor; huginn projects --json" >/dev/null 2>&1
           cat "$SSH_LOG" )
   grep -q -- '-T .* huginn-projects$' <<<"$PJPS" \
     && ok "ps1: bare projects sends the same bare renderer call" || bad "ps1: bare projects sent: $PJPS"
-  grep -q -- "huginn-projects 'show' 'lora'" <<<"$PJPS" && grep -q -- "huginn-projects '--json'" <<<"$PJPS" \
+  grep -q -- "huginn-projects 'show' 'sensor'" <<<"$PJPS" && grep -q -- "huginn-projects '--json'" <<<"$PJPS" \
     && ok "ps1: the sub-verb and --json survive the parameter binder" || bad "ps1: projects sent: $PJPS"
 else
   skip "ps1 projects send check (no pwsh)"
@@ -2165,33 +2165,33 @@ LOG = sys.argv[3]
 # the renderer reads the project, takes the rev the proposal is at, and posts
 # {approve:true, manifestRev}. A fixture with no manifest could only test the
 # refusal path.
-P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "LoRa sensor stick",
-      "cwd": "/root/netplan/dev-ledger/lora-stick", "createdAt": 1789459900,
+P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "Sensor board",
+      "cwd": "/root/projects/sensor-board", "createdAt": 1789459900,
       "status": "proposed",
       "manifest": {"rev": 2, "spawnedRev": 0, "summary": "docs and repo",
                    "sessions": [{"role": "docs", "firstPrompt": "write the README"},
                                 {"role": "repo", "firstPrompt": "tidy the tree"}]},
-      "lead": {"name": "lora-stick/lead", "state": "busy"},
-      "members": [{"name": "lora-stick/docs", "role": "docs", "state": "idle"},
-                  {"name": "lora-stick/repo", "role": "repo", "state": "attention",
+      "lead": {"name": "sensor-board/lead", "state": "busy"},
+      "members": [{"name": "sensor-board/docs", "role": "docs", "state": "idle"},
+                  {"name": "sensor-board/repo", "role": "repo", "state": "attention",
                    "needsYou": True}]}
 # Not proposed: the project somebody types `spawn` at before the lead has
 # written a plan, which is the commonest way that verb is reached too early.
 P2 = {"id": "bbbbbbbb-0000-4000-8000-00000000bbbb", "name": "status page",
-      "cwd": "/root/netplan/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
+      "cwd": "/root/projects/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
       "status": "drafting", "manifest": {"rev": 0, "sessions": []},
       "lead": {"name": "status-page/lead"}, "members": []}
 # The one whose spawn refuses HUNDREDS of members — see the flood assertion.
 P3 = {"id": "cccccccc-0000-4000-8000-00000000cccc", "name": "flood cluster",
-      "cwd": "/root/netplan", "createdAt": 1789459000, "status": "proposed",
+      "cwd": "/root/projects/app", "createdAt": 1789459000, "status": "proposed",
       "manifest": {"rev": 1, "spawnedRev": 0, "summary": "many",
                    "sessions": [{"role": "flood", "firstPrompt": "x"}]},
       "lead": {"name": "flood-cluster/lead"}, "members": []}
 BY_ID = {P1["id"]: P1, P2["id"]: P2, P3["id"]: P3}
 DASH = {"project": P1, "updatedAt": 1789460500,
-        "members": [{"name": "lora-stick/lead", "role": "lead", "state": "busy", "turns": 12},
-                    {"name": "lora-stick/docs", "role": "docs", "state": "idle", "turns": 3},
-                    {"name": "lora-stick/repo", "role": "repo", "state": "attention",
+        "members": [{"name": "sensor-board/lead", "role": "lead", "state": "busy", "turns": 12},
+                    {"name": "sensor-board/docs", "role": "docs", "state": "idle", "turns": 3},
+                    {"name": "sensor-board/repo", "role": "repo", "state": "attention",
                      "needsYou": True, "turns": 7}]}
 class H(BaseHTTPRequestHandler):
     def _log(self, body=b""):
@@ -2236,9 +2236,9 @@ class H(BaseHTTPRequestHandler):
             # one refused is the daemon's documented normal failure, and the
             # renderer has to survive it in both directions (say which is
             # missing, and not report success).
-            self._send(200, {"ok": False, "spawned": [{"role": "docs", "name": "lora-stick/docs"}],
+            self._send(200, {"ok": False, "spawned": [{"role": "docs", "name": "sensor-board/docs"}],
                              "failed": [{"role": "repo",
-                                         "reason": "a tmux session called lora-stick-repo already exists"}]})
+                                         "reason": "a tmux session called sensor-board-repo already exists"}]})
         elif self.path.endswith("/message"):
             self._send(202, {"ok": True})
         else:
@@ -2247,8 +2247,8 @@ class H(BaseHTTPRequestHandler):
         self._log()
         # `refused` is what the daemon added for a member whose dialog was in
         # the way: it is still running, with no project behind it.
-        self._send(200, {"ok": True, "mode": "graceful", "ended": ["lora-stick-lead", "lora-stick-docs"],
-                         "refused": [{"name": "lora-stick-repo", "claudeName": "lora-stick/repo",
+        self._send(200, {"ok": True, "mode": "graceful", "ended": ["sensor-board-lead", "sensor-board-docs"],
+                         "refused": [{"name": "sensor-board-repo", "claudeName": "sensor-board/repo",
                                       "why": "it is sitting on a permission dialog"}]})
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
@@ -2292,7 +2292,7 @@ if [ -z "${PJ_PORT:-}" ] || [ -z "${PJ_404_PORT:-}" ] || [ -z "${PJ_JUNK_PORT:-}
   skip "projects renderer checks (a stub never bound a port)"
 else
   PJ_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects 2>&1)
-  grep -q "LoRa sensor stick" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
+  grep -q "Sensor board" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
     && ok "the list names each project and counts its members" \
     || bad "projects list did not render the fixture: $PJ_LIST"
   # ⚠ THE ONE FACT THE LIST EXISTS FOR. A cluster of twelve sessions is unreadable
@@ -2301,24 +2301,24 @@ else
   # ON THE PROJECT'S OWN LINE, not just in the footer total: a renderer that
   # dropped the row's count still printed "1 needs you" at the bottom, and the
   # assertion passed while the line somebody actually reads had lost it.
-  grep -q "LoRa sensor stick.*1 needs you" <<<"$PJ_LIST" \
+  grep -q "Sensor board.*1 needs you" <<<"$PJ_LIST" \
     && ok "a member waiting on a person is counted on the project's line" \
     || bad "projects list hid a waiting member: $PJ_LIST"
   # The lead's own state, on the same line: a lead that died is why nothing is
   # being proposed, and it is not a member so the member counts never show it.
   grep -qE "lead (busy|working)" <<<"$PJ_LIST" \
     && ok "the lead's state rides the project line" || bad "no lead state in: $PJ_LIST"
-  PJ_SHOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show "LoRa sensor stick" 2>&1)
+  PJ_SHOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show "Sensor board" 2>&1)
   grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "needs you" <<<"$PJ_SHOW" \
     && ok "show renders the member table with the waiting member marked" \
     || bad "projects show: $PJ_SHOW"
   # ⚠ THE ATTACH NAME IS NOT THE PEER NAME. A member is `<slug>/<role>` to its
   # peers and `<slug>-<role>` to tmux, because a slash is not a tmux name
   # character. A hint that printed the peer name would not attach anything --
-  # `huginn lora-stick/repo` takes the first path segment for a session name and
+  # `huginn sensor-board/repo` takes the first path segment for a session name and
   # CREATES a new session beside the project, which is the worst possible answer
   # to "how do I look at this one".
-  grep -q "huginn lora-stick-lead" <<<"$PJ_SHOW" && ! grep -q "huginn lora-stick/" <<<"$PJ_SHOW" \
+  grep -q "huginn sensor-board-lead" <<<"$PJ_SHOW" && ! grep -q "huginn sensor-board/" <<<"$PJ_SHOW" \
     && ok "show suggests the tmux session name, not the peer name, for attaching" \
     || bad "show's attach hint: $(grep -F 'to attach' <<<"$PJ_SHOW")"
   # A NAME is resolved host-side, exactly like `huginn-archive revive <name>`,
@@ -2361,7 +2361,7 @@ else
   # the time; the old gate asserted the member:role GRAMMAR and never the body.
   : > "$PJ_REQ"
   PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-             server/bin/huginn-projects spawn "LoRa sensor stick" 2>&1); PJ_RC=$?
+             server/bin/huginn-projects spawn "Sensor board" 2>&1); PJ_RC=$?
   PJ_SPAWN_BODY=$(grep -F "POST /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa/spawn" "$PJ_REQ" | head -1)
   grep -q '"approve":true' <<<"$PJ_SPAWN_BODY" && grep -q '"manifestRev":2' <<<"$PJ_SPAWN_BODY" \
     && ok "spawn approves the proposal at the rev the project is actually on" \
@@ -2373,7 +2373,7 @@ else
   # it was documented for two releases and it is what a finger types.
   : > "$PJ_REQ"
   PJ_PAIR=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-            server/bin/huginn-projects spawn "LoRa sensor stick" docs:docs --prompt 'x' 2>&1); PJ_RC=$?
+            server/bin/huginn-projects spawn "Sensor board" docs:docs --prompt 'x' 2>&1); PJ_RC=$?
   [ "$PJ_RC" != 0 ] && grep -qi "no members" <<<"$PJ_PAIR" && ! grep -q "POST" "$PJ_REQ" \
     && ok "the old member:role spelling is refused, and sends nothing at all" \
     || bad "spawn with a pair exited $PJ_RC: $PJ_PAIR / sent: $(cat "$PJ_REQ")"
@@ -2386,11 +2386,11 @@ else
     && ok "spawning a project the lead has not proposed yet says so, and posts nothing" \
     || bad "spawn of a drafting project exited $PJ_RC: $PJ_NOTPROP / sent: $(cat "$PJ_REQ")"
   PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-             server/bin/huginn-projects spawn "LoRa sensor stick" 2>&1); PJ_RC=$?
+             server/bin/huginn-projects spawn "Sensor board" 2>&1); PJ_RC=$?
   # ⚠ HTTP 200 IS NOT "IT WORKED". The daemon reports a member that could not
   # start inside a 200 body; a renderer that passed that through as success
   # hands a script a half-born cluster and tells it the cluster is up.
-  grep -q "lora-stick-repo already exists" <<<"$PJ_SPAWN" && [ "$PJ_RC" != 0 ] \
+  grep -q "sensor-board-repo already exists" <<<"$PJ_SPAWN" && [ "$PJ_RC" != 0 ] \
     && ok "a partial spawn names the member that did not start, and exits non-zero" \
     || bad "partial spawn exited $PJ_RC: $PJ_SPAWN"
   # ⚠ A NON-ZERO EXIT MUST NOT EAT THE OUTPUT. Node's stdout is ASYNCHRONOUS
@@ -2415,28 +2415,28 @@ else
   # a command that resolves: a tmux name.
   : > "$PJ_REQ"
   PJ_END=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-           server/bin/huginn-projects end "LoRa sensor stick" 2>&1); PJ_RC=$?
+           server/bin/huginn-projects end "Sensor board" 2>&1); PJ_RC=$?
   grep -q "DELETE /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa?end=1" "$PJ_REQ" \
     && ok "end winds the sessions down by default (the daemon's ?end=1)" \
     || bad "end sent: $(cat "$PJ_REQ")"
   grep -q "huginn projects end" <<<"$PJ_END" \
     && bad "end still prints a remedy that cannot resolve the project it deleted" \
     || ok "and it no longer names a command that cannot resolve"
-  grep -q "lora-stick-repo" <<<"$PJ_END" && grep -q "permission dialog" <<<"$PJ_END" \
-    && grep -q "huginn kill lora-stick-repo" <<<"$PJ_END" && [ "$PJ_RC" != 0 ] \
+  grep -q "sensor-board-repo" <<<"$PJ_END" && grep -q "permission dialog" <<<"$PJ_END" \
+    && grep -q "huginn kill sensor-board-repo" <<<"$PJ_END" && [ "$PJ_RC" != 0 ] \
     && ok "a member that could not be wound down is named, with a command that works, and exits non-zero" \
     || bad "end (exit $PJ_RC) printed: $PJ_END"
   : > "$PJ_REQ"
   PJ_ENDNOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-              server/bin/huginn-projects end "LoRa sensor stick" --now 2>&1)
+              server/bin/huginn-projects end "Sensor board" --now 2>&1)
   grep -q "?end=now" "$PJ_REQ" \
     && ok "--now asks for the outright end, not the graceful one it used to send" \
     || bad "end --now sent: $(cat "$PJ_REQ") / printed: $PJ_ENDNOW"
   : > "$PJ_REQ"
   PJ_KEEP=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
-            server/bin/huginn-projects end "LoRa sensor stick" --keep-sessions 2>&1)
+            server/bin/huginn-projects end "Sensor board" --keep-sessions 2>&1)
   grep -qE "DELETE /v1/projects/[0-9a-f-]+ " "$PJ_REQ" && ! grep -q "end=" "$PJ_REQ" \
-    && grep -q "lora-stick-lead" <<<"$PJ_KEEP" \
+    && grep -q "sensor-board-lead" <<<"$PJ_KEEP" \
     && ok "--keep-sessions ends nothing and NAMES the sessions it left running" \
     || bad "end --keep-sessions sent: $(cat "$PJ_REQ") / printed: $PJ_KEEP"
 fi
@@ -2725,7 +2725,7 @@ else
 fi
 
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
-# ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (brokkr) was found
+# ⚠ WHY THIS EXISTS. On 2026-08-25 a live headless device was found
 # running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown
 # mode, and `--resume` fed unvalidated into argv — while reporting version
 # 0.10.1, the same number as the fixed code. The fixes were committed, released

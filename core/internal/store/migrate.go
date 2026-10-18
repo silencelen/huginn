@@ -422,7 +422,7 @@ func (ch Choice) Apply(cfg *Config, sources []string, at time.Time) {
 	// An address WITH its token, or neither: an address alone made a core
 	// that called itself paired and could not reach huginn - and so was never
 	// paired properly afterwards (a desktop mid-setup had saved the address it
-	// was typed, not yet a token; PRESTIGE, 2026-10-16).
+	// was typed, not yet a token; 2026-10-16).
 	if d.URL != "" && strings.TrimSpace(d.Token) != "" {
 		cfg.Appd.URL = d.URL
 	}

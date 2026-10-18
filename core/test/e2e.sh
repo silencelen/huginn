@@ -110,7 +110,7 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   SU2=$(HOME="$T/sshhome" PATH="$T/sshstub:$PATH" "$T/huginn" setup ssh </dev/null 2>&1); SURC=$?
   grep -q "is already in" <<<"$SU2" && grep -q 'does not know this key yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
-  # The address it is paired on does not carry ssh from here (PRESTIGE,
+  # The address it is paired on does not carry ssh from here (seen
   # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh points
   # 'Host huginn' at the first that answers on port 22. The stub times out for
   # the paired address and refuses the key everywhere else.

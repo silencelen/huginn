@@ -64,9 +64,9 @@ func TestSystemdExecQuote(t *testing.T) {
 
 func TestTaskXMLGolden(t *testing.T) {
 	bin := `C:\Users\O'Brien & Co\AppData\Local\huginn\bin\huginn.exe`
-	s4u := TaskXML(bin, `JNET\silence`, LogonS4U)
+	s4u := TaskXML(bin, `HOME\alex`, LogonS4U)
 	golden(t, "task-s4u.xml", s4u)
-	pw := TaskXML(bin, `PRESTIGE\silence`, LogonPassword)
+	pw := TaskXML(bin, `DESKTOP-01\alex`, LogonPassword)
 	if !strings.Contains(pw, "<LogonType>Password</LogonType>") || strings.Contains(pw, "S4U") {
 		t.Fatal("password task")
 	}
@@ -77,7 +77,7 @@ func TestTaskXMLGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.LogonType != "S4U" || info.UserID != `JNET\silence` || info.Command != bin || info.Arguments != "core run" || info.Enabled != "true" {
+	if info.LogonType != "S4U" || info.UserID != `HOME\alex` || info.Command != bin || info.Arguments != "core run" || info.Enabled != "true" {
 		t.Fatalf("%+v", info)
 	}
 	for _, must := range []string{"<BootTrigger>", "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
@@ -207,7 +207,7 @@ func linuxOpts(t *testing.T, f *fake) LinuxOptions {
 	bin := filepath.Join(dir, "bin", "huginn")
 	os.MkdirAll(filepath.Dir(bin), 0o755)
 	os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755)
-	return LinuxOptions{Binary: bin, Home: dir, User: "silence", ConfigHome: filepath.Join(dir, ".config"), Graphical: true, Runner: f}
+	return LinuxOptions{Binary: bin, Home: dir, User: "alex", ConfigHome: filepath.Join(dir, ".config"), Graphical: true, Runner: f}
 }
 
 func states(r Report) string {
@@ -367,7 +367,7 @@ func winOpts(t *testing.T, f *fake) WindowsOptions {
 	bin := filepath.Join(dir, "huginn", "bin", "huginn.exe")
 	os.MkdirAll(filepath.Dir(bin), 0o755)
 	os.WriteFile(bin, []byte("MZ"), 0o644)
-	return WindowsOptions{Binary: bin, User: `JNET\silence`, AppData: filepath.Join(dir, "Roaming"),
+	return WindowsOptions{Binary: bin, User: `HOME\alex`, AppData: filepath.Join(dir, "Roaming"),
 		StateDir: filepath.Join(dir, "huginn", "state"), Runner: f}
 }
 
@@ -436,8 +436,8 @@ func TestInstallWindowsPassword(t *testing.T) {
 	if len(f.stdins) != 1 || f.stdins[0] != "s3cret-pw\n" || !strings.HasPrefix(f.calls[0], "powershell ") {
 		t.Fatalf("stdins=%q calls=%v", f.stdins, f.calls)
 	}
-	script := PasswordRegisterScript(`C:\x\task.xml`, `JNET\silence`)
-	if strings.Contains(script, "s3cret") || !strings.Contains(script, "[Console]::In.ReadLine()") || !strings.Contains(script, "-User 'JNET\\silence'") {
+	script := PasswordRegisterScript(`C:\x\task.xml`, `HOME\alex`)
+	if strings.Contains(script, "s3cret") || !strings.Contains(script, "[Console]::In.ReadLine()") || !strings.Contains(script, "-User 'HOME\\alex'") {
 		t.Fatal(script)
 	}
 }

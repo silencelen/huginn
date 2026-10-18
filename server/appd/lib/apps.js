@@ -142,7 +142,7 @@ const PROBE_INTERVAL_MS = 5 * 60_000;
  *
  * ⚠ THIS SET IS THE PREREQUISITE'S WHOLE AUTHORITY, so it has to forget. A
  * laptop that was on the LAN once in March must not make every app on this host
- * unaddable in September because 192.168.2.117 is still in a file. Seven days is
+ * unaddable in September because its old address is still in a file. Seven days is
  * the span in which "a device that reaches huginn" is a present-tense claim; one
  * poll from that device renews it, and every real client polls far more often
  * than weekly.
@@ -161,9 +161,9 @@ const MAX_CLIENT_ADDRS = 16;
  * `req.socket.remoteAddress`, as opposed to the listener they dialled.
  *
  * ⚠ THE TWO ARE NOT THE SAME ADDRESS AND ONLY ONE OF THEM IS A FIREWALL SOURCE.
- * An arrival address is one of THIS host's: 192.168.2.117 is huginn's own IP on
- * the LAN, 127.0.0.1 is its loopback. A PVE rule on CT 117 reading
- * `IN ACCEPT -source 192.168.2.117` therefore matches nothing that ever dials
+ * An arrival address is one of THIS host's: 192.168.1.20 is huginn's own IP on
+ * the LAN, 127.0.0.1 is its loopback. A Proxmox rule on huginn's container reading
+ * `IN ACCEPT -source 192.168.1.20` therefore matches nothing that ever dials
  * it — the container's own address is never the far end of an inbound socket —
  * and the whole paste was a no-op that looked like a fix (3.5.2). What a rule
  * needs is who arrived: the Yggdrasil LAN gateway's NAT address for a phone on
@@ -342,7 +342,7 @@ const REFUSED_HOST =
  * scheduled outbound request, and a phone would open it as a real web page. The
  * class rule therefore applies to both schemes.
  *
- * The one place it is looser: a SINGLE-LABEL name (`huginn`, `mimir`) is
+ * The one place it is looser: a SINGLE-LABEL name (`huginn`, `nas`) is
  * allowed, because that is what the contract's seed list uses and because a
  * dotless name cannot be a public FQDN — it resolves through /etc/hosts, a
  * MagicDNS search domain or a LAN suffix, all of which are already inside the
@@ -778,7 +778,7 @@ function legacyConsoleRow(row) {
  * ⚠ `approval: null`, NOT A CARD. Decision 55 deleted the card, and a daemon
  * that kept synthesising one would be handing an old client four root commands
  * computed from a belief this version no longer holds (the D11 exemption, the
- * hard-coded 192.168.2.131). `ConsoleApproval?` is nullable in the client that
+ * hard-coded hypervisor address). `ConsoleApproval?` is nullable in the client that
  * reads this (Models.kt at desktop-v1.5.1), so null is a shape it already
  * decodes; the card simply does not draw. The remedy lives on the rows of
  * `/v1/apps`, where the client that can show it is.
@@ -937,7 +937,7 @@ function remove(list, id) {
 /**
  * A row that IS one of the seeds — same id, same port — describes a service on
  * THIS host whatever host its URL names (2026-10-02). The four live seeds still
- * carry the retired Tailscale address 100.97.198.90; without this the non-local
+ * carry a retired Tailscale address; without this the non-local
  * rule in addressSet would judge them as some other machine's apps the moment
  * that address aged out of the arrival set.
  */
@@ -962,7 +962,7 @@ const SEED_UNITS = [
  *
  * ⚠ ONE ENTRY, AND IT IS THE D11 SCAR. The old card carried a per-unit claim
  * that btc15m-sim "already falls back to 0.0.0.0" and therefore needed no
- * rebind; `ss -ltn` said `100.97.198.90:8093`, because that fallback is what
+ * rebind; `ss -ltn` said `100.101.102.103:8093`, because that fallback is what
  * sim/app.py does when the host has NO tailscale address. The claim is gone; what
  * survives is the only part of it that was true and useful — `systemctl edit
  * btc15m-sim.service` would edit the wrong thing, so the line says where to look
@@ -977,10 +977,10 @@ const UNIT_BIND_NOTES = {
  * cannot say where it is.
  *
  * ⚠ THIS NAME IS THE DEFECT (D10). `huginn` resolves to this host's LAN
- * interface (192.168.2.117); all four seeded units bind its TAILNET address
- * (100.97.198.90). So the seeded rows named an interface on which NONE of them
+ * interface (192.168.1.20); all four seeded units bind its TAILNET address
+ * (100.101.102.103). So the seeded rows named an interface on which NONE of them
  * listen — `curl http://huginn:8088/` answers nothing, `curl
- * http://100.97.198.90:8088/` answers 200 — and every row read "not answering
+ * http://100.101.102.103:8088/` answers 200 — and every row read "not answering
  * from the host" forever, in the one deployment that actually has these units.
  * The probe could not pass, whatever anybody did to the units or the firewall.
  *
@@ -2327,7 +2327,7 @@ function createStore(opts = {}) {
    * it had. See [reports].
    *
    * ⚠ AND A HOST THE RULE REFUSES IS NAMED, NOT SILENTLY DROPPED. 3.9.0
-   * answered 200 with `huginn.jnet.ad` simply missing, and both clients threw
+   * answered 200 with `huginn.home.arpa` simply missing, and both clients threw
    * the reply away — a device pinned only to that name was protected by nothing
    * and told nothing. The reply now carries `refused`, host by host.
    *
@@ -2401,7 +2401,7 @@ function createStore(opts = {}) {
    *
    * ⚠⚠ AN APP ON ANOTHER HOST IS CHECKED AT ITS OWN ADDRESS ONLY (2026-10-02).
    * The plan swaps each of THIS host's addresses into the row's URL, which is
-   * only meaningful for a page this host serves. For `http://192.168.7.50:8088/`
+   * only meaningful for a page this host serves. For `http://192.168.10.50:8088/`
    * it asked huginn's OWN 127.0.0.1:8088 — armap — and passed the row on the
    * strength of an unrelated service; the real app was never contacted. huginn
    * cannot know which of another machine's addresses a device reaches it by, so
@@ -2603,7 +2603,7 @@ function createStore(opts = {}) {
    *
    * ⚠⚠ TWO ADDRESSES, TWO JOBS, AND 3.5.2 EXISTS BECAUSE ONE WAS DOING BOTH.
    * The ARRIVAL is what every app has to answer on, and it is what the
-   * reachability probe dials. The REMOTE is what a firewall rule on heimdall can
+   * reachability probe dials. The REMOTE is what a firewall rule on the hypervisor can
    * name as its source — and it has to be, because an arrival address is one of
    * huginn's own and a `-source` naming CT 117's own IP matches nothing inbound.
    * Recorded on the same terms as the arrival, in the same set, under the same

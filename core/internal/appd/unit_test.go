@@ -45,7 +45,7 @@ func TestPinTagIsKeyedAndShort(t *testing.T) {
 
 func TestNormalizeURL(t *testing.T) {
 	cases := map[string]string{
-		"http://192.168.2.117:8787":    "https://192.168.2.117:8787",
+		"http://192.168.1.20:8787":    "https://192.168.1.20:8787",
 		"http://[fd00::1]:8787":        "https://[fd00::1]:8787",
 		"http://huginn.lan:8787":       "https://huginn.lan:8787",
 		"http://huginn.lan:8787/":      "https://huginn.lan:8787",
@@ -102,8 +102,8 @@ func TestURLRefusal(t *testing.T) {
 	if _, err := New(Config{URL: "http://fd00::1:8787"}); err == nil {
 		t.Fatal("New accepted an undiallable url")
 	}
-	c, err := New(Config{URL: "http://192.168.2.117:8787"})
-	if err != nil || c.URL() != "https://192.168.2.117:8787" {
+	c, err := New(Config{URL: "http://192.168.1.20:8787"})
+	if err != nil || c.URL() != "https://192.168.1.20:8787" {
 		t.Fatalf("New did not upgrade: %v %v", c, err)
 	}
 }

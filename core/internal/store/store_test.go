@@ -310,7 +310,7 @@ func TestMigrationSources(t *testing.T) {
 }
 
 const desktopSample = `{
-  "baseUrl": "https://192.168.2.117:8787",
+  "baseUrl": "https://192.168.1.20:8787",
   "token": "desktoptoken",
   "tlsPins": "{\"owner\":\"0123456789abcdef\",\"pins\":[\"aa\"]}",
   "deviceEnabled": true,
@@ -325,13 +325,13 @@ const desktopSample = `{
 
 const runnerSample = `{
   "url": "https://huginn:8787",
-  "name": "ragnar",
+  "name": "workstation",
   "scope": "work",
   "root": "/srv/work",
   "claude": "claude",
   "actWhileLocked": "true",
   "id": "dev-runner",
-  "llmSlug": "ragnar-llm",
+  "llmSlug": "workstation-llm",
   "tls": {"token": "fedcba9876543210", "pins": ["bb", "cc"]}
 }`
 
@@ -347,13 +347,13 @@ func TestPlanImportBoth(t *testing.T) {
 	}
 	d, r := p.Candidates[0], p.Candidates[1]
 	if d.Source != SourceDesktop || !d.Enabled || d.DeviceID != "dev-desktop" || d.Scope != "own" ||
-		!d.ActWhileLocked || d.Root != `C:\work` || d.Token != "desktoptoken" || d.URL != "https://192.168.2.117:8787" ||
+		!d.ActWhileLocked || d.Root != `C:\work` || d.Token != "desktoptoken" || d.URL != "https://192.168.1.20:8787" ||
 		d.Pins == nil || d.Pins.Tag != "0123456789abcdef" {
 		t.Fatalf("desktop %+v", d)
 	}
 	// "true" (a string) is NOT true: only a literal JSON true widens.
 	if r.Source != SourceRunner || r.ActWhileLocked || r.DeviceID != "dev-runner" || r.Token != "runnertoken" ||
-		r.LLMSlug != "ragnar-llm" || r.Name != "ragnar" || r.Pins.Scheme != "runner-pinset" {
+		r.LLMSlug != "workstation-llm" || r.Name != "workstation" || r.Pins.Scheme != "runner-pinset" {
 		t.Fatalf("runner %+v", r)
 	}
 	// Wipe: two desktop key sets, two runner files.
@@ -445,7 +445,7 @@ func TestReadMigration(t *testing.T) {
 
 // A desktop caught mid-setup has saved the address it was typed but not yet a
 // token. Importing the address alone made a core that called itself paired,
-// reached nothing, and so was never paired properly (PRESTIGE, 2026-10-16).
+// reached nothing, and so was never paired properly (2026-10-16).
 // Its device settings still come across.
 func TestImportTakesNoAddressWithoutItsToken(t *testing.T) {
 	desk := `{"baseUrl":"https://huginn:8787","token":"","deviceEnabled":true,"deviceId":"dev-desk","deviceScope":"own","deviceActWhileLocked":true}`

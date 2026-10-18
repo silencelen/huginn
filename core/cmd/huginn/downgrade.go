@@ -17,7 +17,7 @@ import (
 // installer carries a core and installs it: Huginn Desktop's NSIS installer
 // runs its bundled copy's `core self-install` unconditionally, so installing
 // Desktop 2.3.6 on a machine the 2.4.1 one-liner had just set up put core
-// 2.3.6 back (PRESTIGE, 2026-10-16). The version check lives HERE, in the
+// 2.3.6 back (2026-10-16). The version check lives HERE, in the
 // copy being installed, so every caller is covered - an installer, the app,
 // a script - and an older binary that predates it is the only one that can
 // still do it.

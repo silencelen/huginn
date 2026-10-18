@@ -104,8 +104,8 @@ func setup(args []string) int {
 	why := sshTrust(alias)
 	if strings.HasPrefix(why, "unreachable") {
 		// The address this computer knows huginn by may not carry ssh from
-		// here (PRESTIGE, 2026-10-17: 192.168.2.117 carries only huginn's port
-		// from its VLAN; 192.168.7.117 carries ssh). huginn lists its own
+		// here (a client on another VLAN may be let through to huginn's port on
+		// one address and to ssh on another). huginn lists its own
 		// addresses to the paired core; the first that answers on port 22 is
 		// the same host, so the stanza is pointed at it.
 		if alt, all := sshAddress(*host); alt != "" {
@@ -201,8 +201,8 @@ func sshAddress(host string) (string, []string) {
 		r := <-ch
 		ok[r.i] = r.ok
 	}
-	// One on this computer's own network first (PRESTIGE: 192.168.7.117 beside
-	// its 192.168.7.172, rather than the mesh address that also answers).
+	// One on this computer's own network first (192.168.10.20 beside a client at
+	// 192.168.10.31, rather than a VPN address that also answers).
 	local := localNets()
 	for _, near := range []bool{true, false} {
 		for i, a := range st.Addresses {
