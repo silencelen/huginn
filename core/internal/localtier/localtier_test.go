@@ -36,3 +36,27 @@ func TestSeed(t *testing.T) {
 		t.Fatal("an empty token was written")
 	}
 }
+
+// The token copy is locked every time it is seeded, and when it is found
+// already in place (a copy written before the lock): on Windows 0600 meant
+// nothing and it inherited "Users: read" (security review, 2026-10-17).
+func TestSeedLocksTheTokenFile(t *testing.T) {
+	var locked []string
+	old := lock
+	lock = func(p string) { locked = append(locked, p) }
+	defer func() { lock = old }()
+	dir := t.TempDir()
+	f, err := Seed(dir, "tok-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(locked) != 1 || locked[0] != f {
+		t.Fatalf("a new token file was not locked: %v", locked)
+	}
+	if _, err := Seed(dir, "tok-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(locked) != 2 || locked[1] != f {
+		t.Fatalf("an unchanged token file was not locked again: %v", locked)
+	}
+}

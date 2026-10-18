@@ -41,6 +41,7 @@ func Seed(dir, tok string) (string, error) {
 	}
 	f := TokenFile(dir)
 	if b, err := os.ReadFile(f); err == nil && strings.TrimSpace(string(b)) == tok {
+		lock(f) // a copy written before the lock gets it now
 		return f, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
@@ -54,5 +55,15 @@ func Seed(dir, tok string) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
+	lock(f)
 	return f, nil
 }
+
+// lock gives the token file an ACL of its own on Windows: SYSTEM (the runner
+// service), the Administrators and this account, nothing inherited. 0600
+// means nothing there, and the file inherited ProgramData's "Users: read" -
+// the appd token readable by every account on the PC (security review,
+// 2026-10-17). Best effort: the elevated manager locks the whole tree too
+// (huginn-local lockTree), and a file it created is not this account's to
+// change. A var so a test can see it is asked for.
+var lock = func(path string) { _ = restrictFile(path) }

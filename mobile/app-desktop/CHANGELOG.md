@@ -1,8 +1,17 @@
 # Huginn Desktop changelog
 
-## 2.5.8
+## 2.5.9
 
-Carries core 2.5.8. From the owner's eighth recorded setup run on PRESTIGE.
+Carries core 2.5.9. Desktop 2.5.8 was never released: its changes ship here.
+
+### Security
+- **On Windows, the local-AI files under `C:\ProgramData\huginn-local`, including the copy of
+  huginn's token, were readable by every account on the PC**, and any account could add files
+  beside a model server that runs as LocalSystem. Setting local AI up (or updating it) now locks the
+  folder to SYSTEM, the Administrators and you. huginn core locks the token copy each time it hands
+  it over. See core 2.5.9.
+
+From the owner's eighth recorded setup run on PRESTIGE:
 
 ### Changed
 - **One icon, and a clear way back** (owner). Where huginn core is installed, this app never shows
