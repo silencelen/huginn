@@ -8,6 +8,28 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.5.9] - 2026-10-17
+
+### Security
+- **On Windows, the local-AI copy of huginn's token was readable by every account on the PC.**
+  `C:\ProgramData\huginn-local` inherited ProgramData's defaults:
+  - Users could read the copy of the appd token beside the runner, along with `local.json` and
+    `device.json`. That token gives full control of the huginn host.
+  - Users could also add files to every folder there, beside a model server that runs as
+    LocalSystem.
+
+  Found by the docs and security review, confirmed on PC01.
+  - `huginn local on` and `huginn local update` now lock the folder tree before anything is
+    downloaded or unpacked. Only SYSTEM, the Administrators and the person who set it up can open
+    it, and that person can change only `device\`, where huginn core reseeds the token. An install
+    from before this release is locked at its next `huginn local update` (or `on`).
+  - huginn core also gives the token file a protected ACL of its own each time it seeds it: SYSTEM,
+    the Administrators and this account, nothing inherited.
+
+### Fixed
+- **`huginn core update` works from any shell.** From fish, cmd.exe or a script, the core binary
+  printed its usage and exited 2. It now hands the command to the CLI.
+
 ## [2.5.8] - 2026-10-17
 
 From the owner's eighth recorded install on PC01.

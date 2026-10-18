@@ -2,7 +2,7 @@
 'use strict';
 // huginn-local — activation and lifecycle of the local-AI tier on THIS machine.
 //
-// Version: 2.5.8
+// Version: 2.5.9
 //
 // `huginn local on` follows the device-enrolment grammar exactly: consent →
 // fetch pinned → validate → install → enrol. This file is the manager the shell
@@ -36,7 +36,7 @@ const https = require('node:https');
 const crypto = require('node:crypto');
 const { spawnSync, spawn } = require('node:child_process');
 
-const VERSION = '2.5.8';
+const VERSION = '2.5.9';
 
 // ---8<--- BEGIN GENERATED MANIFEST — scripts/gen-local-manifest.js — DO NOT EDIT ---8<---
 const MANIFEST = {
@@ -926,6 +926,35 @@ function refuseUnelevated(doing) {
   process.exit(1);
 }
 
+/**
+ * Windows: the tier's directory under ProgramData, locked to SYSTEM, the
+ * Administrators and the person who set it up (read; and change on device\,
+ * where huginn core reseeds the token). ProgramData's defaults gave every
+ * account on the PC read on the appd token beside the runner, and the right to
+ * ADD files to every folder here - beside a model server that runs as
+ * LocalSystem (security review, 2026-10-17). Run elevated, before anything is
+ * downloaded or unpacked; the api-key keeps its own SYSTEM-only ACL.
+ */
+function lockTree() {
+  if (process.platform !== 'win32') return;
+  const dir = localDir();
+  fs.mkdirSync(path.join(dir, 'device'), { recursive: true });
+  let sid = '';
+  try {
+    const r = spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' });
+    sid = ((r.stdout || '').match(/"(S-1-[0-9-]+)"/) || [])[1] || '';
+  } catch { /* none */ }
+  const run = (args) => spawnSync('icacls', args, { encoding: 'utf8' });
+  const root = [dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '/grant:r', '*S-1-5-32-544:(OI)(CI)F'];
+  if (sid) root.push('/grant:r', `*${sid}:(OI)(CI)RX`);
+  const a = run(root);
+  if (a.status !== 0) throw new Error(`could not lock ${dir}: ${(a.stderr || a.stdout || '').trim()}`);
+  if (sid) {
+    const b = run([path.join(dir, 'device'), '/grant', `*${sid}:(OI)(CI)M`]);
+    if (b.status !== 0) throw new Error(`could not open ${path.join(dir, 'device')} to you: ${(b.stderr || b.stdout || '').trim()}`);
+  }
+}
+
 function installServiceLinux(which, { system }) {
   const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
   const file = unitFile(name, { system });
@@ -1148,6 +1177,7 @@ async function cmdOn(flags) {
   if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
   refuseUnelevated('turning on');
   if (resolveSystemInstall(flags) === 'done') return;
+  lockTree();
   const det = detectClass();
   if (det.refuse && !flags.adapter) { console.error(`refused: ${det.refuse}`); process.exit(1); }
   if (flags.class) {
@@ -1610,6 +1640,7 @@ async function cmdUpdate(flags) {
   const conf = loadConf();
   if (!conf) { console.error('not set up — run: huginn local on'); process.exit(1); }
   refuseUnelevated('updating');
+  lockTree(); // an install from before the lock gets it here
   // A system unit cannot be restarted from an unprivileged shell, and this
   // verb ends in a restart — so the whole update takes the same ONE prompt
   // the install took rather than failing at its last step with the new
@@ -1967,6 +1998,6 @@ if (require.main === module) {
     // neither systemd nor logind — see setRunner.
     setRunner, serviceUser, lingerState, enableLinger, persistence, persistenceLine,
     persistenceVerdict, probeInstall, elevator, elevators, elevateOnce, updateElevationRefusal,
-    elevationArgv, unitFile, persistSteps, servicePlanLine, daemonUrl,
+    elevationArgv, unitFile, persistSteps, servicePlanLine, daemonUrl, lockTree,
   };
 }
