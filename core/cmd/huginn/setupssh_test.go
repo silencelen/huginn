@@ -8,7 +8,7 @@ import (
 )
 
 // `huginn setup ssh` points `Host huginn` at another of huginn's own addresses
-// when the one it names does not carry ssh from here (PC01, 2026-10-17),
+// when the one it names does not carry ssh from here (seen 2026-10-17),
 // and never edits a stanza that names something else.
 func TestRepointStanzaOnlyForHuginnsOwnAddress(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

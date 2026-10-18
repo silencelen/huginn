@@ -22,7 +22,7 @@ var findWindow = windows.NewLazySystemDLL("user32.dll").NewProc("FindWindowW")
 // logon task starts the tray at the instant of sign-in, before Explorer has
 // made Shell_TrayWnd; an icon added then is refused, and the tray never
 // reached its ready callback — so it never connected to the core and showed
-// nothing (PC01, 2026-10-16: started 13:13:37, never attached; restarted
+// nothing (2026-10-16: started 13:13:37, never attached; restarted
 // once the taskbar was up, attached in seconds). Two minutes, then try anyway.
 func waitForTaskbar() {
 	cls, _ := windows.UTF16PtrFromString("Shell_TrayWnd")

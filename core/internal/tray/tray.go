@@ -174,7 +174,7 @@ func (r *role) ready() {
 // starts over. A tray started at the instant of a Windows sign-in can add a
 // BLANK, unclickable icon and never finish setting it up — never connecting
 // to the core, while holding the one-tray lock so the Startup shortcut's tray
-// steps aside (PC01, 2026-10-16, twice). A fresh process a moment later,
+// steps aside (2026-10-16, twice). A fresh process a moment later,
 // with the taskbar up, works; so start one and leave. Once only
 // (HUGINN_TRAY_RETRY marks the second), so a tray that cannot work here does
 // not loop.
@@ -473,7 +473,7 @@ func NotifyTest(hold time.Duration) error {
 
 // Held: another tray of this user holds the one-tray lock right now. An
 // updater asks before it starts one, so an update does not briefly show two
-// icons while the running tray hands itself over (seen on a Linux laptop, 2.3.0-rc).
+// icons while the running tray hands itself over (seen on Linux, 2.3.0-rc).
 func Held(lock string) bool {
 	f, ok := tryLock(lock)
 	if !ok {

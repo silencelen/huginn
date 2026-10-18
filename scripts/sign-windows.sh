@@ -10,8 +10,8 @@
 #
 # The key and certificate live OUTSIDE the repo (this repo is public), in
 # HUGINN_SIGN_DIR (default /root/.secrets/codesign): signing.key, signing.crt,
-# ca.crt. Today that certificate is issued by a private CA, so only machines in
-# the home.arpa domain trust it; a publicly trusted profile (Azure Artifact
+# ca.crt. Today that certificate is issued by a private CA, so only machines
+# that trust that CA accept it; a publicly trusted profile (Azure Artifact
 # Signing) replaces the files, not this script.
 #
 # Without a key it prints UNSIGNED and leaves the files alone, unless

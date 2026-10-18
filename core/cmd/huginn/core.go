@@ -504,7 +504,7 @@ func coreStatus() int {
 	printDevice(st.Device)
 	// Attached is the core's own answer; the service lines below say whether
 	// the tray STARTS AT LOGIN — two different questions (one was read as the
-	// other on PC01, 2026-10-15).
+	// other in testing, 2026-10-15).
 	if st.Tray {
 		fmt.Println("  tray:    attached")
 	} else {

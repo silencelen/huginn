@@ -142,7 +142,7 @@ const PROBE_INTERVAL_MS = 5 * 60_000;
  *
  * ⚠ THIS SET IS THE PREREQUISITE'S WHOLE AUTHORITY, so it has to forget. A
  * laptop that was on the LAN once in March must not make every app on this host
- * unaddable in September because 192.168.1.20 is still in a file. Seven days is
+ * unaddable in September because its old address is still in a file. Seven days is
  * the span in which "a device that reaches huginn" is a present-tense claim; one
  * poll from that device renews it, and every real client polls far more often
  * than weekly.
@@ -162,7 +162,7 @@ const MAX_CLIENT_ADDRS = 16;
  *
  * ⚠ THE TWO ARE NOT THE SAME ADDRESS AND ONLY ONE OF THEM IS A FIREWALL SOURCE.
  * An arrival address is one of THIS host's: 192.168.1.20 is huginn's own IP on
- * the LAN, 127.0.0.1 is its loopback. A PVE rule on CT 100 reading
+ * the LAN, 127.0.0.1 is its loopback. A Proxmox rule on huginn's container reading
  * `IN ACCEPT -source 192.168.1.20` therefore matches nothing that ever dials
  * it — the container's own address is never the far end of an inbound socket —
  * and the whole paste was a no-op that looked like a fix (3.5.2). What a rule
@@ -778,7 +778,7 @@ function legacyConsoleRow(row) {
  * ⚠ `approval: null`, NOT A CARD. Decision 55 deleted the card, and a daemon
  * that kept synthesising one would be handing an old client four root commands
  * computed from a belief this version no longer holds (the D11 exemption, the
- * hard-coded 192.168.1.131). `ConsoleApproval?` is nullable in the client that
+ * hard-coded hypervisor address). `ConsoleApproval?` is nullable in the client that
  * reads this (Models.kt at desktop-v1.5.1), so null is a shape it already
  * decodes; the card simply does not draw. The remedy lives on the rows of
  * `/v1/apps`, where the client that can show it is.
@@ -937,7 +937,7 @@ function remove(list, id) {
 /**
  * A row that IS one of the seeds — same id, same port — describes a service on
  * THIS host whatever host its URL names (2026-10-02). The four live seeds still
- * carry the retired Tailscale address 100.101.102.103; without this the non-local
+ * carry a retired Tailscale address; without this the non-local
  * rule in addressSet would judge them as some other machine's apps the moment
  * that address aged out of the arrival set.
  */
@@ -2603,7 +2603,7 @@ function createStore(opts = {}) {
    *
    * ⚠⚠ TWO ADDRESSES, TWO JOBS, AND 3.5.2 EXISTS BECAUSE ONE WAS DOING BOTH.
    * The ARRIVAL is what every app has to answer on, and it is what the
-   * reachability probe dials. The REMOTE is what a firewall rule on pve1 can
+   * reachability probe dials. The REMOTE is what a firewall rule on the hypervisor can
    * name as its source — and it has to be, because an arrival address is one of
    * huginn's own and a `-source` naming CT 100's own IP matches nothing inbound.
    * Recorded on the same terms as the arrival, in the same set, under the same

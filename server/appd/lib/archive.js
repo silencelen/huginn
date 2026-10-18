@@ -37,7 +37,7 @@ const MAX_ARCHIVES = 64;
 /**
  * The most of one transcript that is copied into the archive.
  *
- * Measured over this host's 151 the ops repo transcripts: median 149 KB, total
+ * Measured over 151 transcripts on one working host: median 149 KB, total
  * 220 MB, max 58 MB. So 64 archives is ~10 MB typically and the tail is fat
  * enough to matter. Above the cap the LAST bytes are kept rather than the file
  * skipped: the end of a conversation is the part a person is coming back for,

@@ -66,7 +66,7 @@ func TestTaskXMLGolden(t *testing.T) {
 	bin := `C:\Users\O'Brien & Co\AppData\Local\huginn\bin\huginn.exe`
 	s4u := TaskXML(bin, `HOME\alex`, LogonS4U)
 	golden(t, "task-s4u.xml", s4u)
-	pw := TaskXML(bin, `PC01\alex`, LogonPassword)
+	pw := TaskXML(bin, `DESKTOP-01\alex`, LogonPassword)
 	if !strings.Contains(pw, "<LogonType>Password</LogonType>") || strings.Contains(pw, "S4U") {
 		t.Fatal("password task")
 	}

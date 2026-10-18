@@ -33,8 +33,8 @@ if ! [[ "$SESSION" =~ ^[a-z0-9_][a-z0-9_-]{0,49}$ ]]; then
   exit 2
 fi
 # '=' anchors an EXACT tmux target. tmux resolves -t by exact, then PREFIX, then
-# glob, so a unique prefix silently resolves: `cc jt solo` would force-detach the
-# real client of a session named 'jotter'. `new-session -s` below is unaffected
+# glob, so a unique prefix silently resolves: `cc api solo` would force-detach the
+# real client of a session named 'api-refactor'. `new-session -s` below is unaffected
 # (it takes a creation name, not a target), so only the attach path needs this.
 if [ -n "$SOLO" ] && tmux has-session -t "=$SESSION" 2>/dev/null; then
   exec tmux -u attach -d -t "=$SESSION"

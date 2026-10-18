@@ -17,7 +17,7 @@ import (
 //
 // ⚠ "NO GRAPHICAL SESSION" MEANS TWO DIFFERENT MACHINES, and treating them alike
 // is wrong either way:
-//   - a HEADLESS box (a server, an LXC: buildbox, CT 203) has no screen to lock.
+//   - a HEADLESS box (a server, a container) has no screen to lock.
 //     The Node runner always reported it unlocked, and act-scope servers rely on
 //     that; calling it locked would quietly demote every one of them to ask-only.
 //   - a DESKTOP that booted with nobody signed in is sitting at its login screen
@@ -25,8 +25,8 @@ import (
 //     the same thing as LogonUI and the probe already calls it locked.
 //
 // So the question is whether the machine CAN show a graphical login: logind's
-// seat0 CanGraphical. A desktop at its login screen is locked (the owner's
-// "keep act mode while locked" is what makes a RIG-style box act unattended);
+// seat0 CanGraphical. A desktop at its login screen is locked (the
+// "keep act mode while locked" setting is what lets an always-on desktop act unattended);
 // a box with no graphical seat is unlocked; a probe that fails is unknown, which
 // the fence treats as locked.
 type lockReader struct {

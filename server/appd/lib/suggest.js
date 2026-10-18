@@ -8,7 +8,7 @@
 // the session somebody is actually looking at.
 //
 // The call is deliberately caged: `--setting-sources ""` so the global CLAUDE.md
-// never leaks into it (the webhost lesson — a headless claude quietly inherits
+// never leaks into it (a headless claude otherwise quietly inherits
 // the whole persona), `--tools ""` so it cannot act, `--max-turns 1` so it
 // cannot wander, and a scratch cwd so no project instructions load. It writes
 // three lines; everything else here is turning a transcript into a small prompt

@@ -163,7 +163,7 @@ func restartBySupervisor(cur coreSnapshot) (coreSnapshot, bool) {
 // task instance runs until the process exits (shutdown waits up to 5 s on open
 // event streams), and Task Scheduler ignores /Run for a running task. So wait
 // for the old pid to go, and repeat /Run while nothing answers (measured on
-// PC01, 2.1.1: one /Run in that window left the core down for minutes).
+// a Windows test PC, 2.1.1: one /Run in that window left the core down for minutes).
 func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 	old := cur.Version
 	if runtime.GOOS == "windows" && cur.Pid > 0 {
@@ -205,7 +205,7 @@ func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 }
 
 // startDirectly starts the core itself when Task Scheduler holds its task
-// back. Seen on PC01 (2026-10-16): on battery with Energy Saver on, every
+// back. Seen on a Windows laptop (2026-10-16): on battery with Energy Saver on, every
 // start of the "Huginn Core" task was launched and QUEUED, never run, so an
 // update's restart left the core down until the laptop was charged. A core
 // started this way serves this login; the queued task, when it finally runs,
@@ -282,7 +282,7 @@ func ensureTrayAutostart(bin string, running bool) {
 
 // ensureTrayTask gives a Windows install from before 2.3.3 the tray's logon
 // task, once, when its tray starts at login at all (the Startup shortcut is
-// there): the shortcut alone ran 3.5 minutes after sign-in on PC01. A
+// there): the shortcut alone ran 3.5 minutes after sign-in on a test PC. A
 // shortcut the person removed means no tray at login, and no task either.
 func ensureTrayTask(bin string) {
 	if runtime.GOOS != "windows" {

@@ -325,13 +325,13 @@ const desktopSample = `{
 
 const runnerSample = `{
   "url": "https://huginn:8787",
-  "name": "rig",
+  "name": "workstation",
   "scope": "work",
   "root": "/srv/work",
   "claude": "claude",
   "actWhileLocked": "true",
   "id": "dev-runner",
-  "llmSlug": "rig-llm",
+  "llmSlug": "workstation-llm",
   "tls": {"token": "fedcba9876543210", "pins": ["bb", "cc"]}
 }`
 
@@ -353,7 +353,7 @@ func TestPlanImportBoth(t *testing.T) {
 	}
 	// "true" (a string) is NOT true: only a literal JSON true widens.
 	if r.Source != SourceRunner || r.ActWhileLocked || r.DeviceID != "dev-runner" || r.Token != "runnertoken" ||
-		r.LLMSlug != "rig-llm" || r.Name != "rig" || r.Pins.Scheme != "runner-pinset" {
+		r.LLMSlug != "workstation-llm" || r.Name != "workstation" || r.Pins.Scheme != "runner-pinset" {
 		t.Fatalf("runner %+v", r)
 	}
 	// Wipe: two desktop key sets, two runner files.
@@ -445,7 +445,7 @@ func TestReadMigration(t *testing.T) {
 
 // A desktop caught mid-setup has saved the address it was typed but not yet a
 // token. Importing the address alone made a core that called itself paired,
-// reached nothing, and so was never paired properly (PC01, 2026-10-16).
+// reached nothing, and so was never paired properly (2026-10-16).
 // Its device settings still come across.
 func TestImportTakesNoAddressWithoutItsToken(t *testing.T) {
 	desk := `{"baseUrl":"https://huginn:8787","token":"","deviceEnabled":true,"deviceId":"dev-desk","deviceScope":"own","deviceActWhileLocked":true}`

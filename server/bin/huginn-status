@@ -3,7 +3,7 @@
 #
 # PERF NOTE (2026-07-24): this used to call `claude mcp list` just to learn whether
 # MemPalace was reachable. That probe STARTS EVERY CONFIGURED MCP SERVER — including
-# an npx playwright download and a chain that SSHes to nas and `docker run`s a
+# an npx playwright download and a chain that SSHes to another host and `docker run`s a
 # postgres-mcp container — so a read-only status check took ~18 s and created a
 # container on another host every time it ran. It now probes the one thing it
 # reports, directly over ssh, and finishes in well under a second.

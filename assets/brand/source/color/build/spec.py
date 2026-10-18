@@ -347,7 +347,7 @@ DIRECTIONS.append(dict(
     state_ansi=dict(stateIdle='brightBlack', stateWorking='green', stateAttention='brightYellow',
                     stateSuccess='brightCyan', stateError='brightRed', stateInfo='brightMagenta'),
     cli=dict(ok='brightGreen', warn='brightYellow', error='brightRed', muted='brightBlack', accent='brightMagenta'),
-    # Round 7 (2026-10-13, on a foldable): success is teal and info is heather, so this palette pins
+    # Round 7 (2026-10-13, on a phone): success is teal and info is heather, so this palette pins
     # brightCyan and brightMagenta instead of the global brightGreen / brightBlue.
     slot_pins=[('brightRed', 'error'), ('brightCyan', 'stateSuccess'), ('brightYellow', 'stateAttention'), ('brightMagenta', 'stateInfo')],
 ))

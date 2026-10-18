@@ -59,7 +59,7 @@ func TaskXML(binary, user string, logon LogonType) string {
 	b.WriteString("    <Description>huginn core: keeps this machine available to huginn from boot, with nobody signed in. Written by `huginn core install`.</Description>\r\n")
 	b.WriteString(`    <URI>\` + xmlText(TaskName) + "</URI>\r\n")
 	b.WriteString("  </RegistrationInfo>\r\n")
-	// ⚠ THREE TRIGGERS, NOT ONE (measured on PC01 2026-10-14). A boot
+	// ⚠ THREE TRIGGERS, NOT ONE (measured on a Windows 11 PC, 2026-10-14). A boot
 	// trigger alone fired 13 s after power-on, LogonUserS4U failed (0x80070057:
 	// S4U for a DOMAIN account needs a DC, and the network was not up yet), and
 	// Task Scheduler never tried again — the core stayed down even after a
@@ -129,7 +129,7 @@ func TaskXML(binary, user string, logon LogonType) string {
 // TrayTaskXML is the "Huginn Tray" task: the tray at the user's own logon, in
 // their session (InteractiveToken), at normal priority. It exists because the
 // Startup folder runs only after Windows has worked through every Run-key app
-// one by one, each allowed 30 s: on PC01 (2026-10-16) the tray appeared
+// one by one, each allowed 30 s: on a test PC (2026-10-16) the tray appeared
 // 3.5 minutes after sign-in. A logon task starts at once. The Startup shortcut
 // stays as the fallback (Energy Saver can hold tasks back); the one-tray lock
 // makes the second start leave quietly.
@@ -148,7 +148,7 @@ func TrayTaskXML(binary, user string) string {
 	b.WriteString("      <UserId>" + xmlText(user) + "</UserId>\r\n")
 	// ⚠ NOT AT THE INSTANT OF SIGN-IN: Explorer is still building the
 	// taskbar then, and a tray started in that second added a blank icon and
-	// never finished (PC01, 2026-10-16). Ten seconds is still minutes
+	// never finished (2026-10-16). Ten seconds is still minutes
 	// ahead of the Startup folder.
 	b.WriteString("      <Delay>PT10S</Delay>\r\n")
 	b.WriteString("    </LogonTrigger>\r\n")
@@ -171,7 +171,7 @@ func TrayTaskXML(binary, user string) string {
 	b.WriteString("  </Settings>\r\n")
 	// Through `conhost --headless`: huginn.exe is a console program (it is the
 	// CLI too), so started directly by the task it flashed a console window at
-	// every sign-in before the tray detached from it (PC01, 2026-10-16).
+	// every sign-in before the tray detached from it (2026-10-16).
 	// A headless conhost gives it a console nobody sees; Windows has started
 	// every pseudo-console this way since 1809.
 	b.WriteString(`  <Actions Context="Author">` + "\r\n")

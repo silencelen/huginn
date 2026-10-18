@@ -1290,7 +1290,7 @@ echo "[6d/8] the one-line installers (get.sh, get.ps1)"
 sh -n client/get.sh && ok "get.sh parses as POSIX sh" || bad "get.sh does not parse"
 # WHY: PowerShell names are case-insensitive. get.ps1's `$gui = $false` wrote
 # "False" into its own [string]$Gui parameter, so the desktop question was
-# never asked on Windows (PC01, 2026-10-16). No assignment may reuse a
+# never asked on Windows (2026-10-16). No assignment may reuse a
 # parameter's name.
 GP_CLOBBER="$(python3 - <<'PY'
 import re
@@ -1999,7 +1999,7 @@ python3 - "$AR_PF" "${HUGINN_TEST_ARCHIVE_PORT:-0}" <<'ARSTUB' &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 ROWS = {"max": 64, "archives": [
-    {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "jotter",
+    {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "trainer",
      "title": "Archive session feature", "cwd": "/root/projects/app", "model": "claude-opus-4-5",
      "resumeCommand": "cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
      "archivedAt": 1, "endedAt": 2, "lastMessage": "suite green",
@@ -2020,7 +2020,7 @@ class H(BaseHTTPRequestHandler):
         self._send(200, ROWS) if self.path == "/v1/archive" else self._send(404, {"error": "no"})
     def do_POST(self):
         if self.path.endswith("/revive"):
-            self._send(201, {"ok": True, "name": "jotter2", "resumed": True, "restoredTranscript": True})
+            self._send(201, {"ok": True, "name": "trainer2", "resumed": True, "restoredTranscript": True})
         elif "attention" in self.path:
             self._send(409, {"error": "answer the waiting question first, then archive the session"})
         else:
@@ -2052,8 +2052,8 @@ else
   grep -q "answer the waiting question first" <<<"$AR_409" \
     && ok "a refused archive repeats the daemon's sentence, not a client guess" \
     || bad "archive refusal was rewritten client-side: $AR_409"
-  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive jotter 2>&1)
-  grep -q "revived as jotter2" <<<"$AR_REV" \
+  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive trainer 2>&1)
+  grep -q "revived as trainer2" <<<"$AR_REV" \
     && ok "revive resolves a NAME to an id host-side and reports the name it got" \
     || bad "revive by name did not work: $AR_REV"
   # A name nobody archived must not become a POST at all.
@@ -2130,21 +2130,21 @@ chmod +x "$PJT/ssh"
 PJSH=$( export SSH_LOG="$PJT/log"; : > "$SSH_LOG"
         ( export PATH="$PJT:$PATH"
           . "$PWD/client/huginn.sh" >/dev/null 2>&1
-          huginn projects; huginn projects show lora; huginn projects --json ) >/dev/null 2>&1
+          huginn projects; huginn projects show sensor; huginn projects --json ) >/dev/null 2>&1
         cat "$SSH_LOG" )
 grep -q -- '-T .* huginn-projects$' <<<"$PJSH" \
   && ok "sh: bare projects ssh -T's the renderer with NO empty argument" \
   || bad "sh: bare projects sent: $PJSH"
-grep -q -- 'huginn-projects show lora' <<<"$PJSH" && grep -q -- 'huginn-projects --json' <<<"$PJSH" \
+grep -q -- 'huginn-projects show sensor' <<<"$PJSH" && grep -q -- 'huginn-projects --json' <<<"$PJSH" \
   && ok "sh: projects carries its sub-verb and --json" || bad "sh: projects sent: $PJSH"
 if command -v pwsh >/dev/null 2>&1; then
   PJPS=$( export SSH_LOG="$PJT/log2"; : > "$SSH_LOG"
           PATH="$PJT:$PATH" pwsh -NoProfile -Command \
-            ". $PWD/client/huginn.ps1; huginn projects; huginn projects show lora; huginn projects --json" >/dev/null 2>&1
+            ". $PWD/client/huginn.ps1; huginn projects; huginn projects show sensor; huginn projects --json" >/dev/null 2>&1
           cat "$SSH_LOG" )
   grep -q -- '-T .* huginn-projects$' <<<"$PJPS" \
     && ok "ps1: bare projects sends the same bare renderer call" || bad "ps1: bare projects sent: $PJPS"
-  grep -q -- "huginn-projects 'show' 'lora'" <<<"$PJPS" && grep -q -- "huginn-projects '--json'" <<<"$PJPS" \
+  grep -q -- "huginn-projects 'show' 'sensor'" <<<"$PJPS" && grep -q -- "huginn-projects '--json'" <<<"$PJPS" \
     && ok "ps1: the sub-verb and --json survive the parameter binder" || bad "ps1: projects sent: $PJPS"
 else
   skip "ps1 projects send check (no pwsh)"
@@ -2166,7 +2166,7 @@ LOG = sys.argv[3]
 # {approve:true, manifestRev}. A fixture with no manifest could only test the
 # refusal path.
 P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "Sensor board",
-      "cwd": "/root/projects/app/dev-ledger/sensor-board", "createdAt": 1789459900,
+      "cwd": "/root/projects/sensor-board", "createdAt": 1789459900,
       "status": "proposed",
       "manifest": {"rev": 2, "spawnedRev": 0, "summary": "docs and repo",
                    "sessions": [{"role": "docs", "firstPrompt": "write the README"},
@@ -2178,7 +2178,7 @@ P1 = {"id": "aaaaaaaa-0000-4000-8000-00000000aaaa", "name": "Sensor board",
 # Not proposed: the project somebody types `spawn` at before the lead has
 # written a plan, which is the commonest way that verb is reached too early.
 P2 = {"id": "bbbbbbbb-0000-4000-8000-00000000bbbb", "name": "status page",
-      "cwd": "/root/projects/app/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
+      "cwd": "/root/projects/status-page", "createdAt": 1789000000, "endedAt": 1789400000,
       "status": "drafting", "manifest": {"rev": 0, "sessions": []},
       "lead": {"name": "status-page/lead"}, "members": []}
 # The one whose spawn refuses HUNDREDS of members — see the flood assertion.
@@ -2725,7 +2725,7 @@ else
 fi
 
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
-# ⚠ WHY THIS EXISTS. On 2026-08-25 the live headless device (buildbox) was found
+# ⚠ WHY THIS EXISTS. On 2026-08-25 a live headless device was found
 # running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown
 # mode, and `--resume` fed unvalidated into argv — while reporting version
 # 0.10.1, the same number as the fixed code. The fixes were committed, released

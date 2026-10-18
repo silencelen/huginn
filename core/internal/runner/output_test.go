@@ -103,7 +103,7 @@ func TestTextsNameTheEngine(t *testing.T) {
 
 func TestMachineKey(t *testing.T) {
 	for in, want := range map[string]string{
-		"RIG": "rig", "My_Box.local": "my-box-local", "--x--": "x",
+		"WORKSTATION": "workstation", "My_Box.local": "my-box-local", "--x--": "x",
 		strings.Repeat("a", 50): strings.Repeat("a", 40), "": "",
 	} {
 		if got := MachineKey(in); got != want {
@@ -138,7 +138,7 @@ func TestRideAlongRefusal(t *testing.T) {
 			t.Errorf("model %q accepted", m)
 		}
 	}
-	for _, m := range []string{"opus", "claude-opus-5-5", "sonnet", "local-rig-qwen3-8b", "fable.5"} {
+	for _, m := range []string{"opus", "claude-opus-5-5", "sonnet", "local-workstation-qwen3-8b", "fable.5"} {
 		if why := rideAlongRefusal(m, ""); why != "" {
 			t.Errorf("model %q refused: %s", m, why)
 		}
