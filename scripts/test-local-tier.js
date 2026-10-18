@@ -585,3 +585,147 @@ test('plan tells the consent card how the one prompt would happen', () => {
   // And `plan` is still read-only, which is the whole contract of the verb.
   assert.ok(!fs.existsSync(path.join(dir, 'local.json')));
 });
+
+// ------------------------------------------------- ProgramData lock (F14/F2)
+//
+// lockTree itself only runs on Windows (icacls), but the whole security of it
+// is the DECISION and the ORDER, which are pure. These assert the fixes for
+// F14 (a pre-created tree is taken over and its explicit ACEs wiped, not just
+// the inherited ones) and the owner/verify logic, without a Windows box.
+
+test('a pre-existing tree is adopted only from SYSTEM, Administrators or the installer', () => {
+  const me = 'S-1-5-21-10-20-30-1001';
+  assert.ok(local.ownerTrusted('S-1-5-18', me), 'SYSTEM');
+  assert.ok(local.ownerTrusted('S-1-5-32-544', me), 'Administrators');
+  assert.ok(local.ownerTrusted(me, me), 'the installer');
+  // The attack: another standard user pre-created C:\ProgramData\huginn-local.
+  assert.ok(!local.ownerTrusted('S-1-5-21-10-20-30-1055', me), 'another local account');
+  assert.ok(!local.ownerTrusted('', me), 'an unreadable owner is never trusted');
+});
+
+test('lockTree takes ownership and wipes EVERY explicit ACE before granting', () => {
+  const me = 'S-1-5-21-10-20-30-1001';
+  const steps = local.lockTreeSteps('C:\\ProgramData\\huginn-local', me);
+  const joined = steps.map(([cmd, args]) => `${cmd} ${args.join(' ')}`);
+  // 1. Administrators own the whole tree first — removes a pre-creator's
+  //    implicit WRITE_DAC (the heart of F14). The old lock never did this.
+  assert.match(joined[0], /^icacls C:\\ProgramData\\huginn-local \/setowner \*S-1-5-32-544 .*\/t/,
+    joined[0]);
+  // 2. /reset discards explicit ACEs; /inheritance:r alone (the old code) left
+  //    an attacker's explicit full-control entry in place.
+  assert.ok(joined.some((s) => /\/reset\b.*\/t/.test(s)), 'no recursive /reset step: ' + joined.join(' | '));
+  // 3. The grant removes inheritance, names exactly the three trustees, and
+  //    recurses so an adopted dir's existing children are relocked.
+  const grant = joined.find((s) => s.includes('/inheritance:r') && s.includes('/grant:r'));
+  assert.ok(grant, 'no grant step');
+  assert.match(grant, /\*S-1-5-18:\(OI\)\(CI\)F/);
+  assert.match(grant, /\*S-1-5-32-544:\(OI\)\(CI\)F/);
+  assert.match(grant, new RegExp('\\*' + me.replace(/-/g, '\\-') + ':\\(OI\\)\\(CI\\)RX'));
+  assert.match(grant, /\/t\b/, 'the grant must recurse (/t) to fix adopted children');
+  // 4. device\ opens to the installer so huginn core can reseed the token.
+  //    (path.join uses the HOST separator; icacls only ever runs on Windows,
+  //    so match the device step by its arg array, not the separator.)
+  const devStep = steps.find(([cmd, args]) => cmd === 'icacls'
+    && /[\\/]device$/.test(args[0]) && args.includes(`*${me}:(OI)(CI)M`));
+  assert.ok(devStep, 'no device change grant for the installer');
+  assert.ok(devStep[1].includes('/t'), 'the device grant must recurse (/t)');
+});
+
+test('the lock verify catches a tree that is not actually locked', () => {
+  const me = 'S-1-5-21-10-20-30-1001';
+  // The good end state: Administrators own it, inheritance off, only our three.
+  assert.equal(local.verifyLockDecision(
+    { ownerSid: 'S-1-5-32-544', protected: true, sids: ['S-1-5-18', 'S-1-5-32-544', me] }, me), null);
+  // Inheritance still on (icacls /inheritance:r silently did nothing).
+  assert.match(local.verifyLockDecision(
+    { ownerSid: 'S-1-5-32-544', protected: false, sids: ['S-1-5-18'] }, me), /inheritance/);
+  // Ownership never moved off the attacker.
+  assert.match(local.verifyLockDecision(
+    { ownerSid: 'S-1-5-21-10-20-30-1055', protected: true, sids: ['S-1-5-18'] }, me), /owned by/);
+  // An attacker ACE survived the reset.
+  assert.match(local.verifyLockDecision(
+    { ownerSid: 'S-1-5-32-544', protected: true, sids: ['S-1-5-18', 'S-1-5-21-10-20-30-1055'] }, me),
+    /did not grant/);
+  // A completely unreadable ACL is a soft failure (its own sentence).
+  assert.match(local.verifyLockDecision(null, me), /could not read/);
+});
+
+test('parseAclLines reads the Get-Acl shape winAclInfo asks for', () => {
+  const info = local.parseAclLines(
+    'OWNER=S-1-5-32-544\r\nPROTECTED=True\r\nACE=S-1-5-18\r\nACE=S-1-5-32-544\r\nACE=S-1-5-21-1-2-3-1001\r\n');
+  assert.equal(info.ownerSid, 'S-1-5-32-544');
+  assert.equal(info.protected, true);
+  assert.deepEqual(info.sids, ['S-1-5-18', 'S-1-5-32-544', 'S-1-5-21-1-2-3-1001']);
+  assert.equal(local.parseAclLines('OWNER=x\nPROTECTED=False').protected, false);
+});
+
+// ------------------------------------------ token seeding after the lock (F2/F17)
+//
+// On Windows the wrapper and the desktop no longer write the root-equivalent
+// token into ProgramData themselves; they stage it owner-only in the user
+// profile and the elevated manager writes it AFTER lockTree. The write itself
+// (random O_EXCL temp, 0600, rename, no residue) is cross-platform and runs here.
+
+test('seedTokenFromStage writes the token only after the lock, 0600, then shreds the stage', () => {
+  const root = fs.mkdtempSync(path.join(tmp, 'seed-'));
+  const dir = path.join(root, 'data');
+  const stage = path.join(root, 'stage-token');
+  fs.writeFileSync(stage, '  the-real-token\n'); // as the profile stage holds it
+  const savedDir = process.env.HUGINN_LOCAL_DIR;
+  const savedSeed = process.env.HUGINN_SEED_TOKEN_FILE;
+  try {
+    process.env.HUGINN_LOCAL_DIR = dir;
+    process.env.HUGINN_SEED_TOKEN_FILE = stage;
+    assert.equal(local.seedTokenFromStage(), true);
+    const tok = path.join(dir, 'device', 'appd-token');
+    assert.equal(fs.readFileSync(tok, 'utf8'), 'the-real-token', 'trimmed token lands');
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(tok).mode & 0o777, 0o600, 'token is 0600');
+    }
+    assert.ok(!fs.existsSync(stage), 'the staging copy is shredded');
+    // No temp residue left in device\.
+    const residue = fs.readdirSync(path.join(dir, 'device')).filter((n) => n.includes('.tmp'));
+    assert.deepEqual(residue, [], 'left a temp behind: ' + residue.join(','));
+  } finally {
+    if (savedDir === undefined) delete process.env.HUGINN_LOCAL_DIR; else process.env.HUGINN_LOCAL_DIR = savedDir;
+    if (savedSeed === undefined) delete process.env.HUGINN_SEED_TOKEN_FILE; else process.env.HUGINN_SEED_TOKEN_FILE = savedSeed;
+  }
+});
+
+test('seedTokenFromStage is a no-op with nothing staged, and refuses an empty stage', () => {
+  const savedSeed = process.env.HUGINN_SEED_TOKEN_FILE;
+  try {
+    delete process.env.HUGINN_SEED_TOKEN_FILE;
+    assert.equal(local.seedTokenFromStage(), false, 'no env = old path, writes nothing');
+    const root = fs.mkdtempSync(path.join(tmp, 'seed-empty-'));
+    const stage = path.join(root, 'empty');
+    fs.writeFileSync(stage, '   \n');
+    process.env.HUGINN_SEED_TOKEN_FILE = stage;
+    const saved = process.env.HUGINN_LOCAL_DIR;
+    process.env.HUGINN_LOCAL_DIR = path.join(root, 'data');
+    try {
+      assert.throws(() => local.seedTokenFromStage(), /empty/);
+    } finally {
+      if (saved === undefined) delete process.env.HUGINN_LOCAL_DIR; else process.env.HUGINN_LOCAL_DIR = saved;
+    }
+  } finally {
+    if (savedSeed === undefined) delete process.env.HUGINN_SEED_TOKEN_FILE; else process.env.HUGINN_SEED_TOKEN_FILE = savedSeed;
+  }
+});
+
+test('writeTokenSecure creates 0600 under a wide umask and replaces an existing file', () => {
+  if (process.platform === 'win32') return; // mode bits are POSIX
+  const root = fs.mkdtempSync(path.join(tmp, 'wts-'));
+  const dest = path.join(root, 'device', 'appd-token');
+  const old = process.umask(0); // the umask-after-write trap: a default umask would leave 0644
+  try {
+    local.writeTokenSecure(dest, 'first');
+    assert.equal(fs.statSync(dest).mode & 0o777, 0o600);
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'first');
+    local.writeTokenSecure(dest, 'second'); // rename replaces
+    assert.equal(fs.readFileSync(dest, 'utf8'), 'second');
+    assert.equal(fs.statSync(dest).mode & 0o777, 0o600);
+  } finally {
+    process.umask(old);
+  }
+});
