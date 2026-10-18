@@ -6,7 +6,7 @@ import (
 )
 
 // The brand's own terminal renderings (BRAND.md §3: never redraw the mark).
-// art/ is a copy of assets/brand/explorations/round5; TestArtMatchesBrand
+// art/ is a copy of assets/brand/source/round5; TestArtMatchesBrand
 // fails when they drift.
 
 //go:embed art/perch-upright.txt

@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="512" height="512">
-  <!-- Tile master: the ink container inset 10% on a rounded bone tile (rx 18 = 22.5%, the set's tile radius).
-       App icon / taskbar from 48 px up; below that use the un-tiled primary. -->
-  <rect width="80" height="80" rx="18" fill="#E8E2DA"/>
-  <path transform="translate(8,8)" fill="#161310" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M55,29 L38,33 C37,36 39,41 44,46 C48,51 47,58 45,64 L9,64 C10,54 12,42 14,32 C14.5,22 19,18 22,18 L32,18 C34,18 34,20 35,21 L52,27 C53.6,27.6 55,27.8 55,29 Z M28,24 h4 v4 h-4 Z"/>
-</svg>

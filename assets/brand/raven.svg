@@ -5,9 +5,9 @@
        eye is an evenodd hole so the mark works on any background; the fold is a 2-unit slit
        spliced into the ring, so it is ONE path. Box x 22.5-76.5, y 17.8-68.8 (54 x 51).
        Ink #141615, bone #E2E6E1 (Moss & Heather). Below 32 px use the solid (no fold): see
-       explorations/round3/fold-system/mark-32.svg; 16-22 px use mark-16.svg (the head).
+       source/round3/fold-system/mark-32.svg; 16-22 px use mark-16.svg (the head).
        Canonical source: every icon on every platform derives from this path; the vertex
-       list lives in explorations/round3/fold-system/build.py. Regenerate derived assets
+       list lives in source/round3/fold-system/build.py. Regenerate derived assets
        with generate.sh in this directory; BRAND.md is the rule book. -->
   <g transform="translate(2,11)">
     <path fill="#141615" fill-rule="evenodd" d="M76.5,28 L67.5,24.6 L54,17.8 L45,17.8 L36,21.2 L32.18,26.972 L41.616,51.925 L32.334,65.952 L30.666,64.848 L39.384,51.675 L31.106,29.786 L22.5,68.8 L40.5,68.8 L54,62 L58.5,62 L63,48.4 L63,34.8 Z M48.55,26.3 a3.2,3.2 0 1,0 6.4,0 a3.2,3.2 0 1,0 -6.4,0 Z"/>

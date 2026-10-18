@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512">
-  <!-- Huginn glyph tile, r2-03-watching: the container is the ink, the alert raven's head and breast are the hole (the same facets as
-       mark.svg's head on a 3.5-unit cell, origin (9,16); the breast opens onto the bottom edge), the eye is a 4x4 cell of ink at
-       x 24-28 / y 20-24 (whole pixels at 16, 32, 64). ONE evenodd path: container - raven + eye. Walls: 16 above the crown,
-       9.5 right of the tip, 9 behind the head. Tint by state in the tray (idle #7B8794, working #C8A45C, attention #F3D58F). -->
-  <path fill="#161310" fill-rule="evenodd" d="M14,0 H50 A14,14 0 0 1 64,14 V50 A14,14 0 0 1 50,64 H14 A14,14 0 0 1 0,50 V14 A14,14 0 0 1 14,0 Z M54.5,23 L37,30 L37,37 L44,44 L45.75,64 L9,64 L9,47.5 L16,33.5 L12.5,23 L19.5,16 L30,16 L33.5,19.5 L40.5,19.5 Z M24,20 H28 V24 H24 Z"/>
-</svg>

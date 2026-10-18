@@ -21,7 +21,7 @@ if command -v rsvg-convert >/dev/null; then
   render() { rsvg-convert -w "$2" -h "$2" "$1" -o "$3"; }
 else
   command -v node >/dev/null || { echo "need rsvg-convert (or node + playwright)" >&2; exit 1; }
-  render() { node explorations/tools/render.mjs "$1" "${3%.png}" "$2" transparent >/dev/null && mv "${3%.png}-$2.png" "$3"; }
+  render() { node source/tools/render.mjs "$1" "${3%.png}" "$2" transparent >/dev/null && mv "${3%.png}-$2.png" "$3"; }
 fi
 command -v convert      >/dev/null || { echo "need ImageMagick"  >&2; exit 1; }
 
