@@ -93,7 +93,7 @@ if not devs:
     print("  No devices enrolled.")
     print()
     print("  A device is another machine that can run a chat in ITS context.")
-    print("  On the machine you want to offer, run 'huginn device on' (or turn on")
+    print("  On the machine you want to offer, run \"huginn device on\" (or turn on")
     print("  \"Available to huginn\" in the desktop app), and it appears here.")
     print()
     sys.exit(0)
