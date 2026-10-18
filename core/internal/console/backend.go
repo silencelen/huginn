@@ -79,10 +79,12 @@ func (b *backend) do(ctx context.Context, method, path string, body, out any) er
 		if e.Error == "" {
 			e.Error = http.StatusText(res.StatusCode)
 		}
-		return &apiError{Status: res.StatusCode, Msg: e.Error}
+		return &apiError{Status: res.StatusCode, Msg: clean(e.Error)}
 	}
 	if out != nil && len(raw) > 0 {
-		return json.Unmarshal(raw, out)
+		err := json.Unmarshal(raw, out)
+		scrub(out) // every string, before any screen shows it (F25); a partial decode is shown too
+		return err
 	}
 	return nil
 }

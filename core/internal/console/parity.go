@@ -403,6 +403,7 @@ func (m *model) onChatEvent(e chatEvent) tea.Cmd {
 		Position int    `json:"position"`
 	}
 	json.Unmarshal(e.data, &d)
+	scrub(&d) // model text, one delta at a time (F25)
 	switch e.event {
 	case "delta":
 		m.chat.live.WriteString(d.Text)
@@ -431,7 +432,7 @@ func (m *model) chatView() string {
 		return "\n   " + t.dim.Render("loading…")
 	}
 	if c.err != nil {
-		return "\n   " + t.err.Render(c.err.Error())
+		return "\n   " + t.err.Render(clean(c.err.Error()))
 	}
 	var lines []string
 	wrap := func(style lipgloss.Style, indent, s string) {
@@ -615,7 +616,7 @@ func (m *model) projectView() string {
 	case ps.loading:
 		b.WriteString("   " + t.dim.Render("loading…") + "\n")
 	case ps.err != nil:
-		b.WriteString("   " + t.err.Render(ps.err.Error()) + "\n")
+		b.WriteString("   " + t.err.Render(clean(ps.err.Error())) + "\n")
 	default:
 		m.listRows(&b, scrProject, len(ps.members), func(i int) string {
 			mb := ps.members[i]

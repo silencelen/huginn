@@ -25,7 +25,7 @@ func (m *model) gateView() string {
 	b.WriteString("   " + t.key.Render("s") + t.dim.Render("  start it (it is set up, just stopped)") + "\n")
 	b.WriteString("   " + t.key.Render("i") + t.dim.Render("  set it up to start at boot: huginn core install") + "\n")
 	b.WriteString("   " + t.key.Render("a") + t.dim.Render("  attach to the main session anyway (over ssh)") + "\n\n")
-	b.WriteString("   " + t.dim.Render(m.data.coreErr.Error()) + "\n")
+	b.WriteString("   " + t.dim.Render(clean(m.data.coreErr.Error())) + "\n")
 	return b.String()
 }
 
@@ -83,7 +83,7 @@ func (m *model) homeView() string {
 		b.WriteString("  " + tag[1] + "   " + tag[3] + "\n\n")
 	}
 	if m.data.appdErr != nil {
-		b.WriteString("\n  " + t.err.Render("huginn is not reachable from this core: "+m.data.appdErr.Error()) + "\n")
+		b.WriteString("\n  " + t.err.Render("huginn is not reachable from this core: "+clean(m.data.appdErr.Error())) + "\n")
 		if !m.data.core.Paired {
 			b.WriteString("  " + t.dim.Render("pair it: huginn core pair --url https://<host>:8787") + "\n")
 		}
