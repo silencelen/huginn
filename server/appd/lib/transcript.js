@@ -221,11 +221,47 @@ function notificationEcho(d) {
 /** The `<cross-session-message …>…</cross-session-message>` element, or null. */
 const CROSS_RE = /<cross-session-message\b[\s\S]*?<\/cross-session-message>/;
 
+/**
+ * A subagent's report, `<agent-message from="…">…</agent-message>`, with no
+ * cross-session wrapper. Its QUEUE copy carries the bare element (the `user`
+ * record a moment later says "Another Claude session sent a message:" before
+ * it), so it matched nothing here and was drawn as a raw bubble beside the note.
+ */
+const AGENT_RE = /<agent-message\b[\s\S]*?<\/agent-message>/;
+
+/** The largest peer or summary body sent for a folded card; past it, clipped. */
+const FOLD_MAX = 200_000;
+
+// A long paste into Claude Code's prompt is stored wrapped:
+//   <pasted_content id="d842">\n…\n</pasted_content id="d842">\n
+// The id is four hex digits, repeats across messages, and the closer names its
+// opener's, which is what keeps a paste that QUOTES the tag from closing early.
+// The clients fold the block into a card; text that is a title or a label
+// wants the words without the markup.
+const PASTED_RE = /<pasted_content id="([^"\n]{1,32})">\n?([\s\S]*?)\n?<\/pasted_content id="\1">\n?/g;
+
+/** The text with every paste unwrapped: the pasted words stay, the tags go. */
+function unwrapPasted(t) {
+  const s = String(t || '');
+  // Both literals before the scan, as humanizeUserText does for a page frame:
+  // the lazy body between two literals restarts at every opener, so a message
+  // full of openers and no closer would cost a walk to the end for each.
+  if (!s.includes('<pasted_content id="') || !s.includes('</pasted_content id="')) return s;
+  return s.replace(PASTED_RE, '$2\n');
+}
+
 /** The peer's own words, with the subagent wrapper (if any) taken off. */
 function peerBody(raw) {
   const s = String(raw || '');
   const inner = /<agent-message\b[^>]*>([\s\S]*?)<\/agent-message>/.exec(s);
-  const body = inner ? inner[1] : s.replace(/<\/?cross-session-message\b[^>]*>/g, '');
+  let body = inner ? inner[1] : s.replace(/<\/?cross-session-message\b[^>]*>/g, '');
+  // A subagent's hand-back opens with the harness's one-line frame ("[Subagent
+  // hand-back] The text below is the final report … The report follows:") and
+  // indents every line of the report by two spaces. Read back as is, the frame
+  // was the preview line of every report and the indent made a four-space list
+  // into a code block. Display only: nothing here decides who sent it.
+  const frame = /^\s*\[Subagent hand-back\][^\n]*\n/.exec(body);
+  if (frame) body = body.slice(frame[0].length).replace(/^ {2}/gm, '');
   return body.trim();
 }
 
@@ -308,11 +344,15 @@ function peerNote(d, text, peerIds) {
   const origin = d && d.origin;
   if (origin && origin.kind === 'peer') {
     const name = typeof origin.name === 'string' && origin.name ? origin.name : 'another session';
-    const body = peerBody(origin.body || CROSS_RE.exec(String(text || ''))?.[0] || '');
+    const element = CROSS_RE.exec(String(text || ''))?.[0] || AGENT_RE.exec(String(text || ''))?.[0] || '';
+    const body = peerBody(origin.body || element);
     const pid = Number(origin.verifiedPeerPid) || null;
     return {
-      key: CROSS_RE.exec(String(text || ''))?.[0] || null,
+      key: element || null,
       text: body ? `Message from ${name}: ${clip(body, 300)}` : `Message from ${name}`,
+      // The whole message, for a client that folds it into a card (2026-10-17:
+      // the note clipped at 300 characters was the only way to read a report).
+      body: body ? clip(body, FOLD_MAX) : null,
       peer: { name, sessionId: (pid && peerIds && peerIds.get(pid)) || null, pid },
     };
   }
@@ -340,11 +380,25 @@ function peerNoteFromQueue(content, peerIds) {
     return {
       key: block[0],
       text: body ? `Message from ${who}: ${clip(body, 300)}` : `Message from ${who}`,
+      body: body ? clip(body, FOLD_MAX) : null,
       peer: {
         name: who,
         sessionId: (pid && peerIds && peerIds.get(Number(pid[1]))) || null,
         pid: pid ? Number(pid[1]) : null,
       },
+    };
+  }
+  // A subagent's report: the bare element. Its name comes with the `user`
+  // record that follows (origin.name), which then relabels this note.
+  const agent = AGENT_RE.exec(s);
+  if (agent && agent.index <= 2) {
+    const body = peerBody(agent[0]);
+    const who = 'a subagent';
+    return {
+      key: agent[0],
+      text: body ? `Message from ${who}: ${clip(body, 300)}` : `Message from ${who}`,
+      body: body ? clip(body, FOLD_MAX) : null,
+      peer: { name: who, sessionId: null, pid: null },
     };
   }
   return peerNote({}, s, peerIds);
@@ -657,6 +711,8 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
    * later IS a second message.
    */
   const peerSeen = [];
+  // The note a queue copy drew, by its element, so the `user` record can name the sender.
+  const peerEvents = new Map();
   /**
    * The machine-text notes already drawn from their QUEUE record, by content, so
    * the `user` record repeating the same notification ~40 ms later does not draw
@@ -712,11 +768,13 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           // window holds produces exactly one note.
           const peerQ = peerNoteFromQueue(content, peerIds);
           if (peerQ) {
-            out.events.push({
+            const ev = {
               seq: ++seq, kind: 'system', ts, sidechain, text: peerQ.text, peer: peerQ.peer,
+              ...(peerQ.body ? { body: peerQ.body, fold: 'peer' } : {}),
               ...(peerQ.project ? { project: peerQ.project } : {}),
-            });
-            if (peerQ.key) peerSeen.push(peerQ.key);
+            };
+            out.events.push(ev);
+            if (peerQ.key) { peerSeen.push(peerQ.key); peerEvents.set(peerQ.key, ev); }
             continue;
           }
           let ev;
@@ -748,6 +806,23 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             // and nothing needs to swallow one — the difference from the drain
             // below, and the whole reason the two operations are read apart.
             deliverQueued(ev, ts);
+          }
+          else if (content.trim() && !machineText(content) && peerNoteFromQueue(content, peerIds)) {
+            // A PEER NOTE, which the enqueue drew and never queued. A subagent's
+            // hand-back absorbed into a running turn leaves only this record and
+            // no `user` one, and read as text it was the whole report in a bubble.
+            // Drawn here only on a cold open whose enqueue scrolled off the top; a
+            // resumed tail already has the note from an earlier page.
+            const peerR = peerNoteFromQueue(content, peerIds);
+            if (!resuming && !(peerR.key && peerSeen.includes(peerR.key))) {
+              const ev = {
+                seq: ++seq, kind: 'system', ts, sidechain, text: peerR.text, peer: peerR.peer,
+                ...(peerR.body ? { body: peerR.body, fold: 'peer' } : {}),
+                ...(peerR.project ? { project: peerR.project } : {}),
+              };
+              out.events.push(ev);
+              if (peerR.key) { peerSeen.push(peerR.key); peerEvents.set(peerR.key, ev); }
+            }
           }
           else if (content.trim() && !machineText(content)) {
             // The enqueue is outside this window, and what to do about that
@@ -850,6 +925,17 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         }
         const t = textOf(c);
         if (!t.trim() || queued.has(t)) continue;
+        // The compaction summary Claude Code writes as a `user` record: the
+        // model's own account of the conversation so far, never the owner's
+        // words. A card, folded (2026-10-17); it read as a page-long message
+        // the owner had typed.
+        if (d.isCompactSummary === true) {
+          out.events.push({
+            seq: ++seq, kind: 'system', ts, sidechain,
+            text: 'Summary of the earlier conversation', body: clip(t.trim(), FOLD_MAX), fold: 'compact',
+          });
+          continue;
+        }
         // A skill's instruction body, pushed in by the tool call that loaded it.
         // The `Skill` card a couple of records above is ALREADY the one event
         // this invocation deserves — it carries the skill's name and, opened,
@@ -877,9 +963,21 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         const peerU = peerNote(d, t, peerIds);
         if (peerU) {
           const at = peerU.key ? peerSeen.indexOf(peerU.key) : -1;
-          if (at >= 0) { peerSeen.splice(at, 1); continue; }
+          if (at >= 0) {
+            peerSeen.splice(at, 1);
+            // The queue copy drew the note without the sender's name (a
+            // subagent's report names nobody); this record has it.
+            const drawn = peerEvents.get(peerU.key);
+            if (drawn && drawn.peer && drawn.peer.name === 'a subagent' && peerU.peer && peerU.peer.name) {
+              drawn.peer = peerU.peer;
+              drawn.text = peerU.text;
+            }
+            peerEvents.delete(peerU.key);
+            continue;
+          }
           out.events.push({
             seq: ++seq, kind: 'system', ts, sidechain, text: peerU.text, peer: peerU.peer,
+            ...(peerU.body ? { body: peerU.body, fold: 'peer' } : {}),
             ...(peerU.project ? { project: peerU.project } : {}),
           });
           continue;
@@ -1129,7 +1227,65 @@ function liveActivity(events, nowSec) {
   return { ...(tool || {}), subagents };
 }
 
+/**
+ * When this conversation last did something a person would call work, in epoch
+ * seconds: a message, a tool call or its result, the end of a turn, a
+ * compaction. Null when the tail holds none.
+ *
+ * ⚠ NOT tmux's window_activity, which is what "last activity" used to be. Every
+ * redraw of the TUI and every title the state hook writes counts as pane output,
+ * so a session idle for a day read "5 minutes ago". Nor the file's mtime: an
+ * idle transcript is touched without a record being added (seen on this host,
+ * 2026-10-17: mtime 17 minutes old, last record 26 hours old). Only records of
+ * these three types carry a timestamp a person did something at.
+ *
+ * Cached on size and mtime, so a poll of an unchanged transcript reads nothing;
+ * a changed one costs one tail read, parsed from the end until the first hit.
+ */
+const WORK_RECORD_TYPES = new Set(['user', 'assistant', 'system']);
+const lastWorkCache = new Map();
+
+function lastWorkAt(file) {
+  let st;
+  try { st = fs.statSync(file); } catch { return null; }
+  const hit = lastWorkCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.at;
+  let at = null;
+  // One long tool result can be a whole tail on its own, hence the second try.
+  for (const want of [256 * 1024, 4 * 1024 * 1024]) {
+    at = lastWorkInTail(file, st.size, want);
+    if (at !== null || want >= st.size) break;
+  }
+  if (lastWorkCache.size > 500) lastWorkCache.clear();
+  lastWorkCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, at });
+  return at;
+}
+
+function lastWorkInTail(file, size, want) {
+  const len = Math.min(size, want);
+  if (len <= 0) return null;
+  const buf = Buffer.alloc(len);
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    fs.readSync(fd, buf, 0, len, size - len);
+  } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
+  const lines = buf.toString('utf8').split('\n');
+  // Started mid-file: the first line is the end of a record, not a record.
+  const first = size > len ? 1 : 0;
+  for (let i = lines.length - 1; i >= first; i--) {
+    const l = lines[i];
+    if (!l || l.charCodeAt(0) !== 123 /* { */ || !l.includes('"timestamp"')) continue;
+    let d;
+    try { d = JSON.parse(l); } catch { continue; }
+    if (!d || !WORK_RECORD_TYPES.has(d.type) || typeof d.timestamp !== 'string') continue;
+    const ms = Date.parse(d.timestamp);
+    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  }
+  return null;
+}
+
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
-  peerBody, peerNote, peerNoteFromQueue, projectRelayNote,
+  peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt,
 };

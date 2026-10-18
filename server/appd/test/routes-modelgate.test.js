@@ -244,3 +244,26 @@ test('a device posting events cannot write a chat model', async () => {
   assert.notEqual(again.model, 'evil-1', 'a device event never sets a model');
   assert.equal(again.model ?? null, null, 'the chat keeps its default');
 });
+
+// Leaving a chat nobody wrote in deletes it (the clients send ?ifEmpty=1 on
+// the way out). The daemon decides what "empty" is, so a message that arrived
+// from another device a moment ago is never deleted with it.
+test('DELETE ?ifEmpty=1 removes an empty chat and refuses one with a message', async () => {
+  const empty = await mkChat({});
+  assert.equal(empty.status, 201);
+  const gone = await api(`/v1/chats/${empty.body.id}?ifEmpty=1`, { method: 'DELETE' });
+  assert.equal(gone.status, 200, JSON.stringify(gone.body));
+  assert.equal((await api(`/v1/chats/${empty.body.id}`)).status, 404);
+
+  // A message on disk is what "not empty" means. Written straight to the
+  // store: posting one would start a run, and nothing here may spawn claude.
+  const kept = await mkChat({});
+  fs.appendFileSync(path.join(tmp, 'data', 'chats', kept.body.id, 'messages.jsonl'),
+    JSON.stringify({ role: 'user', text: 'hello', ts: 1 }) + '\n');
+  const refused = await api(`/v1/chats/${kept.body.id}?ifEmpty=1`, { method: 'DELETE' });
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /not empty/);
+  assert.equal((await api(`/v1/chats/${kept.body.id}`)).status, 200, 'still there');
+  // A plain DELETE is the person choosing to delete, and still works.
+  assert.equal((await api(`/v1/chats/${kept.body.id}`, { method: 'DELETE' })).status, 200);
+});

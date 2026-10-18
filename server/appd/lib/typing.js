@@ -161,6 +161,10 @@ const CONVERSATIONAL_TYPES = new Set(['user', 'assistant']);
 function isConversationalRecord(rec) {
   if (!rec || typeof rec.type !== 'string') return false;
   if (rec.type === 'system') return rec.subtype === 'turn_duration';
+  // The compaction summary is a `user` record nobody said: after a compaction
+  // while idle it was the last "conversational" record, so the session read as
+  // mid-turn and every automated send waited out its ten minutes, then dropped.
+  if (rec.isCompactSummary === true) return false;
   return CONVERSATIONAL_TYPES.has(rec.type);
 }
 
@@ -275,6 +279,8 @@ function hasHumanUserRecord(jsonlSlice) {
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }
     if (!rec || rec.type !== 'user' || rec.isMeta === true) continue;
+    // Claude Code's own summary after a compaction, not a person.
+    if (rec.isCompactSummary === true) continue;
     const c = rec.message && rec.message.content;
     if (typeof c === 'string') { if (c.trim()) return true; continue; }
     if (!Array.isArray(c)) continue;

@@ -1407,3 +1407,18 @@ test('boxHoldsExactly: the stranded copy is an Enter, a ghost or a draft is not'
   assert.equal(t.boxHoldsExactly(null, 'x'), false);
   assert.equal(t.boxHoldsExactly('somebody else', 'x'), false);
 });
+
+test('the summary after a compaction is neither a turn starting nor the owner typing', () => {
+  // Compacted while idle: the boundary, then Claude Code's summary as a `user`
+  // record. Read as conversation it left the session mid-turn, and every
+  // automated send waited out its hold and then dropped.
+  const turn = JSON.stringify({ type: 'system', subtype: 'turn_duration', timestamp: '2026-10-17T10:00:00Z' });
+  const boundary = JSON.stringify({ type: 'system', subtype: 'compact_boundary', timestamp: '2026-10-17T10:05:00Z' });
+  const summary = JSON.stringify({
+    type: 'user', isCompactSummary: true, isVisibleInTranscriptOnly: true, timestamp: '2026-10-17T10:05:01Z',
+    message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context.' },
+  });
+  const notice = JSON.stringify({ type: 'system', subtype: 'informational', timestamp: '2026-10-17T10:05:02Z', content: 'Compacted while idle, before the prompt cache expired' });
+  assert.equal(t.boundaryFromTail(`${turn}\n${boundary}\n${summary}\n${notice}\n`).idle, true);
+  assert.equal(t.hasHumanUserRecord(`${boundary}\n${summary}\n${notice}\n`), false);
+});
