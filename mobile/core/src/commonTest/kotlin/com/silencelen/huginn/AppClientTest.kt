@@ -278,7 +278,7 @@ class AppClientTest {
                 HttpStatusCode.Conflict,
             )
         }
-        val save = c.saveApp("atlas", version = 3, name = "Armap")
+        val save = c.saveApp("atlas", version = 3, name = "Atlas")
         assertTrue(save.conflict)
         assertEquals(7, save.app.version, "the editor adopts the version it was handed")
         assertEquals("Atlas map", save.app.name)
@@ -290,12 +290,12 @@ class AppClientTest {
     fun `an accepted edit is not a conflict`() = runTest {
         val c = client {
             respond(
-                """{"id":"atlas","name":"Armap","url":"http://huginn:8088/","version":4,
+                """{"id":"atlas","name":"Atlas","url":"http://huginn:8088/","version":4,
                    "up":true,"lastProbeAt":1789459940,"icon":true}""",
                 HttpStatusCode.OK,
             )
         }
-        val save = c.saveApp("atlas", version = 3, name = "Armap")
+        val save = c.saveApp("atlas", version = 3, name = "Atlas")
         assertFalse(save.conflict)
         assertEquals(4, save.app.version)
         assertNull(save.refusal)

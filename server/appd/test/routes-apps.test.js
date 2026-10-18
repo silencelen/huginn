@@ -449,7 +449,7 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
 
   // ⚠ THE LINES SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES, literally.
   //
-  // ⚠⚠ AND THERE IS NO HEIMDALL HALF. The one address failing here is LOOPBACK,
+  // ⚠⚠ AND THERE IS NO HYPERVISOR HALF. The one address failing here is LOOPBACK,
   // which never crosses the veth chain — 100.fw has no say over it and the
   // rebind above is the entire remedy. The old code put `-source 127.0.0.1`
   // here, a rule that could never match, which is the defect 3.5.2 removed;

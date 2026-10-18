@@ -176,12 +176,12 @@ test('a revive takes the old name back when nothing else holds it', () => {
 });
 
 test('a taken name becomes <name>2, not a uuid and not a failure', () => {
-  assert.equal('jtyper2', archive.reviveName('jotter', ['jotter']));
-  assert.equal('jtyper3', archive.reviveName('jotter', ['jotter', 'jtyper2']));
+  assert.equal('jotter2', archive.reviveName('jotter', ['jotter']));
+  assert.equal('jotter3', archive.reviveName('jotter', ['jotter', 'jotter2']));
 });
 
 test('a Set of live names is accepted as readily as an array', () => {
-  assert.equal('jtyper2', archive.reviveName('jotter', new Set(['jotter'])));
+  assert.equal('jotter2', archive.reviveName('jotter', new Set(['jotter'])));
 });
 
 // ------------------------------------------------------- transcript window

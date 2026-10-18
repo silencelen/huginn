@@ -652,7 +652,7 @@ function squashPane(s) { return stripAnsi(String(s || '')).replace(/\s+/g, ''); 
  * with no line count at all, while a short three-line paste is not collapsed at
  * all. A pattern that demanded `+N lines` called every long paragraph "never
  * appeared", the recovery found the box non-empty and chose 'leave', and the
- * message sat there unsent (`workxhuginn`, 2026-09-28: `❯ [Pasted text #1]` in
+ * message sat there unsent (`devxapp`, 2026-09-28: `❯ [Pasted text #1]` in
  * the journal line itself). `\w+` rather than `lines?` so a future `+N chars`
  * reads the same way.
  */
@@ -670,8 +670,8 @@ function pasteProbe(text) { return squashPane(text).slice(0, 32); }
  * shows the middle of a 700-character brief and its first 32 characters are
  * nowhere on screen. The head probe alone read that as "never appeared"; the
  * recovery saw a non-empty box and chose 'leave'; no Enter was pressed. Three
- * of the five journal lines in five days (`jnetad`, `tailscale`,
- * `btc15minxledger`) show the tail of the owner's own message in the box.
+ * of the five journal lines in five days (`homead`, `tailscale`,
+ * `bursarxledger`) show the tail of the person's own message in the box.
  *
  * The tail is as unmistakable as the head for the same reason, and a message
  * short enough for the two to overlap yields one probe, not two.

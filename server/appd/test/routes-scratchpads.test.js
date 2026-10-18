@@ -438,7 +438,7 @@ test('a stale save is a 409 carrying the CURRENT page, not a bare refusal', asyn
 // --------------------------------------------------------- the reference
 
 test('a chat message with a page attached reaches the run inside the frame', async () => {
-  const pad = await mkPad('Hostnames', 'pve1\nskybox');
+  const pad = await mkPad('Hostnames', 'pve1\nstandby');
   const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
   const sent = await api(`/v1/chats/${chat.id}/messages`, {
     method: 'POST',
@@ -447,7 +447,7 @@ test('a chat message with a page attached reaches the run inside the frame', asy
   assert.equal(202, sent.status, JSON.stringify(sent.body));
   const prompt = await waitForPrompt('REF_ONE');
   assert.ok(
-    prompt.includes('[Scratchpad "Hostnames"]\nheimdall\nskybox\n[End scratchpad]'),
+    prompt.includes('[Scratchpad "Hostnames"]\npve1\nstandby\n[End scratchpad]'),
     `the frame did not reach the run: ${JSON.stringify(prompt.slice(0, 200))}`,
   );
   assert.ok(
@@ -618,7 +618,7 @@ test('a page whose CONTENT closes the frame is tagged, and reaches the run whole
   // messages they were sent, and one of them had a page attached. Untagged, the
   // frame ends at the PASTED closing line — the run reads half of what was
   // attached and the rest lands in the sender's own message as raw marker text.
-  const inner = '[Scratchpad "Hostnames"]\nheimdall\n[End scratchpad]';
+  const inner = '[Scratchpad "Hostnames"]\npve1\n[End scratchpad]';
   const pad = await mkPad('Archive', `${inner}\nand a note after it`);
   const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
   const sent = await api(`/v1/chats/${chat.id}/messages`, {

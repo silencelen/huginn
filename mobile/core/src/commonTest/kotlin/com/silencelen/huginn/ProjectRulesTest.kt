@@ -867,10 +867,10 @@ class ProjectRulesTest {
 
     @Test
     fun `a proposal block is read to its summary and its roles`() {
-        val body = """{"type":"software","scope":"Build it.","summary":"WidgetsHub: one devstore app",
+        val body = """{"type":"software","scope":"Build it.","summary":"DashboardApp: one devstore app",
             "sessions":[{"role":"core","firstPrompt":"x"},{"role":"widgets","firstPrompt":"y"},{"role":"release","firstPrompt":"z"}]}"""
         val p = ProjectRules.proposalPreview(body)!!
-        assertEquals("WidgetsHub: one devstore app", p.summary)
+        assertEquals("DashboardApp: one devstore app", p.summary)
         assertEquals(listOf("core", "widgets", "release"), p.roles)
         assertEquals("3 sessions: core, widgets, release", ProjectRules.proposalWords(p))
     }

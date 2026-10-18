@@ -51,7 +51,7 @@ const humanize = lift();
 
 const IMAGE = '[Attached image at /var/lib/huginn-appd/uploads/img-1.jpg — view it with the Read tool.]';
 const FILE = '[Attached file at /var/lib/huginn-appd/uploads/f-2 (backup.tar.gz) — view it with the Read tool.]';
-const PAGE = '[Scratchpad "Hostnames"]\nheimdall .7.10\n[End scratchpad]\n';
+const PAGE = '[Scratchpad "Hostnames"]\npve1 .10.10\n[End scratchpad]\n';
 
 test('the wire markers every app sends humanize to words', () => {
   assert.equal(humanize(`what is this?\n\n${IMAGE}`), 'what is this?\n\nphoto');

@@ -222,7 +222,7 @@ const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
  */
 const PROJECTS_HOME = (process.env.HUGINN_APPD_PROJECTS_DIR
   || path.join(process.env.HOME || '/root', 'projects')).replace(/\/+$/, '') || '/';
-// Optional companion memory node ("Muninn") — feeds the /v1/status mempalace
+// Optional companion memory node — feeds the /v1/status mempalace
 // field. Empty/default on a generic host (the probe reports 'unconfigured');
 // a deployment that has one sets these via a systemd drop-in.
 const MEMPALACE_HOST = process.env.HUGINN_APPD_MEMPALACE_HOST || '';
