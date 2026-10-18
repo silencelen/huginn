@@ -477,8 +477,8 @@ Rough edges:
 Rough edges (most important for a public release):
 - **Authenticode is chained to the private `jnet-ODIN-CA`.** Outside jnet.ad, SmartScreen and Defender
   treat the installer and `huginn.exe` as an *unknown publisher*. A public user sees the "Windows
-  protected your PC" wall. That's the single biggest professional-polish gap. It's already tracked as
-  "a publicly trusted signing account" (memory public-programs-code-signing).
+  protected your PC" wall. That's the single biggest professional-polish gap. The fix is a
+  publicly trusted signing certificate.
 - **Two UAC prompts in the worst case** (uninstall task delete, reinstall task register). Both are
   explained in the gate/uninstall text, but the uninstall prompt appears mid-run. Show "Windows will ask
   for administrator approval to remove the boot task" before the confirmation, not after.
