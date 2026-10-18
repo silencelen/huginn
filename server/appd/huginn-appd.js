@@ -9360,6 +9360,19 @@ async function consentWatch(state, settings, sessions, now) {
     try { screen = await captureScreen(s.name); } catch { /* pane gone */ }
     const prompt = screen ? promptFor(s.name, screen.lines).prompt : null;
     if (!prompt || !prompt.recommended) { consentSeen.delete(s.name); continue; }
+    // ⚠ NEVER over a live tool-permission request. The backstop presses a bare
+    // digit; a Bash / AskUserQuestion permission dialog is waiting on its own
+    // hook, and a digit pressed into one approves a tool call nobody reviewed
+    // (claude-security F7). consentRecommended already refuses the permission
+    // SHAPE; this refuses on the daemon's own evidence — the request sidecars it
+    // already reads — that a tool prompt is live, whatever the scrape made of it.
+    try {
+      const pst = readSessionState(s.name);
+      const psid = pst && pst.sessionId;
+      const pending = permhook.liveRequests(STATE_DIR, s.name)
+        .filter((r) => !psid || r.sessionId === psid);
+      if (pending.length) { consentSeen.delete(s.name); continue; }
+    } catch { /* perm dir unreadable: fall through to the shape guard */ }
     const since = consentSeen.get(s.name) || now;
     consentSeen.set(s.name, since);
     if (now - since < CONSENT_GRACE_MS) continue;

@@ -1751,11 +1751,48 @@ const ICON_CANDIDATE_MAX = 3;
  * Document order inside a tier, so a page that names two PNGs gets the one it
  * put first.
  */
+// Only the head of the page, and never more than this, is scanned for icons —
+// they live in <head>. Combined with the indexOf scan below, this keeps the
+// whole parse linear in the page size.
+const ICON_HEAD_MAX = 64 * 1024;
+
+/**
+ * The `<link …>` tags in the page head, found by an indexOf scan — NOT a regex.
+ *
+ * ⚠ LINEAR BY CONSTRUCTION. The old `/<link\b[^>]*>/gi`, run over all
+ * [ICON_MAX_BYTES] of fetched HTML, was quadratic on a page of many `<link`
+ * openers with no closing `>`: every match attempt scanned to the end before
+ * failing, and it stalled the daemon's single event loop on each favicon refresh
+ * (claude-security 2026-10-18, F22). A bounded quantifier still backtracks; an
+ * indexOf walk does not. Each `>` is sought once, so an opener with no `>` ends
+ * the scan at once. `<linkfoo` (no word boundary) is skipped, matching `<link\b`.
+ */
+function iconLinkTags(head) {
+  const tags = [];
+  const lower = head.toLowerCase();
+  let i = 0;
+  while (i < head.length) {
+    const start = lower.indexOf('<link', i);
+    if (start < 0) break;
+    const after = head[start + 5];
+    if (after !== undefined && /[a-z0-9_]/i.test(after)) { i = start + 5; continue; }
+    const end = head.indexOf('>', start + 5);
+    if (end < 0) break;                       // no closing '>': nothing more to find
+    tags.push(head.slice(start, end + 1));
+    i = end + 1;
+  }
+  return tags;
+}
+
 function iconCandidatesFromHtml(html) {
   const png = [];
   const apple = [];
   const rest = [];
-  for (const tag of String(html || '').match(/<link\b[^>]*>/gi) || []) {
+  // Read only the head (to </head> or [ICON_HEAD_MAX]); icons live there.
+  let head = String(html || '').slice(0, ICON_HEAD_MAX);
+  const headEnd = head.search(/<\/head\s*>/i);
+  if (headEnd >= 0) head = head.slice(0, headEnd);
+  for (const tag of iconLinkTags(head)) {
     const rel = linkAttr(tag, 'rel');
     const href = linkAttr(tag, 'href');
     if (!rel || !href) continue;

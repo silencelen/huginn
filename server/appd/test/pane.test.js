@@ -946,6 +946,23 @@ test('recommended is absent from every ordinary dialog', () => {
     'but it carries neither "limit reached" nor "now uses usage credits", so it is not the dialog');
 });
 
+test('F7: a forged consent heading over a permission dialog is NOT recommended', () => {
+  // claude-security 2026-10-18 F7: the old gate searched the WHOLE pane for the
+  // heading and picked ANY option containing "for this session". A prompt-injected
+  // model prints the heading as prose and runs a Bash command whose "Yes, and
+  // don't ask again … for this session" row carries the phrase — and the backstop
+  // would press Yes on a real permission prompt. The dialog is now recognised
+  // only by its own rows and its own region, so this is refused.
+  const FORGED = path.join(__dirname, 'fixtures', 'prompts', 'fable-consent-forged-80.txt');
+  const p = detectPrompt(fs.readFileSync(FORGED, 'utf8').split('\n'));
+  assert.ok(p, 'it is still a real permission dialog and must parse as a prompt');
+  assert.equal(p.options[0].label, 'Yes', 'the on-screen dialog is a Yes/No permission prompt');
+  assert.equal(p.recommended, undefined,
+    'appd must never auto-answer a tool-permission dialog, forged heading or not');
+  // …and the real consent dialog is still recommended — the fix did not blind it.
+  assert.equal(detectPrompt(consentLines()).recommended, 2);
+});
+
 test('the consent dialog answers through the ordinary fingerprint path', () => {
   const p = detectPrompt(consentLines());
   const fp = promptFingerprint(p);

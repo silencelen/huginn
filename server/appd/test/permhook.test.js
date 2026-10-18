@@ -174,6 +174,23 @@ test('F1: a command that merely APPEARS inside the dialog\'s command does not ma
   assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'rm -rf ~/projects' } }, detectPrompt(pane), ph.dialogRegion(pane)), false);
 });
 
+test('F20: two commands that differ only by a space (or case) do NOT match', () => {
+  // claude-security 2026-10-18 F20: `squash()` deleted ALL whitespace and
+  // lowercased, so the dialog for `rm -rf ~/tmp/x` matched a live, unseen request
+  // for `rm -rf ~ /tmp/x` — a tap meant for one approved the other. Word
+  // boundaries and case must survive the normalisation.
+  const pane = ['─'.repeat(60), ' Bash command', '╌'.repeat(60), ' rm -rf ~/tmp/x', '╌'.repeat(60),
+    ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel'];
+  const prompt = detectPrompt(pane);
+  const region = ph.dialogRegion(pane);
+  assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'rm -rf ~/tmp/x' } }, prompt, region), true,
+    'the exact command on screen still matches');
+  assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'rm -rf ~ /tmp/x' } }, prompt, region), false,
+    'a command that differs by a single space is a DIFFERENT command');
+  assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'RM -RF ~/tmp/x' } }, prompt, region), false,
+    'case is significant in a shell command');
+});
+
 test('file and other tools never take the hook path (their dialog shapes were never captured)', () => {
   const pane = ['─'.repeat(60), ' Create file', ' authorized_keys', ' Do you want to create authorized_keys?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel'];
   for (const tool of ['Write', 'Edit', 'NotebookEdit', 'WebFetch', 'mcp__x__y']) {

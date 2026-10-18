@@ -1428,6 +1428,25 @@ test('the page’s icon links are read as a TOKEN LIST and ranked PNG first', ()
   assert.equal(appsLib.ICON_CANDIDATE_MAX, c(many).length);
 });
 
+test('F22: a flood of unclosed <link openers parses fast and finds nothing', () => {
+  // claude-security 2026-10-18 F22: `/<link\b[^>]*>/gi` over 256 KiB of `<link`
+  // with no `>` is quadratic and stalls the daemon's event loop on every favicon
+  // refresh. Head-only + a capped quantifier makes it linear.
+  const html = '<link'.repeat((256 * 1024) / 5);
+  const started = process.hrtime.bigint();
+  const got = appsLib.iconCandidatesFromHtml(html);
+  const ms = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.deepEqual(got, [], 'no tag ever closes, so there is no candidate');
+  assert.ok(ms < 200, `expected well under 200 ms, took ${ms.toFixed(1)} ms`);
+});
+
+test('F22: icons after the head cap are ignored, before it are still found', () => {
+  const c = appsLib.iconCandidatesFromHtml;
+  // A real <link> inside </head> is found; one after </head> is out of scope.
+  assert.deepEqual(['/a.png'],
+    c('<head><link rel="icon" href="/a.png"></head><link rel="icon" href="/b.png">'));
+});
+
 test('the icon comes from the page’s best link, and /favicon.ico is the LAST resort', async () => {
   // ⚠ THE ORDER REVERSED IN 3.5.2, and the reason is on the other end of the
   // wire: `.ico` DOES NOT DECODE ON ANDROID. Asking `/favicon.ico` first meant
