@@ -175,6 +175,10 @@ and its exit status is the number of failed checks.
 
 ## The Kotlin suites
 
+They need the Android SDK location and a Firebase config, even for the JVM-only modules: set
+them up as in [building.md](building.md#one-time-setup) first. A fresh clone without them fails
+with "SDK location not found" or "File google-services.json is missing" before any test runs.
+
 From `mobile/`:
 
 ```bash
