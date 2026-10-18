@@ -278,32 +278,99 @@ object LocalServe {
     suspend fun enable(baseUrl: String, token: String, onLine: (String) -> Unit): Int = withContext(Dispatchers.IO) {
         if (token.isBlank()) { onLine("no daemon token — connect this app to huginn first"); return@withContext 2 }
         if (baseUrl.isBlank()) { onLine("no daemon address — connect this app to huginn first"); return@withContext 2 }
-        try {
-            val dev = File(localDataDir(), "device")
-            dev.mkdirs()
-            val tok = File(dev, "appd-token")
-            // Refreshed whenever it DIFFERS, not only when absent: the audit
-            // caught a rotated daemon token never reaching a stale seed, which
-            // left the services 401ing while the app itself worked fine.
+        val args = enableArgs(baseUrl, isWindows())
+        if (isWindows()) {
+            // The daemon token is root-equivalent on the host. It is NOT written
+            // into %ProgramData% here: that tree's default ACL grants
+            // BUILTIN\Users read on new children, and this app is UNELEVATED, so
+            // a token placed here would be readable by every account on the PC
+            // until the elevated manager's lockTree runs — and forever if UAC is
+            // declined or fails (2026-10-18, F17). Instead it is staged owner-only
+            // in this user's own temp and handed to the elevated manager, which
+            // writes it into device\ after lockTree (HUGINN_SEED_TOKEN_FILE).
+            val stage = try {
+                stageSeedTokenWindows(token)
+            } catch (e: Exception) {
+                onLine("could not stage the daemon token: ${e.message}"); return@withContext 2
+            }
+            try {
+                runElevatedWindows(args, onLine, seedTokenFile = stage)
+            } finally {
+                runCatching { stage.delete() } // the manager shreds it; this is belt-and-braces
+            }
+        } else {
+            // POSIX: the tier dir is this user's own ~/.config/huginn-local, so a
+            // 0600 file there is private. Create it 0600 ATOMICALLY (O_EXCL + the
+            // mode at creation, never the umask mode then chmod — the old write
+            // was world-readable for the window between the two; F17). Refreshed
+            // whenever it DIFFERS, not only when absent: a rotated daemon token
+            // must reach a stale seed, or the services 401 while the app works.
+            val tok = File(File(localDataDir(), "device"), "appd-token")
             val existing = runCatching { tok.readText().trim() }.getOrNull()
             if (existing != token.trim()) {
-                tok.writeText(token)
                 try {
-                    java.nio.file.Files.setPosixFilePermissions(
-                        tok.toPath(),
-                        setOf(
-                            java.nio.file.attribute.PosixFilePermission.OWNER_READ,
-                            java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
-                        ),
-                    )
-                } catch (_: Exception) { /* not a POSIX filesystem */ }
+                    writeOwnerOnlyPosix(tok, token)
+                } catch (e: Exception) {
+                    onLine("could not seed the daemon token: ${e.message}"); return@withContext 2
+                }
             }
-        } catch (e: Exception) {
-            onLine("could not seed the daemon token: ${e.message}")
-            return@withContext 2
+            run(*args.toTypedArray(), onLine = onLine)
         }
-        val args = enableArgs(baseUrl, isWindows())
-        if (isWindows()) runElevatedWindows(args, onLine) else run(*args.toTypedArray(), onLine = onLine)
+    }
+
+    /**
+     * Stage the daemon token in this user's own temp, owner-only by the profile
+     * ACL, for the elevated manager to read via HUGINN_SEED_TOKEN_FILE. A random
+     * name; the manager shreds it once it has written it into the locked device\.
+     * `%LOCALAPPDATA%\Temp` denies other standard users, which is why the token
+     * is private here and was not in ProgramData.
+     */
+    private fun stageSeedTokenWindows(token: String): File {
+        val f = File.createTempFile(".huginn-seed-", ".tmp")
+        f.deleteOnExit()
+        f.writeText(token)
+        return f
+    }
+
+    /**
+     * Write a secret to dest with mode 0600 set AT CREATION (O_EXCL + a
+     * rw------- attribute) and move it atomically into place — so the file is
+     * never briefly group/other-readable the way writeText-then-chmod leaves it
+     * under a default umask. POSIX only; the caller uses the staged-token path
+     * on Windows. internal so the test can drive it on the (Linux) test host.
+     */
+    internal fun writeOwnerOnlyPosix(dest: File, token: String) {
+        val dir = dest.parentFile
+        dir.mkdirs()
+        runCatching {
+            java.nio.file.Files.setPosixFilePermissions(
+                dir.toPath(),
+                setOf(
+                    java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+                    java.nio.file.attribute.PosixFilePermission.OWNER_EXECUTE,
+                ),
+            )
+        }
+        val rw600 = java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+            setOf(
+                java.nio.file.attribute.PosixFilePermission.OWNER_READ,
+                java.nio.file.attribute.PosixFilePermission.OWNER_WRITE,
+            ),
+        )
+        val tmp = dir.toPath().resolve(".appd-token-" + java.util.UUID.randomUUID() + ".tmp")
+        java.nio.file.Files.createFile(tmp, rw600) // O_EXCL + 0600 at creation
+        try {
+            java.nio.file.Files.write(tmp, token.toByteArray(Charsets.UTF_8))
+            java.nio.file.Files.move(
+                tmp, dest.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (e: Exception) {
+            runCatching { java.nio.file.Files.deleteIfExists(tmp) }
+            throw e
+        }
     }
 
     /**
@@ -461,16 +528,28 @@ object LocalServe {
         "cannot run the elevated step: the daemon address contains a character " +
             "Windows would act on (\", % or ^) — fix it in Settings first"
 
-    fun elevatedCmdText(node: String, mgr: File, args: List<String>, log: File): String {
+    fun elevatedCmdText(node: String, mgr: File, args: List<String>, log: File, seedTokenFile: File? = null): String {
         args.forEach { require(cmdArgSafe(it)) { unsafeArgLine(it) } }
         // EVERY argument quoted, not only the three paths. `&`, `|`, `<` and `>`
         // are inert inside double quotes, which is what stops a saved address
         // from becoming a second elevated command.
         val quoted = args.joinToString(" ") { "\"$it\"" }
-        return "@echo off\r\n\"$node\" \"${mgr.path}\" $quoted > \"${log.path}\" 2>&1\r\n"
+        // The staged-token path tells the elevated manager where to read the
+        // root-equivalent token (it writes it into device\ only after lockTree).
+        // `set "VAR=…"` keeps & | < > inert; %, ^ and " it cannot contain, so a
+        // path carrying one is refused the same way a poisoned address is.
+        val seedLine = if (seedTokenFile != null) {
+            require(cmdArgSafe(seedTokenFile.path)) {
+                "cannot stage the elevated step: the token staging path contains a character Windows would act on (\", % or ^)"
+            }
+            "set \"HUGINN_SEED_TOKEN_FILE=${seedTokenFile.path}\"\r\n"
+        } else {
+            ""
+        }
+        return "@echo off\r\n$seedLine\"$node\" \"${mgr.path}\" $quoted > \"${log.path}\" 2>&1\r\n"
     }
 
-    private suspend fun runElevatedWindows(args: List<String>, onLine: (String) -> Unit): Int {
+    private suspend fun runElevatedWindows(args: List<String>, onLine: (String) -> Unit, seedTokenFile: File? = null): Int {
         val mgr = managerFile()
         if (!mgr.isFile) { onLine("the manager is not fetched — set up first"); return 2 }
         val node = nodeBin()
@@ -488,10 +567,14 @@ object LocalServe {
         // that is then not run would leave the owner reading a UAC prompt that
         // never comes.
         args.firstOrNull { !cmdArgSafe(it) }?.let { onLine(unsafeArgLine(it)); return 2 }
+        if (seedTokenFile != null && !cmdArgSafe(seedTokenFile.path)) {
+            onLine("cannot stage the elevated step: the token staging path contains a character Windows would act on (\", % or ^)")
+            return 2
+        }
         try {
             dir.mkdirs()
             log.writeText("")
-            cmd.writeText(elevatedCmdText(node, mgr, args, log))
+            cmd.writeText(elevatedCmdText(node, mgr, args, log, seedTokenFile))
         } catch (e: Exception) {
             onLine("could not stage the elevated step: ${e.message}")
             return 2
