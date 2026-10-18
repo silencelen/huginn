@@ -213,14 +213,26 @@ func TrayTaskRegistered(o WindowsOptions) bool {
 }
 
 // PasswordRegisterScript registers the task from its XML with a stored password
-// read from STDIN — the password is never in this script, which travels in argv.
+// read from STDIN. The password is never in this script, which travels in
+// argv, and it never reaches a cmdlet either.
+//
+// ⚠ NOT `Register-ScheduledTask -Password $pw`: with PowerShell Module Logging
+// on (a common enterprise baseline), event 4103 records the value of every
+// parameter a cmdlet is bound to, in cleartext, in the very log stdin was
+// meant to keep the password out of (security scan F24, 2026-10-18). Task
+// Scheduler's own COM API takes it instead. A method call is not a cmdlet,
+// so module logging has nothing to bind. RegisterTaskDefinition(path,
+// definition, 6 = TASK_CREATE_OR_UPDATE (what -Force did), user, password,
+// 1 = TASK_LOGON_PASSWORD) registers the same task from the same XML.
 // Pure.
 func PasswordRegisterScript(xmlPath, user string) string {
 	return "$ErrorActionPreference = 'Stop'\n" +
 		"$pw = [Console]::In.ReadLine()\n" +
-		"Register-ScheduledTask -TaskName " + psQuote(TaskName) +
-		" -Xml (Get-Content -Raw -LiteralPath " + psQuote(xmlPath) + ")" +
-		" -User " + psQuote(user) + " -Password $pw -Force | Out-Null\n"
+		"$ts = New-Object -ComObject Schedule.Service\n" +
+		"$ts.Connect()\n" +
+		"$def = $ts.NewTask(0)\n" +
+		"$def.XmlText = Get-Content -Raw -LiteralPath " + psQuote(xmlPath) + "\n" +
+		"$null = $ts.GetFolder('\\').RegisterTaskDefinition(" + psQuote(TaskName) + ", $def, 6, " + psQuote(user) + ", $pw, 1)\n"
 }
 
 // EncodeUTF16 is s as UTF-16LE with a BOM. Pure.
@@ -328,7 +340,7 @@ type WindowsOptions struct {
 	AppData   string // %APPDATA%, for the Startup folder
 	StateDir  string // where the task XML is staged
 	Logon     LogonType
-	Password  string // LogonPassword only; passed to schtasks /RP
+	Password  string // LogonPassword only; reaches PowerShell on stdin, never argv
 	NoTray    bool
 	Runner    Runner
 	StartupFn func(appData string) string // tests override the Startup-folder join
@@ -387,7 +399,8 @@ func InstallWindows(o WindowsOptions) Report {
 				// ⚠ NEVER `schtasks /RP <password>`: argv is recorded by
 				// process-creation auditing and readable by other processes while
 				// it runs (security scan F3, 2026-10-15). The password goes to
-				// PowerShell on STDIN and into Register-ScheduledTask from there.
+				// PowerShell on STDIN and from there into Task Scheduler's COM
+				// API, never a cmdlet parameter (F24: see PasswordRegisterScript).
 				ir, ok := r.(InputRunner)
 				if !ok {
 					os.Remove(xmlPath)
