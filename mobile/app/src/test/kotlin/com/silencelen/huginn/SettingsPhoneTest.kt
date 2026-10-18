@@ -1,7 +1,6 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.Alerts
-import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.StatusHeadroom
@@ -27,6 +26,9 @@ import org.junit.Test
  * the same trade `HuginnViewModelTest` already makes.
  */
 class SettingsPhoneTest {
+    private val LAN_URL = "https://192.168.1.20:8787"
+    private val VPN_URL = "https://10.8.0.1:8787"
+
 
     private companion object {
         const val NOW = 1_789_460_000_000L
@@ -41,7 +43,7 @@ class SettingsPhoneTest {
     @Test
     fun `the home screen says what each drawer is set to`() {
         val f = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.LAN.url,
+            baseUrl = LAN_URL,
             routeName = "LAN",
             connected = true,
             accountEmail = "alex@example-household.org",
@@ -80,7 +82,7 @@ class SettingsPhoneTest {
         // answer, and leading with it is how "the tunnel is down" reads as "my
         // account is broken" for ten minutes.
         val f = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.YGGDRASIL.url,
+            baseUrl = VPN_URL,
             routeName = "Yggdrasil",
             connected = false,
             accountEmail = "alex@example-household.org",
@@ -97,7 +99,7 @@ class SettingsPhoneTest {
     @Test
     fun `the host line says the owner's name for the route`() {
         val renamed = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.YGGDRASIL.url,
+            baseUrl = VPN_URL,
             routeName = "the mesh",
             connected = false,
         )
@@ -237,17 +239,17 @@ class SettingsPhoneTest {
         // The first question asked of a phone that stopped notifying is which
         // address it was on — the tunnel, not the app, is usually the answer.
         val lan = diagnosticsBundle(
-            PhoneSettingsFacts(baseUrl = AppdRoutes.LAN.url, routeName = "LAN"), NOW,
+            PhoneSettingsFacts(baseUrl = LAN_URL, routeName = "LAN"), NOW,
         )
-        assertTrue(lan, "route: LAN · 192.168.7.117:8787" in lan)
+        assertTrue(lan, "route: LAN · 192.168.1.20:8787" in lan)
 
         // The owner's own word for the path, when they have renamed it — this is
         // the line somebody pastes into a chat, and "the mesh" is what they will
         // say out loud in the next message.
         val renamed = diagnosticsBundle(
-            PhoneSettingsFacts(baseUrl = AppdRoutes.YGGDRASIL.url, routeName = "the mesh"), NOW,
+            PhoneSettingsFacts(baseUrl = VPN_URL, routeName = "the mesh"), NOW,
         )
-        assertTrue(renamed, "route: the mesh · 192.168.2.117:8787" in renamed)
+        assertTrue(renamed, "route: the mesh · 10.8.0.1:8787" in renamed)
 
         // A pin nobody named still has a name — its own address. "No route line"
         // and "an address nobody recognises" are different problems.
@@ -258,7 +260,7 @@ class SettingsPhoneTest {
     @Test
     fun `the bundle carries the delivery facts the question is actually about`() {
         val f = PhoneSettingsFacts(
-            baseUrl = AppdRoutes.LAN.url,
+            baseUrl = LAN_URL,
             routeName = "LAN",
             appVersion = "3.1.0",
             appdVersion = "3.0.5",

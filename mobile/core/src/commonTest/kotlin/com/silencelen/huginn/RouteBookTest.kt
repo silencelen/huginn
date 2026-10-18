@@ -242,7 +242,7 @@ class RouteBookTest {
 
     @Test
     fun `a book survives a round trip through the store's encoding`() {
-        val before = AppdRoutes.migrate(lan, routePinned = true).rename("yggdrasil", "the mesh")
+        val before = AppdRoutes.migrate(lan, routePinned = true).rename(AppdRoutes.MIGRATED_ID, "the mesh")
         val after = SettingsCodec.decodeRoutes(SettingsCodec.encodeRoutes(before.routes))
         assertEquals(before.routes, after)
     }

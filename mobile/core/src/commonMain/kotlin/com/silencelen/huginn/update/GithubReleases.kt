@@ -159,6 +159,9 @@ class GithubReleases(
         const val USER_AGENT: String = "huginn-updater"
         const val DESKTOP_TAG_PREFIX: String = "desktop-v"
 
+        /** The CLI and huginn core's channel: client files are fetched from its newest tag. */
+        const val CLI_TAG_PREFIX: String = "cli-v"
+
         /**
          * The phone's channel. `mobile-v` since 2026-08-25; `app-v` is the name it
          * shipped under until then and is still ACCEPTED so a client built before

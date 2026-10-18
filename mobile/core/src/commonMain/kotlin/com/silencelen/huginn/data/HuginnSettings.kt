@@ -223,26 +223,11 @@ interface HuginnSettings {
 
     companion object {
         /**
-         * huginn's tailnet address, which is where the daemon binds.
-         *
-         * ⚠ NO LONGER A DEFAULT SETTING. A fresh install pins nothing (the first
-         * address the owner saves becomes pin #1), so this is what the add-a-
-         * route field SUGGESTS and what [AppdRoutes.migrate] seeds an upgrade
-         * with — not what an unconfigured client quietly points at.
-         */
-        const val DEFAULT_BASE_URL: String = "https://192.168.7.117:8787"
-
-        /**
          * What the add-a-route field shows when it is EMPTY.
          *
-         * ⚠ A PLACEHOLDER, NEVER A PRE-FILL, and never a real address. The field
-         * used to open pre-filled with [DEFAULT_BASE_URL] — one household's
-         * tailnet IP, compiled into a public repo — so a fresh install anywhere
-         * else began by asking the reader to delete somebody else's address
-         * before typing their own, and a distracted Add pinned a route to a
-         * machine that is not theirs. `AppdRoutes` documents that these literals
-         * are exactly what `RouteResolver` refuses to adopt on its own; the form
-         * should not adopt one either.
+         * ⚠ A PLACEHOLDER, NEVER A PRE-FILL, and never a real address. A pre-filled
+         * field asks a new user to delete an address before typing their own, and
+         * a distracted Add pins a route to a machine that is not theirs.
          *
          * `.example.` is reserved (RFC 2606) and resolves nowhere, so this cannot
          * become a live address by accident.

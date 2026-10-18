@@ -34,11 +34,11 @@ enum class RouteKind {
 }
 
 /**
- * One address the owner has pinned, in their own words.
+ * One address the user has pinned, in their own words.
  *
- * This is the record [AppdRoute] was not: it has an id (so a rename does not
- * lose which route is active), an order (so "first healthy in my order" means
- * something), and a timestamp (so a list can say which one is new).
+ * It has an id (so a rename does not lose which route is active), an order (so
+ * "first healthy in my order" means something), and a timestamp (so a list can
+ * say which one is new).
  *
  * @param id stable for the life of the pin, and what [RouteBook.activeId] names.
  *   Never derived from the URL or the name — both are editable.
@@ -47,14 +47,12 @@ enum class RouteKind {
  * @param kind the badge, recomputed whenever [url] changes.
  * @param order the position, mirrored from the list index on every mutation so
  *   a store that loses list order still restores the owner's preference.
- * @param byHand whether a PERSON put this address here. ⚠ NOT COSMETIC: a plain
- *   http route carries the bearer in cleartext, and the two addresses the
- *   migration seeds are hard-coded literals in a public repo — whoever holds one
- *   of them on the network the phone is on today would be handed the token by an
- *   automatic switch. [RouteResolver] will not adopt a plain-http route with
- *   this false without a person saying so. Defaults TRUE so every route that
- *   arrives through [RouteBook.add] — which is the only path a person has — is
- *   trusted the way it always was, and only [AppdRoutes.seed] says otherwise.
+ * @param byHand whether a PERSON put this address here. ⚠ NOT COSMETIC: an
+ *   address nobody chose must never be handed the token by an automatic switch.
+ *   [RouteResolver] will not adopt a plain-http route with this false without a
+ *   person saying so. Defaults TRUE, so every route that arrives through
+ *   [RouteBook.add] — the only path a person has — is trusted; books stored by
+ *   older builds can still carry pins with it false.
  */
 @Serializable
 data class PinnedRoute(

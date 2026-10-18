@@ -19,6 +19,18 @@ import kotlin.test.assertTrue
  */
 class LocalServeTest {
 
+    @Test
+    fun `client files come from a release tag, never a moving branch`() {
+        assertEquals(
+            "https://raw.githubusercontent.com/silencelen/huginn/cli-v2.5.8/client/huginn-local",
+            LocalServe.clientFileUrl("cli-v2.5.8", "huginn-local"),
+        )
+        // The fetch used to read raw.githubusercontent.com/.../main/client/<file>:
+        // whatever was on the default branch at that moment, reviewed or not.
+        val src = File("src/main/kotlin/com/silencelen/huginn/desktop/LocalServe.kt").readText()
+        assertFalse(src.contains("/main/client/"), "LocalServe must not fetch client files from main")
+    }
+
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     // A real answer from a class-C machine, abbreviated only in the sha-less
