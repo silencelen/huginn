@@ -383,3 +383,21 @@ test('an apps store that does not parse is a 503 that says so, and is never re-s
   }
   assert.equal(200, (await api('/v1/apps')).status, 'repaired by hand, the list comes back');
 });
+
+test('a saved route names its device, and can be forgotten over the API', async () => {
+  // 2026-10-18: a retired VPN address one desktop still saved blocked every add
+  // and marked every app red, with nothing to say which device or how to stop it.
+  const put = (who, addrs, name) => api('/v1/apps/routes', {
+    method: 'PUT', headers: { 'x-huginn-client': who }, body: JSON.stringify({ addrs, ...(name ? { name } : {}) }),
+  });
+  let r = await put('suite-desk', ['127.0.0.77'], 'SUITE-DESK');
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.ok(r.body.requiredAddresses.includes('127.0.0.77'));
+  r = await api(`/v1/apps/routes/${encodeURIComponent('127.0.0.77')}`, { method: 'DELETE' });
+  assert.equal(200, r.status, JSON.stringify(r.body));
+  assert.equal('127.0.0.77', r.body.forgotten);
+  assert.deepEqual([{ client: 'suite-desk', name: 'SUITE-DESK' }], r.body.from);
+  assert.ok(!r.body.requiredAddresses.includes('127.0.0.77'));
+  assert.equal(404, (await api('/v1/apps/routes/127.0.0.77', { method: 'DELETE' })).status);
+  assert.equal(400, (await api('/v1/apps/routes/%E0%A4%A', { method: 'DELETE' })).status);
+});

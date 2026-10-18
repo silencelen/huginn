@@ -358,3 +358,70 @@ test('a seed row is this host\'s app wherever its URL points; a lookalike on ano
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ------------------------------------- which device saved a route, and forgetting it
+
+test('a report can name its device; the name survives a restart and a report without one', () => {
+  // 2026-10-18: a retired VPN address saved on one desktop blocked every add and
+  // marked every app red, and nothing on the page said which device it was.
+  const dir = tmpDir('name');
+  try {
+    let store = mkStore(dir);
+    store.list();
+    store.noteReportedRoutes(['127.0.0.9'], 'desk-1', '  DESK\u0007TOP  ');
+    assert.deepEqual([{ client: 'desk-1', name: 'DESK TOP' }], store.pinnersOf('127.0.0.9'));
+    store.noteReportedRoutes(['127.0.0.9'], 'desk-1');           // an older client: no name
+    assert.equal('DESK TOP', store.pinnersOf('127.0.0.9')[0].name, 'the last name it gave stands');
+    store = mkStore(dir);
+    store.list();
+    assert.equal('DESK TOP', store.pinnersOf('127.0.0.9')[0].name, 'and is read back after a restart');
+    assert.equal(appsLib.MAX_CLIENT_NAME, appsLib.cleanClientName('x'.repeat(99)).length);
+    assert.equal(null, appsLib.cleanClientName('  '));
+    assert.equal(null, appsLib.cleanClientName(42));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a saved route that does not answer names the device, on the row and in the refusal', async () => {
+  const dir = tmpDir('pinned');
+  try {
+    const store = mkStore(dir, { fetch: fakeFetch(['127.0.0.1']) });
+    store.list();
+    store.noteReportedRoutes(['127.0.0.9'], 'desk-1', 'DESK');
+    const r = await store.add({ name: 'notes', url: 'http://127.0.0.1:2/' }).catch((e) => e);
+    assert.equal(false, r.ok);
+    assert.equal(422, r.status);
+    assert.match(r.error, /127\.0\.0\.9 is an address saved on DESK/);
+    assert.match(r.error, /DELETE \/v1\/apps\/routes\/127\.0\.0\.9/);
+    assert.doesNotMatch(r.error, /fix the bind first/, 'no bind fixes a retired route');
+    const failing = r.reachable.addresses.find((a) => a.addr === '127.0.0.9');
+    assert.deepEqual([{ client: 'desk-1', name: 'DESK' }], failing.pinnedBy);
+    assert.equal(undefined, r.reachable.addresses.find((a) => a.addr === '127.0.0.1').pinnedBy);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('forgetting a reported route withdraws it from every device at once, and stays forgotten', async () => {
+  const dir = tmpDir('forget');
+  try {
+    let store = mkStore(dir, { fetch: fakeFetch(['127.0.0.1']) });
+    store.list();
+    store.noteReportedRoutes(['127.0.0.9', '127.0.0.8'], 'desk-1', 'DESK');
+    store.noteReportedRoutes(['127.0.0.9'], 'old-phone');
+    const r = store.forgetReportedRoute('127.0.0.9');
+    assert.equal(true, r.ok);
+    assert.deepEqual(['desk-1', 'old-phone'], r.from.map((f) => f.client));
+    assert.deepEqual(['127.0.0.1', '127.0.0.8'], store.requiredAddresses(), 'the other route stays');
+    assert.equal(404, store.forgetReportedRoute('127.0.0.9').status);
+    assert.equal(400, store.forgetReportedRoute('not an address/x').status);
+    store = mkStore(dir, { fetch: fakeFetch(['127.0.0.1', '127.0.0.8']) });
+    store.list();
+    assert.deepEqual(['127.0.0.1', '127.0.0.8'], store.requiredAddresses(), 'still forgotten after a restart');
+    const added = await store.add({ name: 'notes', url: 'http://127.0.0.1:2/' });
+    assert.equal(true, added.ok, JSON.stringify(added));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

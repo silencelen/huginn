@@ -102,7 +102,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.13.1';
+const VERSION = '3.13.2';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -13326,12 +13326,29 @@ async function handleRequest(req, res) {
         if (req.method === 'PUT' && ap === '/v1/apps/routes') {
           const body = await readJsonBody(req, 8 * 1024);
           if (!appsLib.isBodyObject(body)) return sendErr(res, 400, appsLib.REFUSED_BODY);
-          const r = apps.noteReportedRoutes(body.addrs, req.headers['x-huginn-client']);
+          const r = apps.noteReportedRoutes(body.addrs, req.headers['x-huginn-client'], body.name);
           if (!r.ok) return sendJson(res, r.status || 400, { error: r.error, refused: [] });
           // A refused host does NOT fail the report (see noteReportedRoutes): the
           // valid ones are applied and `refused` names the rest.
           return sendJson(res, 200, {
             fresh: r.fresh, gone: r.gone, refused: r.refused,
+            reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses(),
+          });
+        }
+
+        // Forget an address devices reported, so it stops being required of every
+        // app: a retired route (an old VPN address) that one device still saves,
+        // or that a device which will never report again left behind. A device
+        // that still saves it reports it again at its next launch; the Apps page
+        // names which one (`pinnedBy`) so it can be cleaned there too.
+        const forgetMatch = req.method === 'DELETE' && ap.match(/^\/v1\/apps\/routes\/([^/]{1,200})$/);
+        if (forgetMatch) {
+          let addr;
+          try { addr = decodeURIComponent(forgetMatch[1]); } catch { return sendErr(res, 400, 'that is not an address'); }
+          const r = apps.forgetReportedRoute(addr);
+          if (!r.ok) return sendErr(res, r.status || 400, r.error);
+          return sendJson(res, 200, {
+            forgotten: r.addr, from: r.from,
             reported: apps.reportedRoutes(), requiredAddresses: apps.requiredAddresses(),
           });
         }

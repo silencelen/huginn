@@ -1616,13 +1616,23 @@ function reachRefusal(reach) {
   if (reach && reach.remote) {
     return `this app does not answer at ${where} — it is on another host, so huginn checks it only at its own address`;
   }
+  // A failing address that is a route a device SAVED names that device: when the
+  // route is retired (a dead VPN address) no bind or firewall line fixes it, and
+  // the reader needs to know which device to clean, or that huginn can forget it.
+  const saved = rows.filter((a) => Array.isArray(a.pinnedBy) && a.pinnedBy.length).map((a) => {
+    const who = [...new Set(a.pinnedBy.map((p) => p.name || 'a device'))].join(', ');
+    return `${a.addr} is an address saved on ${who}; if it is retired, remove it there `
+      + `or forget it (DELETE /v1/apps/routes/${encodeURIComponent(a.addr)})`;
+  });
+  const savedTail = saved.length ? `. ${saved.join('. ')}` : '';
   const head = `this app does not answer at ${where}`
     + ' — a device that can reach huginn has to be able to reach the app';
   if (rows.length && rows.every(reachedButSilent)) {
     const words = [...new Set(rows.map((a) => String(a.error || 'did not answer')))].join(', ');
-    return `${head}. The connection was not refused (${words}), so this is the app, not the bind`;
+    return `${head}. The connection was not refused (${words}), so this is the app, not the bind${savedTail}`;
   }
-  return `${head}, so fix the bind first`;
+  if (saved.length && rows.every((a) => Array.isArray(a.pinnedBy) && a.pinnedBy.length)) return `${head}${savedTail}`;
+  return `${head}, so fix the bind first${savedTail}`;
 }
 
 // ------------------------------------------------------- favicons (decision 53)
@@ -2066,16 +2076,31 @@ function reportedEntry(raw) {
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, by: [...new Set(by)] };
 }
 
-/** One client's whole report, `{client, lastSeenAt, addrs}`, cleaned, or null. */
+/**
+ * The name a client gives itself in a route report ("DATATREEX", "Galaxy Z
+ * Fold"): one line, no controls, at most [MAX_CLIENT_NAME] characters, or null.
+ * Shown beside a saved route that does not answer, so the reader knows which
+ * device to fix. It is the client's word for itself and decides nothing.
+ */
+const MAX_CLIENT_NAME = 40;
+function cleanClientName(raw) {
+  if (typeof raw !== 'string') return null;
+  const s = raw.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_CLIENT_NAME).trim();
+  return s || null;
+}
+
+/** One client's whole report, `{client, lastSeenAt, addrs, name?}`, cleaned, or null. */
 function reporterEntry(raw) {
   if (!isBodyObject(raw)) return null;
   const addrs = [...new Set((Array.isArray(raw.addrs) ? raw.addrs : []).map(normalizeAddr).filter(Boolean))]
     .slice(0, MAX_ROUTES_PER_CLIENT);
   if (!addrs.length) return null;
+  const name = cleanClientName(raw.name);
   return {
     client: reportedClientId(raw.client),
     lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0,
     addrs,
+    ...(name ? { name } : {}),
   };
 }
 
@@ -2314,7 +2339,55 @@ function createStore(opts = {}) {
   function reporterEntries() {
     pruneReported();
     return [...reports.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
-      .map(([client, v]) => ({ client, lastSeenAt: v.lastSeenAt, addrs: [...v.addrs] }));
+      .map(([client, v]) => ({ client, lastSeenAt: v.lastSeenAt, addrs: [...v.addrs], ...(v.name ? { name: v.name } : {}) }));
+  }
+
+  /** The devices that SAVED this address as a route to huginn: `[{client, name}]`. */
+  function pinnersOf(addr) {
+    const out = [];
+    for (const [client, v] of reports) if (v.addrs.includes(addr)) out.push({ client, name: v.name || null });
+    return out.sort((a, b) => (a.client < b.client ? -1 : 1));
+  }
+
+  /** A probe result with `pinnedBy` on every address a device saved as a route. */
+  function withPinners(reach) {
+    if (!reach || !Array.isArray(reach.addresses) || !reach.addresses.length) return reach;
+    ensureLoaded();
+    pruneReported();
+    return {
+      ...reach,
+      addresses: reach.addresses.map((a) => {
+        const by = a && a.addr ? pinnersOf(a.addr) : [];
+        if (by.length) return { ...a, pinnedBy: by };
+        if (a && 'pinnedBy' in a) { const { pinnedBy, ...rest } = a; return rest; }
+        return a;
+      }),
+    };
+  }
+
+  /**
+   * Forget an address every device reported: it stops being required of every
+   * app at once. For a route that is retired (a VPN address no longer in use) on
+   * a device that will never report again, or until the device that still
+   * saves it is cleaned; a device that still saves it reports it again at its
+   * next launch. `{ok:true, addr, from:[{client,name}]}` or `{ok:false, status, error}`.
+   */
+  function forgetReportedRoute(raw) {
+    const addr = typeof raw === 'string' ? normalizeAddr(raw) : '';
+    if (!addr) return { ok: false, status: 400, error: 'that is not an address' };
+    ensureLoaded();
+    pruneReported();
+    const from = pinnersOf(addr);
+    if (!from.length) return { ok: false, status: 404, error: `no device reports ${addr}` };
+    for (const { client } of from) {
+      const v = reports.get(client);
+      const rest = v.addrs.filter((a) => a !== addr);
+      if (rest.length) reports.set(client, { ...v, addrs: rest });
+      else reports.delete(client);
+    }
+    log(`apps: forgot ${addr}, reported by ${from.map((f) => f.name ? `${f.client} (${f.name})` : f.client).join(', ')} — apps no longer have to answer there`);
+    flushAddrs();
+    return { ok: true, addr, from };
   }
 
   /**
@@ -2339,7 +2412,7 @@ function createStore(opts = {}) {
    *
    * `{ok:true, fresh, gone, refused}` or `{ok:false, status, error}` (shape errors only).
    */
-  function noteReportedRoutes(rawAddrs, by) {
+  function noteReportedRoutes(rawAddrs, by, rawName) {
     const who = reportedClientId(by);
     if (!Array.isArray(rawAddrs)) return { ok: false, status: 400, error: 'addrs must be a list of hosts' };
     const refused = [];
@@ -2362,7 +2435,9 @@ function createStore(opts = {}) {
     pruneReported();
     const before = reportedAddrs();
     const prev = reports.get(who);
-    if (next.length) reports.set(who, { lastSeenAt: stamp(), addrs: next });
+    // An older client sends no name; it keeps the one it last gave.
+    const name = cleanClientName(rawName) || (prev && prev.name) || null;
+    if (next.length) reports.set(who, { lastSeenAt: stamp(), addrs: next, ...(name ? { name } : {}) });
     else reports.delete(who);
     pruneReported(who);
     const after = reportedAddrs();
@@ -2370,7 +2445,7 @@ function createStore(opts = {}) {
     const gone = before.filter((a) => !after.includes(a));
     for (const addr of fresh) log(`apps: ${who} reports a route to huginn via ${addr} — every app now has to answer there too`);
     for (const addr of gone) log(`apps: no device reports ${addr} any more — apps no longer have to answer there`);
-    const changed = !prev || prev.addrs.join(' ') !== next.join(' ');
+    const changed = !prev || prev.addrs.join(' ') !== next.join(' ') || (prev.name || null) !== name;
     if (fresh.length || gone.length || changed || stamp() - addrsFlushedAt >= CLIENT_ADDR_FLUSH_SEC) flushAddrs();
     return { ok: true, fresh, gone, refused };
   }
@@ -2494,7 +2569,9 @@ function createStore(opts = {}) {
     const loadedReports = side ? side.reporters : legacyReporters((env && env.reportedAddresses) || []);
     for (const r of loadedReports) {
       const cur = reports.get(r.client);
-      if (!cur || cur.lastSeenAt < r.lastSeenAt) reports.set(r.client, { lastSeenAt: r.lastSeenAt, addrs: r.addrs });
+      if (!cur || cur.lastSeenAt < r.lastSeenAt) {
+        reports.set(r.client, { lastSeenAt: r.lastSeenAt, addrs: r.addrs, ...(r.name ? { name: r.name } : {}) });
+      }
     }
     pruneAddrs();
   }
@@ -2903,7 +2980,7 @@ function createStore(opts = {}) {
   }
 
   function rowOf(rec) {
-    return appRow(rec, probes.get(rec.id), { ...iconFacts(rec.id), reachable: reaches.get(rec.id) });
+    return appRow(rec, probes.get(rec.id), { ...iconFacts(rec.id), reachable: withPinners(reaches.get(rec.id)) });
   }
 
   function rows() { return load().consoles.map(rowOf); }
@@ -2933,6 +3010,8 @@ function createStore(opts = {}) {
     addresses,
     clientRemotes,
     noteReportedRoutes,
+    forgetReportedRoute,
+    pinnersOf,
     reportedRoutes: reportedEntries,
     requiredAddresses,
     addressSet,
@@ -2949,8 +3028,8 @@ function createStore(opts = {}) {
     async add(input) {
       const pre = add(load().consoles, input, stamp());
       if (!pre.ok) return pre;
-      const reach = await reachabilityProbe(pre.app, addressSet(pre.app),
-        { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() });
+      const reach = withPinners(await reachabilityProbe(pre.app, addressSet(pre.app),
+        { fetch: doFetch, timeoutMs, nowMs, remotes: clientRemotes() }));
       if (reach.ok === false) return { ok: false, status: 422, error: reachRefusal(reach), reachable: reach };
       // ⚠⚠ RE-READ AFTER THE PROBE (2026-10-02). The probe awaits up to the
       // timeout per address, and 3.9.0 then saved the list it had read BEFORE
@@ -3024,6 +3103,7 @@ module.exports = {
   CLIENT_ADDR_TTL_SEC, MAX_CLIENT_ADDRS, MAX_CLIENT_REMOTES, CLIENT_ADDR_FLUSH_SEC,
   LOOPBACK_ADDR, REPORTED_ADDR_TTL_SEC, MAX_ROUTES_PER_CLIENT, MAX_REPORTERS, MAX_APP_ADDRS,
   cleanAddrs, addrsProblem, splitAddressSet, isBodyObject, REFUSED_BODY, REFUSED_ADDR, reportedClientId,
+  MAX_CLIENT_NAME, cleanClientName,
   SIDECAR_NAME, sidecarPath, readSidecar,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
   REBIND_MARKER_NAME, STORE_NAME, SCHEMA, firewallStyle, UNIT_BIND_NOTES,
