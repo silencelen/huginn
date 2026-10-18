@@ -1401,7 +1401,13 @@ if exist "${logFile}" ren "${logFile}" huginn-device.log.1
   -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) \`
   -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'Huginn device' -Action \$action -Trigger \$trigger -Settings \$settings \`
-  -User \$user -Password \$cred.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
+  -RunLevel Highest -Force | Out-Null
+# The password goes to Task Scheduler's COM interface, never to a cmdlet parameter:
+# PowerShell module logging records cmdlet parameters, so -Password would be written
+# to the event log in clear text.
+\$svc = New-Object -ComObject Schedule.Service; \$svc.Connect()
+\$folder = \$svc.GetFolder('\\')
+\$null = \$folder.RegisterTaskDefinition('Huginn device', \$folder.GetTask('Huginn device').Definition, 6, \$user, \$cred.GetNetworkCredential().Password, 1)
 Start-ScheduledTask -TaskName 'Huginn device'
 Start-Sleep -Seconds 20
 Get-ScheduledTask -TaskName 'Huginn device' | Select-Object TaskName,State
@@ -1630,7 +1636,7 @@ async function main() {
         console.error('  is STILL enrolled and nothing here can remove it any more — the token');
         console.error('  that could is being deleted with everything else. Retire it from the');
         console.error('  host, where the token lives:');
-        console.error(`    curl -X DELETE -H "Authorization: Bearer $(cat /etc/huginn-appd/token)" \\`);
+        console.error(`    curl -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' "$(cat /etc/huginn-appd/token)") \\`);
         console.error(`      http://127.0.0.1:8787/v1/devices/${conf.id}`);
         console.error('');
       }
