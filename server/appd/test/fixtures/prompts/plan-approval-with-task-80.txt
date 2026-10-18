@@ -11,7 +11,7 @@
 
    [1mContext[0m
 
-   The working directory ([38;5;153m/tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fixcap-home[39m) contains [38;5;153mhello.txt[39m and a [38;5;153mREADME.md[39m
+   The working directory ([38;5;153m/tmp/claude-0/-root-example/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fixcap-home[39m) contains [38;5;153mhello.txt[39m and a [38;5;153mREADME.md[39m
    that describes it. The user wants [38;5;153mhello.txt[39m renamed to [38;5;153mgreeting.txt[39m; the README's file listing must stay accurate.
 
    [1mSteps[0m

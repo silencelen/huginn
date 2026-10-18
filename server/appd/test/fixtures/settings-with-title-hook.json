@@ -8,7 +8,7 @@
   },
   "model": "claude-fable-5-1",
   "skillOverrides": {
-    "odysseus": "off"
+    "example-skill": "off"
   },
   "hooks": {
     "SessionEnd": [
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /root/.claude/sync-mempalace.sh",
+            "command": "bash /usr/local/lib/example/sync-notes.sh",
             "timeout": 120,
             "async": true
           }
@@ -49,7 +49,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/root/netplan/scripts/active/huginn-whiteboard.sh UserPromptSubmit",
+            "command": "/usr/local/lib/example/whiteboard.sh UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/root/netplan/scripts/active/mempalace-session-checkpoint.sh",
+            "command": "/usr/local/lib/example/session-checkpoint.sh",
             "timeout": 20,
             "async": true
           }
@@ -117,7 +117,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/root/netplan/scripts/active/huginn-whiteboard.sh SessionStart",
+            "command": "/usr/local/lib/example/whiteboard.sh SessionStart",
             "timeout": 5,
             "async": true
           }
@@ -154,7 +154,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/root/netplan/scripts/active/huginn-whiteboard.sh PostToolUse",
+            "command": "/usr/local/lib/example/whiteboard.sh PostToolUse",
             "timeout": 10,
             "async": true
           }
@@ -187,7 +187,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "/root/netplan/scripts/active/huginn-statusline.sh",
+    "command": "/usr/local/lib/example/statusline.sh",
     "padding": 0
   },
   "enabledPlugins": {

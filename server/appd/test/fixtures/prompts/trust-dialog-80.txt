@@ -2,7 +2,7 @@
 [38;5;220m────────────────────────────────────────────────────────────────────────────────
 [39m [1m[38;5;220mAccessing[0m [1m[38;5;220mworkspace:[0m
 
- [1m/tmp/claude-0/-root-netplan/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fi[0m
+ [1m/tmp/claude-0/-root-example/e1ce6899-0e03-4598-9f39-089560767f1e/scratchpad/fi[0m
  [1mxcap-home[0m
 
  Quick safety check: Is this a project you created or one you trust? (Like your
