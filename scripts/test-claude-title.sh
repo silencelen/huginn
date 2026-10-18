@@ -88,5 +88,28 @@ env CLAUDECODE=1 HUGINN_CLAUDE_STATE_DIR="$TMP/s7" PAYLOAD="$PAYLOAD" HOOK="$HOO
   "$TMP/claude.exe" -c 'printf "%s" "$PAYLOAD" | "$HOOK" Stop'
 check test ! -e "$TMP/s7"
 
+# 8-10. A compaction puts back the state it found. $1 = state dir, then the
+#    events in order (an event may carry a trigger as EVENT:trigger).
+events() {
+  local dir="$1"; shift
+  local ev trig
+  for ev in "$@"; do
+    trig="${ev#*:}"; [ "$trig" = "$ev" ] && trig=auto
+    env -u CLAUDECODE HUGINN_CLAUDE_STATE_DIR="$dir" HOOK="$HOOK" EV="${ev%%:*}" \
+      PAYLOAD="{\"session_id\":\"11111111-2222-test\",\"transcript_path\":\"/nonexistent/t.jsonl\",\"cwd\":\"/tmp\",\"trigger\":\"$trig\"}" \
+      "$TMP/claude" -c 'printf "%s" "$PAYLOAD" | "$HOOK" "$EV"'
+  done
+}
+# 8. Compacted while idle: no turn before or after, so it ends idle.
+events "$TMP/s8" Stop PreCompact SessionStart PostCompact
+check test "$(jq -r .state "$TMP/s8/$SESS" 2>/dev/null)" = idle
+check test ! -e "$TMP/s8/.compacting/$SESS"
+# 9. Mid-turn: the turn is still running after it.
+events "$TMP/s9" UserPromptSubmit PreToolUse PreCompact SessionStart PostCompact
+check test "$(jq -r .state "$TMP/s9/$SESS" 2>/dev/null)" = running
+# 10. A manual /compact runs between turns, even if the prompt hook fired for it.
+events "$TMP/s10" Stop UserPromptSubmit PreCompact:manual SessionStart PostCompact
+check test "$(jq -r .state "$TMP/s10/$SESS" 2>/dev/null)" = idle
+
 echo "test-claude-title: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
