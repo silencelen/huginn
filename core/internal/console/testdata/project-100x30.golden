@@ -1,10 +1,10 @@
  (!> huginn  >  project                                             host huginn · core 2.3.0 · live
                                                                                                    
-  dashboard-app  software · active                                                                    
-  Widgets for a foldable                                                                             
+  website  software · active                                                                       
+  The project website                                                                              
                                                                                                    
-  > ! dashboard-app-lead          lead     Ship 0.8.0?                            40 turns · $3.20    
-    * dashboard-app-core          member                                          12 turns · $1.10    
+  > ! website-lead             lead     Ship 0.8.0?                            40 turns · $3.20    
+    * website-core             member                                          12 turns · $1.10    
                                                                                                    
                                                                                                    
                                                                                                    

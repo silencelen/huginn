@@ -1,8 +1,8 @@
  (!> huginn  >  usage                                               host huginn · core 2.3.0 · live
                                                                                                    
   owner@example.net  + in use                                                                      
-   current session              ------------------------   3%   resets in 26374d                   
-   current week, all models     ###############---------  66%   resets in 26374d                   
+   current session              ------------------------   3%   resets in 10d                      
+   current week, all models     ###############---------  66%   resets in 10d                      
                                                                                                    
   last decision: under every threshold                                                             
                                                                                                    

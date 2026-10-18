@@ -41,7 +41,7 @@ func fakeCore(t *testing.T, paired bool) string {
 		}
 	}
 	mux.HandleFunc("/core/status", j(fmt.Sprintf(`{"version":"2.3.0","paired":%v,"url":"https://huginn.example.net:8787","tray":true,
-		"device":{"status":{"enabled":true,"enrolled":true,"note":"Waiting for work","deviceId":"d1"},"settings":{"enabled":true,"name":"a Linux laptop","scope":"work"}}}`, paired)))
+		"device":{"status":{"enabled":true,"enrolled":true,"note":"Waiting for work","deviceId":"d1"},"settings":{"enabled":true,"name":"laptop","scope":"work"}}}`, paired)))
 	if !paired {
 		mux.HandleFunc("/appd/", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(503)
@@ -52,26 +52,29 @@ func fakeCore(t *testing.T, paired bool) string {
 			"sessions":4,"disk":{"free":"9.3G","usedPercent":"91%"},"headroom":{"worstPercent":66,"worstLabel":"Current week, all models","mode":"auto"}}`))
 		mux.HandleFunc("/appd/v1/sessions", j(fmt.Sprintf(`{"sessions":[
 			{"name":"main","state":"idle","title":"Inbox triage","preview":["⎿ done"],"activityAt":%d,"liveModel":"Opus 5.5"},
-			{"name":"widgets","state":"attention","title":"Ship 0.8.0 to a foldable?","preview":["Do you want to proceed?","❯ 1. Yes"],"activityAt":%d,"liveModel":"Opus 5.5","attachedClients":1},
+			{"name":"widgets","state":"attention","title":"Ship 0.8.0 to the phone?","preview":["Do you want to proceed?","❯ 1. Yes"],"activityAt":%d,"liveModel":"Opus 5.5","attachedClients":1},
 			{"name":"build","state":"running","title":"Release the desktop","preview":["Running gradle…"],"activityAt":%d,"liveModel":"Sonnet 5.5","contextPercent":42},
 			{"name":"scratch","state":null,"title":"","preview":["$"],"activityAt":%d},
-			{"name":"osid-lead","state":"idle","title":"lead","activityAt":%d,"project":{"name":"osid","role":"lead"}}]}`, now-3600, now-120, now-30, now-86400*3, now-60)))
+			{"name":"docs-lead","state":"idle","title":"lead","activityAt":%d,"project":{"name":"docs","role":"lead"}}]}`, now-3600, now-120, now-30, now-86400*3, now-60)))
 		mux.HandleFunc("/appd/v1/devices", j(fmt.Sprintf(`{"devices":[
-			{"id":"d1","name":"a Linux laptop","platform":"linux","scope":"work","online":true,"version":"2.3.0","lastSeenSec":%d},
-			{"id":"d2","name":"PC01","platform":"windows","scope":"own","online":true,"running":true,"version":"2.3.0","lastSeenSec":%d},
-			{"id":"d3","name":"buildbox","platform":"linux","scope":"work","online":false,"version":"1.8.0","lastSeenSec":%d}]}`, now, now, now-7200)))
-		mux.HandleFunc("/appd/v1/headroom", j(`{"mode":"auto","accounts":{"a1":{"email":"owner@example.net","live":true,"windows":{
-			"session":{"percent":3,"resetsAt":"2099-01-01T00:00:00Z","label":"Current session"},
-			"weekly_all":{"percent":66,"resetsAt":"2099-01-01T00:00:00Z","label":"Current week, all models"}}}},
-			"sentinels":{"STOP":null},"held":[],"arbiter":{"why":"under every threshold"}}`))
+			{"id":"d1","name":"laptop","platform":"linux","scope":"work","online":true,"version":"2.3.0","lastSeenSec":%d},
+			{"id":"d2","name":"DESKTOP","platform":"windows","scope":"own","online":true,"running":true,"version":"2.3.0","lastSeenSec":%d},
+			{"id":"d3","name":"server","platform":"linux","scope":"work","online":false,"version":"1.8.0","lastSeenSec":%d}]}`, now, now, now-7200)))
+		mux.HandleFunc("/appd/v1/headroom", j(fmt.Sprintf(`{"mode":"auto","accounts":{"a1":{"email":"owner@example.net","live":true,"windows":{
+			"session":{"percent":3,"resetsAt":"%[1]s","label":"Current session"},
+			"weekly_all":{"percent":66,"resetsAt":"%[1]s","label":"Current week, all models"}}}},
+			"sentinels":{"STOP":null},"held":[],"arbiter":{"why":"under every threshold"}}`,
+			// Ten and a half days ahead of the clock, so it renders "in 10d" on any day the
+			// suite runs (a fixed date drifted out of its golden a day after recording).
+			time.Unix(now, 0).Add(252*time.Hour).UTC().Format(time.RFC3339))))
 		mux.HandleFunc("/appd/v1/chats", j(fmt.Sprintf(`{"chats":[
-			{"id":"c1","title":"an exchange sizing","mode":"ask","running":false,"updatedAt":%d,"lastSnippet":"Half Kelly keeps the drawdown under 50%%.","turns":2},
-			{"id":"c2","title":"Restart the arr stack","mode":"act","running":true,"updatedAt":%d,"lastSnippet":"Restarting sonarr…"},
+			{"id":"c1","title":"Budget review","mode":"ask","running":false,"updatedAt":%d,"lastSnippet":"Fixed costs stay under a third of the total.","turns":2},
+			{"id":"c2","title":"Restart the web stack","mode":"act","running":true,"updatedAt":%d,"lastSnippet":"Restarting the web server…"},
 			{"id":"c3","title":"Drive every volume","mode":"ask","updatedAt":%d,"lastSnippet":"All disks healthy."}]}`, now-540, now-20, now-7200)))
-		mux.HandleFunc("/appd/v1/chats/c1", j(`{"id":"c1","title":"an exchange sizing","mode":"ask","seq":0,"messages":[
-			{"type":"user","text":"How big should each bet be?"},
+		mux.HandleFunc("/appd/v1/chats/c1", j(`{"id":"c1","title":"Budget review","mode":"ask","seq":0,"messages":[
+			{"type":"user","text":"How much should go to fixed costs?"},
 			{"type":"tool","name":"Read","input":"/srv/bursar/config.yaml"},
-			{"type":"assistant","text":"Half Kelly keeps the drawdown under 50%, which matches your halt rule."},
+			{"type":"assistant","text":"A third keeps the budget flexible, which matches your rule."},
 			{"type":"result","ok":true,"turns":2,"costUsd":0.04}]}`))
 		mux.HandleFunc("/appd/v1/chats/c1/messages", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(202)
@@ -84,10 +87,10 @@ func fakeCore(t *testing.T, paired bool) string {
 		mux.HandleFunc("/appd/v1/rounds", j(fmt.Sprintf(`{"rounds":[
 			{"id":"r1","title":"Morning briefing","enabled":true,"mode":"ask","cadence":"Daily at 7:00 AM","nextRunAtSec":%d,"lastRun":{"at":%d,"chatId":"c1","status":"ok","headline":"All quiet: 0 alerts, backups green."}},
 			{"id":"r2","title":"Weekly capacity","enabled":false,"mode":"ask","cadence":"Weekly on Sunday at 8:00 AM"}]}`, now+3*3600, now-20*3600)))
-		mux.HandleFunc("/appd/v1/projects", j(`{"projects":[{"id":"p1","name":"dashboard-app","kind":"software","status":"active","memberCount":3,"alive":3,"busy":1,"waiting":1,"manifestSummary":"Widgets for a foldable"}]}`))
+		mux.HandleFunc("/appd/v1/projects", j(`{"projects":[{"id":"p1","name":"website","kind":"software","status":"active","memberCount":3,"alive":3,"busy":1,"waiting":1,"manifestSummary":"The project website"}]}`))
 		mux.HandleFunc("/appd/v1/projects/p1/dashboard", j(`{"members":[
-			{"role":"lead","name":"dashboard-app-lead","alive":true,"state":"attention","needsYou":true,"title":"Ship 0.8.0?","turns":40,"estCostUsd":3.2},
-			{"role":"member","name":"dashboard-app-core","alive":true,"state":"running","turns":12,"estCostUsd":1.1}]}`))
+			{"role":"lead","name":"website-lead","alive":true,"state":"attention","needsYou":true,"title":"Ship 0.8.0?","turns":40,"estCostUsd":3.2},
+			{"role":"member","name":"website-core","alive":true,"state":"running","turns":12,"estCostUsd":1.1}]}`))
 		mux.HandleFunc("/appd/v1/archive", j(fmt.Sprintf(`{"archives":[{"id":"a1","title":"Old router migration","model":"Opus 5.5","lastMessage":"Done; the VLANs are live.","archivedAt":%d}]}`, now-86400*9)))
 		mux.HandleFunc("/appd/v1/watch", func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() })
 	}
@@ -311,8 +314,8 @@ func TestFilter(t *testing.T) {
 	if !strings.Contains(got, "no session matches the filter") {
 		t.Fatalf("an empty filtered list must say so:\n%s", got)
 	}
-	got = render(t, sock, 100, 30, append([]string{"2", "/"}, keys("arr")...)...)
-	if !strings.Contains(got, "Restart the arr stack") || strings.Contains(got, "an exchange") {
+	got = render(t, sock, 100, 30, append([]string{"2", "/"}, keys("web")...)...)
+	if !strings.Contains(got, "Restart the web stack") || strings.Contains(got, "Budget review") {
 		t.Fatalf("chats filter:\n%s", got)
 	}
 }
@@ -327,9 +330,9 @@ func TestPalette(t *testing.T) {
 	if !strings.Contains(got, "Morning briefing") {
 		t.Fatalf("':rounds' + enter should open Rounds:\n%s", got)
 	}
-	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("chat an exchange")...), "enter")...)
-	if !strings.Contains(got, "How big should each bet be?") {
-		t.Fatalf("':chat an exchange' + enter should open that chat:\n%s", got)
+	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("chat budget")...), "enter")...)
+	if !strings.Contains(got, "How much should go to fixed costs?") {
+		t.Fatalf("':chat budget' + enter should open that chat:\n%s", got)
 	}
 	// No 'Host huginn' in this test home: attaching says how to set it up.
 	got = render(t, sock, 100, 30, append(append([]string{":"}, keys("attach widgets")...), "enter")...)
@@ -352,8 +355,8 @@ func TestPaletteRanksSubstringsFirst(t *testing.T) {
 }
 
 func TestSplitArgs(t *testing.T) {
-	got := splitArgs(`projects msg "osid lead" 'two words' plain`)
-	want := []string{"projects", "msg", "osid lead", "two words", "plain"}
+	got := splitArgs(`projects msg "docs lead" 'two words' plain`)
+	want := []string{"projects", "msg", "docs lead", "two words", "plain"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("splitArgs = %q", got)
 	}
