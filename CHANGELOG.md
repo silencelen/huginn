@@ -8,6 +8,35 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.0] - 2026-10-18
+
+### Added
+- **One-command server install.** `curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/server/get.sh | sudo bash`
+  downloads the newest release and runs its setup. `HUGINN_REF` picks another tag or branch.
+  `server/setup.sh` now also installs the daemon (huginn-appd), Node.js 22 when missing or older,
+  `huginn-llm` and `huginn-ask`, and ends with the next steps.
+- **`server/uninstall.sh`** removes the daemon, its unit and drop-ins, the Claude Code hooks and
+  the host tools. A tmux server that still has sessions is kept. `--purge` also removes data and
+  the token.
+- **`huginn-ask`** on the server: one headless turn, fenced exactly like an app chat (ask: Bash,
+  Edit and Write denied; act: allowed).
+- Help lists `core pair`, `device on --name`, `desktop install` on Windows and `uninstall --yes`.
+
+### Changed
+- **`huginn -p` and `-y` run through the server's `huginn-ask`**, so a one-shot is fenced the same
+  way as an app chat on every server. A server without it gets the same fence inline. Before, the
+  deny list applied only when a persona file existed.
+- **Updates come from the newest release.** `huginn update`, the device runner, and the local-AI
+  manager and shim are downloaded from the newest `cli-v` release and syntax-checked before use.
+  They used to come from the default branch through `gh`, or from an SSH mirror that setup never
+  created. `HUGINN_UPDATE_HOST` still names a mirror when set on purpose.
+- macOS is not supported: `get.sh` says so and stops.
+
+### Fixed
+- **Attaching from a terminal whose locale is not UTF-8** (Windows OpenSSH sends none) showed
+  Claude Code's symbols and box drawing as `_`. `cc` now passes `-u` to tmux.
+- `huginn -p` and `-y` no longer grant a memory-server tool that a new server does not have.
+
 ## [2.5.10] - 2026-10-17
 
 ### Changed
