@@ -262,7 +262,7 @@ const { promptFingerprint } = require('../lib/pane');
 const { multiToggleDigits } = require('../lib/pane');
 
 const PROMPT_A = {
-  question: 'Do you want to create jtyper.md?',
+  question: 'Do you want to create jotter.md?',
   options: [
     { number: 1, label: 'Yes', selected: true },
     { number: 2, label: 'No, tell Claude what to do differently', selected: false },
@@ -287,7 +287,7 @@ test('moving the selection caret does not change the fingerprint', () => {
 });
 
 test('a different question fingerprints differently', () => {
-  const other = { ...PROMPT_A, question: 'Do you want to delete jtyper.md?' };
+  const other = { ...PROMPT_A, question: 'Do you want to delete jotter.md?' };
   assert.notEqual(promptFingerprint(other), promptFingerprint(PROMPT_A));
 });
 

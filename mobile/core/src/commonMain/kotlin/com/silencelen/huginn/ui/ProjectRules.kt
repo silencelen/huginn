@@ -291,7 +291,7 @@ object ProjectRules {
      * ⚠⚠ A PROJECT SESSION IS NEVER ON THE SESSIONS PAGE (owner rule, 2026-09-19).
      * It lives in Projects — the tree, the dashboard, its member view — and a
      * copy of it in the main list read as a second, unrelated session: the
-     * widgetshub lead sat in Sessions between two hand-made ones and looked like
+     * dashboard-app lead sat in Sessions between two hand-made ones and looked like
      * a session that had failed to do something.
      *
      * The daemon's own join is the first word: a row that carries

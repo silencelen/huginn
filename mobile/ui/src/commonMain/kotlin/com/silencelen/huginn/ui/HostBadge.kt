@@ -12,7 +12,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * "on PRESTIGE" — where a chat is actually running, when that is not here.
+ * "on PC01" — where a chat is actually running, when that is not here.
  *
  * Drawn only for a remote chat. The common case is this host, and a badge on
  * every row would be a badge that says nothing: the whole job of this mark is

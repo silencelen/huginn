@@ -35,7 +35,7 @@ command -v tmux >/dev/null 2>&1 || exit 0
 # TMUX_PANE out of the environment it hands on. Every hook then exited on the
 # check below, so appd kept that session's old state and old session id, and the
 # desktop's Conversation tab froze on yesterday's transcript while Screen kept
-# streaming (huginnclient, 2026-10-16, after a compaction continued it in a
+# streaming (2026-10-16, after a compaction continued it in a
 # fork). So take them from the nearest ancestor that has them — and only when
 # that pane's own shell is one of OUR ancestors, so a daemon that served another
 # pane can never put this session's state on the wrong one (fail closed).

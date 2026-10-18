@@ -20,7 +20,7 @@ if [ -z "$HHOST" ]; then
 fi
 [ -n "$HHOST" ] || { _huginn_ui_line fail host "no host given - run it again with the host: ./install.sh <host>"; exit 1; }
 # People type huginn's address as they know it, https:// and :8787 included
-# (run 7: "192.168.2.117:8787" became an ssh host name that resolved nowhere).
+# (run 7: "192.168.1.20:8787" became an ssh host name that resolved nowhere).
 # ssh gets the bare host; pairing later uses the address (HUGINN_APPD_URL).
 _hg="$(printf '%s' "$HHOST" | tr -d '[:space:]')"
 _scheme=""; case "$_hg" in http://*) _scheme=http ;; https://*) _scheme=https ;; esac

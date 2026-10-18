@@ -1282,7 +1282,7 @@ const log = (m) => console.log(`[huginn-device] ${new Date().toISOString()} ${m}
  *     program finds both its config and claude's login through HOME /
  *     HUGINN_DEVICE_DIR (the same reason the systemd unit sets them);
  *   - ExecutionTimeLimit ZERO, because the default of 72 hours silently stops a
- *     task on day three — which is what took ThrottleStop down on RAGNAR once;
+ *     task on day three — which is what took ThrottleStop down on RIG once;
  *   - RestartCount/RestartInterval, so a crash is a minute's gap, not a stop;
  *   - IgnoreNew, so a second start (two triggers firing) never runs two runners
  *     enrolling under one id;

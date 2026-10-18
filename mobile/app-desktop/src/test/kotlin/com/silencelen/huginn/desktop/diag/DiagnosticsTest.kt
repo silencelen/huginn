@@ -33,7 +33,7 @@ class DiagnosticsScrubTest {
                 uptimeSec = 42,
                 heapUsedMb = 100,
                 heapMaxMb = 4096,
-                baseUrl = "https://user:$token@100.97.198.90",
+                baseUrl = "https://user:$token@100.101.102.103",
                 routeName = "Tailscale",
                 routePinned = true,
                 hasToken = true,
@@ -92,7 +92,7 @@ class DiagnosticsScrubTest {
     fun `the connection line names the route and then gives the address`() {
         val named = Diagnostics.build(sample(hasToken = true, watchConnected = true).copy(routeName = "the mesh"))
         assertTrue(
-            Regex("""server\s+the mesh · https://100\.97\.198\.90""").containsMatchIn(named),
+            Regex("""server\s+the mesh · https://100\.101\.102\.103""").containsMatchIn(named),
             named.lines().first { it.startsWith("server") },
         )
 
@@ -122,7 +122,7 @@ class DiagnosticsScrubTest {
         uptimeSec = 10,
         heapUsedMb = 1,
         heapMaxMb = 2,
-        baseUrl = "https://100.97.198.90",
+        baseUrl = "https://100.101.102.103",
         routeName = "Tailscale",
         routePinned = false,
         hasToken = hasToken,

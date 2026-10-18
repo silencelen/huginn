@@ -163,7 +163,7 @@ fun ChatsScreen(
             text = {
                 // ⚠⚠ P-03. IT DID NOT SCROLL. Eleven radios, ten labels, and the
                 // eleventh option sat under the Ask / Act row where no gesture
-                // reached it — so RAGNAR's three local models, including the only
+                // reached it — so RIG's three local models, including the only
                 // 30B in the fleet, could not be chosen at all. An AlertDialog
                 // caps its own height and does NOT scroll its text slot for you.
                 Column(
@@ -225,7 +225,7 @@ fun ChatsScreen(
                         // ⚠⚠ P-21. THE MACHINE AND ITS MODELS MUST AGREE. This
                         // used to filter on the model row's own `available`,
                         // which reflects the SERVING credential alone — so
-                        // DATATREEX was greyed as "not reachable" four
+                        // DESKPC was greyed as "not reachable" four
                         // millimetres above its own models drawn live and
                         // pickable. And an EMBEDDING model was offered as
                         // something to have a conversation with. Both rules are

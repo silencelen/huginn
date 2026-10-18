@@ -76,7 +76,7 @@ class SessionControllerTest {
         )
         return SessionController(
             client = client,
-            name = "jtyper",
+            name = "jotter",
             presence = Presence(),
             lease = PaneLeaseHolder(client, scope),
             meta = com.silencelen.huginn.data.SessionMetaSaver(

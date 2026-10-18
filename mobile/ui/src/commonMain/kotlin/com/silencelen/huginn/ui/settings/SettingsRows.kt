@@ -674,7 +674,7 @@ private fun RouteRow(
         // ⚠ THE NAME SHARES THIS ROW WITH THE CONTROLS; THE ADDRESS DOES NOT.
         // It used to: a `weight(1f)` column beside "in use"/"Use" and three
         // TextButtons, with the address at `maxLines = 1`, which on the owner's
-        // phone rendered `http://192.168.2.117:8…`. The PORT is the half that
+        // phone rendered `http://192.168.1.20:8…`. The PORT is the half that
         // says whether this is the daemon's address at all, and the witness
         // clause joined onto the same line went with it — so the row lost "last
         // reached" at exactly the moment somebody is reading the list to find
@@ -883,7 +883,7 @@ internal fun middleElide(text: String, max: Int = ROUTE_URL_MAX): String {
 }
 
 /**
- * "http://192.168.2.117:8787 · last reached 4m ago" — the address and its witness.
+ * "http://192.168.1.20:8787 · last reached 4m ago" — the address and its witness.
  *
  * ⚠ AND THE THIRD WITNESS (decision 58). A route where something huginn-shaped
  * answers but cannot produce the token proof is not "could not be reached" — that

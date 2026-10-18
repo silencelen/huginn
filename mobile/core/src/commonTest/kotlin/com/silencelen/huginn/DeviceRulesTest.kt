@@ -31,7 +31,7 @@ class DeviceRulesTest {
 
     @Test
     fun `a serving row does not make an offline machine reachable`() {
-        val rows = listOf(row("datatreex", "own", online = false), row("datatreex-llm", "generate", online = true))
+        val rows = listOf(row("deskpc", "own", online = false), row("deskpc-llm", "generate", online = true))
         assertFalse(
             DeviceRules.reachable(rows),
             "the rail said 4 reachable while the card said 'not reachable' — same fact, two rules",
@@ -40,16 +40,16 @@ class DeviceRulesTest {
 
     @Test
     fun `the claude row decides when it is up`() {
-        assertTrue(DeviceRules.reachable(listOf(row("brokkr", "work", online = true), row("brokkr-llm", "generate", online = false))))
+        assertTrue(DeviceRules.reachable(listOf(row("buildbox", "work", online = true), row("buildbox-llm", "generate", online = false))))
     }
 
     @Test
     fun `a serve-only machine is judged on what it has`() {
         assertTrue(
-            DeviceRules.reachable(listOf(row("ragnar-llm", "generate", online = true))),
+            DeviceRules.reachable(listOf(row("rig-llm", "generate", online = true))),
             "a box with no claude row is not permanently offline — its serving row is all there is",
         )
-        assertFalse(DeviceRules.reachable(listOf(row("ragnar-llm", "generate", online = false))))
+        assertFalse(DeviceRules.reachable(listOf(row("rig-llm", "generate", online = false))))
     }
 
     @Test

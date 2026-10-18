@@ -6888,8 +6888,8 @@ function saveQuickActions(rec) {
 /**
  * This host's own addresses, for clients to reach it by: a computer that knows
  * huginn by one address can find another that its network lets ssh through
- * (PRESTIGE, 2026-10-17: 192.168.2.117 carries only huginn's port from VLAN 7,
- * 192.168.7.117 carries ssh). Not loopback, not link-local.
+ * (PC01, 2026-10-17: 192.168.1.20 carries only huginn's port from VLAN 7,
+ * 192.168.10.20 carries ssh). Not loopback, not link-local.
  *
  * Behind the token, like everything on /v1/status: huginn is a single-user
  * application, and whoever sets up a client holds the same authority over this
@@ -8895,7 +8895,7 @@ async function noteStall(rec, s, settings, activeWindows, now) {
 /**
  * Act on one stalled SESSION.
  *
- * Returns a line for the notification (`"jtyper (native)"`) or null when there
+ * Returns a line for the notification (`"jotter (native)"`) or null when there
  * is nothing to say — which is the usual answer, because the usual answer is
  * "the window has not reset yet".
  */
@@ -9080,7 +9080,7 @@ async function applyResumes(ctx) {
   // MILLISECONDS, like every other epoch in this payload (lib/headroom's banner).
   state.arbiter.lastResumeAt = now;
   const text = `Usage limit reset · resumed: ${resumed.join(', ')}`;
-  // The lines read "jtyper (typed)"; the SUBJECT is the bare name, so a
+  // The lines read "jotter (typed)"; the SUBJECT is the bare name, so a
   // notification about one session can be opened at that session. Several at
   // once is one event and keeps the host-wide subject.
   const first = String(resumed[0] || '').split(' ')[0];
@@ -10053,7 +10053,7 @@ async function handleRequest(req, res) {
   // clients' route probe has to be able to tell huginn-appd from ANY OTHER
   // HTTP responder on a LAN address before it hands over a root-equivalent
   // bearer token: `probe()` used to accept "something answered", so a printer
-  // or a router on 192.168.2.117:8787 was called a daemon and auto-switch
+  // or a router on 192.168.1.20:8787 was called a daemon and auto-switch
   // leaked the token to it (kcore #59/#78). The probe becomes an
   // unauthenticated GET that must come back 401 with the daemon's error shape;
   // this header is the stronger marker the client prefers when it is present.
@@ -10110,8 +10110,8 @@ async function handleRequest(req, res) {
   //
   // ⚠⚠ AND `remoteAddress` IS THE OTHER HALF, ADDED IN 3.5.2. The arrival
   // address is one of THIS container's own, so a PVE rule on 117 reading
-  // `-source 192.168.2.117` matches nothing inbound and every firewall line the
-  // Apps rows emitted was inert. The client address — 192.168.2.131 for a phone
+  // `-source 192.168.1.20` matches nothing inbound and every firewall line the
+  // Apps rows emitted was inert. The client address — 192.168.1.131 for a phone
   // NATted by the Yggdrasil LAN gateway, a 100.x for a tailnet client — is the
   // only thing here a `-source` can honestly be, and this is the one place the
   // daemon can see it. It is recorded UNDER the arrival it came in on, because
@@ -12189,7 +12189,7 @@ async function handleRequest(req, res) {
         // ...which also means any run already HANDED to this device is gone. Both
         // runners take one job at a time and only poll while idle, so a device that
         // holds a run and asks for another restarted or dropped the first: a run
-        // that rebooted its own machine (stigo, 2026-10-10) would otherwise never
+        // that rebooted its own machine (a Linux laptop, 2026-10-10) would otherwise never
         // report, because the fresh runner's beats refresh `lastHeard` and the
         // device answered 409 "already running something" until RUN_HARD_CAP_MS.
         // Only handed-over runs: a queued one is exactly what this poll is for.
@@ -13241,8 +13241,8 @@ async function handleRequest(req, res) {
     // [appsLib.legacyConsoleList] and [appsLib.legacyConsoleRow], and the 409
     // key. Nothing else forks.
     //
-    // ⚠ NOTHING IN HERE RUNS ANYTHING. The rebind and the heimdall firewall
-    // lines are the OWNER's to run in a netplan session (decision 47); since
+    // ⚠ NOTHING IN HERE RUNS ANYTHING. The rebind and the pve1 firewall
+    // lines are the OWNER's to run in a session on the host (decision 47); since
     // 3.5.0 they ride the FAILING ROW as `reachable.fix` (decision 55) instead of
     // one card at the top of the list. They are strings all the way down.
     //
@@ -13301,7 +13301,7 @@ async function handleRequest(req, res) {
             // ⚠ AND WHO HAS ARRIVED ON EACH — additive, 3.5.2, `{arrival: [client]}`.
             // The arrival addresses say what was CHECKED; these say what the fix
             // lines can put after `-source`, which is the only address in this
-            // payload a firewall rule on heimdall could ever match. An arrival
+            // payload a firewall rule on pve1 could ever match. An arrival
             // with an empty list is a real state and is on the wire as one.
             // NOT on the alias: /v1/consoles answers the frozen 3.4 body.
             clientRemotes: apps.clientRemotes(),

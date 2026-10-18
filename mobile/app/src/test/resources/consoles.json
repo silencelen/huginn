@@ -1,11 +1,11 @@
 {
   "consoles": [
     {
-      "id": "armap",
-      "name": "Architecture map",
+      "id": "atlas",
+      "name": "Atlas map",
       "url": "http://huginn:8088/",
       "kind": "docs",
-      "notes": "Static armap dashboard (docs/current/armap).",
+      "notes": "Static atlas dashboard (docs/current/atlas).",
       "addedAt": 1789000000,
       "version": 1,
       "up": true,
@@ -15,8 +15,8 @@
       "reachableFrom": "host"
     },
     {
-      "id": "jtyper",
-      "name": "jtyper trainer",
+      "id": "jotter",
+      "name": "jotter notes",
       "url": "http://huginn:8091/",
       "kind": "lab",
       "notes": "Blind test + chat + hole-fill flywheel.",
@@ -33,7 +33,7 @@
       "name": "PCB board view",
       "url": "http://huginn:8092/",
       "kind": "tool",
-      "notes": "Live KiCad board review (brokkr renders).",
+      "notes": "Live KiCad board review (buildbox renders).",
       "addedAt": 1789000000,
       "version": 1,
       "up": false,
@@ -43,8 +43,8 @@
       "reachableFrom": "host"
     },
     {
-      "id": "btc15m",
-      "name": "BTC 15m simulator",
+      "id": "bursar",
+      "name": "Bursar ledger",
       "url": "http://huginn:8093/",
       "kind": "lab",
       "notes": "Paper-trading sim for the 15-minute lab.",
@@ -77,29 +77,29 @@
       {
         "id": "rebind",
         "where": "huginn (this host)",
-        "summary": "Bind the three units to 0.0.0.0. btc15m-sim already does.",
+        "summary": "Bind the three units to 0.0.0.0. bursar already does.",
         "file": null,
         "commands": [
-          "systemctl edit armap.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address",
-          "systemctl edit jtyper-trainer.service   # same",
+          "systemctl edit atlas.service            # ExecStart: bind 0.0.0.0 instead of the tailnet address",
+          "systemctl edit jotter.service   # same",
           "systemctl edit boardserver.service      # same",
-          "systemctl restart armap jtyper-trainer boardserver",
+          "systemctl restart atlas jotter-trainer boardserver",
           "ss -ltnp | grep -E '8088|8091|8092'"
         ]
       },
       {
         "id": "firewall",
-        "where": "heimdall",
-        "summary": "Add four rules to /etc/pve/firewall/117.fw, one source and one port each.",
-        "file": "/etc/pve/firewall/117.fw",
+        "where": "pve1",
+        "summary": "Add four rules to /etc/pve/firewall/100.fw, one source and one port each.",
+        "file": "/etc/pve/firewall/100.fw",
         "commands": [
-          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog",
-          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog",
-          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8092 -log nolog",
-          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8093 -log nolog"
+          "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8088 -log nolog",
+          "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog",
+          "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8092 -log nolog",
+          "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8093 -log nolog"
         ]
       }
     ],
-    "note": "Copy these into a netplan session and run them there. When they are done, `touch /var/lib/huginn-appd/consoles-rebind-applied` and every console row will say so."
+    "note": "Copy these into a session on the host and run them there. When they are done, `touch /var/lib/huginn-appd/consoles-rebind-applied` and every console row will say so."
   }
 }

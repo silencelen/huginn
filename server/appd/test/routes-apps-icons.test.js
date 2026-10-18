@@ -11,7 +11,7 @@
 //
 // SAFETY: the store is written before the daemon starts, pointing at fixture
 // servers this file owns on ephemeral loopback ports, and SELF_ADDR is pinned to
-// 127.0.0.1 by the bind — so no probe here can reach the operator's real armap,
+// 127.0.0.1 by the bind — so no probe here can reach the operator's real atlas,
 // trainer, board view or sim, which are on the tailnet address only.
 
 const { test, before, after } = require('node:test');

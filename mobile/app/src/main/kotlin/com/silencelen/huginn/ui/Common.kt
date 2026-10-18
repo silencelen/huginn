@@ -217,7 +217,7 @@ fun StateDot(state: String?, modifier: Modifier = Modifier) {
 fun PulsingDot(color: Color, modifier: Modifier = Modifier) {
     // The shared stepped breath, not a second infinite tween of its own.
     // 2026-10-02: this copy redrew the Sessions tab at display rate (~100 draws
-    // a second on the Fold) for as long as a session was working; see PulseDot.
+    // a second on a foldable) for as long as a session was working; see PulseDot.
     com.silencelen.huginn.ui.work.PulseDot(color, modifier)
 }
 

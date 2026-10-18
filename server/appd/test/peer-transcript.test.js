@@ -108,14 +108,14 @@ test('a subagent\'s message is attributed to the session it was sent from', () =
   // The `@handle` a pane shows is the PARENT session's name slugified — a
   // subagent has no address of its own — so the label comes from `origin.name`
   // and the inner <agent-message> wrapper is unwrapped, not shown.
-  const wrapped = '<cross-session-message from="uds:/tmp/cc-socks/1317355.sock" from-name="netplan-fd"'
+  const wrapped = '<cross-session-message from="uds:/tmp/cc-socks/1317355.sock" from-name="app-fd"'
     + ' from-mode="prompting">\n<agent-message from="ae6c31e17936d867b">\nSPIKE-PING: reply PONG.\n'
     + '</agent-message>\n</cross-session-message>';
   const file = writeJsonl('peer-agent.jsonl', [
     { type: 'queue-operation', operation: 'enqueue', timestamp: STAMP, content: wrapped },
   ]);
   const { events } = readTranscript(file, { limit: 50 });
-  assert.equal('netplan-fd', events[0].peer.name);
+  assert.equal('app-fd', events[0].peer.name);
   assert.equal(1317355, events[0].peer.pid);
   assert.match(events[0].text, /SPIKE-PING/);
   assert.ok(!events[0].text.includes('agent-message'), 'the wrapper is plumbing');

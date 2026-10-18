@@ -63,11 +63,11 @@ test('addresses are canonical: one spelling per address, names in their ASCII fo
 });
 
 test('a dotted name passes exactly when the app-URL host rule passes it', () => {
-  // 2026-10-02: huginn.tail1234.ts.net was accepted, huginn.jnet.ad silently
+  // 2026-10-02: huginn.tail1234.ts.net was accepted, huginn.home.arpa silently
   // dropped. The rule is the URL rule's, said once.
   assert.equal('huginn.tail1234.ts.net', appsLib.normalizeAddr('HUGINN.tail1234.ts.net'));
   assert.equal('x.localhost', appsLib.normalizeAddr('x.localhost'));
-  assert.equal('', appsLib.normalizeAddr('huginn.jnet.ad'));
+  assert.equal('', appsLib.normalizeAddr('huginn.home.arpa'));
 });
 
 test('the 8-address limit is counted after normalising, the way the store counts', () => {
@@ -205,7 +205,7 @@ test('one client cannot push out another client\'s routes; the cap is per client
 });
 
 test('a route the host rule refuses is NAMED, and the valid rest of the report still applies', () => {
-  // 2026-10-02: 'huginn.jnet.ad' vanished from a 200 with no word to anybody.
+  // 2026-10-02: 'huginn.home.arpa' vanished from a 200 with no word to anybody.
   // And the rest must still apply: a 3.9.0 client sends every pin unfiltered and
   // never reads the body, so an all-or-nothing refusal cost it every route.
   const dir = tmpDir('refuse');
@@ -213,9 +213,9 @@ test('a route the host rule refuses is NAMED, and the valid rest of the report s
     const store = mkStore(dir);
     store.list();
     store.noteReportedRoutes(['127.0.0.2'], 'fold');
-    const r = store.noteReportedRoutes(['127.0.0.3', 'huginn.jnet.ad', '8.8.8.8'], 'fold');
+    const r = store.noteReportedRoutes(['127.0.0.3', 'huginn.home.arpa', '8.8.8.8'], 'fold');
     assert.equal(true, r.ok);
-    assert.deepEqual(['huginn.jnet.ad', '8.8.8.8'], r.refused.map((x) => x.addr));
+    assert.deepEqual(['huginn.home.arpa', '8.8.8.8'], r.refused.map((x) => x.addr));
     assert.ok(r.refused.every((x) => typeof x.why === 'string' && x.why));
     assert.deepEqual(['127.0.0.1', '127.0.0.3'], store.requiredAddresses(), 'the valid host replaced the old set');
     assert.equal(true, store.noteReportedRoutes(['huginn.tail1234.ts.net'], 'fold').ok, 'a ts.net name is a route');
@@ -304,25 +304,25 @@ test('an app on ANOTHER host is checked at its own address, never at this host\'
   const dir = tmpDir('remote');
   try {
     const lies = fakeFetch(['127.0.0.1']);   // only the local decoy answers
-    const store = mkStore(dir, { fetch: lies, hostAddr: '192.168.2.117' });
+    const store = mkStore(dir, { fetch: lies, hostAddr: '192.168.1.20' });
     store.list();
-    store.noteReportedRoutes(['192.168.2.117'], 'fold');
-    const r = await store.add({ name: 'Elsewhere', url: 'http://192.168.7.50:8088/' });
+    store.noteReportedRoutes(['192.168.1.20'], 'fold');
+    const r = await store.add({ name: 'Elsewhere', url: 'http://192.168.10.50:8088/' });
     assert.equal(false, r.ok);
     assert.equal(422, r.status);
     assert.ok(!lies.seen.some((u) => u.includes('127.0.0.1')), `loopback was never dialled: ${lies.seen}`);
-    assert.deepEqual(['192.168.7.50'], r.reachable.addresses.map((a) => a.addr));
+    assert.deepEqual(['192.168.10.50'], r.reachable.addresses.map((a) => a.addr));
     assert.deepEqual([], r.reachable.fix, 'no rebind lines for a unit on a machine huginn does not run');
     assert.match(r.error, /another host/);
 
-    const honest = mkStore(tmpDir('remote2'), { fetch: fakeFetch(['192.168.7.50']), hostAddr: '192.168.2.117' });
-    const ok = await honest.add({ name: 'Elsewhere', url: 'http://192.168.7.50:8088/' });
+    const honest = mkStore(tmpDir('remote2'), { fetch: fakeFetch(['192.168.10.50']), hostAddr: '192.168.1.20' });
+    const ok = await honest.add({ name: 'Elsewhere', url: 'http://192.168.10.50:8088/' });
     assert.equal(true, ok.ok, JSON.stringify(ok));
     assert.match(ok.reachable.note, /another host/);
 
     // This host's OWN address is local: substituted and required as before.
-    const local = await mkStore(tmpDir('remote3'), { fetch: fakeFetch(['127.0.0.1', '192.168.2.117']), hostAddr: '192.168.2.117' })
-      .add({ name: 'Here', url: 'http://192.168.2.117:8088/' });
+    const local = await mkStore(tmpDir('remote3'), { fetch: fakeFetch(['127.0.0.1', '192.168.1.20']), hostAddr: '192.168.1.20' })
+      .add({ name: 'Here', url: 'http://192.168.1.20:8088/' });
     assert.equal(true, local.ok);
     assert.ok(local.reachable.addresses.some((a) => a.addr === '127.0.0.1' && a.required));
   } finally {
@@ -341,19 +341,19 @@ test('a verdict with nothing but loopback required says so instead of vouching f
 });
 
 test('a seed row is this host\'s app wherever its URL points; a lookalike on another port is not', () => {
-  // 2026-10-02: the live seeds carry the retired tailnet IP 100.97.198.90.
-  assert.equal(true, appsLib.isSeedRow({ id: 'armap', url: 'http://100.97.198.90:8088/' }));
-  assert.equal(false, appsLib.isSeedRow({ id: 'armap', url: 'http://192.168.7.50:9999/' }));
-  assert.equal(false, appsLib.isSeedRow({ id: 'other', url: 'http://100.97.198.90:8088/' }));
+  // 2026-10-02: the live seeds carry the retired tailnet IP 100.101.102.103.
+  assert.equal(true, appsLib.isSeedRow({ id: 'atlas', url: 'http://100.101.102.103:8088/' }));
+  assert.equal(false, appsLib.isSeedRow({ id: 'atlas', url: 'http://192.168.10.50:9999/' }));
+  assert.equal(false, appsLib.isSeedRow({ id: 'other', url: 'http://100.101.102.103:8088/' }));
   const dir = tmpDir('seedlocal');
   try {
     const store = mkStore(dir);
     store.list();
-    const plan = store.addressSet({ id: 'jtyper', url: 'http://100.97.198.90:8091/', addresses: [] });
+    const plan = store.addressSet({ id: 'jotter', url: 'http://100.101.102.103:8091/', addresses: [] });
     assert.equal(undefined, plan.remote, 'judged as this host, by loopback and reported routes');
     assert.ok(plan.required.includes('127.0.0.1'));
-    const far = store.addressSet({ id: 'x', url: 'http://100.97.198.90:8091/', addresses: [] });
-    assert.equal('100.97.198.90', far.remote, 'the same URL on a non-seed row is somebody else\'s');
+    const far = store.addressSet({ id: 'x', url: 'http://100.101.102.103:8091/', addresses: [] });
+    assert.equal('100.101.102.103', far.remote, 'the same URL on a non-seed row is somebody else\'s');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

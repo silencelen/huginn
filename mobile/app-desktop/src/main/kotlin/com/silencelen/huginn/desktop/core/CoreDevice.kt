@@ -44,7 +44,7 @@ enum class CoreGate { CHECKING, READY, NOT_SET_UP, NOT_RUNNING }
  *
  * ⚠ THE APP NO LONGER RUNS WORK. Its old runner lived only while this window's
  * JVM did, and the JVM lives only while somebody is signed in — which is how
- * RAGNAR kept vanishing as a device (audit 2026-10-03). The core is a per-user
+ * RIG kept vanishing as a device (audit 2026-10-03). The core is a per-user
  * service that starts at boot; this class is a DOOR to it: it shows the core's
  * state and sends the owner's changes, and a crash or quit here can neither
  * orphan nor misreport a run.

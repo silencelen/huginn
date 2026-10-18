@@ -137,7 +137,7 @@ class DaemonTlsTest {
         assertEquals("http://[::1]:8787", DaemonTls.secureUrl("http://[::1]:8787"))
         assertEquals("http://[0:0:0:0:0:0:0:1]:8787", DaemonTls.secureUrl("http://[0:0:0:0:0:0:0:1]:8787"))
 
-        assertEquals("https://192.168.7.117:8787", DaemonTls.secureUrl("http://192.168.7.117:8787"))
+        assertEquals("https://192.168.10.20:8787", DaemonTls.secureUrl("http://192.168.10.20:8787"))
         assertEquals("https://10.0.0.5:8787", DaemonTls.secureUrl("10.0.0.5:8787"), "a bare authority is http, then upgraded")
         assertEquals("https://[fd00::117]:8787", DaemonTls.secureUrl("http://[fd00::117]:8787"))
         assertEquals("https://huginn.lan:8787", DaemonTls.secureUrl("HTTP://huginn.lan:8787"))
@@ -152,7 +152,7 @@ class DaemonTlsTest {
     /** Rule 6: the STORED form is the upgraded one, so the reader sees https. */
     @Test
     fun `routes are stored upgraded`() {
-        assertEquals("https://192.168.2.117:8787", RouteGuard.normalize("http://192.168.2.117:8787/"))
+        assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("http://192.168.1.20:8787/"))
         assertEquals("https://[fd00::1]:8787", RouteGuard.normalize("http://[FD00::1]:8787"))
         assertEquals("http://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"))
         assertEquals("http://[::1]:8787", RouteGuard.normalize("http://[::1]:8787"))
@@ -206,7 +206,7 @@ class DaemonTlsTest {
         transport: MockTransport,
         pins: PinBook = PinBook(),
         tokenNow: () -> String = { token },
-        base: String = "http://192.168.7.117:8787",
+        base: String = "http://192.168.10.20:8787",
     ) = HuginnClient(baseUrlProvider = { base }, tokenProvider = tokenNow, transport = transport, pins = pins)
 
     private fun daemon() = MockTransport(token = token) { request ->
@@ -220,9 +220,9 @@ class DaemonTlsTest {
         val pins = PinBook()
         client(t, pins).ping()
         assertEquals(1, t.probes.size, "one proof")
-        assertTrue(t.probes.single().startsWith("https://192.168.7.117:8787/v1/challenge?nonce="), t.probes.single())
+        assertTrue(t.probes.single().startsWith("https://192.168.10.20:8787/v1/challenge?nonce="), t.probes.single())
         assertEquals(listOf(MockTransport.TEST_FP), pins.pinsFor(token))
-        assertEquals("https://192.168.7.117:8787/v1/ping", seen.single().url.toString())
+        assertEquals("https://192.168.10.20:8787/v1/ping", seen.single().url.toString())
         assertEquals("Bearer $token", seen.single().headers[HttpHeaders.Authorization])
 
         client(t, pins).ping()

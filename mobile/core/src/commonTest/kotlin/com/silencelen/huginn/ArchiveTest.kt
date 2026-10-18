@@ -42,12 +42,12 @@ class ArchiveTest {
         {"archives":[
           {"id":"0123abcd-0000-4000-8000-00000000abcd",
            "claudeSessionId":"0123abcd-0000-4000-8000-00000000abcd",
-           "tmuxName":"jtyper","title":"Archive session feature","cwd":"/root/netplan",
+           "tmuxName":"jotter","title":"Archive session feature","cwd":"/root/projects/app",
            "model":"claude-opus-4-5","effort":"high","permissionMode":"acceptEdits",
-           "gitBranch":"huginn3/w2-archive",
-           "resumeCommand":"cd '/root/netplan' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
+           "gitBranch":"feature/w2-archive",
+           "resumeCommand":"cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
            "archivedAt":1758100000,"endedAt":1758100005,"lastMessage":"suite green",
-           "transcriptPath":"/root/.claude/projects/-root-netplan/x.jsonl",
+           "transcriptPath":"/root/.claude/projects/-root-projects-app/x.jsonl",
            "transcriptBytes":148231,"transcriptTruncated":false,
            "revivedAt":null,"revivedAs":null,"note":null,
            "live":false,"transcriptPresent":true}
@@ -76,13 +76,13 @@ class ArchiveTest {
         assertEquals(64, list.max, "the cap travels, so a client can say what it is")
         val r = list.archives.first()
         assertEquals("0123abcd-0000-4000-8000-00000000abcd", r.id)
-        assertEquals("jtyper", r.tmuxName)
+        assertEquals("jotter", r.tmuxName)
         assertEquals("Archive session feature", r.title)
-        assertEquals("/root/netplan", r.cwd)
+        assertEquals("/root/projects/app", r.cwd)
         // THE FIELD THE WHOLE FEATURE IS. A rename on either side makes this null
         // and the row simply loses a button — no error, nothing to notice.
         assertEquals(
-            "cd '/root/netplan' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
+            "cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000abcd",
             r.resumeCommand,
         )
         assertEquals(1758100005L, r.endedAt)
@@ -151,8 +151,8 @@ class ArchiveTest {
         // read. The host refuses it too; this is what keeps the button away.
         assertFalse(ArchiveRules.canRevive(row(live = true)))
         assertTrue(ArchiveRules.canRevive(row(live = false)))
-        assertEquals("jtyper2", ArchiveRules.liveName(row(live = true, tmuxName = "jtyper", revivedAs = "jtyper2")))
-        assertNull(ArchiveRules.liveName(row(live = false, tmuxName = "jtyper")))
+        assertEquals("jtyper2", ArchiveRules.liveName(row(live = true, tmuxName = "jotter", revivedAs = "jtyper2")))
+        assertNull(ArchiveRules.liveName(row(live = false, tmuxName = "jotter")))
     }
 
     @Test
@@ -166,8 +166,8 @@ class ArchiveTest {
 
     @Test
     fun `a row always has something to call itself`() {
-        assertEquals("Archive session feature", ArchiveRules.label(row(title = "Archive session feature", tmuxName = "jtyper")))
-        assertEquals("jtyper", ArchiveRules.label(row(title = null, tmuxName = "jtyper")))
+        assertEquals("Archive session feature", ArchiveRules.label(row(title = "Archive session feature", tmuxName = "jotter")))
+        assertEquals("jotter", ArchiveRules.label(row(title = null, tmuxName = "jotter")))
         // Neither a title nor a name: a short id, because "" is not distinguishable
         // from the row above it.
         assertEquals("0123abcd", ArchiveRules.label(row(title = null, tmuxName = null)))
@@ -203,10 +203,10 @@ class ArchiveTest {
         // sending it by accident is the mistake worth pinning.
         val c = client { respond("""{"ok":true,"id":"x","archived":false,"pending":true}""",
             HttpStatusCode.Accepted, headersOf(HttpHeaders.ContentType, "application/json")) }
-        c.archiveSession("jtyper")
-        assertEquals("https://appd.test/v1/sessions/jtyper/archive", seen.last().url.toString())
+        c.archiveSession("jotter")
+        assertEquals("https://appd.test/v1/sessions/jotter/archive", seen.last().url.toString())
         assertTrue((seen.last().body as TextContent).text.contains("\"graceful\""))
-        c.archiveSession("jtyper", now = true)
+        c.archiveSession("jotter", now = true)
         assertTrue((seen.last().body as TextContent).text.contains("\"now\""))
     }
 
@@ -223,7 +223,7 @@ class ArchiveTest {
                     HttpStatusCode.Conflict,
                     headersOf(HttpHeaders.ContentType, "application/json"),
                 )
-            }.archiveSession("jtyper")
+            }.archiveSession("jotter")
         }
         assertEquals(409, e.code)
         assertEquals("answer the waiting question first, then archive the session", e.message)

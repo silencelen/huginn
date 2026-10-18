@@ -129,7 +129,7 @@ else
       "$HOME/.local/bin/huginn" core status 2>/dev/null | grep -q 'not paired' || PAIRED=1
       # Paired, but ssh did not answer at the address typed: huginn lists its
       # other addresses to the core, and setup ssh points 'Host huginn' at one
-      # that carries ssh from here (PRESTIGE, 2026-10-17).
+      # that carries ssh from here (PC01, 2026-10-17).
       if [ -n "$PAIRED" ] && [ -z "$TRUSTED" ]; then
         HUGINN_SETUP=1 "$HOME/.local/bin/huginn" setup ssh < "$IN" && TRUSTED=1
       fi

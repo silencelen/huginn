@@ -13,7 +13,7 @@
 // SAFETY, and why this suite PRE-WRITES the store file: the seed list is real.
 // `http://huginn:8088/` and its three siblings are live services on this host,
 // so a suite that let the daemon seed itself would have its background sweep
-// GET the operator's actual armap, jtyper, board view and BTC sim. Instead the
+// GET the operator's actual atlas, jotter, board view and BTC sim. Instead the
 // store is written before the daemon starts, pointing at fixture servers this
 // file owns on ephemeral ports. Seeding itself is covered in apps.test.js,
 // which needs no sockets for it.
@@ -55,10 +55,10 @@ const PORT = 10700 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 
 // ⚠ AND ONE FIXED PORT OUTSIDE THE TABLE: 8088, on LOOPBACK. The seed's ports
-// are not negotiable — they are armap, the trainer, the board view and the sim
+// are not negotiable — they are atlas, the trainer, the board view and the sim
 // — so proving a re-pointed seed row can actually be probed means listening on
 // one of them at the address the daemon binds. 127.0.0.1:8088 is free on this
-// host for exactly the reason D10 exists: the real armap is on the TAILNET
+// host for exactly the reason D10 exists: the real atlas is on the TAILNET
 // address only.
 const SEED_PORT = 8088;
 
@@ -128,16 +128,16 @@ before(async () => {
   await new Promise((r) => hangServer.listen(0, '127.0.0.1', r));
   hangPort = hangServer.address().port;
 
-  // A stand-in for armap, on the seed's own port at the address this daemon
+  // A stand-in for atlas, on the seed's own port at the address this daemon
   // binds, so a re-pointed seed row has something real to answer it.
   //
-  // ⚠ AND IT IS ALLOWED TO LOSE THE RACE. The moment armap.service is rebound to
-  // 0.0.0.0 — the remedy this feature prints — the real armap holds this port on
+  // ⚠ AND IT IS ALLOWED TO LOSE THE RACE. The moment atlas.service is rebound to
+  // 0.0.0.0 — the remedy this feature prints — the real atlas holds this port on
   // every address and the stand-in cannot have it. That is not a failure: what
   // the two tests below need is that SOMETHING answers on 127.0.0.1:8088, and
   // the thing that took the port is the thing the row names. Any other error is
   // still thrown, because it means something unexplained holds the port.
-  seedServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('armap'); });
+  seedServer = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end('atlas'); });
   await new Promise((resolve, reject) => {
     seedServer.once('error', (e) => {
       if (e.code === 'EADDRINUSE') { seedServer = null; resolve(); return; }
@@ -158,14 +158,14 @@ before(async () => {
         url: `http://127.0.0.1:${hangPort}/`, notes: 'fixture' }, 1789460000),
       // What a daemon BEFORE D10 left on disk: the seed pinned to a name that
       // resolves to an interface none of the four units listen on. These are
-      // safe to probe either way — nothing answers on 192.168.2.117 at these
+      // safe to probe either way — nothing answers on 192.168.1.20 at these
       // ports — and the daemon must re-point them onto the address it binds.
-      appsLib.buildRecord({ id: 'armap', name: 'Architecture map', kind: 'docs',
+      appsLib.buildRecord({ id: 'atlas', name: 'Atlas map', kind: 'docs',
         url: 'http://huginn:8088/', notes: 'the old seed' }, 1789460000),
       appsLib.buildRecord({ id: 'board', name: 'PCB board view', kind: 'tool',
         url: 'http://huginn:8092/', notes: 'the old seed' }, 1789460000),
       // And one the OWNER re-pointed, which must come through untouched.
-      appsLib.buildRecord({ id: 'jtyper', name: 'jtyper trainer', kind: 'lab',
+      appsLib.buildRecord({ id: 'jotter', name: 'jotter notes', kind: 'lab',
         url: 'http://huginn:8091/owner-edited', notes: 'their edit' }, 1789460000),
       // A row that CANNOT be reached, whatever state the host is in — see
       // [DEAD_PORT]. It carries a unit so its fix lines are the exact ones.
@@ -242,7 +242,7 @@ test('the list says WHO arrived on each address, which is what a -source has to 
   // ⚠ ADDITIVE, AND THE OTHER HALF OF `clientAddresses`. The arrival addresses
   // say what the probe checked against; these say who the daemon has actually
   // seen on each of them — the only thing it knows that can honestly go after
-  // `-source` in a rule on heimdall. A client can show it; nothing has to.
+  // `-source` in a rule on pve1. A client can show it; nothing has to.
   const body = await list();
   assert.ok(body.clientRemotes && typeof body.clientRemotes === 'object' && !Array.isArray(body.clientRemotes),
     `a map of arrival -> clients: ${JSON.stringify(body.clientRemotes)}`);
@@ -305,9 +305,9 @@ test('/v1/consoles answers the 3.4 BODY, key for key against a capture of the ol
 });
 
 test('every id-bearing route under the alias answers, in the 3.4 shape', async () => {
-  const probe = await api('/v1/consoles/armap/probe', { method: 'POST' });
+  const probe = await api('/v1/consoles/atlas/probe', { method: 'POST' });
   assert.equal(200, probe.status, JSON.stringify(probe.body));
-  assert.equal('armap', probe.body.id);
+  assert.equal('atlas', probe.body.id);
   assert.deepEqual(appsLib.LEGACY_ROW_FIELDS.concat('reachableFrom'), Object.keys(probe.body),
     'a single-row answer is the old row too, or an editor decodes one shape and a list another');
   assert.equal(404, (await api('/v1/consoles/nope')).status, 'and an unknown route under the alias is still 404');
@@ -390,26 +390,26 @@ test('the rows the old seed wrote are re-pointed at the address this daemon bind
   // from the host" forever. This daemon binds 127.0.0.1 (HUGINN_APPD_BIND in
   // `before`), so that is where its seed rows belong.
   const body = await list();
-  assert.equal(`http://127.0.0.1:${SEED_PORT}/`, rowOf(body, 'armap').url);
+  assert.equal(`http://127.0.0.1:${SEED_PORT}/`, rowOf(body, 'atlas').url);
   assert.equal('http://127.0.0.1:8092/', rowOf(body, 'board').url);
-  assert.equal('http://huginn:8091/owner-edited', rowOf(body, 'jtyper').url,
+  assert.equal('http://huginn:8091/owner-edited', rowOf(body, 'jotter').url,
     'a row the owner re-pointed is never moved, whatever it points at');
   // Both seed migrations have run on this store: the address moved on the two
   // rows still holding the old literal, and all three seed rows learned the
   // unit that serves them (they were written here without one, as a pre-3.5
   // daemon would have).
-  assert.equal(3, rowOf(body, 'armap').version, 'the address moved and the unit landed, so the version moved twice');
-  assert.equal(2, rowOf(body, 'jtyper').version,
+  assert.equal(3, rowOf(body, 'atlas').version, 'the address moved and the unit landed, so the version moved twice');
+  assert.equal(2, rowOf(body, 'jotter').version,
     'a row the owner re-pointed still learns its unit — that is a fact about this host, not a choice about an address');
   assert.equal(1, rowOf(body, 'alive').version, 'and a row that is not one of the four is left entirely alone');
 });
 
 test('a re-pointed seed row can actually be probed, which is the entire point of moving it', async () => {
-  const r = await api('/v1/apps/armap/probe', { method: 'POST' });
+  const r = await api('/v1/apps/atlas/probe', { method: 'POST' });
   assert.equal(200, r.status, JSON.stringify(r.body));
   assert.equal(true, r.body.up, 'the stand-in on the seeded address answered — at http://huginn:8088/ nothing ever would');
   assert.equal(200, r.body.httpStatus);
-  assert.equal(true, rowOf(await list(), 'armap').up, 'and the list carries it');
+  assert.equal(true, rowOf(await list(), 'atlas').up, 'and the list carries it');
 });
 
 // ------------------------------------ the retrofit marker and the row's own fix
@@ -450,7 +450,7 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
   // ⚠ THE LINES SOMEBODY PASTES INTO A ROOT SHELL ON TWO MACHINES, literally.
   //
   // ⚠⚠ AND THERE IS NO HEIMDALL HALF. The one address failing here is LOOPBACK,
-  // which never crosses the veth chain — 117.fw has no say over it and the
+  // which never crosses the veth chain — 100.fw has no say over it and the
   // rebind above is the entire remedy. The old code put `-source 127.0.0.1`
   // here, a rule that could never match, which is the defect 3.5.2 removed;
   // 3.6.1 removed the header that was still standing over the sentence saying
@@ -471,13 +471,13 @@ test('a row that the sweep finds unreachable is MARKED with its own lines, and n
 
 test('the seeded rows name the unit that serves each one, so the fix line is exact', async () => {
   const body = await list();
-  assert.equal('armap.service', rowOf(body, 'armap').unit);
+  assert.equal('atlas.service', rowOf(body, 'atlas').unit);
   assert.equal('boardserver.service', rowOf(body, 'board').unit);
   assert.equal('', rowOf(body, 'alive').unit, 'and a row nobody named a unit for says so with a definite value');
 });
 
 test('an app that answers at every address huginn answers on is reachable, with no lines to show', async () => {
-  const r = await api('/v1/apps/armap/probe', { method: 'POST' });
+  const r = await api('/v1/apps/atlas/probe', { method: 'POST' });
   assert.equal(200, r.status, JSON.stringify(r.body));
   assert.equal(true, r.body.reachable.ok, 'the stand-in on 127.0.0.1:8088 answers at the one address this daemon knows');
   assert.deepEqual([], r.body.reachable.fix, 'a row that passes carries no remedy — that was the old card’s whole problem');
@@ -550,7 +550,7 @@ test('an app that does not answer at every known address is REFUSED with 422 and
 test('a unit name that is not a unit name is refused before anything is probed', async () => {
   const r = await api('/v1/apps', {
     method: 'POST',
-    body: JSON.stringify({ name: 'Sneaky unit', url: `http://127.0.0.1:${okPort}/`, unit: 'armap.service; rm -rf /' }),
+    body: JSON.stringify({ name: 'Sneaky unit', url: `http://127.0.0.1:${okPort}/`, unit: 'atlas.service; rm -rf /' }),
   });
   assert.equal(400, r.status, 'a 400, not a 422 — the refusal is about what was typed');
   assert.equal(null, rowOf(await list(), 'sneaky-unit'));
@@ -566,7 +566,7 @@ test('an id that is already taken is a 409 carrying the row it collided with', a
 });
 
 test('there is no icon to serve until a probe has cached one', async () => {
-  assert.equal(404, (await api('/v1/apps/armap/icon')).status);
+  assert.equal(404, (await api('/v1/apps/atlas/icon')).status);
   assert.equal(404, (await api('/v1/apps/nosuchapp/icon')).status, 'and an unknown id is the same 404');
 });
 

@@ -218,17 +218,17 @@ class AttachmentImagesTest {
             decoder = SkiaImageBytesDecoder(),
             fetchIcon = { id -> asked += id; png },
         )
-        val a = loader.loadIcon("armap", iconAt = 1_789_000_000)
-        val b = loader.loadIcon("armap", iconAt = 1_789_000_000)
+        val a = loader.loadIcon("atlas", iconAt = 1_789_000_000)
+        val b = loader.loadIcon("atlas", iconAt = 1_789_000_000)
         assertNotNull(a)
         assertTrue(a === b, "the second draw of the same row returns the cached bitmap")
-        assertEquals(listOf("armap"), asked)
+        assertEquals(listOf("atlas"), asked)
 
-        assertNotNull(loader.loadIcon("armap", iconAt = 1_789_003_600))
-        assertEquals(listOf("armap", "armap"), asked, "new bytes are a new picture")
+        assertNotNull(loader.loadIcon("atlas", iconAt = 1_789_003_600))
+        assertEquals(listOf("atlas", "atlas"), asked, "new bytes are a new picture")
 
-        assertNotNull(loader.loadIcon("jtyper", iconAt = 1_789_000_000))
-        assertEquals(listOf("armap", "armap", "jtyper"), asked, "and another row is another key")
+        assertNotNull(loader.loadIcon("jotter", iconAt = 1_789_000_000))
+        assertEquals(listOf("atlas", "atlas", "jotter"), asked, "and another row is another key")
     }
 
     /**
@@ -249,13 +249,13 @@ class AttachmentImagesTest {
         // The row as the list first drew it, and the SAME row an hour later: the
         // site changed its icon, the daemon re-fetched on probe, `version` is
         // untouched because nobody edited anything.
-        val before = App(id = "armap", name = "armap", version = 4, icon = true, iconAt = 1_789_000_000)
+        val before = App(id = "atlas", name = "atlas", version = 4, icon = true, iconAt = 1_789_000_000)
         val after = before.copy(iconAt = 1_789_003_600)
         assertEquals(before.version, after.version, "the row's revision does NOT move with the bytes")
 
         loader.loadIcon(before.id, before.iconStamp)
         loader.loadIcon(after.id, after.iconStamp)
-        assertEquals(listOf("armap", "armap"), asked, "the new picture must be fetched, not the old one served")
+        assertEquals(listOf("atlas", "atlas"), asked, "the new picture must be fetched, not the old one served")
     }
 
     /**
@@ -271,7 +271,7 @@ class AttachmentImagesTest {
             decoder = SkiaImageBytesDecoder(),
             fetchIcon = { fetches++; pngBytes(8, 8) },
         )
-        val row = App(id = "jtyper", name = "jtyper", icon = true)
+        val row = App(id = "jotter", name = "jotter", icon = true)
         assertEquals(0L, row.iconStamp, "no stamp reads as 0, never as a date in 1970")
         loader.loadIcon(row.id, row.iconStamp)
         loader.loadIcon(row.id, row.iconStamp)
@@ -290,8 +290,8 @@ class AttachmentImagesTest {
             decoder = SkiaImageBytesDecoder(),
             fetchIcon = { fetches++; throw RuntimeException("404") },
         )
-        assertNull(loader.loadIcon("btc15m", iconAt = 1))
-        assertNull(loader.loadIcon("btc15m", iconAt = 1))
+        assertNull(loader.loadIcon("bursar", iconAt = 1))
+        assertNull(loader.loadIcon("bursar", iconAt = 1))
         assertEquals(1, fetches, "a 404 on an icon is permanent for those bytes")
     }
 
@@ -300,13 +300,13 @@ class AttachmentImagesTest {
     fun `without an icon fetcher loadIcon is a quiet miss, not a crash`() = runBlocking {
         var fetches = 0
         val loader = AttachmentImageLoader({ fetches++; ByteArray(0) }, SkiaImageBytesDecoder())
-        assertNull(loader.loadIcon("armap", iconAt = 1))
+        assertNull(loader.loadIcon("atlas", iconAt = 1))
         assertEquals(0, fetches, "and it does not fall back to the uploads route")
     }
 
     /**
-     * ⚠ THE THREE KEY SPACES MUST NOT COLLIDE. An upload called `armap`, a host
-     * path `/armap` and an app id `armap` are three different fetches from three
+     * ⚠ THE THREE KEY SPACES MUST NOT COLLIDE. An upload called `atlas`, a host
+     * path `/atlas` and an app id `atlas` are three different fetches from three
      * different routes sharing one LRU.
      */
     @Test
@@ -319,9 +319,9 @@ class AttachmentImagesTest {
             fetchPath = { path, _ -> hits += "path:$path"; png },
             fetchIcon = { id -> hits += "icon:$id"; png },
         )
-        loader.load("/uploads/armap")
-        loader.loadPath("/armap")
-        loader.loadIcon("armap", iconAt = 1)
-        assertEquals(listOf("upload:armap", "path:/armap", "icon:armap"), hits)
+        loader.load("/uploads/atlas")
+        loader.loadPath("/atlas")
+        loader.loadIcon("atlas", iconAt = 1)
+        assertEquals(listOf("upload:atlas", "path:/atlas", "icon:atlas"), hits)
     }
 }

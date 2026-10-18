@@ -5,7 +5,7 @@
     "slug": "statusflap",
     "kind": "software",
     "status": "active",
-    "cwd": "/root/netplan/status-page",
+    "cwd": "/root/projects/app/status-page",
     "memberCount": 4,
     "alive": 3,
     "busy": 1,

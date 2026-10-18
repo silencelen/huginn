@@ -258,12 +258,12 @@ test('the list carries no content — that is what makes it pollable', async () 
 });
 
 test('a page round-trips through create and read', async () => {
-  const made = await mkPad('Deploy notes', 'ssh hermod\nsudo -i');
+  const made = await mkPad('Deploy notes', 'ssh webhost\nsudo -i');
   assert.equal(1, made.rev, 'a new page starts at rev 1');
   assert.equal(false, made.main);
   const { status, body } = await api(`/v1/scratchpads/${made.id}`);
   assert.equal(200, status);
-  assert.equal('ssh hermod\nsudo -i', body.content);
+  assert.equal('ssh webhost\nsudo -i', body.content);
 });
 
 test('a page nobody has is a 404, not an empty one', async () => {
@@ -438,7 +438,7 @@ test('a stale save is a 409 carrying the CURRENT page, not a bare refusal', asyn
 // --------------------------------------------------------- the reference
 
 test('a chat message with a page attached reaches the run inside the frame', async () => {
-  const pad = await mkPad('Hostnames', 'heimdall\nskybox');
+  const pad = await mkPad('Hostnames', 'pve1\nskybox');
   const chat = (await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask' }) })).body;
   const sent = await api(`/v1/chats/${chat.id}/messages`, {
     method: 'POST',

@@ -478,7 +478,7 @@ object LocalServe {
         // Staged in THIS USER's temp, never in ProgramData: a file an earlier
         // elevated run created there belongs to the administrators, and this
         // unelevated app could not rewrite it - "Stop serving" failed with
-        // "activate.log (Access is denied)" (PRESTIGE, 2026-10-16). The elevated
+        // "activate.log (Access is denied)" (PC01, 2026-10-16). The elevated
         // child runs as this same user, so it can write here too.
         val dir = File(System.getProperty("java.io.tmpdir"), "huginn-local-activate")
         val log = File(dir, "activate.log")

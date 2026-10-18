@@ -69,9 +69,9 @@ class HuginnClientTest {
      */
     @Test
     fun `a base URL without a scheme is judged as http and dialled as https`() = runTest {
-        client(base = "192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
-        assertEquals("https://192.168.2.117:8787/v1/ping", seen.single().url.toString())
-        assertEquals("https://192.168.2.117:8787", RouteGuard.normalize("192.168.2.117:8787"))
+        client(base = "192.168.1.20:8787") { respond("""{"ok":true}""") }.ping()
+        assertEquals("https://192.168.1.20:8787/v1/ping", seen.single().url.toString())
+        assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
         // ⚠ Since 3.11 a bare public name is no longer refused: it is upgraded,
         // and the token only follows it once the TLS proof has matched.
         assertEquals("https://example.com:8787", RouteGuard.normalize("example.com:8787"))
@@ -80,8 +80,8 @@ class HuginnClientTest {
     /** A scheme is a scheme however it is spelled; `HTTP://` was stored by 2.x. */
     @Test
     fun `an upper-case scheme is not prepended to`() = runTest {
-        client(base = "HTTP://192.168.2.117:8787") { respond("""{"ok":true}""") }.ping()
-        assertEquals("https://192.168.2.117:8787/v1/ping", seen.single().url.toString())
+        client(base = "HTTP://192.168.1.20:8787") { respond("""{"ok":true}""") }.ping()
+        assertEquals("https://192.168.1.20:8787/v1/ping", seen.single().url.toString())
     }
 
     /** Loopback is the one place plain http survives (TLS.md rule 6). */
@@ -148,8 +148,8 @@ class HuginnClientTest {
     @Test
     fun `softEndSession posts to the soft-end route and decodes the report`() = runTest {
         val r = ok("""{"ok":true,"phrase":"Finish up.","auto":true,"queued":false}""")
-            .softEndSession("jtyper")
-        assertEquals("https://appd.test/v1/sessions/jtyper/soft-end", seen.single().url.toString())
+            .softEndSession("jotter")
+        assertEquals("https://appd.test/v1/sessions/jotter/soft-end", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertTrue(r.auto)
@@ -160,8 +160,8 @@ class HuginnClientTest {
     @Test
     fun `compactSession posts to the compact route and decodes queued`() = runTest {
         val r = ok("""{"ok":true,"sent":"/compact","queued":true}""")
-            .compactSession("jtyper")
-        assertEquals("https://appd.test/v1/sessions/jtyper/compact", seen.single().url.toString())
+            .compactSession("jotter")
+        assertEquals("https://appd.test/v1/sessions/jotter/compact", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertTrue(r.queued)
@@ -251,9 +251,9 @@ class HuginnClientTest {
     @Test
     fun `a screen long poll rides the poll tier, a plain screen read does not`() = runTest {
         val c = ok("""{"hash":"h","lines":[]}""")
-        c.screen("jtyper", waitMs = 60_000)
+        c.screen("jotter", waitMs = 60_000)
         assertEquals(HuginnClient.POLL_READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
-        c.screen("jtyper")
+        c.screen("jotter")
         assertEquals(HuginnClient.READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
     }
 
@@ -267,24 +267,24 @@ class HuginnClientTest {
         // The default had better be the safe one — every existing call site inherits
         // it, and a default of `true` would reinstate the flap silently.
         val c = ok("""{"hash":"h","lines":[]}""")
-        c.screen("jtyper", cols = 120, rows = 40)
+        c.screen("jotter", cols = 120, rows = 40)
         val viewing = seen.last().url.toString()
         assertTrue(viewing.contains("cols=120"), "the viewer still describes itself: $viewing")
         assertFalse(viewing.contains("live="), "plain viewing must not claim the window: $viewing")
 
-        c.screen("jtyper", cols = 120, rows = 40, live = true)
+        c.screen("jotter", cols = 120, rows = 40, live = true)
         assertTrue(seen.last().url.toString().contains("live=1"),
             "live view is the one thing that may lease: ${seen.last().url}")
 
         // Spelt out rather than sent as `live=0`: absent IS the no-lease spelling,
         // and it is the one every client built before this sends.
-        c.screen("jtyper", cols = 120, rows = 40, live = false)
+        c.screen("jotter", cols = 120, rows = 40, live = false)
         assertFalse(seen.last().url.toString().contains("live="))
     }
 
     @Test
     fun `suggestions ride the poll tier because generation can take seconds`() = runTest {
-        ok("""{"suggestions":[]}""").sessionSuggestions("jtyper")
+        ok("""{"suggestions":[]}""").sessionSuggestions("jotter")
         assertEquals(HuginnClient.POLL_READ_TIMEOUT_MS, timeouts?.socketTimeoutMillis)
     }
 
@@ -668,8 +668,8 @@ class HuginnClientTest {
 
     @Test
     fun `a session send carries the reference too`() = runTest {
-        ok("""{"ok":true}""").sendKeys("jtyper", text = "follow this", scratchpadId = "pad-9")
-        assertEquals("https://appd.test/v1/sessions/jtyper/keys", seen.single().url.toString())
+        ok("""{"ok":true}""").sendKeys("jotter", text = "follow this", scratchpadId = "pad-9")
+        assertEquals("https://appd.test/v1/sessions/jotter/keys", seen.single().url.toString())
         assertTrue("\"scratchpadId\":\"pad-9\"" in lastBody(), lastBody())
     }
 
@@ -680,7 +680,7 @@ class HuginnClientTest {
         // field the composer line cannot say — which is how every client spent the
         // first two seconds of a new session describing a turn that had not begun.
         val r = ok("""{"ok":true,"queued":1,"position":1,"delivered":false,"blockedBy":"starting"}""")
-            .sendKeys("jtyper", text = "the first thing I typed", keys = listOf("Enter"))
+            .sendKeys("jotter", text = "the first thing I typed", keys = listOf("Enter"))
         assertEquals(1, r.queued)
         assertFalse(r.landed)
         assertEquals("starting", r.blockedBy)
@@ -690,7 +690,7 @@ class HuginnClientTest {
     fun `a send from a daemon that does not say why decodes to no reason at all`() = runTest {
         // Not "turn" and not an exception: a pre-3.1.2 daemon simply has nothing to
         // say, and the client must render the sentence it always did.
-        val r = ok("""{"ok":true,"queued":2}""").sendKeys("jtyper", text = "hello")
+        val r = ok("""{"ok":true,"queued":2}""").sendKeys("jotter", text = "hello")
         assertEquals(2, r.queued)
         assertNull(r.blockedBy)
     }
@@ -745,8 +745,8 @@ class HuginnClientTest {
     @Test
     fun `undoLadder decodes what the undo actually did`() = runTest {
         val r = ok("""{"ok":true,"applied":false,"queued":true,"to":"fable","delivery":"queued"}""")
-            .undoLadder("jtyper")
-        assertEquals("https://appd.test/v1/sessions/jtyper/headroom/undo", seen.single().url.toString())
+            .undoLadder("jotter")
+        assertEquals("https://appd.test/v1/sessions/jotter/headroom/undo", seen.single().url.toString())
         assertEquals("POST", seen.single().method.value)
         assertTrue(r.ok)
         assertFalse(r.applied, "mid-turn: the picker cannot be opened inside a running turn")
@@ -762,16 +762,16 @@ class HuginnClientTest {
      */
     @Test
     fun `agentTranscript sends the agent id exactly as the list gave it`() = runTest {
-        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "af7ca864cee1939de")
+        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jotter", "af7ca864cee1939de")
         assertEquals(
-            "https://appd.test/v1/sessions/jtyper/agents/af7ca864cee1939de/transcript?limit=400",
+            "https://appd.test/v1/sessions/jotter/agents/af7ca864cee1939de/transcript?limit=400",
             seen.single().url.toString(),
         )
 
         seen.clear()
-        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jtyper", "agent-3f9c1a")
+        ok("""{"events":[],"nextOffset":0}""").agentTranscript("jotter", "agent-3f9c1a")
         assertEquals(
-            "https://appd.test/v1/sessions/jtyper/agents/agent-3f9c1a/transcript?limit=400",
+            "https://appd.test/v1/sessions/jotter/agents/agent-3f9c1a/transcript?limit=400",
             seen.single().url.toString(),
         )
     }
@@ -779,8 +779,8 @@ class HuginnClientTest {
     @Test
     fun `typing status is a GET, and there is no cancel route to call`() = runTest {
         val t = ok("""{"queued":2,"delivering":false,"blockedBy":"turn","serverTime":1789460000}""")
-            .typingStatus("jtyper")
-        assertEquals("https://appd.test/v1/sessions/jtyper/typing", seen.single().url.toString())
+            .typingStatus("jotter")
+        assertEquals("https://appd.test/v1/sessions/jotter/typing", seen.single().url.toString())
         assertEquals("GET", seen.single().method.value, "the daemon has never served anything else here")
         assertEquals(2, t.queued)
         assertEquals("turn", t.blockedBy)
@@ -811,9 +811,9 @@ class HuginnClientTest {
 
     @Test
     fun `a session widens the daemon's search without widening the client's`() = runTest {
-        client { respond(byteArrayOf(1), HttpStatusCode.OK) }.imageBytes("/w/out.png", session = "jtyper")
+        client { respond(byteArrayOf(1), HttpStatusCode.OK) }.imageBytes("/w/out.png", session = "jotter")
         assertEquals(
-            "https://appd.test/v1/files/image?path=%2Fw%2Fout.png&session=jtyper",
+            "https://appd.test/v1/files/image?path=%2Fw%2Fout.png&session=jotter",
             seen.single().url.toString(),
         )
     }
@@ -844,9 +844,9 @@ class HuginnClientTest {
      */
     @Test
     fun aDeviceSaysBothWhetherItIsLockedAndWhetherThatMatters() = runTest {
-        val c = ok("""{"id":"d1","name":"RAGNAR","platform":"windows","scope":"own"}""")
+        val c = ok("""{"id":"d1","name":"RIG","platform":"windows","scope":"own"}""")
         c.registerDevice(
-            name = "RAGNAR", platform = "windows", scope = "own",
+            name = "RIG", platform = "windows", scope = "own",
             locked = true, actWhileLocked = true,
         )
         var body = lastBody()
@@ -856,7 +856,7 @@ class HuginnClientTest {
         // Turning it OFF has to travel too: a narrowing that only the machine
         // knows about leaves the daemon offering act on a box that revoked it.
         c.registerDevice(
-            name = "RAGNAR", platform = "windows", scope = "own",
+            name = "RIG", platform = "windows", scope = "own",
             locked = true, actWhileLocked = false,
         )
         body = lastBody()
@@ -865,7 +865,7 @@ class HuginnClientTest {
         // A caller that does not pass it says nothing — which is what every
         // client older than the setting does, and what the daemon reads as
         // "never said" rather than as "said no".
-        c.registerDevice(name = "RAGNAR", platform = "windows", scope = "own", locked = true)
+        c.registerDevice(name = "RIG", platform = "windows", scope = "own", locked = true)
         assertFalse("actWhileLocked" in lastBody(), lastBody())
     }
 

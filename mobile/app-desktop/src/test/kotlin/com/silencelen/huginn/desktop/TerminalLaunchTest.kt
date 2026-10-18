@@ -22,7 +22,7 @@ class TerminalLaunchTest {
 
     @Test
     fun `windows opens a profile-loading window through an ENCODED command`() {
-        val argv = TerminalLaunch.argv("jtyper", TerminalLaunch.Os.WINDOWS)!!
+        val argv = TerminalLaunch.argv("jotter", TerminalLaunch.Os.WINDOWS)!!
         assertEquals("powershell.exe", argv[0])
         // The OUTER shell is -NoProfile like every spawn in this client; the
         // window it starts must NOT be, because `huginn` lives in the profile.
@@ -32,10 +32,10 @@ class TerminalLaunchTest {
         assertTrue("-NoProfile" !in command.substringAfter("-ArgumentList"), "the window itself loads the profile")
         val b64 = command.substringAfterLast("','").removeSuffix("'")
         val script = TerminalLaunch.decoded(b64)
-        assertEquals(TerminalLaunch.script("jtyper"), script)
+        assertEquals(TerminalLaunch.script("jotter"), script)
         // Attach through the explicit verb when the loaded CLI has it, the plain
         // form an older CLI understands otherwise (see TerminalLaunchNamesTest).
-        assertTrue(script.endsWith("{ huginn attach 'jtyper' } else { huginn 'jtyper' }"), script)
+        assertTrue(script.endsWith("{ huginn attach 'jotter' } else { huginn 'jotter' }"), script)
         // Dot-sourced explicitly, so a profile that forgot the CLI still gets it.
         assertTrue("\$HOME\\.huginn\\huginn.ps1" in script, script)
     }
@@ -67,7 +67,7 @@ class TerminalLaunchTest {
             assertTrue(!spawned, bad)
         }
         var got: List<String>? = null
-        assertNull(TerminalLaunch.open("widgetshub-core", TerminalLaunch.Os.LINUX, homeWithCli()) { got = it })
+        assertNull(TerminalLaunch.open("dashboard-app-core", TerminalLaunch.Os.LINUX, homeWithCli()) { got = it })
         assertEquals("x-terminal-emulator", got!![0])
     }
 

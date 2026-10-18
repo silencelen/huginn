@@ -251,13 +251,13 @@ test('a chat with no counter at all still alerts on the edge', () => {
 test('a question is reported, with its options listed', () => {
   const text = telegramText({
     kind: 'session_attention',
-    title: 'jtyper needs you',
+    title: 'jotter needs you',
     text: 'ignored when a question is present',
-    question: 'Do you want to create jtyper.md?',
+    question: 'Do you want to create jotter.md?',
     options: [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }],
   });
-  assert.match(text, /jtyper needs you/);
-  assert.match(text, /^Asked: Do you want to create jtyper\.md\?$/m,
+  assert.match(text, /jotter needs you/);
+  assert.match(text, /^Asked: Do you want to create jotter\.md\?$/m,
     'framed as a report, not put to the reader');
   assert.match(text, /^1\) Yes$/m);
   assert.match(text, /^2\) No$/m);

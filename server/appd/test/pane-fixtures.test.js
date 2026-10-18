@@ -123,7 +123,7 @@ test('parseStatusLine reads the two-word accept-edits mode', () => {
 test('parseStatusLine extracts ctx% AND the real branch (was swallowed into branch)', () => {
   // huginn-statusline.sh: "[sess] Model · ctx N% · branch ~N · ⚠ N sessions…".
   // The old regex put "ctx N%" in `branch` and lost the git branch entirely.
-  const s = parseStatusLine(['[jtyper] Fable 5 · ctx 42% · main ~3 · ⚠ 2 sessions in this tree']);
+  const s = parseStatusLine(['[jotter] Fable 5 · ctx 42% · main ~3 · ⚠ 2 sessions in this tree']);
   assert.equal(s.model, 'Fable 5');
   assert.equal(s.contextPercent, 42);
   assert.equal(s.branch, 'main', 'the ~3 dirty count is stripped and the branch recovered');

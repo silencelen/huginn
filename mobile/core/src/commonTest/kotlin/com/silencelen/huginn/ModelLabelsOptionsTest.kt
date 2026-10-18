@@ -95,7 +95,7 @@ class ModelLabelsOptionsTest {
     // 2.77.0), so only `started` shrinks anything.
 
     private val twoMachines = models + listOf(
-        ModelChoice(id = "local-prestige-qwen3-4b", display = "Qwen3 4B - PRESTIGE", family = "local", available = true, host = "d-2"),
+        ModelChoice(id = "local-pc01-qwen3-4b", display = "Qwen3 4B - PC01", family = "local", available = true, host = "d-2"),
     )
 
     @Test
@@ -114,7 +114,7 @@ class ModelLabelsOptionsTest {
     @Test
     fun anUnstartedChatKeepsTheWholeMenu() {
         val ids = ModelLabels.options(twoMachines, PickerSite.CHAT, current = "opus", started = false).map { it.first }
-        assertEquals(listOf("fable", "opus", "local-gpubox-qwen3-8b", "local-prestige-qwen3-4b"), ids)
+        assertEquals(listOf("fable", "opus", "local-gpubox-qwen3-8b", "local-pc01-qwen3-4b"), ids)
     }
 
     @Test

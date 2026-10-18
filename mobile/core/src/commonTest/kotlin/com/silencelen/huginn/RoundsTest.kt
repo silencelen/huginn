@@ -61,7 +61,7 @@ class RoundsTest {
     }
 
     /**
-     * 2026-10-02, on the Fold: on a Friday at 10:10 the weekly Sunday 08:00 Round
+     * 2026-10-02, on a foldable: on a Friday at 10:10 the weekly Sunday 08:00 Round
      * read "Sundays at 8:00 AM · tomorrow". The [24h, 48h) band was named with a
      * CALENDAR word, but the countdown only knows elapsed time (core has no
      * timezone on purpose), so a run 45h50m away landed two calendar days out

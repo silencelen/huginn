@@ -46,7 +46,7 @@ test('an address carrying a username and password is refused', () => {
   // own address for exactly this reason; a console address is handed to a phone
   // browser as well, which would then store it.
   assert.equal(appsLib.REFUSED_USERINFO, appsLib.urlProblem('http://admin:hunter2@huginn:8088/'));
-  assert.equal(appsLib.REFUSED_USERINFO, appsLib.urlProblem('https://admin@100.97.198.90:8092/board'));
+  assert.equal(appsLib.REFUSED_USERINFO, appsLib.urlProblem('https://admin@100.101.102.103:8092/board'));
   assert.equal(null, appsLib.urlProblem('http://huginn:8088/'), 'the same address without the credential is fine');
 });
 
@@ -78,9 +78,9 @@ test('the host must be one huginn cannot reach the public internet with — one 
     'loopback by name': 'http://localhost:8088/',
     'loopback v6': 'http://[::1]:8088/',
     'lan 10': 'http://10.0.0.5:8088/',
-    'lan 192.168': 'http://192.168.2.131:8088/',
+    'lan 192.168': 'http://192.168.1.131:8088/',
     'lan 172.16-31': 'http://172.20.4.4:8088/',
-    'tailnet cgnat': 'http://100.97.198.90:8088/',
+    'tailnet cgnat': 'http://100.101.102.103:8088/',
     'tailnet magicdns': 'https://huginn.taildbeef.ts.net/',
     'mesh ula': 'http://[fd7a:115c:a1e0::1]:8088/',
     'single-label name': 'http://huginn:8088/',
@@ -137,7 +137,7 @@ test('control characters, spaces and backslashes never reach a stored address', 
 // ---------------------------------------------------------------- the record
 
 test('a record has every field a client reads, with a definite value', () => {
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Architecture map', url: 'http://huginn:8088/' }, 1789460000);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Atlas map', url: 'http://huginn:8088/' }, 1789460000);
   assert.deepEqual(
     ['id', 'name', 'url', 'kind', 'notes', 'unit', 'addresses', 'addedAt', 'version'],
     Object.keys(rec),
@@ -196,16 +196,16 @@ test('a kind the caller TYPED and got wrong is a 400, the same as a project kind
 });
 
 test('a name is one line with no control characters in it', () => {
-  assert.equal('BTC 15m simulator', appsLib.cleanName('  BTC\t15m\nsimulator  '));
+  assert.equal('Bursar ledger', appsLib.cleanName('  BTC\t15m\nsimulator  '));
   assert.equal('a'.repeat(appsLib.MAX_NAME), appsLib.cleanName('a'.repeat(200)));
   assert.ok(appsLib.nameProblem(''), 'an app with no name is not a row anybody can find again');
   assert.ok(appsLib.nameProblem('a'.repeat(appsLib.MAX_NAME + 1)));
 });
 
 test('an id is a route segment, unique, and derived from the name when none is given', () => {
-  assert.equal('btc-15m-simulator', appsLib.idFor('BTC 15m simulator'));
-  assert.equal(null, appsLib.idProblem('armap', []));
-  assert.ok(appsLib.idProblem('armap', ['armap']), 'two rows with one id is a PATCH that edits either');
+  assert.equal('btc-15m-simulator', appsLib.idFor('Bursar ledger'));
+  assert.equal(null, appsLib.idProblem('atlas', []));
+  assert.ok(appsLib.idProblem('atlas', ['atlas']), 'two rows with one id is a PATCH that edits either');
   assert.ok(appsLib.idProblem('Armap', []), 'uppercase is not the grammar');
   assert.ok(appsLib.idProblem('../etc', []), 'an id is a path segment in every route below');
   assert.ok(appsLib.idProblem('-lead', []));
@@ -213,7 +213,7 @@ test('an id is a route segment, unique, and derived from the name when none is g
 
 // ------------------------------------------------------------- list algebra
 
-const BASE_LIST = () => appsLib.add([], { name: 'Architecture map', url: 'http://huginn:8088/', kind: 'docs' }, 100).apps;
+const BASE_LIST = () => appsLib.add([], { name: 'Atlas map', url: 'http://huginn:8088/', kind: 'docs' }, 100).apps;
 
 test('add refuses a bad address before it ever reaches the store', () => {
   const r = appsLib.add([], { name: 'Evil', url: 'http://admin:pw@example.com/' }, 100);
@@ -287,7 +287,7 @@ test('remove takes the row out and says which one it was', () => {
 // -------------------------------------------------------------------- rows
 
 test('an app that has never been probed says so — null, which is not false', () => {
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://huginn:8088/' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://huginn:8088/' }, 100);
   const row = appsLib.appRow(rec, undefined);
   assert.equal(null, row.up, '`up:false` would draw this as an outage on a daemon that started 200ms ago');
   assert.equal(0, row.lastProbeAt);
@@ -308,7 +308,7 @@ test('an app that has never been probed says so — null, which is not false', (
  * when somebody looked at it.
  */
 test('A STORED ROW\'S addedAt IS STICKY — a read never re-stamps it', () => {
-  const stored = { id: 'armap', name: 'Armap', url: 'http://huginn:8088/', kind: 'docs', notes: '', version: 1 };
+  const stored = { id: 'atlas', name: 'Armap', url: 'http://huginn:8088/', kind: 'docs', notes: '', version: 1 };
   const first = appsLib.appRow(stored, undefined).addedAt;
   const second = appsLib.appRow(stored, undefined).addedAt;
   assert.equal(first, second, 'two reads of one record cannot disagree about when it was added');
@@ -339,10 +339,10 @@ test('the row asks TWO questions — is it alive, and can this host\u2019s clien
   // holding it could not open the page and the list said so only in general.
   // Now the row itself carries the per-address answer, so a client never has to
   // decide which of two fields it believes.
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://huginn:8088/' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://huginn:8088/' }, 100);
   const row = appsLib.appRow(rec, { up: true, lastProbeAt: 5, latencyMs: 3, httpStatus: 200 }, {
     icon: true,
-    reachable: { ok: false, checkedAt: 7, addresses: [{ addr: '192.168.2.117', ok: false, error: 'connection refused' }], fix: ['x'] },
+    reachable: { ok: false, checkedAt: 7, addresses: [{ addr: '192.168.1.20', ok: false, error: 'connection refused' }], fix: ['x'] },
   });
   assert.equal(true, row.up, 'the daemon fetched it');
   assert.equal(false, row.reachable.ok, 'and your devices still cannot');
@@ -357,14 +357,14 @@ test('the seed is the contract’s four pages, at the address the daemon was han
   // bind this host's TAILNET address; the name `huginn` resolves to its LAN
   // address. A seed pinned to the name therefore addresses an interface on
   // which none of them listen — `curl http://huginn:8088/` answers nothing
-  // while `curl http://100.97.198.90:8088/` answers 200 — so every row read
+  // while `curl http://100.101.102.103:8088/` answers 200 — so every row read
   // "not answering from the host" forever, in the one deployment that has these
   // units. The probe could never pass, whatever anybody did.
-  const seeded = appsLib.seedApps('100.97.198.90', 100);
-  assert.deepEqual(['armap', 'jtyper', 'board', 'btc15m'], seeded.map((c) => c.id));
+  const seeded = appsLib.seedApps('100.101.102.103', 100);
+  assert.deepEqual(['atlas', 'jotter', 'board', 'bursar'], seeded.map((c) => c.id));
   assert.deepEqual(
-    ['http://100.97.198.90:8088/', 'http://100.97.198.90:8091/',
-      'http://100.97.198.90:8092/', 'http://100.97.198.90:8093/'],
+    ['http://100.101.102.103:8088/', 'http://100.101.102.103:8091/',
+      'http://100.101.102.103:8092/', 'http://100.101.102.103:8093/'],
     seeded.map((c) => c.url),
     'the address the daemon itself binds — the one interface these units are on',
   );
@@ -378,8 +378,8 @@ test('the seed address is chosen from what the daemon can offer, skipping the wi
   // to `0.0.0.0`, fall back to the name, and change nothing on the one host
   // that has this defect — so the daemon offers its bind AND the address
   // `tailscale ip -4` gives, and the first that stands up wins.
-  assert.equal('100.97.198.90', appsLib.pickHostAddr('0.0.0.0', '100.97.198.90'));
-  assert.equal('192.168.2.117', appsLib.pickHostAddr('192.168.2.117', '100.97.198.90'), 'a real bind is already the answer');
+  assert.equal('100.101.102.103', appsLib.pickHostAddr('0.0.0.0', '100.101.102.103'));
+  assert.equal('192.168.1.20', appsLib.pickHostAddr('192.168.1.20', '100.101.102.103'), 'a real bind is already the answer');
   assert.equal('', appsLib.pickHostAddr('0.0.0.0', ''), 'and nothing on offer is not a guess');
   assert.equal('', appsLib.pickHostAddr('::', 'example.com'), 'a public host is never an answer here');
   assert.equal('fd00::5', appsLib.pickHostAddr('fd00::5'), 'a mesh ULA is an address this registry accepts');
@@ -388,8 +388,8 @@ test('the seed address is chosen from what the daemon can offer, skipping the wi
 
 test('the wildcard the daemon binds seeds the fallback, not a URL nothing can open', () => {
   assert.equal('http://huginn:8088/', appsLib.seedApps(appsLib.pickHostAddr('0.0.0.0'), 100)[0].url);
-  assert.equal('http://100.97.198.90:8088/',
-    appsLib.seedApps(appsLib.pickHostAddr('0.0.0.0', '100.97.198.90'), 100)[0].url);
+  assert.equal('http://100.101.102.103:8088/',
+    appsLib.seedApps(appsLib.pickHostAddr('0.0.0.0', '100.101.102.103'), 100)[0].url);
 });
 
 test('a daemon that knows no address of its own falls back to the host name rather than inventing one', () => {
@@ -423,15 +423,15 @@ test('a row still carrying the old seeded address is re-pointed; one the owner e
   // literal, and nothing looser: a path, a port or a host of their own is them
   // speaking, and this must never overwrite it.
   const list = [
-    appsLib.buildRecord({ id: 'armap', name: 'Architecture map', url: 'http://huginn:8088/' }, 100),
-    appsLib.buildRecord({ id: 'jtyper', name: 'jtyper trainer', url: 'http://huginn:9099/' }, 100),
+    appsLib.buildRecord({ id: 'atlas', name: 'Atlas map', url: 'http://huginn:8088/' }, 100),
+    appsLib.buildRecord({ id: 'jotter', name: 'jotter notes', url: 'http://huginn:9099/' }, 100),
     appsLib.buildRecord({ id: 'board', name: 'PCB board view', url: 'http://huginn:8092/boards' }, 100),
-    appsLib.buildRecord({ id: 'btc15m', name: 'BTC 15m simulator', url: 'http://127.0.0.1:8093/' }, 100),
+    appsLib.buildRecord({ id: 'bursar', name: 'Bursar ledger', url: 'http://127.0.0.1:8093/' }, 100),
     appsLib.buildRecord({ id: 'mine', name: 'Something of my own', url: 'http://huginn:8088/' }, 100),
   ];
-  const r = appsLib.migrateSeedUrls(list, '100.97.198.90');
-  assert.deepEqual(['armap'], r.changed, 'only a seed row still holding the literal the old seed wrote');
-  assert.equal('http://100.97.198.90:8088/', r.apps[0].url);
+  const r = appsLib.migrateSeedUrls(list, '100.101.102.103');
+  assert.deepEqual(['atlas'], r.changed, 'only a seed row still holding the literal the old seed wrote');
+  assert.equal('http://100.101.102.103:8088/', r.apps[0].url);
   assert.equal(2, r.apps[0].version, 'the address moved, so a client holding version 1 is holding a stale row');
   assert.equal('http://huginn:9099/', r.apps[1].url, 'a re-pointed row is the owner speaking');
   assert.equal('http://huginn:8092/boards', r.apps[2].url, 'and so is a row with a path on it');
@@ -440,9 +440,9 @@ test('a row still carrying the old seeded address is re-pointed; one the owner e
 });
 
 test('re-seeding twice changes nothing the second time', () => {
-  const once = appsLib.migrateSeedUrls(appsLib.seedApps(null, 100), '100.97.198.90');
+  const once = appsLib.migrateSeedUrls(appsLib.seedApps(null, 100), '100.101.102.103');
   assert.equal(4, once.changed.length, 'precondition: a pre-D10 store is four stale rows');
-  assert.deepEqual([], appsLib.migrateSeedUrls(once.apps, '100.97.198.90').changed,
+  assert.deepEqual([], appsLib.migrateSeedUrls(once.apps, '100.101.102.103').changed,
     'the file is rewritten once, not on every load');
 });
 
@@ -453,13 +453,13 @@ test('an existing seed row learns the unit behind it, and a unit the owner typed
   // knows. Separate from the URL migration because an address is a CHOICE and a
   // unit is a fact about this host.
   const list = [
-    appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/' }, 100),
-    appsLib.buildRecord({ id: 'board', name: 'Board', url: 'http://100.97.198.90:8092/', unit: 'mine.service' }, 100),
-    appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.97.198.90:9100/' }, 100),
+    appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/' }, 100),
+    appsLib.buildRecord({ id: 'board', name: 'Board', url: 'http://100.101.102.103:8092/', unit: 'mine.service' }, 100),
+    appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.101.102.103:9100/' }, 100),
   ];
   const r = appsLib.migrateSeedUnits(list);
-  assert.deepEqual(['armap'], r.changed, 'only a seed row that has none');
-  assert.equal('armap.service', r.apps[0].unit);
+  assert.deepEqual(['atlas'], r.changed, 'only a seed row that has none');
+  assert.equal('atlas.service', r.apps[0].unit);
   assert.equal(2, r.apps[0].version, 'the row changed, so a client holding version 1 is holding a stale one');
   assert.equal('mine.service', r.apps[1].unit, 'a unit the owner typed is never overwritten');
   assert.equal('', r.apps[2].unit, 'and a row that is not one of the four is left alone');
@@ -493,7 +493,7 @@ test('the alias body is the 3.4 body, key for key against a capture of it', () =
   // un-updated app 3.5.x and desktop 1.5.x, and each one decodes an EMPTY list:
   // a feature that has silently lost its contents, which is worse than the 404
   // the alias exists to avoid, because a 404 at least hides the surface.
-  const rows = appsLib.seedApps('100.97.198.90', 1789000000).map((rec, i) => appsLib.appRow(rec, {
+  const rows = appsLib.seedApps('100.101.102.103', 1789000000).map((rec, i) => appsLib.appRow(rec, {
     up: [true, true, false, null][i],
     lastProbeAt: [1789459940, 1789459940, 1789459940, 0][i],
     latencyMs: [12, 48, 2000, null][i],
@@ -566,19 +566,19 @@ test('a failing row carries the exact rebind and firewall lines, and only for th
   // that does not match the port the unit was rebound to, and nothing in this
   // product would notice.
   const rec = appsLib.buildRecord({
-    id: 'jtyper', name: 'jtyper trainer', url: 'http://100.97.198.90:8091/', unit: 'jtyper-trainer.service',
+    id: 'jotter', name: 'jotter notes', url: 'http://100.101.102.103:8091/', unit: 'jotter.service',
   }, 100);
   const fix = fixPve(rec, [
-    { addr: '100.97.198.90', ok: true },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ], { '192.168.2.117': ['192.168.2.131'] });
+    { addr: '100.101.102.103', ok: true },
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
+  ], { '192.168.1.20': ['192.168.1.131'] });
   assert.deepEqual([
-    '# on huginn — 192.168.2.117 does not reach this app',
-    'systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of 100.97.198.90',
-    'systemctl restart jtyper-trainer.service',
+    '# on huginn — 192.168.1.20 does not reach this app',
+    'systemctl edit jotter.service   # ExecStart: bind 0.0.0.0 instead of 100.101.102.103',
+    'systemctl restart jotter.service',
     'ss -ltn | grep :8091',
     '# on pve-host — /etc/pve/firewall/100.fw',
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog',
+    'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog',
   ], fix);
 });
 
@@ -586,50 +586,50 @@ test('a row with no unit still gets an instruction, naming the address it does a
   // ⚠ "bind 0.0.0.0" WITH NOTHING TO EDIT IS NOT AN INSTRUCTION. An app the
   // owner added themselves has no unit on the row, and the line has to say what
   // it is replacing or it is advice rather than a fix.
-  const rec = appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.97.198.90:9100/thing' }, 100);
+  const rec = appsLib.buildRecord({ id: 'mine', name: 'Mine', url: 'http://100.101.102.103:9100/thing' }, 100);
   const fix = fixPve(rec, [
-    { addr: '100.97.198.90', ok: true },
-    { addr: '192.168.2.117', ok: false, error: 'no route' },
-  ], { '192.168.2.117': ['192.168.2.131'] });
-  assert.ok(fix.some((l) => l.startsWith('bind 0.0.0.0 instead of 100.97.198.90')), fix.join('\n'));
+    { addr: '100.101.102.103', ok: true },
+    { addr: '192.168.1.20', ok: false, error: 'no route' },
+  ], { '192.168.1.20': ['192.168.1.131'] });
+  assert.ok(fix.some((l) => l.startsWith('bind 0.0.0.0 instead of 100.101.102.103')), fix.join('\n'));
   assert.ok(fix.some((l) => l.includes('name it on the row')), 'and it says how to get the exact line');
   assert.ok(!fix.some((l) => l.startsWith('systemctl edit')), 'never a systemctl line with no unit in it');
-  assert.ok(fix.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 9100 -log nolog'),
+  assert.ok(fix.includes('IN ACCEPT -source 192.168.1.131 -p tcp -dport 9100 -log nolog'),
     'the port comes off the row, not off a hard-coded list of four');
 });
 
 test('one firewall line per FAILING address, and none for the ones that answered', () => {
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
   const fix = fixPve(rec, [
-    { addr: '100.97.198.90', ok: true },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
+    { addr: '100.101.102.103', ok: true },
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
-  ], { '100.97.198.90': ['100.97.198.91'], '192.168.2.117': ['192.168.2.131'], '127.0.0.1': ['127.0.0.1'] });
+  ], { '100.101.102.103': ['100.101.102.104'], '192.168.1.20': ['192.168.1.131'], '127.0.0.1': ['127.0.0.1'] });
   const rules = fix.filter((l) => l.startsWith('IN ACCEPT'));
   assert.deepEqual([
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
+    'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8088 -log nolog',
   ], rules, 'the client on the failing address — and nothing for the address that already answers');
-  assert.ok(!rules.some((l) => l.includes('100.97.198.91')),
+  assert.ok(!rules.some((l) => l.includes('100.101.102.104')),
     'the tailnet client arrived somewhere that WORKS, so it needs nothing opened');
   assert.ok(fix.includes('# 127.0.0.1 passes on its own once the unit binds 0.0.0.0'),
     `the other failing address is loopback and wants no rule at all: ${fix.join(' | ')}`);
-  assert.deepEqual([], fixPve(rec, [{ addr: '100.97.198.90', ok: true }]),
+  assert.deepEqual([], fixPve(rec, [{ addr: '100.101.102.103', ok: true }]),
     'and a row that passes carries no lines at all — that was the old card’s whole problem');
 });
 
-test('btc15m keeps the one true half of the D11 claim: where its bind actually lives', () => {
-  // ⚠ D11. The old card EXEMPTED btc15m-sim as "already binds 0.0.0.0" while its
+test('bursar keeps the one true half of the D11 claim: where its bind actually lives', () => {
+  // ⚠ D11. The old card EXEMPTED bursar as "already binds 0.0.0.0" while its
   // own firewall step opened 8093 — two halves of one card disagreeing about one
-  // service. `ss -ltn` says 100.97.198.90:8093: the 0.0.0.0 in sim/app.py is the
+  // service. `ss -ltn` says 100.101.102.103:8093: the 0.0.0.0 in sim/app.py is the
   // fallback for a host with no tailscale address, not what it does here. What
-  // survives is directions, not an exemption: `systemctl edit btc15m-sim.service`
+  // survives is directions, not an exemption: `systemctl edit bursar.service`
   // would edit the wrong file.
   const rec = appsLib.buildRecord({
-    id: 'btc15m', name: 'BTC 15m simulator', url: 'http://100.97.198.90:8093/', unit: 'btc15m-sim.service',
+    id: 'bursar', name: 'Bursar ledger', url: 'http://100.101.102.103:8093/', unit: 'bursar.service',
   }, 100);
-  const fix = fixPve(rec, [{ addr: '100.97.198.90', ok: true }, { addr: '192.168.2.117', ok: false }]);
+  const fix = fixPve(rec, [{ addr: '100.101.102.103', ok: true }, { addr: '192.168.1.20', ok: false }]);
   assert.ok(fix.some((l) => l.includes('sim/app.py')), `the bind note must ride the line: ${fix.join(' | ')}`);
-  assert.ok(fix.some((l) => l.startsWith('systemctl edit btc15m-sim.service')), 'and it is still asked for');
+  assert.ok(fix.some((l) => l.startsWith('systemctl edit bursar.service')), 'and it is still asked for');
   assert.ok(!/\balready\b/i.test(fix.join(' ')),
     'no unit is claimed to be done already — this daemon cannot see any host but its own, and was wrong about this one');
 });
@@ -640,7 +640,7 @@ test('a row whose address is nonsense still produces lines rather than an except
   // exactly when somebody is looking at this list to work out what is wrong, and
   // the worst possible moment for the list route to throw.
   const rec = { id: 'broken', url: 'not a url', unit: '' };
-  const fix = fixPve(rec, [{ addr: '192.168.2.117', ok: false }]);
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }]);
   assert.ok(fix.length, 'it still says something');
   assert.ok(fix.some((l) => l.includes('the one address it answers on')), fix.join(' | '));
   assert.equal('', appsLib.hostnameOf('not a url'));
@@ -651,8 +651,8 @@ test('nothing in the fix lines is a verb this daemon could run', () => {
   // Decision 47 as a property: the payload is data. If a future edit added an
   // endpoint or a shell string the daemon executes, it would have to add a way
   // to run one here first, and this fails when it does.
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
-  for (const line of fixPve(rec, [{ addr: '192.168.2.117', ok: false }])) {
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  for (const line of fixPve(rec, [{ addr: '192.168.1.20', ok: false }])) {
     assert.equal('string', typeof line, 'every element is text, never a { run } of any kind');
   }
   const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'apps.js'), 'utf8');
@@ -665,21 +665,21 @@ test('nothing in the fix lines is a verb this daemon could run', () => {
 
 test('the firewall source is the CLIENT huginn saw, never the address it arrived on', () => {
   // ⚠⚠ THE BUG THIS SECTION EXISTS FOR. `-source <arrival>` is huginn's OWN
-  // address on that network (192.168.2.117, 127.0.0.1) — a PVE rule on CT 117
+  // address on that network (192.168.1.20, 127.0.0.1) — a PVE rule on CT 100
   // with the container's own IP as source matches no client that ever dials it,
   // so the whole paste was a no-op that looked like a fix. The source a rule
   // needs is the other end of the socket: the client as this daemon sees it,
   // which on the LAN side is the Yggdrasil gateway's NAT address.
   const rec = appsLib.buildRecord({
-    id: 'jtyper', name: 'jtyper trainer', url: 'http://100.97.198.90:8091/', unit: 'jtyper-trainer.service',
+    id: 'jotter', name: 'jotter notes', url: 'http://100.101.102.103:8091/', unit: 'jotter.service',
   }, 100);
   const fix = fixPve(rec, [
-    { addr: '100.97.198.90', ok: true },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ], { '192.168.2.117': ['192.168.2.131'] });
-  assert.ok(fix.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog'),
+    { addr: '100.101.102.103', ok: true },
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
+  ], { '192.168.1.20': ['192.168.1.131'] });
+  assert.ok(fix.includes('IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog'),
     `the client, not the listener: ${fix.join(' | ')}`);
-  assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT') && l.includes('192.168.2.117')),
+  assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT') && l.includes('192.168.1.20')),
     'huginn’s own address is never a -source — that rule can never match');
 });
 
@@ -689,11 +689,11 @@ test('a tailnet client is emitted as itself, and loopback is recorded but never 
   // see which client the daemon is talking about. A LOOPBACK remote is the
   // opposite: `-source 127.0.0.1` in a bridge firewall is a rule that can never
   // match anything, which is the same defect this change exists to remove.
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
-  const fix = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], {
-    '192.168.2.117': ['100.97.198.91', '127.0.0.1'],
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
+    '192.168.1.20': ['100.101.102.104', '127.0.0.1'],
   });
-  assert.ok(fix.includes('IN ACCEPT -source 100.97.198.91 -p tcp -dport 8088 -log nolog'),
+  assert.ok(fix.includes('IN ACCEPT -source 100.101.102.104 -p tcp -dport 8088 -log nolog'),
     `the tailnet client rides as itself: ${fix.join(' | ')}`);
   assert.ok(!fix.some((l) => l.includes('127.0.0.1')), 'and loopback never reaches a firewall file');
   assert.ok(!fix.some((l) => l.includes('100.64.0.0')), 'a tailnet address is never widened either');
@@ -704,24 +704,24 @@ test('three clients in one /24 collapse to the /24; two stay as themselves', () 
   // that differ in the last octet are three rules somebody has to maintain. Two
   // is not a pattern — widening on two would open a /24 on the strength of a
   // coincidence.
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
-  const three = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], {
-    '192.168.2.117': ['192.168.2.131', '192.168.2.44', '192.168.2.77'],
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const three = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
+    '192.168.1.20': ['192.168.1.131', '192.168.1.44', '192.168.1.77'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
-  assert.deepEqual(['IN ACCEPT -source 192.168.2.0/24 -p tcp -dport 8088 -log nolog'], three,
+  assert.deepEqual(['IN ACCEPT -source 192.168.1.0/24 -p tcp -dport 8088 -log nolog'], three,
     'three in one /24 is one rule, not three');
 
-  const two = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], {
-    '192.168.2.117': ['192.168.2.131', '192.168.2.44'],
+  const two = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
+    '192.168.1.20': ['192.168.1.131', '192.168.1.44'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
   assert.deepEqual([
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8088 -log nolog',
-    'IN ACCEPT -source 192.168.2.44 -p tcp -dport 8088 -log nolog',
+    'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8088 -log nolog',
+    'IN ACCEPT -source 192.168.1.44 -p tcp -dport 8088 -log nolog',
   ], two, 'two devices are two devices');
 
   // Different /24s are never merged, however many there are.
-  const spread = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], {
-    '192.168.2.117': ['192.168.2.131', '192.168.7.54', '10.0.0.9'],
+  const spread = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {
+    '192.168.1.20': ['192.168.1.131', '192.168.10.54', '10.0.0.9'],
   }).filter((l) => l.startsWith('IN ACCEPT'));
   assert.equal(3, spread.length, `three networks are three rules: ${spread.join(' | ')}`);
 });
@@ -731,17 +731,17 @@ test('an address no client has arrived from gets a COMMENT, never an invented so
   // arrival address but never seen a client on it has nothing true to put after
   // `-source`, and the old code's answer — the arrival address — was a rule that
   // could not match. A comment is followable; a wrong rule is not.
-  const rec = appsLib.buildRecord({ id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service' }, 100);
-  const fix = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], {});
-  assert.ok(fix.includes('# no client has reached huginn on 192.168.2.117 yet — add its network here'),
+  const rec = appsLib.buildRecord({ id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service' }, 100);
+  const fix = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], {});
+  assert.ok(fix.includes('# no client has reached huginn on 192.168.1.20 yet — add its network here'),
     `the comment names the arrival it is about: ${fix.join(' | ')}`);
   assert.ok(!fix.some((l) => l.startsWith('IN ACCEPT')), 'and there is no rule at all');
 
   // ⚠ THE BACKSTOP. A loopback CLIENT on one of this host's routable addresses
   // is not a source either, and the sentence has to stay true — the daemon HAS
   // seen somebody there, so "no client has reached huginn" would be a lie.
-  const onlyLocal = fixPve(rec, [{ addr: '192.168.2.117', ok: false }], { '192.168.2.117': ['127.0.0.1'] });
-  assert.ok(onlyLocal.includes('# only loopback has reached huginn on 192.168.2.117 — '
+  const onlyLocal = fixPve(rec, [{ addr: '192.168.1.20', ok: false }], { '192.168.1.20': ['127.0.0.1'] });
+  assert.ok(onlyLocal.includes('# only loopback has reached huginn on 192.168.1.20 — '
     + 'a loopback client is not a firewall source, add its network here'),
   `a different, true sentence: ${onlyLocal.join(' | ')}`);
   assert.ok(!onlyLocal.some((l) => l.startsWith('IN ACCEPT')), 'and never -source 127.0.0.1');
@@ -754,20 +754,20 @@ test('a failing LOOPBACK address asks for no firewall line at all, and says why'
   // would be a line somebody pasted as root for no effect — the same defect as
   // naming the arrival address, wearing a different address.
   const rec = appsLib.buildRecord({
-    id: 'board', name: 'PCB board view', url: 'http://100.97.198.90:8092/', unit: 'boardserver.service',
+    id: 'board', name: 'PCB board view', url: 'http://100.101.102.103:8092/', unit: 'boardserver.service',
   }, 100);
   const fix = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
   assert.deepEqual([
-    '# on huginn — 127.0.0.1, 192.168.2.117 do not reach this app',
-    'systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 100.97.198.90',
+    '# on huginn — 127.0.0.1, 192.168.1.20 do not reach this app',
+    'systemctl edit boardserver.service   # ExecStart: bind 0.0.0.0 instead of 100.101.102.103',
     'systemctl restart boardserver.service',
     'ss -ltn | grep :8092',
     '# on pve-host — /etc/pve/firewall/100.fw',
     '# 127.0.0.1 passes on its own once the unit binds 0.0.0.0',
-    'IN ACCEPT -source 192.168.2.131 -p tcp -dport 8092 -log nolog',
+    'IN ACCEPT -source 192.168.1.131 -p tcp -dport 8092 -log nolog',
   ], fix, 'one rule, for the one address a rule can do anything about');
 
   // And on its own, the firewall half is a single line saying there is nothing
@@ -804,10 +804,10 @@ test('no firewall header when there is nothing to put in the file (L3)', () => {
   // The header comes straight back the moment one line belongs in the file.
   const mixed = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'connection refused' },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
   assert.ok(mixed.includes('# on pve-host — /etc/pve/firewall/100.fw'));
-  assert.ok(mixed.includes('IN ACCEPT -source 192.168.2.131 -p tcp -dport 18899 -log nolog'));
+  assert.ok(mixed.includes('IN ACCEPT -source 192.168.1.131 -p tcp -dport 18899 -log nolog'));
 });
 
 test('the default dialect writes neutral rules under a header that names no machine', () => {
@@ -863,9 +863,9 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
   // addresses — one block, two different problems, never merged.
   const both = fixPve(rec, [
     { addr: '127.0.0.1', ok: false, error: 'timed out' },
-    { addr: '192.168.2.117', ok: false, error: 'connection refused' },
-  ], { '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] });
-  assert.ok(both.includes('# on huginn — 192.168.2.117 does not reach this app'),
+    { addr: '192.168.1.20', ok: false, error: 'connection refused' },
+  ], { '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] });
+  assert.ok(both.includes('# on huginn — 192.168.1.20 does not reach this app'),
     `the refused address keeps the bind story:\n${both.join('\n')}`);
   assert.ok(both.some((l) => /^# on huginn — 127\.0\.0\.1 /.test(l) && /timed out/.test(l)),
     'and the timed-out one gets its own sentence');
@@ -883,7 +883,7 @@ test('an address that ACCEPTED the connection is not diagnosed as a bind (L4)', 
 
 test('the 422 sentence names what actually happened (L4)', () => {
   const refused = appsLib.reachRefusal({
-    addresses: [{ addr: '192.168.2.117', ok: false, error: 'connection refused' }],
+    addresses: [{ addr: '192.168.1.20', ok: false, error: 'connection refused' }],
   });
   assert.match(refused, /fix the bind first/);
 
@@ -905,11 +905,11 @@ test('the store records WHICH clients arrived on which address, folded, capped a
     store.stop();
     assert.deepEqual({}, store.clientRemotes(), 'a daemon nobody has connected to knows nothing');
 
-    store.noteClientAddress('192.168.2.117', '::ffff:192.168.2.131');
-    store.noteClientAddress('192.168.2.117', '192.168.2.131');
+    store.noteClientAddress('192.168.1.20', '::ffff:192.168.1.131');
+    store.noteClientAddress('192.168.1.20', '192.168.1.131');
     store.noteClientAddress('127.0.0.1', '127.0.0.1');
-    store.noteClientAddress('192.168.2.117', '0.0.0.0');
-    assert.deepEqual({ '127.0.0.1': ['127.0.0.1'], '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(),
+    store.noteClientAddress('192.168.1.20', '0.0.0.0');
+    assert.deepEqual({ '127.0.0.1': ['127.0.0.1'], '192.168.1.20': ['192.168.1.131'] }, store.clientRemotes(),
       'the mapped spelling folded into the one address it is, and the wildcard was never a client');
 
     // ⚠ RECORDED, THEN WITHHELD. Loopback is on the wire because it is what the
@@ -921,18 +921,18 @@ test('the store records WHICH clients arrived on which address, folded, capped a
     // fact about this host's clients, accumulated over days.
     store.list();
     const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
-    const lan = onDisk.clientAddresses.find((e) => e.addr === '192.168.2.117');
-    assert.deepEqual(['192.168.2.131'], lan.remotes.map((r) => r.addr));
+    const lan = onDisk.clientAddresses.find((e) => e.addr === '192.168.1.20');
+    assert.deepEqual(['192.168.1.131'], lan.remotes.map((r) => r.addr));
     assert.ok(lan.remotes[0].lastSeenAt > 0, 'with the stamp that makes it expire');
 
     // The cap is per ARRIVAL, oldest dropped first.
     for (let i = 1; i <= appsLib.MAX_CLIENT_REMOTES + 4; i++) {
       clock += 1000;
-      store.noteClientAddress('192.168.2.117', `10.0.0.${i}`);
+      store.noteClientAddress('192.168.1.20', `10.0.0.${i}`);
     }
-    const capped = store.clientRemotes()['192.168.2.117'];
+    const capped = store.clientRemotes()['192.168.1.20'];
     assert.equal(appsLib.MAX_CLIENT_REMOTES, capped.length, `capped at ${appsLib.MAX_CLIENT_REMOTES}: ${capped.join(', ')}`);
-    assert.ok(!capped.includes('192.168.2.131'), 'the oldest went first');
+    assert.ok(!capped.includes('192.168.1.131'), 'the oldest went first');
     assert.ok(capped.includes(`10.0.0.${appsLib.MAX_CLIENT_REMOTES + 4}`), 'and the newest is there');
 
     // ⚠ AND IT FORGETS, on the arrival set's own clock. A phone that was on the
@@ -940,8 +940,8 @@ test('the store records WHICH clients arrived on which address, folded, capped a
     clock += (appsLib.CLIENT_ADDR_TTL_SEC + 60) * 1000;
     assert.deepEqual({}, store.clientRemotes(), 'seven days without being seen again is gone');
     clock += 1000;
-    store.noteClientAddress('192.168.2.117', '192.168.2.131');
-    assert.deepEqual({ '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(), 'and one poll brings it back');
+    store.noteClientAddress('192.168.1.20', '192.168.1.131');
+    assert.deepEqual({ '192.168.1.20': ['192.168.1.131'] }, store.clientRemotes(), 'and one poll brings it back');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -959,21 +959,21 @@ test('a store written before 3.5.2 loads, with its arrivals intact and nobody be
       schema: appsLib.SCHEMA,
       seeded: true,
       consoles: [],
-      clientAddresses: [{ addr: '192.168.2.117', lastSeenAt: now - 60 }],
+      clientAddresses: [{ addr: '192.168.1.20', lastSeenAt: now - 60 }],
     });
     const store = appsLib.createStore({
       dir, icons: false, hostAddr: '', fetch: async () => { throw new Error('no probing'); },
     });
     store.stop();
-    assert.deepEqual(['192.168.2.117'], store.addresses(), 'the arrival survived the upgrade');
-    assert.deepEqual({ '192.168.2.117': [] }, store.clientRemotes(),
+    assert.deepEqual(['192.168.1.20'], store.addresses(), 'the arrival survived the upgrade');
+    assert.deepEqual({ '192.168.1.20': [] }, store.clientRemotes(),
       'and it is known to have nobody behind it, which is what the comment line says');
-    assert.deepEqual([], appsLib.addrEntry({ addr: '192.168.2.117', lastSeenAt: now }).remotes,
+    assert.deepEqual([], appsLib.addrEntry({ addr: '192.168.1.20', lastSeenAt: now }).remotes,
       'a definite empty array, never absent');
 
     // And the next client teaches it one, in place, without disturbing the rest.
-    store.noteClientAddress('192.168.2.117', '192.168.2.131');
-    assert.deepEqual({ '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes());
+    store.noteClientAddress('192.168.1.20', '192.168.1.131');
+    assert.deepEqual({ '192.168.1.20': ['192.168.1.131'] }, store.clientRemotes());
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -986,9 +986,9 @@ test('a remote is only remembered for the arrival it actually came in on', () =>
       dir, icons: false, hostAddr: '', fetch: async () => { throw new Error('no probing'); },
     });
     store.stop();
-    store.noteClientAddress('192.168.2.117', '192.168.2.131');
-    store.noteClientAddress('100.97.198.90', '100.97.198.91');
-    assert.deepEqual({ '100.97.198.90': ['100.97.198.91'], '192.168.2.117': ['192.168.2.131'] }, store.clientRemotes(),
+    store.noteClientAddress('192.168.1.20', '192.168.1.131');
+    store.noteClientAddress('100.101.102.103', '100.101.102.104');
+    assert.deepEqual({ '100.101.102.103': ['100.101.102.104'], '192.168.1.20': ['192.168.1.131'] }, store.clientRemotes(),
       'the rule a failing LAN address needs is the LAN client, not whatever last dialled the tailnet');
     // An arrival with no client attached is still an arrival — the probe asks it.
     store.noteClientAddress('127.0.0.5');
@@ -1003,24 +1003,24 @@ test('a unit name is refused rather than coerced, because it ends up in a root c
   // `kind` is coerced so a newer client can still write a row; a unit is not,
   // because the cost of being wrong is a different thing entirely.
   assert.equal(null, appsLib.unitProblem(undefined), 'absent is fine — most rows have no unit');
-  assert.equal(null, appsLib.unitProblem('jtyper-trainer.service'));
+  assert.equal(null, appsLib.unitProblem('jotter.service'));
   assert.equal(null, appsLib.unitProblem('getty@tty1.service'));
-  assert.ok(appsLib.unitProblem('armap.service; rm -rf /'), 'a shell fragment is not a unit name');
+  assert.ok(appsLib.unitProblem('atlas.service; rm -rf /'), 'a shell fragment is not a unit name');
   assert.ok(appsLib.unitProblem('../../etc/passwd'));
   assert.ok(appsLib.unitProblem('a'.repeat(100)));
-  assert.equal('', appsLib.cleanUnit('armap.service && curl evil'), 'and cleanUnit drops what it cannot vouch for');
+  assert.equal('', appsLib.cleanUnit('atlas.service && curl evil'), 'and cleanUnit drops what it cannot vouch for');
 });
 
 test('the seed rows name the unit that serves each one', () => {
   // Without this the four rows this host ships with would fall into the
   // no-unit branch above and ask the owner to work out what to edit — on the
   // one deployment where the daemon knows the answer.
-  const byId = Object.fromEntries(appsLib.seedApps('100.97.198.90', 100).map((r) => [r.id, r.unit]));
+  const byId = Object.fromEntries(appsLib.seedApps('100.101.102.103', 100).map((r) => [r.id, r.unit]));
   assert.deepEqual({
-    armap: 'armap.service',
-    jtyper: 'jtyper-trainer.service',
+    atlas: 'atlas.service',
+    jotter: 'jotter.service',
     board: 'boardserver.service',
-    btc15m: 'btc15m-sim.service',
+    bursar: 'bursar.service',
   }, byId);
 });
 
@@ -1036,7 +1036,7 @@ test('the marker is the owner’s word, and the daemon never writes it', () => {
     assert.equal(false, fs.existsSync(appsLib.markerPath(dir)),
       'the marker does not — a daemon that wrote it would be claiming credit');
 
-    fs.writeFileSync(appsLib.markerPath(dir), '');   // the owner, after a netplan session
+    fs.writeFileSync(appsLib.markerPath(dir), '');   // the owner, after a session on the host
     assert.equal(true, store.retrofitApplied(), 'and it flips without a restart');
     assert.equal(appsLib.REBIND_MARKER_NAME, 'consoles-rebind-applied',
       'the NAME never changed — renaming it would silently un-apply every owner who already ran it');
@@ -1053,7 +1053,7 @@ test('an address a client arrived on is normalised, and a wildcard is not one', 
   // spellings, is probed twice, and one of the spellings is not something
   // anybody would paste into a firewall rule.
   assert.equal('127.0.0.1', appsLib.normalizeAddr('::ffff:127.0.0.1'));
-  assert.equal('100.97.198.90', appsLib.normalizeAddr(' 100.97.198.90 '));
+  assert.equal('100.101.102.103', appsLib.normalizeAddr(' 100.101.102.103 '));
   assert.equal('fd7a:115c:a1e0::1', appsLib.normalizeAddr('[fd7a:115c:a1e0::1]'));
   assert.equal('', appsLib.normalizeAddr('fe80::1%eth0'), 'a link-local carries a zone id that means nothing to another process');
   assert.equal('', appsLib.normalizeAddr('0.0.0.0'), 'a wildcard is a legal bind and a meaningless thing to dial');
@@ -1063,9 +1063,9 @@ test('an address a client arrived on is normalised, and a wildcard is not one', 
 });
 
 test('the reachability probe asks for the SAME page at a different address', () => {
-  assert.equal('http://192.168.2.117:8091/trainer', appsLib.reachUrl('http://100.97.198.90:8091/trainer', '192.168.2.117'));
-  assert.equal('http://[fd7a::1]:8091/', appsLib.reachUrl('http://100.97.198.90:8091/', 'fd7a::1'), 'a v6 literal gets its brackets back');
-  assert.equal('https://192.168.2.117:443/', appsLib.reachUrl('https://huginn/', '192.168.2.117'), 'the scheme default is a port');
+  assert.equal('http://192.168.1.20:8091/trainer', appsLib.reachUrl('http://100.101.102.103:8091/trainer', '192.168.1.20'));
+  assert.equal('http://[fd7a::1]:8091/', appsLib.reachUrl('http://100.101.102.103:8091/', 'fd7a::1'), 'a v6 literal gets its brackets back');
+  assert.equal('https://192.168.1.20:443/', appsLib.reachUrl('https://huginn/', '192.168.1.20'), 'the scheme default is a port');
 });
 
 test('nothing to check against is ok:null with a note, never ok:false', async () => {
@@ -1116,22 +1116,22 @@ test('the probe hands the CLIENTS to the fix lines, not the addresses it dialled
   // the probe reaches the fix lines with a LAN arrival — the one shape that
   // earns a firewall rule — without this unit test dialling a LAN address.
   const rec = appsLib.buildRecord({
-    id: 'armap', name: 'Armap', url: 'http://100.97.198.90:8088/', unit: 'armap.service',
+    id: 'atlas', name: 'Armap', url: 'http://100.101.102.103:8088/', unit: 'atlas.service',
   }, 100);
-  const r = await appsLib.reachabilityProbe(rec, ['192.168.2.117'], {
+  const r = await appsLib.reachabilityProbe(rec, ['192.168.1.20'], {
     fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
-    remotes: { '192.168.2.117': ['192.168.2.131'] },
+    remotes: { '192.168.1.20': ['192.168.1.131'] },
   });
   assert.equal(false, r.ok);
-  assert.deepEqual(['192.168.2.117'], r.addresses.map((a) => a.addr), 'the ARRIVAL address is what was asked');
-  assert.ok(r.fix.includes('allow tcp from 192.168.2.131 to port 8088'),
+  assert.deepEqual(['192.168.1.20'], r.addresses.map((a) => a.addr), 'the ARRIVAL address is what was asked');
+  assert.ok(r.fix.includes('allow tcp from 192.168.1.131 to port 8088'),
     `and the CLIENT is what the rule names: ${r.fix.join(' | ')}`);
 
   // Without the map there is no true source to name, and it says so.
-  const blind = await appsLib.reachabilityProbe(rec, ['192.168.2.117'], {
+  const blind = await appsLib.reachabilityProbe(rec, ['192.168.1.20'], {
     fetch: async () => { throw Object.assign(new Error('refused'), { cause: { code: 'ECONNREFUSED' } }); },
   });
-  assert.ok(blind.fix.includes('# no client has reached huginn on 192.168.2.117 yet — add its network here'),
+  assert.ok(blind.fix.includes('# no client has reached huginn on 192.168.1.20 yet — add its network here'),
     blind.fix.join(' | '));
 });
 
@@ -1177,9 +1177,9 @@ test('the store remembers the addresses clients ARRIVE on, and forgets them afte
     assert.deepEqual([], store.addresses(), 'a daemon nobody has connected to knows nothing');
 
     store.noteClientAddress('::ffff:127.0.0.1');
-    store.noteClientAddress('192.168.2.117');
+    store.noteClientAddress('192.168.1.20');
     store.noteClientAddress('0.0.0.0');
-    assert.deepEqual(['127.0.0.1', '192.168.2.117'], store.addresses().sort(),
+    assert.deepEqual(['127.0.0.1', '192.168.1.20'], store.addresses().sort(),
       'the mapped spelling folded into one, and the wildcard was never an address');
 
     // The set persists: it is a fact about this host's clients, not an
@@ -1187,15 +1187,15 @@ test('the store remembers the addresses clients ARRIVE on, and forgets them afte
     // would allow adds after a reboot that it refused an hour earlier.
     store.list();                       // the seed makes the file exist
     const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
-    assert.deepEqual(['127.0.0.1', '192.168.2.117'], onDisk.clientAddresses.map((e) => e.addr).sort());
+    assert.deepEqual(['127.0.0.1', '192.168.1.20'], onDisk.clientAddresses.map((e) => e.addr).sort());
 
     // ⚠ AND IT FORGETS. A laptop that was on the LAN once in March must not make
     // every app on this host unaddable in September.
     clock += (appsLib.CLIENT_ADDR_TTL_SEC + 60) * 1000;
     assert.deepEqual([], store.addresses(), 'seven days without being seen again is gone');
     clock += 1000;
-    store.noteClientAddress('192.168.2.117');
-    assert.deepEqual(['192.168.2.117'], store.addresses(), 'and one poll brings it back');
+    store.noteClientAddress('192.168.1.20');
+    assert.deepEqual(['192.168.1.20'], store.addresses(), 'and one poll brings it back');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1205,10 +1205,10 @@ test('this host’s own address is in the set even before anybody connects', () 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'apps-selfaddr-'));
   try {
     const store = appsLib.createStore({
-      dir, icons: false, hostAddr: '100.97.198.90', fetch: async () => { throw new Error('no probing'); },
+      dir, icons: false, hostAddr: '100.101.102.103', fetch: async () => { throw new Error('no probing'); },
     });
     store.stop();
-    assert.deepEqual(['100.97.198.90'], store.addresses(),
+    assert.deepEqual(['100.101.102.103'], store.addresses(),
       'the address the seeded rows are written with is one an app has to answer on');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1289,20 +1289,20 @@ test('reported routes: required of every app, remembered for a month, written do
     store.list();   // the seed writes, so the flush has a file to land in
     assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'loopback is required of everything, always');
 
-    assert.deepEqual(['192.168.2.117'], store.noteReportedRoutes(['192.168.2.117', ' 192.168.2.117 '], 'fold').fresh);
-    assert.deepEqual([], store.noteReportedRoutes(['192.168.2.117'], 'desk').fresh, 'the second report of an address is not news');
-    assert.deepEqual(['127.0.0.1', '192.168.2.117'], store.requiredAddresses());
-    assert.deepEqual([{ addr: '192.168.2.117', lastSeenAt: Math.floor(clock / 1000), by: ['desk', 'fold'] }], store.reportedRoutes());
-    assert.ok(lines.some((l) => /fold reports a route to huginn via 192\.168\.2\.117/.test(l)), lines.join(' | '));
+    assert.deepEqual(['192.168.1.20'], store.noteReportedRoutes(['192.168.1.20', ' 192.168.1.20 '], 'fold').fresh);
+    assert.deepEqual([], store.noteReportedRoutes(['192.168.1.20'], 'desk').fresh, 'the second report of an address is not news');
+    assert.deepEqual(['127.0.0.1', '192.168.1.20'], store.requiredAddresses());
+    assert.deepEqual([{ addr: '192.168.1.20', lastSeenAt: Math.floor(clock / 1000), by: ['desk', 'fold'] }], store.reportedRoutes());
+    assert.ok(lines.some((l) => /fold reports a route to huginn via 192\.168\.1\.20/.test(l)), lines.join(' | '));
 
     const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
-    assert.deepEqual(['192.168.2.117'], onDisk.reportedAddresses.map((e) => e.addr), 'a reported route survives a restart');
+    assert.deepEqual(['192.168.1.20'], onDisk.reportedAddresses.map((e) => e.addr), 'a reported route survives a restart');
 
     // The arrival set is the ADVISORY half of a row's plan; a row's own list is required.
-    store.noteClientAddress('100.97.198.90');
-    const plan = store.addressSet({ addresses: ['192.168.2.117', '10.42.0.1'] });
-    assert.deepEqual(['127.0.0.1', '192.168.2.117', '10.42.0.1'], plan.required);
-    assert.deepEqual(['100.97.198.90'], plan.advisory);
+    store.noteClientAddress('100.101.102.103');
+    const plan = store.addressSet({ addresses: ['192.168.1.20', '10.42.0.1'] });
+    assert.deepEqual(['127.0.0.1', '192.168.1.20', '10.42.0.1'], plan.required);
+    assert.deepEqual(['100.101.102.103'], plan.advisory);
 
     clock += (appsLib.REPORTED_ADDR_TTL_SEC + 1) * 1000;
     assert.deepEqual(['127.0.0.1'], store.requiredAddresses(), 'a month unreported is gone');
@@ -1318,8 +1318,8 @@ test('reported routes: required of every app, remembered for a month, written do
 });
 
 test('a row\'s own addresses are cleaned, capped and refused when nonsense', () => {
-  assert.deepEqual(['127.0.0.1', '192.168.2.117'], appsLib.cleanAddrs(['127.0.0.1', ' 192.168.2.117', '127.0.0.1', '']));
-  assert.deepEqual(['192.168.2.117', 'fd7a::1'], appsLib.cleanAddrs('192.168.2.117, [fd7a::1]'), 'a typed string splits on commas and spaces');
+  assert.deepEqual(['127.0.0.1', '192.168.1.20'], appsLib.cleanAddrs(['127.0.0.1', ' 192.168.1.20', '127.0.0.1', '']));
+  assert.deepEqual(['192.168.1.20', 'fd7a::1'], appsLib.cleanAddrs('192.168.1.20, [fd7a::1]'), 'a typed string splits on commas and spaces');
   assert.equal(null, appsLib.addrsProblem(undefined), 'absent is fine');
   assert.equal(null, appsLib.addrsProblem([]));
   assert.match(appsLib.addrsProblem(['8.8.8.8']), /not an address huginn can check from/);
@@ -1708,7 +1708,7 @@ test('probeAll stays within its concurrency, so 32 consoles is not 32 sockets', 
 test('the journal speaks on a state CHANGE and is quiet otherwise', () => {
   // A line every sweep is 288 a day per console, which is how a journal stops
   // being read.
-  const rec = { id: 'armap' };
+  const rec = { id: 'atlas' };
   const up = { up: true };
   const down = { up: false };
   assert.equal(null, appsLib.probeChange(rec, undefined, up), 'a first observation that is fine says nothing');
@@ -1754,22 +1754,22 @@ test('the store re-points the rows a pre-D10 daemon wrote, once, and says so', (
     const lines = [];
     const store = appsLib.createStore({
       dir,
-      hostAddr: '100.97.198.90',
+      hostAddr: '100.101.102.103',
       log: (l) => lines.push(l),
       fetch: async () => { throw new Error('no probing'); },
     });
     store.stop();
     assert.deepEqual([
-      'http://100.97.198.90:8088/', 'http://100.97.198.90:8091/',
-      'http://100.97.198.90:8092/', 'http://100.97.198.90:8093/',
+      'http://100.101.102.103:8088/', 'http://100.101.102.103:8091/',
+      'http://100.101.102.103:8092/', 'http://100.101.102.103:8093/',
     ], store.list().map((c) => c.url));
     const onDisk = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
-    assert.equal('http://100.97.198.90:8088/', onDisk.consoles[0].url, 'and it survived the trip through the file');
+    assert.equal('http://100.101.102.103:8088/', onDisk.consoles[0].url, 'and it survived the trip through the file');
     assert.equal(1, lines.length, `one journal line, not one per load — got ${JSON.stringify(lines)}`);
 
     // ⚠ load() is called by every read path here. A migration that fired on each
     // one would rewrite the store forever and log forever with it.
-    store.list(); store.rows(); store.get('armap');
+    store.list(); store.rows(); store.get('atlas');
     assert.equal(1, lines.length, 'said once');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -1782,10 +1782,10 @@ test('a row the owner re-pointed survives a daemon that learned its own address'
     const seeded = appsLib.seedApps(null, 100);
     seeded[1] = appsLib.buildRecord({ ...seeded[1], url: 'http://huginn:8091/trainer' }, 100);
     appsLib.writeEnvelope(dir, { schema: appsLib.SCHEMA, seeded: true, consoles: seeded });
-    const store = appsLib.createStore({ dir, hostAddr: '100.97.198.90', fetch: async () => { throw new Error('no probing'); } });
+    const store = appsLib.createStore({ dir, hostAddr: '100.101.102.103', fetch: async () => { throw new Error('no probing'); } });
     store.stop();
-    assert.equal('http://huginn:8091/trainer', store.get('jtyper').url, 'their edit is not a seed to be re-applied');
-    assert.equal('http://100.97.198.90:8088/', store.get('armap').url, 'and its untouched sibling still moves');
+    assert.equal('http://huginn:8091/trainer', store.get('jotter').url, 'their edit is not a seed to be re-applied');
+    assert.equal('http://100.101.102.103:8088/', store.get('atlas').url, 'and its untouched sibling still moves');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -1805,11 +1805,11 @@ test('an observation is never written to disk, because it stops being true', asy
     });
     store.stop();
     store.list();                                                     // the first list writes
-    assert.equal(true, (await store.add({ name: 'armap', url: 'http://huginn:8088/' })).ok, 'precondition: a row');
-    const probed = await store.probeNow('armap');
+    assert.equal(true, (await store.add({ name: 'atlas', url: 'http://huginn:8088/' })).ok, 'precondition: a row');
+    const probed = await store.probeNow('atlas');
     assert.equal(true, probed.up, 'precondition: there is an observation to leak');
     await store.add({ name: 'Extra', url: 'http://huginn:9100/' });   // an add writes
-    store.patch('armap', { version: 1, name: 'Armap' });               // a patch writes
+    store.patch('atlas', { version: 1, name: 'Armap' });               // a patch writes
 
     const raw = JSON.parse(fs.readFileSync(appsLib.storePath(dir), 'utf8'));
     for (const c of raw.consoles) {

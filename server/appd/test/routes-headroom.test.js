@@ -508,7 +508,7 @@ test('/v1/autoswitch keeps `last.at` in SECONDS, and loses none of the row', asy
 
 test('/v1/status lists the host\'s own addresses, without loopback (3.12.1)', async () => {
   // A computer that knows huginn by one address finds one its network lets ssh
-  // through (PRESTIGE, 2026-10-17). Behind the token, like the rest of status.
+  // through (PC01, 2026-10-17). Behind the token, like the rest of status.
   const { body } = await api('/v1/status');
   assert.ok(Array.isArray(body.addresses), 'addresses is a list');
   for (const a of body.addresses) {

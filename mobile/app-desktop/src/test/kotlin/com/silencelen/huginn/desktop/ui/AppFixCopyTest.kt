@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  *
  * ⚠⚠ THIS IS THE PLACE IN THIS FEATURE WHERE BEING WRONG IS EXPENSIVE. The
  * disclosure's Copy is the only control it has, deliberately: the lines rebind a
- * systemd unit on the huginn host and sometimes add firewall lines on heimdall,
+ * systemd unit on the huginn host and sometimes add firewall lines on pve1,
  * and nothing in this product applies either (decisions 47 and 55). What the row
  * hands over is therefore not a preview — it is the thing a person pastes into a
  * root shell on two machines.
@@ -40,12 +40,12 @@ class AppFixCopyTest {
 
     /** A row as the live registry would hand it over once the retrofit check ran. */
     private val row = App(
-        id = "jtyper",
-        name = "jtyper trainer",
+        id = "jotter",
+        name = "jotter notes",
         url = "http://huginn:8091/",
         kind = "lab",
         notes = "Blind test + chat + hole-fill flywheel.",
-        unit = "jtyper-trainer.service",
+        unit = "jotter.service",
         addedAt = 1_789_000_000,
         version = 2,
         up = true,
@@ -58,14 +58,14 @@ class AppFixCopyTest {
             checkedAt = 1_789_459_940,
             addresses = listOf(
                 AppAddress("127.0.0.1:8091", ok = true),
-                AppAddress("192.168.7.31:8091", ok = false, error = "connection refused"),
-                AppAddress("100.97.198.90:8091", ok = false, error = "connection refused"),
+                AppAddress("192.168.10.31:8091", ok = false, error = "connection refused"),
+                AppAddress("100.101.102.103:8091", ok = false, error = "connection refused"),
             ),
             fix = listOf(
-                "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1",
-                "systemctl restart jtyper-trainer",
+                "systemctl edit jotter.service   # ExecStart: bind 0.0.0.0 instead of 127.0.0.1",
+                "systemctl restart jotter-trainer",
                 "ss -ltnp | grep 8091",
-                "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog   # /etc/pve/firewall/117.fw on heimdall",
+                "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog   # /etc/pve/firewall/100.fw on pve1",
             ),
         ),
     )
@@ -106,8 +106,8 @@ class AppFixCopyTest {
     @Test
     fun `the app and its unit travel with the lines`() {
         val copied = AppRules.fixText(row)
-        assertTrue(copied.lines().first().contains("jtyper trainer"), copied)
-        assertTrue(copied.lines().first().contains("jtyper-trainer.service"), copied)
+        assertTrue(copied.lines().first().contains("jotter notes"), copied)
+        assertTrue(copied.lines().first().contains("jotter.service"), copied)
     }
 
     /**
@@ -118,8 +118,8 @@ class AppFixCopyTest {
     @Test
     fun `the addresses that failed are named, and the one that answered is not`() {
         val copied = AppRules.fixText(row)
-        assertTrue(copied.contains("192.168.7.31:8091 — connection refused"), copied)
-        assertTrue(copied.contains("100.97.198.90:8091 — connection refused"), copied)
+        assertTrue(copied.contains("192.168.10.31:8091 — connection refused"), copied)
+        assertTrue(copied.contains("100.101.102.103:8091 — connection refused"), copied)
         assertFalse(
             copied.contains("127.0.0.1:8091"),
             "the address that answered is not part of the job: $copied",
@@ -148,7 +148,7 @@ class AppFixCopyTest {
             reachable = AppReachability(
                 ok = true,
                 checkedAt = 1_789_459_940,
-                addresses = listOf(AppAddress("192.168.7.31:8091", ok = true)),
+                addresses = listOf(AppAddress("192.168.10.31:8091", ok = true)),
             ),
         )
         assertFalse(AppRules.failing(fine))

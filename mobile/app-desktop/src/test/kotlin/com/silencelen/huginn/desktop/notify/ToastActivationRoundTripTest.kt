@@ -33,7 +33,7 @@ class ToastActivationRoundTripTest {
     private fun request(
         options: List<AnswerOption>,
         fingerprint: String? = "fp-abc123",
-        session: String = "jtyper",
+        session: String = "jotter",
     ) = NotifyRequest(
         key = "sess:$session",
         title = session,
@@ -73,7 +73,7 @@ class ToastActivationRoundTripTest {
         assertEquals(3, urls.size, xml)
         urls.forEachIndexed { i, url ->
             assertEquals(
-                Activation.Answer("jtyper", i + 1, "fp-abc123"),
+                Activation.Answer("jotter", i + 1, "fp-abc123"),
                 Activations.parse(url),
                 "button ${i + 1} did not round-trip: <$url>",
             )
@@ -93,7 +93,7 @@ class ToastActivationRoundTripTest {
         val xml = WindowsToastNotifier.attentionXml(request(options))
         val urls = actionUrls(xml)
         urls.forEachIndexed { i, url ->
-            assertEquals(Activation.Answer("jtyper", i + 1, "fp-abc123"), Activations.parse(url))
+            assertEquals(Activation.Answer("jotter", i + 1, "fp-abc123"), Activations.parse(url))
         }
         // And the labels survive the XML escaping intact, numbered the way the
         // owner reads them off the pane.
@@ -128,7 +128,7 @@ class ToastActivationRoundTripTest {
             )
             val url = actionUrls(xml).single()
             assertEquals(
-                Activation.Answer("jtyper", 1, fp),
+                Activation.Answer("jotter", 1, fp),
                 Activations.parse(url),
                 "fingerprint <$fp> did not round-trip through <$url>",
             )
@@ -179,19 +179,19 @@ class ToastActivationRoundTripTest {
     @Test
     fun `a finished toast's own action urls round-trip too`() {
         val req = NotifyRequest(
-            key = "ladder:jtyper",
-            title = "jtyper",
+            key = "ladder:jotter",
+            title = "jotter",
             body = "moved to a smaller model",
             urgent = false,
-            target = NavTarget(TargetKind.SESSIONS, "jtyper"),
+            target = NavTarget(TargetKind.SESSIONS, "jotter"),
             actions = listOf(
-                ToastAction("Undo", Activations.undoUrl("jtyper")),
-                ToastAction("OK", Activations.ackUrl("sess:jtyper")),
+                ToastAction("Undo", Activations.undoUrl("jotter")),
+                ToastAction("OK", Activations.ackUrl("sess:jotter")),
             ),
         )
         val urls = actionUrls(WindowsToastNotifier.finishedXml(req))
-        assertEquals(Activation.Undo("jtyper"), Activations.parse(urls[0]))
-        assertEquals(Activation.Ack("sess:jtyper"), Activations.parse(urls[1]))
+        assertEquals(Activation.Undo("jotter"), Activations.parse(urls[0]))
+        assertEquals(Activation.Ack("sess:jotter"), Activations.parse(urls[1]))
     }
 
     @Test
@@ -203,6 +203,6 @@ class ToastActivationRoundTripTest {
         // The whole point: an unescapable character in tool output used to be a
         // toast that never appeared. Parsing at all is the assertion.
         val urls = actionUrls(WindowsToastNotifier.attentionXml(req))
-        assertEquals(Activation.Answer("jtyper", 1, "fp-abc123"), Activations.parse(urls.single()))
+        assertEquals(Activation.Answer("jotter", 1, "fp-abc123"), Activations.parse(urls.single()))
     }
 }

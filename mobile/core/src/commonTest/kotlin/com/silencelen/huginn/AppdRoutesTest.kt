@@ -31,7 +31,7 @@ class AppdRoutesTest {
      */
     @Test
     fun `an upgrade keeps the stored address and adds nothing`() {
-        for (stored in listOf("http://10.0.0.9:8787", "https://192.168.1.20:8787", "http://192.168.2.117:8787")) {
+        for (stored in listOf("http://10.0.0.9:8787", "https://192.168.1.20:8787", "http://192.168.1.20:8787")) {
             val book = AppdRoutes.migrate(stored, routePinned = false)
             assertEquals(listOf(AppdRoutes.MIGRATED_ID), book.routes.map { it.id }, "stored=$stored")
             assertEquals(AppdRoutes.MIGRATED_ID, book.activeId, "stored=$stored")

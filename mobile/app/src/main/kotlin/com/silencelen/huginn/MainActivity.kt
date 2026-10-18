@@ -1217,7 +1217,7 @@ fun HuginnApp(
         )
     }
 
-    // The Z Fold's inner display is ~840dp across; phones are ~360-410. The
+    // The foldable's inner display is ~840dp across; phones are ~360-410. The
     // two-pane threshold sits between them, so unfolding turns the list screens
     // into list-plus-detail and folding collapses them back — and the navigation
     // moves from a thumb-reach bottom bar to a rail, which is where hands sit on
@@ -1802,7 +1802,7 @@ fun HuginnApp(
                 onOpen = { a -> openApp(context, a, vm) },
                 onProbe = { a -> vm.probeApp(a.id) },
                 // COPY AND NOTHING ELSE. The lines rebind a unit on the host and
-                // sometimes add firewall lines on heimdall; this app runs
+                // sometimes add firewall lines on pve1; this app runs
                 // neither, ever.
                 onCopyFix = { text -> vm.copy(text, "the fix") },
                 addAnswer = appAdd,
@@ -2441,7 +2441,7 @@ private fun openApp(
 
 /**
  * The seam between the list and the detail on a wide screen, carrying the
- * notch that hides the list — the desktop's `SeamNotch`, brought to the Z Fold
+ * notch that hides the list — the desktop's `SeamNotch`, brought to the foldable
  * (owner, 2026-10-01: "the same minimize left page tab feature we offer on
  * desktop"). The list is a fixed 292dp here and there is no splitter, so the
  * seam is a toggle and nothing else; the notch sits at the top, where the desktop

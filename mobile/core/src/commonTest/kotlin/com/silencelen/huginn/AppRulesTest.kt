@@ -40,12 +40,12 @@ class AppRulesTest {
         icon: Boolean = true,
         reachable: AppReachability = AppReachability(ok = true, checkedAt = nowSec - 7_200),
     ) = App(
-        id = "armap",
-        name = "Architecture map",
+        id = "atlas",
+        name = "Atlas map",
         url = url,
         kind = kind,
-        notes = "Static armap dashboard.",
-        unit = "armap.service",
+        notes = "Static atlas dashboard.",
+        unit = "atlas.service",
         addedAt = nowSec - 86_400,
         version = 3,
         up = up,
@@ -215,19 +215,19 @@ class AppRulesTest {
         up = true,
         status = 403,
     ).copy(
-        id = "jtyper",
-        name = "jtyper trainer",
-        unit = "jtyper-trainer.service",
+        id = "jotter",
+        name = "jotter notes",
+        unit = "jotter.service",
         reachable = AppReachability(
             ok = false,
             checkedAt = nowSec,
             addresses = listOf(
-                AppAddress("192.168.7.31:8091", ok = false, error = "connection refused"),
-                AppAddress("100.97.198.90:8091", ok = true),
+                AppAddress("192.168.10.31:8091", ok = false, error = "connection refused"),
+                AppAddress("100.101.102.103:8091", ok = true),
             ),
             fix = listOf(
-                "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0",
-                "systemctl restart jtyper-trainer",
+                "systemctl edit jotter.service   # ExecStart: bind 0.0.0.0",
+                "systemctl restart jotter-trainer",
                 "ss -ltnp | grep 8091",
             ),
         ),
@@ -248,7 +248,7 @@ class AppRulesTest {
         )
         // A row with fix lines and no verdict yet still has something to show.
         assertTrue(
-            AppRules.failing(app(reachable = AppReachability(fix = listOf("systemctl restart armap")))),
+            AppRules.failing(app(reachable = AppReachability(fix = listOf("systemctl restart atlas")))),
         )
     }
 
@@ -279,21 +279,21 @@ class AppRulesTest {
     @Test
     fun `each address says which one it was and why it did not answer`() {
         assertEquals(
-            "192.168.7.31:8091 — connection refused",
-            AppRules.addressWords(AppAddress("192.168.7.31:8091", ok = false, error = "connection refused")),
+            "192.168.10.31:8091 — connection refused",
+            AppRules.addressWords(AppAddress("192.168.10.31:8091", ok = false, error = "connection refused")),
         )
         assertEquals(
-            "192.168.7.31:8091 — no answer",
-            AppRules.addressWords(AppAddress("192.168.7.31:8091", ok = false)),
+            "192.168.10.31:8091 — no answer",
+            AppRules.addressWords(AppAddress("192.168.10.31:8091", ok = false)),
             "a failure with no reason still has to read as a failure",
         )
         assertEquals(
-            "100.97.198.90:8091 — answered",
-            AppRules.addressWords(AppAddress("100.97.198.90:8091", ok = true)),
+            "100.101.102.103:8091 — answered",
+            AppRules.addressWords(AppAddress("100.101.102.103:8091", ok = true)),
         )
         assertEquals(
-            "100.97.198.90:8091 — timed out · not required",
-            AppRules.addressWords(AppAddress("100.97.198.90:8091", ok = false, error = "timed out", required = false)),
+            "100.101.102.103:8091 — timed out · not required",
+            AppRules.addressWords(AppAddress("100.101.102.103:8091", ok = false, error = "timed out", required = false)),
             "an advisory miss says it is not the reason for anything",
         )
         assertEquals(
@@ -305,7 +305,7 @@ class AppRulesTest {
 
     @Test
     fun `the Also-check field splits on spaces and commas and drops repeats`() {
-        assertEquals(listOf("10.42.0.1", "192.168.2.117"), AppRules.splitAddresses(" 10.42.0.1, 192.168.2.117  10.42.0.1 "))
+        assertEquals(listOf("10.42.0.1", "192.168.1.20"), AppRules.splitAddresses(" 10.42.0.1, 192.168.1.20  10.42.0.1 "))
         assertEquals(emptyList(), AppRules.splitAddresses("  "))
     }
 
@@ -342,14 +342,14 @@ class AppRulesTest {
         assertEquals(positions.sorted(), positions, "the lines arrived out of order: $positions")
         assertEquals(
             listOf(
-                "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0",
-                "systemctl restart jtyper-trainer",
+                "systemctl edit jotter.service   # ExecStart: bind 0.0.0.0",
+                "systemctl restart jotter-trainer",
                 "ss -ltnp | grep 8091",
             ),
             AppRules.fixLines(failing),
             "blanks dropped, everything else untouched",
         )
-        assertTrue(text.contains("jtyper trainer"), "the payload names the app it belongs to: $text")
+        assertTrue(text.contains("jotter notes"), "the payload names the app it belongs to: $text")
         assertEquals("", AppRules.fixText(app()), "nothing wrong, nothing to copy")
     }
 
@@ -367,9 +367,9 @@ class AppRulesTest {
         assertFalse(AppRules.hasIcon(app(icon = false)))
         assertTrue(AppRules.hasIcon(app(icon = true)))
         assertEquals("A", AppRules.iconInitial(app()))
-        assertEquals("J", AppRules.iconInitial(app().copy(name = "jtyper trainer")))
+        assertEquals("J", AppRules.iconInitial(app().copy(name = "jotter notes")))
         // The label's rule, not the name's: a row with no name leads with its id.
-        assertEquals("B", AppRules.iconInitial(app().copy(name = "  ", id = "btc15m")))
+        assertEquals("B", AppRules.iconInitial(app().copy(name = "  ", id = "bursar")))
         assertEquals("#", AppRules.iconInitial(app().copy(name = "", id = "", url = "9-lab")))
     }
 
@@ -406,8 +406,8 @@ class AppRulesTest {
 
     @Test
     fun `the subtitle carries the kind, the unit and the note`() {
-        assertEquals("dashboard · armap.service · Static armap dashboard.", AppRules.subtitle(app()))
-        assertEquals("other · Static armap dashboard.", AppRules.subtitle(app(kind = "hardware").copy(unit = null)))
+        assertEquals("dashboard · atlas.service · Static atlas dashboard.", AppRules.subtitle(app()))
+        assertEquals("other · Static atlas dashboard.", AppRules.subtitle(app(kind = "hardware").copy(unit = null)))
     }
 
     /**
@@ -417,23 +417,23 @@ class AppRulesTest {
     @Test
     fun `an empty unit reads as no unit, not as an empty one`() {
         assertEquals(
-            "dashboard · Static armap dashboard.",
+            "dashboard · Static atlas dashboard.",
             AppRules.subtitle(app().copy(unit = "")),
         )
         assertEquals(
-            "dashboard · Static armap dashboard.",
+            "dashboard · Static atlas dashboard.",
             AppRules.subtitle(app().copy(unit = null)),
         )
         assertEquals(
-            "# jtyper trainer\nsystemctl restart x",
-            AppRules.fixTextOf("jtyper trainer", "", emptyList(), listOf("systemctl restart x")),
+            "# jotter notes\nsystemctl restart x",
+            AppRules.fixTextOf("jotter notes", "", emptyList(), listOf("systemctl restart x")),
         )
     }
 
     @Test
     fun `a row with no name still has to be distinguishable`() {
-        assertEquals("Architecture map", AppRules.label(app()))
-        assertEquals("armap", AppRules.label(app().copy(name = "  ")))
+        assertEquals("Atlas map", AppRules.label(app()))
+        assertEquals("atlas", AppRules.label(app().copy(name = "  ")))
         assertEquals("http://huginn:8088/", AppRules.label(app().copy(name = "", id = "")))
     }
 
@@ -454,9 +454,9 @@ class AppRulesTest {
         assertNull(AppRules.urlProblem("http://huginn:8088/"))
         assertNull(AppRules.urlProblem("http://localhost:3000/"))
         assertNull(AppRules.urlProblem("http://127.0.0.1:8092/board"))
-        assertNull(AppRules.urlProblem("http://192.168.7.54/status"))
-        assertNull(AppRules.urlProblem("http://100.97.198.90:8787/"))
-        assertNull(AppRules.urlProblem("https://huginn.ts.net/armap"))
+        assertNull(AppRules.urlProblem("http://192.168.10.54/status"))
+        assertNull(AppRules.urlProblem("http://100.101.102.103:8787/"))
+        assertNull(AppRules.urlProblem("https://huginn.ts.net/atlas"))
     }
 
     /**
@@ -495,7 +495,7 @@ class AppRulesTest {
     @Test
     fun `only an http or https row opens`() {
         assertTrue(AppRules.openable(app()))
-        assertTrue(AppRules.openable(app(url = "https://huginn.ts.net/armap")))
+        assertTrue(AppRules.openable(app(url = "https://huginn.ts.net/atlas")))
         assertFalse(AppRules.openable(app(url = "ftp://huginn/")))
         assertFalse(AppRules.openable(app(url = "file:///etc/passwd")))
         assertFalse(AppRules.openable(app(url = "javascript:alert(1)")))
@@ -515,10 +515,10 @@ class AppRulesTest {
         val list = AppList(
             apps = listOf(failing, app()),
             retrofitApplied = false,
-            clientAddresses = listOf("192.168.7.31", "100.97.198.90"),
+            clientAddresses = listOf("192.168.10.31", "100.101.102.103"),
         )
         assertEquals(
-            "Retrofit not applied · 1 of 2 needs it · your devices arrive on 192.168.7.31, 100.97.198.90",
+            "Retrofit not applied · 1 of 2 needs it · your devices arrive on 192.168.10.31, 100.101.102.103",
             AppRules.retrofitNote(list),
         )
         assertNull(
@@ -526,7 +526,7 @@ class AppRulesTest {
             "a finished transition has nothing to say",
         )
         assertNull(
-            AppRules.retrofitNote(AppList(apps = listOf(app()), clientAddresses = listOf("192.168.7.31"))),
+            AppRules.retrofitNote(AppList(apps = listOf(app()), clientAddresses = listOf("192.168.10.31"))),
             "nothing needs it, so nothing is said",
         )
     }
@@ -555,7 +555,7 @@ class AppRulesTest {
                 refusal = "boardserver answers here but not on the addresses your devices arrive from",
                 reachable = AppReachability(
                     ok = false,
-                    addresses = listOf(AppAddress("192.168.7.31:8092", ok = false, error = "connection refused")),
+                    addresses = listOf(AppAddress("192.168.10.31:8092", ok = false, error = "connection refused")),
                     fix = listOf("systemctl edit boardserver.service", "systemctl restart boardserver"),
                 ),
             ),

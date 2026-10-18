@@ -6,7 +6,7 @@ const { suggestionContext, buildPrompt, parseSuggestions } = require('../lib/sug
 test('the digest is the last exchange, assistant last', () => {
   const ctx = suggestionContext([
     { kind: 'user', text: 'ship it' },
-    { kind: 'assistant', text: 'Shipped. One thing I could not verify: the Fold typing feel.' },
+    { kind: 'assistant', text: 'Shipped. One thing I could not verify: a foldable typing feel.' },
   ]);
   assert.match(ctx, /owner last said:\nship it/);
   assert.match(ctx, /could not verify/);
@@ -51,8 +51,8 @@ test('the prompt pins the format rules', () => {
 
 // Models decorate even when told not to; the parser undoes it.
 test('numbering, bullets and quotes are stripped', () => {
-  const got = parseSuggestions('1. Run the tests\n- "Ship it"\n\u2022 \u2018Check the Fold\u2019\n');
-  assert.deepEqual(got, ['Run the tests', 'Ship it', 'Check the Fold']);
+  const got = parseSuggestions('1. Run the tests\n- "Ship it"\n\u2022 \u2018Check a foldable\u2019\n');
+  assert.deepEqual(got, ['Run the tests', 'Ship it', 'Check a foldable']);
 });
 
 test('preamble lines and blanks are dropped', () => {

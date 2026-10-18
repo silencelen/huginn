@@ -29,8 +29,8 @@ class ProjectRelayRowTest {
     @Test
     fun `the attribution names the project and the sender`() {
         assertEquals(
-            "lora-stick · from lora-stick/lead",
-            relayAttribution(RelayProject(id = "p1", name = "lora-stick", from = "lora-stick/lead")),
+            "sensor-board · from sensor-board/lead",
+            relayAttribution(RelayProject(id = "p1", name = "sensor-board", from = "sensor-board/lead")),
         )
     }
 
@@ -60,7 +60,7 @@ class ProjectRelayRowTest {
     fun `a project with no sender still names itself`() {
         // The header cannot match without a sender, so this is defensive rather
         // than expected — and an empty "· from " is the one thing it must not be.
-        assertEquals("lora-stick", relayAttribution(RelayProject(name = "lora-stick", from = "")))
+        assertEquals("sensor-board", relayAttribution(RelayProject(name = "sensor-board", from = "")))
     }
 
     /**

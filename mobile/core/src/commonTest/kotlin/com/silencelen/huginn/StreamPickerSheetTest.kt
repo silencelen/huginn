@@ -110,7 +110,7 @@ class StreamPickerSheetTest {
         assertTrue(StreamPicker.matchesFilter(item, "resume"), "a word past the chip's 28 characters")
         assertTrue(StreamPicker.matchesFilter(item, "A85DFC"), "the id, case-insensitively")
         assertTrue(StreamPicker.matchesFilter(item, "   "), "a blank filter hides nothing")
-        assertFalse(StreamPicker.matchesFilter(item, "kerkcraft"))
+        assertFalse(StreamPicker.matchesFilter(item, "gameserver"))
     }
 
     @Test

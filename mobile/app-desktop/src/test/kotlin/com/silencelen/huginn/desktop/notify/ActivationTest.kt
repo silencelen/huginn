@@ -18,8 +18,8 @@ class ActivationTest {
 
     @Test
     fun `open carries a view and an id`() {
-        val a = Activations.parse("huginn://open?view=sessions&id=jtyper")
-        assertEquals(Activation.Open(NavTarget(TargetKind.SESSIONS, "jtyper")), a)
+        val a = Activations.parse("huginn://open?view=sessions&id=jotter")
+        assertEquals(Activation.Open(NavTarget(TargetKind.SESSIONS, "jotter")), a)
     }
 
     @Test
@@ -40,8 +40,8 @@ class ActivationTest {
 
     @Test
     fun `answer needs session, option and fingerprint`() {
-        val a = Activations.parse("huginn://answer?session=jtyper&option=2&fp=abc123")
-        assertEquals(Activation.Answer("jtyper", 2, "abc123"), a)
+        val a = Activations.parse("huginn://answer?session=jotter&option=2&fp=abc123")
+        assertEquals(Activation.Answer("jotter", 2, "abc123"), a)
     }
 
     @Test
@@ -51,8 +51,8 @@ class ActivationTest {
         // owner clicks — and huginn's host is root-equivalent. Without a
         // fingerprint the daemon answers whatever question is on the pane at that
         // instant, so a forged link approves an arbitrary tool-use prompt.
-        assertNull(Activations.parse("huginn://answer?session=jtyper&option=2"))
-        assertNull(Activations.parse("huginn://answer?session=jtyper&option=2&fp="))
+        assertNull(Activations.parse("huginn://answer?session=jotter&option=2"))
+        assertNull(Activations.parse("huginn://answer?session=jotter&option=2&fp="))
     }
 
     @Test
@@ -136,7 +136,7 @@ class ActivationTest {
 
     @Test
     fun `a notification key is stable and distinguishes the two lists`() {
-        assertEquals("sess:jtyper", NavTarget(TargetKind.SESSIONS, "jtyper").key)
-        assertEquals("chat:jtyper", NavTarget(TargetKind.CHATS, "jtyper").key)
+        assertEquals("sess:jotter", NavTarget(TargetKind.SESSIONS, "jotter").key)
+        assertEquals("chat:jotter", NavTarget(TargetKind.CHATS, "jotter").key)
     }
 }

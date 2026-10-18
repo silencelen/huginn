@@ -118,7 +118,7 @@ test('boundaryFromTail is NOT idle for an empty or unreadable tail', () => {
 // ------------------------------------------- the bookkeeping tail (3.0.2)
 
 // The record types Claude Code writes AFTER a turn has ended, as counted over
-// the last 40 real transcripts in ~/.claude/projects/-root-netplan: bookkeeping,
+// the last 40 real transcripts in ~/.claude/projects/-root-projects-app: bookkeeping,
 // every one of them, and every one of them arrived after the turn marker.
 const BOOKKEEPING = [
   'last-prompt', 'ai-title', 'mode', 'permission-mode', 'atis-latch', 'cost-state',
@@ -296,8 +296,8 @@ test('every drop writes ONE journal line naming the origin, kind, session and re
     'typing: dropped headroom/resume for pctrooubleshoot: timeout',
   );
   assert.equal(
-    t.dropLogLine('jtyper', {}, 'human'),
-    'typing: dropped unknown/text for jtyper: human',
+    t.dropLogLine('jotter', {}, 'human'),
+    'typing: dropped unknown/text for jotter: human',
   );
 });
 
@@ -493,7 +493,7 @@ const LIVE_COMPOSER = [
   '──────────────────────────────────────────────────────────────────────────',
   '❯ ',
   '──────────────────────────────────────────────────────────────────────────',
-  '  [jtyper] Fable 5.1 · ctx 43% · main ~5',
+  '  [jotter] Fable 5.1 · ctx 43% · main ~5',
   '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents',
 ];
 
@@ -730,7 +730,7 @@ test('the poll interval and the give-up window are the contract\'s', () => {
 // ------------------------------------------------ paste settled (3.1.x P1)
 //
 // Fixtures are REAL pane captures taken from the sweep that found the bug
-// (2026-09-17, Claude Code 2.1.258, /root/netplan): the same 5 rows the daemon
+// (2026-09-17, Claude Code 2.1.258, /root/projects/app): the same 5 rows the daemon
 // reads, one from a send that is sitting unsent in the composer and one from a
 // send that went. A hand-written pane would have agreed with whatever the rules
 // happened to say.
@@ -775,7 +775,7 @@ test('the composer is the LAST caret, not the first — an echoed message is not
 test('a pane with no caret at all has no composer — which is not an empty one', () => {
   // null, not ''. A shell and a booting claude both have nothing to say about a
   // composer, and `composerCleared` must not read that as "the message went".
-  assert.equal(t.composerText(['root@huginn:~/netplan# ']), null);
+  assert.equal(t.composerText(['root@huginn:~/projects/app# ']), null);
   assert.equal(t.composerText([]), null);
 });
 
@@ -930,7 +930,7 @@ const FRESH_COMPOSER = [
 test('composerEmpty tells a composer with nothing in it from no composer at all', () => {
   // null / true / false, and all three are different instructions: nothing here
   // can answer, nothing is in the box, somebody's words are in the box.
-  assert.equal(t.composerEmpty(['root@huginn:~/netplan#']), null, 'a shell has no composer');
+  assert.equal(t.composerEmpty(['root@huginn:~/projects/app#']), null, 'a shell has no composer');
   assert.equal(t.composerEmpty([]), null, 'nor has an empty pane');
   assert.equal(t.composerEmpty(SENT_PANE), true, 'the box let go of the message');
   assert.equal(t.composerEmpty(STUCK_PANE), false, 'the box is holding one');
@@ -1012,7 +1012,7 @@ test('recoveryDecision re-pastes ONLY into a composer that is drawn and empty', 
   assert.equal(t.recoveryDecision(SENT_PANE), 'resend', 'the lost band: up, and holding nothing');
   assert.equal(t.recoveryDecision(STUCK_PANE), 'leave',
     'a person may be mid-sentence; pasting over it turns a lost message into a mangled one');
-  assert.equal(t.recoveryDecision(['root@huginn:~/netplan#']), 'blind',
+  assert.equal(t.recoveryDecision(['root@huginn:~/projects/app#']), 'blind',
     'a shell cannot say whether the bytes arrived, so nothing changes for it');
   assert.equal(t.recoveryDecision([]), 'blind', 'nor can a pane tmux answered nothing for');
 });
@@ -1051,7 +1051,7 @@ test('composerHoldsDraft separates somebody ELSE\'s words from ours and from not
   // is never held, an empty box or our own text is not a draft, and anything
   // else is a person mid-sentence.
   const holds = (lines) => t.composerHoldsDraft(t.composerText(lines), MESSAGE);
-  assert.equal(holds(['root@huginn:~/netplan#']), null, 'a shell has no box to own');
+  assert.equal(holds(['root@huginn:~/projects/app#']), null, 'a shell has no box to own');
   assert.equal(holds([]), null, 'nor has a pane tmux answered nothing for');
   assert.equal(holds(SENT_PANE), false, 'an empty box is nobody\'s');
   assert.equal(holds(FRESH_COMPOSER), false, 'and neither is the dim placeholder hint');
@@ -1209,7 +1209,7 @@ test('the recovery writes its own journal line, carrying the pane', () => {
 // ------------------------------------------- the sessions nobody marked
 
 test('shellPrompt reads the LAST line, and only a prompt terminator counts', () => {
-  assert.equal(t.shellPrompt(['root@huginn:~/netplan#']), true);
+  assert.equal(t.shellPrompt(['root@huginn:~/projects/app#']), true);
   assert.equal(t.shellPrompt(['alex@box:~$']), true);
   assert.equal(t.shellPrompt(['% ']), true, 'zsh, and trailing space is not content');
   assert.equal(t.shellPrompt(['>>>']), true, 'a REPL is no more a startup than a shell is');

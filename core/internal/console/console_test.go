@@ -73,7 +73,7 @@ func fakeCore(t *testing.T, paired bool) string {
 			{"id":"c3","title":"Drive every volume","mode":"ask","updatedAt":%d,"lastSnippet":"All disks healthy."}]}`, now-540, now-20, now-7200)))
 		mux.HandleFunc("/appd/v1/chats/c1", j(`{"id":"c1","title":"Budget review","mode":"ask","seq":0,"messages":[
 			{"type":"user","text":"How much should go to fixed costs?"},
-			{"type":"tool","name":"Read","input":"/srv/btc15m/config.yaml"},
+			{"type":"tool","name":"Read","input":"/srv/bursar/config.yaml"},
 			{"type":"assistant","text":"A third keeps the budget flexible, which matches your rule."},
 			{"type":"result","ok":true,"turns":2,"costUsd":0.04}]}`))
 		mux.HandleFunc("/appd/v1/chats/c1/messages", func(w http.ResponseWriter, r *http.Request) {

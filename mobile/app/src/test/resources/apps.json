@@ -1,12 +1,12 @@
 {
   "apps": [
     {
-      "id": "armap",
-      "name": "Architecture map",
+      "id": "atlas",
+      "name": "Atlas map",
       "url": "http://huginn:8088/",
       "kind": "docs",
-      "notes": "Static armap dashboard (docs/current/armap).",
-      "unit": "armap.service",
+      "notes": "Static atlas dashboard (docs/current/atlas).",
+      "unit": "atlas.service",
       "addedAt": 1789000000,
       "version": 3,
       "up": true,
@@ -18,20 +18,20 @@
         "ok": true,
         "checkedAt": 1789459940,
         "addresses": [
-          { "addr": "192.168.7.31:8088", "ok": true, "error": null },
-          { "addr": "100.97.198.90:8088", "ok": true, "error": null }
+          { "addr": "192.168.10.31:8088", "ok": true, "error": null },
+          { "addr": "100.101.102.103:8088", "ok": true, "error": null }
         ],
         "fix": [],
         "note": ""
       }
     },
     {
-      "id": "jtyper",
-      "name": "jtyper trainer",
+      "id": "jotter",
+      "name": "jotter notes",
       "url": "http://huginn:8091/",
       "kind": "lab",
       "notes": "Blind test + chat + hole-fill flywheel.",
-      "unit": "jtyper-trainer.service",
+      "unit": "jotter.service",
       "addedAt": 1789000000,
       "version": 1,
       "up": true,
@@ -43,16 +43,16 @@
         "ok": false,
         "checkedAt": 1789459940,
         "addresses": [
-          { "addr": "192.168.7.31:8091", "ok": false, "error": "connection refused" },
-          { "addr": "100.97.198.90:8091", "ok": true, "error": null }
+          { "addr": "192.168.10.31:8091", "ok": false, "error": "connection refused" },
+          { "addr": "100.101.102.103:8091", "ok": true, "error": null }
         ],
         "fix": [
           "# on huginn — bind the unit to 0.0.0.0",
-          "systemctl edit jtyper-trainer.service   # ExecStart: bind 0.0.0.0 instead of the tailnet address",
-          "systemctl restart jtyper-trainer",
+          "systemctl edit jotter.service   # ExecStart: bind 0.0.0.0 instead of the tailnet address",
+          "systemctl restart jotter-trainer",
           "ss -ltnp | grep 8091",
-          "# on heimdall — allow the port in /etc/pve/firewall/117.fw",
-          "IN ACCEPT -source 192.168.2.131 -p tcp -dport 8091 -log nolog"
+          "# on pve1 — allow the port in /etc/pve/firewall/100.fw",
+          "IN ACCEPT -source 192.168.1.131 -p tcp -dport 8091 -log nolog"
         ],
         "note": ""
       }
@@ -62,7 +62,7 @@
       "name": "PCB board view",
       "url": "http://huginn:8092/",
       "kind": "tool",
-      "notes": "Live KiCad board review (brokkr renders).",
+      "notes": "Live KiCad board review (buildbox renders).",
       "unit": "boardserver.service",
       "addedAt": 1789000000,
       "version": 1,
@@ -80,8 +80,8 @@
       }
     },
     {
-      "id": "btc15m",
-      "name": "BTC 15m simulator",
+      "id": "bursar",
+      "name": "Bursar ledger",
       "url": "http://huginn:8093/",
       "kind": "lab",
       "notes": "Paper-trading sim for the 15-minute lab.",
@@ -112,7 +112,7 @@
   ],
   "retrofitApplied": false,
   "clientAddresses": [
-    "192.168.7.31",
-    "100.97.198.90"
+    "192.168.10.31",
+    "100.101.102.103"
   ]
 }

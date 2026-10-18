@@ -220,7 +220,7 @@ test('the polish call is caged, on sonnet, one turn, no tools', async () => {
   assert.ok(argv, 'the stub recorded no call for this draft');
   assert.equal(argv[0], '-p');
   // ⚠ THE FOUR THAT MATTER. Empty --setting-sources keeps the global CLAUDE.md and
-  // huginn's persona out (the hermod lesson); empty --tools means this cannot act;
+  // huginn's persona out (the webhost lesson); empty --tools means this cannot act;
   // one turn means it cannot wander. A regression here is invisible in the answer.
   assert.equal(argv[argv.indexOf('--setting-sources') + 1], '', 'no CLAUDE.md, global or project');
   assert.equal(argv[argv.indexOf('--tools') + 1], '', 'a rewrite must not be able to DO anything');

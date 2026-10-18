@@ -67,7 +67,7 @@ function _Huginn-BadName {
 function _Huginn-CanonName { param([string]$Name) return $Name.ToLower() }
 # tmux resolves -t targets by EXACT match, then PREFIX, then glob. A unique prefix
 # resolves silently, so 'huginn kill andvari' would destroy a session actually named
-# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jtyper'.
+# 'andvariautofill', and 'huginn solo jt' would evict the real client of 'jotter'.
 # Anchoring with '=' forces exact match (tmux(1) "exact-match").
 function _Huginn-TmuxTarget { param([string]$Name) return "=$Name" }
 
@@ -616,7 +616,7 @@ function _Huginn-DesktopUpdate {
     $wasOpen = [bool](Get-Process -Name 'huginn-desktop-kt' -ErrorAction SilentlyContinue)
     # The installer installs the core it carries. Desktop 2.3.6 and older do
     # that without comparing versions, which put an OLDER core over the one
-    # this machine runs (PRESTIGE, 2026-10-16) - so the current core is kept
+    # this machine runs (PC01, 2026-10-16) - so the current core is kept
     # aside and put back if the installer replaced it with an older one.
     $coreBin = _Huginn-CoreBin; $coreWas = ''; $coreKeep = ''
     if ($coreBin) {
@@ -641,7 +641,7 @@ function _Huginn-DesktopUpdate {
     if (-not $app) { $app = Join-Path $env:LOCALAPPDATA 'Programs\huginn-desktop-kt\huginn-desktop-kt.exe' }
     # A silent first install answers its components page with the section
     # DEFAULTS (local AI off, autostart off) into first-run.json, and the app
-    # then showed those steps as "skipped" - answers nobody gave (PRESTIGE,
+    # then showed those steps as "skipped" - answers nobody gave (PC01,
     # 2026-10-16). Nobody saw that page, so its file goes before the app opens.
     if ($Install -and -not $have) {
       $cfgRoot = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
@@ -804,7 +804,7 @@ function _Huginn-CorePair {
   }
   if (_Huginn-UiTty) { _Huginn-UiLive (@(_Huginn-UiFrames)[0]) 'paired' "fetching the token over ssh and pairing with $srv" }
   # What the core prints is UTF-8; read as the console's OEM page, its ellipsis
-  # came out as three box-drawing letters on PRESTIGE.
+  # came out as three box-drawing letters on PC01.
   $enc = [Console]::OutputEncoding
   try {
     [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -1537,7 +1537,7 @@ function huginn {
       for ($i = 0; $i -lt 15; $i++) { & $bin core status *> $null; if ($LASTEXITCODE -eq 0) { break }; Start-Sleep 1 }
       if ($LASTEXITCODE -ne 0) {
         # Windows queues every start of the boot task on battery (Energy Saver;
-        # PRESTIGE, 2026-10-16: the desktop's setup then found no core).
+        # PC01, 2026-10-16: the desktop's setup then found no core).
         # `core start` - unelevated, so the core never runs as administrator -
         # starts it directly when the task is held back.
         $slog = Join-Path ([IO.Path]::GetTempPath()) ('huginn-core-start-' + [guid]::NewGuid().ToString('N') + '.log')

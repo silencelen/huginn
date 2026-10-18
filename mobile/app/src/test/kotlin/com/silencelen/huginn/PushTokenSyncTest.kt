@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * 3.9.0 crashed seven times on the Fold right after the update: a failed FCM
+ * 3.9.0 crashed seven times on a foldable right after the update: a failed FCM
  * `getToken()` task THROWS from `getResult()`, and the callback read it before
  * asking whether the task had succeeded.
  */

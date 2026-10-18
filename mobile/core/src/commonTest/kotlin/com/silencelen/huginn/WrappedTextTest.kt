@@ -59,12 +59,12 @@ class WrappedTextTest {
 
     @Test
     fun `a cross-session message folds under the sending session's name, one card`() {
-        val msg = "<cross-session-message from=\"uds:/tmp/cc-socks/1.sock\" from-name=\"netplan-fd\" " +
+        val msg = "<cross-session-message from=\"uds:/tmp/cc-socks/1.sock\" from-name=\"app-fd\" " +
             "from-mode=\"prompting\">\n<agent-message from=\"ae6c\">\nSPIKE-PING: reply PONG.\n</agent-message>\n" +
             "</cross-session-message>"
         val segs = WrappedText.segments(msg)
         assertEquals(1, segs.size)
-        assertEquals("Message from netplan-fd", segs[0].label)
+        assertEquals("Message from app-fd", segs[0].label)
         assertEquals("SPIKE-PING: reply PONG.", segs[0].text)
     }
 

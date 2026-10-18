@@ -12,9 +12,9 @@ import kotlin.test.assertTrue
  * WHAT THE NEW-CHAT PICKER MAY OFFER, AND IN WHAT ORDER (P-03, P-21).
  *
  * The walker's dialog held eleven radios and ten labels, did not scroll, and the
- * eleventh option was unreachable by any gesture — so RAGNAR's three local
+ * eleventh option was unreachable by any gesture — so RIG's three local
  * models, including the fleet's only 30B, could not be chosen at all. In the
- * same dialog `DATATREEX` was correctly greyed as "not reachable" while its own
+ * same dialog `DESKPC` was correctly greyed as "not reachable" while its own
  * models rendered beneath it at full brightness as selectable, and `Nomic Embed`
  * — an EMBEDDING model — was offered as something to have a conversation with.
  *
@@ -41,8 +41,8 @@ class ChatPickerRulesTest {
     @Test
     fun `an embedding model is never offered as a chat model`() {
         val models = listOf(
-            local("local-dtx-qwen3-8b", "Qwen3 8B - DATATREEX", "dtx-llm"),
-            local("local-dtx-nomic-embed-text", "Nomic Embed - DATATREEX", "dtx-llm"),
+            local("local-dtx-qwen3-8b", "Qwen3 8B - DESKPC", "dtx-llm"),
+            local("local-dtx-nomic-embed-text", "Nomic Embed - DESKPC", "dtx-llm"),
         )
         val rows = ModelLabels.localChatRows(models, listOf(device("dtx-llm", scope = "generate")))
         assertEquals(
@@ -55,7 +55,7 @@ class ChatPickerRulesTest {
     @Test
     fun `the tell is the name, from either field`() {
         assertTrue(ModelLabels.isEmbedding(ModelChoice(id = "local-x-nomic-embed-text", display = "Nomic")))
-        assertTrue(ModelLabels.isEmbedding(ModelChoice(id = "local-x-thing", display = "Nomic Embed - RAGNAR")))
+        assertTrue(ModelLabels.isEmbedding(ModelChoice(id = "local-x-thing", display = "Nomic Embed - RIG")))
         assertFalse(ModelLabels.isEmbedding(ModelChoice(id = "local-x-qwen3-30b-a3b", display = "Qwen3 30B-A3B")))
         assertFalse(ModelLabels.isEmbedding(ModelChoice(id = "opus", display = "Opus")))
     }
@@ -63,18 +63,18 @@ class ChatPickerRulesTest {
     // ---------------------------------------------------------- reachability
 
     /**
-     * ⚠⚠ P-21, EXACTLY. `DATATREEX` is enrolled twice — a claude row that has
+     * ⚠⚠ P-21, EXACTLY. `DESKPC` is enrolled twice — a claude row that has
      * stopped checking in and a serving row that has not — and the picker greyed
      * the machine while drawing its models live. One machine, one answer.
      */
     @Test
     fun `a model is as reachable as its MACHINE, not as its serving credential`() {
         val devices = listOf(
-            device("dtx", name = "DATATREEX", online = false, machine = "datatreex"),
-            device("dtx-llm", name = "DATATREEX-llm", online = true, scope = "generate", machine = "datatreex"),
+            device("dtx", name = "DESKPC", online = false, machine = "deskpc"),
+            device("dtx-llm", name = "DESKPC-llm", online = true, scope = "generate", machine = "deskpc"),
         )
         val rows = ModelLabels.localChatRows(
-            listOf(local("local-dtx-qwen3-8b", "Qwen3 8B - DATATREEX", "dtx-llm")),
+            listOf(local("local-dtx-qwen3-8b", "Qwen3 8B - DESKPC", "dtx-llm")),
             devices,
         )
         assertEquals(1, rows.size, "it is SHOWN — hiding it reads as an enrolment that vanished")
@@ -84,11 +84,11 @@ class ChatPickerRulesTest {
     @Test
     fun `a machine whose rows are all checking in is reachable`() {
         val devices = listOf(
-            device("rag", name = "RAGNAR", online = true, machine = "ragnar"),
-            device("rag-llm", online = true, scope = "generate", machine = "ragnar"),
+            device("rag", name = "RIG", online = true, machine = "rig"),
+            device("rag-llm", online = true, scope = "generate", machine = "rig"),
         )
         val rows = ModelLabels.localChatRows(
-            listOf(local("local-rag-qwen3-30b-a3b", "Qwen3 30B-A3B - RAGNAR", "rag-llm")),
+            listOf(local("local-rag-qwen3-30b-a3b", "Qwen3 30B-A3B - RIG", "rag-llm")),
             devices,
         )
         assertTrue(rows.single().reachable)

@@ -10,8 +10,8 @@ const {
 const WRAPPER = "/bin/bash -c source /root/.claude/shell-snapshots/snapshot-bash-1785137321325-37gn94.sh 2>/dev/null || true && shopt -u extglob 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'sleep 500; echo done-marker' < /dev/null && pwd -P >| /tmp/claude-cac4-cwd";
 
 test('the task dir derives its slug from the transcript path, not cwd', () => {
-  const dir = taskDirFor('/root/.claude/projects/-root-netplan/abc.jsonl', 'abc', 0);
-  assert.equal(dir, '/tmp/claude-0/-root-netplan/abc/tasks');
+  const dir = taskDirFor('/root/.claude/projects/-root-projects-app/abc.jsonl', 'abc', 0);
+  assert.equal(dir, '/tmp/claude-0/-root-projects-app/abc/tasks');
 });
 
 test('no transcript or session means no dir rather than a guess', () => {

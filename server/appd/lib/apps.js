@@ -1,6 +1,6 @@
 'use strict';
 // Apps: the web pages this host MAKES AND SERVES ITSELF, as a list you can look
-// at from the phone — armap, the jtyper trainer, the board view, the BTC sim.
+// at from the phone — atlas, the jotter notes, the board view, the bursar ledger.
 // Called "consoles" until 3.5.0 (decision 53); the word on every surface is now
 // "apps", and so is the word in this daemon's journal.
 //
@@ -947,13 +947,13 @@ function isSeedRow(rec) {
 }
 
 const SEED_UNITS = [
-  { id: 'armap', port: 8088, name: 'Architecture map', kind: 'docs', unit: 'armap.service',
-    notes: 'Static armap dashboard (docs/current/armap).' },
-  { id: 'jtyper', port: 8091, name: 'jtyper trainer', kind: 'lab', unit: 'jtyper-trainer.service',
+  { id: 'atlas', port: 8088, name: 'Atlas map', kind: 'docs', unit: 'atlas.service',
+    notes: 'Static atlas dashboard (docs/current/atlas).' },
+  { id: 'jotter', port: 8091, name: 'jotter notes', kind: 'lab', unit: 'jotter.service',
     notes: 'Blind test + chat + hole-fill flywheel.' },
   { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool', unit: 'boardserver.service',
-    notes: 'Live KiCad board review (brokkr renders).' },
-  { id: 'btc15m', port: 8093, name: 'BTC 15m simulator', kind: 'lab', unit: 'btc15m-sim.service',
+    notes: 'Live KiCad board review (buildbox renders).' },
+  { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar.service',
     notes: 'Paper-trading sim for the 15-minute lab.' },
 ];
 
@@ -961,15 +961,15 @@ const SEED_UNITS = [
  * Where a unit's bind actually lives, when it is not in the unit file.
  *
  * ⚠ ONE ENTRY, AND IT IS THE D11 SCAR. The old card carried a per-unit claim
- * that btc15m-sim "already falls back to 0.0.0.0" and therefore needed no
+ * that bursar "already falls back to 0.0.0.0" and therefore needed no
  * rebind; `ss -ltn` said `100.101.102.103:8093`, because that fallback is what
  * sim/app.py does when the host has NO tailscale address. The claim is gone; what
  * survives is the only part of it that was true and useful — `systemctl edit
- * btc15m-sim.service` would edit the wrong thing, so the line says where to look
+ * bursar.service` would edit the wrong thing, so the line says where to look
  * instead. This map holds directions, never exemptions.
  */
 const UNIT_BIND_NOTES = {
-  'btc15m-sim.service': 'its bind is in sim/app.py, not the unit',
+  'bursar.service': 'its bind is in sim/app.py, not the unit',
 };
 
 /**
@@ -1105,7 +1105,7 @@ function migrateSeedUrls(list, addr) {
  *
  * ⚠ SEPARATE FROM [migrateSeedUrls] ON PURPOSE. That one moves an address and
  * has to be paranoid about the exact literal, because an address is a thing the
- * owner chooses. A unit is a fact about THIS host: `armap.service` serves port
+ * owner chooses. A unit is a fact about THIS host: `atlas.service` serves port
  * 8088 here whatever anybody pointed the row at, and a row with no unit falls
  * into the no-unit branch of [fixLines] and asks the owner to work out what to
  * edit — on the one deployment where the daemon knows the answer.
@@ -2402,7 +2402,7 @@ function createStore(opts = {}) {
    * ⚠⚠ AN APP ON ANOTHER HOST IS CHECKED AT ITS OWN ADDRESS ONLY (2026-10-02).
    * The plan swaps each of THIS host's addresses into the row's URL, which is
    * only meaningful for a page this host serves. For `http://192.168.10.50:8088/`
-   * it asked huginn's OWN 127.0.0.1:8088 — armap — and passed the row on the
+   * it asked huginn's OWN 127.0.0.1:8088 — atlas — and passed the row on the
    * strength of an unrelated service; the real app was never contacted. huginn
    * cannot know which of another machine's addresses a device reaches it by, so
    * what is required of a non-local app is exactly what a device opens: its own
@@ -2605,7 +2605,7 @@ function createStore(opts = {}) {
    * The ARRIVAL is what every app has to answer on, and it is what the
    * reachability probe dials. The REMOTE is what a firewall rule on the hypervisor can
    * name as its source — and it has to be, because an arrival address is one of
-   * huginn's own and a `-source` naming CT 117's own IP matches nothing inbound.
+   * huginn's own and a `-source` naming CT 100's own IP matches nothing inbound.
    * Recorded on the same terms as the arrival, in the same set, under the same
    * clock, so neither can drift out from under the other.
    *

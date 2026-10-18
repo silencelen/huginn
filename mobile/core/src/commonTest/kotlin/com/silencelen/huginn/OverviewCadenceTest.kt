@@ -23,8 +23,8 @@ class OverviewCadenceTest {
 
     @Test
     fun `a cached map is kept for its own session and dropped for another`() {
-        assertTrue(OverviewCadence.keepCache("jtyper", "jtyper"))
-        assertFalse(OverviewCadence.keepCache("jtyper", "main"))
+        assertTrue(OverviewCadence.keepCache("jotter", "jotter"))
+        assertFalse(OverviewCadence.keepCache("jotter", "main"))
         assertFalse(OverviewCadence.keepCache(null, "main"))
     }
 }

@@ -166,7 +166,7 @@ class AppStore(
         // Not answering is something to FIX here, not a place to send anyone:
         // the "first screen" this used to point at sits under the setup window.
         // `huginn core start` uses the boot task and, when Windows holds that
-        // back (Energy Saver on battery queued every start on PRESTIGE,
+        // back (Energy Saver on battery queued every start on PC01,
         // 2026-10-16), starts the core directly.
         var st = runCatching { core.status() }.getOrNull()
         if (st == null) {

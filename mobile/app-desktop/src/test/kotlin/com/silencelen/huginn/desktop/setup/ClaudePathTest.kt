@@ -19,7 +19,7 @@ import kotlin.test.assertTrue
  * Every case here is one this box cannot reproduce by running the real thing —
  * it is Linux, and the interesting half is Windows. So the candidate list takes
  * its environment as a parameter and the shim rule is asserted as text, which is
- * the only way any of it is checked before it reaches PRESTIGE.
+ * the only way any of it is checked before it reaches PC01.
  *
  * NOTE kotlin.test's argument order is (expected, actual, message).
  */

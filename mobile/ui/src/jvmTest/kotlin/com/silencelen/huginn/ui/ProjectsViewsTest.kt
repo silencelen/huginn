@@ -34,7 +34,7 @@ class ProjectsViewsTest {
         busy: Int = 1,
         waiting: Int = 1,
         status: String = "active",
-        cwd: String = "/root/netplan/status-page",
+        cwd: String = "/root/projects/app/status-page",
         manifestRev: Int = 0,
         manifestSummary: String? = null,
         endedReason: String? = null,
@@ -97,7 +97,7 @@ class ProjectsViewsTest {
     @Test
     fun `the row leads with the answer to the only question it is asked`() {
         assertEquals(
-            "1 of 3 working · 1 needs you · /root/netplan/status-page",
+            "1 of 3 working · 1 needs you · /root/projects/app/status-page",
             projectSubtitle(row(), nowMs),
         )
     }
@@ -110,12 +110,12 @@ class ProjectsViewsTest {
             // ⚠ "just the lead so far", not "no members yet" (P-33/D-20): the
             // MEMBERS list under this header shows the lead, so the header
             // saying nobody is here contradicts the list below it.
-            "just the lead so far · two sessions: docs and fw · /root/netplan/dev-ledger/lora-stick",
+            "just the lead so far · two sessions: docs and fw · /root/projects/app/dev-ledger/sensor-board",
             projectSubtitle(
                 row(
                     members = 0, alive = 0, busy = 0, waiting = 0,
                     status = "proposed",
-                    cwd = "/root/netplan/dev-ledger/lora-stick",
+                    cwd = "/root/projects/app/dev-ledger/sensor-board",
                     manifestRev = 2,
                     manifestSummary = "two sessions: docs and fw",
                 ),
@@ -148,7 +148,7 @@ class ProjectsViewsTest {
         // itself, and it is the difference between a filed project and a broken
         // one.
         assertEquals(
-            "none running · /root/netplan/status-page · the lead session is gone · 2h ago",
+            "none running · /root/projects/app/status-page · the lead session is gone · 2h ago",
             projectSubtitle(
                 row(
                     members = 2, alive = 0, busy = 0, waiting = 0,
@@ -160,7 +160,7 @@ class ProjectsViewsTest {
         )
         // And one the owner filed, with nothing to explain.
         assertEquals(
-            "none running · /root/netplan/status-page · archived · 2h ago",
+            "none running · /root/projects/app/status-page · archived · 2h ago",
             projectSubtitle(row(members = 2, alive = 0, busy = 0, waiting = 0, status = "archived"), nowMs),
         )
     }

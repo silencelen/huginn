@@ -343,7 +343,7 @@ fun Shell(store: AppStore) {
         // never did it itself.
         //
         // One BoxWithConstraints, at the root, asking the question the phone has
-        // asked since the Fold shipped. The arithmetic is [Responsive], kept out of
+        // asked since the foldable layout shipped. The arithmetic is [Responsive], kept out of
         // the composition and asserted, because a frame that is wrong does not
         // throw — it draws, and it looks deliberate.
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -1561,7 +1561,7 @@ private fun NewSessionDialog(
                     value = text,
                     ok = ok || text.isEmpty(),
                     label = "Session name",
-                    placeholder = "e.g. jtyper",
+                    placeholder = "e.g. jotter",
                 ) { text = it }
                 Text(
                     when {
@@ -1602,7 +1602,7 @@ private fun RenameDialog(
                     value = text,
                     ok = ok,
                     label = if (session) "Session name" else "Chat title",
-                    placeholder = if (session) "e.g. jtyper" else "What this chat is about",
+                    placeholder = if (session) "e.g. jotter" else "What this chat is about",
                 ) { text = it }
                 Text(
                     if (session) SESSION_NAME_HELP

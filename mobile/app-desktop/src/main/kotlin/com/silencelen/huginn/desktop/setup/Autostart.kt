@@ -30,7 +30,7 @@ import java.io.File
  *
  * The pure half — where the file goes and what is in it — is separated from the
  * IO so it can be asserted on a Linux box for a Windows machine, which is the
- * only way this gets tested at all before it reaches PRESTIGE.
+ * only way this gets tested at all before it reaches PC01.
  */
 object Autostart {
 

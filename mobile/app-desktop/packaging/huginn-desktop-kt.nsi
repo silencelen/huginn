@@ -229,7 +229,7 @@ Function ${UN}EnsureNotRunning
     ; Ask the app itself to quit first, through its single-instance channel
     ; (instance.lock: port + secret, this user's only), exactly as its tray's
     ; "Quit Huginn" does. Ending the runtime by force left the jpackage launcher
-    ; showing error dialogs (PRESTIGE, 2026-10-16). An app from before 2.3.6
+    ; showing error dialogs (PC01, 2026-10-16). An app from before 2.3.6
     ; ignores the request and the forced path below still applies.
     InitPluginsDir
     FileOpen $9 "$PLUGINSDIR\askquit.ps1" w

@@ -43,8 +43,8 @@ import java.awt.datatransfer.StringSelection
 import kotlinx.coroutines.launch
 
 /**
- * The things huginn makes and hosts itself — armap, the jtyper trainer, the
- * board view, the BTC sim — with an icon, a note, a liveness probe and a verdict
+ * The things huginn makes and hosts itself — atlas, the jotter notes, the
+ * board view, the bursar ledger — with an icon, a note, a liveness probe and a verdict
  * about whether this machine can actually open them.
  *
  * SPANS BOTH COLUMNS, like Devices: a row already carries everything there is to
@@ -59,8 +59,8 @@ import kotlinx.coroutines.launch
  * of the row.
  *
  * ⚠⚠ NOTHING HERE APPLIES THE RETROFIT. A failing row discloses the systemd
- * change on the huginn host and the firewall lines on heimdall; both are
- * owner-run, in a netplan session, and the only control the panel has is Copy
+ * change on the huginn host and the firewall lines on pve1; both are
+ * owner-run, in a session on the host, and the only control the panel has is Copy
  * (decisions 47 and 55). The clipboard is this window's entire contribution.
  */
 @Composable

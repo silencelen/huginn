@@ -509,7 +509,7 @@ data class TranscriptEvent(
      * system note, which is wrong about the detail and right about the category.
      *
      * ⚠ LABEL FROM [ProjectPeer.name], NEVER FROM THE RENDERED TEXT — the
-     * `@handle` form slugifies the slash (`lora-stick/docs` → `@lora-stick-docs`),
+     * `@handle` form slugifies the slash (`sensor-board/docs` → `@sensor-board-docs`),
      * so the preview cannot be parsed back into an addressable name.
      */
     val peer: ProjectPeer? = null,
@@ -3127,8 +3127,8 @@ data class ProjectSave(
 
 // --------------------------------------------------------------------- apps
 //
-// An APP is something huginn makes and hosts itself — armap, the jtyper
-// trainer, the board view, the BTC sim — with a name, an icon, a note and a
+// An APP is something huginn makes and hosts itself — atlas, the jotter
+// trainer, the board view, the bursar ledger — with a name, an icon, a note and a
 // liveness probe. It is not a Device: a device is another machine that enrols
 // and decides for itself what it will do. There is no shared key, no shared
 // lifecycle and no shared security story, so there is no shared model either.

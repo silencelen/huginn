@@ -433,7 +433,7 @@ class StreamPickerTest {
         // unfolded list laid out one per row — nine settled agents, nine
         // full-width lines. See StreamPicker.LABEL_MAX.
         assertEquals(28, StreamPicker.LABEL_MAX, "the width two chips a row is measured against")
-        val long = "audit every nginx vhost on hermod and report what changed"
+        val long = "audit every nginx vhost on webhost and report what changed"
         val items = StreamPicker.items(listOf(agent("agent-x", task = long)), NOW)
         val label = items[1].label
         // AT MOST, not exactly: clip trims the trailing space before the ellipsis,

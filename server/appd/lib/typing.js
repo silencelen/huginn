@@ -128,7 +128,7 @@ function isBoundaryRecord(rec) {
   if (rec.type !== 'assistant') return false;
   if (rec.isApiErrorMessage === true) return true;
   // ⚠ AND A TURN CAN END WITH NO turn_duration AT ALL. Census over the 25 most
-  // recent real transcripts in ~/.claude/projects/-root-netplan: turn_duration
+  // recent real transcripts in ~/.claude/projects/-root-projects-app: turn_duration
   // is written 1:1 with system/stop_hook_summary — i.e. ONLY when a Stop hook
   // ran — and 14 of those 25 files contain none at all, 11 of them ending on an
   // assistant record carrying `stop_reason: "end_turn"`. On that kind of session
@@ -416,7 +416,7 @@ function paneBlocks(why) {
  *   ────────────────────────────────────────
  *   ❯                                            <- the composer
  *   ────────────────────────────────────────
- *     [jtyper] Fable 5.1 · ctx 43% · main ~5     <- statusline
+ *     [jotter] Fable 5.1 · ctx 43% · main ~5     <- statusline
  *     ⏵⏵ auto mode on (shift+tab to cycle)       <- mode hint
  *
  * `paneReadyForInput` reads the LAST non-blank line, so on this build its

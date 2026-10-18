@@ -158,8 +158,8 @@ private fun MachineCard(
             // ⚠⚠ THE DOT BELONGS TO THE TITLE, NOT TO THE CARD (P-36). Centred
             // against the whole column it landed ON the name for a machine with
             // one capability line and FLOATED between two lines for a machine
-            // with several — so `brokkr` and `huginn` were marked one way and
-            // DATATREEX, PRESTIGE and RAGNAR another, in a list read top to
+            // with several — so `buildbox` and `huginn` were marked one way and
+            // DESKPC, PC01 and RIG another, in a list read top to
             // bottom for exactly that mark. Pinned to the top and centred inside
             // the title's own line box, every card is marked in the same place
             // whatever it goes on to say.

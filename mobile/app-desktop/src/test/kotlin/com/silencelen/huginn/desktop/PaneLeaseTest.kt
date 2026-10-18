@@ -50,8 +50,8 @@ class PaneLeaseTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val holder = PaneLeaseHolder(client(blackHole()), scope)
-            runBlocking { holder.reconcile(PaneLease.Want("jtyper", 120, 40)) }
-            assertEquals("jtyper", holder.heldSession, "the lease must be held before it can be released")
+            runBlocking { holder.reconcile(PaneLease.Want("jotter", 120, 40)) }
+            assertEquals("jotter", holder.heldSession, "the lease must be held before it can be released")
 
             val started = System.nanoTime()
             holder.releaseBlocking(timeoutMs = 300)
@@ -88,7 +88,7 @@ class PaneLeaseTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val holder = PaneLeaseHolder(client(blackHole()), scope)
-            runBlocking { holder.reconcile(PaneLease.Want("jtyper", 120, 40)) }
+            runBlocking { holder.reconcile(PaneLease.Want("jotter", 120, 40)) }
             holder.releaseBlocking(timeoutMs = 300)
             // The mutex must be free and the holder usable afterwards: a quit
             // that is cancelled (close-to-tray) is followed by ordinary work.
@@ -125,17 +125,17 @@ class PaneLeaseTest {
             val holder = PaneLeaseHolder(client(recorder(calls)), scope)
 
             // Same tab, same window, same measurement — only `live` changes.
-            val live = PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+            val live = PaneLease.wanted("jotter", visible = true, wantsGrid = true,
                 live = true, cols = 120, rows = 40)
-            val watching = PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+            val watching = PaneLease.wanted("jotter", visible = true, wantsGrid = true,
                 live = false, cols = 120, rows = 40)
 
             runBlocking { holder.reconcile(live) }
-            assertEquals("jtyper", holder.heldSession)
+            assertEquals("jotter", holder.heldSession)
 
             runBlocking { holder.reconcile(watching) }
             assertNull(holder.heldSession, "dropping out of live view must drop the claim")
-            assertEquals(listOf("DELETE /v1/sessions/jtyper/size"), calls,
+            assertEquals(listOf("DELETE /v1/sessions/jotter/size"), calls,
                 "and the release must reach the daemon, not just the local flag")
         } finally {
             scope.cancel()
@@ -149,7 +149,7 @@ class PaneLeaseTest {
         try {
             val holder = PaneLeaseHolder(client(recorder(calls)), scope)
             runBlocking {
-                holder.reconcile(PaneLease.wanted("jtyper", visible = true, wantsGrid = true,
+                holder.reconcile(PaneLease.wanted("jotter", visible = true, wantsGrid = true,
                     live = false, cols = 120, rows = 40))
             }
             assertNull(holder.heldSession)

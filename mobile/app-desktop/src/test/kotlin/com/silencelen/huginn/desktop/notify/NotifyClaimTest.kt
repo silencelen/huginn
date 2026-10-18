@@ -46,7 +46,7 @@ class NotifyClaimTest {
     // the transition edge, so the loss is permanent per event.
 
     private fun request(key: String = "k") = NotifyRequest(
-        key = key, title = "t", body = "b", urgent = true, target = NavTarget(TargetKind.SESSIONS, "jtyper"),
+        key = key, title = "t", body = "b", urgent = true, target = NavTarget(TargetKind.SESSIONS, "jotter"),
     )
 
     @Test
