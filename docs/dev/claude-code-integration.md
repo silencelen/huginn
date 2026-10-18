@@ -256,6 +256,27 @@ Notes:
   openings (`[SYSTEM NOTIFICATION - NOT USER INPUT]`, image captions and others) that Claude Code
   writes into `user` records. A new wording not on the list shows up as a message the person
   appears to have typed.
+- **Compaction.** A `system`/`compact_boundary` record is followed by a `user` record with
+  `isCompactSummary: true` and `isVisibleInTranscriptOnly: true` and no `isMeta` ("This session is
+  being continued from a previous conversation…"). It is drawn as a folded `compact` note, the send
+  queue skips it (`isConversationalRecord`, `hasHumanUserRecord`), and the Overview does not count
+  it as a message. A compaction while idle adds `system`/`informational` "Compacted while idle,
+  before the prompt cache expired", and its hooks are PreCompact, SessionStart (source `compact`)
+  and PostCompact with no turn and no Stop. Its `trigger` is `auto`, the same as one mid-turn, so
+  the title hook keeps the state PreCompact found and PostCompact restores it.
+- **Subagent hand-back.** A subagent's report is queued as a bare `<agent-message from="<id>">`
+  whose first line is the harness frame (`[Subagent hand-back] … The report follows:`) and whose
+  report lines are indented two spaces. Absorbed into a running turn it leaves `enqueue`, the Agent
+  `tool_result`, a `queued_command` attachment and `remove`, with no `user` record after it.
+  `peerNoteFromQueue` reads it on both queue operations; `peerBody` removes the frame and indent.
+- **Pastes.** A long paste is stored as `<pasted_content id="d842">\n…\n</pasted_content id="d842">`
+  in a `user` record with `origin.kind: "human"`. The id is four hex digits and repeats across
+  messages. The clients fold it (`WrappedText`); `unwrapPasted` drops the tags from chat titles
+  and Overview labels.
+- **Last activity.** A session's `activityAt` is the timestamp of the transcript's last `user`,
+  `assistant` or `system` record (`lastWorkAt`). tmux `window_activity` moves on every redraw and
+  every title the state hook writes, and the transcript's mtime moves without a record being
+  added, so neither is used except for a session with no transcript.
 - **Model discovery.** The scan reads `HUGINN_CLAUDE_BIN`, default
   `/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe` (the global npm install that
   `server/setup.sh` performs). It is cached on the file's size and modification time, so it
@@ -367,6 +388,13 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
 20. **Device argv**: `cd server/appd && HUGINN_DEVICE_BIN=<path to huginn> node --test
     test/device-policy-cases.test.js` runs the shared policy matrix against the Go runner's
     `huginn device print-argv`.
+21. **Compaction, hand-back and paste shapes** (see the notes under
+    [Files Huginn reads](#files-huginn-reads)): the `isCompactSummary` record, the idle-compaction
+    hook order, the `<agent-message>` hand-back frame and indent, and the `<pasted_content>` tags.
+    A change draws the summary or a report as something the person typed, or leaves an idle
+    session reading as working. Tests: `transcript.test.js`, `peer-transcript.test.js`,
+    `typing.test.js`, `sessiongraph.test.js`, `scripts/test-claude-title.sh` (cases 8 to 10), and
+    `WrappedTextTest.kt`.
 
 ### Capturing a new fixture
 

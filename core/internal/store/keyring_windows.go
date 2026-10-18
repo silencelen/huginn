@@ -11,8 +11,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// The Credential Manager calls, with the struct layout proven by
-// proto/windows/s4ucheck.
+// The Credential Manager calls. The struct layout was checked on Windows with a
+// standalone probe before this shipped.
 var (
 	advapi32   = windows.NewLazySystemDLL("advapi32.dll")
 	credWriteW = advapi32.NewProc("CredWriteW")

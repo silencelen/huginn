@@ -142,7 +142,7 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/sessions/<name>/rename` | `{name}`: rename it. |
 | GET | `/v1/sessions/<name>/screen` | The terminal screen. `?cols=&rows=` report your size; `?live=1` also resizes the pane for you (one client at a time holds this lease); `?history=` adds scrollback; `?hash=&wait=` long-polls. |
 | DELETE | `/v1/sessions/<name>/size` | Release your screen-size lease. |
-| GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. |
+| GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. A `system` event with a `body` is a headline over a longer text: `fold: "peer"` is a message from another session or a subagent's report, `fold: "compact"` is the summary written after a compaction. |
 | POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`: type into the session. `text` alone fills the prompt without sending; add `keys: ["Enter"]` to send. Allowed keys: `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `DC`, `IC`, arrows, `Home`, `End`, `PPage`, `NPage`, `C-a` to `C-z`, `M-a` to `M-z`, `F1` to `F12`. |
 | GET | `/v1/sessions/<name>/typing` | What is waiting to be typed into the session, and what holds it. |
 | POST | `/v1/sessions/<name>/answer` | `{option}`, or `{options: [...]}` for a multiple choice: answer the question on screen. `409` if that question is gone. |
@@ -165,7 +165,7 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/chats` | `{mode: "ask" \| "act", model?, effort?, title?, host?}`: create a chat; `host` is a device id to run it on instead of the server. Returns the chat with its `id` (`201`). |
 | GET | `/v1/chats/<id>` | The chat, its transcript and any text still arriving. |
 | PATCH | `/v1/chats/<id>` | `{title}`: rename it. |
-| DELETE | `/v1/chats/<id>` | Delete it. Refused while a run is active. |
+| DELETE | `/v1/chats/<id>` | Delete it. Refused while a run is active. With `?ifEmpty=1`, deletes it only if nothing was ever sent in it and answers `409` otherwise; the clients send this when the person leaves an empty chat. |
 | POST | `/v1/chats/<id>/messages` | `{text, scratchpadId?}`: send a message. `?stream=1` streams the run; otherwise `202`. A message sent while a run is active is queued. |
 | GET | `/v1/chats/<id>/stream` | `?since=<id>`: reattach to a running run. |
 | POST | `/v1/chats/<id>/cancel` | Stop the run. |
@@ -239,7 +239,8 @@ core. They are not meant for scripts.
 | PATCH, DELETE | `/v1/apps/<id>` | Change or remove one. |
 | POST | `/v1/apps/<id>/probe` | Check it again now. |
 | GET | `/v1/apps/<id>/icon` | Its icon. |
-| PUT | `/v1/apps/routes` | The addresses this client reaches the server on (keyed by `X-Huginn-Client`). |
+| PUT | `/v1/apps/routes` | `{addrs, name?}`: the addresses this client reaches the server on (keyed by `X-Huginn-Client`), and the client's name for itself. Each address becomes one every app must answer on; a failing one is listed with `pinnedBy`, the clients that saved it. |
+| DELETE | `/v1/apps/routes/<addr>` | Forget an address every client reported, so apps no longer have to answer there: for a retired address. A client that still saves it reports it again at its next launch. `404` when no client reports it. |
 
 `/v1/consoles` and the paths under it are a deprecated spelling of `/v1/apps`.
 
