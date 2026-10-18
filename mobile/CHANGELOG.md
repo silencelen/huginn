@@ -6,6 +6,13 @@
 - **The Apps page names the device that saved an address that does not answer**, and can forget
   the address. The phone sends its model name with the addresses it saves.
 
+### Security
+- **With the app lock on, a notification reply is not sent while the app is locked.** It is kept
+  as the chat's draft, and chat notifications offer "Open Huginn to reply" instead of a reply box.
+- The app proves the daemon on a loopback route (a USB or ssh forward) before sending the token.
+- Debug builds are signed with a key kept outside the repository. A debug install from an earlier
+  build has to be uninstalled before a new debug build installs.
+
 ## 3.12.1 — 2026-10-18
 
 3.12.0 did not reach the in-app store, which refused an example address in a setup hint: its

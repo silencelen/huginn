@@ -10,9 +10,31 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 
 ## [2.6.2] - 2026-10-18
 
-### Changed
-- No changes to the CLI or the server scripts. The version follows desktop 2.6.2, which carries
-  this core.
+### Security
+- **The appd token never appears on a command line.** The server scripts (`huginn llm`,
+  `devices`, `rounds`, `archive`), the installer's health check, the release scripts and every
+  client verb that goes through the daemon hand it to curl on stdin or through a file
+  descriptor. On a command line any other account on the server could read it.
+- **huginn core and the device runner prove the daemon on loopback too** before sending the
+  token. A loopback `http://` address is used over https on the same port; a server running
+  without TLS needs `HUGINN_APPD_PLAINTEXT=local` on the client.
+- **Tab completion never expands or runs a session name** from the server, in bash and
+  PowerShell. PowerShell inserts session names quoted.
+- An ssh link that ends on the server's loopback no longer enrols a device at `127.0.0.1` unless
+  the server is provably this machine; the Windows client never uses loopback.
+- **Windows local AI:** the ProgramData tree is owned by Administrators and relocked, with every
+  explicit grant removed, before the token is written, and the token is handed to the elevated
+  step from the user's profile instead of being written into ProgramData first.
+- `huginn setup ssh` takes only a plain host name or address from the server for `ssh_config`.
+- `huginn core install --logon password` gives the password to Task Scheduler's COM interface,
+  not to a cmdlet parameter that PowerShell logging records.
+- `huginn console` and `huginn llm` strip terminal control sequences from server and model text.
+- `setup.sh` and `uninstall.sh` write the session account's home as that account, and refuse
+  symlinks and files another account owns there.
+
+### Fixed
+- `huginn devices` lists devices again.
+- `huginn llm` sends prompts larger than 128 KiB.
 
 ## [2.6.1] - 2026-10-18
 

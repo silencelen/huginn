@@ -18,6 +18,15 @@ version number collided. Entries below are reconstructed from the shipping commi
 - `DELETE /v1/apps/routes/<addr>` forgets an address every client reported, so apps no longer have
   to answer there. For a retired address; a client that still saves it reports it again at launch.
 
+### Security
+- The two-minute consent backstop answers only the usage-credit dialog, recognised by its own
+  rows, and never while a permission prompt is on screen. Text the model printed could make it
+  answer a real permission prompt.
+- An approval from a phone or the desktop goes to the Bash request with exactly the command shown;
+  only the dialog's line wrapping is ignored, and case and spaces count.
+- The favicon scan reads only a page's head, with a bounded tag search, so a hostile page cannot
+  stall the daemon.
+
 ## 3.13.1 — 2026-10-18
 
 ### Added

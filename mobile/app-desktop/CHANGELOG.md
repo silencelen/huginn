@@ -8,6 +8,16 @@ Carries core 2.6.2.
 - **The Apps page names the device that saved an address that does not answer**, and can forget
   the address. The desktop sends its computer name with the addresses it saves.
 
+### Security
+- **A `huginn://` answer or undo link acts only with the nonce of the notification that offered
+  it**, within five minutes. Any other link, from a web page or another program, opens the
+  session instead.
+- The app proves the daemon on a loopback address before sending the token.
+- Settings, their salvage copy and the single-instance lock are created owner-only, and the
+  config folder is private on Linux.
+- Local AI on Windows hands the token to the elevated step instead of writing it into ProgramData
+  unelevated.
+
 ### Fixed
 - **The first launch after an install, a reinstall or an update re-maximizes the window once**,
   which clears the garbled or black areas some displays showed until the window was resized by
