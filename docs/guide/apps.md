@@ -30,6 +30,12 @@ belong to a project are grouped under Projects instead; see [Projects](projects.
 
 Open a session to see three tabs.
 
+<p>
+  <img src="../../assets/screenshots/android-conversation.jpg" alt="The Android app's Conversation tab: the user's request, Claude's thinking, and Read, Edit and Bash tool cards, with Running the test suite above" width="280">
+  &nbsp;
+  <img src="../../assets/screenshots/android-screen.jpg" alt="The Android app's Screen tab: the live pane with Claude Code asking whether to run npm run build, and a row of keys a phone keyboard lacks" width="280">
+</p>
+
 ### Conversation
 
 The default tab, built from the session's own Claude Code transcript rather than from the screen:
@@ -136,6 +142,8 @@ sent on its own.
 
 The desktop app runs on huginn core and cannot work without it. If huginn core is not set up or
 not running, the window offers the one button that fixes it.
+
+<img src="../../assets/screenshots/desktop-session.png" alt="The desktop app: the session list, and one session open on its conversation with tool calls while it runs the test suite" width="760">
 
 - **The tray icon is huginn core's.** Its menu has **Open Huginn**, the sessions that need you
   (one click opens each), what is working, **Close to tray**, **Quit Huginn** and **Hide this

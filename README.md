@@ -19,7 +19,7 @@ Claude Code on a server you own, within reach of every device you use.
 </div>
 
 <p align="center">
-  <img src="assets/screenshots/desktop-session.png" alt="The Huginn desktop app: a list of three Claude Code sessions, one open showing its conversation and tool calls while it runs the test suite" width="880">
+  <img src="assets/screenshots/overview.png" alt="The same three Claude Code sessions in the Huginn desktop app and on an unfolded Android phone: the desktop shows one session's conversation and tool calls, the phone the session that is waiting for an answer" width="880">
 </p>
 
 ## What it is
