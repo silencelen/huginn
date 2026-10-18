@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop.notify
 
+import com.silencelen.huginn.desktop.PrivateFiles
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -28,9 +29,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * The record carries a secret alongside the port and every message must open with
  * it. Loopback is not a permission boundary — any local user could otherwise post
- * a `huginn://answer` straight into the running app, which is exactly the hole
- * [Activations.parse]'s fingerprint rule exists to close, reopened one layer down.
- * The file is mode 0600 for the same reason.
+ * URLs straight into the running app, or `!quit` it. (A URL that does arrive is
+ * still only navigation unless it carries one of this run's toast nonces; see
+ * [Activations.resolve].)
+ *
+ * ⚠ THE FILE IS 0600 FROM ITS FIRST BYTE, in a 0700 directory. It used to be
+ * written at the process umask (0644 at the usual 022) and narrowed afterwards,
+ * and an account watching the directory could open it in between and keep
+ * reading the secret through the open descriptor. [PrivateFiles] gives the
+ * create call the mode and swaps the finished file into place.
  */
 class SingleInstance private constructor(
     /** Null when no loopback socket could be bound; the guard then degrades to nothing. */
@@ -129,12 +136,11 @@ class SingleInstance private constructor(
                 .toArray().joinToString("") { ALPHABET[it].toString() }
 
             runCatching {
-                configDir.mkdirs()
-                portFile.writeText("${server.localPort}\n$secret\n")
-                portFile.setReadable(false, false)
-                portFile.setWritable(false, false)
-                portFile.setReadable(true, true)
-                portFile.setWritable(true, true)
+                PrivateFiles.dir(configDir)
+                val record = "${server.localPort}\n$secret\n".toByteArray(Charsets.UTF_8)
+                // Windows keeps the in-place write it always had: no POSIX modes
+                // to get wrong, and the file sits under the user's own profile.
+                if (PrivateFiles.posix) PrivateFiles.replace(portFile, record) else portFile.writeBytes(record)
             }
             return SingleInstance(server, secret, portFile)
         }
