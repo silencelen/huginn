@@ -1,6 +1,6 @@
 package com.silencelen.huginn.desktop
 
-import com.silencelen.huginn.data.HuginnSettings
+import com.silencelen.huginn.data.AppdRoutes
 import com.silencelen.huginn.data.RouteBook
 import com.silencelen.huginn.data.RouteHealth
 import java.io.File
@@ -316,9 +316,9 @@ class DesktopSettingsTest {
     fun `removal keeps the routes, which are not credentials`() {
         // The connect screen would only ask for the same addresses back.
         val settings = DesktopSettings(freshFile())
-        runBlocking { settings.setRouteBook(RouteBook().add("Tailnet", HuginnSettings.DEFAULT_BASE_URL, now = 1)) }
+        runBlocking { settings.setRouteBook(RouteBook().add("Tailnet", "https://192.168.1.20:8787", now = 1)) }
         settings.clearForRemoval()
-        assertEquals(HuginnSettings.DEFAULT_BASE_URL, settings.baseUrlNow())
+        assertEquals("https://192.168.1.20:8787", settings.baseUrlNow())
         assertEquals(listOf("Tailnet"), settings.routeBookNow().routes.map { it.name })
     }
 
@@ -367,9 +367,8 @@ class DesktopSettingsTest {
             """{"baseUrl":"http://192.168.1.20:8787","token":"t","routePinned":true,"clientId":"desktop-kt-old"}""",
         )
         val book = DesktopSettings(file).routeBookNow()
-        // The second seed is the LAN address since the tailnet one was retired (AppdRoutes.RETIRED).
-        assertEquals(listOf("Yggdrasil", "LAN"), book.routes.map { it.name })
-        assertEquals("yggdrasil", book.activeId)
+        assertEquals(listOf("192.168.1.20:8787"), book.routes.map { it.name }, "the stored address, and nothing added")
+        assertEquals(AppdRoutes.MIGRATED_ID, book.activeId)
         assertEquals("https://192.168.1.20:8787", book.activeUrl, "the same address, upgraded (docs/TLS.md)")
         assertFalse(book.autoSwitch, "appd_route_pinned became autoSwitch=false")
     }

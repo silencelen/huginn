@@ -145,12 +145,12 @@ class SettingsStoreRoutesTest {
         // `pinned_routes` key at all. That absence is the migration trigger, and
         // adding two keys beside it must not have moved it.
         val p = mutablePreferencesOf()
-        p[stringPreferencesKey("base_url")] = "http://100.101.102.103:8787"
+        p[stringPreferencesKey("base_url")] = "http://192.168.1.20:8787"
         p[booleanPreferencesKey("appd_route_pinned")] = true
         val migrated = SettingsStore.routeBookFrom(p)
-        assertEquals(AppdRoutes.migrate("http://100.101.102.103:8787", true), migrated)
+        assertEquals(AppdRoutes.migrate("http://192.168.1.20:8787", true), migrated)
         assertEquals(false, migrated.autoSwitch)
-        assertTrue("the built-ins are seeded", migrated.routes.isNotEmpty())
+        assertTrue("the stored address is pinned", migrated.routes.isNotEmpty())
     }
 
     /** docs/TLS.md rule 6: an install stored on plain http reads back as https. */

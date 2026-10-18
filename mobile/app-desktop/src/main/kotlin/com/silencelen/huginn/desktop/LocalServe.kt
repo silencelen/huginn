@@ -1,5 +1,7 @@
 package com.silencelen.huginn.desktop
 
+import com.silencelen.huginn.update.GithubReleaseIndex
+import com.silencelen.huginn.update.GithubReleases
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -183,24 +185,40 @@ object LocalServe {
     fun fetchTmpName(f: String) = "$f.tmp.js"
 
     /**
+     * Where one client file is fetched from: [tag] of the pinned public repo, a
+     * tagged release, never a moving branch.
+     */
+    fun clientFileUrl(tag: String, file: String): String =
+        "https://raw.githubusercontent.com/${GithubReleases.REPO}/$tag/client/$file"
+
+    /**
      * Fetch the manager, the shim and the device runner when absent — the same
      * three files, from the same trust root, as the CLI's `huginn local on`
-     * (the pinned public repo over TLS), and with the same gate: a download
-     * that fails `node --check` is refused, never installed.
+     * (the newest cli-v release of the pinned public repo, over TLS), and with
+     * the same gate: a download that fails `node --check` is refused, never
+     * installed.
      */
     suspend fun fetchManager(onLine: (String) -> Unit): Boolean = withContext(Dispatchers.IO) {
         // NOT `?: run {}`: a bare `run` in this object is the member verb below.
         val node = nodeBin()
         if (node == null) { onLine(NODE_MISSING); return@withContext false }
-        for (f in listOf("huginn-local", "huginn-llm-shim", "huginn-device")) {
+        val missing = listOf("huginn-local", "huginn-llm-shim", "huginn-device")
+            .filterNot { File(huginnDir(), it).let { d -> d.isFile && d.length() > 0 } }
+        if (missing.isEmpty()) return@withContext true
+        val tag = runCatching {
+            GithubReleaseIndex.newest(GithubReleases().list(60), GithubReleases.CLI_TAG_PREFIX)?.tagName
+        }.getOrNull()
+        if (tag == null) {
+            onLine("could not read the newest huginn release from GitHub — check this computer's internet access, then try again")
+            return@withContext false
+        }
+        for (f in missing) {
             val dest = File(huginnDir(), f)
-            if (dest.isFile && dest.length() > 0) continue
             dest.parentFile?.mkdirs()
             val tmp = File(huginnDir(), fetchTmpName(f))
             onLine("fetching $f…")
             try {
-                val conn = URI("https://raw.githubusercontent.com/silencelen/huginn/main/client/$f")
-                    .toURL().openConnection() as HttpURLConnection
+                val conn = URI(clientFileUrl(tag, f)).toURL().openConnection() as HttpURLConnection
                 conn.connectTimeout = 10_000
                 conn.readTimeout = 30_000
                 check(conn.responseCode == 200) { "answered ${conn.responseCode}" }

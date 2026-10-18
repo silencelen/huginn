@@ -4,73 +4,14 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 
 /**
- * One of the two addresses this app SHIPPED with, for seeding and migration.
- *
- * There were two because only ONE VpnService can hold the tunnel slot at a time:
- * while Tailscale is connected the tailnet address is the reachable one, and
- * while Yggdrasil (the Nebula mesh) is connected the LAN address is, reached
- * through the mesh gateway on pve1. Neither is reachable from the other's
- * tunnel — which is the whole reason this app has ever had more than one address,
- * and now the reason a user can pin as many as they need.
- *
- * ⚠ NOT A UI TYPE. It carried a `hint` ("huginn's tailnet address") that a row on
- * the phone printed beside the route name; nothing prints it now, because a route
- * has the owner's own name and the app has no business annotating it.
- */
-data class AppdRoute(val label: String, val url: String)
-
-/**
- * The two addresses this app used to be built around — now SEED AND MIGRATION
- * ONLY.
- *
- * Routes are the owner's list ([RouteBook]), not a compile-time constant, and
- * nothing in the UI names Tailscale or Yggdrasil any more. What survives here is
- * the pair of addresses an upgrading install has to be handed so that upgrading
- * changes nothing about where the app talks — see [migrate], whose table is the
- * whole point of this file's continued existence.
+ * The upgrade from a store written before the route book existed. Nothing else:
+ * routes are the user's own list ([RouteBook]), and this app ships with no
+ * address of its own.
  */
 object AppdRoutes {
     /**
-     * huginn's LAN address — the one every client at home reaches directly since
-     * the LAN-first change of 2026-09-29, and the address the headless runners
-     * dial. It replaced the tailnet address as the first seed when Tailscale was
-     * retired (see [RETIRED]).
-     */
-    val LAN = AppdRoute(label = "LAN", url = "https://192.168.10.20:8787")
-
-    /**
-     * Addresses this app ONCE shipped with that no longer answer anything: the
-     * tailnet address died with Tailscale on 2026-09-30. An upgrade from an
-     * install still pointed at one must NOT carry it forward as the active
-     * route — the install would come up "connected" to nothing and stay there
-     * with autoSwitch never consulted — so [migrate] treats it like a refused
-     * address: dropped, named in [RouteBook.droppedUrl], and the live seeds
-     * offered with no active route, which is what lets the auto-switch pick one
-     * that answers.
-     */
-    val RETIRED: Set<String> = setOf("https://100.101.102.103:8787")
-
-    /** Whether [url] is one of [RETIRED], however an older install spelled it. */
-    fun isRetired(url: String): Boolean = RouteGuard.normalize(url) in RETIRED
-
-    /**
-     * huginn's VLAN-2 address. Off-LAN devices reach it through the yggdrasil
-     * LAN gateway.
-     *
-     * ⚠ HTTPS, like every seed since appd 3.11 (TLS.md). These were `http://`
-     * because the mesh hop was encrypted anyway; the LAN leg behind the gateway
-     * never was, and a public client cannot assume a mesh at all. An install
-     * that stored the http form is upgraded by [RouteGuard.normalize], and
-     * [match] compares normalized forms, so it still matches.
-     */
-    val YGGDRASIL = AppdRoute(label = "Yggdrasil", url = "https://192.168.1.20:8787")
-
-    val ALL = listOf(LAN, YGGDRASIL)
-
-    /**
-     * The id a migrated hand-typed address gets. Fixed rather than minted so the
-     * migration table is a table — the same input gives the same book, which is
-     * what [MigrationTest] can hold to account.
+     * The id a migrated address gets. Fixed rather than minted so the migration
+     * table is a table — the same input gives the same book.
      */
     const val MIGRATED_ID: String = "custom"
 
@@ -82,107 +23,46 @@ object AppdRoutes {
      * READ until the first save writes the book down. A wall-clock timestamp
      * would make two reads of the same unchanged bytes produce two different
      * books, which breaks flow equality and would have every collector rebuild
-     * on every emission. Zero is also the honest answer: nobody added these, an
-     * upgrade did.
+     * on every emission.
      */
     const val MIGRATED_AT: Long = 0
 
     fun normalize(url: String): String = url.trim().trimEnd('/')
 
-    /** The predefined route matching [url], or null when it's a custom address. */
-    fun match(url: String): AppdRoute? {
-        val n = RouteGuard.normalize(url)
-        return ALL.firstOrNull { RouteGuard.normalize(it.url) == n }
-    }
-
     /**
-     * The seed pin for a built-in, with the label as its name and a stable id.
-     *
-     * ⚠ `byHand = false`. Nobody typed these: they are literals compiled into a
-     * PUBLIC app, over plain http, and an install that upgrades gets both of them
-     * whether or not the machine they name is the one it talks to. That is
-     * exactly the shape [RouteResolver] refuses to adopt on its own.
-     */
-    fun seed(route: AppdRoute, now: Long, order: Int = 0): PinnedRoute {
-        val url = normalize(route.url)
-        return PinnedRoute(
-            id = route.label.lowercase(),
-            name = route.label,
-            url = url,
-            kind = RouteGuard.kindOf(url),
-            order = order,
-            addedAt = now,
-            byHand = false,
-        )
-    }
-
-    /**
-     * Turns what an older install stored into a route book, with NO user action
-     * and no change in behaviour.
-     *
-     * The rules, and why each one is the way it is:
+     * Turns what an older install stored into a route book, with no user action.
      *
      * | stored | becomes |
      * |---|---|
-     * | `base_url` matching a built-in | that built-in as pin #1, named "Tailscale" / "Yggdrasil" |
-     * | `base_url` matching nothing | pin #1 named after its own host — the owner's chosen address stays chosen |
-     * | `base_url` the guard refuses | NOT pinned, NOT replaced: carried back as [RouteBook.droppedUrl] with no active route |
-     * | `base_url` in [RETIRED] | the same: dropped and named, the live seeds offered, nothing active |
-     * | the built-ins not already emitted | appended, in [ALL] order |
+     * | `base_url` the guard allows | the only pin, active, named after its own host |
+     * | `base_url` the guard refuses | NOT pinned: carried back as [RouteBook.droppedUrl], nothing active |
      * | `base_url` absent (fresh install) | an EMPTY book; the first address saved becomes pin #1 |
      * | `appd_route_pinned` = true | `autoSwitch = false` — the same refusal to move, under its new name |
      *
-     * The resulting order reproduces the old `candidates()` EXACTLY (active
-     * first, then the built-ins in [ALL] order), so the first route the resolver
-     * picks after an upgrade is the one it would have picked before it. That is
-     * not a coincidence to be preserved by hand; it is why the order is spelled
-     * this way.
+     * An upgrade never ADDS an address the user did not have. Builds before this
+     * one appended two addresses compiled into the app; an address belongs in a
+     * person's list only when that person put it there.
      */
     fun migrate(storedBaseUrl: String?, routePinned: Boolean, now: Long = MIGRATED_AT): RouteBook {
-        // ⚠ THE GUARD'S normalize, NOT THIS FILE'S. A trim-and-slash normalize
-        // misses every other way 2.x could spell an address it still connected
-        // with — `192.168.1.20:8787` (HuginnClient prepends the scheme),
-        // `HTTP://…` — so `match()` failed and the filter kept the built-in as
-        // well: three pins, two of them the same daemon.
+        // The guard's normalize, not this file's: `192.168.1.20:8787` (the old
+        // client prepended the scheme) and `HTTP://…` were storable and worked.
         val stored = storedBaseUrl?.let { RouteGuard.normalize(it) }?.takeIf { it.isNotBlank() }
             ?: return RouteBook(autoSwitch = !routePinned)
 
-        // ⚠ THE ONE ROW THAT IS NOT BEHAVIOUR-IDENTICAL, AND CANNOT BE. The phone's
-        // old "Base URL" was free text with no validation, so a plain-http
-        // HOSTNAME both stored and worked — `huginn.lan`, the short MagicDNS name
-        // `huginn`, a DDNS name, a public literal, an address with a path. The
-        // guard refuses all of those and is right to (a bearer in cleartext to a
-        // name is exactly what it exists to stop), but the old behaviour was to
-        // drop it silently in `normalized()` and let `activeId` fall back to a
-        // hard-coded built-in — an address the owner never chose, reached without
-        // a word, and with `appd_route_pinned` mapping to autoSwitch=false so it
-        // was never even probed. Now: the address is carried back as
-        // `droppedUrl` and the book is left with NO active route.
-        val builtIn = match(stored)?.let { seed(it, now) }
-        // A RETIRED address is handled like a refused one — see RETIRED.
-        val first = builtIn ?: if (RouteGuard.isAllowed(stored) && !isRetired(stored)) {
-            PinnedRoute(
-                id = MIGRATED_ID,
-                name = RouteBook.defaultName(stored),
-                url = stored,
-                kind = RouteGuard.kindOf(stored),
-                addedAt = now,
-            )
-        } else null
-        val rest = ALL.filter { RouteGuard.normalize(it.url) != stored }.map { seed(it, now) }
-        if (first == null) {
-            return RouteBook(
-                routes = rest,
-                activeId = null,
-                autoSwitch = !routePinned,
-                droppedUrl = stored,
-            ).normalized()
+        // The old "Base URL" was free text with no validation, so an address the
+        // guard refuses could be stored and could even have worked. It is named,
+        // never silently replaced, and nothing becomes active in its place.
+        if (!RouteGuard.isAllowed(stored)) {
+            return RouteBook(activeId = null, autoSwitch = !routePinned, droppedUrl = stored).normalized()
         }
-        return RouteBook(
-            routes = listOf(first) + rest,
-            activeId = first.id,
-            autoSwitch = !routePinned,
-        ).normalized()
+        val pin = PinnedRoute(
+            id = MIGRATED_ID,
+            name = RouteBook.defaultName(stored),
+            url = stored,
+            kind = RouteGuard.kindOf(stored),
+            addedAt = now,
+        )
+        return RouteBook(routes = listOf(pin), activeId = pin.id, autoSwitch = !routePinned).normalized()
     }
 }
 
