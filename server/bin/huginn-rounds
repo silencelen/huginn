@@ -41,8 +41,16 @@ _lib="$(dirname "$(readlink -f "$0")")/../lib"
 
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-rounds: no appd token at $TOKEN_FILE" >&2; exit 1; }
+TOKEN="$(cat "$TOKEN_FILE")"
+# ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
+# every account on this host and the token is root-equivalent, so an
+# `-H "Authorization: Bearer ..."` argument handed it to anyone who looked while
+# curl ran. The header reaches curl through a file descriptor instead (-H @file,
+# curl 7.55+), and printf is a bash builtin, so no process carries the token in
+# its arguments. scripts/test-no-token-argv.sh holds every script to this.
+appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 
-BODY="$(curl -sf -m 10 -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+BODY="$(appd_curl -sf -m 10 \
   http://127.0.0.1:8787/v1/rounds 2>/dev/null)" || {
   echo "huginn-rounds: huginn-appd is not answering on 127.0.0.1:8787" >&2
   echo "               (systemctl status huginn-appd)" >&2

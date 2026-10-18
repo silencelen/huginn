@@ -28,6 +28,15 @@ TOKEN_FILE=/etc/huginn-appd/token
 BASE_URL=${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
 FEED=/v1/desktop-kt
 KEEP=2
+# ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
+# every account on this host and the token is root-equivalent, and step 7
+# downloads every artifact - hundreds of MB - with it, so an `-H "Authorization:
+# Bearer ..."` argument stayed on display for minutes. The header reaches curl
+# through a file descriptor instead (-H @file, curl 7.55+), and printf is a bash
+# builtin, so no process carries the token in its arguments. TOKEN is read where
+# it is needed (steps 1 and 7). scripts/test-no-token-argv.sh holds every script
+# to this.
+appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 
 # The Windows JDK whose jmods the cross-jlink links against and whose jpackage.exe
 # runs under wine. Cached OUTSIDE the build tree on purpose: the spike kept it in
@@ -223,11 +232,12 @@ echo "  autostart: app writes '$KT_LNK' in Startup, uninstaller removes it"
 # "update" that walks it backwards. version.txt is a one-line file edited by
 # hand and releases get cut from old checkouts; neither mistake is exotic.
 if [ -f "$TOKEN_FILE" ]; then
+  TOKEN=$(cat "$TOKEN_FILE")
   # `|| ''` because a manifest WITHOUT a version field makes `node -p` print the
   # four-letter word "undefined", which is neither empty nor a version, and every
   # test downstream of here would then be reasoning about a string that means
   # nothing.
-  LIVE=$(curl -sf -H "Authorization: Bearer $(cat "$TOKEN_FILE")" \
+  LIVE=$(appd_curl -sf \
     "$BASE_URL$FEED/manifest" 2>/dev/null | node -p \
     "try{JSON.parse(require('fs').readFileSync(0,'utf8')).version||''}catch{''}" || true)
   # An empty LIVE is the first release into a fresh channel — nothing to compare.
@@ -836,14 +846,14 @@ EOF
 # --------------------------------------------------- 7. verify through the wire
 echo "[7/7] verify through the wire"
 TOKEN=$(cat "$TOKEN_FILE")
-SERVED=$(curl -sf -H "Authorization: Bearer $TOKEN" "$BASE_URL$FEED/manifest" \
+SERVED=$(appd_curl -sf "$BASE_URL$FEED/manifest" \
   | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
 [ "$SERVED" = "$VERSION" ] || { echo "FAIL: served manifest says '$SERVED'" >&2; exit 1; }
 for f in "$DIST/$DEB" "$DIST/$TGZ" "$DIST/$ARCHPKG" "$DIST/$EXE"; do
   [ -f "$f" ] || continue
   b=$(basename "$f")
-  LEN=$(curl -sf -o /dev/null -w '%{size_download}' \
-    -H "Authorization: Bearer $TOKEN" "$BASE_URL$FEED/$b")
+  LEN=$(appd_curl -sf -o /dev/null -w '%{size_download}' \
+    "$BASE_URL$FEED/$b")
   WANT=$(stat -c %s "$f")
   [ "$LEN" = "$WANT" ] || { echo "FAIL: $b served $LEN bytes, built $WANT" >&2; exit 1; }
   echo "  $b OK ($LEN bytes)"
