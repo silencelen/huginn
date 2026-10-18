@@ -652,6 +652,7 @@ case "$cmd" in
   *'/etc/huginn-appd/token'*) echo 'gate-token' ;;
   *SSH_CONNECTION*)           echo "$SSHCONN" ;;
   *'ip -4'*)                  [ -n "${HOSTV4:-}" ] && echo "$HOSTV4" ;;
+  *'/etc/machine-id'*)        [ -n "${HOSTMID:-}" ] && echo "$HOSTMID" ;;
 esac
 exit 0
 USSH
@@ -663,9 +664,10 @@ url_home () {   # a home whose ~/.huginn already holds runners that print argv
     printf 'console.log(process.argv.slice(2).join(" "));\n' > "$UT/home/.huginn/$f"
   done
 }
-url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4
+url_sh () {   # $1 = the huginn command, $2 = SSH_CONNECTION, $3 = the host's IPv4,
+              # $4 = the host's /etc/machine-id (none when empty)
   url_home
-  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}"
+  ( export PATH="$UT:$PATH" HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HOSTMID="${4:-}"
     export HUGINN_LOCAL_DIR="$UT/home/localdir"
     . "$PWD/client/huginn.sh" >/dev/null 2>&1
     eval "$1" ) 2>&1
@@ -682,21 +684,49 @@ U4=$(url_sh 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '10.0.0.5')
 grep -q -- '--url https://192.168.1.20:8787' <<<"$U4" \
   && ok "sh: an IPv4 ssh path is untouched" || bad "sh: device on over IPv4 passed: $U4"
 # ⚠ AND https:// FOR ANY OF THEM (appd 3.11, docs/dev/protocol-tls.md rule 6): the runner
-# carries the root-equivalent token, and the address is a LAN/mesh one. Only the
-# host's own loopback stays http://, because plain HTTP never leaves the box.
-ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
-grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB" \
-  && ok "sh: a loopback ssh path stays http:// (the one cleartext case)" || bad "sh: loopback passed: $ULB"
-ULB6=$(url_sh 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
-grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB6" \
-  && ok "sh: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "sh: ::1 passed: $ULB6"
+# carries the root-equivalent token, and the address is a LAN/mesh one. Only a
+# host PROVED to be this machine gets http://127.0.0.1, because plain HTTP to our
+# own loopback never leaves the box.
+#
+# ⚠ AND A LOOPBACK LINK IS NOT THAT PROOF. A tunnel or proxy that ends on the
+# HOST's loopback (a reverse ssh tunnel, cloudflared, sslh) makes sshd report
+# 127.0.0.1 as well, and a 127.* answer used to become http://127.0.0.1:8787 on
+# the spot: a laptop enrolled at ITS OWN loopback, its runner sending the token
+# in cleartext every 15 seconds to whatever bound that port there. So loopback is
+# kept only when the host's machine-id is this machine's; the ps1 client, whose
+# host is never this machine, never builds a loopback url at all.
+if [ -s /etc/machine-id ]; then HEREMID=$(tr -d '[:space:]' < /etc/machine-id); else HEREMID=; fi
+# Differs from this machine's in every digit, so it can never match it.
+OTHERMID=$(printf '%s' "${HEREMID:-0123456789abcdef0123456789abcdef}" | tr '0-9a-f' '1-9a-f0')
+for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22'; do
+  ULB=$(url_sh 'huginn device on' "$conn" '192.0.2.10' "$OTHERMID")
+  grep -q -- '--url https://192.0.2.10:8787' <<<"$ULB" && ! grep -qE '127\.0\.0\.|\[::1\]' <<<"$ULB" \
+    && ok "sh: a loopback link ($conn) from ANOTHER machine dials the host's own address" \
+    || bad "sh: a loopback link from another machine passed: $ULB"
+done
+ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '192.0.2.10' '')
+grep -q -- '--url https://192.0.2.10:8787' <<<"$ULB" \
+  && ok "sh: and so does one whose host has no machine-id to compare" || bad "sh: loopback, no host machine-id, passed: $ULB"
+ULB=$(url_sh 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '' "$OTHERMID")
+! grep -q '^on ' <<<"$ULB" && grep -q 'say it yourself: huginn device on --url' <<<"$ULB" \
+  && ok "sh: and with no address to be had, it refuses and names --url" || bad "sh: loopback, no host v4, said: $ULB"
+if [ -n "$HEREMID" ]; then
+  for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22' ''; do
+    ULB=$(url_sh 'huginn device on' "$conn" '192.0.2.10' "$HEREMID")
+    grep -q -- '--url http://127.0.0.1:8787' <<<"$ULB" \
+      && ok "sh: a host that IS this machine stays http://127.0.0.1 (link: '${conn:-none}')" \
+      || bad "sh: same machine, link '${conn:-none}', passed: $ULB"
+  done
+else
+  skip "sh: same-machine loopback (no /etc/machine-id here)"
+fi
 UL=$(url_sh 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
 grep -q -- '--url https://10.0.0.5:8787' <<<"$UL" \
   && ok "sh: and huginn local on builds the same url" || bad "sh: local on passed: $UL"
 if command -v pwsh >/dev/null 2>&1; then
   url_ps () {
     url_home
-    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
+    HOME="$UT/home" SSHCONN="$2" HOSTV4="${3:-}" HOSTMID="${4:-}" HUGINN_LOCAL_DIR="$UT/home/localdir" \
       PATH="$UT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'
   }
   P6=$(url_ps 'huginn device on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
@@ -710,12 +740,21 @@ if command -v pwsh >/dev/null 2>&1; then
   P4=$(url_ps 'huginn device on' '192.168.1.50 5000 192.168.1.20 22' '')
   grep -q -- '--url https://192.168.1.20:8787' <<<"$P4" \
     && ok "ps1: an IPv4 ssh path is untouched" || bad "ps1: device on over IPv4 passed: $P4"
-  PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '10.0.0.5')
-  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB" \
-    && ok "ps1: a loopback ssh path stays http:// (the one cleartext case)" || bad "ps1: loopback passed: $PLB"
-  PLB6=$(url_ps 'huginn device on' '::1 5000 ::1 22' '10.0.0.5')
-  grep -q -- '--url http://127.0.0.1:8787' <<<"$PLB6" \
-    && ok "ps1: and ::1 maps to http://127.0.0.1 (appd binds IPv4)" || bad "ps1: ::1 passed: $PLB6"
+  # Never loopback from this client - not even when the machine-ids match, which
+  # only pwsh on Linux could ever see.
+  for conn in '127.0.0.1 5000 127.0.0.1 22' '::1 5000 ::1 22' ''; do
+    for whose in another this; do
+      if [ "$whose" = this ]; then mid="$HEREMID"; else mid="$OTHERMID"; fi
+      [ -n "$mid" ] || continue
+      PLB=$(url_ps 'huginn device on' "$conn" '192.0.2.10' "$mid")
+      grep -q -- '--url https://192.0.2.10:8787' <<<"$PLB" && ! grep -qE '127\.0\.0\.|\[::1\]' <<<"$PLB" \
+        && ok "ps1: link '${conn:-none}', $whose machine's id: the host's own address, never loopback" \
+        || bad "ps1: link '${conn:-none}', $whose machine's id, passed: $PLB"
+    done
+  done
+  PLB=$(url_ps 'huginn device on' '127.0.0.1 5000 127.0.0.1 22' '' "$OTHERMID")
+  ! grep -q '^on ' <<<"$PLB" && grep -q 'say it yourself: huginn device on --url' <<<"$PLB" \
+    && ok "ps1: and with no address to be had, it refuses and names --url" || bad "ps1: loopback, no host v4, said: $PLB"
   PL=$(url_ps 'huginn local on' 'fd00::2 5000 fd00::1 22' '10.0.0.5')
   grep -q -- '--url https://10.0.0.5:8787' <<<"$PL" \
     && ok "ps1: and huginn local on builds the same url" || bad "ps1: local on passed: $PL"

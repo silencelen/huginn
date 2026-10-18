@@ -167,7 +167,7 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # address THIS machine just reached the host at, which is better than choosing on
 # the device's behalf between a LAN address, a tailnet name and whatever
 # `hostname` happens to say. $1 = the ssh alias; prints https://<authority>:8787
-# (http:// only for the host's own loopback).
+# (http://127.0.0.1 only when the host is proved to be this machine).
 #
 # ⚠ HTTPS, BECAUSE THE RUNNER CARRIES THE TOKEN (appd 3.11, docs/dev/protocol-tls.md). The
 # runner sends /etc/huginn-appd/token - root-equivalent on the host - on every
@@ -207,28 +207,39 @@ _huginn_device_runner() { printf '%s' "$HOME/.huginn/huginn-device"; }
 # does have to dial the daemon directly. A device enrolled from here and one
 # enrolled from an app can therefore hold different addresses for the same
 # daemon; fix that in the app's route book, or with `--url` here.
+#
+# ⚠ A LOOPBACK ADDRESS ON THE LINK IS NOT PROOF THAT THE HOST IS THIS MACHINE.
+# A tunnel or proxy that ends on the host's own loopback (a reverse ssh tunnel,
+# cloudflared, frp, sslh) makes sshd report 127.0.0.1 too - and a 127.* answer
+# used to become http://127.x:8787 on the spot, so a laptop was enrolled at ITS
+# OWN loopback and the runner sent the root-equivalent token in cleartext, every
+# 15 seconds, to whatever local account or sandboxed app bound that port. So a
+# loopback answer gets the same machine-id test as no answer at all, and when
+# the test does not prove it, it is no answer: the host is asked for an address
+# it holds, or the caller refuses and names --url.
 _huginn_srv_url() {
   local H="$1" a v4 there here
   a="$(ssh -T "$H" 'echo $SSH_CONNECTION' 2>/dev/null | awk '{print $3}' | tr -d '[:space:]')"
   case "$a" in
-    '')
-      # Nothing to learn from the link. Is the host this very machine?
+    ''|127.*|::1|::ffff:127.*)
+      # Nothing to learn from the link, or only that it ended on the host's own
+      # loopback. Either way: is the host this very machine? Only then is the
+      # daemon on OUR loopback, where plain HTTP never leaves the box - and it
+      # is 127.0.0.1 whatever the link said, because that is the address appd
+      # always answers on (::1 too: appd binds IPv4, see the bracketing note).
       there="$(ssh -T "$H" 'cat /etc/machine-id 2>/dev/null' 2>/dev/null | tr -d '[:space:]')"
       here="$(cat /etc/machine-id 2>/dev/null | tr -d '[:space:]')"
       if [ -n "$there" ] && [ "$there" = "$here" ]; then
         printf 'http://127.0.0.1:8787'; return 0
-      fi ;;
-    # The host's own loopback (an alias pointing at this machine): plain HTTP
-    # is the one thing that stays, because it never leaves the box. ::1 maps to
-    # 127.0.0.1 because appd binds IPv4 (see the bracketing note above).
-    127.*) printf 'http://%s:8787' "$a"; return 0 ;;
-    ::1) printf 'http://127.0.0.1:8787'; return 0 ;;
+      fi
+      a= ;;
     *:*) ;;
     *) printf 'https://%s:8787' "$a"; return 0 ;;
   esac
   v4="$(ssh -T "$H" "ip -4 -o addr show scope global 2>/dev/null | awk '{print \$4}' | cut -d/ -f1 | head -1" \
         2>/dev/null | tr -d '[:space:]')"
   case "$v4" in
+    127.*) ;;   # never a routable answer, whatever the host printed
     [0-9]*.[0-9]*.[0-9]*.[0-9]*) printf 'https://%s:8787' "$v4"; return 0 ;;
   esac
   [ -n "$a" ] || return 1
