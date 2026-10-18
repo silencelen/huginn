@@ -41,7 +41,8 @@ function lift() {
     pick('function humanizeUserText(t) {', '\n}\n'),
     'this.humanizeUserText = humanizeUserText;',
   ].join('\n');
-  const box = {};
+  // The daemon has it from lib/transcript; the lifted function needs it too.
+  const box = { unwrapPasted: require('../lib/transcript').unwrapPasted };
   vm.runInNewContext(code, box);
   return box.humanizeUserText;
 }
@@ -75,4 +76,9 @@ test('a pill line pasted back into a message, in either spelling, is left as typ
   ]) {
     assert.equal(humanize(`earlier I sent\n${pill}`), `earlier I sent\n${pill}`);
   }
+});
+
+test('a pasted block titles a chat with what was pasted, not its tags', () => {
+  const pasted = '\n\n<pasted_content id="d842">\nbug: empty chats should auto delete\n</pasted_content id="d842">\n';
+  assert.equal(humanize(pasted), 'bug: empty chats should auto delete');
 });

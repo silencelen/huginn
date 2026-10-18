@@ -54,7 +54,7 @@ object RouteGuard {
      * `https://` or the machine's IP would have been accepted.
      */
     const val REFUSED: String =
-        "refusing that server address — it must be a bare host and port, like 192.168.1.5:8787 " +
+        "refusing that server address — it must be a bare host and port, like 192.0.2.10:8787 " +
             "or https://huginn.example.net:8787 (huginn always connects over https, except to this machine)"
 
     /** The address as it is stored: trimmed, no trailing slash, scheme explicit. */
