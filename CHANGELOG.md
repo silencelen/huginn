@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.1] - 2026-10-18
+
+### Fixed
+- **A session that compacted while idle no longer reads as working until the next prompt.** The
+  state hook keeps the state a compaction found and puts it back when the compaction ends.
+- The console counts projects, not the sessions inside them ("more in 2 projects").
+
 ## [2.6.0] - 2026-10-18
 
 ### Added

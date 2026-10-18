@@ -122,7 +122,10 @@ object SetupScaffoldRules {
 
     /** One line under the title: what the step will actually DO, not what it is about. */
     fun blurb(step: SetupStep): String = when (step) {
-        SetupStep.ROUTE -> "The address of your huginn host, for example 192.168.1.10 or huginn.example.net."
+        // ⚠ NO IP LITERAL IN THE EXAMPLE. The store's string scan reads any
+        // private address in the APK as an endpoint the app talks to, and app
+        // 3.12.0 was held at the last good build for exactly this sentence.
+        SetupStep.ROUTE -> "The address of your huginn host: its IP address, or a name such as huginn.example.net."
         SetupStep.TOKEN ->
             "On the huginn host, sudo cat /etc/huginn-appd/token prints it. Connecting hands it to " +
                 "huginn core, which keeps it."

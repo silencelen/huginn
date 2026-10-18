@@ -1,5 +1,27 @@
 # Huginn Desktop changelog
 
+## 2.6.1
+
+Carries core 2.6.1.
+
+### Added
+- `HUGINN_RENDER_API` (for example `OPENGL` or `SOFTWARE`) picks the renderer for a display that
+  draws the window wrongly. The log records the renderer, scale and size at start.
+
+### Changed
+- **Long blocks fold.** A paste, a message from another session, a subagent's report and the
+  summary written after a compaction each show as a card with a label and the first line. Click
+  to open it.
+- **Leaving a chat you never wrote in deletes it.** A chat with an unsent draft is kept.
+- The Sessions list counts projects ("in 2 projects"), not the sessions inside them.
+
+### Fixed
+- **The window repaints itself in the first seconds after it opens**, to clear the garbled or
+  black areas some displays showed after an install or update until the window was resized.
+- Pasted text no longer shows its `<pasted_content>` tags.
+- A session's time is its last message or tool call, not the last time its screen redrew. The
+  tooltip reads "Last activity".
+
 ## 2.6.0
 
 Carries core 2.6.0.

@@ -9,6 +9,28 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.1 — 2026-10-18
+
+### Added
+- Transcript notes carry `body` and `fold` (`peer` or `compact`): the whole message from another
+  session or a subagent, and the summary written after a compaction, for clients that fold them.
+- `DELETE /v1/chats/:id?ifEmpty=1` deletes a chat only when nothing was sent in it, and answers
+  409 otherwise. The clients send it when the person leaves an empty chat.
+
+### Changed
+- A session's `activityAt` is its transcript's last message, tool call or turn end, and also the
+  pane's output while it is running. It was the pane's last output, which every redraw moved.
+  `paneActivityAt` carries that value.
+
+### Fixed
+- **The summary after a compaction is a folded note, not a message from the person.** The send
+  queue no longer counts it as the person typing, which held automated sends after a compaction
+  and then dropped them.
+- A subagent's report absorbed into a running turn is a note, not its raw `<agent-message>` text
+  in a bubble. Its harness frame and indent are removed.
+- Chat titles and Overview labels drop `<pasted_content>` tags. The Overview no longer counts the
+  compaction summary as a message.
+
 ## 3.13.0 — 2026-10-17
 
 ### Added

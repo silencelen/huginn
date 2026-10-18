@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## 3.12.1 — 2026-10-18
+
+3.12.0 did not reach the in-app store, which refused an example address in a setup hint: its
+changes ship here.
+
+### Changed
+- **Long blocks fold.** A paste, a message from another session, a subagent's report and the
+  summary written after a compaction each show as a card with a label and the first line. Tap to
+  open it.
+- **Leaving a chat you never wrote in deletes it.** A chat with an unsent draft is kept.
+- The Sessions page counts projects ("2 projects"), not the sessions inside them.
+
+### Fixed
+- Pasted text no longer shows its `<pasted_content>` tags.
+- A session's time is its last message or tool call, not the last time its screen redrew.
+
 ## 3.12.0 — 2026-10-18
 
 ### Changed
