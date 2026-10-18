@@ -7,6 +7,10 @@
 # Default TERM when the SSH client didn't send one (Windows OpenSSH has no $TERM):
 # without this, tmux aborts with "open terminal failed: not a terminal".
 export TERM="${TERM:-xterm-256color}"
+# -u on both tmux calls below: tmux draws every non-ASCII character as '_' for a client
+# whose locale is not UTF-8, and an SSH login lands in the server's locale (LANG=C on a
+# stock Debian container) unless the client sends its own, which Windows never does.
+# Claude Code's screen is mostly box drawing and symbols.
 SESSION=main
 SOLO=
 for a in "$@"; do
@@ -33,7 +37,7 @@ fi
 # real client of a session named 'jtyper'. `new-session -s` below is unaffected
 # (it takes a creation name, not a target), so only the attach path needs this.
 if [ -n "$SOLO" ] && tmux has-session -t "=$SESSION" 2>/dev/null; then
-  exec tmux attach -d -t "=$SESSION"
+  exec tmux -u attach -d -t "=$SESSION"
 fi
 # Open in the project dir, but never let a missing/unreadable workdir become a hard
 # failure: `tmux new-session -c` exits in well under a second if the directory is
@@ -45,4 +49,4 @@ WORKDIR="${HUGINN_WORKDIR:-$HOME}"
 # is no idle bash prompt to misread the terminal's device-attributes replies (the tmux 3.6
 # startup queries) as commands -> kills the "61: command not found" spam. Exit claude and
 # you fall through to a normal login shell. (Attaching to an EXISTING session ignores this.)
-exec tmux new-session -A -s "$SESSION" -c "$WORKDIR" 'claude; exec "$SHELL" -l'
+exec tmux -u new-session -A -s "$SESSION" -c "$WORKDIR" 'claude; exec "$SHELL" -l'
