@@ -174,7 +174,7 @@ The desktop app runs on Windows (x64) and Linux (x86-64), on top of huginn core.
 
 | Command | What it does |
 |---|---|
-| `huginn update` | Update everything Huginn on this computer that is installed, to the newest release: this CLI, huginn core, the desktop app and the local AI tier. The local AI tier asks before it changes anything (on Windows, run `huginn local update` yourself; it needs administrator approval). In PowerShell, open a new window, or run `. $PROFILE`, to load the new CLI. |
+| `huginn update` | Update everything Huginn on this computer that is installed, to the newest release: this CLI, huginn core, the desktop app and the local AI tier. The local AI tier asks before it changes anything (on Windows, run `huginn local update` yourself; it asks for administrator approval). In PowerShell, open a new window, or run `. $PROFILE`, to load the new CLI. |
 | `huginn uninstall [--all] [--yes]` | Remove the whole stack from this computer, top down: the desktop app, the local AI tier, this computer's device entry on the server, huginn core and this CLI. It asks you to type `uninstall` first; `--yes` skips that. Your SSH key and `Host huginn` entry are kept; `--all` removes the entry too, and the key only when it is Huginn's own (by file name or the comment in its `.pub`). |
 | `huginn version` | The CLI version and the server alias it targets. |
 
