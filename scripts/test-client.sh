@@ -2868,6 +2868,23 @@ else
   skip "desktop uninstaller scope (no $NSI in this tree)"
 fi
 
+echo "[hardening/8] the host scripts: no token on argv, clean model output, safe home writes"
+# Three gates of their own, each runnable alone and each with its own WHY: the
+# appd token never rides a command line (scripts/test-no-token-argv.sh),
+# huginn-llm never hands the terminal a control sequence (test-llm-output.sh),
+# and setup.sh/uninstall.sh never write through a link in HUGINN_HOME
+# (test-home-writes.sh). Their SKIPs are repeated here, loudly, never counted green.
+for g in test-no-token-argv test-llm-output test-home-writes; do
+  G_OUT=$(bash "scripts/$g.sh" 2>&1); G_RC=$?
+  G_N=$(grep -c '^  ok ' <<<"$G_OUT")
+  if [ "$G_RC" -eq 0 ] && [ "$G_N" -gt 0 ]; then
+    ok "$g: $G_N checks"
+    grep '^  SKIP' <<<"$G_OUT" | sed "s/^  SKIP  /  SKIP  $g: /" >&2
+  else
+    bad "$g FAILED (exit $G_RC):"; grep -E '^  (FAIL|SKIP)' <<<"$G_OUT" | head -12 >&2
+  fi
+done
+
 echo "[8/8] what is actually DEPLOYED on this host, vs what is in the tree"
 # ⚠ WHY THIS EXISTS. On 2026-08-25 a live headless device was found
 # running the PRE-SECURITY-FIX runner — `allows()` failing open on an unknown

@@ -89,7 +89,10 @@ settles the question of whether one is in force.
 After changing a drop-in, check the daemon can still SEE tmux sessions. That is the
 failure the comments in `hardening.conf` care most about, and it is silent:
 
-```sh
-curl -sH "Authorization: Bearer $(sudo cat /etc/huginn-appd/token)" \
+```bash
+curl -sH @<(printf 'Authorization: Bearer %s\n' "$(sudo cat /etc/huginn-appd/token)") \
   http://127.0.0.1:8787/v1/sessions
 ```
+
+The header goes to curl through a file descriptor, not as an argument: other accounts
+on the machine can read every process's arguments, and the token is root-equivalent.

@@ -112,9 +112,16 @@ systemctl enable --quiet huginn-appd
 systemctl restart huginn-appd
 TOKEN="$(cat "$TOKEN_FILE")"
 PORT="${HUGINN_APPD_PORT:-$(unit_env HUGINN_APPD_PORT)}"; PORT="${PORT:-8787}"
+# ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
+# every account on this host, the token is root-equivalent and never rotates,
+# and the loop below runs up to sixty curls on every install and update. The
+# header reaches curl through a file descriptor instead (-H @file, curl 7.55+),
+# and printf is a bash builtin, so no process carries the token in its
+# arguments. scripts/test-no-token-argv.sh holds every script to this.
+appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 PING=
 for _ in $(seq 1 60); do
-  PING="$(curl -sf -m 2 -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/v1/ping" || true)"
+  PING="$(appd_curl -sf -m 2 "http://127.0.0.1:$PORT/v1/ping" || true)"
   [ -n "$PING" ] && break
   sleep 0.5
 done
@@ -122,7 +129,7 @@ grep -q '"ok":true' <<<"$PING" || {
   journalctl -u huginn-appd -n 20 --no-pager >&2 || true
   die "huginn-appd did not answer on 127.0.0.1:$PORT (journal above). If HUGINN_APPD_BIND is set, it must include loopback - use 0.0.0.0."
 }
-SPING="$(curl -sfk -m 5 -H "Authorization: Bearer $TOKEN" "https://127.0.0.1:$PORT/v1/ping" || true)"
+SPING="$(appd_curl -sfk -m 5 "https://127.0.0.1:$PORT/v1/ping" || true)"
 grep -q '"secure":true' <<<"$SPING" || die "huginn-appd is up but its HTTPS listener did not answer"
 TLS_CERT="${HUGINN_APPD_TLS_CERT:-$(unit_env HUGINN_APPD_TLS_CERT)}"
 if [ -z "$TLS_CERT" ]; then

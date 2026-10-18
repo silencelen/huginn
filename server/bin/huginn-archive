@@ -69,9 +69,12 @@ down() {
 BODY_FILE="$(mktemp)"
 trap 'rm -f "$BODY_FILE"' EXIT
 
+# The token reaches curl through a file descriptor (-H @file), never as an
+# argument, which every account here could read in /proc/<pid>/cmdline for as
+# long as curl runs: see huginn-rounds.
 call() {  # call METHOD PATH -> prints the status, leaves the body in $BODY_FILE
   curl -s -m 20 -o "$BODY_FILE" -w '%{http_code}' \
-    -X "$1" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H 'Content-Type: application/json' \
     "$API$2" 2>/dev/null
 }
 

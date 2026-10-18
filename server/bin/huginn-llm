@@ -22,7 +22,17 @@ set -u
 API=http://127.0.0.1:8787
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-llm: no appd token at $TOKEN_FILE" >&2; exit 1; }
-auth=(-H "Authorization: Bearer $(cat "$TOKEN_FILE")" -H "content-type: application/json")
+TOKEN="$(cat "$TOKEN_FILE")"
+# ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
+# every account on this host and the token is root-equivalent - and this script
+# polls, one curl every two seconds for as long as the model takes, so an
+# `-H "Authorization: Bearer ..."` argument kept it on display the whole time.
+# The header reaches curl through a file descriptor instead (-H @file, curl
+# 7.55+), and printf is a bash builtin, so no process carries the token in its
+# arguments. scripts/test-no-token-argv.sh holds every script to this.
+appd_curl() {
+  curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H "content-type: application/json" "$@"
+}
 
 MODEL= TIMEOUT=120 KEEP= PROMPT=
 while [ $# -gt 0 ]; do
@@ -65,10 +75,23 @@ if [ "$PROMPT" = "-" ]; then PROMPT=$(cat); fi
 
 py() { python3 -c "$1" 2>/dev/null; }
 
+# ONE definition for every string from the daemon that reaches the terminal:
+# the answer on stdout and the refusals on stderr. The answer is model text, and
+# a model writes what it read - an ESC [ 2K or an OSC 52 in a log it was asked
+# to summarise comes back out verbatim, and the terminal executes it. So C0 and
+# C1 controls become spaces, the rule huginn-archive and its siblings apply.
+# Unlike theirs, newline and tab survive: an answer is prose and code, not a
+# one-line label. (scripts/test-llm-output.sh feeds it the sequences.)
+CLEAN_PY='
+CTRL = dict.fromkeys([c for c in list(range(0, 32)) + list(range(127, 160)) if c not in (9, 10)], 32)
+def clean(v):
+    return str(v).translate(CTRL)
+'
+
 # Default model: the first AVAILABLE local row — the same door a person's
 # "+ Local" button opens. --model pins a specific machine's row.
 if [ -z "$MODEL" ]; then
-  MODEL=$(curl -s -m 15 "$API/v1/models?local=1" "${auth[@]}" | py "
+  MODEL=$(appd_curl -s -m 15 "$API/v1/models?local=1" | py "
 import json,sys
 for m in json.load(sys.stdin).get('models',[]):
     if m.get('family')=='local' and m.get('available'):
@@ -77,11 +100,12 @@ for m in json.load(sys.stdin).get('models',[]):
 fi
 
 TITLE=$(printf '%s' "llm: $PROMPT" | tr '\n' ' ' | head -c 60)
-CHAT=$(curl -s -m 15 -X POST "$API/v1/chats" "${auth[@]}" \
+CHAT=$(appd_curl -s -m 15 -X POST "$API/v1/chats" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'model': sys.argv[1], 'title': sys.argv[2]}))" "$MODEL" "$TITLE")")
 CID=$(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('id',''))")
 if [ -z "$CID" ]; then
-  echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: refused - $(printf '%s' "$CHAT" | py "$CLEAN_PY
+import json,sys; print(clean(json.load(sys.stdin).get('error','?')))")" >&2
   exit 1
 fi
 
@@ -91,36 +115,37 @@ cleanup() {
   # DELETE a chat while its run is active (409), so without cancelling first the
   # chat is orphaned AND the generate run keeps burning on the serving box. Only
   # needed when we never observed the run settle (a timeout or a mid-run error).
-  [ -z "$SETTLED" ] && curl -s -m 10 -X POST "$API/v1/chats/$CID/cancel" "${auth[@]}" >/dev/null 2>&1
+  [ -z "$SETTLED" ] && appd_curl -s -m 10 -X POST "$API/v1/chats/$CID/cancel" >/dev/null 2>&1
   [ -n "$KEEP" ] && return
   # Cancel is SIGTERM-then-SIGKILL and takes a moment to settle; retry the DELETE
   # while it still 409s so the chat is not left behind.
   for _ in 1 2 3 4 5; do
-    code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' -X DELETE "$API/v1/chats/$CID" "${auth[@]}")
+    code=$(appd_curl -s -m 10 -o /dev/null -w '%{http_code}' -X DELETE "$API/v1/chats/$CID")
     [ "$code" = 409 ] || break
     sleep 1
   done
 }
 trap cleanup EXIT
 
-SENT=$(curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" "${auth[@]}" \
+SENT=$(appd_curl -s -m 15 -X POST "$API/v1/chats/$CID/messages" \
   -d "$(python3 -c "import json,sys; print(json.dumps({'text': sys.stdin.read()}))" <<<"$PROMPT")")
 printf '%s' "$SENT" | grep -q '"ok":true' || {
-  echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "import json,sys; print(json.load(sys.stdin).get('error','?'))")" >&2
+  echo "huginn-llm: send refused - $(printf '%s' "$SENT" | py "$CLEAN_PY
+import json,sys; print(clean(json.load(sys.stdin).get('error','?')))")" >&2
   exit 1; }
 
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep 2
-  R=$(curl -s -m 15 "$API/v1/chats/$CID" "${auth[@]}")
+  R=$(appd_curl -s -m 15 "$API/v1/chats/$CID")
   RUN=$(printf '%s' "$R" | py "import json,sys; print(json.load(sys.stdin).get('running'))")
   if [ "$RUN" = "False" ]; then
     SETTLED=1   # the run finished on its own; DELETE will not 409, no cancel needed
-    ANSWER=$(printf '%s' "$R" | py "
+    ANSWER=$(printf '%s' "$R" | py "$CLEAN_PY
 import json,sys
 c = json.load(sys.stdin)
 a = [m for m in c.get('messages',[]) if m.get('type')=='assistant']
-print((a[-1].get('text') or '') if a else '')")
+print(clean((a[-1].get('text') or '') if a else ''))")
     if [ -n "$ANSWER" ]; then printf '%s\n' "$ANSWER"; exit 0; fi
     echo "huginn-llm: the run finished with no answer (see the chat with --keep)" >&2
     exit 1
