@@ -70,6 +70,69 @@ func (d *Daemon) firstStartImport(ctx context.Context) string {
 	return msg
 }
 
+// upgradeStoredURLs rewrites the addresses in core.json to the form they are
+// dialled in (appd.NormalizeURL), and returns "old -> new" for each one it
+// changed. Nothing is written when nothing changes.
+//
+// ⚠ WHY, WHEN THE CLIENT UPGRADES ON ITS OWN. A core paired on the server
+// itself, or adopted from the Node runner's default, holds
+// http://127.0.0.1:8787 from before loopback was proved (security scan F8).
+// appd.New dials it as https:// either way, so the route keeps working; but
+// the route book compares the address typed with the address stored (remove,
+// pin, the health beside each row), and `huginn core status` would go on
+// printing http:// for a connection that is TLS. An address that ends up
+// listed twice (http:// and https:// of one daemon) is kept once.
+func upgradeStoredURLs(st *store.Store) ([]string, error) {
+	cfg, _, err := st.Load()
+	if err != nil {
+		return nil, err
+	}
+	if len(upgradeURLs(&cfg)) == 0 { // a scratch copy: Load hands out a fresh one
+		return nil, nil
+	}
+	var changed []string
+	_, _, err = st.Update(func(c *store.Config) error {
+		changed = upgradeURLs(c)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return changed, nil
+}
+
+func upgradeURLs(c *store.Config) []string {
+	var changed []string
+	up := func(u string) string {
+		n := appd.NormalizeURL(u)
+		if n != u {
+			changed = append(changed, u+" -> "+n)
+		}
+		return n
+	}
+	if c.Appd.URL != "" {
+		c.Appd.URL = up(c.Appd.URL)
+	}
+	if c.Appd.Pinned != "" {
+		c.Appd.Pinned = up(c.Appd.Pinned)
+	}
+	if len(c.Appd.Routes) == 0 {
+		return changed
+	}
+	seen := map[string]bool{c.Appd.URL: true}
+	routes := make([]store.Route, 0, len(c.Appd.Routes))
+	for _, r := range c.Appd.Routes {
+		r.URL = up(r.URL)
+		if seen[r.URL] {
+			continue
+		}
+		seen[r.URL] = true
+		routes = append(routes, r)
+	}
+	c.Appd.Routes = routes
+	return changed
+}
+
 // lastSeen asks appd when it last heard from each candidate id, with that
 // candidate's own url and token. An unreachable daemon is zero time for all,
 // and Choose then prefers the runner.

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/silencelen/huginn/core/internal/appd"
 	"github.com/silencelen/huginn/core/internal/clientkit"
 	"github.com/silencelen/huginn/core/internal/daemon"
 	"github.com/silencelen/huginn/core/internal/install"
@@ -567,10 +568,16 @@ func corePair(args []string) int {
 		fmt.Fprintln(os.Stderr, "(the core must be running: `huginn core run`, or `huginn core install`)")
 		return 1
 	}
-	if fp := out["fingerprint"]; fp != "" {
-		fmt.Printf("paired with %s (certificate %s... proved by the token)\n", *url, fp[:16])
+	// The address as the core saved it, which is the one it dials: an
+	// http://127.0.0.1:8787 typed here is proved and saved as https://.
+	saved := *url
+	if s := out["url"]; s != "" {
+		saved = s
+	}
+	if fp := out["fingerprint"]; len(fp) >= 16 {
+		fmt.Printf("paired with %s (certificate %s... proved by the token)\n", saved, fp[:16])
 	} else {
-		fmt.Printf("paired with %s (loopback, plain http)\n", *url)
+		fmt.Printf("paired with %s (plain http to this machine, %s=local: nothing proves who answers on that port)\n", saved, appd.PlaintextEnv)
 	}
 	return 0
 }

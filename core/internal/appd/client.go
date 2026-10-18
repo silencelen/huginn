@@ -193,11 +193,8 @@ func (c *Client) raw1(ctx context.Context, method, path string, payload []byte) 
 	case "https":
 		resp, err = c.pinnedRequest(ctx, tok, method, target, payload)
 	case "http":
-		// ⚠ LOOPBACK AND NOTHING ELSE. NormalizeURL already turned every remote
-		// http:// into https://; this re-check is so no future caller that
-		// builds a Client some other way can put the token on the wire.
-		if !IsLoopbackHost(target.Hostname()) {
-			return nil, fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", target.Host)
+		if err := plainRefusal(target); err != nil {
+			return nil, err
 		}
 		resp, err = c.send(ctx, c.plainTransport(), tok, method, target, payload)
 	default:
@@ -214,6 +211,35 @@ func (c *Client) raw1(ctx context.Context, method, path string, payload []byte) 
 		return resp, &StatusError{Method: method, Path: target.Path, Status: resp.Status, Body: string(b)}
 	}
 	return resp, nil
+}
+
+// plainRefusal says why the token may not go to u over plain http, or nil.
+//
+// ⚠ LOOPBACK UNDER HUGINN_APPD_PLAINTEXT=local, AND NOTHING ELSE. NormalizeURL
+// already dials every other http:// as https://, a loopback one included; this
+// re-check is so no caller that builds a Client some other way (or keeps one
+// across a change of the switch) can put the token on the wire unproved. A
+// loopback port proves nothing about who holds it (security scan F8).
+func plainRefusal(u *url.URL) error {
+	if !IsLoopbackHost(u.Hostname()) {
+		return fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", u.Host)
+	}
+	if !PlaintextLoopback() {
+		return fmt.Errorf("refusing plain http to %s: the token goes only to a daemon that has proved itself over TLS, on this machine too (%s=local turns that off, for a daemon here that has no TLS)", u.Host, PlaintextEnv)
+	}
+	return nil
+}
+
+// noTLSHint finishes the old-daemon sentence for an address on this machine,
+// which this client used to reach in plain http: the port may be held by
+// something other than huginn, and there is one way to reach an old daemon
+// anyway, which is named rather than guessed at.
+func (c *Client) noTLSHint() string {
+	if !IsLoopbackHost(c.cur().Hostname()) {
+		return ""
+	}
+	return fmt.Sprintf("; on this machine that is an old daemon or another program holding the port. "+
+		"To send the token in plain http to a daemon here that has no TLS, run this client with %s=local", PlaintextEnv)
 }
 
 // resolve joins an absolute path onto the base url.
@@ -282,7 +308,7 @@ func (c *Client) Prove(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if c.cur().Scheme != "https" {
-		return "", fmt.Errorf("%s is loopback plain http; there is no certificate to prove", c.URL())
+		return "", fmt.Errorf("%s is plain http (%s=local): there is no certificate to prove", c.URL(), PlaintextEnv)
 	}
 	pins, err := c.proveAndPin(ctx, tok, c.loadPins(tok))
 	if err != nil {
@@ -408,7 +434,7 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 	if len(t) == 0 || t[0] != '{' {
 		// A missing (or non-object) `tls` over https is NOT PROVED, full stop
 		// (rule 2): the legacy proof beside it is never a substitute.
-		return "", fmt.Errorf("%s: %w", c.origin(), ErrOldDaemon)
+		return "", fmt.Errorf("%s: %w%s", c.origin(), ErrOldDaemon, c.noTLSHint())
 	}
 	var tb struct {
 		V     int    `json:"v"`
@@ -603,7 +629,7 @@ func (c *Client) dialErr(hctx, parent context.Context, addr string, limit time.D
 func (c *Client) handshakeErr(hctx, parent context.Context, addr string, limit time.Duration, err error, inHandshake bool) error {
 	var rh tls.RecordHeaderError
 	if errors.As(err, &rh) {
-		return fmt.Errorf("%s: %w (%s did not answer TLS)", c.origin(), ErrOldDaemon, addr)
+		return fmt.Errorf("%s: %w (%s did not answer TLS%s)", c.origin(), ErrOldDaemon, addr, c.noTLSHint())
 	}
 	// Either clock may ring first: the context, or the conn deadline set from it.
 	if (hctx.Err() != nil || errors.Is(err, os.ErrDeadlineExceeded)) && parent.Err() == nil {
@@ -650,9 +676,9 @@ func (c *Client) stamp(req *http.Request) {
 // Stream opens a token-carrying GET and returns the response with its body
 // OPEN, for server-sent events (`/v1/watch?stream=1`). The same TLS rules as
 // Do: proved and pinned over https (re-proved once on a rotated leaf), plain
-// http for loopback only. No request timeout — the caller's ctx ends it, and
-// the caller closes the body. A status of 400 or above is returned as a
-// *StatusError with the body already closed.
+// http only to loopback under HUGINN_APPD_PLAINTEXT=local. No request timeout
+// — the caller's ctx ends it, and the caller closes the body. A status of 400
+// or above is returned as a *StatusError with the body already closed.
 func (c *Client) Stream(ctx context.Context, path string) (*http.Response, error) {
 	var res *http.Response
 	err := c.withRoutes(ctx, func() error {
@@ -695,8 +721,8 @@ func (c *Client) stream1(ctx context.Context, path string) (*http.Response, erro
 		}
 		return res, err
 	case "http":
-		if !IsLoopbackHost(target.Hostname()) {
-			return nil, fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", target.Host)
+		if err := plainRefusal(target); err != nil {
+			return nil, err
 		}
 		t = c.plainTransport()
 	default:

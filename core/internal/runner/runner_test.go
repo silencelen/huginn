@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/silencelen/huginn/core/internal/appd"
+	"github.com/silencelen/huginn/core/internal/appd/appdtest"
 )
 
 // Shrunk once for the whole package: setting them per test races with the
@@ -147,8 +147,9 @@ func run(t *testing.T, d *fakeDaemon, conf Config, lock Lock) *harness {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fakes")
 	}
-	srv := httptest.NewServer(d.handler())
-	t.Cleanup(srv.Close)
+	// A fake that proves itself over TLS the way appd does: the client sends
+	// the token nowhere unproved, a loopback address included.
+	srv := appdtest.NewServer(t, "t0k3n", d.handler())
 	api, err := appd.New(appd.Config{URL: srv.URL, Tokens: appd.StaticToken("t0k3n"), Pins: &appd.MemoryPinStore{}})
 	if err != nil {
 		t.Fatal(err)

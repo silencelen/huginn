@@ -14,8 +14,12 @@
 //	       a connection whose leaf is IN that set, or it does not go at all.
 //
 // None of this is optional: there is no setting that re-enables cleartext to a
-// remote host, and a failed proof never falls back to anything. The reference
-// implementations are client/huginn-device (Node) and mobile/core DaemonTls.kt.
+// remote host, and a failed proof never falls back to anything. A daemon on
+// this machine is proved the same way (loopback has no identity: anything can
+// hold the port while appd restarts); only HUGINN_APPD_PLAINTEXT=local, for a
+// daemon here that has no TLS, keeps a loopback http:// plain (PlaintextEnv).
+// The reference implementations are client/huginn-device (Node) and
+// mobile/core DaemonTls.kt.
 package appd
 
 import (

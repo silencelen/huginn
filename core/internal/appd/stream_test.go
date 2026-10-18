@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -43,34 +42,38 @@ func TestE2EStreamWatch(t *testing.T) {
 	}
 }
 
+// Over the proved channel (a fake that proves itself, on loopback like the
+// daemon on the server itself): the caller's headers ride along, the token
+// header is never theirs to set, and a 4xx is a StatusError.
 func TestStreamStampsHeadersButNeverTheToken(t *testing.T) {
 	var got http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Clone()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte("event: state\ndata: {}\n\n"))
-	}))
-	defer srv.Close()
-	c, err := New(Config{URL: srv.URL, Tokens: StaticToken("t0k3n"),
-		Headers: func() map[string]string {
+	cert := mintCert(t, "stream")
+	f := fakeDaemon(t, certCfg(cert), goodAnswer(testToken, cert), func(f *fake) {
+		f.other = func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/denied" {
+				http.Error(w, "nope", 401)
+				return
+			}
+			got = r.Header.Clone()
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Write([]byte("event: state\ndata: {}\n\n"))
+		}
+	})
+	c := newTestClient(t, f.url(), nil, func(cfg *Config) {
+		cfg.Headers = func() map[string]string {
 			return map[string]string{"X-Huginn-Notify": "1", "authorization": "Bearer stolen"}
-		}})
-	if err != nil {
-		t.Fatal(err)
-	}
+		}
+	})
 	res, err := c.Stream(context.Background(), "/v1/watch?stream=1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	res.Body.Close()
-	if got.Get("X-Huginn-Notify") != "1" || got.Get("Authorization") != "Bearer t0k3n" {
+	if got.Get("X-Huginn-Notify") != "1" || got.Get("Authorization") != "Bearer "+testToken {
 		t.Fatalf("headers %v", got)
 	}
 	// And a 4xx comes back as a StatusError with the body closed.
-	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "nope", 401) }))
-	defer srv2.Close()
-	c2, _ := New(Config{URL: srv2.URL, Tokens: StaticToken("x")})
-	if _, err := c2.Stream(context.Background(), "/v1/watch"); !IsAuth(err) {
+	if _, err := c.Stream(context.Background(), "/v1/denied"); !IsAuth(err) {
 		t.Fatalf("got %v", err)
 	}
 }
