@@ -927,71 +927,17 @@ function remove(list, id) {
   return { ok: true, apps: current.filter((c) => c.id !== rec.id), app: rec };
 }
 
-// -------------------------------------------------------------------- the seed
+// -------------------------------------------------------- this host's own address
 
 /**
- * The four pages this host serves, from the contract — name, port, kind and the
- * one line under the name. The ADDRESS is not in here, because it is not a
- * property of the page (see [seedHost]).
- */
-/**
- * A row that IS one of the seeds — same id, same port — describes a service on
- * THIS host whatever host its URL names (2026-10-02). The four live seeds still
- * carry a retired Tailscale address; without this the non-local
- * rule in addressSet would judge them as some other machine's apps the moment
- * that address aged out of the arrival set.
- */
-function isSeedRow(rec) {
-  const unit = SEED_UNITS.find((u) => u.id === (rec && rec.id));
-  return !!unit && Number(portOf(rec.url)) === unit.port;
-}
-
-const SEED_UNITS = [
-  { id: 'atlas', port: 8088, name: 'Atlas map', kind: 'docs', unit: 'atlas.service',
-    notes: 'A static documentation site.' },
-  { id: 'jotter', port: 8091, name: 'jotter notes', kind: 'lab', unit: 'jotter.service',
-    notes: 'A small web app in development.' },
-  { id: 'board', port: 8092, name: 'PCB board view', kind: 'tool', unit: 'boardserver.service',
-    notes: 'A circuit board viewer.' },
-  { id: 'bursar', port: 8093, name: 'Bursar ledger', kind: 'lab', unit: 'bursar.service',
-    notes: 'A simulator in development.' },
-];
-
-/**
- * Where a unit's bind actually lives, when it is not in the unit file.
- *
- * ⚠ ONE ENTRY, AND IT IS THE D11 SCAR. The old card carried a per-unit claim
- * that bursar "already falls back to 0.0.0.0" and therefore needed no
- * rebind; `ss -ltn` said `100.101.102.103:8093`, because that fallback is what
- * sim/app.py does when the host has NO tailscale address. The claim is gone; what
- * survives is the only part of it that was true and useful — `systemctl edit
- * bursar.service` would edit the wrong thing, so the line says where to look
- * instead. This map holds directions, never exemptions.
- */
-const UNIT_BIND_NOTES = {
-  'bursar.service': 'its bind is in sim/app.py, not the unit',
-};
-
-/**
- * The host the seed used to be pinned to, and the fallback for a daemon that
- * cannot say where it is.
- *
- * ⚠ THIS NAME IS THE DEFECT (D10). `huginn` resolves to this host's LAN
- * interface (192.168.1.20); all four seeded units bind its TAILNET address
- * (100.101.102.103). So the seeded rows named an interface on which NONE of them
- * listen — `curl http://huginn:8088/` answers nothing, `curl
- * http://100.101.102.103:8088/` answers 200 — and every row read "not answering
- * from the host" forever, in the one deployment that actually has these units.
- * The probe could not pass, whatever anybody did to the units or the firewall.
- *
- * It survives only as the fallback, because a daemon that has not been told an
- * address should write what it used to write rather than guess.
+ * The single-label name a row may use for this host: `http://huginn:8088/` is an app
+ * on the machine the daemon runs on (see isLocalHost).
  */
 const SEED_FALLBACK_HOST = 'huginn';
 
 /**
  * `addr` as a URL authority this registry would accept, or '' — the one guard
- * both [seedHost] and [pickHostAddr] are built on.
+ * [pickHostAddr] is built on.
  *
  * ⚠ THE DAEMON'S OWN ADDRESS IS NOT EXEMPT FROM THE DAEMON'S OWN URL RULE. A
  * wildcard (`0.0.0.0`, `::`) is a legal way to start this process and a
@@ -1004,7 +950,7 @@ function seedableHost(addr) {
   if (!s) return '';
   // A literal v6 address needs its brackets back before it is a URL authority.
   const host = s.includes(':') && !s.startsWith('[') ? `[${s}]` : s;
-  return urlProblem(`http://${host}:${SEED_UNITS[0].port}/`) ? '' : host;
+  return urlProblem(`http://${host}:8088/`) ? '' : host;
 }
 
 /**
@@ -1032,97 +978,6 @@ function pickHostAddr(...candidates) {
     if (seedableHost(c)) return c.trim().split('%')[0];
   }
   return '';
-}
-
-/** The host part of a seeded address: what the daemon handed in, or the old name. */
-function seedHost(addr) {
-  return seedableHost(addr) || SEED_FALLBACK_HOST;
-}
-
-/** One seeded unit's address, for `addr`. */
-function seedUrl(addr, port) { return `http://${seedHost(addr)}:${port}/`; }
-
-/**
- * What the seed wrote BEFORE D10 — the exact literal [migrateSeedUrls] matches.
- *
- * ⚠ A LITERAL, not a pattern. It is the only thing that distinguishes a row the
- * old seed wrote from a row the owner chose, and a looser rule here overwrites
- * somebody's edit.
- */
-function legacySeedUrl(port) { return `http://${SEED_FALLBACK_HOST}:${port}/`; }
-
-/**
- * The four pages this host serves — written once, on the first list against a
- * store that has never existed, so the feature arrives populated instead of
- * arriving as an empty list with a plus button.
- *
- * Seeded ONCE and recorded as such in the envelope: an owner who deletes all
- * four has said something, and a seeder that ran on every empty list would
- * argue with them forever.
- *
- * The address is the host's own, from [seedHost] — not 127.0.0.1, which would
- * be a different claim about where these pages are, and not a name, which is
- * what D10 was.
- */
-function seedApps(addr = null, now = Math.floor(Date.now() / 1000)) {
-  return SEED_UNITS.map((u) => buildRecord({
-    id: u.id, name: u.name, url: seedUrl(addr, u.port), kind: u.kind, notes: u.notes, unit: u.unit,
-  }, now));
-}
-
-/**
- * Re-apply the seed's ADDRESS to the rows that still carry the old one.
- *
- * ⚠ THE FIX HAS TO REACH THE STORES THAT ALREADY EXIST. Seeding correctly only
- * on a host that has never run this daemon would leave every real installation
- * with four rows that can never answer and no way to notice — the seed runs
- * once, by design, and never runs again.
- *
- * ⚠ AND IT MUST NEVER OVERWRITE AN EDIT. The test is the EXACT previous literal
- * for THAT row's id: a path, a different port, a host of their own, or an id
- * that is not one of the four is the owner speaking, and is left alone. The
- * `version` moves with the address, because a client holding the old number is
- * holding a row that no longer describes anything.
- */
-function migrateSeedUrls(list, addr) {
-  const changed = [];
-  const host = seedHost(addr);
-  // Nothing better to move them to: leave the store exactly as it is, and in
-  // particular do not rewrite the file.
-  if (host === SEED_FALLBACK_HOST) return { changed, apps: list || [] };
-  const apps = (list || []).map((rec) => {
-    const unit = SEED_UNITS.find((u) => u.id === (rec && rec.id));
-    if (!unit || !rec || rec.url !== legacySeedUrl(unit.port)) return rec;
-    changed.push(rec.id);
-    return { ...rec, url: seedUrl(addr, unit.port), version: (Number(rec.version) || 1) + 1 };
-  });
-  return { changed, apps };
-}
-
-/**
- * Give the four rows this host ships with the UNIT that serves them, when they
- * do not already carry one.
- *
- * ⚠ SEPARATE FROM [migrateSeedUrls] ON PURPOSE. That one moves an address and
- * has to be paranoid about the exact literal, because an address is a thing the
- * owner chooses. A unit is a fact about THIS host: `atlas.service` serves port
- * 8088 here whatever anybody pointed the row at, and a row with no unit falls
- * into the no-unit branch of [fixLines] and asks the owner to work out what to
- * edit — on the one deployment where the daemon knows the answer.
- *
- * ⚠ ONLY WHEN IT IS EMPTY. A unit the owner typed is theirs, even if it is not
- * the one shipped here. The `version` moves with it, because a client holding
- * the old number is holding a row that no longer describes the same thing.
- */
-function migrateSeedUnits(list) {
-  const changed = [];
-  const apps = (list || []).map((rec) => {
-    const unit = SEED_UNITS.find((u) => u.id === (rec && rec.id));
-    if (!unit || !rec || cleanUnit(rec.unit)) return rec;
-    changed.push(rec.id);
-    return { ...rec, unit: unit.unit, version: (Number(rec.version) || 1) + 1 };
-  });
-  return { changed, apps };
 }
 
 // ------------------------------------------- the fix lines (decisions 54, 55)
@@ -1228,9 +1083,7 @@ function fixLines(rec, addresses = [], remotes = {}, fw = FIREWALL) {
     const addrs = unbound.map((a) => a.addr);
     out.push(`# on huginn — ${addrs.join(', ')} ${addrs.length === 1 ? 'does' : 'do'} not reach this app`);
     if (unit) {
-      const note = UNIT_BIND_NOTES[unit];
-      out.push(`systemctl edit ${unit}   # ExecStart: bind 0.0.0.0 instead of ${bound || 'one address'}`
-        + (note ? `  (${note})` : ''));
+      out.push(`systemctl edit ${unit}   # ExecStart: bind 0.0.0.0 instead of ${bound || 'one address'}`);
       out.push(`systemctl restart ${unit}`);
     } else {
       out.push(`bind 0.0.0.0 instead of ${bound || 'the one address it answers on'}`
@@ -2273,8 +2126,8 @@ function createStore(opts = {}) {
   const dir = opts.dir;
   const fs = opts.fs || nodeFs;
   const log = opts.log || (() => {});
-  // The address the DAEMON binds, handed down rather than discovered here — see
-  // [seedHost]. Empty is honest: the seed then writes what it always wrote.
+  // The address the DAEMON binds, handed down rather than discovered here (see
+  // [pickHostAddr]). Empty is honest: it is simply not counted as one of ours.
   const hostAddr = typeof opts.hostAddr === 'string' ? opts.hostAddr.trim() : '';
   const doFetch = opts.fetch || globalThis.fetch;
   const nowMs = opts.nowMs || (() => Date.now());
@@ -2493,8 +2346,8 @@ function createStore(opts = {}) {
   }
 
   /**
-   * Whether an app's host is THIS host — loopback, the name the seed falls back
-   * to, this machine's hostname, or an address huginn knows it answers on (an
+   * Whether an app's host is THIS host — loopback, the single-label name
+   * `huginn`, this machine's hostname, or an address huginn knows it answers on (an
    * arrival, its own bind, a reported route).
    */
   function isLocalHost(host) {
@@ -2524,7 +2377,7 @@ function createStore(opts = {}) {
   function addressSet(rec) {
     const own = cleanAddrs(rec && rec.addresses);
     const host = normalizeAddr(hostnameOf(rec && rec.url));
-    if (host && !isLocalHost(host) && !isSeedRow(rec)) return { required: [...new Set([host, ...own])], advisory: [], remote: host };
+    if (host && !isLocalHost(host)) return { required: [...new Set([host, ...own])], advisory: [], remote: host };
     const required = [...new Set([...requiredAddresses(), ...own])];
     const advisory = addresses().filter((a) => !required.includes(a));
     return { required, advisory };
@@ -2811,8 +2664,8 @@ function createStore(opts = {}) {
     const env = readStore();
     // First ever list: an EMPTY registry, recorded as created. A new server
     // serves nothing yet, and the apps it does serve are the operator's to add.
-    // (`seeded: true` keeps its meaning for the migrations below: "the first
-    // list happened". Stores from builds that pre-filled rows keep theirs.)
+    // (`seeded: true` means "the first list happened". Stores from builds that
+    // pre-filled rows keep theirs.)
     if (!env) {
       ensureLoaded();
       const seeded = {
@@ -2825,27 +2678,7 @@ function createStore(opts = {}) {
       return writeEnvelope(dir, seeded, fs);
     }
     ensureLoaded();
-    // And every load after that: re-apply the seed's ADDRESS to any row still
-    // carrying the one D10 pinned. Costs a list scan and returns `env` unchanged
-    // on every load but the first that finds one — after the rewrite no row
-    // matches the old literal, so this cannot become a store that rewrites
-    // itself forever.
-    if (!env.seeded) return env;
-    const moved = migrateSeedUrls(env.consoles, hostAddr);
-    const united = migrateSeedUnits(moved.apps);
-    if (!moved.changed.length && !united.changed.length) return env;
-    // The old observation describes the old address. Same reason `patch` drops
-    // one when the url changes: a row wearing the previous address's latency is
-    // a lie with a number on it.
-    for (const id of moved.changed) { probes.delete(id); reaches.delete(id); }
-    if (moved.changed.length) {
-      log(`apps: re-pointed ${moved.changed.join(', ')} at ${seedHost(hostAddr)} `
-        + `(the seeded address named an interface nothing listens on)`);
-    }
-    if (united.changed.length) {
-      log(`apps: learned the unit behind ${united.changed.join(', ')} — their fix lines can name it now`);
-    }
-    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles: united.apps }, fs);
+    return env;
   }
 
   /**
@@ -3143,16 +2976,15 @@ module.exports = {
   MAX_CLIENT_NAME, cleanClientName,
   SIDECAR_NAME, sidecarPath, readSidecar,
   ICONS_DIR_NAME, ICON_MAX_BYTES, ICON_TIMEOUT_MS, ICON_REFRESH_MS, ICON_MAX_REDIRECTS,
-  REBIND_MARKER_NAME, STORE_NAME, SCHEMA, firewallStyle, UNIT_BIND_NOTES,
+  REBIND_MARKER_NAME, STORE_NAME, SCHEMA, firewallStyle,
   REFUSED_SCHEME, REFUSED_USERINFO, REFUSED_TRAVERSAL, REFUSED_HOST,
   oneLine, cleanName, cleanKind, kindProblem, cleanUnit, idFor,
   hostClass, parseAppUrl, urlProblem, normalizeUrl,
   nameProblem, notesProblem, idProblem, unitProblem,
   buildRecord, storedAddedAt, noProbe, noReach, reachOf, appRow, sortApps,
   LEGACY_ROW_FIELDS, legacyConsoleRow, legacyConsoleList,
-  findApp, add, patch, rename, setUrl, remove, isSeedRow,
-  SEED_UNITS, SEED_FALLBACK_HOST, seedableHost, pickHostAddr, seedHost, seedUrl, legacySeedUrl,
-  seedApps, migrateSeedUrls, migrateSeedUnits,
+  findApp, add, patch, rename, setUrl, remove,
+  SEED_FALLBACK_HOST, seedableHost, pickHostAddr,
   portOf, hostnameOf, fixLines, reachedButSilent, remotesOf, firewallSources, slash24,
   noClientHere, onlyLoopbackHere, loopbackNeedsNoRule,
   normalizeAddr, addrAuthority, reachUrl, reachOne, reachabilityProbe, reachRefusal,

@@ -9,6 +9,11 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## Unreleased
+
+### Removed
+- The legacy seed machinery: rows that older builds pre-filled are ordinary rows now.
+
 ## 3.13.2 — 2026-10-19
 
 ### Added
