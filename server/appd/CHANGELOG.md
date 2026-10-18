@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.2 — 2026-10-18
+
+### Added
+- `PUT /v1/apps/routes` takes the client's `name`. A failing address that clients saved is listed
+  with `pinnedBy`, the clients that saved it, and the add refusal names them and how to forget the
+  address.
+- `DELETE /v1/apps/routes/<addr>` forgets an address every client reported, so apps no longer have
+  to answer there. For a retired address; a client that still saves it reports it again at launch.
+
 ## 3.13.1 — 2026-10-18
 
 ### Added

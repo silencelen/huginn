@@ -3,9 +3,9 @@
 #     if (Test-Path "$HOME\.huginn\huginn.ps1") { . "$HOME\.huginn\huginn.ps1" }
 # Targets the `huginn` SSH alias by default; override per-device with:  $env:HUGINN_HOST = 'my-host'
 # Self-update with:  huginn update   (pulls this file from the repo; gh -> scp fallback)
-# Version: 2.6.1
+# Version: 2.6.2
 
-$script:HUGINN_VERSION = '2.6.1'
+$script:HUGINN_VERSION = '2.6.2'
 $script:HUGINN_REPO    = 'silencelen/huginn'
 # Client code - this file, and the runners it installs - comes from the newest
 # cli-v release on GitHub: a tagged build, never a moving branch. Only

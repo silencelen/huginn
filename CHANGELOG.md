@@ -8,6 +8,12 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.2] - 2026-10-18
+
+### Changed
+- No changes to the CLI or the server scripts. The version follows desktop 2.6.2, which carries
+  this core.
+
 ## [2.6.1] - 2026-10-18
 
 ### Fixed

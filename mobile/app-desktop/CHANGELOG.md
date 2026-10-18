@@ -1,5 +1,18 @@
 # Huginn Desktop changelog
 
+## 2.6.2
+
+Carries core 2.6.2.
+
+### Added
+- **The Apps page names the device that saved an address that does not answer**, and can forget
+  the address. The desktop sends its computer name with the addresses it saves.
+
+### Fixed
+- **The first launch after an install, a reinstall or an update re-maximizes the window once**,
+  which clears the garbled or black areas some displays showed until the window was resized by
+  hand. Repainting alone, as in 2.6.1, did not clear them.
+
 ## 2.6.1
 
 Carries core 2.6.1.

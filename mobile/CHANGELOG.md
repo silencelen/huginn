@@ -1,5 +1,11 @@
 # Huginn changelog
 
+## 3.12.2 — 2026-10-18
+
+### Added
+- **The Apps page names the device that saved an address that does not answer**, and can forget
+  the address. The phone sends its model name with the addresses it saves.
+
 ## 3.12.1 — 2026-10-18
 
 3.12.0 did not reach the in-app store, which refused an example address in a setup hint: its
