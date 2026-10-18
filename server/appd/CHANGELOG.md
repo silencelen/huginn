@@ -38,6 +38,12 @@ version number collided. Entries below are reconstructed from the shipping commi
   Proxmox file.
 - A new server's Apps list starts empty. Earlier builds pre-filled it with four pages from one
   development host, which could never answer anywhere else.
+- Alerts are on for a new server, so a waiting session reaches the apps by push without any
+  setup. The alert relay script is an optional extra channel. A saved choice is kept.
+- The hardening drop-in keeps the kernel, module and cgroup protections and no longer makes the
+  filesystem read-only or filters socket families: act chats can install packages and edit
+  `/etc` as a session can, and `ip` and `ss` work in them. Add your own drop-in for a stricter
+  sandbox.
 
 ### Upgrading
 - To keep extra tools, a persona at a custom path, or Proxmox-style fix lines, set the matching

@@ -6,7 +6,7 @@ installs the unit and the files in this directory:
 | file | installed as | what |
 |---|---|---|
 | `../huginn-appd.service` | `/etc/systemd/system/huginn-appd.service` | the service; replaced on every install |
-| `hardening.conf` | `huginn-appd.service.d/hardening.conf` | sandboxing; replaced on every install |
+| `hardening.conf` | `huginn-appd.service.d/hardening.conf` | kernel-level sandboxing; replaced on every install |
 | (generated) | `huginn-appd.service.d/site.conf` | this server's own settings; written once, never overwritten |
 
 Put your own settings in `site.conf` (or another drop-in of your own) and run
@@ -18,6 +18,22 @@ a drop-in other than `hardening.conf`.
 drop-in cannot set them: the gate runs as a Claude Code hook, in the CLI's environment,
 not the daemon's. `node /opt/huginn-appd/install-hooks.js --uninstall` removes the hook
 entries the installer added.
+
+### A stricter sandbox
+
+`hardening.conf` stops the daemon and the chats and rounds it starts from changing the
+kernel, but leaves the filesystem writable, so an act chat can do what a session can.
+To confine them further, add a drop-in of your own, for example
+`huginn-appd.service.d/strict.conf`:
+
+```ini
+[Service]
+ProtectSystem=strict
+ReadWritePaths=/var/lib/huginn-appd /run /root /tmp
+```
+
+Act chats and rounds can then write only to those paths. Sessions are not affected: they run in
+their own unit, `huginn-tmux.service`.
 
 ## Environment the daemon reads
 
