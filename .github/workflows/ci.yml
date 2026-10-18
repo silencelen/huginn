@@ -19,7 +19,7 @@ on:
 permissions:
   contents: read
 
-# One run per ref. main took ten pushes in a day during the huginn 3 train and
+# One run per ref. On a busy day main takes many pushes, and
 # every superseded run kept a runner busy reporting on a commit nobody was
 # waiting for. PR runs are cancelled when a new commit lands; main runs are NOT,
 # because on main the per-commit verdict is the record — a bisect needs it.
@@ -38,10 +38,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          # What the daemon actually runs in production (v22.x). server/setup.sh
-          # still installs Node 20 as the floor for a fresh host, so a 22-only
-          # feature would pass here and break a new install — that gap is real
-          # and belongs to the installer, not to this file.
+          # The Node.js line server/setup.sh installs on a new server.
           node-version: '22'
           # No `cache:` on purpose. The daemon has ZERO npm dependencies and
           # therefore no lockfile; setup-node's cache REQUIRES one and fails the

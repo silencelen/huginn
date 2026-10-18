@@ -1,21 +1,19 @@
-<!-- Thanks for contributing to Huginn! The terminal core stays lean (bash / tmux /
-     PowerShell); the daemon and apps have tests — run them. -->
+## What and why
+<!-- What does this change, and what need does it serve? Link the issue or discussion. -->
 
-## What & why
-<!-- What does this change, and what need does it serve? -->
-
-## Surfaces touched
-- [ ] Server core (`setup.sh` / `cc` / `huginn-status` / `tmux.conf` / `server/bin`)
-- [ ] CLI client (`huginn.ps1` **and** `huginn.sh` kept in sync)
-- [ ] Daemon (`server/appd/` — zero-dep, `node --test` passes)
-- [ ] Apps (`mobile/` — lowest-module rule per `docs/ADDING-A-FEATURE.md`; suites pass)
-- [ ] Provisioning / docs / branding
+## Parts touched
+- [ ] Server install or host tools (`server/`)
+- [ ] Daemon (`server/appd/`)
+- [ ] `huginn` command (`client/`: both `huginn.sh` and `huginn.ps1`)
+- [ ] huginn core or the console (`core/`)
+- [ ] Apps (`mobile/`)
+- [ ] Documentation
 
 ## Checklist
-- [ ] No secrets, real IPs, or hostnames (placeholders only)
-- [ ] Shell scripts are LF; new runnable scripts marked `+x`
-- [ ] CLI client files stay ASCII-only and in sync (subcommand + help + completion)
-- [ ] Tested on the surface(s) I changed
+- [ ] Tests for what I changed pass, and a new test fails without the change ([Testing](https://github.com/silencelen/huginn/blob/main/docs/dev/testing.md))
+- [ ] No real addresses, host names, accounts, keys or tokens (placeholders only)
+- [ ] Client scripts stay 7-bit ASCII, LF/CRLF as `.gitattributes` says, help generated from `client/help-table.txt`
+- [ ] Docs updated if behaviour changed
 
-## Notes
-<!-- Anything reviewers should know. -->
+## How I tested it
+<!-- Commands run, platforms tried. -->

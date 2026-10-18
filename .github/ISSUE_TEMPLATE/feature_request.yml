@@ -1,26 +1,22 @@
-name: 💡 Feature request
-description: Suggest an idea for Huginn
+name: Feature request
+description: Suggest an improvement
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: For open-ended ideas, [Discussions](https://github.com/silencelen/huginn/discussions) is often a better first stop.
   - type: textarea
     id: problem
     attributes:
-      label: What's the need?
-      description: What are you trying to do that Huginn doesn't make easy yet?
+      label: What do you want to do?
+      description: The need, in your own words. What is hard or impossible today?
     validations:
       required: true
   - type: textarea
     id: idea
     attributes:
-      label: Proposed solution
-      description: How might it work? (Remember Huginn stays tiny — bash/tmux/PowerShell, no daemons.)
+      label: How could it work?
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: Keeps it lean?
-      options:
-        - label: This fits Huginn's "small, portable, no-dependencies" philosophy
+      label: Alternatives you considered

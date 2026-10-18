@@ -1,93 +1,54 @@
 # Contributing to Huginn
 
-Thanks for your interest! Huginn is one repo with two very different halves, and the
-ground rules differ by half:
+Thank you for helping. Bug reports, fixes, documentation and ideas are all welcome.
 
-- **The terminal core** (`client/`, `server/` minus `appd/`) is intentionally tiny — a
-  few shell scripts and a tmux config. Keep it lean, portable, and dependency-free:
-  plain `bash`, `tmux`, and PowerShell. No frameworks, no build step.
-- **The apps** (`server/appd/`, `mobile/`) are real programs with tests: a
-  zero-dependency Node ≥ 20 daemon, and a Kotlin Multiplatform codebase that builds the
-  Android app and the Compose desktop client. "Tiny" doesn't apply there — *layered*
-  does: read [`docs/ADDING-A-FEATURE.md`](docs/ADDING-A-FEATURE.md) before touching
-  `mobile/`, and write in the lowest module that can hold the change (`:core` → `:ui` →
-  the shells). There is one desktop client and it is the Compose one; the Electron
-  client that used to live in `desktop/` was retired and deleted on 2026-08-27.
+- **Questions and ideas:** [Discussions](https://github.com/silencelen/huginn/discussions).
+- **Bugs:** [open an issue](https://github.com/silencelen/huginn/issues/new/choose) with the
+  versions and the steps to reproduce.
+- **Security issues:** report them privately; see [SECURITY.md](SECURITY.md).
 
-## Ground rules (everywhere)
+## The codebase
 
-- **No secrets, ever.** No real IPs, hostnames, keys, or tokens in the repo. Use
-  placeholders (`<host>`, `<VMID>`).
-- **Keep `huginn.ps1` and `huginn.sh` in sync** — they're a pair. A new subcommand goes
-  in both, plus the help text and the tab-completer.
-- **Zero dependencies stays true.** The daemon has no `npm install`; keep it that way.
-  The Kotlin side pins its versions in `mobile/gradle/libs.versions.toml`.
-- **Tests gate the apps.** `mobile/scripts/build.sh` runs the Kotlin suites *and* the
-  daemon's `node --test` suite before any APK, and asserts the test **count** as well as
-  the exit code. A change that removes tests from discovery will be caught — but don't
-  make it try.
+| Part | Where | Language |
+|---|---|---|
+| Server: host tools, tmux config, installer | `server/` | bash, Python |
+| Server: the daemon | `server/appd/` | Node.js 22, no dependencies |
+| Client: the `huginn` command | `client/` | bash and PowerShell (a pair) |
+| Client: huginn core and the console | `core/` | Go |
+| Apps: shared logic and UI, Android, desktop | `mobile/` | Kotlin, Compose Multiplatform |
 
-## Good first contributions
+The [developer docs](docs/dev/README.md) explain the architecture, how to build each part and how
+to run every test.
 
-- A `client/install.sh` path for fish/zsh, or a macOS note.
-- Provisioning recipes for other hosts (cloud-init, Docker, NixOS).
-- A real demo GIF (see [`assets/demo.tape`](assets/demo.tape)).
-- Docs fixes, clearer wording, more FAQ entries.
-- Daemon routes currently have thin direct test coverage (`server/appd/test/` exercises
-  the libs) — route-level tests are welcome.
+## Before you open a pull request
 
-## Dev notes
+1. **Run the tests for what you changed** ([Testing](docs/dev/testing.md)):
+   - daemon: `cd server/appd && node --test test/*.test.js`
+   - clients: `scripts/test-client.sh` (the PowerShell half needs `pwsh`)
+   - core: `cd core && go vet ./... && go test ./...`
+   - apps: `cd mobile && ./gradlew :core:jvmTest :ui:jvmTest :app:testDebugUnitTest :app-desktop:test`
+2. **Add a test that fails without your change.** The suites assert their test counts, so a
+   test that silently stops running is caught.
+3. **Keep the pairs in step.** A change to `client/huginn.sh` goes into `client/huginn.ps1` too.
+   Help text lives in `client/help-table.txt` and is generated into both
+   (`node scripts/gen-help.js`). After changing either client, refresh the copies embedded in
+   huginn core (see [Go core](docs/dev/go-core.md)).
+4. **Follow the house rules:**
+   - The client scripts print 7-bit ASCII only (Windows PowerShell 5.1 misreads anything else).
+   - Shell scripts are LF; PowerShell files are CRLF (`.gitattributes` enforces it). Runnable
+     scripts are tracked executable.
+   - The daemon stays free of npm dependencies.
+   - Kotlin goes in the lowest module that can hold it ([Kotlin clients](docs/dev/kotlin-clients.md)).
+   - No real addresses, host names, accounts, keys or tokens anywhere, including tests: use
+     `192.0.2.x`, `example.net` and similar placeholders.
+5. **Describe the change** in the pull request: what it does, why, and how you tested it.
 
-- **The two CLI client files are ASCII-only.** `client/huginn.ps1` and
-  `client/huginn.sh` must contain **no non-ASCII characters** — no box-drawing,
-  em-dashes (`—`), ellipses (`…`), or smart quotes. `huginn update`'s `scp` path
-  delivers the file without a BOM, and Windows PowerShell 5.1 then mis-decodes any
-  non-ASCII as the ANSI code page and fails to parse the whole file. Use `-`, `--`,
-  `...`, and straight quotes. (READMEs, `docs/`, and the Kotlin/Node sources are
-  exempt — they're never sourced by a shell.)
-- **Line endings matter.** Shell scripts must be **LF** (enforced by
-  [`.gitattributes`](.gitattributes)); PowerShell stays CRLF. Don't commit CRLF shell
-  scripts — they break on the Linux host.
-- **Executable bits:** server `bin/*`, `setup.sh`, and the `*.sh` installers are tracked
-  `+x`. If you add a runnable script, set it: `git update-index --chmod=+x path`.
-- **tmux specifics:** the `Alt-o` binding relies on `##{client_tty}` (deferred format
-  expansion). If you touch it, test with two attached clients.
-- **Kotlin tests use `kotlin.test`**, whose `assertEquals` takes the message **last**
-  where JUnit takes it first — with three String arguments that difference compiles
-  silently. Convert assertions by hand, never by `sed`.
-- **Branding:** the raven is one canonical path, `assets/brand/raven.svg`;
-  `assets/brand/generate.sh` regenerates every raster and lists the hand-carried copies
-  (the Android vector drawables, the desktop's `RavenMark.kt`). Change the path, chase
-  the list.
+## Design and brand
 
-## Cutting a release
-
-Each component versions independently and its changelog is the source of the
-release notes — write the `## <version>` section first, or the tooling refuses:
-
-- **CLI / server core**: bump both `client/huginn.{sh,ps1}` (they stay in
-  lockstep), add the `CHANGELOG.md` section, then
-  `scripts/github-release.sh core X.Y.Z` (tags `vX.Y.Z`, cuts the GitHub
-  release from the section).
-- **Android app**: `mobile/scripts/ship.sh` — publishes to the store *and*
-  mirrors to GitHub (`app-vX.Y.Z` + the signed APK) automatically.
-- **Compose desktop**: `mobile/scripts/release-desktop.sh` — publishes to the
-  update channel *and* mirrors to GitHub (`desktop-vX.Y.Z` + both installers).
-- **Daemon**: deploys are not releases; when a version is worth marking,
-  `scripts/github-release.sh appd X.Y.Z` (notes via
-  `HUGINN_RELEASE_NOTES_FILE` if there's no changelog section).
-
-The GitHub mirror is best-effort by design: the store/channel publish is the
-release, and a GitHub outage must not fail it.
-
-## Workflow
-
-1. Fork → branch → change.
-2. `shellcheck` your bash where you can; `Invoke-ScriptAnalyzer` for PowerShell is a
-   bonus. For `mobile/`, run `scripts/build.sh` (or at minimum the affected module's
-   tests); for the daemon, `node --test server/appd/test/`.
-3. Open a PR with a clear description of what and why. Small, focused PRs merge fastest.
+The visual identity is defined in [`assets/brand/BRAND.md`](assets/brand/BRAND.md): colours, type,
+the raven, and the state words (working, needs you, waiting, shell, ok, error, info). Use the
+tokens and state tables rather than new colours or wording.
 
 ## Code of conduct
 
-Be kind and constructive. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
