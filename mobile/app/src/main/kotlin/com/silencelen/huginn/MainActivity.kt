@@ -130,6 +130,7 @@ import com.silencelen.huginn.ui.SessionsScreen
 import com.silencelen.huginn.ui.settings.SettingsPhoneScreen
 import com.silencelen.huginn.ui.SendTargetSheet
 import com.silencelen.huginn.ui.SignInDialog
+import com.silencelen.huginn.ui.WebLinks
 import com.silencelen.huginn.ui.StatusScreen
 import com.silencelen.huginn.ui.theme.HuginnTheme
 import com.silencelen.huginn.ui.theme.verbInk
@@ -273,21 +274,15 @@ class MainActivity : FragmentActivity() {
                     // without this (or against an old daemon) rows fall back to the
                     // "photo attached" pill.
                     // A link in an answer hands off to the browser — http(s)
-                    // ONLY. `huginn://` is this app's own deep link and `file:`
-                    // reads the phone's storage; neither is something a model's
-                    // output gets to reach by being tapped. What will not open is
-                    // copied, so the reader still has it.
+                    // ONLY ([WebLinks]). `huginn://` is this app's own deep link
+                    // and `file:` reads the phone's storage; neither is something
+                    // a model's output gets to reach by being tapped. What will
+                    // not open is copied, so the reader still has it.
                     val linkHandler = remember(vm) {
                         object : UriHandler {
                             override fun openUri(uri: String) {
-                                val scheme = runCatching { Uri.parse(uri).scheme }.getOrNull()?.lowercase()
-                                if (scheme != "http" && scheme != "https") return
-                                runCatching {
-                                    startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }.onFailure { vm.copy(uri, "link") }
+                                if (WebLinks.browsable(uri) == null) return
+                                if (!openWebLink(this@MainActivity, uri)) vm.copy(uri, "link")
                             }
                         }
                     }
@@ -872,7 +867,6 @@ fun HuginnApp(
     val plan by vm.plan.collectAsState()
     val savedAccounts by vm.savedAccounts.collectAsState()
     val switching by vm.switching.collectAsState()
-    val loginUrl by vm.loginUrl.collectAsState()
     val login by vm.login.collectAsState()
     val loginBusy by vm.loginBusy.collectAsState()
     val watchEnabled by vm.watchEnabled.collectAsState()
@@ -980,19 +974,7 @@ fun HuginnApp(
         }
     }
 
-    // The sign-in URL is 450 characters and hard-wrapped in the pane, so hand it
-    // straight to a browser instead of asking anyone to copy it off a terminal.
     val context = LocalContext.current
-    LaunchedEffect(loginUrl) {
-        loginUrl?.let { url ->
-            runCatching {
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }.onFailure { vm.copy(url, "sign-in URL") }
-            vm.loginUrlHandled()
-        }
-    }
 
     // Re-checked on every resume, because the answer can change in system
     // settings while the app is in the background.
@@ -1103,12 +1085,16 @@ fun HuginnApp(
             state = st,
             busy = loginBusy,
             onStart = { email -> vm.startLogin(email) },
+            // The sign-in URL is 450 characters and hard-wrapped in the pane, so
+            // the dialog hands it to a browser rather than asking anyone to copy
+            // it off a terminal — on a TAP, and http(s) only. It used to be
+            // launched the moment the daemon returned it, on any scheme.
             onOpenUrl = { url ->
-                runCatching {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                }.onFailure { vm.copy(url, "sign-in URL") }
+                when {
+                    WebLinks.browsable(url) == null ->
+                        vm.showToast("Not opened: the sign-in link is not an http(s) address")
+                    !openWebLink(context, url) -> vm.copy(url, "sign-in URL")
+                }
             },
             onSubmit = { vm.submitLoginCode(it) },
             onDismiss = { vm.dismissLogin() },
@@ -1941,13 +1927,9 @@ fun HuginnApp(
                         )
                     }
                 },
-                openLink = { url ->
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                    }.isSuccess
-                },
+                // http(s) only: false for anything else, and the editor then
+                // shows the address instead of opening it.
+                openLink = { url -> openWebLink(context, url) },
             )
         }
 
@@ -2415,6 +2397,19 @@ private fun StatusIcon(fill: com.silencelen.huginn.ui.UsageFill?) {
     }
 }
 
+
+/**
+ * Hands [url] to a browser, and false when it was not: http(s) ONLY ([WebLinks]),
+ * whoever wrote it — a model's answer, the daemon's sign-in URL, a Settings link.
+ */
+private fun openWebLink(context: android.content.Context, url: String): Boolean {
+    val web = WebLinks.browsable(url) ?: return false
+    return runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(web).normalizeScheme()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.isSuccess
+}
 
 /**
  * Opens an app in the phone's browser.

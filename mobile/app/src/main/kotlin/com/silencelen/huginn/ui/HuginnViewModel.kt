@@ -1671,10 +1671,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         usagePollJob = null
     }
 
-    private val _loginUrl = MutableStateFlow<String?>(null)
-    val loginUrl: StateFlow<String?> = _loginUrl.asStateFlow()
-    fun loginUrlHandled() { _loginUrl.value = null }
-
     /** Non-null while a sign-in is being run from inside the app. */
     private val _login = MutableStateFlow<LoginState?>(null)
     val login: StateFlow<LoginState?> = _login.asStateFlow()
@@ -1743,7 +1739,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.startLogin(email) }
                 .onSuccess {
-                    _loginUrl.value = it.url                     // opens the browser
+                    // The URL is NOT opened here: the dialog offers it as a button,
+                    // http(s) only, and the owner taps it. See SignInDialog.
                     _login.value = LoginState(
                         running = true, awaitingCode = true, url = it.url,
                         intendedEmail = email,
