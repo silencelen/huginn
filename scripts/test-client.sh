@@ -763,6 +763,51 @@ if command -v pwsh >/dev/null 2>&1; then
 else
   skip "ps1 device-url checks (no pwsh)"
 fi
+# ⚠ AND THE TOKEN THE PS1 WRITES OFF WINDOWS IS OWNER-ONLY. Under pwsh on Linux
+# `huginn device on` and `huginn local on` wrote the appd token (root on the
+# host) with New-Item/Set-Content at the umask: a 0755 directory and a 0644
+# file, readable by every account on the machine, where the bash client makes
+# them 0700 and 0600. And `local on` staged it in ~/.huginn at 0644, and left
+# it there when the manager never read it. Run at umask 022, as a login is.
+if command -v pwsh >/dev/null 2>&1; then
+  tok_ps () {   # $1 = the huginn command, $2 = HUGINN_LOCAL_DIR (none when empty); runs in $UT/tcwd
+    rm -rf "$UT/thome" "$UT/tcwd"; mkdir -p "$UT/thome/.huginn" "$UT/tcwd"
+    local f repo="$PWD"
+    for f in huginn-device huginn-local huginn-llm-shim; do
+      printf 'console.log(process.argv.slice(2).join(" "));\n' > "$UT/thome/.huginn/$f"
+    done
+    [ -n "${3:-}" ] && { mkdir -p "$UT/thome/.config/huginn"; printf 'old-token' > "$UT/thome/.config/huginn/appd-token"; chmod 644 "$UT/thome/.config/huginn/appd-token"; }
+    ( cd "$UT/tcwd" && umask 022 && export PATH="$UT:$PATH" HOME="$UT/thome" SSHCONN='192.0.2.50 5000 192.0.2.20 22' HOSTV4='' HOSTMID='' \
+      && if [ -n "$2" ]; then export HUGINN_LOCAL_DIR="$2"; else unset HUGINN_LOCAL_DIR; fi \
+      && pwsh -NoProfile -Command ". $repo/client/huginn.ps1; $1" ) 2>&1 | tr -d '\r'
+  }
+  mode_of () { stat -c '%a' "$1" 2>/dev/null || echo none; }
+  TD_OUT=$(tok_ps 'huginn device on' '')
+  TDD="$UT/thome/.config/huginn"
+  [ "$(mode_of "$TDD")" = 700 ] && [ "$(mode_of "$TDD/appd-token")" = 600 ] && [ "$(cat "$TDD/appd-token" 2>/dev/null)" = gate-token ] \
+    && ok "ps1 off Windows: device on writes the token 0600 in a 0700 directory" \
+    || bad "ps1 device on left the token $(mode_of "$TDD/appd-token") in a $(mode_of "$TDD") directory: $TD_OUT"
+  tok_ps 'huginn device on' '' old >/dev/null
+  [ "$(mode_of "$TDD/appd-token")" = 600 ] && [ "$(mode_of "$TDD")" = 700 ] \
+    && ok "ps1 off Windows: and a token an older run left at 0644 is made 0600" \
+    || bad "ps1 device on kept an old token at $(mode_of "$TDD/appd-token") in a $(mode_of "$TDD") directory"
+  TL_OUT=$(tok_ps 'huginn local on' "$UT/thome/ld")
+  TLD="$UT/thome/ld"
+  [ "$(mode_of "$TLD")" = 700 ] && [ "$(mode_of "$TLD/device")" = 700 ] && [ "$(mode_of "$TLD/device/appd-token")" = 600 ] \
+    && [ "$(cat "$TLD/device/appd-token" 2>/dev/null)" = gate-token ] \
+    && ok "ps1 off Windows: local on writes the token 0600 into device/, both directories 0700" \
+    || bad "ps1 local on: token $(mode_of "$TLD/device/appd-token"), device/ $(mode_of "$TLD/device"), dir $(mode_of "$TLD"): $TL_OUT"
+  STAGES=$(find "$UT/thome" -name '.seed-*' 2>/dev/null)
+  [ -z "$STAGES" ] && ok "ps1 off Windows: and no stage copy of the token is left in the profile" \
+    || bad "ps1 local on left a stage copy of the token: $(for f in $STAGES; do printf '%s (%s) ' "$f" "$(mode_of "$f")"; done)"
+  tok_ps 'huginn local on' '' >/dev/null
+  TLH="$UT/thome/.config/huginn-local"
+  [ "$(mode_of "$TLH/device/appd-token")" = 600 ] && [ "$(mode_of "$TLH")" = 700 ] && [ -z "$(ls -A "$UT/tcwd")" ] \
+    && ok "ps1 off Windows: with no HUGINN_LOCAL_DIR, local on uses ~/.config/huginn-local, never a 'C:\\' path in the cwd" \
+    || bad "ps1 local on, default dir: token $(mode_of "$TLH/device/appd-token"); the cwd holds: $(ls -A "$UT/tcwd")"
+else
+  skip "ps1 token modes off Windows (no pwsh)"
+fi
 # ⚠ AND THE RUNNER NAMES THE ADDRESS. A bare "Invalid URL" on a machine with
 # nobody at it is a message that cannot be acted on - and this one is reached
 # AFTER the url has been written to disk.
@@ -1869,6 +1914,22 @@ fi
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
 node --check client/huginn-llm-shim && ok "huginn-llm-shim parses" || bad "huginn-llm-shim does not parse"
+# The shim's own suite: the claude-CLI contract, 0600 transcripts, and the
+# engine identity check - the engine's key and the owner's prompt go only to
+# the engine this tier started (or adopted), never to whatever holds its port.
+# It stands up real listeners on that port: the engine, run from the tier's
+# runtime/ directory, and squatters running another program and (as root)
+# under another account. Captured, never piped (pipefail).
+LS_OUT=$(node --test scripts/test-llm-shim.js 2>&1); LS_RC=$?
+LS_N=$(grep -oE '^# pass [0-9]+' <<<"$LS_OUT" | grep -oE '[0-9]+')
+LS_SKIP=$(grep -oE '^# skipped [0-9]+' <<<"$LS_OUT" | grep -oE '[0-9]+')
+if [ "$LS_RC" -eq 0 ] && [ "${LS_N:-0}" -ge 14 ]; then
+  ok "the llm shim's contract, transcripts and engine identity check (${LS_N} tests)"
+  [ "${LS_SKIP:-0}" -gt 0 ] && skip "llm shim: ${LS_SKIP} test(s) need Linux, or root to listen as another account"
+else
+  bad "llm shim gate FAILED (exit $LS_RC, ${LS_N:-0} passed):"
+  grep -E '^not ok|error:' <<<"$LS_OUT" | head -12 >&2
+fi
 
 LOCAL_V=$(grep -m1 "^const VERSION = " client/huginn-local | sed "s/.*'\(.*\)'.*/\1/")
 SHIM_V=$(grep -m1 "^const VERSION = " client/huginn-llm-shim | sed "s/.*'\(.*\)'.*/\1/")

@@ -16,15 +16,19 @@
 // runner (`setRunner`), and the unit files are generated into a temp dir and
 // read back as text.
 //
-// PORTS: this file binds nothing. scripts/test-llm-shim.js holds 18790-18799;
-// the appd files own 8788-10799 (table in any server/appd/test/routes-*.js).
+// PORTS: only ports the kernel picks (listen on 0), for the engine identity
+// cases at the end. scripts/test-llm-shim.js holds 18790-18799; the appd files
+// own 8788-10799 (table in any server/appd/test/routes-*.js).
 
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
+const net = require('node:net');
+const http = require('node:http');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const readline = require('node:readline');
+const { spawnSync, spawn } = require('node:child_process');
 
 const MGR = path.resolve(__dirname, '..', 'client', 'huginn-local');
 const local = require(MGR);
@@ -728,4 +732,192 @@ test('writeTokenSecure creates 0600 under a wide umask and replaces an existing 
   } finally {
     process.umask(old);
   }
+});
+
+// ------------------------------------------------------- engine identity
+//
+// The manager hands the engine a key in its health check (`on`, `update`,
+// `status`, `doctor`) and records, when it adopts an engine, which account
+// serves it — the record the shim then holds every connection to. Both go
+// through the shim's identity check (engineKit). A listener that is not the
+// engine is asked nothing, and is sent no key.
+
+const SHIM_SRC = path.resolve(__dirname, '..', 'client', 'huginn-llm-shim');
+const MY_UID = typeof process.getuid === 'function' ? process.getuid() : null;
+const LINUX = process.platform === 'linux';
+
+/** The manager as its own process, without blocking this one: the listeners below live in it. */
+function runMgrAsync(argv, { dir, bin, home, env = {} } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [MGR, ...argv], {
+      env: {
+        ...process.env, PATH: `${bin}:${process.env.PATH}`, HOME: home,
+        HUGINN_LOCAL_DIR: dir, HUGINN_LOCAL_USER: 'owner', ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+/** An Ollama stand-in in this process: lists one model and records each request. */
+async function fakeOllama() {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push({ url: req.url, auth: req.headers.authorization || null });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ models: [{ name: 'tiny:1b' }] }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { seen, port: srv.address().port, close: () => new Promise((r) => srv.close(() => r())) };
+}
+
+/** A machine this manager can adopt onto: stub systemd/logind, the shim and a runner that enrols nothing. */
+function adoptionBox(name) {
+  const root = fs.mkdtempSync(path.join(tmp, name));
+  const dir = path.join(root, 'data');
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(path.join(dir, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'bin', 'huginn-device.js'), 'process.exit(0);\n');
+  stubBin(bin, 'systemctl', 'exit 0');
+  stubBin(bin, 'loginctl', 'echo Linger=yes');
+  stubRunuser(bin);
+  return { root, dir, bin, home: path.join(root, 'home'), env: { HUGINN_SHIM_SOURCE: SHIM_SRC } };
+}
+
+test('adopting an engine records which account serves it, and the key goes only to that account', { skip: !LINUX && 'Linux only' }, async () => {
+  const box = adoptionBox('adopt-id-');
+  const ol = await fakeOllama();
+  try {
+    const r = await runMgrAsync(['on', '--adapter', 'ollama', '--adapter-url', `http://127.0.0.1:${ol.port}`,
+      '--adapter-key', 'adapter-secret', '--yes', '--url', 'http://127.0.0.1:1'], box);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const conf = JSON.parse(fs.readFileSync(path.join(box.dir, 'local.json'), 'utf8'));
+    assert.equal(conf.adapter.engine.uid, MY_UID, 'the account that accepted the probe');
+    assert.equal(conf.adapter.engine.exe, process.execPath, 'and its program, for the record');
+    assert.match(r.stdout, new RegExp(`is served by uid ${MY_UID}, pid \\d+`), 'said before the consent question');
+    assert.ok(ol.seen.length >= 1 && ol.seen.every((q) => q.auth === 'Bearer adapter-secret'),
+      `the list was asked with the key, over the judged connection: ${JSON.stringify(ol.seen)}`);
+  } finally { await ol.close(); }
+});
+
+test('adopting a port nothing serves is refused before anything is recorded', { skip: !LINUX && 'Linux only' }, async () => {
+  const box = adoptionBox('adopt-none-');
+  const probe = net.createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const port = probe.address().port;
+  await new Promise((r) => probe.close(r));
+  const r = await runMgrAsync(['on', '--adapter', 'ollama', '--adapter-url', `http://127.0.0.1:${port}`, '--yes', '--url', 'http://127.0.0.1:1'], box);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /is not answering/);
+  assert.ok(!fs.existsSync(path.join(box.dir, 'local.json')), 'nothing adopted, nothing written');
+});
+
+test('update records who serves an engine adopted before identities were', { skip: !LINUX && 'Linux only' }, async () => {
+  const box = adoptionBox('adopt-upd-');
+  const ol = await fakeOllama();
+  try {
+    fs.writeFileSync(path.join(box.dir, 'local.json'), JSON.stringify({
+      mode: 'adapter', adopted: true, class: 'adapter', deviceName: 'box-llm', systemUnits: false,
+      adapter: { kind: 'ollama', url: `http://127.0.0.1:${ol.port}`, key: null },
+      modelsBySlug: { 'tiny-1b': { file: 'tiny:1b', display: 'tiny:1b' } }, defaultModel: 'tiny-1b',
+    }));
+    const before = await runMgrAsync(['status'], box);
+    assert.match(before.stdout, /^identity +not recorded, so the shim refuses this engine until it is: huginn local update$/m,
+      'status says why every run is refused, and the verb that fixes it');
+    const r = await runMgrAsync(['update'], box);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /engine {2}recorded: .* is served by uid/);
+    const conf = JSON.parse(fs.readFileSync(path.join(box.dir, 'local.json'), 'utf8'));
+    assert.equal(conf.adapter.engine.uid, MY_UID);
+    assert.equal(modeOf(path.join(box.dir, 'local.json')), 0o600);
+    const after = await runMgrAsync(['status'], box);
+    assert.doesNotMatch(after.stdout, /^identity/m, after.stdout);
+  } finally { await ol.close(); }
+});
+
+const modeOf = (f) => fs.statSync(f).mode & 0o777;
+
+/**
+ * A managed install whose api-key exists, and whose runtime/ holds a link to
+ * node: the program the stand-in engine runs, so it is "under runtime/".
+ */
+function managedBox(name, port) {
+  const dir = fs.mkdtempSync(path.join(tmp, name));
+  fs.writeFileSync(path.join(dir, 'api-key'), 'managed-secret\n', { mode: 0o600 });
+  const tree = path.join(dir, 'runtime', 'llama-swap-t');
+  fs.mkdirSync(tree, { recursive: true });
+  const exe = path.join(tree, 'llama-swap');
+  try { fs.linkSync(process.execPath, exe); } catch { fs.copyFileSync(process.execPath, exe); fs.chmodSync(exe, 0o755); }
+  const conf = { mode: 'managed', class: 'C', port, systemUnits: false, modelsBySlug: { tiny: {} }, defaultModel: 'tiny' };
+  return { dir, exe, conf };
+}
+
+/** health() in this process, as this account's own install (serviceUid without an `id` lookup). */
+async function healthAs(dir, conf) {
+  const saved = { d: process.env.HUGINN_LOCAL_DIR, u: process.env.HUGINN_LOCAL_USER };
+  process.env.HUGINN_LOCAL_DIR = dir;
+  process.env.HUGINN_LOCAL_USER = os.userInfo().username;
+  try { return await local.health(conf); } finally {
+    process.env.HUGINN_LOCAL_DIR = saved.d;
+    process.env.HUGINN_LOCAL_USER = saved.u;
+  }
+}
+
+test('the health check sends the key to the engine this install started, over the judged connection', { skip: !LINUX && 'Linux only' }, async () => {
+  const port = await new Promise((r) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+  const box = managedBox('health-ok-', port);
+  const script = path.join(box.dir, 'engine.js');
+  fs.writeFileSync(script, `require('http').createServer((q, s) => {
+  process.stdout.write(JSON.stringify({ url: q.url, auth: q.headers.authorization || null }) + '\\n');
+  s.writeHead(200, { 'content-type': 'application/json' }); s.end('{"data":[{"id":"tiny"}]}');
+}).listen(${port}, '127.0.0.1', () => process.stdout.write('{"ready":true}\\n'));\n`);
+  const child = spawn(box.exe, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const seen = [];
+  await new Promise((resolve) => readline.createInterface({ input: child.stdout }).on('line', (l) => {
+    const o = JSON.parse(l); if (o.ready) resolve(); else seen.push(o);
+  }));
+  try {
+    const h = await healthAs(box.dir, box.conf);
+    assert.equal(h.refused, undefined, JSON.stringify(h));
+    assert.deepEqual(h.models, ['tiny']);
+    for (let i = 0; i < 20 && !seen.length; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(seen[0].auth, 'Bearer managed-secret');
+  } finally { child.kill('SIGKILL'); }
+});
+
+test('the health check sends a squatter on the engine port nothing — not the key, not a request', { skip: !LINUX && 'Linux only' }, async () => {
+  let bytes = 0;
+  let conns = 0;
+  const sq = net.createServer((s) => {
+    conns += 1;
+    s.on('error', () => {});
+    s.on('data', (d) => {
+      bytes += d.length;
+      s.end('HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\n\r\n{"data":[{"id":"pwned"}]}');
+    });
+  });
+  await new Promise((r) => sq.listen(0, '127.0.0.1', r));
+  const box = managedBox('health-sq-', sq.address().port);
+  try {
+    // This process is the squatter: this account, but not a program from runtime/.
+    const h = await healthAs(box.dir, box.conf);
+    assert.match(String(h.refused), /not this machine's local engine: pid \d+ runs \S*node, which is not under/, JSON.stringify(h));
+    assert.deepEqual(h.models, [], 'nothing it said was taken as the model list');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(conns, 1, 'it was reached, and judged');
+    assert.equal(bytes, 0, 'and sent not one byte, so not the key');
+    const s = await (async () => {
+      const saved = process.env.HUGINN_LOCAL_DIR;
+      process.env.HUGINN_LOCAL_DIR = box.dir;
+      process.env.HUGINN_LOCAL_USER = os.userInfo().username;
+      fs.writeFileSync(path.join(box.dir, 'local.json'), JSON.stringify(box.conf));
+      shim({ systemctl: { stdout: 'active\n' }, loginctl: { stdout: 'Linger=yes\n' }, runuser: { stdout: 'active\n' } });
+      try { return await local.statusInfo(); } finally { process.env.HUGINN_LOCAL_DIR = saved; process.env.HUGINN_LOCAL_USER = 'owner'; }
+    })();
+    assert.match(String(s.engine.refused), /not this machine's local engine/, 'status says so, in the field the desktop decodes');
+  } finally { await new Promise((r) => sq.close(r)); }
 });

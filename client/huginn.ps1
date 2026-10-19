@@ -493,6 +493,51 @@ function _Huginn-HasUrl {
   return $false
 }
 
+# pwsh on Linux or macOS keeps the appd token the way the bash client does:
+# owner-only. New-Item and Set-Content create at the umask (directories 0755,
+# files 0644), so on a shared machine the token - root-equivalent on the host -
+# was readable by every account. Windows keeps what it had: there the
+# profile's ACL is what guards it. A no-op on Windows (5.1 has no $IsWindows).
+function _Huginn-OwnerOnly {
+  param([string]$Path, [switch]$Directory)
+  if ($null -eq $IsWindows -or $IsWindows) { return }
+  $mode = if ($Directory) { 'UserRead, UserWrite, UserExecute' } else { 'UserRead, UserWrite' }
+  $t = 'System.IO.UnixFileMode' -as [type]
+  if ($t) { [IO.File]::SetUnixFileMode($Path, [Enum]::Parse($t, $mode)); return }
+  chmod $(if ($Directory) { '700' } else { '600' }) -- $Path
+  if ($LASTEXITCODE -ne 0) { throw "huginn: could not make $Path owner-only" }
+}
+
+# Write the token to $Path. Off Windows: its directory is made 0700 first, so
+# not even an empty temp is reachable by another account; the temp has a
+# random name and is created new (never a file somebody planted), 0600 before
+# a byte of the token goes in, and is then renamed over $Path.
+function _Huginn-WriteSecret {
+  param([string]$Path, [string]$Value)
+  if ($null -eq $IsWindows -or $IsWindows) { Set-Content -NoNewline -Path $Path -Value $Value; return }
+  $d = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Force -Path $d | Out-Null
+  _Huginn-OwnerOnly $d -Directory
+  $tmp = Join-Path $d ('.' + (Split-Path -Leaf $Path) + '.' + [IO.Path]::GetRandomFileName())
+  $t = 'System.IO.UnixFileMode' -as [type]
+  if ($t) {
+    $o = New-Object IO.FileStreamOptions
+    $o.Mode = 'CreateNew'; $o.Access = 'Write'; $o.UnixCreateMode = [Enum]::Parse($t, 'UserRead, UserWrite')
+    $fs = [IO.FileStream]::new($tmp, $o)
+  } else {
+    $fs = [IO.File]::Open($tmp, 'CreateNew', 'Write', 'None')
+  }
+  try {
+    _Huginn-OwnerOnly $tmp
+    $b = (New-Object Text.UTF8Encoding $false).GetBytes($Value)
+    $fs.Write($b, 0, $b.Length)
+  } catch {
+    $fs.Dispose(); Remove-Item -Force -LiteralPath $tmp -ErrorAction SilentlyContinue; throw
+  }
+  $fs.Dispose()
+  Move-Item -Force -LiteralPath $tmp -Destination $Path
+}
+
 # --- desktop download links ---
 # The Compose desktop client ships as a PUBLIC GitHub release (tag desktop-v<ver>),
 # and that is also where the installed app's own self-updater fetches from - so the
@@ -1594,6 +1639,7 @@ function huginn {
       $dir = Join-Path $HOME '.config/huginn'
       New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
       New-Item -ItemType Directory -Force -Path $dir | Out-Null
+      _Huginn-OwnerOnly $dir -Directory   # off Windows: 0700, as the bash client makes it
       if ($sub -eq 'update' -or -not (Test-Path $runner)) {
         _Huginn-FetchFile -RepoPath 'client/huginn-device' -Dest $runner -Label 'huginn device' | Out-Null
       }
@@ -1607,9 +1653,9 @@ function huginn {
         $tokfile = Join-Path $dir 'appd-token'
         if (-not (Test-Path $tokfile)) {
           $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join ''
-          if ($tok.Trim()) { Set-Content -NoNewline -Path $tokfile -Value $tok.Trim() }
+          if ($tok.Trim()) { _Huginn-WriteSecret $tokfile $tok.Trim() }
           else { _Huginn-Fail "huginn device: could not read the appd token from $H" }
-        }
+        } else { _Huginn-OwnerOnly $tokfile }   # one an older run left at the umask
         # See _Huginn-SrvUrl: the address this machine just reached the host at,
         # bracketed when it is an IPv6 literal.
         # An explicit --url wins outright - it is the answer to this question,
@@ -1695,7 +1741,11 @@ function huginn {
       }
       if ($sub -eq 'plan') { node $mgr plan @rest; return }
       if ($sub -eq 'update') { if (Test-Path $mgr) { node $mgr update @rest }; return }
+      # Off Windows the tier lives where the manager and the bash client keep
+      # it; 'C:\ProgramData\...' there was a relative path in the current directory.
+      $posix = ($null -ne $IsWindows) -and -not $IsWindows
       $dir = if ($env:HUGINN_LOCAL_DIR) { $env:HUGINN_LOCAL_DIR }
+             elseif ($posix)            { Join-Path $HOME '.config/huginn-local' }
              elseif ($env:ProgramData)  { Join-Path $env:ProgramData 'huginn-local' }
              else                       { 'C:\ProgramData\huginn-local' }
       # The appd token is root-equivalent on the host, so it is NOT written into
@@ -1710,7 +1760,24 @@ function huginn {
       # for lockTree to relock.
       $tokfile = Join-Path $dir 'device/appd-token'
       $seed = $null
-      if (-not (Test-Path $tokfile)) {
+      if ($posix) {
+        # pwsh on Linux or macOS does what the bash client does. There is no
+        # ProgramData ACL to wait for, so the token goes straight into device/,
+        # owner-only (0700 directories, a 0600 file); a stage in the profile was
+        # 0644 there, and an elevated --system run never got to read it.
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir 'device') | Out-Null
+        _Huginn-OwnerOnly $dir -Directory
+        _Huginn-OwnerOnly (Join-Path $dir 'device') -Directory
+        if (Test-Path $tokfile) { _Huginn-OwnerOnly $tokfile }
+        else {
+          $tok = ''
+          $old = Join-Path $HOME '.config/huginn/appd-token'
+          if (Test-Path $old) { $tok = Get-Content -Raw -Path $old }
+          if (-not "$tok".Trim()) { $tok = (ssh -T $H 'cat /etc/huginn-appd/token') -join '' }
+          if (-not "$tok".Trim()) { _Huginn-Fail "huginn local: could not read the appd token from $H" }
+          _Huginn-WriteSecret $tokfile "$tok".Trim()
+        }
+      } elseif (-not (Test-Path $tokfile)) {
         $tok = ''
         $old = Join-Path $HOME '.config/huginn/appd-token'
         if (Test-Path $old) { $tok = Get-Content -Raw -Path $old }
