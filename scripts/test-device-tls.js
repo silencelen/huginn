@@ -423,6 +423,71 @@ test('HUGINN_APPD_PLAINTEXT=local is the old behaviour, on purpose and only to l
   assert.match(dev.plainRefusal(new URL('http://127.0.0.1:1')), /HUGINN_APPD_PLAINTEXT=local/);
 });
 
+// ------------------- a peer that has not proved itself: bounded in size and time
+//
+// The challenge is the one exchange with a peer nobody has proved yet. Its
+// answer used to be read whole, with only an idle timeout: a peer dripping a
+// byte at a time stalled the serve loop for good, and one streaming without
+// end grew this process.
+
+/** A TLS listener that hands each request's raw socket to `onRequest`, once its head is in. */
+async function rawTls(cert, onRequest) {
+  const socks = [];
+  const srv = tls.createServer({ key: cert.key, cert: cert.cert }, (s) => {
+    socks.push(s);
+    s.on('error', () => { });
+    let head = '';
+    let answered = false;
+    s.on('data', (d) => {
+      head += d;
+      if (!answered && head.includes('\r\n\r\n')) { answered = true; onRequest(s); }
+    });
+  });
+  const port = await listen(srv);
+  return { port, kill: () => { for (const s of socks) s.destroy(); } };
+}
+
+test('a challenge answer that drips is ended by its deadline instead of stalling the runner', { timeout: 15000 }, async () => {
+  const timers = [];
+  const peer = await rawTls(mintCert('drip'), (s) => {
+    s.write('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{');
+    // A byte every 100 ms: the idle timeout never fires.
+    const t = setInterval(() => { if (!s.destroyed) s.write(' '); }, 100);
+    t.unref();
+    timers.push(t);
+  });
+  try {
+    const t0 = Date.now();
+    await assert.rejects(dev.proveDaemon(`https://127.0.0.1:${peer.port}`, TOKEN, { deadlineMs: 800 }), /within 800 ms/);
+    assert.ok(Date.now() - t0 < 4000, `bounded by the deadline (took ${Date.now() - t0} ms)`);
+    assert.ok(dev.CHALLENGE_DEADLINE_MS > 0 && dev.CHALLENGE_DEADLINE_MS <= 30000, 'and the default deadline is a real one');
+  } finally {
+    for (const t of timers) clearInterval(t);
+    peer.kill();
+  }
+});
+
+test('a challenge answer bigger than a few KiB is cut off, not read into memory', { timeout: 20000 }, async () => {
+  const chunk = Buffer.alloc(64 * 1024, 0x20);
+  let sent = 0;
+  const peer = await rawTls(mintCert('flood'), (s) => {
+    s.write('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n');
+    const pump = () => {
+      while (!s.destroyed && sent < 64 * 1024 * 1024) {
+        sent += chunk.length;
+        if (!s.write(chunk)) { s.once('drain', pump); return; }
+      }
+    };
+    pump();
+  });
+  try {
+    const t0 = Date.now();
+    await assert.rejects(dev.proveDaemon(`https://127.0.0.1:${peer.port}`, TOKEN), /ran past \d+ bytes/);
+    assert.ok(Date.now() - t0 < 5000, `cut off at once (took ${Date.now() - t0} ms)`);
+    assert.ok(dev.CHALLENGE_MAX_BYTES <= 8192, 'a few KiB: appd answers in about 300 bytes');
+  } finally { peer.kill(); }
+});
+
 // --------------------------------------------------- end to end, real appd
 
 test('E2E: enrol against a real appd over https, pin its own certificate, long-poll', async () => {
