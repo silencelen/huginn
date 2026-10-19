@@ -234,9 +234,25 @@ else
   [ "$(jq -r .keep "$S" 2>/dev/null)" = 1 ] && [ -z "$(hooks_of "$S")" ] && [ "$(stat -c %U "$S")" = "$NOBODY" ] \
     && ok "uninstall.sh still takes the hooks out, writing as the home's owner" \
     || bad "uninstall in $NOBODY's home (exit $RC): $(stat -c '%U' "$S") $(tr -d '\n' < "$S") / $OUT"
+  # install-hooks.js runs as the home's owner too. It writes <settings>.huginn.tmp
+  # and renames that over the file, so a link the account planted at the temp
+  # name would be a root write wherever it pointed - the one this block exists
+  # not to make. Here the daemon's own hook IS in the file, so the script has
+  # something to write.
+  if command -v node >/dev/null 2>&1; then
+    H="$(newhome uninstall-hooks)"
+    as_nobody mkdir "$H/.claude"
+    as_nobody sh -c 'printf "%s\n" "$2" > "$1/.claude/settings.json"' sh "$H" \
+      '{"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/huginn-appd/hooks/huginn-permission-hook"}]}]}}'
+    as_nobody ln -s "$R/file" "$H/.claude/settings.json.huginn.tmp"
+    OUT="$(run_block uninstall-block.sh "$H")"; RC=$?
+    [ "$(cat "$R/file")" = "ROOT FILE" ] \
+      && ok "uninstall.sh: install-hooks.js runs as the home's owner, so a link at its temp name reaches no root file" \
+      || bad "uninstall.sh: install-hooks.js wrote a root file through the account's link (exit $RC): $(head -c 200 "$R/file") / $OUT"
+  fi
 fi
 
-echo "[5/5] one rule, one copy of it"
+echo "[5/6] one rule, one copy of it"
 fn() { awk -v f="$1() {" 'index($0, f) == 1 {on=1} on{print} on && /^}$/{exit}' "$2"; }
 for f in as_home_owner home_path_ok home_replace; do
   A="$(fn "$f" "$SETUP")"; B="$(fn "$f" "$UNINSTALL")"
