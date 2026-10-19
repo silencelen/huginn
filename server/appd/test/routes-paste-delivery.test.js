@@ -42,8 +42,46 @@ const TMUX_SOCK = `huginn-bp-${process.pid}`;
 const FAKE = path.join(__dirname, 'fixtures', 'fake-claude-bp.js');
 const typing = require('../lib/typing');
 
-let tmp, stateDir, token, daemon, daemonLog;
+let tmp, stateDir, token, daemon, daemonLog, armFile;
 const madeSessions = new Set();
+
+/**
+ * A tmux wrapper on the DAEMON's PATH (never ours), which passes every call
+ * through — except once it is ARMED. Armed (a file: line 1 the message, line 2
+ * a trigger file), the first `capture-pane` whose output shows the message raises
+ * the stand-in's dialog by creating the trigger, waits until the real pane shows
+ * that dialog, and then hands back the capture it took BEFORE raising it.
+ *
+ * That is the race exactly, made deterministic: the daemon's read says the
+ * message has landed in the box, and by the time its Enter goes the pane is a
+ * permission prompt. A dialog raised by a background subagent lands in that gap
+ * on its own schedule; this lands it there every time.
+ */
+function tmuxShim(realTmux) {
+  return '#!/bin/sh\n'
+    + `real='${realTmux}'\n`
+    + 'if [ -n "${HG_ARM:-}" ] && [ -f "$HG_ARM" ]; then\n'
+    + '  case " $* " in\n'
+    + '    *" capture-pane "*)\n'
+    + '      out=$("$real" "$@"); rc=$?\n'
+    + '      marker=$(sed -n 1p "$HG_ARM"); trigger=$(sed -n 2p "$HG_ARM")\n'
+    + '      case "$out" in\n'
+    + '        *"$marker"*)\n'
+    + '          rm -f "$HG_ARM"; : > "$trigger"; i=0\n'
+    + '          while [ $i -lt 150 ]; do\n'
+    + '            if "$real" "$@" | grep -q "Do you want to proceed"; then break; fi\n'
+    + '            sleep 0.02; i=$((i + 1))\n'
+    + '          done ;;\n'
+    + '      esac\n'
+    + '      printf "%s\\n" "$out"; exit $rc ;;\n'
+    + '  esac\n'
+    + 'fi\n'
+    + 'exec "$real" "$@"\n';
+}
+const dialogFileFor = (name) => path.join(tmp, `${name}.dialog`);
+const answersFor = (name) => path.join(tmp, `${name}.answers`);
+/** Arm the wrapper: raise `name`'s dialog the moment a read shows `text`. */
+function armDialog(name, text) { fs.writeFileSync(armFile, `${text}\n${dialogFileFor(name)}\n`); }
 
 function sh(cmd, args) {
   if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args];
@@ -81,12 +119,13 @@ function composerOf(name) {
   return typing.composerText(capture(name).replace(/\n$/, '').split('\n'));
 }
 
-async function startPane(suffix, { typed = '', lag = 0, rows = 30 } = {}) {
+async function startPane(suffix, { typed = '', lag = 0, rows = 30, dialog = false } = {}) {
   const name = `${PFX}-${suffix}`;
   madeSessions.add(name);
+  const dialogEnv = dialog ? `HG_FAKE_DIALOG_FILE=${dialogFileFor(name)} HG_FAKE_DIALOG_OUT=${answersFor(name)} ` : '';
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', String(rows),
     `env HG_FAKE_CLAUDE_OUT=${outFor(name)} HG_FAKE_CLAUDE_TYPED='${typed}' HG_FAKE_LAG_MS=${lag} `
-    + `${process.execPath} ${FAKE}`]);
+    + `${dialogEnv}${process.execPath} ${FAKE}`]);
   for (let i = 0; i < 60 && composerOf(name) === null; i++) await wait(100);
   return name;
 }
@@ -100,9 +139,16 @@ before(async () => {
   fs.mkdirSync(path.join(tmp, 'data'));
   daemonLog = path.join(tmp, 'daemon.log');
   const logFd = fs.openSync(daemonLog, 'a');
+  const realTmux = execFileSync('/bin/sh', ['-c', 'command -v tmux'], { encoding: 'utf8' }).trim();
+  const shimDir = path.join(tmp, 'shim');
+  fs.mkdirSync(shimDir);
+  fs.writeFileSync(path.join(shimDir, 'tmux'), tmuxShim(realTmux), { mode: 0o755 });
+  armFile = path.join(tmp, 'arm');
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
       ...process.env,
+      PATH: `${shimDir}:${process.env.PATH}`,
+      HG_ARM: armFile,
       HUGINN_APPD_PORT: String(PORT),
       HUGINN_APPD_BIND: '127.0.0.1',
       HUGINN_APPD_DATA: path.join(tmp, 'data'),
@@ -299,4 +345,59 @@ test('9: a paste-end marker inside the text cannot split the message', async () 
   assert.equal(body.delivered, true, JSON.stringify(body));
   assert.deepEqual(submitted(name), ['first part\nsecond part'], 'one message, both halves');
   assert.equal(composerOf(name), '', 'and nothing left behind in the box');
+});
+
+/** Poll until `fn()` is true, or fail saying what was being waited for. */
+async function until(fn, ms, what) {
+  const deadline = Date.now() + ms;
+  while (!fn()) {
+    if (Date.now() > deadline) throw new Error(`${what} never happened`);
+    await wait(100);
+  }
+}
+
+test('10: a permission dialog raised between the paste and its Enter gets NO Enter; the send is held', async () => {
+  // The Enter that submits a message is also the key that answers a selector,
+  // and on a tool prompt the highlighted row is Yes. The send was released off
+  // one read, pasted, settled — and the Enter went out with no fresh look, so a
+  // dialog a background subagent raised in that gap was approved by a chat
+  // message. Now the pane is read once more right before the Enter.
+  const name = await startPane('gap', { dialog: true });
+  const text = `please run the nightly report ${process.pid}`;
+  armDialog(name, text);
+  const { status, body } = await send(name, text);
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(fs.existsSync(armFile), false, 'precondition: the dialog was raised after the paste was seen');
+  assert.equal(readOr(answersFor(name)), '', 'no keystroke answered the dialog — an Enter there is a Yes');
+  assert.equal(body.delivered, false, JSON.stringify(body));
+  assert.equal(body.blockedBy, 'modal', 'reported like any send a dialog holds');
+  assert.deepEqual(submitted(name), []);
+  assert.equal((await typingOf(name)).blockedBy, 'modal', 'and /typing says the same');
+  assert.match(readOr(daemonLog), /not pressing Enter — a dialog opened before the Enter/);
+
+  // The owner answers the dialog themselves. The message comes back in the box
+  // and goes in from there — an Enter, never a second paste.
+  sh('tmux', ['send-keys', '-t', `=${name}:`, 'Escape']);
+  await until(() => submitted(name).length > 0, 10_000, 'the held message to be submitted');
+  await wait(500);
+  assert.deepEqual(submitted(name), [text], 'exactly once, whole');
+  assert.equal(readOr(answersFor(name)).trim(), 'DENIED', 'the only answer the dialog got was the owner\'s');
+  assert.equal((await typingOf(name)).queued, 0);
+});
+
+test('10b: a message already in the box gets no Enter if a dialog opens before it', async () => {
+  // The resubmit path (the box already holds exactly this message) pressed Enter
+  // straight away — same gap, same Yes.
+  const text = `please look at the overnight backup report ${process.pid}`;
+  const name = await startPane('gapbox', { typed: text, dialog: true });
+  armDialog(name, text);
+  const { body } = await send(name, text);
+  assert.equal(fs.existsSync(armFile), false, 'precondition: the dialog was raised after the gate looked');
+  assert.equal(readOr(answersFor(name)), '', 'no keystroke answered the dialog');
+  assert.equal(body.delivered, false, JSON.stringify(body));
+  assert.equal(body.blockedBy, 'modal');
+  sh('tmux', ['send-keys', '-t', `=${name}:`, 'Escape']);
+  await until(() => submitted(name).length > 0, 10_000, 'the held message to be submitted');
+  await wait(500);
+  assert.deepEqual(submitted(name), [text], 'once — not the message twice in one prompt');
 });

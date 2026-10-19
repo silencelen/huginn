@@ -1003,6 +1003,97 @@ function boxHoldsExactly(composerHolds, text) {
   return !!squashed && squashed === squashPane(text);
 }
 
+/**
+ * Is what the box holds the message appd typed into it — and nothing else?
+ *
+ * Broader than `boxHoldsExactly` in the two ways a box legitimately shows a
+ * message that is in it: a long paste collapsed to its `[Pasted text …]` marker,
+ * and a long one scrolled so only a piece of it is on screen (`boxExplainedBy`).
+ * Never true for a box with somebody else's words in it as well.
+ */
+function boxIsOurs(composerHolds, text) {
+  if (composerHolds == null) return false;
+  const squashed = squashPane(composerHolds);
+  if (!squashed) return false;
+  if (boxExplainedBy(squashed, text)) return true;
+  return PASTED_MARKER_RE.test(squashed) && !squashed.replace(PASTED_MARKER_ALL_RE, '')
+    && wouldCollapse(text);
+}
+
+/**
+ * ─── LOOK BEFORE THE ENTER ─────────────────────────────────────────────────
+ *
+ * ⚠ THE ENTER THAT SUBMITS A MESSAGE IS ALSO THE KEY THAT ANSWERS A DIALOG.
+ * A send is released off one capture, pasted, given a settle wait and a beat —
+ * and the Enter went out with no fresh look at the pane. A permission prompt or
+ * an AskUserQuestion that a background subagent or a hook raised in that gap
+ * takes the Enter on its highlighted row, and on a tool prompt that row is Yes:
+ * the owner approves a tool call they never saw, by sending a chat message. The
+ * same is true of the Enter that resubmits a message already in the box, and of
+ * the Enter the lost-paste recoveries press.
+ *
+ * So the pane is captured once more immediately before every such Enter, and
+ * the Enter goes only to the composer:
+ *
+ *   null                       press — the composer holds exactly our message,
+ *                              or nothing on screen is a dialog (a pane with no
+ *                              composer keeps the blind behaviour it always had)
+ *   {blockedBy:'modal'|'trust'} a dialog is up: the message stays in the box,
+ *                              unsent, and the send is HELD until it is answered
+ *   {blockedBy:'shell'}        claude died under the paste and a shell prompt is
+ *                              on the last row: nothing is run, nothing is pressed
+ *   {blockedBy:'modal'}        a composer was drawn before the paste and none is
+ *                              now — something with no caret of its own replaced
+ *                              it, and an Enter there answers whatever it is
+ *
+ * The composer holding our text is checked FIRST because a message is allowed
+ * to look like a dialog: `1. fix the backup` / `2. rerun` in a box with no status
+ * line under it reads as a selector run to `detectPrompt`, and must still go.
+ */
+function enterRefusal(lines, text, { hadComposer = false } = {}) {
+  if (lines == null) return null;    // nothing could be read: the blind rule, as before
+  const arr = Array.isArray(lines) ? lines : String(lines).split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
+  if (last >= 0 && shellPromptRow(plain[last])) {
+    return { blockedBy: 'shell', why: 'claude is no longer running in the pane (a shell prompt is on its last row)' };
+  }
+  const c = composerText(arr);
+  if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return null;
+  const why = paneReadyForInput(arr).why;
+  if (paneBlocks(why)) {
+    return { blockedBy: why === 'trust' ? 'trust' : 'modal', why: 'a dialog opened before the Enter' };
+  }
+  if (hadComposer && c === null) {
+    return { blockedBy: 'modal', why: 'the composer was replaced by something with no caret' };
+  }
+  return null;
+}
+
+/**
+ * Is a dialog drawn BELOW the composer box `composerText` found?
+ *
+ * A frame that left an old box on screen with a selector painted under it reads,
+ * to `composerText`, as a box holding our message — the structural box is found
+ * first. The rows under its closing rule are the status lines and nothing else
+ * while the box is live; a cursored option row, a selector footer or a whole
+ * dialog there means the box is history and the selector has the keyboard.
+ */
+function dialogUnderBox(plain, last) {
+  const box = composerBox(plain, last);
+  if (!box || box.bottom < 0) return false;
+  const below = plain.slice(box.bottom + 1, last + 1);
+  if (!below.length) return false;
+  return below.some((l) => SELECTOR_ROW_RE.test(l) || DIALOG_FOOTER_RE.test(l)
+    || (TRUST_ROW_RE.test(l) && /❯/.test(l))) || !!detectPrompt(below);
+}
+
+function enterHeldLogLine(name, held, lines) {
+  return `typing: ${name}: not pressing Enter — ${held.why}; the message is in the box, unsent `
+    + `(${held.blockedBy}) | pane: ${paneTail(lines)}`;
+}
+
 function composerHoldsDraft(composerHolds, text, ours = null) {
   if (composerHolds === null || composerHolds === undefined) return null;
   const squashed = squashPane(composerHolds);
@@ -1592,7 +1683,8 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly,
+  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly, boxIsOurs,
+  enterRefusal, enterHeldLogLine,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,

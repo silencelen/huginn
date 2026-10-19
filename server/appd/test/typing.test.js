@@ -1493,3 +1493,70 @@ test('a LIVE composer is still a composer, even when its status line ends in `%`
   assert.equal(t.shellPromptRow(R80), false);
 });
 
+// ---- the look before the Enter -----------------------------------------------
+
+const PERMISSION_UP = [
+  '● Bash(rm -rf /srv/cache)',
+  '─'.repeat(80),
+  ' Bash command',
+  '╌'.repeat(80),
+  ' rm -rf /srv/cache',
+  '╌'.repeat(80),
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  "   2. Yes, and don't ask again for rm commands in /srv",
+  '   3. No',
+  ' Esc to cancel · Tab to amend',
+];
+
+test('enterRefusal: the composer holding exactly our message gets its Enter', () => {
+  const msg = 'please rerun the audit tonight';
+  assert.equal(t.enterRefusal(boxOf(msg), msg, { hadComposer: true }), null);
+  // A message that LOOKS like a selector run is still ours — in a box with no
+  // status line under it, detectPrompt reads it as one.
+  const listy = '1. fix the backup job\n2. then rerun the audit';
+  const bare = [R80, '❯ 1. fix the backup job', '  2. then rerun the audit', R80];
+  assert.equal(t.paneReadyForInput(bare).why, 'modal', 'precondition: the run reads as a dialog');
+  assert.equal(t.enterRefusal(bare, listy, { hadComposer: true }), null);
+  // A long paste the TUI collapsed to its marker.
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i + 1} of the log`).join('\n');
+  assert.equal(t.enterRefusal(boxOf('[Pasted text #1 +40 lines]'), long, { hadComposer: true }), null);
+});
+
+test('enterRefusal: a permission dialog drawn after the paste gets NO Enter', () => {
+  const held = t.enterRefusal(PERMISSION_UP, 'please rerun the audit tonight', { hadComposer: true });
+  assert.ok(held, 'an Enter here is a Yes on a tool call nobody saw');
+  assert.equal(held.blockedBy, 'modal');
+  assert.equal(t.enterRefusal(fixturePane('ask-simple-v2-80.txt'), 'thanks', { hadComposer: true }).blockedBy, 'modal');
+  assert.equal(t.enterRefusal(TRUST_DIALOG, 'thanks', { hadComposer: false }).blockedBy, 'trust',
+    'the trust dialog pre-selects "No, exit": an Enter there ends the session');
+  assert.match(t.enterHeldLogLine('jotter', held, PERMISSION_UP), /not pressing Enter .* \(modal\) \| pane: /);
+});
+
+test('enterRefusal: a box replaced by something with no caret is not pressed into either', () => {
+  const notice = ['● Working…', '', '  Press Enter to continue'];
+  assert.equal(t.enterRefusal(notice, 'hello there friend', { hadComposer: true }).blockedBy, 'modal');
+  // …but a pane that never had a box keeps the blind behaviour it always had.
+  assert.equal(t.enterRefusal(notice, 'hello there friend', { hadComposer: false }), null);
+  assert.equal(t.enterRefusal([], 'x', { hadComposer: false }), null);
+  assert.equal(t.enterRefusal(null, 'x', { hadComposer: true }), null, 'an unreadable pane: as before');
+  // An empty box (a TUI behind its input) is still a box: the Enter goes behind the bytes.
+  assert.equal(t.enterRefusal(EMPTY_BOX, 'late text', { hadComposer: true }), null);
+});
+
+test('enterRefusal: claude dying under the paste leaves the text at the prompt, unrun', () => {
+  const dead = [R80, '❯ please rerun the audit tonight', R80, ...STATUS, 'root@host:~#'];
+  assert.equal(t.enterRefusal(dead, 'please rerun the audit tonight', { hadComposer: true }).blockedBy, 'shell');
+});
+
+test('boxIsOurs: the whole message, its collapsed marker, a scrolled piece — never somebody else\'s words', () => {
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i + 1} of the log`).join('\n');
+  assert.equal(t.boxIsOurs('rerun it', 'rerun it'), true);
+  assert.equal(t.boxIsOurs('[Pasted text #1 +40 lines]', long), true);
+  assert.equal(t.boxIsOurs('[Pasted text #1 +40 lines]', 'short'), false, 'a short message is never drawn as a marker');
+  assert.equal(t.boxIsOurs('line 12 of the log line 13 of the log line 14', long), true, 'scrolled');
+  assert.equal(t.boxIsOurs('rerun it and also delete the cache', 'rerun it'), false);
+  assert.equal(t.boxIsOurs('', 'x'), false);
+  assert.equal(t.boxIsOurs(null, 'x'), false);
+});
+

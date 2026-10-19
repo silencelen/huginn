@@ -2233,21 +2233,79 @@ async function recoverLostPaste(name, text, settle, before) {
   return { landed: second.landed, enter: true, recovered: true };
 }
 
-async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {}) {
+/**
+ * The Enter that submits a message — pressed only after one more look.
+ *
+ * ⚠ EVERY Enter that follows a paste goes through here (typing.enterRefusal):
+ * the main path after its settle and beat, the lost-paste recoveries, the
+ * resubmit of a message already in the box, and the send-keys fallback. A
+ * dialog raised between the paste and the Enter — a background subagent's tool
+ * prompt, a hook's question — would take the Enter on its highlighted row, which
+ * on a permission prompt is Yes. The capture is the last thing before the key.
+ *
+ * @returns {{held?: object, failed?: object}} `held` when no Enter was pressed
+ *          and why; `failed` is a result to hand straight back (tmux refused)
+ */
+async function enterAfterLook(name, text, { hadComposer = false } = {}) {
+  const lines = await capturePaneLines(name);
+  const held = typing.enterRefusal(lines, text, { hadComposer });
+  if (held) {
+    log(typing.enterHeldLogLine(name, held, lines));
+    return { held };
+  }
+  const en = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+  if (en.err) return { failed: { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr } };
+  return {};
+}
+
+/**
+ * What a send reports when the look before its Enter refused (enterAfterLook).
+ *
+ * A dialog: `ok` with `held` — the text is in the box, nothing was submitted, and
+ * the queue holds the entry until the dialog is answered (pumpQueue). A shell:
+ * a 409 like the gate's own refusal (#15) — the text sits at the prompt, unrun.
+ */
+function heldResult(name, text, held, fields) {
+  notePasteOutcome(name, text, false);
+  if (held.blockedBy === 'shell') {
+    return {
+      ok: false, code: 409, held,
+      message: 'claude stopped running in this session while the message was being typed — it is '
+        + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
+    };
+  }
+  return { ok: true, ...fields, submitted: false, held };
+}
+
+async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false } = {}) {
   const target = `=${name}:`;
   // The spelling that is actually pasted, so the settle and confirm checks below
   // compare against the bytes the pane received (2026-10-02, see pasteSafe).
   text = typing.pasteSafe(text);
+  // ⚠ A SEND HELD AFTER ITS PASTE IS ALREADY IN THE BOX (`typed`, see pumpQueue).
+  // A dialog opened between its paste and its Enter; the box it comes back to is
+  // either still holding the message — then the Enter is all that is owed — or it
+  // is not, and then nothing is typed at all: a second paste behind a first one
+  // that is merely scrolled or collapsed is the message twice.
+  if (submit && typed && !typing.boxIsOurs(boxHolds, text)) {
+    log(`typing: ${name}: a held message is no longer in the composer as it was typed; `
+      + 'not pasting it a second time');
+    notePasteOutcome(name, text, false);
+    return { ok: true, how: 'enter', settled: false, settleMs: 0, submitted: false, recovered: false };
+  }
   // ⚠ THE BOX ALREADY HOLDS EXACTLY THIS MESSAGE (2026-10-02). The 'leave'
   // recovery strands a message on purpose, and the person presses Send again.
   // A second paste behind the first is the message twice in one prompt; the
   // copy that is there only lacks its Enter. `boxHolds` is the gate's ghost-free
   // read of the composer, so a dim suggestion of the same words never gets here.
-  if (submit && typing.boxHoldsExactly(boxHolds, text)) {
+  if (submit && (typed || typing.boxHoldsExactly(boxHolds, text))) {
     log(`typing: ${name}: the message is already sitting in the composer; pressing Enter `
       + 'instead of pasting a second copy');
-    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    const press = await enterAfterLook(name, text, { hadComposer: true });
+    if (press.failed) return press.failed;
+    if (press.held) {
+      return heldResult(name, text, press.held, { how: 'enter', settled: true, settleMs: 0, recovered: false });
+    }
     const conf = await confirmSubmitted(name, text);
     if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
     notePasteOutcome(name, text, conf.ok);
@@ -2282,8 +2340,14 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {
       return { ok: true, how: 'paste', settled: false, settleMs: settle.waitedMs, submitted: false, recovered };
     }
     await sleep(PASTE_BEAT_MS);
-    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    // `before` showing a composer is what lets the look tell "a dialog with no
+    // caret replaced the box" from "this pane never had a box".
+    const pressed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+    if (pressed.failed) return pressed.failed;
+    if (pressed.held) {
+      return heldResult(name, text, pressed.held,
+        { how: 'paste', settled: landed, settleMs: settle.waitedMs, recovered });
+    }
     let submitted = null;
     if (landed) {
       // A pane that took N ms to paint the paste takes about as long to act on
@@ -2307,8 +2371,9 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {
     await sleep(SUBMIT_BEAT_MS);
   }
   if (!submit) return { ok: true, how: 'send-keys' };
-  const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-  if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+  const keyed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+  if (keyed.failed) return keyed.failed;
+  if (keyed.held) return heldResult(name, text, keyed.held, { how: 'send-keys' });
   return { ok: true, how: 'send-keys' };
 }
 
@@ -2810,6 +2875,10 @@ async function pumpQueue(name) {
         // so in the journal, in one grep-able shape, every time.
         log(typing.dropLogLine(name, entry, reason));
         log(`typing: ${name}: ${q.lastError}`);
+        if (entry.typedInBox) {
+          log(`typing: ${name}: the dropped message was typed before a dialog opened and is still `
+            + 'in the composer, unsent');
+        }
         entry.settle({ delivered: false, dropped: reason });
         continue;
       }
@@ -2961,10 +3030,31 @@ async function pumpQueue(name) {
           log(`typing: ${name}: refusing to submit into a shell prompt — claude is not running here`);
           r = { ok: false, code: 409, message: refusal };
         } else if (typeof entry.run === 'function') r = await entry.run();
-        else r = await sendTextToPane(name, entry.text, { submit: entry.submit, boxHolds: gate.composerHolds });
+        else {
+          r = await sendTextToPane(name, entry.text, {
+            submit: entry.submit, boxHolds: gate.composerHolds, typed: !!entry.typedInBox,
+          });
+        }
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
       } finally { q.delivering = false; q.inFlight = null; }
+      // ⚠ A DIALOG TOOK THE PANE BETWEEN THE PASTE AND ITS ENTER (enterAfterLook).
+      // The message is in the box and nothing was submitted, so this is not a
+      // delivery and not a failure: it is a send held by a dialog, exactly as if
+      // the dialog had been up when the gate looked. Back to the head of the
+      // queue, marked as already typed — when the dialog has been answered, the
+      // delivery is an Enter into the box (or nothing, if the box no longer holds
+      // it), never a second paste. The sender is told `blockedBy` like any hold.
+      if (r && r.ok && r.held) {
+        entry.typedInBox = true;
+        q.entries.unshift(entry);
+        q.blockedBy = r.held.blockedBy;
+        if (guarded && draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
+        log(`typing: ${name}: holding the send until the dialog is answered; it will be `
+          + 'submitted from the box, never pasted again');
+        armQueueTimer(name);
+        return;
+      }
       // The stamp the NEXT entry's boundary test starts from (see queueFor).
       // Only on success: a paste that never reached the pane started no turn,
       // and moving the window for it would hold the entry behind it for a
@@ -8044,15 +8134,26 @@ async function applyLadder(name, to) {
     return { ok: false, delivery: 'delivery_unconfirmed', reason };
   };
 
+  // Whether a composer is drawn BEFORE `/model` goes in: what lets the look below
+  // tell "something with no caret replaced the box" from "this pane has no box".
+  const hadComposer = typing.composerText((await paneLines(name)) || []) !== null;
   const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
   if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
   await sleep(SUBMIT_BEAT_MS);
-  const ent = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+  // ⚠ THE SAME LOOK A MESSAGE'S ENTER GETS (enterAfterLook). A dialog raised in
+  // the beat above — a background agent's tool prompt — would take this Enter on
+  // its Yes. fail() is no way out either: its Escape answers that dialog too. So
+  // nothing at all is pressed, and `/model` is left in the box behind the dialog
+  // for whoever answers it to see.
+  const look = await enterAfterLook(name, '/model', { hadComposer });
+  if (look.held) {
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: `a dialog opened before /model was submitted (${look.held.why})` };
+  }
   // ⚠ THROUGH fail(), because `/model` is ALREADY IN THE COMPOSER by here. This
   // was the one early exit that skipped the Escape after typing text, so the
   // pump released the next entry into a composer holding `/model` and the
   // session received `/modelYour usage limit has reset. Continue the task…`.
-  if (ent.err) return fail('could not submit /model');
+  if (look.failed) return fail('could not submit /model');
 
   let rows = null;
   const openBy = Date.now() + PICKER_WAIT_MS;
