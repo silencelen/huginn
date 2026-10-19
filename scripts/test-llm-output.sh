@@ -25,6 +25,12 @@ trap 'rm -rf "$T"' EXIT
 od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > "$T/token"; echo >> "$T/token"
 sed "s#^TOKEN_FILE=/etc/huginn-appd/token\$#TOKEN_FILE=$T/token#" "$TREE/server/bin/huginn-llm" > "$T/huginn-llm"
 grep -q "^TOKEN_FILE=$T/token\$" "$T/huginn-llm" || { bad "no TOKEN_FILE line to point at a scratch token (update this gate)"; exit 1; }
+# huginn-llm pins the daemon's certificate before it sends anything: a scratch
+# one, so this never reads (or depends on) this host's own daemon.
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=huginn-appd \
+  -keyout "$T/appd.key" -out "$T/appd.crt" >/dev/null 2>&1 \
+  || { bad "openssl could not make the scratch certificate huginn-llm pins"; exit 1; }
+export HUGINN_APPD_TLS_CERT="$T/appd.crt"
 
 mkdir -p "$T/stub"
 cat > "$T/stub/curl" <<'STUB'
@@ -34,7 +40,7 @@ method="" url="" out="" wfmt=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift 2 ;;
-    -H|-m|-d) shift 2 ;;
+    -H|-m|-d|--pinnedpubkey) shift 2 ;;
     -o) out="$2"; shift 2 ;;
     -w) wfmt="$2"; shift 2 ;;
     -*) shift ;;

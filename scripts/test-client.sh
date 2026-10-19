@@ -59,6 +59,18 @@ trap _cleanup EXIT
 # is the thing being talked to. An explicit port may still be requested (the
 # HUGINN_TEST_* overrides below) for anyone debugging against a fixed address.
 STUB_DIR=$(mktemp -d); STUB_DIRS+=("$STUB_DIR")
+# ⚠ AND EVERY STUB THAT STANDS IN FOR appd SPEAKS TLS WITH ONE SCRATCH KEY PAIR.
+# The host tools and the clients' host-side command pin appd's own certificate
+# before the token goes anywhere, so a stub is only reachable with the
+# certificate it serves, and each call that should reach it is TOLD that
+# certificate (HUGINN_APPD_TLS_CERT="$STUB_CERT", per call: exported for the
+# whole run it would also reach the real daemons the projects-live and [7/8]
+# lanes start, which read the same variable). Nothing here pins, or reaches,
+# this host's own daemon.
+STUB_CERT="$STUB_DIR/appd.crt" STUB_KEY="$STUB_DIR/appd.key"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=huginn-appd \
+  -keyout "$STUB_KEY" -out "$STUB_CERT" >/dev/null 2>&1 || STUB_CERT=
+export STUB_CERT STUB_KEY
 stub_port () {    # $1 = the port file a stub was told to write; prints the port
   local pf="$1" _
   for _ in $(seq 1 60); do
@@ -2054,13 +2066,16 @@ rm -rf "$HRT"
 # host where appd is stopped, and on one already running 3.0.0.
 HR_PF="$STUB_DIR/headroom.port"
 python3 - "$HR_PF" "${HUGINN_TEST_HEADROOM_PORT:-0}" <<'STUB' >/dev/null 2>&1 &
-import sys
+import os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+# TLS with the scratch daemon certificate (see STUB_CERT at the top).
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 # The port file is the lane's proof that the listener it is about to talk to is
 # OURS. Written after bind, so it never appears for a stub that lost the port.
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
@@ -2074,12 +2089,12 @@ if [ -z "${HR_PORT:-}" ]; then
   # reason, which is worse than not running it.
   skip "headroom daemon-too-old checks (the stub never bound a port)"
 else
-  HR_OUT=$(HUGINN_APPD_URL="http://127.0.0.1:$HR_PORT" server/bin/huginn-headroom 2>&1); HR_RC=$?
+  HR_OUT=$(HUGINN_APPD_URL="https://127.0.0.1:$HR_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-headroom 2>&1); HR_RC=$?
   grep -q 'needs appd 3.0.0' <<<"$HR_OUT" && [ "$HR_RC" = 1 ] \
     && ok "headroom on an older daemon names the version it needs (exit 1)" \
     || bad "headroom on a 404 said: $HR_OUT (exit $HR_RC)"
 fi
-HR_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-headroom 2>&1); HR_RC=$?
+HR_DEAD=$(HUGINN_APPD_URL="https://127.0.0.1:1" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-headroom 2>&1); HR_RC=$?
 [ "$HR_RC" = 2 ] \
   && ok "headroom exits 2 when nothing is answering (1 = appd is there but cannot serve it)" \
   || bad "headroom with no daemon exited $HR_RC: $HR_DEAD"
@@ -2175,7 +2190,7 @@ AP_BAD=$(awk "/python3 -c '/{inpy=1; next} /^' /{inpy=0} inpy" server/bin/huginn
 # client, so a parse check would be most of it untested.
 AR_PF="$STUB_DIR/archive.port"
 python3 - "$AR_PF" "${HUGINN_TEST_ARCHIVE_PORT:-0}" <<'ARSTUB' &
-import json, sys
+import json, os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 ROWS = {"max": 64, "archives": [
     {"id": "0123abcd-0000-4000-8000-00000000abcd", "tmuxName": "trainer",
@@ -2206,6 +2221,8 @@ class H(BaseHTTPRequestHandler):
             self._send(202, {"ok": True, "id": "x", "archived": False, "pending": True, "queued": True})
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
 srv.serve_forever()
 ARSTUB
@@ -2216,7 +2233,7 @@ if [ -z "${AR_PORT:-}" ]; then
   # below fail for the wrong reason.
   skip "archive renderer checks (the stub never bound a port)"
 else
-  AR_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive 2>&1)
+  AR_LIST=$(HUGINN_APPD_URL="https://127.0.0.1:$AR_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-archive 2>&1)
   grep -q "claude --resume 0123abcd" <<<"$AR_LIST" \
     && ok "the list prints the resume command, which is the whole point of the row" \
     || bad "archive list had no resume command: $AR_LIST"
@@ -2227,20 +2244,20 @@ else
     && ok "a row whose transcript is gone says so instead of offering a hollow revive" \
     || bad "archive list was silent about a missing transcript: $AR_LIST"
   # THE REFUSAL, VERBATIM. This is why the call is made on the host at all.
-  AR_409=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive attention 2>&1)
+  AR_409=$(HUGINN_APPD_URL="https://127.0.0.1:$AR_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-archive attention 2>&1)
   grep -q "answer the waiting question first" <<<"$AR_409" \
     && ok "a refused archive repeats the daemon's sentence, not a client guess" \
     || bad "archive refusal was rewritten client-side: $AR_409"
-  AR_REV=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive trainer 2>&1)
+  AR_REV=$(HUGINN_APPD_URL="https://127.0.0.1:$AR_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-archive revive trainer 2>&1)
   grep -q "revived as trainer2" <<<"$AR_REV" \
     && ok "revive resolves a NAME to an id host-side and reports the name it got" \
     || bad "revive by name did not work: $AR_REV"
   # A name nobody archived must not become a POST at all.
-  AR_MISS=$(HUGINN_APPD_URL="http://127.0.0.1:$AR_PORT" server/bin/huginn-archive revive nosuchname 2>&1)
+  AR_MISS=$(HUGINN_APPD_URL="https://127.0.0.1:$AR_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-archive revive nosuchname 2>&1)
   grep -q "nothing archived under" <<<"$AR_MISS" \
     && ok "reviving a name that was never archived says so" || bad "revive of an unknown name: $AR_MISS"
 fi
-AR_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-archive 2>&1); AR_RC=$?
+AR_DEAD=$(HUGINN_APPD_URL="https://127.0.0.1:1" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-archive 2>&1); AR_RC=$?
 [ "$AR_RC" = 2 ] \
   && ok "archive exits 2 when nothing is answering (1 = appd is there but cannot serve it)" \
   || bad "archive with no daemon exited $AR_RC: $AR_DEAD"
@@ -2337,7 +2354,7 @@ PJ_PF="$STUB_DIR/projects.port"
 PJ_404_PF="$STUB_DIR/projects404.port"
 PJ_REQ=$(mktemp)
 python3 - "$PJ_PF" "${HUGINN_TEST_PROJECTS_PORT:-0}" "$PJ_REQ" <<'PJSTUB' &
-import json, sys
+import json, os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 LOG = sys.argv[3]
 # ⚠ THE MANIFEST IS PART OF THE FIXTURE NOW, because `spawn` is an APPROVAL:
@@ -2431,18 +2448,22 @@ class H(BaseHTTPRequestHandler):
                                       "why": "it is sitting on a permission dialog"}]})
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
 srv.serve_forever()
 PJSTUB
 PJ_STUB=$!; STUB_PIDS+=("$PJ_STUB")
 python3 - "$PJ_404_PF" "${HUGINN_TEST_PROJECTS_404_PORT:-0}" <<'PJ404' >/dev/null 2>&1 &
-import sys
+import os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(404); self.end_headers(); self.wfile.write(b'{"error":"not found"}')
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
 srv.serve_forever()
 PJ404
@@ -2450,7 +2471,7 @@ PJ_404_STUB=$!; STUB_PIDS+=("$PJ_404_STUB")
 # A third stub: HTTP 200 with a body that is not JSON. See the assertion below.
 PJ_JUNK_PF="$STUB_DIR/projectsjunk.port"
 python3 - "$PJ_JUNK_PF" "${HUGINN_TEST_PROJECTS_JUNK_PORT:-0}" <<'PJJUNK' >/dev/null 2>&1 &
-import sys
+import os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -2458,6 +2479,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b'<html>502 Bad Gateway</html>')
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
 srv.serve_forever()
 PJJUNK
@@ -2470,7 +2493,7 @@ if [ -z "${PJ_PORT:-}" ] || [ -z "${PJ_404_PORT:-}" ] || [ -z "${PJ_JUNK_PORT:-}
   # below fail for the wrong reason.
   skip "projects renderer checks (a stub never bound a port)"
 else
-  PJ_LIST=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects 2>&1)
+  PJ_LIST=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects 2>&1)
   grep -q "Sensor board" <<<"$PJ_LIST" && grep -qE "2 members" <<<"$PJ_LIST" \
     && ok "the list names each project and counts its members" \
     || bad "projects list did not render the fixture: $PJ_LIST"
@@ -2487,7 +2510,7 @@ else
   # being proposed, and it is not a member so the member counts never show it.
   grep -qE "lead (busy|working)" <<<"$PJ_LIST" \
     && ok "the lead's state rides the project line" || bad "no lead state in: $PJ_LIST"
-  PJ_SHOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show "Sensor board" 2>&1)
+  PJ_SHOW=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects show "Sensor board" 2>&1)
   grep -q "docs" <<<"$PJ_SHOW" && grep -q "repo" <<<"$PJ_SHOW" && grep -q "needs you" <<<"$PJ_SHOW" \
     && ok "show renders the member table with the waiting member marked" \
     || bad "projects show: $PJ_SHOW"
@@ -2502,7 +2525,7 @@ else
     || bad "show's attach hint: $(grep -F 'to attach' <<<"$PJ_SHOW")"
   # A NAME is resolved host-side, exactly like `huginn-archive revive <name>`,
   # so neither client has to parse the list in bash AND in PowerShell.
-  PJ_MISS2=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" server/bin/huginn-projects show nosuchproject 2>&1)
+  PJ_MISS2=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects show nosuchproject 2>&1)
   grep -q "no project" <<<"$PJ_MISS2" \
     && ok "show of an unknown project says so instead of 404-ing" || bad "show unknown: $PJ_MISS2"
   # ⚠⚠ WHAT `new` SENDS IS THE WHOLE VERB. The daemon requires `kind` (one of
@@ -2511,7 +2534,7 @@ else
   # …" and the only way to make a project was a phone or a desktop, while the
   # gate stayed green because nothing here ever created one.
   : > "$PJ_REQ"
-  PJ_NEW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_NEW=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
            server/bin/huginn-projects new "Gate cluster" --brief 'size the gate work' 2>&1); PJ_RC=$?
   PJ_NEW_BODY=$(grep -F 'POST /v1/projects ' "$PJ_REQ" | head -1)
   [ "$PJ_RC" = 0 ] && grep -q '"kind":"other"' <<<"$PJ_NEW_BODY" \
@@ -2519,7 +2542,7 @@ else
     && ok "new sends the kind (default other) and the brief the daemon requires" \
     || bad "new sent: ${PJ_NEW_BODY:-nothing} (exit $PJ_RC) / printed: $PJ_NEW"
   : > "$PJ_REQ"
-  PJ_KIND=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_KIND=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
             server/bin/huginn-projects new "Gate cluster" --kind hardware --brief - <<<'from stdin' 2>&1)
   grep -q '"kind":"hardware"' "$PJ_REQ" && grep -q 'from stdin' "$PJ_REQ" \
     && ok "--kind travels, and --brief - reads the brief from stdin" \
@@ -2528,7 +2551,7 @@ else
   # lead gets. Refused HERE so the message can name the flag that answers it —
   # and nothing may reach the wire.
   : > "$PJ_REQ"
-  PJ_NOBRIEF=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_NOBRIEF=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
                server/bin/huginn-projects new "No brief" 2>&1); PJ_RC=$?
   [ "$PJ_RC" != 0 ] && grep -q -- "--brief" <<<"$PJ_NOBRIEF" && ! grep -q "POST" "$PJ_REQ" \
     && ok "new without a brief is refused before anything is sent" \
@@ -2539,7 +2562,7 @@ else
   # answered "approve must be true — spawning is the owner's decision" 100% of
   # the time; the old gate asserted the member:role GRAMMAR and never the body.
   : > "$PJ_REQ"
-  PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_SPAWN=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
              server/bin/huginn-projects spawn "Sensor board" 2>&1); PJ_RC=$?
   PJ_SPAWN_BODY=$(grep -F "POST /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa/spawn" "$PJ_REQ" | head -1)
   grep -q '"approve":true' <<<"$PJ_SPAWN_BODY" && grep -q '"manifestRev":2' <<<"$PJ_SPAWN_BODY" \
@@ -2551,7 +2574,7 @@ else
   # A member list typed at it is refused in the renderer's own words, because
   # it was documented for two releases and it is what a finger types.
   : > "$PJ_REQ"
-  PJ_PAIR=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_PAIR=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
             server/bin/huginn-projects spawn "Sensor board" docs:docs --prompt 'x' 2>&1); PJ_RC=$?
   [ "$PJ_RC" != 0 ] && grep -qi "no members" <<<"$PJ_PAIR" && ! grep -q "POST" "$PJ_REQ" \
     && ok "the old member:role spelling is refused, and sends nothing at all" \
@@ -2559,12 +2582,12 @@ else
   # ⚠ AND A PROJECT WITH NO PROPOSAL IS NOT A SPAWN. "this project is drafting,
   # not proposed" is true and has no next step in it; the next step is the lead.
   : > "$PJ_REQ"
-  PJ_NOTPROP=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_NOTPROP=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
                server/bin/huginn-projects spawn "status page" 2>&1); PJ_RC=$?
   [ "$PJ_RC" != 0 ] && grep -q "no proposal to approve" <<<"$PJ_NOTPROP" && ! grep -q "POST" "$PJ_REQ" \
     && ok "spawning a project the lead has not proposed yet says so, and posts nothing" \
     || bad "spawn of a drafting project exited $PJ_RC: $PJ_NOTPROP / sent: $(cat "$PJ_REQ")"
-  PJ_SPAWN=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_SPAWN=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
              server/bin/huginn-projects spawn "Sensor board" 2>&1); PJ_RC=$?
   # ⚠ HTTP 200 IS NOT "IT WORKED". The daemon reports a member that could not
   # start inside a 200 body; a renderer that passed that through as success
@@ -2579,7 +2602,7 @@ else
   # DISCARDED. A short reply hides it completely; this drives the exiting path
   # with >64 KB (a spawn that refused 800 members) through a pipe and asserts the
   # LAST line survived. Only the tail is kept, so a failure does not dump 90 KB.
-  PJ_FLOOD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_FLOOD=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
              server/bin/huginn-projects spawn "flood cluster" 2>&1 | cat | tail -3)
   grep -q "THE-LAST-LINE" <<<"$PJ_FLOOD" \
     && ok "a long reply on the non-zero-exit path survives the pipe" \
@@ -2593,7 +2616,7 @@ else
   # through the daemon's own `?end=1`, and anything still running is named with
   # a command that resolves: a tmux name.
   : > "$PJ_REQ"
-  PJ_END=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_END=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
            server/bin/huginn-projects end "Sensor board" 2>&1); PJ_RC=$?
   grep -q "DELETE /v1/projects/aaaaaaaa-0000-4000-8000-00000000aaaa?end=1" "$PJ_REQ" \
     && ok "end winds the sessions down by default (the daemon's ?end=1)" \
@@ -2606,13 +2629,13 @@ else
     && ok "a member that could not be wound down is named, with a command that works, and exits non-zero" \
     || bad "end (exit $PJ_RC) printed: $PJ_END"
   : > "$PJ_REQ"
-  PJ_ENDNOW=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_ENDNOW=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
               server/bin/huginn-projects end "Sensor board" --now 2>&1)
   grep -q "?end=now" "$PJ_REQ" \
     && ok "--now asks for the outright end, not the graceful one it used to send" \
     || bad "end --now sent: $(cat "$PJ_REQ") / printed: $PJ_ENDNOW"
   : > "$PJ_REQ"
-  PJ_KEEP=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_PORT" \
+  PJ_KEEP=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
             server/bin/huginn-projects end "Sensor board" --keep-sessions 2>&1)
   grep -qE "DELETE /v1/projects/[0-9a-f-]+ " "$PJ_REQ" && ! grep -q "end=" "$PJ_REQ" \
     && grep -q "sensor-board-lead" <<<"$PJ_KEEP" \
@@ -2623,7 +2646,7 @@ fi
 # Wave 3 appd, and "404" on its own sends somebody looking for a bug in the
 # renderer. One line, naming the daemon, and its own exit code so a script can
 # branch on it.
-PJ_OLD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_404_PORT" server/bin/huginn-projects 2>&1); PJ_RC=$?
+PJ_OLD=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_404_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects 2>&1); PJ_RC=$?
 [ "$PJ_RC" = 3 ] && grep -qi "huginn-appd" <<<"$PJ_OLD" \
   && ok "projects on a daemon without the feature exits 3 and says which daemon" \
   || bad "projects on a 404 exited $PJ_RC: $PJ_OLD"
@@ -2631,11 +2654,11 @@ PJ_OLD=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_404_PORT" server/bin/huginn-proje
 # or a proxy error page arrives as a SUCCESSFUL status with junk in it, and the
 # renderer would otherwise print "No projects." — a sentence somebody acts on,
 # and a lie. Worse than an error, because it looks like an answer.
-PJ_JUNK=$(HUGINN_APPD_URL="http://127.0.0.1:$PJ_JUNK_PORT" server/bin/huginn-projects 2>&1); PJ_RC=$?
+PJ_JUNK=$(HUGINN_APPD_URL="https://127.0.0.1:$PJ_JUNK_PORT" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects 2>&1); PJ_RC=$?
 [ "$PJ_RC" != 0 ] && ! grep -q "No projects" <<<"$PJ_JUNK" \
   && ok "a 200 that is not JSON is an error, not an empty list" \
   || bad "projects on a non-JSON 200 exited $PJ_RC: $PJ_JUNK"
-PJ_DEAD=$(HUGINN_APPD_URL="http://127.0.0.1:1" server/bin/huginn-projects 2>&1); PJ_RC=$?
+PJ_DEAD=$(HUGINN_APPD_URL="https://127.0.0.1:1" HUGINN_APPD_TLS_CERT="$STUB_CERT" server/bin/huginn-projects 2>&1); PJ_RC=$?
 [ "$PJ_RC" = 2 ] \
   && ok "projects exits 2 when nothing is answering (3 = appd is there but too old)" \
   || bad "projects with no daemon exited $PJ_RC: $PJ_DEAD"
@@ -2730,6 +2753,10 @@ FAKECLAUDE
       node server/appd/huginn-appd.js > "$PJL/daemon.log" 2>&1 &
   PJL_PID=$!; STUB_PIDS+=("$PJL_PID")
   PJL_URL="http://127.0.0.1:$PJL_PORT"
+  # The renderer speaks HTTPS to it and pins ITS certificate, minted into its
+  # scratch data dir on first start; the staging helper below stays on loopback
+  # plain HTTP, which this daemon allows from loopback.
+  PJL_TLS_URL="https://127.0.0.1:$PJL_PORT" PJL_CERT="$PJL/data/tls/cert.pem"
   PJL_UP=
   # ⚠ PROBED THROUGH THE RENDERER, not with a bare curl: this daemon wants the
   # bearer on every route including /v1/ping, and a curl carrying it would put
@@ -2737,14 +2764,14 @@ FAKECLAUDE
   # renderer reads the file itself, and a `list` that returns 0 also proves the
   # exact path the rest of this lane uses.
   for _ in $(seq 1 100); do
-    HUGINN_APPD_URL="$PJL_URL" server/bin/huginn-projects list >/dev/null 2>&1 && { PJL_UP=1; break; }
+    HUGINN_APPD_URL="$PJL_TLS_URL" HUGINN_APPD_TLS_CERT="$PJL_CERT" server/bin/huginn-projects list >/dev/null 2>&1 && { PJL_UP=1; break; }
     kill -0 "$PJL_PID" 2>/dev/null || break
     sleep 0.2
   done
   if [ -z "$PJL_UP" ]; then
     skip "projects lifecycle (the daemon did not come up: $(tail -2 "$PJL/daemon.log" | tr '\n' ' '))"
   else
-    pj () { HUGINN_APPD_URL="$PJL_URL" server/bin/huginn-projects "$@" 2>&1; }
+    pj () { HUGINN_APPD_URL="$PJL_TLS_URL" HUGINN_APPD_TLS_CERT="$PJL_CERT" server/bin/huginn-projects "$@" 2>&1; }
     PJL_NAME="Gate cluster $$"
     # ⚠ NO --cwd: the daemon auto-trusts its own WORKDIR, and every other
     # directory has to have been trusted in Claude Code first (the folder-trust

@@ -38,8 +38,12 @@
 
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
+const tls = require('tls');
+const { execFileSync } = require('child_process');
 
 // The brand state table, through its generated node reader: one source
 // (server/lib/state-table.json) for every renderer's marks and words. Beside this
@@ -58,8 +62,9 @@ const TOKEN_FILE = '/etc/huginn-appd/token';
 // Overridable for the CLI gate, which stands a stub daemon up on a spare port
 // and drives this renderer against it — the same knob huginn-headroom and
 // huginn-archive carry, and the reason those two have real end-to-end coverage
-// instead of a parse check.
-const BASE = (process.env.HUGINN_APPD_URL || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+// instead of a parse check. HTTPS only, and pinned like the default (see the
+// wire, below): an override is not a way around the proof.
+const BASE = (process.env.HUGINN_APPD_URL || 'https://127.0.0.1:8787').replace(/\/+$/, '');
 
 // ---------------------------------------------------------------- hygiene
 
@@ -143,28 +148,135 @@ function token() {
   return t;
 }
 
+// ⚠ THE DAEMON PROVES ITSELF BEFORE THE TOKEN LEAVES. 8787 is not a privileged
+// port: while huginn-appd is stopped or restarting, any account on this host can
+// bind 127.0.0.1:8787, and a plain-HTTP call handed it the root-equivalent token.
+// So the call is HTTPS, and the certificate that answers must be appd's own —
+// the one in its certificate file, which only root can read — compared after
+// the handshake and before a byte of the request is written. No readable
+// certificate, no call: there is no plain-HTTP fallback.
+//
+// The certificate is where appd keeps it (server/appd/lib/tls.js):
+// HUGINN_APPD_TLS_CERT, else <HUGINN_APPD_DATA>/tls/cert.pem, each from this
+// environment and then from the unit (site.conf can set them), in the order
+// server/appd/install.sh reads them.
+function appdCertFile() {
+  if (process.env.HUGINN_APPD_TLS_CERT) return process.env.HUGINN_APPD_TLS_CERT;
+  let unit = '';
+  try {
+    unit = execFileSync('systemctl', ['show', 'huginn-appd', '-p', 'Environment', '--value'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 });
+  } catch { unit = ''; }
+  const fromUnit = (k) => {
+    let v = '';
+    for (const w of unit.split(/\s+/)) if (w.startsWith(`${k}=`)) v = w.slice(k.length + 1);
+    return v;
+  };
+  const data = process.env.HUGINN_APPD_DATA || fromUnit('HUGINN_APPD_DATA') || '/var/lib/huginn-appd';
+  return fromUnit('HUGINN_APPD_TLS_CERT') || path.join(data, 'tls', 'cert.pem');
+}
+
+let PIN = '';
+function pin() {   // appd's certificate fingerprint, read once
+  if (PIN) return PIN;
+  const file = appdCertFile();
+  try { PIN = new crypto.X509Certificate(fs.readFileSync(file)).fingerprint256; } catch { PIN = ''; }
+  if (!PIN) {
+    die(`cannot read huginn-appd's certificate ${file}`, 1,
+        '(the token goes only to a daemon that proves it holds that key)');
+  }
+  return PIN;
+}
+
+function appdUrl() {
+  let u = null;
+  try { u = new URL(BASE); } catch { u = null; }
+  if (!u || u.protocol !== 'https:' || !u.hostname) {
+    die('HUGINN_APPD_URL must be https:// - the token never travels in the clear', 1);
+  }
+  return u;
+}
+
+// A TLS connection that has shown appd's own certificate, or a rejection —
+// `notTheDaemon` when something answered with any other one. Nothing is
+// written to it before this resolves.
+function pinnedSocket(u, ms) {
+  const fp = pin();
+  return new Promise((resolve, reject) => {
+    const sock = tls.connect({
+      host: u.hostname.replace(/^\[(.*)\]$/, '$1'), port: Number(u.port) || 443,
+      rejectUnauthorized: false,   // no CA can vouch for a self-signed certificate; the pin does
+    });
+    const timer = setTimeout(() => sock.destroy(new Error('timeout')), ms);
+    sock.once('error', (e) => { clearTimeout(timer); reject(e); });
+    sock.once('secureConnect', () => {
+      clearTimeout(timer);
+      const peer = sock.getPeerX509Certificate();
+      if (!peer || peer.fingerprint256 !== fp) {
+        sock.destroy();
+        reject(Object.assign(new Error('not the daemon'), { notTheDaemon: true }));
+        return;
+      }
+      resolve(sock);
+    });
+  });
+}
+
+// One request on a proved connection -> { status, ok, text }.
+async function send(method, route, headers, payload, ms) {
+  const u = appdUrl();
+  const sock = await pinnedSocket(u, ms);
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      method,
+      host: u.hostname.replace(/^\[(.*)\]$/, '$1'),
+      port: Number(u.port) || 443,
+      path: u.pathname.replace(/\/+$/, '') + route,
+      headers,
+      createConnection: () => sock,
+    }, (res) => {
+      const chunks = [];
+      const done = () => {
+        clearTimeout(timer);
+        const status = res.statusCode;
+        resolve({ status, ok: status >= 200 && status < 300, text: Buffer.concat(chunks).toString('utf8') });
+      };
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', done);
+      // A body cut short is what arrived of it, as it always was here: the
+      // status is the answer, and a 200 that is not JSON is refused below.
+      res.on('error', done);
+    });
+    const timer = setTimeout(() => req.destroy(new Error('timeout')), ms);
+    req.on('error', (e) => { clearTimeout(timer); reject(e); });
+    req.end(payload);
+  });
+}
+
 // One caller for every route, so the 2-vs-3-vs-1 decision is made in one place.
 // `probe` marks the call that doubles as the feature probe (/v1/projects): a 404
 // there is an older daemon, while a 404 on a sub-route is a project that is gone.
 async function call(method, path, body, probe) {
-  const init = {
-    method,
-    headers: { Authorization: 'Bearer ' + token(), Accept: 'application/json' },
-    signal: AbortSignal.timeout(method === 'GET' ? 10000 : 30000),
-  };
+  const headers = { Authorization: 'Bearer ' + token(), Accept: 'application/json' };
+  let payload;
   if (body !== undefined) {
-    init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(body);
+    payload = JSON.stringify(body);
+    headers['Content-Type'] = 'application/json';
+    headers['Content-Length'] = Buffer.byteLength(payload);
   }
   let res;
   try {
-    res = await fetch(BASE + path, init);
-  } catch {
-    // Deliberately not printing the exception: fetch puts the full request URL
-    // in some of them, and the header travels with the request object.
+    res = await send(method, path, headers, payload, method === 'GET' ? 10000 : 30000);
+  } catch (e) {
+    // Deliberately not printing the exception: a request error can carry the
+    // request it failed to make, and the header travels with it.
+    if (e && e.notTheDaemon) {
+      die(`whatever holds ${BASE} is not huginn-appd (wrong certificate); the token was not sent`, 2,
+          '(systemctl status huginn-appd)');
+    }
     die(`huginn-appd is not answering on ${BASE}`, 2, '(systemctl status huginn-appd)');
   }
-  const text = await res.text().catch(() => '');
+  const text = res.text;
   if (res.ok) {
     const json = parse(text);
     // ⚠ A 200 THAT IS NOT JSON IS NOT AN EMPTY ANSWER. A truncated body, a proxy's

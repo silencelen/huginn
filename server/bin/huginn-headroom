@@ -22,15 +22,19 @@
 #
 # Exit codes, because a client may branch on them:
 #   0  rendered
-#   1  no token, or appd answered but cannot serve headroom (too old / HTTP error)
-#   2  appd is not answering at all
+#   1  no token or no certificate, or appd answered but cannot serve headroom
+#      (too old / HTTP error)
+#   2  appd is not answering at all, or what answered is not appd
+import http.client
 import json
 import os
+import re
 import runpy
+import ssl
+import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
+import urllib.parse
 
 
 def _state_table():
@@ -52,7 +56,9 @@ def _state_table():
 ST = _state_table()
 
 TOKEN_FILE = "/etc/huginn-appd/token"
-BASE = os.environ.get("HUGINN_APPD_URL") or "http://127.0.0.1:8787"
+# HTTPS only, and pinned like the default (below): an override is not a way
+# around the proof.
+BASE = os.environ.get("HUGINN_APPD_URL") or "https://127.0.0.1:8787"
 
 # ONE definition, used on every string that reaches the screen. A terminal
 # executes some of what it is handed, and several of these strings (an arbiter
@@ -77,6 +83,74 @@ def die(msg, code, hint=None):
     sys.exit(code)
 
 
+# ⚠ THE DAEMON PROVES ITSELF BEFORE THE TOKEN LEAVES. 8787 is not a privileged
+# port: while huginn-appd is stopped or restarting, any account on this host can
+# bind 127.0.0.1:8787, and a plain-HTTP call handed it the root-equivalent token.
+# So the call is HTTPS, and the certificate that answers must be appd's own -
+# the one in its certificate file, which only root can read - compared after the
+# handshake and before a byte of the request is written. No readable certificate,
+# no call: there is no plain-HTTP fallback.
+def appd_cert():
+    """Where appd keeps its certificate (server/appd/lib/tls.js).
+
+    HUGINN_APPD_TLS_CERT, else <HUGINN_APPD_DATA>/tls/cert.pem, each from this
+    environment and then from the unit (site.conf can set them), in the order
+    server/appd/install.sh reads them.
+    """
+    cert = os.environ.get("HUGINN_APPD_TLS_CERT") or ""
+    if cert:
+        return cert
+    try:
+        out = subprocess.run(
+            ["systemctl", "show", "huginn-appd", "-p", "Environment", "--value"],
+            capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    unit = {}
+    for word in out.split():
+        k, _, v = word.partition("=")
+        unit[k] = v
+    data = os.environ.get("HUGINN_APPD_DATA") or unit.get("HUGINN_APPD_DATA") or "/var/lib/huginn-appd"
+    return unit.get("HUGINN_APPD_TLS_CERT") or os.path.join(data, "tls", "cert.pem")
+
+
+def appd_der(path):
+    """The DER of the first certificate in `path` (the leaf appd serves), or None."""
+    try:
+        with open(path) as fh:
+            m = re.search(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", fh.read(), re.S)
+        return ssl.PEM_cert_to_DER_cert(m.group(0)) if m else None
+    except (OSError, ValueError):
+        return None
+
+
+class NotTheDaemon(Exception):
+    pass
+
+
+class PinnedHTTPS(http.client.HTTPSConnection):
+    """HTTPS to the one certificate given, whatever any CA would say about it.
+
+    No CA can vouch for a self-signed certificate, so the check is the pin:
+    connect() does the handshake, compares the certificate it was shown with
+    appd's own, and refuses before request() writes anything.
+    """
+
+    def __init__(self, host, port, der, timeout):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        super().__init__(host, port, timeout=timeout, context=ctx)
+        self.der = der
+
+    def connect(self):
+        super().connect()
+        if self.sock.getpeercert(binary_form=True) != self.der:
+            self.sock.close()
+            self.sock = None
+            raise NotTheDaemon()
+
+
 def fetch():
     try:
         with open(TOKEN_FILE) as fh:
@@ -86,30 +160,48 @@ def fetch():
     if not token:
         die("no appd token at %s" % TOKEN_FILE, 1)
 
-    req = urllib.request.Request(
-        BASE.rstrip("/") + "/v1/headroom",
-        headers={"Authorization": "Bearer " + token, "Accept": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return r.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        # 404 is the FEATURE PROBE, not a bug: every appd before 3.0.0 serves
-        # /v1/status and /v1/rounds happily and has never heard of this route. Say
-        # which version is missing rather than "not found", because the person
-        # reading it is the person who can deploy the daemon.
-        if e.code == 404:
-            die("headroom needs appd 3.0.0 or newer", 1,
-                "(this host is running an older huginn-appd - deploy the daemon)")
-        if e.code in (401, 403):
-            die("appd refused the host token (HTTP %d)" % e.code, 1,
-                "(check %s against the running daemon)" % TOKEN_FILE)
-        die("appd answered HTTP %d for /v1/headroom" % e.code, 1)
+        url = urllib.parse.urlsplit(BASE)
+        host, port = url.hostname, url.port or 443
+    except ValueError:
+        url = host = port = None
+    if not url or url.scheme != "https" or not host:
+        die("HUGINN_APPD_URL must be https:// - the token never travels in the clear", 1)
+    cert = appd_cert()
+    der = appd_der(cert)
+    if der is None:
+        die("cannot read huginn-appd's certificate %s" % cert, 1,
+            "(the token goes only to a daemon that proves it holds that key)")
+
+    conn = PinnedHTTPS(host, port, der, timeout=10)
+    try:
+        conn.request("GET", url.path.rstrip("/") + "/v1/headroom",
+                     headers={"Authorization": "Bearer " + token, "Accept": "application/json"})
+        r = conn.getresponse()
+        status, body = r.status, r.read()
+    except NotTheDaemon:
+        die("whatever holds %s is not huginn-appd (wrong certificate); the token was not sent" % BASE, 2,
+            "(systemctl status huginn-appd)")
     except Exception:
-        # Deliberately not printing the exception: urllib puts the full request
-        # URL in some of them, and the header travels with the request object.
+        # Deliberately not printing the exception: a request error can carry the
+        # request it failed to make, and the header travels with it.
         die("huginn-appd is not answering on %s" % BASE, 2,
             "(systemctl status huginn-appd)")
+    finally:
+        conn.close()
+    # 404 is the FEATURE PROBE, not a bug: every appd before 3.0.0 serves
+    # /v1/status and /v1/rounds happily and has never heard of this route. Say
+    # which version is missing rather than "not found", because the person
+    # reading it is the person who can deploy the daemon.
+    if status == 404:
+        die("headroom needs appd 3.0.0 or newer", 1,
+            "(this host is running an older huginn-appd - deploy the daemon)")
+    if status in (401, 403):
+        die("appd refused the host token (HTTP %d)" % status, 1,
+            "(check %s against the running daemon)" % TOKEN_FILE)
+    if not 200 <= status < 300:
+        die("appd answered HTTP %d for /v1/headroom" % status, 1)
+    return body.decode("utf-8", "replace")
 
 
 def ago(ms):

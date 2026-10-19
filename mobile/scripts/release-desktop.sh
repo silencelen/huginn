@@ -25,18 +25,46 @@ cd "$(dirname "$0")/.."          # -> mobile/
 
 CHANNEL_DIR=/var/lib/huginn-appd/desktop-kt
 TOKEN_FILE=/etc/huginn-appd/token
-BASE_URL=${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
+BASE_URL=${HUGINN_APPD_URL:-https://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
+case "$BASE_URL" in
+  https://*) ;;
+  *) echo "REFUSING: HUGINN_APPD_URL must be https:// - the token never travels in the clear" >&2; exit 2 ;;
+esac
 FEED=/v1/desktop-kt
 KEEP=2
+# ⚠ THE DAEMON PROVES ITSELF BEFORE THE TOKEN LEAVES. 8787 is not a privileged
+# port: while huginn-appd is stopped or restarting, any account on this host can
+# bind it, and a plain-HTTP call handed that account the root-equivalent token.
+# So steps 1 and 7 speak HTTPS pinned to the public key in appd's own
+# certificate, which only root can read; curl checks the pin during the
+# handshake, before a byte of the request is sent, and -k (the CA check a
+# self-signed certificate cannot pass) does not switch it off. The certificate
+# is where appd keeps it (server/appd/lib/tls.js), found the way
+# server/bin/huginn-rounds finds it. No readable certificate, no call.
+appd_pin() {
+  local unit cert="${HUGINN_APPD_TLS_CERT:-}" data="${HUGINN_APPD_DATA:-}" key
+  if [ -z "$cert" ]; then
+    unit="$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr ' ' '\n')"
+    cert="$(sed -n 's/^HUGINN_APPD_TLS_CERT=//p' <<<"$unit" | tail -1)"
+    [ -n "$data" ] || data="$(sed -n 's/^HUGINN_APPD_DATA=//p' <<<"$unit" | tail -1)"
+    cert="${cert:-${data:-/var/lib/huginn-appd}/tls/cert.pem}"
+  fi
+  key="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null)" || key=""
+  if [ -z "$key" ]; then
+    echo "REFUSING: cannot read huginn-appd's certificate $cert - the token goes only to a daemon that proves it holds that key" >&2
+    return 1
+  fi
+  printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
+}
 # ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
 # every account on this host and the token is root-equivalent, and step 7
 # downloads every artifact - hundreds of MB - with it, so an `-H "Authorization:
 # Bearer ..."` argument stayed on display for minutes. The header reaches curl
 # through a file descriptor instead (-H @file, curl 7.55+), and printf is a bash
-# builtin, so no process carries the token in its arguments. TOKEN is read where
-# it is needed (steps 1 and 7). scripts/test-no-token-argv.sh holds every script
-# to this.
-appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
+# builtin, so no process carries the token in its arguments. TOKEN and PIN are
+# read where they are needed (steps 1 and 7). scripts/test-no-token-argv.sh holds
+# every script to this.
+appd_curl() { curl -S -k --pinnedpubkey "$PIN" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 
 # The Windows JDK whose jmods the cross-jlink links against and whose jpackage.exe
 # runs under wine. Cached OUTSIDE the build tree on purpose: the spike kept it in
@@ -233,6 +261,7 @@ echo "  autostart: app writes '$KT_LNK' in Startup, uninstaller removes it"
 # hand and releases get cut from old checkouts; neither mistake is exotic.
 if [ -f "$TOKEN_FILE" ]; then
   TOKEN=$(cat "$TOKEN_FILE")
+  PIN=$(appd_pin) || exit 1
   # `|| ''` because a manifest WITHOUT a version field makes `node -p` print the
   # four-letter word "undefined", which is neither empty nor a version, and every
   # test downstream of here would then be reasoning about a string that means
@@ -846,6 +875,7 @@ EOF
 # --------------------------------------------------- 7. verify through the wire
 echo "[7/7] verify through the wire"
 TOKEN=$(cat "$TOKEN_FILE")
+PIN=$(appd_pin) || exit 1
 SERVED=$(appd_curl -sf "$BASE_URL$FEED/manifest" \
   | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
 [ "$SERVED" = "$VERSION" ] || { echo "FAIL: served manifest says '$SERVED'" >&2; exit 1; }
