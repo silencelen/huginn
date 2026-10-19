@@ -453,7 +453,14 @@ func currentUser() string {
 	return os.Getenv("USER")
 }
 
-// call talks to this user's running core.
+// maxCallBody bounds what one answer may make call hold. The core's own
+// answers are a few KB, and so is appd's status through the core's /appd
+// proxy, which passes on whatever appd sends, as long as appd sends it.
+const maxCallBody = 4 << 20
+
+// call talks to this user's running core. An answer larger than maxCallBody
+// is an error, not read to the end; an error's text is what the core (or
+// appd, through the proxy) said, cleaned for one line of a terminal.
 func call(method, path string, body any, out any) (int, error) {
 	c := ipc.Client(daemon.SocketPath(paths()))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -463,16 +470,22 @@ func call(method, path string, body any, out any) (int, error) {
 		return 0, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxCallBody+1))
+	if err != nil {
+		return resp.StatusCode, fmt.Errorf("%s %s: reading huginn core's answer: %w", method, path, err)
+	}
+	if len(b) > maxCallBody {
+		return resp.StatusCode, fmt.Errorf("%s %s: huginn core's answer is larger than %d MB", method, path, maxCallBody>>20)
+	}
 	if resp.StatusCode >= 400 {
 		var e struct {
 			Error string `json:"error"`
 		}
 		json.Unmarshal(b, &e)
 		if e.Error == "" {
-			e.Error = strings.TrimSpace(string(b))
+			e.Error = string(b)
 		}
-		return resp.StatusCode, errors.New(e.Error)
+		return resp.StatusCode, errors.New(appd.Printable(e.Error, 2000))
 	}
 	if out != nil {
 		return resp.StatusCode, json.Unmarshal(b, out)

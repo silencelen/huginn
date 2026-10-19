@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -25,15 +26,17 @@ import (
 // installer, a distro package). The CLI's session verbs and attaching reach
 // the host over ssh to `Host huginn`; the core and the apps use the token.
 //
-// It never touches a key it did not make, and never edits a `Host huginn`
-// stanza that is already there.
+// It never touches a key it did not make. A `Host huginn` stanza that is
+// already there changes in two cases only: the person names the address
+// (--host), or ssh proves the new address is the same machine (sshFallback).
+// An address that huginn lists is never enough on its own.
 func setup(args []string) int {
 	if len(args) == 0 || args[0] != "ssh" {
 		fmt.Fprintln(os.Stderr, "usage: huginn setup ssh [--host HOST] [--user USER]")
 		return 2
 	}
 	fs := flag.NewFlagSet("setup ssh", flag.ContinueOnError)
-	host := fs.String("host", "", "the huginn host's address (default: the host this core is paired with)")
+	host := fs.String("host", "", "the huginn host's address (default: the host this core is paired with); an existing 'Host huginn' entry is pointed at it")
 	user := fs.String("user", envOr("HUGINN_USER", "root"), "the ssh user on the host")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -61,10 +64,25 @@ func setup(args []string) int {
 	}
 	key := filepath.Join(sshDir, "id_ed25519")
 	if hn, ok := stanzaHost(cfg, alias); ok {
-		if !inBlock { // an installer's block has just said it
-			u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s is already in %s - kept as it is", alias, hn, tilde(home, cfg)))
+		if *host != "" && *host != hn {
+			// The person named the address, which is the consent a move needs:
+			// what sshFallback prints when it will not move the entry itself.
+			if !plainHost(*host) {
+				u.Line(ui.Fail, "ssh", fmt.Sprintf("--host %q is not a plain host name or address", *host))
+				return 2
+			}
+			if !setHostName(cfg, alias, hn, *host) {
+				u.Line(ui.Fail, "ssh", fmt.Sprintf("could not point 'Host %s' at %s: it has no HostName line to change", alias, *host))
+				u.Note(fmt.Sprintf("Add the line 'HostName %s' under 'Host %s' in %s, then run this again.", *host, alias, tilde(home, cfg)))
+				return 1
+			}
+			u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s (it was %s), as asked", alias, *host, hn))
+		} else {
+			if !inBlock { // an installer's block has just said it
+				u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s is already in %s - kept as it is", alias, hn, tilde(home, cfg)))
+			}
+			*host = hn
 		}
-		*host = hn
 		if k := stanzaKey(cfg, alias, home); k != "" {
 			key = k
 		}
@@ -105,22 +123,9 @@ func setup(args []string) int {
 
 	why := sshTrust(alias)
 	if strings.HasPrefix(why, "unreachable") {
-		// The address this computer knows huginn by may not carry ssh from
-		// here (a client on another VLAN may be let through to huginn's port on
-		// one address and to ssh on another). huginn lists its own
-		// addresses to the paired core; the first that answers on port 22 is
-		// the same host, so the stanza is pointed at it.
-		if alt, all := sshAddress(*host); alt != "" {
-			if repointStanza(cfg, alias, *host, alt, all) {
-				u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s: %s does not answer ssh from here, and %s is the same huginn", alias, alt, *host, alt))
-				*host = alt
-				why = sshTrust(alias)
-			} else {
-				u.Line(ui.Warn, "ssh", fmt.Sprintf("%s does not answer ssh from here, but %s (the same huginn) does", *host, alt))
-				u.Note(fmt.Sprintf("'Host %s' in %s names a host this did not write; set its HostName to %s", alias, tilde(home, cfg), alt))
-			}
-		} else if len(all) > 0 {
-			u.Note("None of huginn's addresses (" + strings.Join(all, ", ") + ") answers ssh from here.")
+		if moved := sshFallback(u, cfg, alias, *host); moved != "" {
+			*host = moved
+			why = sshTrust(alias)
 		}
 	}
 	if why == "hostkey" && isTerminal(os.Stdin) {
@@ -170,6 +175,64 @@ func setup(args []string) int {
 	return 0
 }
 
+// sshFallback is what setup does when host, the HostName of `Host <alias>`,
+// does not answer ssh from here. A client on another VLAN may be let through
+// to huginn's port on one address and to ssh on another, and huginn lists its
+// own addresses to the paired core (sshAddress).
+//
+// ⚠ HUGINN'S LIST IS NO PROOF OF WHERE SSH SHOULD GO. An address that takes
+// connections on port 22 can be any machine: a hostile or mistaken list would
+// get every later attach, after steering the person through that machine's
+// host key prompt. So the entry is moved only when ssh itself shows the new
+// address holds the host key this computer already knows for host (and lets
+// this computer in). Otherwise the addresses are printed, with the command
+// that moves the entry when the person says so. Returns the address the
+// entry now names, or "" when it did not change.
+func sshFallback(u *ui.Out, cfg, alias, host string) string {
+	alt, all := sshAddress(host)
+	if alt == "" {
+		if len(all) > 0 {
+			u.Note("None of huginn's addresses (" + strings.Join(all, ", ") + ") answers ssh from here.")
+		}
+		return ""
+	}
+	if namesHuginn(host, all) && sshSameHost(alias, host, alt) && repointStanza(cfg, alias, host, alt, all) {
+		u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s: %s does not answer ssh from here, and %s has the host key this computer knows for %s", alias, alt, host, alt, host))
+		return alt
+	}
+	u.Line(ui.Warn, "ssh", fmt.Sprintf("%s does not answer ssh from here; %s, another address huginn lists, takes connections on port %s", host, alt, sshPort))
+	u.Note(fmt.Sprintf("'Host %s' was left as it is: nothing shows that %s is the same machine (huginn lists %s).", alias, alt, strings.Join(all, ", ")))
+	u.Note(fmt.Sprintf("If %s is your huginn host, point 'Host %s' at it with: huginn setup ssh --host %s", alt, alias, alt))
+	return ""
+}
+
+// sshSameHost: ssh, sent to alias's entry at addr, finds there the host key
+// that known_hosts holds for old, and gets in (exit status 0).
+//
+// ⚠ ONLY THE EXIT STATUS IS READ. HostKeyAlias makes ssh look addr's key up
+// under old's name, and StrictHostKeyChecking=yes makes any other key (or no
+// key known for old) a refusal before authentication starts. The key exchange
+// is signed, so a machine that only copies the public key fails it too. ssh
+// prints text the far end chose (a bad version line, a banner), so nothing it
+// prints is taken as a verdict.
+var sshSameHost = func(alias, old, addr string) bool {
+	if !plainHost(old) || !plainHost(addr) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, "ssh",
+		"-o", "BatchMode=yes",
+		"-o", "StrictHostKeyChecking=yes",
+		"-o", "HostKeyAlias="+old,
+		"-o", "HostName="+addr,
+		"-o", "CheckHostIP=no",
+		"-o", "UpdateHostKeys=no",
+		"-o", "ConnectTimeout=10",
+		alias, "true")
+	return c.Run() == nil
+}
+
 // sshPort is where sshAddress knocks; a var so a test can stand a listener in
 // for sshd.
 var sshPort = "22"
@@ -177,6 +240,8 @@ var sshPort = "22"
 // sshAddress: huginn's own addresses, as it lists them to the paired core
 // (appd 3.12.1+, /v1/status), and the first of them other than host that
 // answers on port 22 from here ("" when none does, or huginn did not say).
+// An answer on the port says something listens there, not what it is: see
+// sshFallback.
 func sshAddress(host string) (string, []string) {
 	var st struct {
 		Addresses []string `json:"addresses"`
@@ -275,20 +340,29 @@ func sameNet(addr string, nets []*net.IPNet) bool {
 }
 
 // repointStanza changes the HostName of the `Host <alias>` stanza from old to
-// to - only when old names this huginn (one of its own addresses, or the
-// address the core is paired with): a stanza naming something else is a
-// person's own, and is never edited. Reports whether it changed the file.
-// to must be a plain host (plainHost), whatever the caller checked: never a
-// line break, which would add lines of its own to the stanza.
+// to - only when old names this huginn (namesHuginn): a stanza naming
+// something else is a person's own, and is never edited this way. Reports
+// whether it changed the file. It is the edit, not the decision: sshFallback
+// calls it only once ssh has shown that to is the same machine as old.
 func repointStanza(cfg, alias, old, to string, huginns []string) bool {
-	if strings.ContainsAny(to, "\r\n") || !plainHost(to) {
+	if !namesHuginn(old, huginns) {
 		return false
 	}
-	ours := old == pairedHost()
-	for _, a := range huginns {
-		ours = ours || a == old
-	}
-	if !ours {
+	return setHostName(cfg, alias, old, to)
+}
+
+// namesHuginn: host is one of huginn's own addresses, or the address the core
+// is paired with.
+func namesHuginn(host string, huginns []string) bool {
+	return host == pairedHost() || slices.Contains(huginns, host)
+}
+
+// setHostName changes the HostName of the `Host <alias>` stanza from old to
+// to, and reports whether it changed the file. to must be a plain host
+// (plainHost), whatever the caller checked: never a line break, which would
+// add lines of its own to the stanza.
+func setHostName(cfg, alias, old, to string) bool {
+	if strings.ContainsAny(to, "\r\n") || !plainHost(to) {
 		return false
 	}
 	b, err := os.ReadFile(cfg)

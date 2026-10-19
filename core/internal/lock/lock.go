@@ -16,9 +16,11 @@
 // sessions (D-Bus org.freedesktop.login1 first, `loginctl` text as the
 // fallback) and its LockedHint is read.
 //
-// Windows: one PowerShell call reads the session ids LogonUI.exe runs in and
-// `quser`; an active, unlocked rdp-tcp#N session counts as present. Both work
-// from session 0, where the boot task runs.
+// Windows: one PowerShell call reads the session ids LogonUI.exe runs in, the
+// account it runs as and `quser`. Only that account's own sessions count: a
+// connected console or rdp-tcp#N session of its that is not showing LogonUI is
+// somebody here. Another account's session never is. All of it works from
+// session 0, where the boot task runs.
 package lock
 
 import (
@@ -82,91 +84,169 @@ var rdpSession = regexp.MustCompile(`^rdp-tcp#\d+$`)
 
 // ParseQuser parses quser output, tolerating the missing SESSIONNAME of a
 // disconnected row: the id is the first bare-number field after the user,
-// and the state follows it. Anything that is not a row is ignored ("No User
-// exists for *", localised headers). Pure.
+// the session name (if any) is the field just before it, and the state
+// follows it. Anything that is not a row is ignored ("No User exists for *",
+// localised headers). Pure.
 func ParseQuser(text string) []QuserRow {
 	var rows []QuserRow
 	for _, raw := range strings.Split(text, "\n") {
-		raw = strings.TrimRight(raw, "\r")
-		current := strings.HasPrefix(raw, ">")
-		fields := strings.Fields(strings.TrimPrefix(raw, ">"))
-		if len(fields) < 3 {
-			continue
+		if row, ok := parseQuserRow(raw); ok {
+			rows = append(rows, row)
 		}
-		idAt := -1
-		for i, f := range fields {
-			if _, err := strconv.Atoi(f); err == nil {
-				idAt = i
-				break
-			}
-		}
-		if idAt < 1 || idAt+1 >= len(fields) {
-			continue
-		}
-		id, _ := strconv.Atoi(fields[idAt])
-		row := QuserRow{User: fields[0], ID: id, State: strings.ToLower(fields[idAt+1]), Current: current}
-		if idAt >= 2 {
-			row.Session = fields[1]
-		}
-		rows = append(rows, row)
 	}
 	return rows
 }
 
-// WindowsReading is the rule as a pure function. logonUI nil = LogonUI could
-// not be asked → Unknown. An active rdp-tcp#N session that is not itself
-// showing LogonUI is somebody here; otherwise a lock screen anywhere is
-// locked, and none is unlocked.
-func WindowsReading(quser string, logonUI map[int]bool) Reading {
-	if logonUI == nil {
-		return Unknown
+func parseQuserRow(raw string) (QuserRow, bool) {
+	raw = strings.TrimRight(raw, "\r")
+	current := strings.HasPrefix(raw, ">")
+	fields := strings.Fields(strings.TrimPrefix(raw, ">"))
+	if len(fields) < 3 {
+		return QuserRow{}, false
 	}
-	for _, r := range ParseQuser(quser) {
-		if r.State == "active" && rdpSession.MatchString(strings.ToLower(r.Session)) && !logonUI[r.ID] {
-			return Unlocked
+	idAt := firstNumber(fields)
+	if idAt < 1 || idAt+1 >= len(fields) {
+		return QuserRow{}, false
+	}
+	id, _ := strconv.Atoi(fields[idAt])
+	row := QuserRow{User: fields[0], ID: id, State: strings.ToLower(fields[idAt+1]), Current: current}
+	if idAt >= 2 {
+		row.Session = fields[idAt-1]
+	}
+	return row, true
+}
+
+func firstNumber(fields []string) int {
+	for i, f := range fields {
+		if _, err := strconv.Atoi(f); err == nil {
+			return i
 		}
 	}
-	if len(logonUI) > 0 {
-		return Locked
+	return -1
+}
+
+// ownerRow reads raw as one of owner's rows, or says it is not one. quser pads
+// USERNAME to a column, and a Windows account name can hold a space ("alex
+// smith"), so the row must start with the whole name and then hold at most a
+// session name before the id: "alex" does not claim "alex smith"'s row, nor
+// "alexander"'s. Both sides compare in lower case. Pure.
+func ownerRow(raw, owner string) (QuserRow, bool) {
+	raw = strings.TrimRight(raw, "\r")
+	current := strings.HasPrefix(raw, ">")
+	body := strings.ToLower(strings.TrimLeft(strings.TrimPrefix(raw, ">"), " \t"))
+	owner = strings.ToLower(strings.TrimSpace(owner))
+	rest, ok := strings.CutPrefix(body, owner)
+	if owner == "" || !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+		return QuserRow{}, false
 	}
-	return Unlocked
+	fields := strings.Fields(rest)
+	idAt := firstNumber(fields)
+	if idAt < 0 || idAt > 1 || idAt+1 >= len(fields) {
+		return QuserRow{}, false
+	}
+	id, _ := strconv.Atoi(fields[idAt])
+	row := QuserRow{User: owner, ID: id, State: fields[idAt+1], Current: current}
+	if idAt == 1 {
+		row.Session = fields[0]
+	}
+	return row, true
+}
+
+// interactive: a console or rdp-tcp#N session name. quser prints a session
+// name only for a connected session (a disconnected row leaves the column
+// empty), and the name, unlike the STATE text ("Active", "Aktiv", "Actif"), is
+// the same in every language.
+func interactive(session string) bool {
+	s := strings.ToLower(session)
+	return s == "console" || rdpSession.MatchString(s)
+}
+
+// WindowsReading is the rule as a pure function, for owner, the account the
+// core runs as (as [Environment]::UserName prints it; any case). logonUI nil
+// = LogonUI could not be asked, and no owner = the account is not known:
+// either is Unknown.
+//
+// ⚠ ONLY OWNER'S OWN SESSIONS SAY "SOMEBODY IS HERE". A connected console or
+// rdp-tcp#N session of owner's that is not showing LogonUI is unlocked.
+// Otherwise a lock or sign-in screen anywhere is locked, and so is another
+// account's connected session: somebody else at this machine is not the owner
+// (a shared PC, another account's RDP session while the owner's screen is
+// locked). With neither, nothing is up at all: unlocked, as before.
+func WindowsReading(quser string, logonUI map[int]bool, owner string) Reading {
+	rd, _ := windowsDecide(quser, logonUI, owner)
+	return rd
+}
+
+func windowsDecide(quser string, logonUI map[int]bool, owner string) (Reading, string) {
+	if logonUI == nil {
+		return Unknown, "the lock probe could not list the sessions LogonUI runs in"
+	}
+	if strings.TrimSpace(owner) == "" {
+		return Unknown, "the lock probe could not tell which account it runs as"
+	}
+	other := false
+	for _, raw := range strings.Split(quser, "\n") {
+		if r, ok := ownerRow(raw, owner); ok {
+			if interactive(r.Session) && !logonUI[r.ID] {
+				return Unlocked, "this account's session " + strconv.Itoa(r.ID) + " is signed in and unlocked"
+			}
+			continue
+		}
+		if r, ok := parseQuserRow(raw); ok && (r.State == "active" || interactive(r.Session)) {
+			other = true
+		}
+	}
+	switch {
+	case len(logonUI) > 0:
+		return Locked, "a lock or sign-in screen is up"
+	case other:
+		return Locked, "another account is signed in here, and this one is not"
+	}
+	return Unlocked, "no lock or sign-in screen is up"
 }
 
 // WindowsScript is the one PowerShell command whose output ParseWindows
-// reads: both halves from one child, so they describe the same moment.
+// reads: all of it from one child, so it describes one moment. The account
+// name comes from the same child as quser's rows, so the two are written in
+// the same encoding, whatever the console's code page does to a name.
 const WindowsScript = "$ErrorActionPreference='SilentlyContinue'; " +
 	"$s=@(Get-Process LogonUI | Select-Object -ExpandProperty SessionId); " +
 	"Write-Output ('LOGONUI ' + ($s -join ' ')); " +
+	"Write-Output ('ME ' + [Environment]::UserName); " +
 	"Write-Output 'QUSER'; " +
 	"$q = & quser 2>&1; if ($q) { $q | Write-Output }"
 
-// ParseWindows turns the script's output into a result. Pure.
+// ParseWindows turns the script's output into a result: the LOGONUI line,
+// the ME line and everything after the QUSER line, found line by line (a row
+// of quser's can hold any of those words). Pure.
 func ParseWindows(out string) Result {
-	out = strings.ToLower(out)
-	i := strings.Index(out, "logonui")
-	if i < 0 {
-		return Result{Reading: Unknown, Reason: "the lock probe got an unexpected answer from PowerShell"}
-	}
-	body := out[i+len("logonui"):]
-	k := strings.Index(body, "quser")
-	if k < 0 {
-		return Result{Reading: Unknown, Reason: "the lock probe got an unexpected answer from PowerShell"}
-	}
-	ids := map[int]bool{}
-	for _, f := range strings.Fields(body[:k]) {
-		if n, err := strconv.Atoi(f); err == nil {
-			ids[n] = true
+	lines := strings.Split(strings.ReplaceAll(strings.ToLower(out), "\r", ""), "\n")
+	var ids map[int]bool
+	owner, at := "", -1
+	for i, l := range lines {
+		t := strings.TrimSpace(l)
+		switch {
+		case ids == nil && (t == "logonui" || strings.HasPrefix(t, "logonui ")):
+			ids = map[int]bool{}
+			for _, f := range strings.Fields(t[len("logonui"):]) {
+				if n, err := strconv.Atoi(f); err == nil {
+					ids[n] = true
+				}
+			}
+		case ids != nil && owner == "" && strings.HasPrefix(t, "me "):
+			owner = strings.TrimSpace(t[len("me "):])
+		case ids != nil && t == "quser":
+			at = i
+		}
+		if at >= 0 {
+			break
 		}
 	}
-	rd := WindowsReading(body[k+len("quser"):], ids)
-	res := Result{Reading: rd}
-	switch rd {
-	case Locked:
-		res.Reason = "a lock or sign-in screen is up"
-	case Unlocked:
-		res.Reason = "a session is signed in and unlocked"
+	if ids == nil || at < 0 {
+		return Result{Reading: Unknown, Reason: "the lock probe got an unexpected answer from PowerShell"}
 	}
-	return res
+	rd, why := windowsDecide(strings.Join(lines[at+1:], "\n"), ids, owner)
+	return Result{Reading: rd, Reason: why}
 }
 
 // ------------------------------------------------------------------- linux

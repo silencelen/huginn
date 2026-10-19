@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -70,6 +71,14 @@ func (p Prober) windows(ctx context.Context) Result {
 	return ParseWindows(out)
 }
 
+// linux reads the user's sessions from logind.
+//
+// ⚠ "LOGIND COULD NOT BE ASKED" IS NOT "NO SESSION". NoSession sends the
+// daemon on to ask whether this is a headless box, which reads as unlocked;
+// a system bus or a logind that does not answer must read as a lock state
+// that cannot be read (Unknown, which the fence treats as locked), or one
+// fault on a desktop would turn its locked screen into "unlocked". Only a
+// machine with no loginctl at all is taken as having no logind.
 func (p Prober) linux(ctx context.Context) Result {
 	if p.Login1 != nil {
 		if ss, err := p.Login1(ctx); err == nil {
@@ -77,9 +86,13 @@ func (p Prober) linux(ctx context.Context) Result {
 		}
 	}
 	out, err := p.Exec(ctx, "loginctl", "list-sessions", "--no-legend")
-	if err != nil {
+	if errors.Is(err, exec.ErrNotFound) {
 		return Result{Reading: Unknown, NoSession: true,
-			Reason: "logind could not list sessions (" + firstLine(out, err) + "); no session to read a lock from"}
+			Reason: "no loginctl here (" + firstLine(out, err) + "); no session to read a lock from"}
+	}
+	if err != nil {
+		return Result{Reading: Unknown,
+			Reason: "logind could not list sessions (" + firstLine(out, err) + "), so the lock state cannot be read"}
 	}
 	ss := ParseListSessions(out)
 	var mine []Session
@@ -90,7 +103,11 @@ func (p Prober) linux(ctx context.Context) Result {
 		show, err := p.Exec(ctx, "loginctl", "show-session", s.ID,
 			"-p", "Type", "-p", "Class", "-p", "State", "-p", "LockedHint", "-p", "Remote")
 		if err != nil {
-			continue // the session went away between the two calls
+			if strings.Contains(show, "No session '"+s.ID+"' known") {
+				continue // the session went away between the two calls
+			}
+			return Result{Reading: Unknown, Session: s.ID,
+				Reason: "logind could not read session " + s.ID + " (" + firstLine(show, err) + "), so the lock state cannot be read"}
 		}
 		ParseShowSession(show, &s)
 		mine = append(mine, s)
