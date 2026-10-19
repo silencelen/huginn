@@ -1869,6 +1869,22 @@ fi
 echo "[local/8] the local tier: manager, shim, manifest, units"
 node --check client/huginn-local && ok "huginn-local parses" || bad "huginn-local does not parse"
 node --check client/huginn-llm-shim && ok "huginn-llm-shim parses" || bad "huginn-llm-shim does not parse"
+# The shim's own suite: the claude-CLI contract, 0600 transcripts, and the
+# engine identity check - the engine's key and the owner's prompt go only to
+# the engine this tier started (or adopted), never to whatever holds its port.
+# It stands up real listeners on that port: the engine, run from the tier's
+# runtime/ directory, and squatters running another program and (as root)
+# under another account. Captured, never piped (pipefail).
+LS_OUT=$(node --test scripts/test-llm-shim.js 2>&1); LS_RC=$?
+LS_N=$(grep -oE '^# pass [0-9]+' <<<"$LS_OUT" | grep -oE '[0-9]+')
+LS_SKIP=$(grep -oE '^# skipped [0-9]+' <<<"$LS_OUT" | grep -oE '[0-9]+')
+if [ "$LS_RC" -eq 0 ] && [ "${LS_N:-0}" -ge 14 ]; then
+  ok "the llm shim's contract, transcripts and engine identity check (${LS_N} tests)"
+  [ "${LS_SKIP:-0}" -gt 0 ] && skip "llm shim: ${LS_SKIP} test(s) need Linux, or root to listen as another account"
+else
+  bad "llm shim gate FAILED (exit $LS_RC, ${LS_N:-0} passed):"
+  grep -E '^not ok|error:' <<<"$LS_OUT" | head -12 >&2
+fi
 
 LOCAL_V=$(grep -m1 "^const VERSION = " client/huginn-local | sed "s/.*'\(.*\)'.*/\1/")
 SHIM_V=$(grep -m1 "^const VERSION = " client/huginn-llm-shim | sed "s/.*'\(.*\)'.*/\1/")
