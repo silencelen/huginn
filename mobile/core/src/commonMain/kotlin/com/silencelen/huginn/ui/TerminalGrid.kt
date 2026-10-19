@@ -78,11 +78,25 @@ object TerminalGrid {
      *
      * @param cols pad/truncate every row to this width so the grid is rectangular
      *   and a row that ends early cannot make the next row's cells shift left.
+     *   The daemon's word for the pane width, so held to `0..`[MAX_COLS]: a
+     *   negative one threw, and an enormous one allocated that many cells a row.
+     *
+     * ⚠ NEVER THROWS ON WHAT THE DAEMON SENDS. Every byte here is the screen
+     * payload of a response, and a throw inside a composition takes the
+     * session view down with it until the pane changes.
      */
     fun parse(lines: List<String>, cols: Int, defaultFg: Color, defaultBg: Color): TermGrid {
-        val rows = lines.map { parseLine(it, cols, defaultFg, defaultBg) }
-        return TermGrid(rows, cols)
+        val width = cols.coerceIn(0, MAX_COLS)
+        val rows = lines.map { parseLine(it, width, defaultFg, defaultBg) }
+        return TermGrid(rows, width)
     }
+
+    /**
+     * The widest grid drawn. tmux's own ceiling on a window is 10000 columns;
+     * no screen a person reads is a tenth of that, and every row is padded out
+     * to this width.
+     */
+    const val MAX_COLS: Int = 1000
 
     private fun parseLine(line: String, cols: Int, defaultFg: Color, defaultBg: Color): List<TermCell> {
         val st = Style()
@@ -188,7 +202,18 @@ object TerminalGrid {
                             val r = codes.getOrNull(k + 2) ?: 0
                             val g = codes.getOrNull(k + 3) ?: 0
                             val b = codes.getOrNull(k + 4) ?: 0
-                            val col = Color(r / 255f, g / 255f, b / 255f)
+                            // ⚠ CLAMPED HERE, NOT LEFT TO Color(). A component
+                            // outside 0..255 only ever comes from the daemon (tmux
+                            // refuses one), and Color()'s contract is 0..1: the
+                            // Compose in use today clamps it, an older one threw
+                            // inside parse() and took the screen view down. This
+                            // draws exactly what the clamping version drew, on
+                            // any version.
+                            val col = Color(
+                                r.coerceIn(0, 255) / 255f,
+                                g.coerceIn(0, 255) / 255f,
+                                b.coerceIn(0, 255) / 255f,
+                            )
                             if (isFg) st.fg = col else st.bg = col
                             k += 4
                         }

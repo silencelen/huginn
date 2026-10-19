@@ -2,6 +2,8 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.SseLines
+import com.silencelen.huginn.data.WatchEvent
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
@@ -158,6 +160,31 @@ class SseTest {
             .streamChat("abc").toList()
         assertTrue(events.all { it is ChatEvent.Delta || it is ChatEvent.Failure }, "unexpected $events")
         assertTrue(events.last() is ChatEvent.Failure, "a cut link must end in a failure, got $events")
+    }
+
+    /**
+     * A daemon that never ends a line — or never ends a frame, sending `data:`
+     * line after `data:` line — used to grow the reader's buffer until the app
+     * died. Past 1 MiB the stream now ends, as a failure, like a cut link.
+     */
+    @Test
+    fun `a frame past the limit ends the chat stream as a failure`() = runTest {
+        val endless = "event: delta\ndata: {\"text\":\"" + "x".repeat(SseLines.MAX_LINE) + "\"}\n\n"
+        val one = client("event: delta\ndata: {\"text\":\"a\"}\n\n$endless").streamChat("abc").toList()
+        assertEquals("a", (one.first() as ChatEvent.Delta).text, "what came before is kept")
+        assertTrue((one.last() as ChatEvent.Failure).text.contains("longer than"), "$one")
+
+        val manyLines = "event: delta\n" + "data: ${"y".repeat(64 * 1024)}\n".repeat(20) + "\n"
+        val two = client(manyLines).streamChat("abc").toList()
+        assertTrue(two.single() is ChatEvent.Failure, "$two")
+    }
+
+    @Test
+    fun `a frame past the limit ends the watch stream as a failure`() = runTest {
+        val body = ": hi\n\nevent: state\n" + "data: ${"z".repeat(64 * 1024)}\n".repeat(20) + "\n"
+        val events = client(body).watchStream(null).toList()
+        assertTrue(events.first() is WatchEvent.Alive, "$events")
+        assertTrue((events.last() as WatchEvent.Failure).message.contains("longer than"), "$events")
     }
 
     @Test

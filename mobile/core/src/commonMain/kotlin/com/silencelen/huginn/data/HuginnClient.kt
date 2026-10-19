@@ -73,17 +73,22 @@ import kotlinx.serialization.json.jsonPrimitive
  * address included (security scan F9): the daemon hands it to anybody who asks,
  * so whatever holds a loopback port can relay it from the daemon's own address.
  *
- * @param version the daemon's own, from the header it stamps on every response
- *   including the 401, or from the challenge's body. Null on a daemon too old to
- *   stamp it.
+ * @param version the PROVED daemon's own, from the challenge body (or the header
+ *   it stamps) on the connection the proof just bound, and only if it is shaped
+ *   like a release number ([DaemonTls.versionShape]). ⚠ Null whenever [proven] is
+ *   false: before a proof the far end's version is a claim anybody can print, and
+ *   it used to lead the setup flow's sentence (security review, 2026-10).
  * @param answered something huginn-SHAPED is at that address. Useful to SAY
  *   (a pre-3.6 daemon 404s the challenge and is still a real daemon); never
  *   sufficient to adopt.
  * @param secure the probe ran over TLS: every address, a loopback one included,
  *   unless [DaemonTls.plaintextLoopback] kept a loopback route plain.
- * @param tooOld what answered is a daemon older than 3.11 — no TLS to prove over.
+ * @param tooOld what answered says it is a daemon older than 3.11 — no TLS to
+ *   prove over. Only ever set for an address off this machine whose token has
+ *   proved nothing yet; anywhere TLS is known to be, that answer is [intercepted].
  * @param intercepted a huginn-shaped answer whose bound proof FAILED under a real
- *   token: TLS.md's interception case. Never adoptable, and said as such.
+ *   token, or a plain-HTTP (or "too old") answer where TLS is known to be: TLS.md's
+ *   interception case. Never adoptable, and said as such.
  */
 data class DaemonProbe(
     val proven: Boolean,
@@ -285,21 +290,32 @@ class HuginnClient(
         fun probeWords(probe: DaemonProbe): String {
             if (probe.address.isBlank()) return NO_ROUTE
             val where = probe.address.removePrefix("https://").removePrefix("http://").trimEnd('/')
-            val what = probe.version?.takeIf { it.isNotBlank() }?.let { "appd $it" } ?: "huginn"
-            if (probe.proven) return "$what answered at $where, and proved it"
-            if (probe.tooOld) return "$what at $where has no TLS — update the daemon to 3.11 or newer"
+            // ⚠⚠ THE VERDICT LEADS, AND ONLY A PROVED DAEMON IS NAMED BY ITS VERSION
+            // (security review, 2026-10). These words used to open with
+            // "appd <version>" whatever the verdict, and the version is what the
+            // far end SAYS — so an unproved answer chose the first words of the
+            // sentence the reader decides on. Everything below is built from the
+            // verdict and the address the reader typed; the version appears only
+            // beside a proof, and only shaped like one (DaemonTls.versionShape).
+            if (probe.proven) {
+                val what = DaemonTls.versionShape(probe.version)?.let { "appd $it" } ?: "huginn"
+                return "$what answered at $where, and proved it"
+            }
             if (probe.intercepted) return "$where could not prove it is your huginn daemon — someone may be intercepting the connection"
+            if (probe.tooOld) {
+                return "$where has no TLS — update the daemon to 3.11 or newer; if it already is, something else answered in its place"
+            }
             // Over TLS an unproved answer is a daemon asked before a token was
             // given — the setup flow's address step — not an old one.
             // So it is said as what it is - an answer waiting for the token - and not
             // as a failure: "cannot prove it is huginn" read as broken on a correct
             // address (PC01, 2026-10-16).
-            if (probe.answered && probe.secure) return "$what answers at $where; the token (next) proves it is yours"
+            if (probe.answered && probe.secure) return "huginn answers at $where; the token (next) proves it is yours"
             // Plain http, which only HUGINN_APPD_PLAINTEXT=local leaves to a
             // loopback route: no certificate to bind a proof to, and the legacy
             // proof is relayable, so nothing here can be proved at all.
             if (probe.answered) {
-                return "$what at $where ${DaemonChallenge.NOT_PROVEN} — plain http (${DaemonTls.PLAINTEXT_ENV}=local) has nothing to prove it with"
+                return "huginn at $where ${DaemonChallenge.NOT_PROVEN} — plain http (${DaemonTls.PLAINTEXT_ENV}=local) has nothing to prove it with"
             }
             return "nothing at $where answered as huginn"
         }
@@ -454,12 +470,24 @@ class HuginnClient(
     private suspend fun prove(origin: String, token: String, timeoutMs: Long): String {
         val nonce = DaemonChallenge.newNonce()
         val reply = transport.probe("$origin${DaemonChallenge.PATH}?nonce=$nonce", timeoutMs)
-        return when (val v = DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls)) {
+        val loopback = DaemonTls.dialsLoopback(origin)
+        // ⚠ TLS IS KNOWN TO BE THERE when this token's daemon has proved itself
+        // before (a re-proof always has pins) or the port is this machine's: a
+        // plain-HTTP answer, or a claim to predate TLS, is then the interception
+        // case and never "update it" (DaemonTls.judge).
+        val tlsRequired = loopback || pins.pinsFor(token).isNotEmpty()
+        val v = DaemonTls.judge(
+            token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls, tlsRequired,
+        )
+        return when (v) {
             is DaemonTls.Verdict.Proven -> { pins.add(token, v.fp); v.fp }
             is DaemonTls.Verdict.TooOld -> throw DaemonTlsException(
                 DaemonTlsException.Kind.TOO_OLD,
-                DaemonTls.TOO_OLD +
-                    if (DaemonTls.isLoopbackHost(DaemonTls.hostOf(origin.substringAfter("://")))) DaemonTls.LOOPBACK_HINT else "",
+                DaemonTls.TOO_OLD + DaemonTls.TOO_OLD_HINT,
+            )
+            is DaemonTls.Verdict.Downgraded -> throw DaemonTlsException(
+                DaemonTlsException.Kind.INTERCEPTED,
+                DaemonTls.INTERCEPTED + if (v.plain && loopback) DaemonTls.LOOPBACK_HINT else "",
             )
             is DaemonTls.Verdict.Unproven -> throw DaemonTlsException(
                 DaemonTlsException.Kind.INTERCEPTED,
@@ -702,14 +730,16 @@ class HuginnClient(
             val version = resp.headers[APPD_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
             // Bounded by the probe timeouts above: a host that dribbles a body
             // at a probe fails the same way one that never answers does.
-            answersLikeDaemon(version, resp.status.value, resp.bodyAsText()) to version
-        }.getOrElse { false to null }
+            answersLikeDaemon(version, resp.status.value, resp.bodyAsText())
+        }.getOrElse { false }
 
+        // No version: nothing here is proved, so whatever the far end calls
+        // itself is not repeated (see DaemonProbe.version).
         return DaemonProbe(
             proven = false,
-            version = fingerprint.second,
+            version = null,
             address = address,
-            answered = fingerprint.first,
+            answered = fingerprint,
         )
     }
 
@@ -733,24 +763,41 @@ class HuginnClient(
             if (e is CancellationException) throw e
             return DaemonProbe(proven = false, version = null, address = address, answered = false, secure = true)
         }
-        val bodyVersion = if (reply.status in 200..299) {
-            runCatching { probeJson.decodeFromString<ChallengeAnswer>(reply.body).version }.getOrNull()
-        } else null
-        val version = bodyVersion?.takeIf { it.isNotBlank() } ?: reply.appdHeader
-        return when (val v = DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls)) {
+        // ⚠ READ ONLY ONCE THE PROOF HAS PASSED. Before that the body and the
+        // header are whatever answered, and a version from them would lead the
+        // setup flow's sentence (see DaemonProbe.version).
+        fun provedVersion(): String? {
+            val bodyVersion = if (reply.status in 200..299) {
+                runCatching { probeJson.decodeFromString<ChallengeAnswer>(reply.body).version }.getOrNull()
+            } else null
+            return DaemonTls.versionShape(bodyVersion?.takeIf { it.isNotBlank() } ?: reply.appdHeader)
+        }
+        // As in prove(): TLS is known to be there for a daemon this token has
+        // proved, and on this machine. No token, no pins to consult.
+        val tlsRequired = DaemonTls.dialsLoopback(root) || (token.isNotEmpty() && pins.pinsFor(token).isNotEmpty())
+        val v = DaemonTls.judge(
+            token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls, tlsRequired,
+        )
+        return when (v) {
             is DaemonTls.Verdict.Proven -> {
                 pins.add(token, v.fp)
-                DaemonProbe(proven = true, version = version, address = address, answered = true, secure = true)
+                DaemonProbe(proven = true, version = provedVersion(), address = address, answered = true, secure = true)
             }
             is DaemonTls.Verdict.TooOld -> DaemonProbe(
-                proven = false, version = v.version ?: version, address = address, answered = true,
+                proven = false, version = null, address = address, answered = true,
                 secure = true, tooOld = true,
+            )
+            // A plain answer (or a claim to predate TLS) where TLS is known to
+            // be: never the daemon, whether or not a token was there to prove with.
+            is DaemonTls.Verdict.Downgraded -> DaemonProbe(
+                proven = false, version = null, address = address, answered = true,
+                secure = true, intercepted = true,
             )
             // With no token there was nothing to prove WITH: a real daemon read
             // before the setup flow has asked for one. Only a proof that failed
             // under a real token is the interception sentence.
             is DaemonTls.Verdict.Unproven -> DaemonProbe(
-                proven = false, version = version, address = address, answered = true,
+                proven = false, version = null, address = address, answered = true,
                 secure = true, intercepted = token.isNotEmpty(),
             )
             DaemonTls.Verdict.NotHuginn -> {
@@ -759,7 +806,7 @@ class HuginnClient(
                 val ping = runCatching { transport.probe("$root/v1/ping", PROBE_TIMEOUT_MS) }.getOrNull()
                 val pv = ping?.appdHeader?.trim()?.takeIf { it.isNotEmpty() }
                 val answered = ping != null && answersLikeDaemon(pv, ping.status, ping.body)
-                DaemonProbe(proven = false, version = pv ?: version, address = address, answered = answered, secure = true)
+                DaemonProbe(proven = false, version = null, address = address, answered = answered, secure = true)
             }
         }
     }
@@ -932,7 +979,7 @@ class HuginnClient(
                     when {
                         line.startsWith(":") -> emit(WatchEvent.Alive)
                         line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                        line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                        line.startsWith("data:") -> data.appendSseData(line.removePrefix("data:").trim())
                         line.isEmpty() -> {
                             when (event) {
                                 "state" -> runCatching { decode<Watch>(data.toString()) }
@@ -1938,7 +1985,7 @@ class HuginnClient(
                     when {
                         line.startsWith(":") -> Unit                 // heartbeat comment
                         line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                        line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                        line.startsWith("data:") -> data.appendSseData(line.removePrefix("data:").trim())
                         line.startsWith("id:") -> Unit
                         line.isEmpty() -> {
                             if (event != null) {

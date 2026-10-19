@@ -86,4 +86,105 @@ class WrappedTextTest {
     fun `one line is one line`() {
         assertEquals("Pasted text · 1 line", WrappedText.pastedLabel("only\n"))
     }
+
+    // ------------------------------------------------- the scan is the regex
+
+    /**
+     * The patterns the scan replaced, kept here as the reference it is held to.
+     * They are correct and only slow — quadratic on an opener whose closer
+     * never comes — so they judge small messages and nothing else.
+     */
+    private val oldPasted = Regex(
+        """<pasted_content id="([^"\n]{1,32})">\n?([\s\S]*?)\n?</pasted_content id="\1">\n?""",
+    )
+    private val oldAgent = Regex("""<agent-message\b[^>]*>\n?([\s\S]*?)\n?</agent-message>""")
+    private val oldCross = Regex("""<cross-session-message\b([^>]*)>\n?([\s\S]*?)\n?</cross-session-message>""")
+
+    private fun scanned(blocks: List<WrappedText.Block>) = blocks.map { Triple(it.range, it.body, it.attrs) }
+
+    private fun assertSameAsRegex(text: String) {
+        assertEquals(
+            oldPasted.findAll(text).map { Triple(it.range, it.groupValues[2], "") }.toList(),
+            scanned(WrappedText.pastedBlocks(text)),
+            "pasted: ${text.replace("\n", "\\n")}",
+        )
+        assertEquals(
+            oldAgent.findAll(text).map { Triple(it.range, it.groupValues[1], text.substring(it.range.first + 14).substringBefore('>')) }.toList(),
+            scanned(WrappedText.taggedBlocks(text, "<agent-message", "</agent-message>")),
+            "agent: ${text.replace("\n", "\\n")}",
+        )
+        assertEquals(
+            oldCross.findAll(text).map { Triple(it.range, it.groupValues[2], it.groupValues[1]) }.toList(),
+            scanned(WrappedText.taggedBlocks(text, "<cross-session-message", "</cross-session-message>")),
+            "cross: ${text.replace("\n", "\\n")}",
+        )
+    }
+
+    @Test
+    fun `the scan finds exactly what the patterns found, case by case`() {
+        for (text in listOf(
+            paste,
+            "a<pasted_content id=\"x\"></pasted_content id=\"x\">b",
+            "<pasted_content id=\"x\">\n</pasted_content id=\"x\">",
+            "<pasted_content id=\"x\">\n\n</pasted_content id=\"x\">\n\n",
+            "<pasted_content id=\"x\">a\n</pasted_content id=\"y\">\n</pasted_content id=\"x\">",
+            "<pasted_content id=\"x\"><pasted_content id=\"x\">in</pasted_content id=\"x\"></pasted_content id=\"x\">",
+            "<pasted_content id=\"a\">1</pasted_content id=\"b\"><pasted_content id=\"b\">2</pasted_content id=\"a\"></pasted_content id=\"b\">",
+            "<pasted_content id=\"" + "i".repeat(32) + "\">ok</pasted_content id=\"" + "i".repeat(32) + "\">",
+            "<pasted_content id=\"" + "i".repeat(33) + "\">no</pasted_content id=\"" + "i".repeat(33) + "\">",
+            "<pasted_content id=\"\">empty id</pasted_content id=\"\">",
+            "<pasted_content id=\"a\nb\">newline in id</pasted_content id=\"a\nb\">",
+            "<pasted_content id=\"<pasted_content id=\">x</pasted_content id=\"<pasted_content id=\">",
+            "<agent-message>a</agent-message><agent-message from=\"x\">\nb\n</agent-message>",
+            "<agent-messages>no</agent-message><agent-message-x>yes</agent-message>",
+            "<agent-message\nfrom=\"x\"\n>spans\n</agent-message>",
+            "</agent-message><agent-message>after the last closer",
+            "<agent-message no closing bracket</agent-message>",
+            "<cross-session-message from-name=\"a\">\n<agent-message>x</agent-message>\n</cross-session-message>",
+            "<cross-session-message>one</cross-session-message><cross-session-message>two</cross-session-message>",
+        )) {
+            assertSameAsRegex(text)
+        }
+    }
+
+    /** Generated messages over the characters the patterns turn on, seeded so a failure repeats. */
+    @Test
+    fun `the scan finds exactly what the patterns found, on generated messages`() {
+        val pieces = listOf(
+            "<pasted_content id=\"", "</pasted_content id=\"", "\">", "<agent-message", "</agent-message>",
+            "<cross-session-message", "</cross-session-message>", " from-name=\"n\"", ">", "\n", "\"", "a", "b", "x",
+            "<", "-", "_", " ",
+        )
+        val random = kotlin.random.Random(20261019)
+        repeat(4000) {
+            val text = buildString { repeat(random.nextInt(1, 24)) { append(pieces[random.nextInt(pieces.size)]) } }
+            assertSameAsRegex(text)
+        }
+    }
+
+    // ------------------------------------------------------------ the timing
+
+    /**
+     * ⚠ THE REASON THE PATTERNS WENT. Many openers whose closer never comes —
+     * one closer of another id is enough to get past the cheap pre-check — and
+     * the backreferenced pattern scanned to the end of the message once per
+     * opener: time in the square of the length, on the render path. Measured
+     * on the JVM, 2,500 such openers (60 KB) took the regex 6.6 s and 5,000
+     * took 28 s; one pass takes milliseconds, and the bound below is generous.
+     */
+    @Test
+    fun `many openers without closers cost one pass, not one pass each`() {
+        val openers = 4_000
+        val pasted = "<pasted_content id=\"ab\">".repeat(openers) + "</pasted_content id=\"zz\">"
+        val agents = "</agent-message>" + "<agent-message>".repeat(openers)
+        val crosses = "</cross-session-message>" + "<cross-session-message>".repeat(openers)
+        for (text in listOf(pasted, agents, crosses)) {
+            assertTrue(WrappedText.hasWrapped(text), "the pre-check passes, so the scan really runs")
+            val mark = kotlin.time.TimeSource.Monotonic.markNow()
+            val segs = WrappedText.segments(text)
+            val took = mark.elapsedNow()
+            assertEquals(1, segs.size, "nothing folds: no opener has its closer")
+            assertTrue(took.inWholeMilliseconds < 2_000, "took $took on ${text.length} characters")
+        }
+    }
 }

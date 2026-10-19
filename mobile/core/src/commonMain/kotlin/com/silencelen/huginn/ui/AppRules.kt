@@ -542,10 +542,26 @@ object AppRules {
      * One addition RouteGuard has no use for: a SINGLE-LABEL name is allowed.
      * `http://huginn:8088/` is how every row in this registry is written, and a
      * name with no dot in it cannot resolve past the local search domain.
+     *
+     * ⚠⚠ THE HOST JUDGED IS THE HOST A BROWSER WILL VISIT (security review,
+     * 2026-10). This used to judge the host as written, but a browser — and the
+     * daemon, through `new URL` in lib/apps.js — first percent-decodes it, maps
+     * IDNA full stops to `.` and reads a numeric host as IPv4 in any of its
+     * spellings. So `evil%2ecom`, `evil。com`, `0x08080808` or a decimal past
+     * 2^31 had no dot, passed as a single-label name, and opened a public page. The host
+     * is now put through those same steps first ([browserHost]); what cannot be
+     * put through them faithfully is refused rather than guessed at.
      */
     fun urlProblem(raw: String): String? {
         val url = raw.trim()
         if (url.isEmpty()) return "an app needs an address"
+        if (url.length > URL_MAX) return "that address is too long"
+        // The daemon's own first refusal, mirrored: a browser drops tabs and
+        // newlines from inside a host and reads `\` as `/`, so either one makes
+        // the address it visits differ from the text judged here.
+        if (url.any { it.code <= 0x20 || it.code in 0x7f..0x9f || it == '\\' }) {
+            return "an app address must not contain spaces, control characters or backslashes"
+        }
         val scheme = url.substringBefore("://", missingDelimiterValue = "").lowercase()
         // ⚠ THE SCHEME IS REQUIRED, unlike the client's convenience upgrade of a
         // bare address: `huginn:8088` reads as a scheme called "huginn", and a
@@ -559,25 +575,177 @@ object AppRules {
         // Refused outright rather than normalised away: a path a client resolves
         // differently from the daemon is a link that goes somewhere else.
         if (".." in url) return "an app address cannot contain .."
-        val host = (if (authority.startsWith("[")) authority.substringBefore(']').drop(1)
-        else authority.substringBeforeLast(':', missingDelimiterValue = authority)).lowercase()
+        val host = when (val h = browserHost(authority)) {
+            is BrowserHost.Refused -> return h.why
+            is BrowserHost.Name -> h.host
+        }
         if (host.isEmpty()) return "an app address needs a host"
         if (host.length > HOST_MAX) return "an app address's host is too long"
         // Single-label names first: `huginn` cannot leave the local search domain
         // and is what the whole seeded registry is written with.
         if (singleLabel(host)) return null
         // ⚠ kindOf, NOT isAllowed — see the KDoc. Judged as http on purpose, so
-        // https cannot buy a public host a pass it has not earned.
-        if (RouteGuard.kindOf("http://$authority") != RouteKind.CUSTOM) return null
+        // https cannot buy a public host a pass it has not earned. On the host
+        // as the browser reads it, never on the text as written.
+        val asUrl = if (':' in host) "http://[$host]" else "http://$host"
+        if (RouteGuard.kindOf(asUrl) != RouteKind.CUSTOM) return null
         return "an app address must be on this host, the LAN, the tailnet or the mesh"
     }
 
-    /** A name with no dot and no colon: it cannot resolve past the search domain. */
+    /**
+     * A name with no dot: it cannot resolve past the search domain. Letters,
+     * digits, `-` and `_` only — and never a number, which [browserHost] has
+     * already turned into a dotted IPv4 address.
+     */
     private fun singleLabel(host: String): Boolean =
-        '.' !in host && ':' !in host && host.toIntOrNull() == null
+        host.isNotEmpty() && host.all { it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' }
 
     private val SCHEMES = setOf("http", "https")
     private const val HOST_MAX: Int = 253
+    private const val URL_MAX: Int = 2000
+
+    private const val NOT_AN_ADDRESS = "that is not a valid address"
+    private const val NOT_ASCII = "an app address must spell its host in plain ASCII (an international name in its xn-- form)"
+
+    /** What [browserHost] made of an authority. */
+    private sealed interface BrowserHost {
+        /** Lowercase; a dotted quad for any IPv4 spelling; an IPv6 literal without its brackets. */
+        data class Name(val host: String) : BrowserHost
+        data class Refused(val why: String) : BrowserHost
+    }
+
+    /**
+     * The host a browser visits for [authority] (`host[:port]`, no userinfo):
+     * the WHATWG URL host parser, as far as an app address needs it.
+     *
+     * - The port must be ASCII digits up to 65535, or the browser refuses the
+     *   whole address.
+     * - Percent-escapes are decoded, as the browser does before anything else.
+     * - ⚠ ANYTHING NOT ASCII IS REFUSED, not mapped. A browser maps it through
+     *   the full IDNA table — `。` `．` `｡` become `.`, fullwidth letters become
+     *   ASCII — and a partial copy of that table here is a copy that disagrees
+     *   on whichever character it lacks. Nothing is lost: the daemon stores the
+     *   ASCII form `new URL` gives it, so a host it accepted never arrives
+     *   spelled any other way.
+     * - A host that ends in a number is IPv4 in every spelling a browser
+     *   accepts — hex, octal, fewer than four parts, one 32-bit number — and is
+     *   returned dotted; one the browser cannot read is refused.
+     */
+    private fun browserHost(authority: String): BrowserHost {
+        val hostText: String
+        val portText: String?
+        if (authority.startsWith("[")) {
+            val close = authority.indexOf(']')
+            if (close < 0) return BrowserHost.Refused(NOT_AN_ADDRESS)
+            hostText = authority.substring(1, close)
+            val tail = authority.substring(close + 1)
+            portText = when {
+                tail.isEmpty() -> null
+                tail.startsWith(":") -> tail.substring(1)
+                else -> return BrowserHost.Refused(NOT_AN_ADDRESS)
+            }
+        } else {
+            hostText = authority.substringBefore(':')
+            portText = if (':' in authority) authority.substringAfter(':') else null
+        }
+        if (portText != null && portText.isNotEmpty() &&
+            (portText.any { it !in '0'..'9' } || (portText.trimStart('0').length > 5) ||
+                portText.toInt() > 65535)
+        ) {
+            return BrowserHost.Refused(NOT_AN_ADDRESS)
+        }
+        if (authority.startsWith("[")) {
+            // An IPv6 literal is not percent-decoded or IDNA-mapped; RouteGuard
+            // judges its characters and its class.
+            return BrowserHost.Name(hostText.lowercase())
+        }
+        val decoded = StringBuilder(hostText.length)
+        var i = 0
+        while (i < hostText.length) {
+            val c = hostText[i]
+            if (c.code >= 0x80) return BrowserHost.Refused(NOT_ASCII)
+            if (c != '%') { decoded.append(c); i++; continue }
+            val hi = if (i + 1 < hostText.length) hexValue(hostText[i + 1]) else -1
+            val lo = if (i + 2 < hostText.length) hexValue(hostText[i + 2]) else -1
+            if (hi < 0 || lo < 0) return BrowserHost.Refused(NOT_AN_ADDRESS)
+            val byte = hi * 16 + lo
+            if (byte >= 0x80) return BrowserHost.Refused(NOT_ASCII)
+            decoded.append(byte.toChar())
+            i += 3
+        }
+        val host = decoded.toString().lowercase()
+        if (host.isEmpty()) return BrowserHost.Refused("an app address needs a host")
+        // What no host may contain, decoded or not (WHATWG's forbidden domain
+        // code points): the browser refuses the whole address.
+        if (host.any { it.code < 0x20 || it in FORBIDDEN_IN_HOST }) return BrowserHost.Refused(NOT_AN_ADDRESS)
+        if (!endsInNumber(host)) return BrowserHost.Name(host)
+        return ipv4(host)?.let { BrowserHost.Name(it) } ?: BrowserHost.Refused(NOT_AN_ADDRESS)
+    }
+
+    private val FORBIDDEN_IN_HOST: Set<Char> =
+        setOf(' ', '#', '%', '/', ':', '<', '>', '?', '@', '[', '\\', ']', '^', '|', '\u007f')
+
+    private fun hexValue(c: Char): Int = when (c) {
+        in '0'..'9' -> c - '0'
+        in 'a'..'f' -> c - 'a' + 10
+        in 'A'..'F' -> c - 'A' + 10
+        else -> -1
+    }
+
+    /** WHATWG "ends in a number": whether a browser will read [host] as IPv4. */
+    private fun endsInNumber(host: String): Boolean {
+        val parts = host.split('.').toMutableList()
+        if (parts.last().isEmpty()) {
+            if (parts.size == 1) return false
+            parts.removeAt(parts.lastIndex)
+        }
+        val last = parts.last()
+        if (last.isNotEmpty() && last.all { it in '0'..'9' }) return true
+        return ipv4Number(last) != null
+    }
+
+    /**
+     * WHATWG's IPv4 parser: [host] as a dotted quad, or null where a browser
+     * refuses it. `0x7f.1`, `0177.0.0.1`, `127.1` and `2130706433` are all
+     * `127.0.0.1`.
+     */
+    private fun ipv4(host: String): String? {
+        val parts = host.split('.').toMutableList()
+        if (parts.last().isEmpty() && parts.size > 1) parts.removeAt(parts.lastIndex)
+        if (parts.size > 4) return null
+        val numbers = parts.map { ipv4Number(it) ?: return null }
+        if (numbers.dropLast(1).any { it > 255 }) return null
+        val last = numbers.last()
+        if (last >= 1L shl (8 * (5 - numbers.size))) return null
+        var v = last
+        numbers.dropLast(1).forEachIndexed { k, n -> v += n shl (8 * (3 - k)) }
+        return "${(v shr 24) and 255}.${(v shr 16) and 255}.${(v shr 8) and 255}.${v and 255}"
+    }
+
+    /**
+     * WHATWG's IPv4 number: decimal, `0x` hex or leading-zero octal, or null.
+     * Saturates at 2^32 — anything that large is refused by [ipv4] anyway, and
+     * a browser accepts any number of leading zeros, so the digits are not.
+     */
+    private fun ipv4Number(part: String): Long? {
+        if (part.isEmpty()) return null
+        var digits = part
+        var radix = 10
+        if (digits.length >= 2 && (digits.startsWith("0x") || digits.startsWith("0X"))) {
+            digits = digits.substring(2)
+            radix = 16
+        } else if (digits.length >= 2 && digits[0] == '0') {
+            digits = digits.substring(1)
+            radix = 8
+        }
+        var v = 0L
+        for (c in digits) {
+            val d = hexValue(c)
+            if (d < 0 || d >= radix) return null
+            v = minOf(v * radix + d, 1L shl 32)
+        }
+        return v
+    }
 
     /**
      * Whether pressing this row may hand its address to a browser.

@@ -142,9 +142,15 @@ class RouteGuardTest {
             "http://127.0.0.1:ssh",
             "http://fd00::1:8787",   // unbracketed v6 — host and port are ambiguous
             "http://127.0.0.1 :8787",
+            // A sign or another script's digits: Ktor reads 8787, OkHttp
+            // refuses the URL — two parsers disagreeing about what was allowed.
+            "http://127.0.0.1:+8787",
+            "http://127.0.0.1:８７８７",
+            "http://127.0.0.1:-1",
         )) {
             assertFalse(RouteGuard.isAllowed(url), "should be refused: '$url'")
         }
+        assertEquals("https://127.0.0.1:8787", RouteGuard.normalize("http://127.0.0.1:08787"), "leading zeros are still digits")
     }
 
     // ------------------------------------------------------------- refusal

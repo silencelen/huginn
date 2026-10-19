@@ -1,13 +1,21 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.SseFrameTooLargeException
 import com.silencelen.huginn.data.SseLines
 import com.silencelen.huginn.data.SseTruncatedException
+import com.silencelen.huginn.data.appendSseData
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.cancel
+import io.ktor.utils.io.writeFully
+import io.ktor.utils.io.writer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The line reader both SSE flows sit on.
@@ -92,5 +100,63 @@ class SseLinesTest {
             assertEquals("", r.next())
         }
         assertNull(r.next())
+    }
+
+    // ---------------------------------------------------- a line with no end
+
+    private fun capped(text: String, max: Int, chunk: Int = 16) =
+        SseLines(ByteReadChannel(text.encodeToByteArray()), chunkSize = chunk, maxLine = max)
+
+    /**
+     * A line is at most `maxLine` bytes before its `\n`. Exactly that many is a
+     * line; one more ends the stream, whether the newline never comes or comes
+     * too late.
+     */
+    @Test
+    fun `a line longer than the limit ends the stream, one at the limit is a line`() = runTest {
+        val r = capped("a".repeat(64) + "\n" + "b".repeat(65) + "\nnever read\n", max = 64)
+        assertEquals("a".repeat(64), r.next())
+        val e = assertFailsWith<SseFrameTooLargeException> { r.next() }
+        assertEquals(64, e.limit)
+        // A CR counts: it is a byte of the line until the \n proves otherwise.
+        assertEquals("c".repeat(63), capped("c".repeat(63) + "\r\n", max = 64).next())
+        assertFailsWith<SseFrameTooLargeException> { capped("c".repeat(64) + "\r\n", max = 64).next() }
+    }
+
+    /**
+     * ⚠ THE FINDING ITSELF: a peer that never sends a newline. The buffer used to
+     * double for as long as the bytes kept coming; now the stream ends a read
+     * after the limit, however much more the peer has to send.
+     */
+    @Test
+    fun `a peer that never ends a line is cut off at the limit, not buffered`() = runTest {
+        var served = 0L
+        val endless = CoroutineScope(Dispatchers.Default).writer {
+            val block = ByteArray(4096) { 'x'.code.toByte() }
+            while (served < 64L * 1024 * 1024) { channel.writeFully(block); served += block.size }
+            channel.flushAndClose()
+        }.channel
+        val r = SseLines(endless, chunkSize = 8 * 1024, maxLine = 256 * 1024)
+        assertFailsWith<SseFrameTooLargeException> { r.next() }
+        endless.cancel()
+        assertTrue(served < 64L * 1024 * 1024, "the reader kept taking bytes: $served")
+    }
+
+    /** At the default limit — 1 MiB, the largest frame either SSE reader accepts. */
+    @Test
+    fun `the default limit is one MiB`() = runTest {
+        assertEquals(1 shl 20, SseLines.MAX_LINE)
+        val ok = "d".repeat(SseLines.MAX_LINE)
+        assertEquals(ok.length, lines("$ok\n").next()!!.length)
+        assertFailsWith<SseFrameTooLargeException> { lines(ok + "d\n").next() }
+    }
+
+    @Test
+    fun `a frame built from many data lines is held to the same limit`() {
+        val frame = StringBuilder()
+        frame.appendSseData("x".repeat(60), limit = 100)
+        assertFailsWith<SseFrameTooLargeException> { frame.appendSseData("y".repeat(41), limit = 100) }
+        frame.appendSseData("z".repeat(40), limit = 100)
+        assertEquals(100, frame.length)
     }
 }

@@ -1196,7 +1196,8 @@ class DaemonProbeTest {
 
         assertFalse(probe.proven, "a fingerprint is not a proof")
         assertTrue(probe.answered)
-        assertEquals("3.4.0", probe.version)
+        assertNull(probe.version, "what an unproved answer calls itself is not repeated as a fact")
+        assertFalse("3.4.0" in HuginnClient.probeWords(probe), HuginnClient.probeWords(probe))
         assertNull(seen.last().headers[HttpHeaders.Authorization], "the probe must never carry the bearer")
         assertTrue(
             HuginnClient.probeWords(probe).contains(DaemonChallenge.NOT_PROVEN),

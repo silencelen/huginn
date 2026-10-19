@@ -487,6 +487,81 @@ class AppRulesTest {
     }
 
     /**
+     * ⚠⚠ THE HOST A BROWSER VISITS, NOT THE HOST AS WRITTEN. Each of these has
+     * no ASCII dot as written, so each passed as a single-label name — and a
+     * browser (like the daemon's own `new URL`) decodes the escape, maps the
+     * IDNA full stop, or reads the number as IPv4, and goes somewhere public.
+     */
+    @Test
+    fun `a host is judged after the browser has decoded, mapped and numbered it`() {
+        val off = "an app address must be on this host, the LAN, the tailnet or the mesh"
+        assertEquals(off, AppRules.urlProblem("http://evil%2ecom/"), "a percent-escaped dot")
+        assertEquals(off, AppRules.urlProblem("https://evil%2Eexample%2Ecom:8443/board"))
+        assertEquals(off, AppRules.urlProblem("http://0x08080808/"), "8.8.8.8 in hex")
+        assertEquals(off, AppRules.urlProblem("http://134744072/"), "8.8.8.8 as one number")
+        assertEquals(off, AppRules.urlProblem("http://3221225985/"), "a number past 2^31 is an address off the LAN (192.0.2.1), not a name")
+        assertEquals(off, AppRules.urlProblem("http://010.8.8.8/"), "8.8.8.8 with an octal first part")
+        assertEquals(off, AppRules.urlProblem("http://8.8.2056/"), "8.8.8.8 in three parts")
+        assertEquals(off, AppRules.urlProblem("http://0/"), "0.0.0.0")
+        for (bad in listOf(
+            "http://evil。com/",          // IDEOGRAPHIC FULL STOP
+            "http://evil．com/",          // FULLWIDTH FULL STOP
+            "http://evil｡com/",          // HALFWIDTH IDEOGRAPHIC FULL STOP
+            "http://evil%E3%80%82com/",       // the same, percent-escaped
+            "http://ｈｕｇｉｎｎ/", // fullwidth letters
+        )) {
+            assertEquals(
+                "an app address must spell its host in plain ASCII (an international name in its xn-- form)",
+                AppRules.urlProblem(bad),
+                bad,
+            )
+        }
+        // What the browser itself refuses is refused, not guessed at.
+        for (bad in listOf(
+            "http://4294967296/",             // past 32 bits: the browser's parser fails
+            "http://99999999999999999999/",
+            "http://1.2.3.4.5/",
+            "http://256.1.1.1/",
+            "http://08/",                     // octal with an 8 in it
+            "http://huginn.0x1/",
+            "http://evil%252ecom/",           // decodes to a '%', which no host may hold
+            "http://evil%2/",
+            "http://huginn%3a8088/",
+            "http://huginn:99999/",
+            "http://huginn:80x/",
+            "http://huginn:8088:1/",
+        )) {
+            assertEquals("that is not a valid address", AppRules.urlProblem(bad), bad)
+        }
+        // And what the daemon writes, or what decodes to it, still opens.
+        for (ok in listOf(
+            "http://hu%67inn:8088/",          // = huginn
+            "http://HUGINN:8088/",
+            "http://0x7f000001:8092/board",   // = 127.0.0.1
+            "http://2130706433/",             // = 127.0.0.1
+            "http://0177.0.0.1/",             // = 127.0.0.1
+            "http://127.1/",                  // = 127.0.0.1
+            "http://10.1/",                   // = 10.0.0.1
+            "http://192.168.0x0a.0x14/",      // = 192.168.10.20
+            "http://127.0.0.1./",
+            "http://xn--e1afmkfd:8088/",      // a single label, in its ASCII form
+            "http://huginn:/",
+            "http://my-nas_1/",
+            "http://[::1]:8088/",
+        )) {
+            assertNull(AppRules.urlProblem(ok), ok)
+        }
+        assertEquals(off, AppRules.urlProblem("http://xn--e1afmkfd.com/"), "an ASCII-form name with a dot is a domain")
+        assertEquals(
+            "an app address must not contain spaces, control characters or backslashes",
+            AppRules.urlProblem("http://huginn\\.evil.com/"),
+        )
+        assertEquals("that address is too long", AppRules.urlProblem("http://huginn/" + "a".repeat(2000)))
+        assertFalse(AppRules.openable(app(url = "http://evil%2ecom/")))
+        assertFalse(AppRules.openable(app(url = "http://0x08080808/")))
+    }
+
+    /**
      * ⚠⚠ THE ROW IS THE LINK NOW, so the http(s) gate moved onto the row itself.
      * The whole row is the control — a press anywhere on it hands the address to
      * a browser — and a row whose address the rules refuse must not be pressable

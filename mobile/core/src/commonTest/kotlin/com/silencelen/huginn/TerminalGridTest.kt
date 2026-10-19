@@ -137,6 +137,38 @@ class TerminalGridTest {
         assertEquals(86, (c.blue * 255f).toInt())
     }
 
+    /**
+     * A component outside 0..255 is what tmux itself refuses to pass on, so
+     * only a daemon can send one. Color() takes 0..1; whether it clamps or
+     * throws is the library's choice (an older Compose threw, inside parse()),
+     * so the grid clamps first and never asks.
+     */
+    @Test
+    fun `an out-of-range truecolour is clamped, never handed to Color as it came`() {
+        val fg = parse(esc("<E>[38;2;300;0;0mX"))[0].fg
+        assertEquals(255, (fg.red * 255f).toInt())
+        assertEquals(0, (fg.green * 255f).toInt())
+        val bg = parse(esc("<E>[48;2;0;-1;0mX"))[0].bg!!
+        assertEquals(0, (bg.green * 255f).toInt())
+        val big = parse(esc("<E>[38;2;0;0;2147483647mX"))[0].fg
+        assertEquals(255, (big.blue * 255f).toInt())
+        val after = parse(esc("<E>[38;2;300;0;0;1mX"))[0]
+        assertTrue(after.bold, "the three components are consumed; the code after them still applies")
+        // In range, one parameter short: still a colour, as before.
+        assertEquals(255, (parse(esc("<E>[38;2;255;0mX"))[0].fg.red * 255f).toInt())
+    }
+
+    @Test
+    fun `a pane width from the daemon is held to something drawable`() {
+        val none = TerminalGrid.parse(listOf("abc"), -5, FG, BG)
+        assertEquals(0, none.cols)
+        assertTrue(none.rows.single().isEmpty())
+        val huge = TerminalGrid.parse(listOf("abc"), Int.MAX_VALUE, FG, BG)
+        assertEquals(TerminalGrid.MAX_COLS, huge.cols)
+        assertEquals(TerminalGrid.MAX_COLS, huge.rows.single().size)
+        assertEquals("abc", textOf(huge.rows.single()))
+    }
+
     @Test
     fun `bold and dim are set and cleared together by 22`() {
         val row = parse(esc("<E>[1mB<E>[22mN"))
