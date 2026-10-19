@@ -233,6 +233,10 @@ STUB
     && ok "token is read ON THE HOST, never marshalled from the client" || bad "token handling changed"
   grep -q 'curl -K -' <<<"$E" && ! grep -q -- '-H "Authorization' <<<"$E" \
     && ok "the token reaches curl on stdin, never on its command line" || bad "token is on curl's argv: $E"
+  grep -q -- '--pinnedpubkey "sha256//$p"' <<<"$E" && grep -q 'https://127.0.0.1:8787/v1/' <<<"$E" \
+    && ! grep -q 'http://127.0.0.1:8787' <<<"$E" \
+    && ok "and only over https, pinned to the key in appd's own certificate" \
+    || bad "ps1: the host-side call is not pinned https: $E"
   grep -q "WRAPUP" "$T/out" \
     && ok "end reports the phrase the daemon returned" || bad "end did not parse the JSON reply"
 
@@ -403,12 +407,15 @@ echo "[5c/8] the daemon's own refusal survives the trip home"
 # Driven against a REAL curl: the stub ssh runs the command the client actually
 # composed, with the daemon address and the token PATH rewritten to this lane's
 # own stub and a throwaway token file. So this asserts the composed request and
-# the reply handling together, not a re-implementation of either.
+# the reply handling together, not a re-implementation of either. Over TLS, with
+# the command told the stub's certificate: it pins appd's own key before it
+# sends the token (scripts/test-appd-pin.sh holds that half).
 APT=$(mktemp -d); STUB_DIRS+=("$APT")
 printf 'gate-token\n' > "$APT/token"
+printf '#!/bin/sh\nexit 0\n' > "$APT/systemctl"; chmod +x "$APT/systemctl"
 AP_PF="$APT/appd.port"
 python3 - "$AP_PF" "${HUGINN_TEST_APPD_PORT:-0}" <<'APSTUB' >/dev/null 2>&1 &
-import json, sys
+import json, os, ssl, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):
     def _send(self, code, obj):
@@ -437,6 +444,8 @@ class H(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
     def log_message(self, *a): pass
 srv = HTTPServer(("127.0.0.1", int(sys.argv[2])), H)
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(os.environ["STUB_CERT"], os.environ["STUB_KEY"])
+srv.socket = tls.wrap_socket(srv.socket, server_side=True)
 with open(sys.argv[1], "w") as fh: fh.write(str(srv.server_port))
 srv.serve_forever()
 APSTUB
@@ -466,7 +475,7 @@ APSSH
   aemit () {   # $1 = the huginn command; $2 = the daemon port to aim ssh at
     export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
     : > "$SSH_LOG"
-    ( export PATH="$APT:$PATH"
+    ( export PATH="$APT:$PATH" HUGINN_APPD_TLS_CERT="$STUB_CERT"
       . "$PWD/client/huginn.sh" >/dev/null 2>&1
       eval "$1" ) >"$APT/out" 2>&1
     cat "$APT/out"
@@ -499,7 +508,8 @@ APSSH
   if command -v pwsh >/dev/null 2>&1; then
     pemit () { export SSH_LOG="$APT/log" APPD_TOKEN="$APT/token" APPD_PORT="${2:-$AP_PORT}"
                : > "$SSH_LOG"
-               PATH="$APT:$PATH" pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'; }
+               PATH="$APT:$PATH" HUGINN_APPD_TLS_CERT="$STUB_CERT" \
+                 pwsh -NoProfile -Command ". $PWD/client/huginn.ps1; $1" 2>&1 | tr -d '\r'; }
     PE=$(pemit 'huginn end attention')
     grep -q "answer the waiting question first" <<<"$PE" \
       && ok "ps1: end repeats the daemon's 409 too" || bad "ps1: end on a 409 said: $PE"
@@ -2930,13 +2940,15 @@ else
   skip "desktop uninstaller scope (no $NSI in this tree)"
 fi
 
-echo "[hardening/8] the host scripts: no token on argv, clean model output, safe home writes"
-# Three gates of their own, each runnable alone and each with its own WHY: the
-# appd token never rides a command line (scripts/test-no-token-argv.sh),
-# huginn-llm never hands the terminal a control sequence (test-llm-output.sh),
-# and setup.sh/uninstall.sh never write through a link in HUGINN_HOME
-# (test-home-writes.sh). Their SKIPs are repeated here, loudly, never counted green.
-for g in test-no-token-argv test-llm-output test-home-writes; do
+echo "[hardening/8] the host scripts: no token on argv, a proved daemon, clean model output, safe home writes"
+# Four gates of their own, each runnable alone and each with its own WHY: the
+# appd token never rides a command line (scripts/test-no-token-argv.sh), and
+# goes only to a listener that proves it holds the daemon's key
+# (test-appd-pin.sh); huginn-llm never hands the terminal a control sequence
+# (test-llm-output.sh); and setup.sh/uninstall.sh never write through a link in
+# HUGINN_HOME (test-home-writes.sh). Their SKIPs are repeated here, loudly,
+# never counted green.
+for g in test-no-token-argv test-appd-pin test-llm-output test-home-writes; do
   G_OUT=$(bash "scripts/$g.sh" 2>&1); G_RC=$?
   G_N=$(grep -c '^  ok ' <<<"$G_OUT")
   if [ "$G_RC" -eq 0 ] && [ "$G_N" -gt 0 ]; then

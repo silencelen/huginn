@@ -106,7 +106,15 @@ function _Huginn-Appd {
   # The token is read ON THE HOST and handed to curl as a config line on stdin
   # (`-K -`): printf is a shell builtin, so it never appears in any process's
   # command line, where every other account on the host could read it.
-  $remote = 'printf ''header = "Authorization: Bearer %s"\n'' "$(cat /etc/huginn-appd/token 2>/dev/null)" | curl -K - -s -w "\n%{http_code}" -X ' + $Method + $data + ' "http://127.0.0.1:8787' + $Path + '"'
+  # And only to the daemon, proved: HTTPS pinned to the public key in appd's own
+  # certificate, which root on the host can read and no other account can (8787
+  # is not a privileged port, so while appd is down anybody there can hold it).
+  # The same text as _huginn_appd in huginn.sh, with the reasons there: no
+  # certificate to read means no call (exit 3), another key means curl's 90,
+  # said in words. $pin holds no single quote.
+  $pin = 'u=$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr " " "\n"); c=${HUGINN_APPD_TLS_CERT:-$(printf "%s\n" "$u" | sed -n "s/^HUGINN_APPD_TLS_CERT=//p" | tail -n 1)}; d=${HUGINN_APPD_DATA:-$(printf "%s\n" "$u" | sed -n "s/^HUGINN_APPD_DATA=//p" | tail -n 1)}; c=${c:-${d:-/var/lib/huginn-appd}/tls/cert.pem}; k=$(openssl x509 -in "$c" -noout -pubkey 2>/dev/null); [ -n "$k" ] || { echo "huginn: cannot read the huginn-appd certificate $c - the token goes only to a daemon that proves it holds that key" >&2; exit 3; }; p=$(printf "%s\n" "$k" | openssl pkey -pubin -outform der 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A); '
+  $remote = $pin + 'printf ''header = "Authorization: Bearer %s"\n'' "$(cat /etc/huginn-appd/token 2>/dev/null)" | curl -K - -k --pinnedpubkey "sha256//$p" -s -w "\n%{http_code}" -X ' + $Method + $data + ' "https://127.0.0.1:8787' + $Path + '"' +
+            '; r=$?; [ "$r" != 90 ] || echo "huginn: whatever holds 127.0.0.1:8787 is not huginn-appd (wrong key); the token was not sent" >&2; exit $r'
   $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($remote))
   $raw = ssh -T -o BatchMode=yes -o ConnectTimeout=10 $H "echo $b64 | base64 -d | bash -s" 2>&1
   $rc = $LASTEXITCODE
