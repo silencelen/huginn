@@ -423,12 +423,13 @@ test('HUGINN_APPD_PLAINTEXT=local is the old behaviour, on purpose and only to l
   assert.match(dev.plainRefusal(new URL('http://127.0.0.1:1')), /HUGINN_APPD_PLAINTEXT=local/);
 });
 
-// ------------------- a peer that has not proved itself: bounded in size and time
+// ------------------- a peer that has not proved itself: bounded, and shown not obeyed
 //
 // The challenge is the one exchange with a peer nobody has proved yet. Its
 // answer used to be read whole, with only an idle timeout: a peer dripping a
 // byte at a time stalled the serve loop for good, and one streaming without
-// end grew this process.
+// end grew this process. And whatever it (or the daemon) said reached the log
+// and the terminal with its control sequences intact.
 
 /** A TLS listener that hands each request's raw socket to `onRequest`, once its head is in. */
 async function rawTls(cert, onRequest) {
@@ -486,6 +487,76 @@ test('a challenge answer bigger than a few KiB is cut off, not read into memory'
     assert.ok(Date.now() - t0 < 5000, `cut off at once (took ${Date.now() - t0} ms)`);
     assert.ok(dev.CHALLENGE_MAX_BYTES <= 8192, 'a few KiB: appd answers in about 300 bytes');
   } finally { peer.kill(); }
+});
+
+// What a terminal ACTS on: erase-line and CR (rewrite a line), OSC 52 (set the
+// clipboard) and OSC 0 (retitle) ended by BEL, a one-byte C1 CSI, DEL, NUL.
+const HOSTILE = 'boom\u001b[2K\rALL CLEAR\u001b]52;c;cHduZWQ=\u0007\u001b]0;owned\u0007\u009b31mred\u007f\u0000 end';
+const CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+
+async function hostilePeer() {
+  const c = mintCert('hostile');
+  const srv = https.createServer({ key: c.key, cert: c.cert }, (req, res) => {
+    res.writeHead(500, { 'Content-Type': 'text/plain' });
+    res.end(HOSTILE);
+  });
+  return listen(srv);
+}
+
+test('an unproved peer\'s answer reaches an error message with its control sequences blanked', async () => {
+  const port = await hostilePeer();
+  writeConf({ url: `https://127.0.0.1:${port}` });
+  await assert.rejects(dev.api('GET', '/v1/ping'), (e) => {
+    assert.match(e.message, /challenge at \S+ answered 500 boom/);
+    assert.ok(!CONTROLS.test(e.message), JSON.stringify(e.message));
+    return true;
+  });
+  assert.equal(dev.termSafe('a\tb\nc'), 'a\tb\nc', 'newline and tab are text, and stay');
+  assert.equal(dev.termSafe(HOSTILE).length, HOSTILE.length, 'blanked, not deleted: the text keeps its shape');
+  assert.ok(!CONTROLS.test(dev.termSafe(HOSTILE)));
+});
+
+test('serve logs an unproved peer\'s answer without its control sequences', { skip: process.platform === 'win32' }, async () => {
+  const port = await hostilePeer();
+  const d = fs.mkdtempSync(path.join(tmp, 'ctl-serve-'));
+  fs.writeFileSync(path.join(d, 'device.json'), JSON.stringify({ url: `https://127.0.0.1:${port}`, name: 'ctl', scope: 'look' }));
+  const child = spawn(process.execPath, [RUNNER, 'serve'], { env: { ...process.env, HUGINN_DEVICE_DIR: d }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.on('data', (b) => { out += b; });
+  child.stderr.on('data', (b) => { out += b; });
+  try {
+    for (let i = 0; i < 100 && !/not reaching huginn/.test(out); i += 1) await wait(100);
+  } finally {
+    child.kill('SIGKILL');
+  }
+  assert.match(out, /not reaching huginn: challenge at \S+ answered 500 boom/, out);
+  const bad = [...out].filter((ch) => CONTROLS.test(ch));
+  assert.deepEqual(bad.map((ch) => ch.codePointAt(0).toString(16)), [], 'no control but newline and tab reached the log');
+});
+
+test('status shows the daemon\'s words without their control sequences', async () => {
+  const c = mintCert('status');
+  const srv = https.createServer({ key: c.key, cert: c.cert }, (req, res) => {
+    const u = new URL(req.url, 'https://x');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (u.pathname === '/v1/challenge') {
+      const n = u.searchParams.get('nonce');
+      return res.end(JSON.stringify({ proof: hmac(TOKEN, n), version: '3.13.2', tls: { v: 1, fp: c.fp, proof: dev.boundProof(TOKEN, n, c.fp) } }));
+    }
+    return res.end(JSON.stringify({ online: true, scope: 'work\u001b]0;owned\u0007', effectiveScope: 'look\u009b2J\r', queued: 0 }));
+  });
+  const port = await listen(srv);
+  const d = fs.mkdtempSync(path.join(tmp, 'ctl-status-'));
+  fs.writeFileSync(path.join(d, 'device.json'), JSON.stringify({ url: `https://127.0.0.1:${port}`, name: 'ctl', scope: 'look', id: 'dev9' }));
+  const st = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [RUNNER, 'status'], { env: { ...process.env, HUGINN_DEVICE_DIR: d }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (b) => { out += b; });
+    child.stderr.on('data', (b) => { out += b; });
+    child.on('close', () => resolve(out));
+  });
+  assert.match(st, /huginn sees it as reachable, scope work +\]0;owned +\(-> look +2J +right now\)/, st);
+  assert.ok(!CONTROLS.test(st), JSON.stringify(st));
 });
 
 // --------------------------------------------------- end to end, real appd

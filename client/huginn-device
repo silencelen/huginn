@@ -812,6 +812,18 @@ function rawRequest(mod, u, { method = 'GET', headers = {}, payload = null, time
   });
 }
 
+/**
+ * Text from the daemon, or from a peer that has not proved it IS the daemon,
+ * as a terminal or a log may show it: every C0 control but newline and tab,
+ * DEL, and every C1 control (U+009B is a one-character CSI) blanked to a
+ * space. A peer's answer, a work id, a scope name or an error body reaches the
+ * person reading `serve`'s log, `status` or `on`, and ESC [2K, a CR or an
+ * OSC 52 there rewrites lines or sets the clipboard. The same rule appd,
+ * huginn-llm and core's console apply to what they print.
+ */
+const TERM_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+const termSafe = (s) => String(s).replace(TERM_CONTROLS, ' ');
+
 // The challenge is the one exchange with a peer that has not proved anything
 // yet, so it is the one held to a size and a clock. appd answers it in about
 // 300 bytes; a peer that streams megabytes, or drips a byte a second to keep an
@@ -848,7 +860,7 @@ async function proveDaemon(origin, tok, { deadlineMs = CHALLENGE_DEADLINE_MS, ma
     }
     throw e;
   }
-  if (r.status !== 200) throw new Error(`challenge at ${origin} answered ${r.status} ${r.body.slice(0, 200)}`);
+  if (r.status !== 200) throw new Error(`challenge at ${origin} answered ${r.status} ${termSafe(r.body.slice(0, 200))}`);
   let body;
   try { body = JSON.parse(r.body); } catch { throw new Error(`challenge at ${origin} did not answer JSON`); }
   const t = body && body.tls;
@@ -921,7 +933,7 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     sent = rawRequest(http, u, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${tok}` } });
   }
   return sent.then(({ status, body: out }) => {
-    if (status >= 400) throw new Error(`${method} ${u.pathname} → ${status} ${out.slice(0, 200)}`);
+    if (status >= 400) throw new Error(`${method} ${u.pathname} → ${status} ${termSafe(out.slice(0, 200))}`);
     return out ? JSON.parse(out) : {};
   });
 }
@@ -966,7 +978,7 @@ async function enrol(conf) {
   // misenrolment the exclusive scope exists to prevent. The scope this runner
   // asked for must be the scope the daemon heard, or nothing is offered.
   if (parseScope(conf.scope) === 'generate' && dev.scope !== 'generate') {
-    throw new Error(`the daemon did not recognise scope "generate" (it answered "${dev.scope}") — update huginn-appd before enrolling a serving machine`);
+    throw new Error(`the daemon did not recognise scope "generate" (it answered "${termSafe(dev.scope)}") — update huginn-appd before enrolling a serving machine`);
   }
   if (dev.llmSlug && conf.llmSlug !== dev.llmSlug) { conf.llmSlug = dev.llmSlug; saveConf(conf); }
   if (dev.id !== conf.id) { conf.id = dev.id; saveConf(conf); }
@@ -1367,7 +1379,8 @@ async function serve() {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const log = (m) => console.log(`[huginn-device] ${new Date().toISOString()} ${m}`);
+// Every line: work ids, scopes and error bodies come from the daemon or a peer.
+const log = (m) => console.log(termSafe(`[huginn-device] ${new Date().toISOString()} ${m}`));
 
 // ------------------------------------------------------------- windows task
 
@@ -1490,12 +1503,13 @@ async function status() {
   try {
     const d = await api('GET', `/v1/devices/${conf.id}`);
     console.log('');
-    console.log(`    huginn sees it as ${d.online ? 'reachable' : 'not reachable'}`
+    // Every value here is the daemon's: shown, never obeyed (see termSafe).
+    console.log(termSafe(`    huginn sees it as ${d.online ? 'reachable' : 'not reachable'}`
       + `, scope ${d.scope}${d.scope === d.effectiveScope ? '' : ` (-> ${d.effectiveScope} right now)`}`
-      + `${d.running ? ', running a job' : d.queued ? `, ${d.queued} queued` : ''}`);
+      + `${d.running ? ', running a job' : d.queued ? `, ${d.queued} queued` : ''}`));
   } catch (e) {
     console.log('');
-    console.log(`    could not ask huginn: ${e.message}`);
+    console.log(termSafe(`    could not ask huginn: ${e.message}`));
   }
   console.log('');
 }
@@ -1587,7 +1601,7 @@ async function main() {
       }
       saveConf(conf);
       const id = await enrol(loadConf());
-      console.log(`Enrolled ${conf.name} as "${parseScope(conf.scope)}" (${id}).`);
+      console.log(termSafe(`Enrolled ${conf.name} as "${parseScope(conf.scope)}" (${id}).`));
       // Run by `huginn local on` (HUGINN_DEVICE_MANAGED=1), which installs and
       // starts the services itself and serves models, not claude work: the
       // unattended-act note and the systemd lines below are for a person
@@ -1647,9 +1661,9 @@ async function main() {
         await api('DELETE', `/v1/devices/${conf.id}`);
       } catch (e) {
         if (!force) {
-          console.error(`Could NOT remove this machine from huginn: ${e.message}`);
+          console.error(termSafe(`Could NOT remove this machine from huginn: ${e.message}`));
           console.error('');
-          console.error(`  Still enrolled as ${conf.id}. Nothing has been changed here, so this`);
+          console.error(termSafe(`  Still enrolled as ${conf.id}. Nothing has been changed here, so this`));
           console.error('  is safe to run again once huginn is reachable. Stop the runner');
           console.error('  meanwhile, or it keeps answering for work:');
           console.error('    systemctl disable --now huginn-device');
@@ -1659,14 +1673,14 @@ async function main() {
           process.exit(1);
         }
         dropped = false;
-        console.error(`Could NOT remove this machine from huginn: ${e.message}`);
+        console.error(termSafe(`Could NOT remove this machine from huginn: ${e.message}`));
         console.error('');
-        console.error(`  --force: clearing this machine anyway. The row ${conf.id} ("${conf.name}")`);
+        console.error(termSafe(`  --force: clearing this machine anyway. The row ${conf.id} ("${conf.name}")`));
         console.error('  is STILL enrolled and nothing here can remove it any more — the token');
         console.error('  that could is being deleted with everything else. Retire it from the');
         console.error('  host, where the token lives:');
         console.error(`    curl -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' "$(cat /etc/huginn-appd/token)") \\`);
-        console.error(`      http://127.0.0.1:8787/v1/devices/${conf.id}`);
+        console.error(termSafe(`      http://127.0.0.1:8787/v1/devices/${conf.id}`));
         console.error('');
       }
       const gone = forget();
@@ -1817,7 +1831,7 @@ WantedBy=default.target`);
 // call them without also starting a runner — so the one part of this file that
 // silently destroyed output was the part nothing could reach.
 if (require.main === module) {
-  main().catch((e) => { console.error(`huginn-device: ${e.message}`); process.exit(1); });
+  main().catch((e) => { console.error(termSafe(`huginn-device: ${e.message}`)); process.exit(1); });
 } else {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
@@ -1828,6 +1842,6 @@ if (require.main === module) {
     permanent, authFailed, noTokenError, retryDelayMs,
     boundProof, proofMatches, upgradeUrl, isLoopbackHost, pinsFor, addPin, pinTag, proveDaemon, api, loadConf,
     MAX_PINS, INTERCEPTED, OLD_DAEMON, PLAINTEXT_ENV, plaintextLoopback, plainRefusal, enrol,
-    CHALLENGE_MAX_BYTES, CHALLENGE_DEADLINE_MS,
+    termSafe, CHALLENGE_MAX_BYTES, CHALLENGE_DEADLINE_MS,
   };
 }
