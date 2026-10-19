@@ -148,4 +148,48 @@ class ActivationNoncesTest {
             assertTrue(seen.add(n), "a nonce repeated")
         }
     }
+
+    // ------------------------------------------- opening and taking it down
+
+    private val chat = NavTarget(TargetKind.CHATS, "c1")
+
+    @Test
+    fun `any toast's nonce opens its own target and takes down its own key, nothing else`() {
+        val t = table()
+        assertEquals(Verdict.ACCEPTED, t.redeemOpen(t.issue("chat:c1", Grant.Notice, chat), chat))
+        assertEquals(Verdict.ACCEPTED, t.redeemAck(t.issue("chat:c1", Grant.Notice, chat), "chat:c1"))
+        assertEquals(Verdict.MISMATCH, t.redeemOpen(t.issue("chat:c1", Grant.Notice, chat), NavTarget(TargetKind.CHATS, "c2")))
+        assertEquals(Verdict.MISMATCH, t.redeemAck(t.issue("chat:c1", Grant.Notice, chat), "chat:c2"))
+        // An answer or an undo toast opens its session unless told otherwise.
+        val jotter = NavTarget(TargetKind.SESSIONS, "jotter")
+        assertEquals(Verdict.ACCEPTED, t.redeemOpen(t.issue("sess:jotter", question), jotter))
+        assertEquals(Verdict.ACCEPTED, t.redeemOpen(t.issue("ladder:jotter", Grant.Undo("jotter")), jotter))
+        assertEquals(Verdict.ACCEPTED, t.redeemAck(t.issue("ladder:jotter", Grant.Undo("jotter")), "ladder:jotter"))
+    }
+
+    @Test
+    fun `a toast that opens nowhere cannot be opened by a nonce`() {
+        val t = table()
+        assertEquals(Verdict.MISMATCH, t.redeemOpen(t.issue("headroom:x", Grant.Notice), chat))
+    }
+
+    @Test
+    fun `a notice nonce can neither answer nor undo`() {
+        val t = table()
+        assertEquals(Verdict.MISMATCH, t.redeemAnswer(t.issue("sess:a", Grant.Notice, chat), "a", 1, "fp"))
+        assertEquals(Verdict.MISMATCH, t.redeemUndo(t.issue("ladder:a", Grant.Notice, chat), "a"))
+    }
+
+    @Test
+    fun `taking a toast down outlives the right to answer from it, but not by forever`() {
+        val t = table()
+        val late = t.issue("sess:jotter", question)
+        val later = t.issue("sess:other", Grant.Answer("other", "fp", setOf(1)))
+        val latest = t.issue("chat:c1", Grant.Notice, chat)
+        clock += ActivationNonces.TTL_MS + 1
+        assertEquals(Verdict.ACCEPTED, t.redeemOpen(late, NavTarget(TargetKind.SESSIONS, "jotter")), "read late, still goes away")
+        assertEquals(Verdict.EXPIRED, t.redeemAnswer(later, "other", 1, "fp"), "but no longer answers")
+        clock += ActivationNonces.ACK_TTL_MS
+        assertEquals(Verdict.EXPIRED, t.redeemAck(latest, "chat:c1"))
+    }
 }

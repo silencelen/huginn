@@ -49,7 +49,12 @@ data class NavTarget(val kind: TargetKind, val id: String) {
 
 /** What a `huginn://` URL asked for. */
 sealed interface Activation {
-    data class Open(val target: NavTarget) : Activation
+    /**
+     * Bring the window up on [target]. [nonce] is the toast's, when one of this
+     * app's toasts built the link; only with it does arriving take a notification
+     * down. See [Activations.resolve].
+     */
+    data class Open(val target: NavTarget, val nonce: String? = null) : Activation
 
     /**
      * [fingerprint] and [nonce] are non-null BY CONSTRUCTION. See
@@ -79,8 +84,12 @@ sealed interface Activation {
      * of OK — navigate to the thing — is a different verb wearing the same word,
      * and a button that says OK and moves the reader somewhere is a button that
      * gets pressed once and then never again.
+     *
+     * NONCED, like [Answer]: notification keys are predictable (`sess:<name>`),
+     * so a bare `ack` let any web page take a "needs you" down without the owner
+     * seeing it. Without the toast's [nonce] it does nothing at all.
      */
-    data class Ack(val key: String) : Activation
+    data class Ack(val key: String, val nonce: String? = null) : Activation
 }
 
 /**
@@ -95,10 +104,21 @@ sealed interface ActivationStep {
     data object Summon : ActivationStep
 
     /**
-     * Bring the window up on [target]. [refused] says why, when this is an answer
-     * or an undo that was not acted on, for the log.
+     * Bring the window up on [target].
+     *
+     * [acknowledge] is true only for a link this run can prove it built — an
+     * `open` carrying its toast's nonce — and only then does arriving take the
+     * notification down, as arriving from inside the app does. Any other link
+     * moves the window and acknowledges nothing.
+     *
+     * [refused] says why, when this is an answer, an undo or an open whose nonce
+     * was not good, for the log.
      */
-    data class Navigate(val target: NavTarget, val refused: String? = null) : ActivationStep
+    data class Navigate(
+        val target: NavTarget,
+        val acknowledge: Boolean = false,
+        val refused: String? = null,
+    ) : ActivationStep
 
     /** The exact call the in-app answer makes: `answerPrompt(session, option, fp)`. */
     data class Answer(val session: String, val option: Int, val fingerprint: String) : ActivationStep
@@ -107,6 +127,9 @@ sealed interface ActivationStep {
 
     /** Take the notification filed under [key] down. */
     data class Dismiss(val key: String) : ActivationStep
+
+    /** Nothing at all: an `ack` this run cannot prove it built. [why] is for the log. */
+    data class Ignore(val why: String) : ActivationStep
 }
 
 /**
@@ -115,11 +138,14 @@ sealed interface ActivationStep {
  *
  * Four verbs:
  * ```
- * huginn://open?view=chats|sessions&id=…               focus + navigate
+ * huginn://open?view=chats|sessions&id=…[&nonce=…]     focus + navigate
  * huginn://answer?session=…&option=N&fp=…&nonce=…      answer a pane prompt
  * huginn://undo?session=…&nonce=…                      put a laddered session back
- * huginn://ack?key=…                                   take a notification down
+ * huginn://ack?key=…&nonce=…                           take a notification down
  * ```
+ *
+ * Every link one of this app's toasts carries has that toast's nonce on it. An
+ * `open` without one still opens; it just takes nothing down.
  *
  * Pure and side-effect free on purpose — every rule below is a security rule, and
  * the ones that matter are testable without a window, a tray or a daemon.
@@ -166,7 +192,7 @@ object Activations {
                 val kind = TargetKind.fromWire(q["view"]) ?: return null
                 val id = q["id"].orEmpty()
                 if (id.isEmpty()) return null
-                Activation.Open(NavTarget(kind, id))
+                Activation.Open(NavTarget(kind, id), q["nonce"]?.takeIf { it.isNotEmpty() })
             }
 
             "answer" -> {
@@ -191,7 +217,7 @@ object Activations {
 
             "ack" -> {
                 val key = q["key"].orEmpty()
-                if (key.isEmpty()) null else Activation.Ack(key)
+                if (key.isEmpty()) null else Activation.Ack(key, q["nonce"]?.takeIf { it.isNotEmpty() })
             }
 
             else -> null
@@ -209,12 +235,41 @@ object Activations {
      * its TTL. Everything else that names a session opens it — including any link
      * that STARTED this process, since a nonce from a previous run cannot be in a
      * fresh table — so a forged or stale link is navigation, never an answer.
+     *
+     * TAKING A NOTIFICATION DOWN IS AN ACTION TOO. A "needs you" that vanishes is
+     * an alert the owner never sees, and the keys are predictable, so `ack` and
+     * the acknowledgement that comes with `open` need the toast's nonce as well:
+     * an `ack` without one is [ActivationStep.Ignore], an `open` without one is
+     * navigation that acknowledges nothing.
      */
     fun resolve(raw: String?, nonces: ActivationNonces): ActivationStep =
         when (val a = parse(raw)) {
             null -> ActivationStep.Summon
-            is Activation.Open -> ActivationStep.Navigate(a.target)
-            is Activation.Ack -> ActivationStep.Dismiss(a.key)
+            is Activation.Open -> {
+                val nonce = a.nonce
+                if (nonce == null) {
+                    ActivationStep.Navigate(a.target)
+                } else {
+                    val v = nonces.redeemOpen(nonce, a.target)
+                    if (v == ActivationNonces.Verdict.ACCEPTED) {
+                        ActivationStep.Navigate(a.target, acknowledge = true)
+                    } else {
+                        ActivationStep.Navigate(
+                            a.target,
+                            refused = "open link with ${v.name.lowercase()} nonce: opened, acknowledged nothing",
+                        )
+                    }
+                }
+            }
+            is Activation.Ack -> {
+                val nonce = a.nonce
+                val v = if (nonce == null) null else nonces.redeemAck(nonce, a.key)
+                if (v == ActivationNonces.Verdict.ACCEPTED) {
+                    ActivationStep.Dismiss(a.key)
+                } else {
+                    ActivationStep.Ignore("ack link with ${v?.name?.lowercase() ?: "no"} nonce: ignored")
+                }
+            }
             is Activation.Answer -> {
                 val v = nonces.redeemAnswer(a.nonce, a.session, a.option, a.fingerprint)
                 if (v == ActivationNonces.Verdict.ACCEPTED) {
@@ -261,8 +316,10 @@ object Activations {
         return null
     }
 
-    fun openUrl(target: NavTarget): String =
-        "${PREFIX}open?view=${enc(target.kind.wire)}&id=${enc(target.id)}"
+    /** [nonce]: the toast's, so a click on it may also take it down. */
+    fun openUrl(target: NavTarget, nonce: String? = null): String =
+        "${PREFIX}open?view=${enc(target.kind.wire)}&id=${enc(target.id)}" +
+            (nonce?.let { "&nonce=${enc(it)}" } ?: "")
 
     fun answerUrl(session: String, option: Int, fingerprint: String, nonce: String): String =
         "${PREFIX}answer?session=${enc(session)}&option=$option&fp=${enc(fingerprint)}&nonce=${enc(nonce)}"
@@ -270,7 +327,7 @@ object Activations {
     fun undoUrl(session: String, nonce: String): String =
         "${PREFIX}undo?session=${enc(session)}&nonce=${enc(nonce)}"
 
-    fun ackUrl(key: String): String = "${PREFIX}ack?key=${enc(key)}"
+    fun ackUrl(key: String, nonce: String): String = "${PREFIX}ack?key=${enc(key)}&nonce=${enc(nonce)}"
 
     /**
      * [URLEncoder] and [URLDecoder] agree with each other about `+` (space out,

@@ -221,12 +221,45 @@ class ToastActivationRoundTripTest {
             target = NavTarget(TargetKind.SESSIONS, "jotter"),
             actions = listOf(
                 ToastAction("Undo", Activations.undoUrl("jotter", NONCE)),
-                ToastAction("OK", Activations.ackUrl("sess:jotter")),
+                ToastAction("OK", Activations.ackUrl("ladder:jotter", NONCE)),
             ),
         )
         val urls = actionUrls(WindowsToastNotifier.finishedXml(req))
         assertEquals(Activation.Undo("jotter", NONCE), Activations.parse(urls[0]))
-        assertEquals(Activation.Ack("sess:jotter"), Activations.parse(urls[1]))
+        assertEquals(Activation.Ack("ladder:jotter", NONCE), Activations.parse(urls[1]))
+    }
+
+    @Test
+    fun `a click on the toast itself carries its nonce, and opens with none when it has none`() {
+        fun launch(xml: String): String = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(xml.byteInputStream()).documentElement.getAttribute("launch")
+        val target = NavTarget(TargetKind.SESSIONS, "jotter")
+        assertEquals(Activation.Open(target, NONCE), Activations.parse(launch(WindowsToastNotifier.attentionXml(request(emptyList())))))
+        val news = NotifyRequest(key = "chat:c1", title = "t", body = "b", urgent = false, target = NavTarget(TargetKind.CHATS, "c1"))
+        assertEquals(Activation.Open(NavTarget(TargetKind.CHATS, "c1")), Activations.parse(launch(WindowsToastNotifier.finishedXml(news))))
+        assertEquals(
+            Activation.Open(NavTarget(TargetKind.CHATS, "c1"), NONCE),
+            Activations.parse(launch(WindowsToastNotifier.finishedXml(news.copy(nonce = NONCE)))),
+        )
+    }
+
+    @Test
+    fun `a button whose url is not a huginn link this app reads is never drawn`() {
+        // A protocol action hands its arguments to the shell verbatim.
+        val req = NotifyRequest(
+            key = "ladder:jotter",
+            title = "jotter",
+            body = "b",
+            urgent = false,
+            target = NavTarget(TargetKind.SESSIONS, "jotter"),
+            actions = listOf(
+                ToastAction("Web", "https://example.invalid/"),
+                ToastAction("Settings", "ms-settings:privacy"),
+                ToastAction("Odd", "huginn://quit"),
+                ToastAction("OK", Activations.ackUrl("ladder:jotter", NONCE)),
+            ),
+        )
+        assertEquals(listOf(Activations.ackUrl("ladder:jotter", NONCE)), actionUrls(WindowsToastNotifier.finishedXml(req)))
     }
 
     @Test

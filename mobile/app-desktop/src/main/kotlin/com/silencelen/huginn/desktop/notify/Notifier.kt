@@ -16,11 +16,13 @@ const val MAX_ANSWER_BUTTONS: Int = 3
  * Code is showing, and it is refused without a fingerprint for the same reason.
  * "Undo that downgrade" is not that shape: there is no pane, no rows, and no
  * question — so it travels as a finished `huginn://` URL that this app built
- * itself, which is the only thing a toast backend can activate anyway. A URL
- * that acts for the owner (undo) carries its toast's nonce from
+ * itself, which is the only thing a toast backend can activate anyway. Every
+ * one (Undo, and OK, which takes the toast down) carries its toast's nonce from
  * [ActivationNonces], like the answer buttons do.
  *
- * Still BOUNDED: a fixed label and a URL from [Activations], never free text.
+ * Still BOUNDED: a fixed label and a URL from [Activations], never free text. A
+ * backend draws only `huginn://` links this app can parse; anything else is
+ * dropped rather than handed to the shell.
  */
 data class ToastAction(val label: String, val url: String)
 
@@ -54,9 +56,11 @@ data class NotifyRequest(
      */
     val fingerprint: String? = null,
     /**
-     * This toast's nonce from [ActivationNonces], stamped on every answer button.
-     * Null means no answer buttons either: the fingerprint says WHICH question,
-     * and only the nonce says this app offered the answer. See [Activations.resolve].
+     * This toast's nonce from [ActivationNonces], stamped on every link it
+     * carries: its answer buttons, and the `open` its body fires, which may then
+     * take it down. Null means no answer buttons either: the fingerprint says
+     * WHICH question, and only the nonce says this app offered the answer. See
+     * [Activations.resolve].
      */
     val nonce: String? = null,
     /**

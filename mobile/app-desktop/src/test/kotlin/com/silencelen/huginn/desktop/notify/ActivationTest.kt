@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop.notify
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -154,15 +155,77 @@ class ActivationTest {
     }
 
     @Test
-    fun `open, ack and rubbish resolve as they always did`() {
+    fun `open and rubbish resolve as they always did`() {
         val nonces = ActivationNonces()
         assertEquals(
             ActivationStep.Navigate(NavTarget(TargetKind.CHATS, "c1")),
             Activations.resolve("huginn://open?view=chats&id=c1", nonces),
         )
-        assertEquals(ActivationStep.Dismiss("ladder:main"), Activations.resolve(Activations.ackUrl("ladder:main"), nonces))
         assertEquals(ActivationStep.Summon, Activations.resolve("huginn://answer?option=1&fp=x&nonce=y", nonces))
         assertEquals(ActivationStep.Summon, Activations.resolve(null, nonces))
+    }
+
+    // ------------------------------------------- taking a notification down
+
+    @Test
+    fun `AN ACK WITHOUT ITS TOAST'S NONCE DOES NOTHING`() {
+        // Keys are predictable (`sess:<name>`), and a web page can fire a scheme
+        // link: a bare ack used to take any "needs you" down unseen.
+        val nonces = ActivationNonces()
+        val bare = Activations.resolve("huginn://ack?key=sess%3Amain", nonces)
+        assertTrue(bare !is ActivationStep.Dismiss, "a bare ack took a notification down: $bare")
+        assertIs<ActivationStep.Ignore>(bare)
+        assertIs<ActivationStep.Ignore>(Activations.resolve("huginn://ack?key=sess%3Amain&nonce=guess", nonces))
+    }
+
+    @Test
+    fun `an ack with its toast's nonce takes that toast down, once`() {
+        val nonces = ActivationNonces()
+        val nonce = nonces.issue("ladder:main", ActivationNonces.Grant.Undo("main"))
+        assertIs<ActivationStep.Ignore>(Activations.resolve(Activations.ackUrl("sess:main", nonce), nonces))
+        // That spent it: a nonce presented for the wrong key cannot be retried.
+        assertIs<ActivationStep.Ignore>(Activations.resolve(Activations.ackUrl("ladder:main", nonce), nonces))
+        val fresh = nonces.issue("ladder:main", ActivationNonces.Grant.Undo("main"))
+        assertEquals(ActivationStep.Dismiss("ladder:main"), Activations.resolve(Activations.ackUrl("ladder:main", fresh), nonces))
+        assertIs<ActivationStep.Ignore>(Activations.resolve(Activations.ackUrl("ladder:main", fresh), nonces))
+    }
+
+    @Test
+    fun `AN OPEN WITHOUT A GOOD NONCE OPENS AND ACKNOWLEDGES NOTHING`() {
+        val nonces = ActivationNonces()
+        val target = NavTarget(TargetKind.SESSIONS, "main")
+        val bare = assertIs<ActivationStep.Navigate>(Activations.resolve("huginn://open?view=sessions&id=main", nonces))
+        assertEquals(target, bare.target)
+        assertFalse(bare.acknowledge)
+        val guessed = assertIs<ActivationStep.Navigate>(Activations.resolve(Activations.openUrl(target, "guess"), nonces))
+        assertFalse(guessed.acknowledge)
+        assertTrue(guessed.refused.orEmpty().contains("unknown"), guessed.refused)
+    }
+
+    @Test
+    fun `an open with its toast's nonce acknowledges, once, and only for its target`() {
+        val nonces = ActivationNonces()
+        val chat = NavTarget(TargetKind.CHATS, "c1")
+        val nonce = nonces.issue("chat:c1", ActivationNonces.Grant.Notice, chat)
+        assertEquals(ActivationStep.Navigate(chat, acknowledge = true), Activations.resolve(Activations.openUrl(chat, nonce), nonces))
+        assertFalse(assertIs<ActivationStep.Navigate>(Activations.resolve(Activations.openUrl(chat, nonce), nonces)).acknowledge)
+        // A real nonce, copied onto a link to something else.
+        val other = nonces.issue("chat:c1", ActivationNonces.Grant.Notice, chat)
+        val moved = assertIs<ActivationStep.Navigate>(
+            Activations.resolve(Activations.openUrl(NavTarget(TargetKind.SESSIONS, "main"), other), nonces),
+        )
+        assertFalse(moved.acknowledge)
+        assertTrue(moved.refused.orEmpty().contains("mismatch"), moved.refused)
+    }
+
+    @Test
+    fun `a needs-you toast's body click acknowledges with the same nonce its buttons carry`() {
+        val nonces = ActivationNonces()
+        val target = NavTarget(TargetKind.SESSIONS, "main")
+        val nonce = nonces.issue(target.key, ActivationNonces.Grant.Answer("main", "fp1", setOf(1)))
+        assertEquals(ActivationStep.Navigate(target, acknowledge = true), Activations.resolve(Activations.openUrl(target, nonce), nonces))
+        // One nonce per toast: opening it spent the buttons too.
+        assertIs<ActivationStep.Navigate>(Activations.resolve(Activations.answerUrl("main", 1, "fp1", nonce), nonces))
     }
 
     // ------------------------------------------------------------- the frame
@@ -233,6 +296,16 @@ class ActivationTest {
                 Activation.Undo(name, "n0nce-_x"),
                 Activations.parse(Activations.undoUrl(name, "n0nce-_x")),
                 "undo round-trip for '$name'",
+            )
+            assertEquals(
+                Activation.Open(NavTarget(TargetKind.SESSIONS, name), "n0nce-_x"),
+                Activations.parse(Activations.openUrl(NavTarget(TargetKind.SESSIONS, name), "n0nce-_x")),
+                "nonced open round-trip for '$name'",
+            )
+            assertEquals(
+                Activation.Ack("sess:$name", "n0nce-_x"),
+                Activations.parse(Activations.ackUrl("sess:$name", "n0nce-_x")),
+                "ack round-trip for '$name'",
             )
         }
     }
