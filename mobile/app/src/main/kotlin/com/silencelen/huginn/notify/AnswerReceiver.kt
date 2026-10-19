@@ -29,6 +29,12 @@ import kotlinx.coroutines.withTimeoutOrNull
  * A tap therefore has exactly three outcomes, and all three say something. Silence
  * would be the worst of them: an action button that sometimes does nothing is worse
  * than no button.
+ *
+ * ⚠ AND NO FINGERPRINT, NO ANSWER. A blank one used to be sent as none at all,
+ * which is the one request the host cannot check: the digit lands on whatever
+ * dialog is on the pane by then. Buttons are only drawn with a fingerprint, so a
+ * blank one means a notification from before that rule; it is refused here and
+ * the owner is sent to the session to answer there ([decide]).
  */
 class AnswerReceiver : BroadcastReceiver() {
 
@@ -38,10 +44,10 @@ class AnswerReceiver : BroadcastReceiver() {
         val label = intent.getStringExtra(EXTRA_LABEL).orEmpty()
         val fingerprint = intent.getStringExtra(EXTRA_FINGERPRINT).orEmpty()
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
-        if (option < 1) return
+        val step = decide(option, fingerprint)
+        if (step == Step.IGNORE) return
 
         val app = context.applicationContext
-        val pending = goAsync()
 
         // Taken down at once rather than when the request comes back. The tap has been
         // registered and leaving the buttons on screen invites a second, and a double
@@ -49,6 +55,20 @@ class AnswerReceiver : BroadcastReceiver() {
         if (notificationId != 0) {
             runCatching { NotificationManagerCompat.from(app).cancel(notificationId) }
         }
+
+        if (step == Step.OPEN_SESSION) {
+            // A receiver cannot open an activity from a notification button, so the
+            // way to the session is a notification whose tap opens it.
+            SessionWatchWorker.post(
+                app,
+                "Not answered: $session",
+                "This button did not say which question it was for. Open the session to answer there.",
+                session,
+            )
+            return
+        }
+
+        val pending = goAsync()
 
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -78,7 +98,7 @@ class AnswerReceiver : BroadcastReceiver() {
         val client = HuginnClient({ base }, { bearer })
 
         val result = runCatching {
-            client.answerPrompt(session, option, fingerprint.ifBlank { null })
+            client.answerPrompt(session, option, fingerprint)
         }
         result.onSuccess { r ->
             if (r.ok) {
@@ -113,7 +133,30 @@ class AnswerReceiver : BroadcastReceiver() {
         }
     }
 
+    /** What one tap does, decided before anything is sent. */
+    enum class Step {
+        /** Not an answer at all (no option): nothing happens. */
+        IGNORE,
+
+        /** No fingerprint to bind it to a question: nothing is sent; the session is offered instead. */
+        OPEN_SESSION,
+
+        /** Sent, with the fingerprint, for the host to check against the pane. */
+        SEND,
+    }
+
     companion object {
+        /**
+         * The whole decision, pure so it can be tested off a device. A blank
+         * [fingerprint] is never sent as "none": that would ask the host to press
+         * [option] on whatever is on the pane now.
+         */
+        fun decide(option: Int, fingerprint: String?): Step = when {
+            option < 1 -> Step.IGNORE
+            fingerprint.isNullOrBlank() -> Step.OPEN_SESSION
+            else -> Step.SEND
+        }
+
         const val ACTION = "com.silencelen.huginn.ANSWER"
         const val EXTRA_SESSION = "session"
         const val EXTRA_OPTION = "option"
