@@ -43,6 +43,9 @@ Android app.
   requires `Authorization: Bearer <token>`. A token holder can type into any session, answer
   Claude Code's permission prompts, start act chats, read transcripts and files, and queue work on
   your devices. There is no read-only token and no per-device token.
+- **The token stays off command lines.** The `huginn` command's remote verbs hand it to `curl` on
+  the server on standard input (`curl -K -`), and the examples in these docs send it as a header
+  read from a file, so it never appears in another account's process list.
 - **No rate limiting on authentication.** A wrong token gets `401` immediately, with no delay or
   lockout. Only the unauthenticated `/v1/challenge` route is limited (20 requests per second per
   address). The token is 32 random bytes; it stays unguessable only while nobody can try at
