@@ -1560,3 +1560,58 @@ test('boxIsOurs: the whole message, its collapsed marker, a scrolled piece — n
   assert.equal(t.boxIsOurs(null, 'x'), false);
 });
 
+// ---- the held send's drop check reads only what is new -----------------------
+
+test('scanForHuman reads each byte of a growing transcript once, bounded, and still sees the person', () => {
+  // A held automated send runs this every 400 ms. It used to decode everything
+  // since the entry was queued on every poll — the whole of a long turn, tool
+  // output and all, over and over for up to ten minutes.
+  let file = Buffer.alloc(0);
+  const reads = [];
+  const read = (from, max) => {
+    const buf = file.subarray(from, Math.min(file.length, from + max));
+    reads.push({ from, len: buf.length });
+    return { buf, start: from };
+  };
+  const add = (s) => { file = Buffer.concat([file, Buffer.from(s)]); };
+  const rec = (o) => `${JSON.stringify(o)}\n`;
+  const tool = (n) => rec({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x'.repeat(n) }] } });
+  const person = rec({ type: 'user', message: { content: 'actually, stop and do the other thing' } });
+
+  add(rec({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }));
+  const cursor = { at: file.length };            // queued here
+  add(tool(300_000));
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(cursor.at, file.length, 'everything complete has been read');
+  const afterFirst = reads.length;
+  add(tool(300_000));
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(reads[afterFirst].from, file.length - Buffer.byteLength(tool(300_000)),
+    'the next look starts where the last one stopped — not where the entry was queued');
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(reads[reads.length - 1].len, 0, 'nothing new: nothing read');
+
+  // A person's record arriving in two writes is read once it is whole.
+  const half = Math.floor(person.length / 2);
+  add(person.slice(0, half));
+  const before = cursor.at;
+  assert.equal(t.scanForHuman(cursor, read), false, 'half a line is not a record yet');
+  assert.equal(cursor.at, before, 'and is left for the next look');
+  add(person.slice(half));
+  assert.equal(t.scanForHuman(cursor, read), true, 'the person spoke');
+
+  // Every read was bounded, and the total read is the file, not a multiple of it.
+  assert.ok(reads.every((r) => r.len <= t.HUMAN_SCAN_MAX_BYTES));
+  const total = reads.reduce((a, r) => a + r.len, 0);
+  assert.ok(total < file.length * 1.5, `read ${total} bytes of a ${file.length}-byte transcript`);
+});
+
+test('scanForHuman steps over a line longer than one read, then still sees the person', () => {
+  let file = Buffer.from(`${JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'y'.repeat(5000) }] } })}\n`);
+  file = Buffer.concat([file, Buffer.from(`${JSON.stringify({ type: 'user', message: { content: 'hello?' } })}\n`)]);
+  const read = (from, max) => ({ buf: file.subarray(from, Math.min(file.length, from + max)), start: from });
+  const cursor = { at: 0 };
+  let saw = false;
+  for (let i = 0; i < 20 && !saw; i++) saw = t.scanForHuman(cursor, read, 1024);
+  assert.equal(saw, true);
+});

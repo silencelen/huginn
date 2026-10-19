@@ -290,6 +290,47 @@ function hasHumanUserRecord(jsonlSlice) {
   return false;
 }
 
+/**
+ * The most one drop check may read of a held entry's transcript.
+ *
+ * Generous on purpose: a person's message with a pasted image is one record of
+ * several MB of base64, and it has to fit whole to be read as a person. A record
+ * longer than this is a tool's output, never something somebody typed.
+ */
+const HUMAN_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Has a person spoken in the part of the transcript not looked at yet?
+ *
+ * ⚠ ONLY WHAT IS NEW, AND NEVER MORE THAN A BOUNDED READ OF IT. The drop check
+ * runs on every 400 ms poll while an automated send is held, and it used to read
+ * and decode EVERYTHING from the moment the entry was queued — so a send held
+ * behind a long agent turn re-read the whole growing turn, tool output and all,
+ * twice and a half times a second for up to ten minutes. Now `cursor.at` moves
+ * past every complete line once it has been read, each check reads only what
+ * was appended since (at most `max` bytes), and a line still being written is
+ * left for the next check.
+ *
+ * @param cursor { at } — byte offset of the first unread byte; advanced here
+ * @param read   (from, max) => { buf, start } | null, raw bytes of the file
+ */
+function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+  const slice = read(cursor.at, max);
+  if (!slice || !slice.buf || !slice.buf.length) return false;
+  const nl = slice.buf.lastIndexOf(0x0a);
+  if (nl < 0) {
+    // No complete line: one still being written — or one longer than a whole
+    // read, which nobody typed. Step over that; wait for the other.
+    if (slice.buf.length >= max) cursor.at = slice.start + slice.buf.length;
+    return false;
+  }
+  const done = slice.buf.subarray(0, nl + 1);
+  cursor.at = slice.start + done.length;
+  // A read that began inside a line it stepped over starts with that line's
+  // tail; it does not parse, and is skipped like any fragment.
+  return hasHumanUserRecord(done.toString('utf8'));
+}
+
 // The composer's input line: a bare caret, or a caret with typed text after it.
 const CARET_EMPTY_RE = /^\s*❯\s*$/;
 const CARET_TYPED_RE = /^\s*❯\s+\S/;
@@ -1692,7 +1733,7 @@ module.exports = {
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
-  hasHumanUserRecord, kindOf,
+  hasHumanUserRecord, kindOf, scanForHuman, HUMAN_SCAN_MAX_BYTES,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,

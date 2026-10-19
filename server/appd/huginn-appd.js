@@ -2648,6 +2648,28 @@ function transcriptTail(file, from = null, bytes = 64 * 1024) {
   }
 }
 
+/**
+ * At most `max` bytes of a transcript from byte `from` — never "everything from
+ * there to the end", which is what made a long hold re-read the whole of a
+ * growing turn on every poll. Raw bytes, so a caller can stop at a line end
+ * without splitting a character. `{ buf, size, start }`, or null.
+ */
+function transcriptSlice(file, from, max) {
+  let fd;
+  try {
+    const st = fs.statSync(file);
+    const start = Math.max(0, Math.min(Number(from) || 0, st.size));
+    const len = Math.max(0, Math.min(st.size - start, max));
+    if (len === 0) return { buf: Buffer.alloc(0), size: st.size, start };
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(len);
+    const got = fs.readSync(fd, buf, 0, len, start);
+    return { buf: got === len ? buf : buf.subarray(0, got), size: st.size, start };
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+  }
+}
+
 function transcriptPath(name) {
   const st = readSessionState(name);
   return st && st.transcript ? st.transcript : null;
@@ -2823,9 +2845,10 @@ function humanSpokeSince(entry, name) {
     if (file) { entry.transcript = file; entry.transcriptAt = 0; }
   }
   if (!file || from == null) return false;
-  const tail = transcriptTail(file, from);
-  if (!tail || !tail.text) return false;
-  return typing.hasHumanUserRecord(tail.text);
+  // Incremental and bounded (typing.scanForHuman): each poll reads only what was
+  // appended since the last one, never the whole slice since the entry queued.
+  if (!entry.humanScan || entry.humanScan.file !== file) entry.humanScan = { file, at: from };
+  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max));
 }
 
 function armQueueTimer(name) {
