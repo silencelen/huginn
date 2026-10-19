@@ -147,6 +147,33 @@ test('sessions cap by dropping the oldest turns and prune by age and count', () 
   assert.ok(fs.existsSync(path.join(tmp, 'sessions', `${sid}.jsonl`)), 'the fresh one stays');
 });
 
+const MODE_OF = (f) => fs.statSync(f).mode & 0o777;
+
+// The transcripts are the owner's prompts and the model's answers; the key,
+// the config and the token beside them are all 0600.
+test('session transcripts are owner-only: 0600 files in a 0700 directory, whatever the umask', { skip: process.platform === 'win32' && 'mode bits are POSIX' }, () => {
+  const dir = path.join(tmp, 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.chmodSync(dir, 0o755);                         // as an older shim left it
+  const legacy = crypto.randomUUID();
+  const legacyFile = path.join(dir, `${legacy}.jsonl`);
+  fs.writeFileSync(legacyFile, '{"role":"user","content":"old"}\n');
+  fs.chmodSync(legacyFile, 0o644);
+  const old = process.umask(0);                     // the widest umask there is
+  try {
+    shim.saveSession(legacy, [{ role: 'user', content: 'the owner said this' }]);
+    assert.equal(MODE_OF(legacyFile), 0o600, 'a save replaces a 0644 transcript with a 0600 one');
+    assert.equal(MODE_OF(dir), 0o700, 'and closes the directory an older shim left open');
+    const fresh = crypto.randomUUID();
+    shim.saveSession(fresh, [{ role: 'user', content: 'and this' }]);
+    assert.equal(MODE_OF(path.join(dir, `${fresh}.jsonl`)), 0o600, 'a new transcript is 0600 from the start');
+    assert.deepEqual(shim.loadSession(fresh).map((m) => m.content), ['and this']);
+    assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')), [], 'no temp is left behind');
+  } finally {
+    process.umask(old);
+  }
+});
+
 // --------------------------------------------------------------- contract
 
 test('--contract-check emits the exact dialect handleClaudeEvent consumes', async () => {

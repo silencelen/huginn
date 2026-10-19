@@ -121,6 +121,47 @@ function mapModel(raw, conf) {
 
 function sessionsDir() { return path.join(localDir(), 'sessions'); }
 
+/**
+ * The sessions directory, owner-only: created 0700, and set back to 0700 when
+ * it already exists.
+ *
+ * ⚠ TRANSCRIPTS ARE THE OWNER'S PROMPTS AND THE MODEL'S ANSWERS, and they were
+ * written under the default umask: 0755 here and 0644 per file, readable by
+ * every account on a machine whose key, config and token are all 0600. The
+ * mode on the directory also covers files an older shim left at 0644 (they
+ * cannot be reached through it), and each save replaces its file with a 0600
+ * one. On Windows the tier's tree is already locked to its owners (lockTree).
+ */
+function privateSessionsDir() {
+  const dir = sessionsDir();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(dir, 0o700); } catch { /* not ours to change: the files are 0600 regardless */ }
+  }
+  return dir;
+}
+
+/**
+ * Write `text` to `dest` as a 0600 file: a random temp created O_EXCL at 0600
+ * (never a planted file, never a moment at the umask), then renamed over.
+ */
+function writePrivate(dest, text) {
+  const tmp = path.join(path.dirname(dest), `.${path.basename(dest)}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const fd = fs.openSync(tmp, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, text);
+  } catch (e) {
+    try { fs.closeSync(fd); } catch { /* closed */ }
+    try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+  fs.closeSync(fd);
+  try { fs.renameSync(tmp, dest); } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+}
+
 function loadSession(id) {
   try {
     return fs.readFileSync(path.join(sessionsDir(), `${id}.jsonl`), 'utf8')
@@ -132,8 +173,7 @@ function loadSession(id) {
 }
 
 function saveSession(id, history) {
-  const dir = sessionsDir();
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = privateSessionsDir();
   let lines = history.map((m) => JSON.stringify({ role: m.role, content: m.content, ts: m.ts || Date.now() }));
   // Cap by dropping the OLDEST non-system turns: the system line anchors the
   // conversation, the newest turns are the ones a resume actually needs.
@@ -144,15 +184,21 @@ function saveSession(id, history) {
     lines.splice(idx, 1);
     text = lines.join('\n') + '\n';
   }
-  fs.writeFileSync(path.join(dir, `${id}.jsonl`), text);
+  writePrivate(path.join(dir, `${id}.jsonl`), text);
 }
 
 /** Old and surplus session files go, newest stay. Called once per spawn. */
 function pruneSessions(now = Date.now()) {
-  const dir = sessionsDir();
+  if (!fs.existsSync(sessionsDir())) return;
+  const dir = privateSessionsDir();
   let entries;
   try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+    const names = fs.readdirSync(dir);
+    // A temp left by a run that died mid-save is never loaded; it goes once stale.
+    for (const f of names.filter((n) => n.endsWith('.tmp'))) {
+      try { if (now - fs.statSync(path.join(dir, f)).mtimeMs > 60 * 60 * 1000) fs.unlinkSync(path.join(dir, f)); } catch { /* gone */ }
+    }
+    entries = names.filter((f) => f.endsWith('.jsonl'))
       .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }));
   } catch {
     return;
