@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # test-home-writes.sh — server/setup.sh and server/uninstall.sh never write
-# through a path in HUGINN_HOME that the home's own account controls.
+# through a path in HUGINN_HOME that the home's own account controls, and the
+# desktop package's purge never deletes through one in anybody's home.
 #
 # WHY THIS EXISTS: both scripts run as root and write into HUGINN_HOME, which is
 # root's home by default but may be a non-root account's. That account controls
@@ -10,6 +11,12 @@
 # back out as a world-readable copy inside the home. The scripts now do those
 # reads and writes AS the home's owner and refuse links and other accounts'
 # files. This holds them there, and holds root's own home to what it always got.
+#
+# The desktop .deb's postrm (built by mobile/scripts/release-desktop.sh) is the
+# same class with every account at once: on purge it walks each home as root and
+# removes the app's files, and a link planted at .config or .cache turned that
+# into root deleting wherever the link pointed. [6/6] runs it against scratch
+# homes owned by scratch uids.
 #
 # It runs ONLY the marked `huginn-home-writes` block of each script, sourced in a
 # subshell against scratch homes under one mktemp -d, never the scripts
@@ -62,7 +69,7 @@ done
   fi
 } | sed "s#/opt/huginn-appd#$OPT#g" > "$T/uninstall-block.sh"
 
-echo "[1/5] the blocks are what this gate thinks they are"
+echo "[1/6] the blocks are what this gate thinks they are"
 for b in setup-block.sh uninstall-block.sh; do
   # A block that reached past its own step would run apt-get or systemctl from
   # here; refuse to source anything that looks like it.
@@ -92,7 +99,7 @@ command -v jq >/dev/null 2>&1 || { skip "every check (no jq here; both scripts s
 hooks_of() { jq -r '[.hooks[]?[]?.hooks[]?.command] | sort | .[]' "$1" 2>/dev/null; }
 WANT_TITLE="$(jq -r '[del(._comment)[][].hooks[].command | "/usr/local/bin/" + .] | sort | .[]' "$TREE/server/claude-hooks.json")"
 
-echo "[2/5] a home this account owns: what it always got"
+echo "[2/6] a home this account owns: what it always got"
 H="$T/homes/own"; mkdir -p "$H"
 OUT="$(run_block setup-block.sh "$H")"; RC=$?
 if [ "$RC" = 0 ] && cmp -s "$TREE/server/tmux.conf" "$H/.tmux.conf" \
@@ -135,7 +142,7 @@ OUT="$(run_block setup-block.sh "$H")"; RC=$?
   && ok "a settings.json jq cannot read is left exactly as it was, and said so" \
   || bad "an unreadable settings.json (exit $RC): $(cat "$S") / $OUT"
 
-echo "[3/5] links planted in the home are refused, not followed"
+echo "[3/6] links planted in the home are refused, not followed"
 H="$T/homes/linked"; V="$T/victims"; mkdir -p "$H/.claude" "$V"; chmod 0755 "$V"
 for f in tmux new add settings; do printf 'VICTIM %s\n' "$f" > "$V/$f"; done
 printf 'set -g mouse off  # mine\n' > "$H/.tmux.conf"
@@ -169,7 +176,7 @@ cmp -s "$T/un-settings.before" "$V/un-settings" && [ "$(cat "$V/un-new")" = 'VIC
   && ok "uninstall.sh follows neither link, and says so" \
   || bad "uninstall.sh wrote through a link in the home (exit $RC): $OUT"
 
-echo "[4/5] a home that belongs to another account"
+echo "[4/6] a home that belongs to another account"
 NOBODY="$(getent passwd nobody | cut -d: -f1)"
 if [ "$(id -u)" != 0 ] || [ -z "$NOBODY" ] || ! { command -v runuser || command -v setpriv; } >/dev/null 2>&1; then
   skip "cross-account cases (need root, a 'nobody' account and runuser or setpriv)"
@@ -227,9 +234,25 @@ else
   [ "$(jq -r .keep "$S" 2>/dev/null)" = 1 ] && [ -z "$(hooks_of "$S")" ] && [ "$(stat -c %U "$S")" = "$NOBODY" ] \
     && ok "uninstall.sh still takes the hooks out, writing as the home's owner" \
     || bad "uninstall in $NOBODY's home (exit $RC): $(stat -c '%U' "$S") $(tr -d '\n' < "$S") / $OUT"
+  # install-hooks.js runs as the home's owner too. It writes <settings>.huginn.tmp
+  # and renames that over the file, so a link the account planted at the temp
+  # name would be a root write wherever it pointed - the one this block exists
+  # not to make. Here the daemon's own hook IS in the file, so the script has
+  # something to write.
+  if command -v node >/dev/null 2>&1; then
+    H="$(newhome uninstall-hooks)"
+    as_nobody mkdir "$H/.claude"
+    as_nobody sh -c 'printf "%s\n" "$2" > "$1/.claude/settings.json"' sh "$H" \
+      '{"hooks":{"PermissionRequest":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/huginn-appd/hooks/huginn-permission-hook"}]}]}}'
+    as_nobody ln -s "$R/file" "$H/.claude/settings.json.huginn.tmp"
+    OUT="$(run_block uninstall-block.sh "$H")"; RC=$?
+    [ "$(cat "$R/file")" = "ROOT FILE" ] \
+      && ok "uninstall.sh: install-hooks.js runs as the home's owner, so a link at its temp name reaches no root file" \
+      || bad "uninstall.sh: install-hooks.js wrote a root file through the account's link (exit $RC): $(head -c 200 "$R/file") / $OUT"
+  fi
 fi
 
-echo "[5/5] one rule, one copy of it"
+echo "[5/6] one rule, one copy of it"
 fn() { awk -v f="$1() {" 'index($0, f) == 1 {on=1} on{print} on && /^}$/{exit}' "$2"; }
 for f in as_home_owner home_path_ok home_replace; do
   A="$(fn "$f" "$SETUP")"; B="$(fn "$f" "$UNINSTALL")"
@@ -239,6 +262,72 @@ for f in as_home_owner home_path_ok home_replace; do
 done
 # The uninstall checks above ran the daemon's install-hooks.js only when node is here.
 command -v node >/dev/null 2>&1 || skip "install-hooks.js under uninstall.sh (no node here)"
+
+echo "[6/6] the desktop package's purge: each home as its owner, through no link"
+REL="$TREE/mobile/scripts/release-desktop.sh"
+awk "/^cat > \"\\\$DEB_TMP\/hygiene.sh\" <<'HYGIENE_EOF'\$/{on=1; next} /^HYGIENE_EOF\$/{on=0} on" "$REL" > "$T/hygiene.sh"
+if [ "$(wc -l < "$T/hygiene.sh")" -lt 10 ] || ! grep -q 'getent passwd' "$T/hygiene.sh"; then
+  bad "release-desktop.sh: could not cut the purge block out of it (the HYGIENE_EOF heredoc moved?)"
+elif [ "$(id -u)" != 0 ] || ! command -v setpriv >/dev/null 2>&1; then
+  skip "the purge (needs root, to own scratch homes as other uids, and setpriv)"
+else
+  { printf '#!/bin/sh\n'; cat "$T/hygiene.sh"; printf 'exit 0\n'; } > "$T/postrm"
+  P="$T/purge"; mkdir -p "$P/bin"; chmod 0711 "$P"
+  # Scratch uids with no account here: the passwd lines are this check's own.
+  home() {   # $1 = name, $2 = uid -> a home owned by that uid
+    mkdir -p "$P/$1"; chown "$2:$2" "$P/$1"; chmod 0755 "$P/$1"; echo "$P/$1"
+  }
+  plant() {  # $1 = a file to create, with its parents; $2 = what it says (default: kept)
+    mkdir -p "$(dirname "$1")"; printf '%s\n' "${2:-kept}" > "$1"
+  }
+  # 1. an account's own files, in its own home: removed, and nothing else.
+  H1="$(home own 61001)"
+  for f in .config/huginn-desktop-kt/settings.json .cache/huginn-desktop-kt/x \
+           .local/share/applications/huginn-desktop-kt.desktop .config/keep-me/x; do plant "$H1/$f"; done
+  plant "$H1/.config/autostart/huginn-desktop-kt.desktop" 'Exec=/opt/huginn-desktop-kt/bin/huginn-desktop-kt'
+  chown -R 61001:61001 "$H1"
+  # 2. links planted by the account, pointing at root's files.
+  H2="$(home linked 61002)"
+  plant "$P/victim-config/huginn-desktop-kt/settings.json"
+  plant "$P/victim-config/autostart/huginn-desktop-kt.desktop" 'Exec=/opt/huginn-desktop-kt/bin/x'
+  plant "$P/victim-local/share/applications/huginn-desktop-kt.desktop"
+  plant "$P/victim-cache/x"
+  ln -s "$P/victim-config" "$H2/.config"; ln -s "$P/victim-local" "$H2/.local"
+  mkdir -p "$H2/.cache"; ln -s "$P/victim-cache" "$H2/.cache/huginn-desktop-kt"
+  chown -h 61002:61002 "$H2/.config" "$H2/.local" "$H2/.cache" "$H2/.cache/huginn-desktop-kt"
+  # 3. a "home" the account does not own.
+  H3="$(home notmine 0)"; plant "$H3/.config/huginn-desktop-kt/settings.json"
+  # 4. root's files left in an account's own home: not the account's to delete,
+  #    so not deleted (as root, they were).
+  H4="$(home rootleft 61004)"; plant "$H4/.config/huginn-desktop-kt/settings.json"
+  # 5. root's own home: cleaned as root, still through no link.
+  H5="$(home roothome 0)"; plant "$H5/.config/huginn-desktop-kt/settings.json"
+  plant "$P/victim-root/huginn-desktop-kt/x"; ln -s "$P/victim-root" "$H5/.cache"
+  printf '%s\n' "alex:x:61001:61001::$H1:/bin/sh" "blake:x:61002:61002::$H2:/bin/sh" \
+    "casey:x:61003:61003::$H3:/bin/sh" "drew:x:61004:61004::$H4:/bin/sh" "root:x:0:0::$H5:/bin/sh" \
+    > "$P/passwd"
+  printf '#!/bin/sh\n[ "$1" = passwd ] && cat %q\n' "$P/passwd" > "$P/bin/getent"; chmod 0755 "$P/bin/getent"
+  OUT="$(PATH="$P/bin:$PATH" sh "$T/postrm" purge 2>&1)"; RC=$?
+  GONE=""; for f in .config/huginn-desktop-kt .cache/huginn-desktop-kt .local/share/applications/huginn-desktop-kt.desktop \
+                    .config/autostart/huginn-desktop-kt.desktop; do [ -e "$H1/$f" ] && GONE="$GONE $f"; done
+  [ "$RC" = 0 ] && [ -z "$GONE" ] && [ -e "$H1/.config/keep-me/x" ] \
+    && ok "an account's own files go, as that account, and nothing beside them" \
+    || bad "the purge (exit $RC) left in an account's own home:${GONE:- -} (keep-me $( [ -e "$H1/.config/keep-me/x" ] && echo kept || echo GONE)) / $OUT"
+  LOST=""
+  for f in victim-config/huginn-desktop-kt/settings.json victim-config/autostart/huginn-desktop-kt.desktop \
+           victim-local/share/applications/huginn-desktop-kt.desktop victim-cache/x victim-root/huginn-desktop-kt/x; do
+    [ -e "$P/$f" ] || LOST="$LOST $f"
+  done
+  [ -z "$LOST" ] && ok "a link planted at .config, .local or .cache/huginn-desktop-kt reaches nothing of root's" \
+    || bad "the purge deleted root's files through a link in somebody's home:$LOST"
+  [ -e "$H3/.config/huginn-desktop-kt/settings.json" ] && ok "a home the account does not own is left alone" \
+    || bad "the purge cleaned a home its account does not own"
+  [ -e "$H4/.config/huginn-desktop-kt/settings.json" ] \
+    && ok "root's own files in an account's home are not deleted for it (the purge acts as the account)" \
+    || bad "the purge deleted root's files in an account's home - it acted as root"
+  [ ! -e "$H5/.config/huginn-desktop-kt" ] && ok "root's own home is still cleaned" \
+    || bad "the purge no longer cleans root's own home"
+fi
 
 echo
 [ "$FAIL" = 0 ] && echo "home-writes gates: PASS" || { echo "home-writes gates: FAIL" >&2; exit 1; }

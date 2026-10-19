@@ -42,19 +42,49 @@ _lib="$(dirname "$(readlink -f "$0")")/../lib"
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-devices: no appd token at $TOKEN_FILE" >&2; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
+# The daemon proves itself before the token leaves: HTTPS pinned to the key in
+# appd's own certificate, and no call at all without it - see huginn-rounds.
+appd_pin() {
+  local unit cert="${HUGINN_APPD_TLS_CERT:-}" data="${HUGINN_APPD_DATA:-}" key
+  if [ -z "$cert" ]; then
+    unit="$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr ' ' '\n')"
+    cert="$(sed -n 's/^HUGINN_APPD_TLS_CERT=//p' <<<"$unit" | tail -1)"
+    [ -n "$data" ] || data="$(sed -n 's/^HUGINN_APPD_DATA=//p' <<<"$unit" | tail -1)"
+    cert="${cert:-${data:-/var/lib/huginn-appd}/tls/cert.pem}"
+  fi
+  key="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null)" || key=""
+  if [ -z "$key" ]; then
+    echo "huginn-devices: cannot read huginn-appd's certificate $cert" >&2
+    echo "                (the token goes only to a daemon that proves it holds that key)" >&2
+    return 1
+  fi
+  printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
+}
+PIN="$(appd_pin)" || exit 1
 # The token reaches curl through a file descriptor, never as an argument, which
 # every account here could read in /proc/<pid>/cmdline: see huginn-rounds.
-appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
+appd_curl() { curl -k --pinnedpubkey "$PIN" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
+# Why a call failed; 90 is curl's "the key is not the pinned one".
+appd_down() {   # $1 = curl's exit code
+  if [ "$1" = 90 ]; then
+    echo "huginn-devices: whatever holds 127.0.0.1:8787 is not huginn-appd (wrong key); the token was not sent" >&2
+  else
+    echo "huginn-devices: huginn-appd is not answering on 127.0.0.1:8787" >&2
+  fi
+  echo "                (systemctl status huginn-appd)" >&2
+  exit 1
+}
 
+# Response bodies reach python on stdin, from a builtin printf, never on argv,
+# where every account here could read them: see huginn-rounds.
 if [ -n "$WATCH_NAME" ]; then
   # Resolved on the host, by name or id. Two rows can share a name (a machine
   # re-enrolled from a second profile did exactly that), so a name that matches
   # more than one row is refused with the ids, rather than marking the wrong one.
-  LIST="$(appd_curl -sf -m 10 http://127.0.0.1:8787/v1/devices 2>/dev/null)" \
-    || { echo "huginn-devices: huginn-appd is not answering on 127.0.0.1:8787" >&2; exit 1; }
-  ID="$(python3 -c '
+  LIST="$(appd_curl -sf -m 10 https://127.0.0.1:8787/v1/devices 2>/dev/null)" || appd_down "$?"
+  ID="$(printf '%s' "$LIST" | python3 -c '
 import json, sys
-want, rows = sys.argv[1].lower(), json.loads(sys.argv[2]).get("devices", [])
+want, rows = sys.argv[1].lower(), json.load(sys.stdin).get("devices", [])
 hit = [r for r in rows if r.get("id") == sys.argv[1]] or [r for r in rows if str(r.get("name", "")).lower() == want]
 if not hit:
     sys.stderr.write("huginn-devices: no device called %r (see: huginn devices)\n" % sys.argv[1]); sys.exit(1)
@@ -62,33 +92,30 @@ if len(hit) > 1:
     sys.stderr.write("huginn-devices: %d rows are called %r - say which, by id:\n" % (len(hit), sys.argv[1]))
     for r in hit: sys.stderr.write("  %s  v%s  %s  %s\n" % (r["id"], r.get("version"), r.get("scope"), "online" if r.get("online") else "offline"))
     sys.exit(1)
-print(hit[0]["id"])' "$WATCH_NAME" "$LIST")" || exit 1
+print(hit[0]["id"])' "$WATCH_NAME")" || exit 1
   FLAG=false; [ "$WATCH_ON" = on ] && FLAG=true
   OUT="$(appd_curl -sf -m 10 -X PATCH -H 'content-type: application/json' \
-    -d "{\"watch\":$FLAG}" "http://127.0.0.1:8787/v1/devices/$ID" 2>/dev/null)" \
-    || { echo "huginn-devices: the daemon refused (is appd 3.10 or newer deployed?)" >&2; exit 1; }
-  python3 -c '
+    -d "{\"watch\":$FLAG}" "https://127.0.0.1:8787/v1/devices/$ID" 2>/dev/null)" || {
+    [ "$?" != 90 ] || appd_down 90
+    echo "huginn-devices: the daemon refused (is appd 3.10 or newer deployed?)" >&2; exit 1; }
+  printf '%s' "$OUT" | python3 -c '
 import json, sys
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 if d.get("watch"):
     print("  %s is now watched: you will be messaged when it has not checked in for 10 minutes, and when it is back." % d["name"])
 else:
-    print("  %s is no longer watched." % d["name"])' "$OUT"
+    print("  %s is no longer watched." % d["name"])'
   exit 0
 fi
 
 BODY="$(appd_curl -sf -m 10 \
-  http://127.0.0.1:8787/v1/devices 2>/dev/null)" || {
-  echo "huginn-devices: huginn-appd is not answering on 127.0.0.1:8787" >&2
-  echo "                (systemctl status huginn-appd)" >&2
-  exit 1
-}
+  https://127.0.0.1:8787/v1/devices 2>/dev/null)" || appd_down "$?"
 
-python3 -c '
+printf '%s' "$BODY" | python3 -c '
 import json, os, sys, time
 
 E = os.environ
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 devs = d.get("devices", [])
 # The one line grammar (BRAND.md section 3): the one-row raven and the surface.
 print("(o> huginn - devices")
@@ -210,4 +237,4 @@ machines = len(order)
 on = sum(1 for k in order if any(x.get("online") for x in groups[k]))
 print("  %d machine%s, %d reachable" % (machines, "" if machines == 1 else "s", on))
 print()
-' "$BODY"
+'

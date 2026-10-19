@@ -55,10 +55,40 @@ TOKEN="$(cat "$TOKEN_FILE")"
 # Overridable for the CLI gate, which stands a stub daemon up on a spare port and
 # drives this renderer against it — the same knob huginn-headroom carries, and
 # the reason that renderer has real end-to-end coverage instead of a parse check.
-API="${HUGINN_APPD_URL:-http://127.0.0.1:8787}"
+# HTTPS only, and pinned like the default (below): an override is not a way
+# around the proof.
+API="${HUGINN_APPD_URL:-https://127.0.0.1:8787}"
+case "$API" in
+  https://*) ;;
+  *) echo "huginn-archive: HUGINN_APPD_URL must be https:// - the token never travels in the clear" >&2; exit 1 ;;
+esac
 
-down() {
-  echo "huginn-archive: huginn-appd is not answering on $API" >&2
+# The daemon proves itself before the token leaves: HTTPS pinned to the key in
+# appd's own certificate, and no call at all without it - see huginn-rounds.
+appd_pin() {
+  local unit cert="${HUGINN_APPD_TLS_CERT:-}" data="${HUGINN_APPD_DATA:-}" key
+  if [ -z "$cert" ]; then
+    unit="$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr ' ' '\n')"
+    cert="$(sed -n 's/^HUGINN_APPD_TLS_CERT=//p' <<<"$unit" | tail -1)"
+    [ -n "$data" ] || data="$(sed -n 's/^HUGINN_APPD_DATA=//p' <<<"$unit" | tail -1)"
+    cert="${cert:-${data:-/var/lib/huginn-appd}/tls/cert.pem}"
+  fi
+  key="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null)" || key=""
+  if [ -z "$key" ]; then
+    echo "huginn-archive: cannot read huginn-appd's certificate $cert" >&2
+    echo "                (the token goes only to a daemon that proves it holds that key)" >&2
+    return 1
+  fi
+  printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
+}
+PIN="$(appd_pin)" || exit 1
+
+down() {   # $1 = curl's exit code; 90 is "the key is not the pinned one"
+  if [ "${1:-}" = 90 ]; then
+    echo "huginn-archive: whatever holds $API is not huginn-appd (wrong key); the token was not sent" >&2
+  else
+    echo "huginn-archive: huginn-appd is not answering on $API" >&2
+  fi
   echo "                (systemctl status huginn-appd)" >&2
   exit 2
 }
@@ -73,7 +103,7 @@ trap 'rm -f "$BODY_FILE"' EXIT
 # argument, which every account here could read in /proc/<pid>/cmdline for as
 # long as curl runs: see huginn-rounds.
 call() {  # call METHOD PATH -> prints the status, leaves the body in $BODY_FILE
-  curl -s -m 20 -o "$BODY_FILE" -w '%{http_code}' \
+  curl -s -m 20 -o "$BODY_FILE" -w '%{http_code}' -k --pinnedpubkey "$PIN" \
     -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H 'Content-Type: application/json' \
     "$API$2" 2>/dev/null
 }
@@ -93,18 +123,21 @@ old_daemon() {
 }
 
 # The one field-picker, so a message is never printed through a `grep` that would
-# also match it inside a transcript preview. JSON in argv, not on stdin: this
-# script may itself be run from a pipe.
+# also match it inside a transcript preview. The JSON is python's stdin, read from
+# the body file, never argv: every account here can read /proc/<pid>/cmdline, and
+# an archive carries titles, last messages and the commands that resume them. A
+# redirect is python's own stdin, so a caller piping into THIS script is not
+# competing with it.
 field() { python3 -c '
 import json, sys
 try:
-    d = json.loads(sys.argv[1])
+    d = json.load(sys.stdin)
 except Exception:
     print("")
     sys.exit(0)
-v = d.get(sys.argv[2])
+v = d.get(sys.argv[1])
 print("" if v is None else str(v))
-' "$(cat "$BODY_FILE")" "$1"; }
+' "$1" < "$BODY_FILE"; }
 
 # --------------------------------------------------------------- revive
 
@@ -117,12 +150,12 @@ if [ "${1:-}" = "revive" ]; then
   # A NAME is resolved here rather than in the client, which would mean parsing
   # the list in bash AND in PowerShell. Newest first, so a name that was archived
   # more than once brings back the most recent of them — the one somebody means.
-  ST="$(call GET /v1/archive)" || down
+  ST="$(call GET /v1/archive)" || down "$?"
   old_daemon "$ST"
   ID="$(python3 -c '
 import json, sys
-want = sys.argv[2]
-rows = json.loads(sys.argv[1]).get("archives", [])
+want = sys.argv[1]
+rows = json.load(sys.stdin).get("archives", [])
 for r in rows:
     if r.get("id") == want:
         print(want); sys.exit(0)
@@ -131,10 +164,10 @@ for r in rows:
     if r.get("tmuxName") == want or (r.get("revivedAs") == want):
         print(r.get("id")); sys.exit(0)
 print("")
-' "$(cat "$BODY_FILE")" "$WHAT")"
+' "$WHAT" < "$BODY_FILE")"
   [ -n "$ID" ] || { echo "huginn-archive: nothing archived under '$WHAT' - run 'huginn archive' for the list" >&2; exit 1; }
 
-  ST="$(call POST "/v1/archive/$ID/revive")" || down
+  ST="$(call POST "/v1/archive/$ID/revive")" || down "$?"
   if [ "$ST" != "201" ]; then
     MSG="$(field error)"
     echo "huginn-archive: ${MSG:-could not revive that session (HTTP $ST)}" >&2
@@ -174,7 +207,7 @@ if [ -n "${1:-}" ]; then
   esac
   # mode in the QUERY STRING, not a body: both clients reach this over ssh and
   # neither should have to build JSON to say one word.
-  ST="$(call POST "/v1/sessions/$NAME/archive?mode=$MODE")" || down
+  ST="$(call POST "/v1/sessions/$NAME/archive?mode=$MODE")" || down "$?"
   if [ "$ST" != "202" ]; then
     MSG="$(field error)"
     # ⚠ THE DAEMON'S SENTENCE, VERBATIM. "answer the waiting question first, then
@@ -195,14 +228,14 @@ fi
 
 # ------------------------------------------------------------------- list
 
-ST="$(call GET /v1/archive)" || down
+ST="$(call GET /v1/archive)" || down "$?"
 old_daemon "$ST"
 
 python3 -c '
 import json, os, sys, time
 
 E = os.environ
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 rows = d.get("archives", [])
 # The one line grammar (BRAND.md section 3): the one-row raven and the surface.
 print("(o> huginn - archive")
@@ -292,4 +325,4 @@ cap = d.get("max")
 print("  %d archived%s" % (n, ("  (of %d kept; the oldest goes first)" % cap) if isinstance(cap, int) else ""))
 print("  huginn revive <name>   to bring one back")
 print()
-' "$(cat "$BODY_FILE")"
+' < "$BODY_FILE"

@@ -42,28 +42,63 @@ _lib="$(dirname "$(readlink -f "$0")")/../lib"
 TOKEN_FILE=/etc/huginn-appd/token
 [ -s "$TOKEN_FILE" ] || { echo "huginn-rounds: no appd token at $TOKEN_FILE" >&2; exit 1; }
 TOKEN="$(cat "$TOKEN_FILE")"
+
+# ⚠ THE DAEMON PROVES ITSELF BEFORE THE TOKEN LEAVES. 8787 is not a privileged
+# port: while huginn-appd is stopped or restarting, any account on this host can
+# bind 127.0.0.1:8787, and a plain-HTTP call handed it the root-equivalent token.
+# So the call is HTTPS, pinned to the public key in appd's own certificate, which
+# only root can read. curl checks the pin during the handshake, before a byte of
+# the request is sent, and -k (which only skips the CA check a self-signed
+# certificate cannot pass) does not switch it off. No readable certificate, no
+# call: there is no plain-HTTP fallback. The certificate is where appd keeps it
+# (server/appd/lib/tls.js): HUGINN_APPD_TLS_CERT, else
+# <HUGINN_APPD_DATA>/tls/cert.pem, each from this environment and then from the
+# unit (site.conf can set them), in the order server/appd/install.sh reads them.
+appd_pin() {
+  local unit cert="${HUGINN_APPD_TLS_CERT:-}" data="${HUGINN_APPD_DATA:-}" key
+  if [ -z "$cert" ]; then
+    unit="$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr ' ' '\n')"
+    cert="$(sed -n 's/^HUGINN_APPD_TLS_CERT=//p' <<<"$unit" | tail -1)"
+    [ -n "$data" ] || data="$(sed -n 's/^HUGINN_APPD_DATA=//p' <<<"$unit" | tail -1)"
+    cert="${cert:-${data:-/var/lib/huginn-appd}/tls/cert.pem}"
+  fi
+  key="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null)" || key=""
+  if [ -z "$key" ]; then
+    echo "huginn-rounds: cannot read huginn-appd's certificate $cert" >&2
+    echo "               (the token goes only to a daemon that proves it holds that key)" >&2
+    return 1
+  fi
+  printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
+}
+PIN="$(appd_pin)" || exit 1
 # ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
 # every account on this host and the token is root-equivalent, so an
 # `-H "Authorization: Bearer ..."` argument handed it to anyone who looked while
 # curl ran. The header reaches curl through a file descriptor instead (-H @file,
 # curl 7.55+), and printf is a bash builtin, so no process carries the token in
 # its arguments. scripts/test-no-token-argv.sh holds every script to this.
-appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
+appd_curl() { curl -k --pinnedpubkey "$PIN" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 
 BODY="$(appd_curl -sf -m 10 \
-  http://127.0.0.1:8787/v1/rounds 2>/dev/null)" || {
-  echo "huginn-rounds: huginn-appd is not answering on 127.0.0.1:8787" >&2
+  https://127.0.0.1:8787/v1/rounds 2>/dev/null)" || {
+  # 90 is curl's "the key is not the pinned one": something else holds the port.
+  if [ "$?" = 90 ]; then
+    echo "huginn-rounds: whatever holds 127.0.0.1:8787 is not huginn-appd (wrong key); the token was not sent" >&2
+  else
+    echo "huginn-rounds: huginn-appd is not answering on 127.0.0.1:8787" >&2
+  fi
   echo "               (systemctl status huginn-appd)" >&2
   exit 1
 }
 
-# JSON in argv, not on stdin: this script may itself be fed from a pipe, and a
-# heredoc'd python competing for stdin is a bug that only shows up under ssh.
-python3 -c '
+# JSON on stdin, from a builtin printf, never on argv: every account here can read
+# /proc/<pid>/cmdline, and a round's report is not theirs. The pipe is python's
+# own stdin, so a caller feeding THIS script from a pipe is not competing with it.
+printf '%s' "$BODY" | python3 -c '
 import json, os, sys, time
 
 E = os.environ
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 rounds = d.get("rounds", [])
 # The one line grammar (BRAND.md section 3): the one-row raven and the surface.
 print("(o> huginn - rounds")
@@ -199,4 +234,4 @@ for r in rounds:
 n = len(rounds)
 print("  %d round%s" % (n, "" if n == 1 else "s"))
 print()
-' "$BODY"
+'

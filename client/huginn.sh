@@ -978,10 +978,25 @@ _huginn_appd() {
   local H="${HUGINN_HOST:-huginn}" raw body data='' rc=0 ef= cmd err=
   _HUGINN_APPD_CODE=
   [ -z "${3:-}" ] || data=" -H 'Content-Type: application/json' --data '$3'"
+  # ONLY TO THE DAEMON, PROVED. 8787 is not a privileged port: while huginn-appd is
+  # down or restarting, any account on the host can bind 127.0.0.1:8787, and a
+  # plain-HTTP call handed it the token. So the call is HTTPS, pinned to the public
+  # key in appd's own certificate, which root on the host can read and no other
+  # account can: curl checks the pin during the handshake, before it sends a byte,
+  # and -k (the CA check a self-signed certificate cannot pass) does not switch it
+  # off. The certificate is where appd keeps it (server/appd/lib/tls.js):
+  # HUGINN_APPD_TLS_CERT, else <HUGINN_APPD_DATA>/tls/cert.pem, from the host
+  # shell's environment and then the unit's. None to read means no call and
+  # exit 3; another key means curl's 90, said in words.
+  # POSIX sh with no single quote in it: it runs in the host account's own shell,
+  # and huginn.ps1 sends the same text.
+  local pin='u=$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr " " "\n"); c=${HUGINN_APPD_TLS_CERT:-$(printf "%s\n" "$u" | sed -n "s/^HUGINN_APPD_TLS_CERT=//p" | tail -n 1)}; d=${HUGINN_APPD_DATA:-$(printf "%s\n" "$u" | sed -n "s/^HUGINN_APPD_DATA=//p" | tail -n 1)}; c=${c:-${d:-/var/lib/huginn-appd}/tls/cert.pem}; k=$(openssl x509 -in "$c" -noout -pubkey 2>/dev/null); [ -n "$k" ] || { echo "huginn: cannot read the huginn-appd certificate $c - the token goes only to a daemon that proves it holds that key" >&2; exit 3; }; p=$(printf "%s\n" "$k" | openssl pkey -pubin -outform der 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A); '
   # The token is read ON THE HOST and handed to curl as a config line on stdin
   # (`-K -`): printf is a shell builtin, so it never appears in any process's
   # command line, where every other account on the host could read it.
-  cmd="printf 'header = \"Authorization: Bearer %s\"\n' \"\$(cat /etc/huginn-appd/token 2>/dev/null)\" | curl -K - -s -w '\n%{http_code}' -X $1$data \"http://127.0.0.1:8787$2\""
+  cmd="${pin}printf 'header = \"Authorization: Bearer %s\"\n' \"\$(cat /etc/huginn-appd/token 2>/dev/null)\""
+  cmd="$cmd | curl -K - -k --pinnedpubkey \"sha256//\$p\" -s -w '\n%{http_code}' -X $1$data \"https://127.0.0.1:8787$2\""
+  cmd="$cmd; r=\$?; [ \"\$r\" != 90 ] || echo \"huginn: whatever holds 127.0.0.1:8787 is not huginn-appd (wrong key); the token was not sent\" >&2; exit \$r"
   ef="$(mktemp "${TMPDIR:-/tmp}/huginn-ssh.XXXXXX" 2>/dev/null)" || ef=
   if [ -n "$ef" ]; then
     raw="$(ssh -T "$H" "$cmd" 2>"$ef")" || rc=$?

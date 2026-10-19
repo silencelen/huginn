@@ -22,8 +22,25 @@ case "$VARIANT" in
 esac
 
 # Concurrent sessions share this working tree; a second gradle invocation on the
-# same project dir corrupts the build cache, so serialise on a lock.
-LOCK=/tmp/huginn-app-gradle.lock
+# same project dir corrupts the build cache, so serialise on a lock - the same
+# one scripts/release-desktop.sh takes. It lives in this tree's own .gradle, in a
+# 0700 directory, never under a fixed name in shared /tmp, where any account
+# could create that name first and hold it; and the wait is bounded
+# (HUGINN_GRADLE_LOCK_WAIT seconds), so a build stuck behind a hung one says so
+# instead of waiting for ever.
+LOCK_DIR="$REPO_DIR/.gradle/huginn-lock"
+install -d -m 0700 "$LOCK_DIR"
+LOCK="$LOCK_DIR/gradle.lock"
+LOCK_WAIT="${HUGINN_GRADLE_LOCK_WAIT:-1800}"
+gradle_locked() {
+  local rc=0
+  flock -E 75 -w "$LOCK_WAIT" "$LOCK" ./gradlew "$@" || rc=$?
+  if [ "$rc" = 75 ]; then
+    echo "[build] another gradle build in this tree held $LOCK for ${LOCK_WAIT}s — refusing." >&2
+    echo "[build] wait for it, or set HUGINN_GRADLE_LOCK_WAIT to wait longer." >&2
+  fi
+  return "$rc"
+}
 
 echo "[build 1/3] unit tests"
 # BOTH modules. Most of the logic lives in :core now, and `:app:testDebugUnitTest`
@@ -39,7 +56,7 @@ echo "[build 1/3] unit tests"
 # task outputs: an unchanged tree leaves the test tasks up-to-date, gradle skips
 # them, and the COUNT below is then read from the PREVIOUS run's XML — a green gate
 # over tests that never executed. Forcing a real run is the whole point of a gate.
-flock "$LOCK" ./gradlew --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
+gradle_locked --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
 
 # The COUNT is asserted, not just the exit code — same reason as the server suite
 # below, and the same failure the line above describes: a suite that stops being
@@ -112,13 +129,25 @@ leaked_appd() {
 }
 # Which FILE failed, from node's own TAP: a failing test carries the absolute
 # path in its `location:` (emitted for failures only), and a file whose
-# before/after hook blew up is named by the `not ok` line itself.
+# before/after hook blew up - or that ran out of time - is named by the
+# `not ok` line itself.
 appd_failed_files() {
   {
     sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
     sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
   } | sort -u
 }
+# The names of the tests a TAP log says passed (a skip or a todo is not a pass).
+appd_passed_names() { sed -nE '/# (SKIP|TODO)/d; s/^[[:space:]]*ok [0-9]+ - (.*)$/\1/p' "$1"; }
+# ⚠ EVERY RUN IS BOUNDED. With no timeout, one hung test held a gate for fourteen
+# hours. --test-timeout bounds each test AND each file as a whole (the runner
+# gives a file's process the same limit), so a hang becomes one named failure -
+# `not ok ... <file>`, "test timed out" - in minutes, and the retry-once path
+# below takes it from there.
+# Fifteen minutes, not five: the slowest file in the suite takes, as it stands,
+# about eight on a loaded host (routes-tmux-health), and a limit under that
+# would fail it twice and refuse every run.
+TEST_TIMEOUT_MS="${HUGINN_APPD_TEST_TIMEOUT_MS:-900000}"
 
 if command -v node >/dev/null 2>&1; then
   LEAKED_APPD="$(leaked_appd)"
@@ -136,12 +165,12 @@ if command -v node >/dev/null 2>&1; then
   # could ever run either. Disarmed around the pipeline only, so `tee` can keep
   # showing the run live, which is why this gate is a pipeline at all.
   set +e
-  node --test "$APPD_DIR"/test/*.test.js | tee "$NODE_LOG"
+  node --test --test-timeout="$TEST_TIMEOUT_MS" "$APPD_DIR"/test/*.test.js | tee "$NODE_LOG"
   NODE_RC="${PIPESTATUS[0]}"
   set -e
   # '# pass', not '# tests': the latter counts failures too. Matches deploy.sh and
   # release-desktop.sh so all three gates measure the same thing. Read from the
-  # FULL run, never from a retry — a floor met by one file on its own is no floor.
+  # FULL run — a floor met by one file on its own is no floor.
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
   if [ "$NODE_RC" != 0 ]; then
     # ONE flaky FILE gets ONE more chance, and only when it is the only one that
@@ -159,18 +188,30 @@ $(appd_failed_files "$NODE_LOG")
 EOF
     if [ "$RETRY_N" = 1 ] && [ -f "$RETRY_FILE" ]; then
       echo "[build] one test file failed — re-running $RETRY_FILE alone, once."
-      if node --test "$RETRY_FILE"; then
+      # Through tee, so the run still shows live and node still writes TAP (on a
+      # terminal it would write its spec format, which has no '# pass' line).
+      RETRY_LOG="$(mktemp)"
+      set +e
+      node --test --test-timeout="$TEST_TIMEOUT_MS" "$RETRY_FILE" | tee "$RETRY_LOG"
+      RETRY_RC="${PIPESTATUS[0]}"
+      set -e
+      if [ "$RETRY_RC" = 0 ]; then
         echo "[gate] retried once: $RETRY_FILE"
-        # Every failure in the full run belonged to this one file (nothing else
-        # failed) and the file has just passed alone, so credit them back. Still
-        # the FULL run's numbers — its '# fail' is the file's healthy count, now
-        # proved; the retry's own '# pass' is never read. Without this a flake
-        # in any file bigger than the floor's margin refused a green tree
-        # (1733 counted against a floor of 1740 on 2026-09-19, 12 tests flaked).
-        NODE_FAILED="$(grep -oE '^# fail [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
-        NODE_COUNT=$((NODE_COUNT + NODE_FAILED))
+        # This one file's share of the count comes from its retry, every other
+        # file's from the full run. Without this a flake in any file bigger than
+        # the floor's margin refused a green tree (1733 counted against a floor
+        # of 1740 on 2026-09-19, 12 tests flaked), and a file that ran out of
+        # time - whose unstarted tests the full run never counted at all -
+        # always would. Its passes in the full run are counted by name, which
+        # can only over-count (two files may share a test name), so the credit
+        # can come out too small, never too big.
+        IN_FULL="$(awk 'NR == FNR { want[$0] = 1; next } $0 in want { n++ } END { print n + 0 }' \
+          <(appd_passed_names "$RETRY_LOG") <(appd_passed_names "$NODE_LOG"))"
+        RETRY_PASSED="$(grep -oE '^# pass [0-9]+' "$RETRY_LOG" | grep -oE '[0-9]+' || echo 0)"
+        NODE_COUNT=$((NODE_COUNT - IN_FULL + RETRY_PASSED))
+        rm -f "$RETRY_LOG"
       else
-        rm -f "$NODE_LOG"; echo "[build] server tests failed twice on $RETRY_FILE — refusing." >&2; exit 1
+        rm -f "$NODE_LOG" "$RETRY_LOG"; echo "[build] server tests failed twice on $RETRY_FILE — refusing." >&2; exit 1
       fi
     else
       rm -f "$NODE_LOG"
@@ -186,7 +227,7 @@ EOF
 fi
 
 echo "[build 2/3] $VARIANT APK"
-flock "$LOCK" ./gradlew "$TASK"
+gradle_locked "$TASK"
 
 [ -f "$MANIFEST" ] || { echo "[build] $MANIFEST missing — export task did not run" >&2; exit 1; }
 APK_NAME="$(grep -oE '"apk":"[^"]+"' "$MANIFEST" | head -1 | sed 's/"apk":"//; s/"$//')"

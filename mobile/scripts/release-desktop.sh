@@ -25,18 +25,46 @@ cd "$(dirname "$0")/.."          # -> mobile/
 
 CHANNEL_DIR=/var/lib/huginn-appd/desktop-kt
 TOKEN_FILE=/etc/huginn-appd/token
-BASE_URL=${HUGINN_APPD_URL:-http://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
+BASE_URL=${HUGINN_APPD_URL:-https://$(tailscale ip -4 2>/dev/null || echo 127.0.0.1):8787}
+case "$BASE_URL" in
+  https://*) ;;
+  *) echo "REFUSING: HUGINN_APPD_URL must be https:// - the token never travels in the clear" >&2; exit 2 ;;
+esac
 FEED=/v1/desktop-kt
 KEEP=2
+# ⚠ THE DAEMON PROVES ITSELF BEFORE THE TOKEN LEAVES. 8787 is not a privileged
+# port: while huginn-appd is stopped or restarting, any account on this host can
+# bind it, and a plain-HTTP call handed that account the root-equivalent token.
+# So steps 1 and 7 speak HTTPS pinned to the public key in appd's own
+# certificate, which only root can read; curl checks the pin during the
+# handshake, before a byte of the request is sent, and -k (the CA check a
+# self-signed certificate cannot pass) does not switch it off. The certificate
+# is where appd keeps it (server/appd/lib/tls.js), found the way
+# server/bin/huginn-rounds finds it. No readable certificate, no call.
+appd_pin() {
+  local unit cert="${HUGINN_APPD_TLS_CERT:-}" data="${HUGINN_APPD_DATA:-}" key
+  if [ -z "$cert" ]; then
+    unit="$(systemctl show huginn-appd -p Environment --value 2>/dev/null | tr ' ' '\n')"
+    cert="$(sed -n 's/^HUGINN_APPD_TLS_CERT=//p' <<<"$unit" | tail -1)"
+    [ -n "$data" ] || data="$(sed -n 's/^HUGINN_APPD_DATA=//p' <<<"$unit" | tail -1)"
+    cert="${cert:-${data:-/var/lib/huginn-appd}/tls/cert.pem}"
+  fi
+  key="$(openssl x509 -in "$cert" -noout -pubkey 2>/dev/null)" || key=""
+  if [ -z "$key" ]; then
+    echo "REFUSING: cannot read huginn-appd's certificate $cert - the token goes only to a daemon that proves it holds that key" >&2
+    return 1
+  fi
+  printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
+}
 # ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
 # every account on this host and the token is root-equivalent, and step 7
 # downloads every artifact - hundreds of MB - with it, so an `-H "Authorization:
 # Bearer ..."` argument stayed on display for minutes. The header reaches curl
 # through a file descriptor instead (-H @file, curl 7.55+), and printf is a bash
-# builtin, so no process carries the token in its arguments. TOKEN is read where
-# it is needed (steps 1 and 7). scripts/test-no-token-argv.sh holds every script
-# to this.
-appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
+# builtin, so no process carries the token in its arguments. TOKEN and PIN are
+# read where they are needed (steps 1 and 7). scripts/test-no-token-argv.sh holds
+# every script to this.
+appd_curl() { curl -S -k --pinnedpubkey "$PIN" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
 
 # The Windows JDK whose jmods the cross-jlink links against and whose jpackage.exe
 # runs under wine. Cached OUTSIDE the build tree on purpose: the spike kept it in
@@ -53,9 +81,24 @@ export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 # Concurrent Claude sessions share this working tree and a second gradle
 # invocation on the same project dir corrupts the build cache. Same lock as
-# scripts/build.sh.
-LOCK=/tmp/huginn-app-gradle.lock
-GRADLE="flock $LOCK ./gradlew"
+# scripts/build.sh: in this tree's own .gradle, in a 0700 directory, never under
+# a fixed name in shared /tmp (any account could create that name first, and
+# hold it), and waited on for HUGINN_GRADLE_LOCK_WAIT seconds at most, so a
+# release stuck behind a hung build says so instead of waiting for ever.
+LOCK_DIR="$PWD/.gradle/huginn-lock"
+install -d -m 0700 "$LOCK_DIR"
+LOCK="$LOCK_DIR/gradle.lock"
+LOCK_WAIT="${HUGINN_GRADLE_LOCK_WAIT:-1800}"
+gradle_locked() {
+  local rc=0
+  flock -E 75 -w "$LOCK_WAIT" "$LOCK" ./gradlew "$@" || rc=$?
+  if [ "$rc" = 75 ]; then
+    echo "REFUSING: another gradle build in this tree held $LOCK for ${LOCK_WAIT}s" >&2
+    echo "          (wait for it, or set HUGINN_GRADLE_LOCK_WAIT to wait longer)" >&2
+  fi
+  return "$rc"
+}
+GRADLE=gradle_locked
 
 LINUX_ONLY=0
 SKIP_TESTS=0
@@ -102,7 +145,12 @@ NOTIFIER=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/notify/Window
 # a language boundary, which is the same reason the AUMID has a gate.
 FIRSTRUN=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/FirstRun.kt
 AUTOSTART=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/Autostart.kt
-LOG=${TMPDIR:-/tmp}/huginn-desktop-kt-release.log
+# The log, in a directory of this run's own (mktemp -d: 0700, a fresh name) and
+# never under a fixed name in shared /tmp, where any account could create it
+# first - as a link to a file this root-run script would then truncate, or as a
+# file of theirs it would write the build into. Kept after the run; printed below.
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop-kt-release.XXXXXX")"
+LOG="$LOG_DIR/release.log"
 : > "$LOG"
 
 echo "== releasing huginn-desktop-kt $VERSION =="
@@ -233,6 +281,7 @@ echo "  autostart: app writes '$KT_LNK' in Startup, uninstaller removes it"
 # hand and releases get cut from old checkouts; neither mistake is exotic.
 if [ -f "$TOKEN_FILE" ]; then
   TOKEN=$(cat "$TOKEN_FILE")
+  PIN=$(appd_pin) || exit 1
   # `|| ''` because a manifest WITHOUT a version field makes `node -p` print the
   # four-letter word "undefined", which is neither empty nor a version, and every
   # test downstream of here would then be reasoning about a string that means
@@ -322,16 +371,28 @@ if [ "$SKIP_TESTS" = 0 ]; then
 
   # Which FILE failed, from node's own TAP: a failing test carries the absolute
   # path in its `location:` (emitted for failures only), and a file whose
-  # before/after hook blew up is named by the `not ok` line itself.
+  # before/after hook blew up - or that ran out of time - is named by the
+  # `not ok` line itself.
   appd_failed_files() {
     {
       sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
       sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
     } | sort -u
   }
+  # The names of the tests a TAP log says passed (a skip or a todo is not a pass).
+  appd_passed_names() { sed -nE '/# (SKIP|TODO)/d; s/^[[:space:]]*ok [0-9]+ - (.*)$/\1/p' "$1"; }
 
+  # ⚠ EVERY RUN IS BOUNDED. With no timeout, one hung test held a gate for
+  # fourteen hours. --test-timeout bounds each test AND each file as a whole
+  # (the runner gives a file's process the same limit), so a hang becomes one
+  # named failure - `not ok ... <file>`, "test timed out" - in minutes, and the
+  # retry-once path below takes it from there.
+  # Fifteen minutes, not five: the slowest file in the suite takes, as it stands,
+  # about eight on a loaded host (routes-tmux-health), and a limit under that
+  # would fail it twice and refuse every run.
+  TEST_TIMEOUT_MS="${HUGINN_APPD_TEST_TIMEOUT_MS:-900000}"
   NODE_LOG="$(mktemp)"
-  if ! node --test "$APPD_DIR"/test/*.test.js > "$NODE_LOG" 2>&1; then
+  if ! node --test --test-timeout="$TEST_TIMEOUT_MS" "$APPD_DIR"/test/*.test.js > "$NODE_LOG" 2>&1; then
     # ONE flaky FILE gets ONE more chance, and only when it is the only one that
     # failed. Four suites have each failed exactly once here while parallel
     # gradle builds held the host at load 11-23 on eight cores, each passing
@@ -349,9 +410,8 @@ EOF
     if [ "$RETRY_N" = 1 ] && [ -f "$RETRY_FILE" ]; then
       echo "  one test file failed — re-running $RETRY_FILE alone, once."
       RETRY_LOG="$(mktemp)"
-      if node --test "$RETRY_FILE" > "$RETRY_LOG" 2>&1; then
+      if node --test --test-timeout="$TEST_TIMEOUT_MS" "$RETRY_FILE" > "$RETRY_LOG" 2>&1; then
         echo "[gate] retried once: $RETRY_FILE"
-        rm -f "$RETRY_LOG"
       else
         tail -30 "$RETRY_LOG"
         echo "REFUSING: server tests failed twice on $RETRY_FILE (retry log: $RETRY_LOG)" >&2; exit 1
@@ -361,15 +421,22 @@ EOF
       echo "REFUSING: server tests failed ($RETRY_N file(s))" >&2; exit 1
     fi
   fi
-  # The FULL run's count, never the retry's: a floor met by one file re-run on
-  # its own would be no floor at all.
+  # The FULL run's count: a floor met by one file re-run on its own would be no
+  # floor at all.
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
-  # After a successful single-file retry every '# fail' in the full run belonged
-  # to that file and has just been proved passing: credit them back, from the
-  # full run's own numbers, never the retry's. Without this a flake in any file
-  # bigger than the floor's margin refused a green tree (build.sh, 2026-09-19).
+  # ...except for the one file that was retried and has just passed alone: its
+  # share comes from the retry, every other file's from the full run. Without
+  # this a flake in any file bigger than the floor's margin refused a green tree
+  # (build.sh, 2026-09-19), and a file that ran out of time - whose unstarted
+  # tests the full run never counted at all - always would. Its passes in the
+  # full run are counted by name, which can only over-count (two files may share
+  # a test name), so the credit can come out too small, never too big.
   if [ -n "${RETRY_FILE:-}" ]; then
-    NODE_COUNT=$((NODE_COUNT + $(grep -oE '^# fail [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)))
+    IN_FULL="$(awk 'NR == FNR { want[$0] = 1; next } $0 in want { n++ } END { print n + 0 }' \
+      <(appd_passed_names "$RETRY_LOG") <(appd_passed_names "$NODE_LOG"))"
+    RETRY_PASSED="$(grep -oE '^# pass [0-9]+' "$RETRY_LOG" | grep -oE '[0-9]+' || echo 0)"
+    NODE_COUNT=$((NODE_COUNT - IN_FULL + RETRY_PASSED))
+    rm -f "$RETRY_LOG"
   fi
   rm -f "$NODE_LOG"
   [ "${NODE_COUNT:-0}" -ge "$APPD_MIN" ] \
@@ -452,26 +519,54 @@ cat > "$DEB_TMP/hygiene.sh" <<'HYGIENE_EOF'
 # a name spelled out in full, nothing globbed, and exit 0 unconditionally. A
 # maintainer script that fails leaves the package half-configured, and this one
 # is doing housekeeping — it has no business being able to break an uninstall.
+#
+# ⚠ AND IT RUNS AS ROOT IN HOMES IT DOES NOT OWN. Every name under a home is its
+# account's to choose: a link planted at .config (to /etc, say) or at
+# .config/huginn-desktop-kt turned these rm's into root deleting whatever the
+# link reached. So a home is cleaned only when its account owns it, a path with
+# a symlink anywhere below the home is left alone, and the rm's run AS the
+# home's owner (setpriv, util-linux): what that account could not delete
+# itself, this does not delete either. Root's own home is root's.
 if [ "$1" = purge ]; then
+  hy_nolink() {   # $1 = home, $2 = path under it: true when no part of $2 is a link
+    hy_p="$1"; hy_r="$2"
+    while [ -n "$hy_r" ]; do
+      hy_p="$hy_p/${hy_r%%/*}"
+      case "$hy_r" in */*) hy_r="${hy_r#*/}" ;; *) hy_r="" ;; esac
+      [ -L "$hy_p" ] && return 1
+    done
+    return 0
+  }
+  hy_as() {       # $1 = uid, $2 = gid, then a command to run as that account
+    hy_u="$1"; hy_g="$2"; shift 2
+    if [ "$hy_u" = 0 ]; then "$@"
+    else setpriv --reuid="$hy_u" --regid="$hy_g" --clear-groups -- "$@" 2>/dev/null
+    fi
+  }
   # uid >= 1000 is "a person", and root is added because plenty of these boxes
   # run as root and would otherwise be the one home this never cleaned. nobody
   # (65534) is excluded: it has a home path and no business owning one.
   getent passwd 2>/dev/null \
-    | awk -F: '($3 >= 1000 && $3 < 65534) || $3 == 0 { print $6 }' \
-    | while IFS= read -r h; do
+    | awk -F: '($3 >= 1000 && $3 < 65534) || $3 == 0 { print $3 ":" $4 ":" $6 }' \
+    | while IFS=: read -r uid gid h; do
     case "$h" in
       /*) ;;
       *) continue ;;                 # relative or empty: not a home, not ours
     esac
     [ -d "$h" ] || continue
+    # The account's OWN home only: a shared directory or a system path given as
+    # somebody's home is not theirs to have cleaned.
+    [ "$(stat -L -c %u -- "$h" 2>/dev/null)" = "$uid" ] || continue
     # settings.json holds the daemon's bearer token in plaintext.
-    rm -rf "$h/.config/huginn-desktop-kt"
-    rm -rf "$h/.cache/huginn-desktop-kt"
-    rm -f  "$h/.local/share/applications/huginn-desktop-kt.desktop"
+    hy_nolink "$h" .config/huginn-desktop-kt && hy_as "$uid" "$gid" rm -rf -- "$h/.config/huginn-desktop-kt"
+    hy_nolink "$h" .cache/huginn-desktop-kt && hy_as "$uid" "$gid" rm -rf -- "$h/.cache/huginn-desktop-kt"
+    hy_nolink "$h" .local/share/applications/huginn-desktop-kt.desktop \
+      && hy_as "$uid" "$gid" rm -f -- "$h/.local/share/applications/huginn-desktop-kt.desktop"
     # The app's login entry, only when it starts THIS package (a portable
     # install of the app writes the same name).
-    grep -qs '/opt/huginn-desktop-kt/' "$h/.config/autostart/huginn-desktop-kt.desktop" \
-      && rm -f "$h/.config/autostart/huginn-desktop-kt.desktop"
+    hy_nolink "$h" .config/autostart/huginn-desktop-kt.desktop \
+      && hy_as "$uid" "$gid" grep -qs '/opt/huginn-desktop-kt/' "$h/.config/autostart/huginn-desktop-kt.desktop" \
+      && hy_as "$uid" "$gid" rm -f -- "$h/.config/autostart/huginn-desktop-kt.desktop"
   done
 fi
 ### END huginn-uninstall-hygiene ###
@@ -846,6 +941,7 @@ EOF
 # --------------------------------------------------- 7. verify through the wire
 echo "[7/7] verify through the wire"
 TOKEN=$(cat "$TOKEN_FILE")
+PIN=$(appd_pin) || exit 1
 SERVED=$(appd_curl -sf "$BASE_URL$FEED/manifest" \
   | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
 [ "$SERVED" = "$VERSION" ] || { echo "FAIL: served manifest says '$SERVED'" >&2; exit 1; }

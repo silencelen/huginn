@@ -21,7 +21,14 @@
 #         reach it, through a file and never through argv;
 #   [3/3] the real curl: the renderers against a stub daemon on loopback, while
 #         every /proc/<pid>/cmdline on the machine is watched for the token.
-# Every token here is a fresh random one; the real one is never read.
+# The daemon's ANSWERS get the same rule: a round's report, a device list or an
+# archive (titles, last messages, the commands that resume them) went to
+# `python3 -c` as an argument, where every account could read it too. [2/3] puts
+# a recording python3 on PATH and [3/3] watches for the bodies as well; they
+# must reach python on stdin.
+# Every token and key here is a fresh random one; the real ones are never read,
+# and nothing here talks to this host's own daemon: the callers are pointed at a
+# scratch certificate (HUGINN_APPD_TLS_CERT), which is also what they pin.
 #
 # Usage: scripts/test-no-token-argv.sh [tree [dir...]]
 #   tree defaults to this checkout. Point it at an export of an older commit
@@ -123,17 +130,20 @@ fi
 # read the scratch token instead of /etc/huginn-appd/token.
 od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > "$T/token"; echo >> "$T/token"; chmod 600 "$T/token"
 has_token() { grep -qFf "$T/token" "$@"; }    # never the token itself on argv
+# Every body a renderer parses carries BODYMARK, which no script's own text holds:
+# seen on a command line, it can only have come from the daemon's answer.
+MARK=BODYMARK-a7c19e
 cat > "$T/routes" <<'ROUTES'
-GET /v1/rounds 200 {"rounds":[]}
-GET /v1/devices 200 {"devices":[{"id":"d1","name":"box","online":true,"scope":"own","platform":"linux"}]}
-PATCH /v1/devices/d1 200 {"id":"d1","name":"box","watch":true}
-GET /v1/archive 200 {"max":64,"archives":[{"id":"a1","tmuxName":"sess","title":"Old work","transcriptPresent":true,"archivedAt":1}]}
-POST /v1/sessions/sess/archive?mode=graceful 202 {"ok":true,"archived":true}
-POST /v1/archive/a1/revive 201 {"ok":true,"name":"sess2","resumed":true,"restoredTranscript":false}
-GET /v1/models?local=1 200 {"models":[{"id":"local:box:m","family":"local","available":true}]}
+GET /v1/rounds 200 {"rounds":[],"note":"BODYMARK-a7c19e"}
+GET /v1/devices 200 {"devices":[{"id":"d1","name":"box","online":true,"scope":"own","platform":"linux"}],"note":"BODYMARK-a7c19e"}
+PATCH /v1/devices/d1 200 {"id":"d1","name":"box","watch":true,"note":"BODYMARK-a7c19e"}
+GET /v1/archive 200 {"max":64,"note":"BODYMARK-a7c19e","archives":[{"id":"a1","tmuxName":"sess","title":"Old work","transcriptPresent":true,"archivedAt":1}]}
+POST /v1/sessions/sess/archive?mode=graceful 202 {"ok":true,"archived":true,"note":"BODYMARK-a7c19e"}
+POST /v1/archive/a1/revive 201 {"ok":true,"name":"sess2","resumed":true,"restoredTranscript":false,"note":"BODYMARK-a7c19e"}
+GET /v1/models?local=1 200 {"models":[{"id":"local:box:m","family":"local","available":true}],"note":"BODYMARK-a7c19e"}
 POST /v1/chats 200 {"id":"c1"}
 POST /v1/chats/c1/messages 200 {"ok":true}
-GET /v1/chats/c1 200 {"running":false,"messages":[{"type":"assistant","text":"forty-two"}]}
+GET /v1/chats/c1 200 {"running":false,"note":"BODYMARK-a7c19e","messages":[{"type":"assistant","text":"forty-two"}]}
 DELETE /v1/chats/c1 200 {"ok":true}
 GET /v1/ping 200 {"ok":true,"version":"9.9.9","secure":true}
 GET /v1/desktop-kt/manifest 200 {"version":"1.2.3"}
@@ -144,9 +154,22 @@ GET /v1/desktop-kt/a.exe 200 abc
 ROUTES
 mkdir -p "$T/bin" "$T/lib"
 cp "$TREE/server/lib/state-table.sh" "$T/lib/"
-copy_renderer() {   # $1 = name, $2 = base URL -> $T/bin/$1
+# The daemon's certificate, as far as every caller here knows: a scratch one.
+# They pin it, so they can only ever reach a listener holding $T/appd.key.
+CERT_OK=1
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=huginn-appd \
+  -keyout "$T/appd.key" -out "$T/appd.crt" >/dev/null 2>&1 || CERT_OK=
+export HUGINN_APPD_TLS_CERT="$T/appd.crt"
+if [ -z "$CERT_OK" ]; then
+  skip "[2/3] and [3/3] (openssl could not make the scratch certificate every caller pins)"
+  echo; [ "$FAIL" = 0 ] && echo "no-token-argv gates: PASS" || { echo "no-token-argv gates: FAIL" >&2; exit 1; }
+  exit 0
+fi
+copy_renderer() {   # $1 = name, $2 = the port to aim 127.0.0.1:8787 at -> $T/bin/$1
+  # The port in any scheme: an https:// caller and an older http:// one are
+  # aimed at the same listener, and neither can reach this host's own daemon.
   sed -e "s#^TOKEN_FILE=/etc/huginn-appd/token\$#TOKEN_FILE=$T/token#" \
-      -e "s#http://127\\.0\\.0\\.1:8787#$2#g" "$TREE/server/bin/$1" > "$T/bin/$1"
+      -e "s#127\\.0\\.0\\.1:8787#127.0.0.1:$2#g" "$TREE/server/bin/$1" > "$T/bin/$1"
   chmod 755 "$T/bin/$1"
   grep -q "^TOKEN_FILE=$T/token\$" "$T/bin/$1" \
     || { bad "$1: no 'TOKEN_FILE=/etc/huginn-appd/token' line to point at the scratch token (update this gate)"; return 1; }
@@ -186,6 +209,7 @@ while [ $# -gt 0 ]; do
         case "$h" in [Aa]uthorization:*) [ "${h#*: }" = "$want" ] && via=argv ;; esac
       fi ;;
     -d|--data|--data-binary) shift; [ -n "$method" ] || method=POST ;;
+    --pinnedpubkey) shift ;;
     -o|--output) out="$1"; shift ;;
     -w|--write-out) wfmt="$1"; shift ;;
     -m|--max-time) shift ;;
@@ -210,31 +234,40 @@ if [ -n "$wfmt" ]; then
 fi
 exit 0
 STUB
-# The installer's check also asks systemd and openssl; neither is the point here.
+# The installer's check also asks systemd; that is not the point here, and
+# nothing here may read this host's own unit.
 printf '#!/bin/sh\nexit 0\n' > "$SS/systemctl"
 printf '#!/bin/sh\nexit 0\n' > "$SS/journalctl"
-printf '#!/bin/sh\nexit 0\n' > "$SS/openssl"
-chmod 755 "$SC/curl" "$SS"/*
-export STUB_LOG="$L" STUB_TOKEN_FILE="$T/token" STUB_ROUTES="$T/routes"
+# python3, recorded: what the renderers hand it on the command line.
+REAL_PYTHON3="$(command -v python3)"
+cat > "$SC/python3" <<'PYREC'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_LOG/pyargv"
+exec "$REAL_PYTHON3" "$@"
+PYREC
+chmod 755 "$SC/curl" "$SC/python3" "$SS"/*
+export STUB_LOG="$L" STUB_TOKEN_FILE="$T/token" STUB_ROUTES="$T/routes" REAL_PYTHON3
 
 recorded() {  # $1 = label, $2 = requests (;-separated), $3 = expected output line, $4.. = command
   local label="$1" want got out rc
   want="$(tr ';' '\n' <<<"$2" | sed 's/$/ file/')"
   local expect="$3"; shift 3
-  : > "$L/argv"; : > "$L/requests"
+  : > "$L/argv"; : > "$L/requests"; : > "$L/pyargv"
   out="$(PATH="$SC:$SS:$PATH" "$@" 2>&1)"; rc=$?
   got="$(cat "$L/requests")"
   if has_token "$L/argv"; then
     bad "$label: the token was on curl's command line ($(grep -c . "$L/requests") request(s))"
+  elif grep -qF "$MARK" "$L/pyargv"; then
+    bad "$label: the daemon's answer was on python3's command line, where every account can read it"
   elif [ "$got" != "$want" ]; then
     bad "$label: requests (method path how-the-token-came) were [$(tr '\n' ';' <<<"$got")], wanted [$(tr '\n' ';' <<<"$want")] (exit $rc: $(head -c 300 <<<"$out"))"
   elif ! grep -qF -- "$expect" <<<"$out"; then
     bad "$label: authorised, but the output lost '$expect' (exit $rc): $(head -c 300 <<<"$out")"
   else
-    ok "$label: $(grep -c . <<<"$got") request(s), the header on a file descriptor, never argv"
+    ok "$label: $(grep -c . <<<"$got") request(s), the header on a file descriptor, never argv; no answer on python's argv"
   fi
 }
-for r in "${RENDERERS[@]}"; do copy_renderer "$r" "http://127.0.0.1:8787" || true; done
+for r in "${RENDERERS[@]}"; do copy_renderer "$r" 8787 || true; done
 for c in "${CASES[@]}"; do
   IFS='|' read -r name args reqs expect <<<"$c"
   [ -x "$T/bin/$name" ] || continue
@@ -265,6 +298,7 @@ rel_prelude() {   # $1 = VERSION
   echo 'set -euo pipefail'
   printf 'TOKEN_FILE=%q BASE_URL=%q FEED=/v1/desktop-kt DIST=%q VERSION=%q\n' "$T/token" http://127.0.0.1:8787 "$T/dist" "$1"
   echo 'DEB=a.deb TGZ=a.tar.gz ARCHPKG=a.pkg.tar.zst EXE=a.exe'
+  awk '/^appd_pin\(\) \{/{on=1} on{print} on && /^\}/{exit}' "$REL"
   grep -E '^appd_curl\(\) \{' "$REL" || true
 }
 { rel_prelude 1.2.4
@@ -291,10 +325,14 @@ echo "[3/3] the real curl: no process on this machine ever shows the token"
 if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
   skip "the real-curl lane (needs curl and python3)"
 else
-  python3 - "$T/routes" "$T/port" "$T/served" "$T/token" 0.4 <<'SERVER' &
-import sys, time
+  # Plain HTTP or TLS (with the scratch certificate) on one port, told apart by
+  # the first byte the way appd tells them apart.
+  python3 - "$T/routes" "$T/port" "$T/served" "$T/token" 0.4 "$T/appd.crt" "$T/appd.key" <<'SERVER' &
+import socket, ssl, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-routes_file, port_file, log_file, token_file, hold = sys.argv[1:6]
+routes_file, port_file, log_file, token_file, hold, cert, key = sys.argv[1:8]
+tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+tls.load_cert_chain(cert, key)
 want = "Bearer " + open(token_file).read().strip()
 routes = {}
 for line in open(routes_file):
@@ -321,7 +359,16 @@ class H(BaseHTTPRequestHandler):
     def do_PATCH(self): self.answer("PATCH")
     def do_DELETE(self): self.answer("DELETE")
     def log_message(self, *a): pass
-srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+class S(ThreadingHTTPServer):
+    daemon_threads = True
+    def finish_request(self, request, client_address):
+        try:
+            if request.recv(1, socket.MSG_PEEK)[:1] == b"\x16":
+                request = tls.wrap_socket(request, server_side=True)
+            self.RequestHandlerClass(request, client_address, self)
+        except (ssl.SSLError, OSError):
+            pass
+srv = S(("127.0.0.1", 0), H)
 with open(port_file, "w") as fh:
     fh.write(str(srv.server_port))
 srv.serve_forever()
@@ -331,7 +378,7 @@ SERVER
   if [ -z "$PORT" ]; then
     skip "the real-curl lane (the stub daemon never bound a port)"
   else
-    for r in "${RENDERERS[@]}"; do copy_renderer "$r" "http://127.0.0.1:$PORT" || true; done
+    for r in "${RENDERERS[@]}"; do copy_renderer "$r" "$PORT" || true; done
     for c in "${CASES[@]}"; do
       IFS='|' read -r name args reqs expect <<<"$c"
       [ -x "$T/bin/$name" ] || continue
@@ -339,10 +386,10 @@ SERVER
       # The watcher reads every /proc/<pid>/cmdline it can, over and over, until
       # told to stop, and reports any that holds the token - and how many curls
       # it saw talking to the stub, so a watcher that saw nothing cannot pass.
-      python3 - "$T/token" "$T/stop" "$T/hits" ":$PORT/" <<'WATCH' &
+      python3 - "$T/token" "$T/stop" "$T/hits" ":$PORT/" "$MARK" <<'WATCH' &
 import os, sys, time
 token = open(sys.argv[1], "rb").read().strip()
-stop, out, port = sys.argv[2], sys.argv[3], sys.argv[4].encode()
+stop, out, port, mark = sys.argv[2], sys.argv[3], sys.argv[4].encode(), sys.argv[5].encode()
 hits, curls = set(), set()
 while True:
     done = os.path.exists(stop)
@@ -355,7 +402,7 @@ while True:
         except OSError:
             continue
         args = c.split(b"\0")
-        if token in c:
+        if token in c or (mark in c and pid != str(os.getpid())):
             hits.add("%s %s" % (pid, os.path.basename(args[0]).decode(errors="replace")))
         if os.path.basename(args[0]) == b"curl" and port in c:
             curls.add(pid)
@@ -377,7 +424,7 @@ WATCH
       if [ -z "$CURLS" ]; then
         bad "$label: the /proc watcher did not report (python3 failed?)"
       elif grep -q '^hit ' "$T/hits"; then
-        bad "$label: the token was in a process's command line: $(grep '^hit ' "$T/hits" | tr '\n' ';')"
+        bad "$label: the token or the daemon's answer was in a process's command line: $(grep '^hit ' "$T/hits" | tr '\n' ';')"
       elif [ "$(cat "$T/served")" != "$want" ]; then
         bad "$label: the daemon saw [$(tr '\n' ';' < "$T/served")], wanted [$(tr '\n' ';' <<<"$want")] (exit $rc: $(head -c 300 <<<"$out"))"
       elif ! grep -qF -- "$expect" <<<"$out"; then
