@@ -274,8 +274,11 @@ func TestPlainHTTPOldDaemonNeverDowngraded(t *testing.T) {
 	t.Cleanup(srv.Close)
 	httpsURL := strings.Replace(srv.URL, "http://", "https://", 1)
 
-	// From nothing (the probe meets it) and already pinned (the pinned dial
-	// meets it): both are "old daemon", neither tries cleartext.
+	// From nothing (the probe meets it): "old daemon". Already pinned (the
+	// pinned dial meets it, or a re-proof does): the daemon at this token has
+	// proved itself over TLS, so plain HTTP at its address is somebody else,
+	// an interception (security review, 2026-10-18; the old code said "old
+	// daemon, update it" here too). Neither tries cleartext.
 	for _, pinned := range []bool{false, true} {
 		store := &MemoryPinStore{}
 		if pinned {
@@ -283,8 +286,17 @@ func TestPlainHTTPOldDaemonNeverDowngraded(t *testing.T) {
 		}
 		cl := newTestClient(t, httpsURL, store, nil)
 		_, err := cl.Do(context.Background(), "GET", "/v1/ping", nil)
-		if !errors.Is(err, ErrOldDaemon) {
-			t.Fatalf("pinned=%v: want old-daemon, got %v", pinned, err)
+		switch {
+		case !pinned && !errors.Is(err, ErrOldDaemon):
+			t.Fatalf("first contact: want old-daemon, got %v", err)
+		case pinned && (!errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) || strings.Contains(err.Error(), "3.11")):
+			t.Fatalf("pinned: want interception and no word of an old daemon, got %v", err)
+		}
+		if pinned {
+			// The re-proof path: Prove with the pin in hand meets it in the probe.
+			if _, err := cl.Prove(context.Background()); !errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) {
+				t.Fatalf("pinned, re-proving: want interception, got %v", err)
+			}
 		}
 	}
 	mu.Lock()
@@ -292,6 +304,23 @@ func TestPlainHTTPOldDaemonNeverDowngraded(t *testing.T) {
 	if len(seen) != 0 {
 		t.Fatalf("an HTTP request reached the plain server: %v", seen)
 	}
+}
+
+// The other half of rule 8, under a pin: a TLS answer with no `tls` proof is
+// not the daemon that proved itself for this token over TLS either.
+func TestPinnedLegacyAnswerIsInterception(t *testing.T) {
+	c := mintCert(t, "legacy-under-pin")
+	f := fakeDaemon(t, certCfg(c), func(n string) any {
+		return map[string]any{"proof": legacyProof(testToken, n), "version": "3.10.3"}
+	})
+	store := &MemoryPinStore{}
+	_ = store.SavePins(PinSet{}.With(testToken, strings.Repeat("a", 64)))
+	cl := newTestClient(t, f.url(), store, nil)
+	_, err := cl.Do(context.Background(), "GET", "/v1/ping", nil)
+	if !errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) {
+		t.Fatalf("want interception, got %v", err)
+	}
+	noAuth(t, f.requests())
 }
 
 // silentListener accepts TCP and then says nothing at all.

@@ -204,11 +204,7 @@ func (c *Client) raw1(ctx context.Context, method, path string, payload []byte) 
 		return nil, err
 	}
 	if resp.Status >= 400 {
-		b := resp.Body
-		if len(b) > 200 {
-			b = b[:200]
-		}
-		return resp, &StatusError{Method: method, Path: target.Path, Status: resp.Status, Body: string(b)}
+		return resp, &StatusError{Method: method, Path: target.Path, Status: resp.Status, Body: Printable(string(resp.Body), 200)}
 	}
 	return resp, nil
 }
@@ -331,7 +327,7 @@ func (c *Client) proveAndPin(ctx context.Context, tok string, tried []string) ([
 	if cur := set.For(tok); len(cur) > 0 && !slices.Equal(cur, tried) {
 		return cur, nil
 	}
-	fp, err := c.probe(ctx, tok)
+	fp, err := c.probe(ctx, tok, len(tried) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +353,12 @@ func (c *Client) proveAndPin(ctx context.Context, tok string, tried []string) ([
 // is whatever the far end wants us to believe; it is read for a hint only.
 // ⚠ AND THE LEGACY `proof` IS NOT EVEN DECODED (rule 2): it proves the daemon,
 // not this channel, and a relay would forward it untouched.
-func (c *Client) probe(ctx context.Context, tok string) (string, error) {
+// ⚠ pinned: this client holds a pin for tok, so the daemon at this token has
+// proved itself over TLS before. An answer with no TLS, or no `tls` proof, is
+// then somebody else (an interception), never "a daemon older than 3.11".
+// ⚠ NOTHING THE PEER WRITES REACHES AN ERROR UNCLEANED: it has proved
+// nothing, and the error reaches a terminal (Printable).
+func (c *Client) probe(ctx context.Context, tok string, pinned bool) (string, error) {
 	nb := make([]byte, 32)
 	if _, err := rand.Read(nb); err != nil {
 		return "", err
@@ -388,7 +389,7 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 		_ = tc.SetDeadline(dl)
 	}
 	if err := tc.HandshakeContext(pctx); err != nil {
-		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, true)
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, true, pinned)
 	}
 	cs := tc.ConnectionState()
 	if len(cs.PeerCertificates) == 0 {
@@ -406,11 +407,11 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 	req.Header.Set("Accept", "application/json")
 	// No Authorization header, ever: this channel trusts anyone.
 	if err := req.Write(tc); err != nil {
-		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false)
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false, pinned)
 	}
 	res, err := http.ReadResponse(bufio.NewReader(tc), req)
 	if err != nil {
-		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false)
+		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false, pinned)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxProbeBody))
 	res.Body.Close()
@@ -418,11 +419,11 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 		return "", fmt.Errorf("challenge at %s: reading the answer: %w", c.origin(), err)
 	}
 	if res.StatusCode != http.StatusOK {
-		b := body
-		if len(b) > 200 {
-			b = b[:200]
+		said := Printable(string(body), 200)
+		if said != "" {
+			said = ": " + said
 		}
-		return "", fmt.Errorf("challenge at %s answered %d %s", c.origin(), res.StatusCode, b)
+		return "", fmt.Errorf("challenge at %s answered %d%s", c.origin(), res.StatusCode, said)
 	}
 	var ans struct {
 		TLS json.RawMessage `json:"tls"`
@@ -434,6 +435,9 @@ func (c *Client) probe(ctx context.Context, tok string) (string, error) {
 	if len(t) == 0 || t[0] != '{' {
 		// A missing (or non-object) `tls` over https is NOT PROVED, full stop
 		// (rule 2): the legacy proof beside it is never a substitute.
+		if pinned {
+			return "", interceptedAt(c.origin(), " (it answered with no TLS proof, and the daemon pinned for this token gives one)")
+		}
 		return "", fmt.Errorf("%s: %w%s", c.origin(), ErrOldDaemon, c.noTLSHint())
 	}
 	var tb struct {
@@ -548,7 +552,7 @@ func (c *Client) dialPinned(pins []string) func(context.Context, string, string)
 			if refused != nil {
 				return nil, refused
 			}
-			return nil, c.handshakeErr(hctx, ctx, addr, c.hs, err, true)
+			return nil, c.handshakeErr(hctx, ctx, addr, c.hs, err, true, true)
 		}
 		return tc, nil
 	}
@@ -626,9 +630,17 @@ func (c *Client) dialErr(hctx, parent context.Context, addr string, limit time.D
 // "400 Bad Request" back, which crypto/tls reports as a RecordHeaderError.
 // That is refused as an old daemon (rule 8) — never answered by retrying in
 // cleartext.
-func (c *Client) handshakeErr(hctx, parent context.Context, addr string, limit time.Duration, err error, inHandshake bool) error {
+//
+// ⚠ UNLESS A PIN IS IN HAND (pinned). The daemon at this token has proved
+// itself over TLS, so an answer that is not TLS is somebody else holding the
+// address: an interception (rule 5). Calling it an old daemon to update would
+// send the person after the wrong thing. Either way nothing was sent.
+func (c *Client) handshakeErr(hctx, parent context.Context, addr string, limit time.Duration, err error, inHandshake, pinned bool) error {
 	var rh tls.RecordHeaderError
 	if errors.As(err, &rh) {
+		if pinned {
+			return interceptedAt(c.origin(), fmt.Sprintf(" (%s did not answer TLS, and the daemon pinned for this token does)", addr))
+		}
 		return fmt.Errorf("%s: %w (%s did not answer TLS%s)", c.origin(), ErrOldDaemon, addr, c.noTLSHint())
 	}
 	// Either clock may ring first: the context, or the conn deadline set from it.
@@ -749,9 +761,9 @@ func (c *Client) openStream(ctx context.Context, t *http.Transport, tok string, 
 		return nil, err
 	}
 	if res.StatusCode >= 400 {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 200))
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 4<<10))
 		res.Body.Close()
-		return nil, &StatusError{Method: http.MethodGet, Path: target.Path, Status: res.StatusCode, Body: string(b)}
+		return nil, &StatusError{Method: http.MethodGet, Path: target.Path, Status: res.StatusCode, Body: Printable(string(b), 200)}
 	}
 	return res, nil
 }
