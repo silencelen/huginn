@@ -1377,6 +1377,72 @@ test('unwrapPasted keeps the pasted words and drops the tags', () => {
     'X </pasted_content id="bb"> Y');
 });
 
+test('unwrapPasted stays linear on openers whose closer never comes', () => {
+  // ⚠ The backreferenced regex this used to be restarted its lazy body at every
+  // opener, so each opener without a closer after it cost a walk to the end of
+  // the text: about four seconds for each 250 KB input below. One stray closer
+  // anywhere is enough to get past a check that both tags occur.
+  const { unwrapPasted } = require('../lib/transcript');
+  const n = 10_000;
+  const hostile = [
+    // one id, and its only closer before every opener
+    '</pasted_content id="a">' + '<pasted_content id="a">\nx'.repeat(n),
+    // a different id on every opener, and a closer for none of them
+    '</pasted_content id="zz">' + Array.from({ length: n }, (_, i) => `<pasted_content id="${i.toString(36)}">\nx`).join(''),
+    // openers back to back, then a closer naming another id
+    '<pasted_content id="a">'.repeat(n) + '</pasted_content id="b">',
+  ];
+  for (const s of hostile) {
+    const t0 = process.hrtime.bigint();
+    const out = unwrapPasted(s);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.equal(out, s, 'nothing pairs, so nothing changes');
+    assert.ok(ms < 200, `${s.length} characters took ${ms.toFixed(0)} ms`);
+  }
+  // And as many blocks that do close, which must all come undone.
+  const closed = '<pasted_content id="a">\nx\n</pasted_content id="a">\n'.repeat(n);
+  const t0 = process.hrtime.bigint();
+  assert.equal(unwrapPasted(closed), 'x\n'.repeat(n));
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 200);
+});
+
+test('unwrapPasted pairs blocks exactly as the backreferenced regex it replaced', () => {
+  // The scan keeps the regex's meaning edge for edge: an optional newline after
+  // the opener and before the closer, the FIRST closer of the same id, ids of 1
+  // to 32 characters with no quote or newline, a block inside another's body
+  // left alone, an unclosed opener left as text. The old expression is the
+  // oracle, on inputs small enough that its cost does not matter.
+  const { unwrapPasted } = require('../lib/transcript');
+  const ORACLE = /<pasted_content id="([^"\n]{1,32})">\n?([\s\S]*?)\n?<\/pasted_content id="\1">\n?/g;
+  const oracle = (s) => (s.includes('<pasted_content id="') && s.includes('</pasted_content id="')
+    ? s.replace(ORACLE, '$2\n') : s);
+  let seed = 20261019;
+  const rnd = (k) => {   // mulberry32: seeded, so a failure replays exactly
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) % k;
+  };
+  const ids = ['a', 'b', 'd842', 'x'.repeat(32), 'y'.repeat(33), '', 'a\nb', 'a"b', '>', '<pasted_content id='];
+  const id = () => ids[rnd(ids.length)];
+  const parts = [
+    () => `<pasted_content id="${id()}">`, () => `</pasted_content id="${id()}">`,
+    () => '<pasted_content id="a">', () => '</pasted_content id="a">',
+    () => '<pasted_content id="a">', () => '</pasted_content id="a">',
+    () => '\n', () => '\n\n', () => 'w', () => '"', () => '>', () => '$2',
+    () => `<pasted_content id="${id()}"`, () => '</pasted_content id="',
+  ];
+  let paired = 0;
+  for (let i = 0; i < 20_000; i++) {
+    let s = '';
+    for (let j = 1 + rnd(12); j > 0; j--) s += parts[rnd(parts.length)]();
+    const want = oracle(s);
+    if (want !== s) paired += 1;
+    assert.equal(unwrapPasted(s), want, JSON.stringify(s));
+  }
+  assert.ok(paired > 2000, `the inputs must hold real blocks too, not only near misses (${paired})`);
+});
+
 test('lastWorkAt is the last message, tool or turn end, not the records written around them', () => {
   const { lastWorkAt } = require('../lib/transcript');
   // The tail of an idle session on this host, shape verbatim: the turn ends,

@@ -238,16 +238,74 @@ const FOLD_MAX = 200_000;
 // opener's, which is what keeps a paste that QUOTES the tag from closing early.
 // The clients fold the block into a card; text that is a title or a label
 // wants the words without the markup.
-const PASTED_RE = /<pasted_content id="([^"\n]{1,32})">\n?([\s\S]*?)\n?<\/pasted_content id="\1">\n?/g;
+const PASTE_OPEN = '<pasted_content id="';
+const PASTE_CLOSE = '</pasted_content id="';
 
-/** The text with every paste unwrapped: the pasted words stay, the tags go. */
+/**
+ * The id of the paste tag whose literal ends at `at` — 1 to 32 characters that
+ * are neither a quote nor a newline, then `">` — and where the tag ends; null
+ * when what follows the literal is not that.
+ */
+function pasteTag(s, at) {
+  const lim = Math.min(s.length, at + 33);
+  let k = at;
+  while (k < lim && s[k] !== '"' && s[k] !== '\n') k++;
+  if (k === at || k === lim || s[k] !== '"' || s[k + 1] !== '>') return null;
+  return { id: s.slice(at, k), end: k + 2 };
+}
+
+/**
+ * The text with every paste unwrapped: the pasted words stay, the tags go.
+ *
+ * Left to right, a block is an opener, one optional newline, the body up to the
+ * FIRST closer naming the same id (less one newline right before that closer),
+ * the closer, and one optional newline; it becomes its body and a newline.
+ * Scanning resumes after the closer, so a block inside another one's body is
+ * left as it is, and an opener with no closer after it is left as text.
+ *
+ * ⚠ A SCAN, NOT A REGEX. This was one backreferenced regex with a lazy body,
+ * and that restarts at every opener: a text of many openers whose closer never
+ * comes walked to the end once per opener, which is quadratic, and a check that
+ * both literals occur somewhere does not stop it — one stray closer is enough.
+ * Here every closer is indexed by id in one pass, and each id's cursor only
+ * moves forward, so the cost is linear in the text whatever it holds.
+ */
 function unwrapPasted(t) {
   const s = String(t || '');
-  // Both literals before the scan, as humanizeUserText does for a page frame:
-  // the lazy body between two literals restarts at every opener, so a message
-  // full of openers and no closer would cost a walk to the end for each.
-  if (!s.includes('<pasted_content id="') || !s.includes('</pasted_content id="')) return s;
-  return s.replace(PASTED_RE, '$2\n');
+  if (!s.includes(PASTE_OPEN) || !s.includes(PASTE_CLOSE)) return s;
+  const closers = new Map();   // id -> { at: [closer offsets, ascending], next }
+  for (let at = s.indexOf(PASTE_CLOSE); at >= 0; at = s.indexOf(PASTE_CLOSE, at + 1)) {
+    const tag = pasteTag(s, at + PASTE_CLOSE.length);
+    if (!tag) continue;
+    let c = closers.get(tag.id);
+    if (!c) closers.set(tag.id, (c = { at: [], next: 0 }));
+    c.at.push(at);
+  }
+  let out = '';
+  let copied = 0;              // s[0, copied) is already in `out`
+  let at = s.indexOf(PASTE_OPEN);
+  while (at >= 0) {
+    const tag = pasteTag(s, at + PASTE_OPEN.length);
+    const c = tag && closers.get(tag.id);
+    if (c) {
+      const body = s[tag.end] === '\n' ? tag.end + 1 : tag.end;
+      // Openers of one id are met in order and their bodies start in order, so
+      // a closer before this body can never pair with a later opener either.
+      while (c.next < c.at.length && c.at[c.next] < body) c.next++;
+      if (c.next < c.at.length) {
+        const close = c.at[c.next];
+        const bodyEnd = close > body && s[close - 1] === '\n' ? close - 1 : close;
+        let end = close + PASTE_CLOSE.length + tag.id.length + 2;
+        if (s[end] === '\n') end++;
+        out += s.slice(copied, at) + s.slice(body, bodyEnd) + '\n';
+        copied = end;
+        at = s.indexOf(PASTE_OPEN, end);
+        continue;
+      }
+    }
+    at = s.indexOf(PASTE_OPEN, at + 1);
+  }
+  return out + s.slice(copied);
 }
 
 /** The peer's own words, with the subagent wrapper (if any) taken off. */
