@@ -42,7 +42,6 @@ appd_pin() {
   fi
   printf 'sha256//%s' "$(openssl pkey -pubin -outform der <<<"$key" 2>/dev/null | openssl dgst -sha256 -binary | openssl base64 -A)"
 }
-PIN="$(appd_pin)" || exit 1
 # ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
 # every account on this host and the token is root-equivalent - and this script
 # polls, one curl every two seconds for as long as the model takes, so an
@@ -102,6 +101,8 @@ EOF
 done
 if [ "$PROMPT" = "-" ]; then PROMPT=$(cat); fi
 [ -n "$PROMPT" ] || { echo "huginn-llm: no prompt (arg or '-' for stdin)" >&2; exit 2; }
+# After the arguments, so --help and a usage error never depend on it.
+PIN="$(appd_pin)" || exit 1
 
 py() { python3 -c "$1" 2>/dev/null; }
 
