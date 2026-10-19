@@ -46,16 +46,28 @@ fi
 
 # Which FILE failed, from node's own TAP: a failing test carries the absolute
 # path in its `location:` (node emits that line for failures only), and a file
-# whose before/after hook blew up is named by the `not ok` line itself.
+# whose before/after hook blew up - or that ran out of time - is named by the
+# `not ok` line itself.
 failed_files() {
   {
     sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
     sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
   } | sort -u
 }
+# The names of the tests a TAP log says passed (a skip or a todo is not a pass).
+passed_names() { sed -nE '/# (SKIP|TODO)/d; s/^[[:space:]]*ok [0-9]+ - (.*)$/\1/p' "$1"; }
 
+# ⚠ EVERY RUN IS BOUNDED. With no timeout, one hung test held this gate for
+# fourteen hours. --test-timeout bounds each test AND each file as a whole (the
+# runner gives a file's process the same limit), so a hang becomes one named
+# failure - `not ok ... <file>`, "test timed out" - in minutes, and the
+# retry-once path below takes it from there.
+# Fifteen minutes, not five: the slowest file in the suite takes, as it stands,
+# about eight on a loaded host (routes-tmux-health), and a limit under that
+# would fail it twice and refuse every run.
+TEST_TIMEOUT_MS="${HUGINN_APPD_TEST_TIMEOUT_MS:-900000}"
 TEST_LOG="$(mktemp)"
-if ! node --test "$SRC"/test/*.test.js > "$TEST_LOG" 2>&1; then
+if ! node --test --test-timeout="$TEST_TIMEOUT_MS" "$SRC"/test/*.test.js > "$TEST_LOG" 2>&1; then
   # ONE flaky FILE gets ONE more chance, and only when it is the only one that
   # failed. Four suites have each failed exactly once on this host while parallel
   # gradle builds held it at load 11-23 on eight cores, each passing alone
@@ -73,9 +85,8 @@ EOF
   if [ "$RETRY_N" = 1 ] && [ -f "$RETRY" ]; then
     echo "[deploy] one test file failed — re-running $RETRY alone, once."
     RETRY_LOG="$(mktemp)"
-    if node --test "$RETRY" > "$RETRY_LOG" 2>&1; then
+    if node --test --test-timeout="$TEST_TIMEOUT_MS" "$RETRY" > "$RETRY_LOG" 2>&1; then
       echo "[gate] retried once: $RETRY"
-      rm -f "$RETRY_LOG"
     else
       tail -40 "$RETRY_LOG"
       echo "[deploy] REFUSING: appd tests failed twice on $RETRY (retry log: $RETRY_LOG)" >&2; exit 1
@@ -85,16 +96,23 @@ EOF
     echo "[deploy] REFUSING: appd tests failed (${RETRY_N} file(s); full log: $TEST_LOG)" >&2; exit 1
   fi
 fi
-# The FULL run's count, never the retry's: a floor met by one file re-run alone
-# would be no floor at all.
+# The FULL run's count: a floor met by one file re-run alone would be no floor at
+# all.
 PASSED="$(grep -oE '^# pass [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)"
-# ...except that after a successful single-file retry every '# fail' in the full
-# run belonged to that file and has just been proved passing, so it is credited
-# back — from the full run's own numbers, never the retry's. Without this a
-# flake in any file bigger than the floor's margin refused a green tree
-# (build.sh had the same gap; 1733 vs a floor of 1740 on 2026-09-19).
+# ...except for the one file that was retried and has just passed alone: its
+# share is taken from the retry, every other file's from the full run. Without
+# this a flake in any file bigger than the floor's margin refused a green tree
+# (build.sh had the same gap; 1733 vs a floor of 1740 on 2026-09-19), and a file
+# that ran out of time - whose unstarted tests the full run never counted at all
+# - always would. Its passes in the full run are counted by name, which can only
+# over-count (two files may share a test name), so the credit can come out too
+# small, never too big.
 if [ -n "${RETRY:-}" ]; then
-  PASSED=$((PASSED + $(grep -oE '^# fail [0-9]+' "$TEST_LOG" | grep -oE '[0-9]+' || echo 0)))
+  IN_FULL="$(awk 'NR == FNR { want[$0] = 1; next } $0 in want { n++ } END { print n + 0 }' \
+    <(passed_names "$RETRY_LOG") <(passed_names "$TEST_LOG"))"
+  RETRY_PASSED="$(grep -oE '^# pass [0-9]+' "$RETRY_LOG" | grep -oE '[0-9]+' || echo 0)"
+  PASSED=$((PASSED - IN_FULL + RETRY_PASSED))
+  rm -f "$RETRY_LOG"
 fi
 rm -f "$TEST_LOG"
 . "$(cd "$SRC/../.." && pwd)/scripts/test-floors.env"

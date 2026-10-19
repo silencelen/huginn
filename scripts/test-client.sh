@@ -2999,15 +2999,17 @@ else
   skip "desktop uninstaller scope (no $NSI in this tree)"
 fi
 
-echo "[hardening/8] the host scripts: no token on argv, a proved daemon, clean model output, safe home writes"
-# Four gates of their own, each runnable alone and each with its own WHY: the
+echo "[hardening/8] the host scripts: no token on argv, a proved daemon, clean model output, safe home writes, bounded gates"
+# Five gates of their own, each runnable alone and each with its own WHY: the
 # appd token never rides a command line (scripts/test-no-token-argv.sh), and
 # goes only to a listener that proves it holds the daemon's key
 # (test-appd-pin.sh); huginn-llm never hands the terminal a control sequence
-# (test-llm-output.sh); and setup.sh/uninstall.sh never write through a link in
-# HUGINN_HOME (test-home-writes.sh). Their SKIPs are repeated here, loudly,
-# never counted green.
-for g in test-no-token-argv test-appd-pin test-llm-output test-home-writes; do
+# (test-llm-output.sh); setup.sh/uninstall.sh and the desktop purge never write
+# through a link in a home (test-home-writes.sh); and the build and release
+# scripts keep their scratch files private and every wait bounded
+# (test-build-gates.sh). Their SKIPs are repeated here, loudly, never counted
+# green.
+for g in test-no-token-argv test-appd-pin test-llm-output test-home-writes test-build-gates; do
   G_OUT=$(bash "scripts/$g.sh" 2>&1); G_RC=$?
   G_N=$(grep -c '^  ok ' <<<"$G_OUT")
   if [ "$G_RC" -eq 0 ] && [ "$G_N" -gt 0 ]; then

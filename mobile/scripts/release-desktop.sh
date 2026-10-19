@@ -371,16 +371,28 @@ if [ "$SKIP_TESTS" = 0 ]; then
 
   # Which FILE failed, from node's own TAP: a failing test carries the absolute
   # path in its `location:` (emitted for failures only), and a file whose
-  # before/after hook blew up is named by the `not ok` line itself.
+  # before/after hook blew up - or that ran out of time - is named by the
+  # `not ok` line itself.
   appd_failed_files() {
     {
       sed -nE "s|^not ok [0-9]+ - (/.*\.test\.js)$|\1|p" "$1"
       sed -nE "s|^[[:space:]]*location: '(/[^']*\.test\.js):[0-9]+:[0-9]+'.*|\1|p" "$1"
     } | sort -u
   }
+  # The names of the tests a TAP log says passed (a skip or a todo is not a pass).
+  appd_passed_names() { sed -nE '/# (SKIP|TODO)/d; s/^[[:space:]]*ok [0-9]+ - (.*)$/\1/p' "$1"; }
 
+  # ⚠ EVERY RUN IS BOUNDED. With no timeout, one hung test held a gate for
+  # fourteen hours. --test-timeout bounds each test AND each file as a whole
+  # (the runner gives a file's process the same limit), so a hang becomes one
+  # named failure - `not ok ... <file>`, "test timed out" - in minutes, and the
+  # retry-once path below takes it from there.
+  # Fifteen minutes, not five: the slowest file in the suite takes, as it stands,
+  # about eight on a loaded host (routes-tmux-health), and a limit under that
+  # would fail it twice and refuse every run.
+  TEST_TIMEOUT_MS="${HUGINN_APPD_TEST_TIMEOUT_MS:-900000}"
   NODE_LOG="$(mktemp)"
-  if ! node --test "$APPD_DIR"/test/*.test.js > "$NODE_LOG" 2>&1; then
+  if ! node --test --test-timeout="$TEST_TIMEOUT_MS" "$APPD_DIR"/test/*.test.js > "$NODE_LOG" 2>&1; then
     # ONE flaky FILE gets ONE more chance, and only when it is the only one that
     # failed. Four suites have each failed exactly once here while parallel
     # gradle builds held the host at load 11-23 on eight cores, each passing
@@ -398,9 +410,8 @@ EOF
     if [ "$RETRY_N" = 1 ] && [ -f "$RETRY_FILE" ]; then
       echo "  one test file failed — re-running $RETRY_FILE alone, once."
       RETRY_LOG="$(mktemp)"
-      if node --test "$RETRY_FILE" > "$RETRY_LOG" 2>&1; then
+      if node --test --test-timeout="$TEST_TIMEOUT_MS" "$RETRY_FILE" > "$RETRY_LOG" 2>&1; then
         echo "[gate] retried once: $RETRY_FILE"
-        rm -f "$RETRY_LOG"
       else
         tail -30 "$RETRY_LOG"
         echo "REFUSING: server tests failed twice on $RETRY_FILE (retry log: $RETRY_LOG)" >&2; exit 1
@@ -410,15 +421,22 @@ EOF
       echo "REFUSING: server tests failed ($RETRY_N file(s))" >&2; exit 1
     fi
   fi
-  # The FULL run's count, never the retry's: a floor met by one file re-run on
-  # its own would be no floor at all.
+  # The FULL run's count: a floor met by one file re-run on its own would be no
+  # floor at all.
   NODE_COUNT="$(grep -oE '^# pass [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)"
-  # After a successful single-file retry every '# fail' in the full run belonged
-  # to that file and has just been proved passing: credit them back, from the
-  # full run's own numbers, never the retry's. Without this a flake in any file
-  # bigger than the floor's margin refused a green tree (build.sh, 2026-09-19).
+  # ...except for the one file that was retried and has just passed alone: its
+  # share comes from the retry, every other file's from the full run. Without
+  # this a flake in any file bigger than the floor's margin refused a green tree
+  # (build.sh, 2026-09-19), and a file that ran out of time - whose unstarted
+  # tests the full run never counted at all - always would. Its passes in the
+  # full run are counted by name, which can only over-count (two files may share
+  # a test name), so the credit can come out too small, never too big.
   if [ -n "${RETRY_FILE:-}" ]; then
-    NODE_COUNT=$((NODE_COUNT + $(grep -oE '^# fail [0-9]+' "$NODE_LOG" | grep -oE '[0-9]+' || echo 0)))
+    IN_FULL="$(awk 'NR == FNR { want[$0] = 1; next } $0 in want { n++ } END { print n + 0 }' \
+      <(appd_passed_names "$RETRY_LOG") <(appd_passed_names "$NODE_LOG"))"
+    RETRY_PASSED="$(grep -oE '^# pass [0-9]+' "$RETRY_LOG" | grep -oE '[0-9]+' || echo 0)"
+    NODE_COUNT=$((NODE_COUNT - IN_FULL + RETRY_PASSED))
+    rm -f "$RETRY_LOG"
   fi
   rm -f "$NODE_LOG"
   [ "${NODE_COUNT:-0}" -ge "$APPD_MIN" ] \
