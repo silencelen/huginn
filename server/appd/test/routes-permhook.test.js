@@ -206,3 +206,35 @@ test('the unnumbered trust dialog is carded, and a tap moves the caret with arro
   await wait(400);
   assert.match(sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]), /chose: Yes, I trust this folder/);
 });
+
+// ---- the second look before the keystroke --------------------------------------
+
+test('a dialog that changes while the hook attempt waits gets no digit: the tap is refused', async () => {
+  // The hand-off waits up to 2.5 s for a hook to claim the answer, and only then
+  // does the keystroke path type — into whatever the pane shows by then. Here a
+  // different command's prompt (same words, same rows) takes the screen during
+  // that wait; the digit meant for the first must not land on it.
+  const name = `ph-${process.pid}-swap`;
+  const trigger = path.join(tmp, `${name}.swap`);
+  const out = path.join(tmp, `${name}.keys`);
+  const other = PROMPT.replace('touch probe.txt', 'rm -rf ~');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${PROMPT}\\n"; while [ ! -f ${trigger} ]; do sleep 0.05; done; `
+    + `printf "\\033[2J\\033[H${other}\\n"; stty -echo; cat > ${out}'`]);
+  fs.writeFileSync(path.join(stateDir, name), JSON.stringify({ state: 'attention', sessionId: `sid-${name}`, ts: Date.now() }));
+  await wait(600);
+  const { body } = await api(`/v1/sessions/${name}/screen`);
+  assert.ok(body && body.prompt, 'the first dialog is on screen');
+  // A live hook for the first command that never claims anything.
+  writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
+  const answering = api(`/v1/sessions/${name}/answer`, {
+    method: 'POST', body: JSON.stringify({ option: 1, fingerprint: body.prompt.fingerprint }),
+  });
+  await wait(500);
+  fs.writeFileSync(trigger, '');
+  const r = await answering;
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.reason, 'changed');
+  await wait(400);
+  assert.equal(fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', '', 'no digit reached the second dialog');
+});

@@ -155,8 +155,6 @@ function detectNumberedPrompt(lines) {
   const OPTION_RE = /^(\s*)(?:[\u276F>]\s*)?(\d{1,2})[.)]\s+(\S.*)$/;
   // The selector's own help line, drawn under the options.
   const HINT_RE = /enter to select|to navigate|esc to cancel|tab\/arrows/i;
-  // Multi-question tab headers above the question text.
-  const HEADER_RE = /^\s*([\u2610\u2611\u2612]\s|\u2190\s)/;
 
   // Lines that mean the ORDINARY chrome is drawn below this run: the composer,
   // the status line, the mode hint, a spinner. A live selector replaces all of
@@ -206,9 +204,11 @@ function detectNumberedPrompt(lines) {
   // The checkbox is STATE, not label — it is stripped so the label (and with it
   // the fingerprint) stays stable while the user toggles.
   const CHECK_RE = /^\[( |x|X|\u2714|\u2713)\]\s+/;
+  const optRows = [];
   for (let j = i; j >= floor; j--) {
     const m = OPTION_RE.exec(plain[j]);
     if (m) {
+      optRows.push(j);
       let label = m[3].trim();
       let checked = null;
       const cb = CHECK_RE.exec(label);
@@ -311,6 +311,7 @@ function detectNumberedPrompt(lines) {
   }
   if (!question) question = questionFallback;
   const recommended = consentRecommended(plain, opts);
+  const bodyDigest = dialogBodyDigest(plain, firstIdx, optRows);
   return {
     question,
     options: opts,
@@ -321,7 +322,117 @@ function detectNumberedPrompt(lines) {
     // Additive, and absent for every ordinary dialog: appd has an opinion about
     // exactly one prompt, and only because leaving it unanswered destroys work.
     ...(recommended ? { recommended } : {}),
+    // What the dialog SHOWS above its options — the command, the diff, the plan.
+    // A short digest rather than the text, because it rides every /screen poll;
+    // promptFingerprint folds it in (see dialogBodyRows for why it exists).
+    ...(bodyDigest ? { bodyDigest } : {}),
   };
+}
+
+// ---- the dialog's BODY, which is half of what a question IS -----------------
+//
+// ⚠ THE OPTIONS ARE NOT THE QUESTION. Every Bash permission dialog asks "Do you
+// want to proceed?" over the same Yes / Yes, and don't ask again… / No rows, and
+// every Edit, Write, MCP-tool and plan-approval dialog shares its wording with
+// every other one of its kind. The answer fingerprint used to be the question
+// and the labels and nothing else, so two DIFFERENT commands waiting in the same
+// pane — parallel subagents queue their prompts there — had one identity: a Yes
+// tapped on a notification for one command passed the guard while the pane was
+// showing the other, and both the hook path and the keystroke path approved it.
+// The command, the diff, the plan: that is what the owner actually looked at.
+//
+// So the body is the dialog's own rows between its top border and option 1, as
+// DRAWN. Normalised only where the TUI's drawing carries no meaning of its own:
+// trailing blanks (tmux trims them anyway), blank rows, the width of the
+// dialog's structural rules, and the multi-question tab strip, whose ☐/☒ marks
+// are answer STATE. The rows are NOT re-joined into one line to undo the
+// wrapping: tmux drops the space a wrap leaves at the end of a row, so a
+// rejoined `rm -rf ~ /tmp/x` and `rm -rf ~/tmp/x` would be the same string at the
+// width where that space falls on the edge. Binding to the rows as drawn means a
+// RESIZE between the read and the tap changes the identity, and that answer is
+// refused as `changed` and re-offered — a re-tap, never a wrong approval.
+//
+// ⚠ WHERE THE DIALOG STARTS IS DECIDED BY ITS STRUCTURE, NOT ITS GLYPHS. A rule
+// is a run of `─` — and a command can print one. If the nearest `─` row above
+// the options counted as the border, a command could carry a fake border and
+// make everything above it (`rm -rf ~`) vanish from its identity. Claude Code
+// draws a permission dialog's own rules at the dialog's edge and every row of
+// its CONTENT one column in (` Bash command`, ` rm -rf …`, ` ❯ 1. Yes`), so a
+// rule only counts as the dialog's own when it sits left of the options. A
+// dialog that draws its content at the edge (AskUserQuestion — model-written,
+// and answered through the hook's own exact text when it is installed) falls
+// back to the nearest rule of any indent.
+const HEADER_RE = /^\s*([☐☑☒]\s|←\s)/;
+// A dialog's top border: `─` and nothing else (a rule that carries a session
+// name is the input box's, not a dialog's); corners for the older boxed layout.
+const DIALOG_TOP_RE = /^\s*[╭┌]?─{20,}[╮┐]?\s*$/;
+// The dashed rule a dialog draws around a command, a diff or a plan.
+const DASHED_RULE_RE = /^\s*╌{10,}\s*$/;
+const indentOf = (s) => /^\s*/.exec(String(s))[0].length;
+
+/**
+ * Where the dialog whose option 1 sits on row `firstIdx` begins: the index of
+ * its top border, or -1 when the border is not on screen (a dialog taller than
+ * the pane, whose visible rows are then all its own).
+ *
+ * A plan approval draws the PLAN in a dashed box above a second border that
+ * carries the question, so a border with a structural dashed rule straight above
+ * it is followed up past that box to the plan's own border.
+ */
+function dialogTop(plain, firstIdx, optIndent) {
+  const structural = (row) => indentOf(row) < optIndent;
+  const above = (from, re) => {
+    for (let k = from; k >= 0; k--) {
+      if (re.test(plain[k]) && structural(plain[k])) return k;
+    }
+    return -1;
+  };
+  if (optIndent === 0) {
+    // No pad to tell a border from content: the nearest rule of any indent.
+    for (let k = firstIdx - 1; k >= 0; k--) if (DIALOG_TOP_RE.test(plain[k])) return k;
+    return -1;
+  }
+  let top = above(firstIdx - 1, DIALOG_TOP_RE);
+  while (top > 0) {
+    let k = top - 1;
+    while (k >= 0 && !plain[k].trim()) k--;
+    if (k < 0 || !DASHED_RULE_RE.test(plain[k]) || !structural(plain[k])) break;
+    const open = above(k - 1, DASHED_RULE_RE);
+    top = open < 0 ? -1 : above(open - 1, DIALOG_TOP_RE);
+  }
+  return top;
+}
+
+/**
+ * The dialog's body rows, as drawn, between its top border and option 1.
+ *
+ * @param plain    the pane, ANSI stripped and right-trimmed
+ * @param firstIdx the row option 1 is drawn on
+ * @param optRows  every option row of the run (their indent is the dialog's
+ *                 content column; the selection caret is drawn in that column,
+ *                 so the minimum over the run does not move with the caret)
+ */
+function dialogBodyRows(plain, firstIdx, optRows) {
+  const rows = (optRows && optRows.length ? optRows : [firstIdx]).map((k) => indentOf(plain[k]));
+  const optIndent = Math.min(...rows);
+  const top = dialogTop(plain, firstIdx, optIndent);
+  const out = [];
+  for (let k = top + 1; k < firstIdx; k++) {
+    const row = plain[k];
+    if (!row.trim()) continue;
+    // The dialog's own rules, whose width is the pane's and nothing else's.
+    if (RULE_RE.test(row) && indentOf(row) < optIndent) continue;
+    if (HEADER_RE.test(row)) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+/** The body as a short digest, or null when the dialog draws nothing above its options. */
+function dialogBodyDigest(plain, firstIdx, optRows) {
+  const rows = dialogBodyRows(plain, firstIdx, optRows);
+  if (!rows.length) return null;
+  return createHash('sha1').update(rows.join('\n')).digest('hex').slice(0, 12);
 }
 
 // ---- the folder-trust dialog, unnumbered ------------------------------------
@@ -362,7 +473,12 @@ function detectTrustDialog(lines) {
   if (options[0].label === options[1].label) return null;
   const q = plain.slice(Math.max(0, rows[0] - 20), rows[0]).map((t) => t.trim()).find((t) => TRUST_QUESTION_RE.test(t));
   if (!q) return null;
-  return { question: q.slice(0, 240), options, multiSelect: false, unnumbered: true };
+  // The folder it asks about is in the body: a trust answer binds to the path.
+  const bodyDigest = dialogBodyDigest(plain, rows[0], rows);
+  return {
+    question: q.slice(0, 240), options, multiSelect: false, unnumbered: true,
+    ...(bodyDigest ? { bodyDigest } : {}),
+  };
 }
 
 /** The question on this pane: a numbered selector, or the unnumbered trust dialog. */
@@ -694,17 +810,35 @@ function parseStatusExtras(lines, max = 3) {
  * selection caret is deliberately EXCLUDED: moving the highlight up and down does not
  * change which question is being asked, and including it would reject a valid answer
  * simply because the cursor had moved.
+ *
+ * ⚠ AND THE BODY IS INCLUDED (`bodyDigest`, see dialogBodyRows): the question and
+ * the labels are the same for every Bash command there is. A prompt without one —
+ * the hook-fused AskUserQuestion, whose exact question text IS its identity, and
+ * the degraded card computed from the same sidecar — fingerprints exactly as it
+ * always did, so those two keep agreeing with each other.
  */
 function promptFingerprint(prompt) {
   if (!prompt || !Array.isArray(prompt.options) || !prompt.options.length) return null;
   // Neither the caret nor a checkbox state is part of the question's identity:
   // moving the highlight or half-toggling in tmux does not change what is asked,
   // and labels arrive with checkbox markers already stripped.
-  const stable = JSON.stringify([
+  const parts = [
     prompt.question || '',
     prompt.options.map((o) => [o.number, o.label]),
-  ]);
-  return createHash('sha1').update(stable).digest('hex').slice(0, 12);
+  ];
+  if (typeof prompt.bodyDigest === 'string' && prompt.bodyDigest) parts.push(prompt.bodyDigest);
+  return createHash('sha1').update(JSON.stringify(parts)).digest('hex').slice(0, 12);
+}
+
+/**
+ * Does this prompt draw the rows only an AskUserQuestion dialog has — the TUI's
+ * own "Type something." and "Chat about this"? Hook fusion may drop the pane's
+ * body for exactly those (the hook's question text is exact); any other dialog
+ * that merely matched a sidecar's labels keeps its body in its identity.
+ */
+function drawsAskRows(prompt) {
+  return !!prompt && Array.isArray(prompt.options)
+    && prompt.options.some((o) => /^(?:type something\.?|chat about this)$/i.test(String(o && o.label || '').trim()));
 }
 
 /**
@@ -841,6 +975,7 @@ function loginPaneState(lines) {
 
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
+  detectTrustDialog, dialogBodyRows, drawsAskRows,
   consentRecommended,
   sameConsent,
   parseModelPicker,

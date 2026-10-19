@@ -3522,6 +3522,11 @@ function withPendingQuestion(name, st) {
   return since ? { ...st, state: 'attention', stateSince: since, stateSinceMs: since * 1000 } : st;
 }
 
+// The pane module by name, for the two helpers the import block at the top does
+// not destructure (drawsAskRows in promptFor, stripAnsi in the ladder's
+// transcript read).
+const paneLib = require('./lib/pane');
+
 /**
  * The one place "what question is on this pane" is decided, so /screen, /answer
  * and the alert enrichment can never disagree about a label or a fingerprint.
@@ -3562,7 +3567,16 @@ function promptFor(name, lines) {
         };
         ask = { ...degradedAskCard(sidecar, promptFingerprint(synthetic)), multiPart: true };
       } else {
-        prompt = { ...fused.prompt, fingerprint: promptFingerprint(fused.prompt) };
+        // ⚠ THE PANE'S BODY STAYS IN THE IDENTITY UNLESS THIS IS AN ASK. Fusion
+        // matches on labels alone, so a sidecar whose labels happen to read like
+        // a permission dialog's (Yes / … / No — the model writes both) would fuse
+        // onto that dialog and drop its command from the fingerprint. Only a pane
+        // drawing the TUI's own AskUserQuestion rows hands its identity to the
+        // hook's exact text — which is what keeps a fused question width-stable.
+        const keep = panePrompt.bodyDigest && !paneLib.drawsAskRows(panePrompt)
+          ? { bodyDigest: panePrompt.bodyDigest } : {};
+        const base = { ...fused.prompt, ...keep };
+        prompt = { ...base, fingerprint: promptFingerprint(base) };
       }
     }
   }
@@ -7945,6 +7959,28 @@ async function answerByArrows(name, fingerprint, chosen) {
 }
 
 /**
+ * The second look /answer takes immediately before it types a digit: the
+ * refusal to send when the question on the pane NOW is not the one the
+ * fingerprint was checked against, or null when it still is.
+ *
+ * ⚠ THE FINGERPRINT WAS CHECKED UP TO SECONDS EARLIER. `tryHookAnswer` waits up
+ * to 2.5 s for a hook that may never claim the answer, and only then does the
+ * keystroke path type — into whatever the pane shows by then. A parallel
+ * subagent's next permission prompt drawn in that gap is a different question
+ * with its own identity, and the digit must not land on it.
+ */
+async function answerMovedOn(name, fingerprint) {
+  const lines = await paneLines(name);
+  const prompt = lines ? promptFor(name, lines).prompt : null;
+  if (prompt && prompt.fingerprint === fingerprint) return null;
+  if (!prompt) return { ok: false, reason: 'gone', error: 'that question is no longer on screen' };
+  return {
+    ok: false, reason: 'changed', error: 'the session is asking something else now',
+    prompt, fingerprint: prompt.fingerprint,
+  };
+}
+
+/**
  * Answer the dialog on `name` through its waiting PermissionRequest hook instead
  * of keystrokes (lib/permhook.js; hooks/huginn-permission-hook). True only when
  * the hook took the decision; false — for ANY reason — means nothing was
@@ -11795,6 +11831,10 @@ async function handleRequest(req, res) {
             log(`answer: ${name} <- multi [${desired.join(',')}] via hook (${labelsOf().join(', ').slice(0, 80)})`);
             return sendJson(res, 200, { ok: true, options: desired, labels: labelsOf(), via: 'hook' });
           }
+          // A second look before the first key: the hook attempt above can take
+          // seconds, and the toggles are typed into whatever is up by then.
+          const movedMulti = await answerMovedOn(name, live);
+          if (movedMulti) return sendJson(res, 409, movedMulti);
           const digits = multiToggleDigits(prompt.options, desired);
           for (const d of digits) {
             const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
@@ -11838,6 +11878,11 @@ async function handleRequest(req, res) {
           log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
+        // ⚠ AND LOOK AGAIN BEFORE THE DIGIT (answerMovedOn). The fingerprint above
+        // was checked against a capture taken before the hook attempt, which can
+        // wait seconds; the keystroke goes to whatever is on screen now.
+        const moved = await answerMovedOn(name, live);
+        if (moved) return sendJson(res, 409, moved);
 
         // The digit and Enter separately, literal digit first, so a multi-digit option
         // cannot be split across a submit.

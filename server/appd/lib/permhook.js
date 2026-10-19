@@ -89,6 +89,31 @@ function liveRequests(stateDir, name, { alive = pidAlive, now = Date.now() } = {
   return out.sort((a, b) => a.ts - b.ts);
 }
 
+const OPTION_ONE_RE = /^\s*(?:❯\s*)?1\.\s/;
+const OPTION_ROW_RE = /^\s*(?:❯\s*)?\d{1,2}[.)]\s/;
+const indentOf = (s) => /^\s*/.exec(String(s))[0].length;
+
+/**
+ * The dialog's CONTENT column: the least-indented option row from option 1 down.
+ *
+ * ⚠ WHY A RULE HAS TO SIT LEFT OF IT TO COUNT. The border and the dashed rules
+ * that frame the command are glyphs a command can print too. Read by glyph, a
+ * Bash command carrying its own `───` and `╌╌╌` rows moved the region's start
+ * and the command block onto ITS rows, and the hand-off could then match a
+ * different live request whose command was only the tail. Claude Code draws a
+ * dialog's own rules at its edge and every content row (the command included)
+ * one column in, so only a rule left of the options is the dialog's. A layout
+ * with no such pad (0) keeps the old reading.
+ */
+function optionIndent(rows, first) {
+  let min = Infinity;
+  for (let i = first; i < rows.length; i++) {
+    if (OPTION_ROW_RE.test(rows[i])) min = Math.min(min, indentOf(rows[i]));
+  }
+  return Number.isFinite(min) ? min : 0;
+}
+const structuralIn = (optIndent) => (row) => optIndent === 0 || indentOf(row) < optIndent;
+
 /**
  * The dialog's own lines: from its top border (the full-width `───` rule the
  * TUI draws above every selector) down to the bottom of the pane. Without the
@@ -98,24 +123,31 @@ function dialogRegion(lines) {
   const plain = (lines || []).map(stripAnsi);
   let first = -1;
   for (let i = plain.length - 1; i >= 0; i--) {
-    if (/^\s*(?:❯\s*)?1\.\s/.test(plain[i])) { first = i; break; }
+    if (OPTION_ONE_RE.test(plain[i])) { first = i; break; }
   }
   if (first < 0) return plain.slice(-30).join('\n');
+  const structural = structuralIn(optionIndent(plain, first));
   for (let i = first - 1; i >= 0 && i >= first - 60; i--) {
-    if (/^\s*─{20,}\s*$/.test(plain[i])) return plain.slice(i).join('\n');
+    if (/^\s*─{20,}\s*$/.test(plain[i]) && structural(plain[i])) return plain.slice(i).join('\n');
   }
   return plain.slice(Math.max(0, first - 30)).join('\n');
 }
 
 /**
  * The Bash dialog's own command: the lines between the first two `╌╌╌` rules of
- * the dialog region, or null when the region has no such block.
+ * the dialog region that are the DIALOG's (see optionIndent), or null when the
+ * region has no such block.
  */
 function dialogCommandBlock(region) {
   const lines = String(region || '').split('\n');
+  let first = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (OPTION_ONE_RE.test(lines[i])) { first = i; break; }
+  }
+  const structural = structuralIn(first < 0 ? 0 : optionIndent(lines, first));
   const rules = [];
   for (let i = 0; i < lines.length && rules.length < 2; i++) {
-    if (/^\s*╌{10,}\s*$/.test(lines[i])) rules.push(i);
+    if (/^\s*╌{10,}\s*$/.test(lines[i]) && structural(lines[i])) rules.push(i);
   }
   if (rules.length < 2 || rules[1] - rules[0] < 2) return null;
   return lines.slice(rules[0] + 1, rules[1]).join('\n');

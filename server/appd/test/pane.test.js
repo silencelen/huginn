@@ -987,3 +987,126 @@ test('a narrower pane renders the same dialog, and it still parses', () => {
   assert.equal(p.recommended, 2);
   assert.deepEqual(p.options.map((o) => o.number), [1, 2, 3]);
 });
+
+// ---- the dialog BODY is part of the question's identity ---------------------
+//
+// Every Bash permission dialog asks "Do you want to proceed?" over the same
+// rows, so a fingerprint of the question and the labels alone was ONE identity
+// for every command there is: a Yes tapped for one command passed the guard
+// while the pane showed another. The shapes below are the 2.1.296 layout
+// (permhook.test.js, routes-permhook.test.js): the dialog's rules at the edge,
+// every content row one column in.
+
+const RULE80 = '─'.repeat(80);
+const DASH80 = '╌'.repeat(80);
+/** A live Bash permission dialog for `command` (one pane row per array item). */
+function bashDialog(commandRows, { caretOn = 1 } = {}) {
+  const opt = (n, label) => `${n === caretOn ? ' ❯ ' : '   '}${n}. ${label}`;
+  return [
+    '● Bash(…)',
+    '  ⎿  Waiting…',
+    RULE80,
+    ' Bash command',
+    DASH80,
+    ...commandRows.map((r) => ` ${r}`),
+    DASH80,
+    ' Do you want to proceed?',
+    opt(1, 'Yes'),
+    opt(2, "Yes, and don't ask again for rm commands in /root/proj"),
+    opt(3, 'No'),
+    ' Esc to cancel · Tab to amend',
+  ];
+}
+
+test('two Bash dialogs for DIFFERENT commands fingerprint differently', () => {
+  const a = detectPrompt(bashDialog(['rm -rf /tmp/scratch']));
+  const b = detectPrompt(bashDialog(['rm -rf ~']));
+  assert.ok(a && b, 'both are live dialogs');
+  assert.deepEqual(a.options, b.options, 'the rows a person taps are identical');
+  assert.equal(a.question, b.question);
+  assert.notEqual(promptFingerprint(a), promptFingerprint(b),
+    'a Yes offered for one command must not pass for the other');
+});
+
+test('a command that differs by one space is a different dialog', () => {
+  const a = detectPrompt(bashDialog(['rm -rf ~/tmp/x']));
+  const b = detectPrompt(bashDialog(['rm -rf ~ /tmp/x']));
+  assert.notEqual(promptFingerprint(a), promptFingerprint(b));
+});
+
+test('the same dialog keeps its fingerprint when the caret moves', () => {
+  const at1 = detectPrompt(bashDialog(['make deploy']));
+  const at3 = detectPrompt(bashDialog(['make deploy'], { caretOn: 3 }));
+  assert.equal(promptFingerprint(at1), promptFingerprint(at3));
+  // …and when the scroll ABOVE the dialog moves on: history is not the question.
+  const scrolled = ['● an earlier answer', '  that scrolled up', ...bashDialog(['make deploy'])];
+  assert.equal(promptFingerprint(detectPrompt(scrolled)), promptFingerprint(at1));
+});
+
+test('a command cannot hide its head behind a border it draws itself', () => {
+  // The rule glyphs are printable. If the nearest `───` row above the options
+  // counted as the dialog's border, a command carrying one would make every row
+  // above it — the part that matters — vanish from its identity.
+  const fake = ['─'.repeat(60), '╌'.repeat(60), 'echo done'];
+  const dangerous = detectPrompt(bashDialog(['rm -rf ~', ...fake]));
+  const harmless = detectPrompt(bashDialog(['ls', ...fake]));
+  assert.ok(dangerous && harmless);
+  assert.notEqual(promptFingerprint(dangerous), promptFingerprint(harmless));
+});
+
+test('Edit dialogs with different diffs fingerprint differently', () => {
+  const edit = (newLine) => [
+    RULE80,
+    ' Edit file',
+    ' server/config.js',
+    DASH80,
+    '   12  - const port = 8787;',
+    `   12  + ${newLine}`,
+    DASH80,
+    ' Do you want to make this edit to config.js?',
+    ' ❯ 1. Yes',
+    '   2. Yes, allow all edits during this session (shift+tab)',
+    '   3. No',
+    ' Esc to cancel · Tab to amend',
+  ];
+  const a = detectPrompt(edit('const port = 8788;'));
+  const b = detectPrompt(edit('const port = process.env.PORT;'));
+  assert.ok(a && b);
+  assert.notEqual(promptFingerprint(a), promptFingerprint(b));
+});
+
+test('plan approvals with different plans fingerprint differently (the plan box sits above the question)', () => {
+  const plan = fs.readFileSync(path.join(__dirname, 'fixtures', 'prompts', 'plan-approval-v2-80.txt'), 'utf8').split('\n');
+  const other = plan.map((l) => l.replace('Write the text "hi" into it.', 'Write the text "bye" into it.'));
+  assert.notDeepEqual(other, plan, 'the substitution hit the plan body');
+  const a = detectPrompt(plan);
+  const b = detectPrompt(other);
+  assert.ok(a && b);
+  assert.deepEqual(a.options.map((o) => o.label), b.options.map((o) => o.label));
+  assert.notEqual(promptFingerprint(a), promptFingerprint(b));
+});
+
+test('the trust dialog binds to the folder it is asking about', () => {
+  const lines = fs.readFileSync(path.join(__dirname, 'fixtures', 'prompts', 'trust-dialog-unnumbered-80.txt'), 'utf8').split('\n');
+  const elsewhere = lines.map((l) => l.replace('/tmp/fixcap', '/root/.ssh'));
+  assert.notDeepEqual(elsewhere, lines);
+  assert.notEqual(promptFingerprint(detectPrompt(lines)), promptFingerprint(detectPrompt(elsewhere)));
+});
+
+test('a prompt with no body fingerprints exactly as before (the hook-fused question)', () => {
+  // The fused AskUserQuestion and the degraded card are computed from the same
+  // sidecar and must keep agreeing with each other — neither carries a body.
+  const { createHash } = require('node:crypto');
+  const old = createHash('sha1').update(JSON.stringify([
+    PROMPT_A.question, PROMPT_A.options.map((o) => [o.number, o.label]),
+  ])).digest('hex').slice(0, 12);
+  assert.equal(promptFingerprint(PROMPT_A), old);
+});
+
+test('drawsAskRows: only the TUI rows an AskUserQuestion draws', () => {
+  const { drawsAskRows } = require('../lib/pane');
+  assert.equal(drawsAskRows(detectPrompt(ASK_DIALOG)), true);
+  assert.equal(drawsAskRows(detectPrompt(MULTI_DIALOG)), true, '"Type something" without the period, too');
+  assert.equal(drawsAskRows(detectPrompt(bashDialog(['ls']))), false);
+  assert.equal(drawsAskRows(null), false);
+});

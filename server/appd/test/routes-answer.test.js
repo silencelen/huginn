@@ -190,3 +190,62 @@ test('an answer with an EMPTY fingerprint is refused', async () => {
   });
   assert.equal(status, 400);
 });
+
+// ---------------------------------------------------------------------------
+// The dialog's BODY is part of what a tap answers. Every Bash prompt asks "Do
+// you want to proceed?" over the same rows, so the fingerprint of the question
+// and the labels alone was one identity for every command: a Yes offered for
+// one command was typed into the dialog for another. Dialogs drawn the 2.1.296
+// way — the rules at the dialog's edge, every content row one column in.
+// ---------------------------------------------------------------------------
+
+const bashDialog = (cmd) => [
+  '─'.repeat(80), ' Bash command', '╌'.repeat(80), ` ${cmd}`, '╌'.repeat(80),
+  ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and do not ask again', '   3. No', '',
+  ' Esc to cancel',
+].join('\\n');
+
+/**
+ * A pane showing the dialog for `first`, which becomes the dialog for `second`
+ * when the trigger file appears — a parallel subagent's prompt taking the
+ * screen once the first was answered elsewhere. Keystrokes land in `out`.
+ */
+function swappingDialog(suffix, first, second) {
+  const name = `${SESSION}-${suffix}`;
+  const trigger = path.join(tmp, `${suffix}.swap`);
+  const out = path.join(tmp, `${suffix}.keys`);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${bashDialog(first)}\\n"; while [ ! -f ${trigger} ]; do sleep 0.05; done; `
+    + `printf "\\033[2J\\033[H${bashDialog(second)}\\n"; stty -echo; cat > ${out}'`]);
+  return { name, trigger, out };
+}
+const paneOf = (name) => { try { return sh('tmux', ['capture-pane', '-p', '-t', `=${name}:`]); } catch { return ''; } };
+
+test('a tap for one command is refused when the pane now asks about ANOTHER (same words, same rows)', async () => {
+  const { name, trigger, out } = swappingDialog('swap', 'rm -rf /tmp/scratch', 'rm -rf ~');
+  try {
+    let first = null;
+    for (let i = 0; i < 50 && !(first && first.prompt); i++) {
+      first = (await api(`/v1/sessions/${name}/screen`)).body;
+      if (!(first && first.prompt)) await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.ok(first && first.prompt, 'the first dialog is a live question');
+    fs.writeFileSync(trigger, '');
+    for (let i = 0; i < 50 && !paneOf(name).includes('rm -rf ~'); i++) await new Promise((r) => setTimeout(r, 100));
+    assert.match(paneOf(name), /rm -rf ~/, 'precondition: the second dialog took the screen');
+    const second = (await api(`/v1/sessions/${name}/screen`)).body;
+    assert.deepEqual(second.prompt.options.map((o) => o.label), first.prompt.options.map((o) => o.label),
+      'the rows a person taps are identical');
+    assert.notEqual(second.prompt.fingerprint, first.prompt.fingerprint, 'but it is not the same question');
+
+    const { status, body } = await api(`/v1/sessions/${name}/answer`, {
+      method: 'POST', body: JSON.stringify({ option: 1, fingerprint: first.prompt.fingerprint }),
+    });
+    assert.equal(status, 409, JSON.stringify(body));
+    assert.equal(body.reason, 'changed');
+    await new Promise((r) => setTimeout(r, 400));
+    assert.equal(fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', '', 'nothing was typed at the other command');
+  } finally {
+    try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* fine */ }
+  }
+});
