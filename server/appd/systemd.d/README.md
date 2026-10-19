@@ -90,9 +90,15 @@ After changing a drop-in, check the daemon can still SEE tmux sessions. That is 
 failure the comments in `hardening.conf` care most about, and it is silent:
 
 ```bash
-curl -sH @<(printf 'Authorization: Bearer %s\n' "$(sudo cat /etc/huginn-appd/token)") \
-  http://127.0.0.1:8787/v1/sessions
+PIN=$(sudo openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \
+  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)
+curl -sk --pinnedpubkey "sha256//$PIN" \
+  -H @<(printf 'Authorization: Bearer %s\n' "$(sudo cat /etc/huginn-appd/token)") \
+  https://127.0.0.1:8787/v1/sessions
 ```
 
 The header goes to curl through a file descriptor, not as an argument: other accounts
 on the machine can read every process's arguments, and the token is root-equivalent.
+The pin is the daemon's own key, so while the daemon is restarting, an account that
+takes the port first is refused before the token is sent. If a drop-in sets
+`HUGINN_APPD_TLS_CERT`, read that file instead.

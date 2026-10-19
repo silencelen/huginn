@@ -33,8 +33,12 @@ Android app.
   proved again before it is trusted, never accepted on sight. The full protocol is in
   [TLS protocol](dev/protocol-tls.md).
 - **Plain HTTP from loopback only.** The same port answers plain HTTP only from the server
-  itself (`127.0.0.0/8`, `::1`), for the host-side tools. Any other plain HTTP request is refused
-  with `426`. Loopback has no identity check, so keep other user accounts off the server.
+  itself (`127.0.0.0/8`, `::1`). Any other plain HTTP request is refused with `426`. Plain HTTP
+  has no identity check: while the daemon is stopped or restarting, any account on the server can
+  take the port. So nothing in Huginn sends the token over it. The host-side tools and the
+  installer use HTTPS pinned to the daemon's key, and huginn core, the device runner and the
+  desktop app run the proof above on the server too. Keep other user accounts off the server all
+  the same.
 - **The token is root-equivalent.** Every route except `GET /v1/challenge` (the proof above)
   requires `Authorization: Bearer <token>`. A token holder can type into any session, answer
   Claude Code's permission prompts, start act chats, read transcripts and files, and queue work on

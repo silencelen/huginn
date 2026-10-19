@@ -33,8 +33,8 @@ To see what you run:
 ```bash
 huginn version                     # huginn core, and its local protocol version
 cat /usr/local/src/huginn/.huginn-ref        # on the server: the release it was installed from
-curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") \
-  http://127.0.0.1:8787/v1/ping      # on the server: the daemon's version
+curl -sk -o /dev/null -D - https://127.0.0.1:8787/v1/ping | grep -i '^x-huginn-appd'
+                                   # on the server: the daemon's version (needs no token)
 ```
 
 The desktop app shows its version under Settings → Updates & diagnostics, and the Android app

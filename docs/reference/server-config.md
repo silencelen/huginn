@@ -67,8 +67,14 @@ drop-in.
 
    ```bash
    systemctl show huginn-appd -p Environment
-   curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") http://127.0.0.1:8787/v1/sessions
+   PIN=$(openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \
+     | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)
+   curl -s -k --pinnedpubkey "sha256//$PIN" \
+     -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") https://127.0.0.1:8787/v1/sessions
    ```
+
+   The pin keeps the token from reaching anything but the daemon (see
+   [API](api.md#authentication)). If you set `HUGINN_APPD_TLS_CERT`, read that file instead.
 
    An empty session list while sessions are running means the daemon cannot see tmux, usually
    because a drop-in changed its sandbox (for example by adding `PrivateTmp=yes`).

@@ -11,12 +11,17 @@ can call it from your own scripts and tools.
 
 ```text
 https://<server>:8787/v1/...        from another computer
-http://127.0.0.1:8787/v1/...        on the server itself
+https://127.0.0.1:8787/v1/...       on the server itself
 ```
 
 The port is `HUGINN_APPD_PORT` (default `8787`). One port serves both protocols: HTTPS to
 everyone, plain HTTP only to the server itself. A plain HTTP request from another address gets
 `426` with `{"error": "...", "tls": true}`.
+
+Do not send the token over plain HTTP, even on the server. Plain HTTP cannot tell the daemon from
+anything else: while the daemon is stopped or restarting, any account on the server can take the
+port and read what a plain request carries. Huginn's own tools on the server use HTTPS pinned to
+the daemon's key, as below.
 
 ## Authentication
 
@@ -34,12 +39,17 @@ it can run commands on the server through sessions and act chats. See [Security]
 - `GET /v1/challenge` is the only route that needs no token (see below).
 
 ```bash
-# on the server
-curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") http://127.0.0.1:8787/v1/ping
+# on the server, as root
+PIN=$(openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \
+  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)
+curl -s -k --pinnedpubkey "sha256//$PIN" \
+  -H @<(printf 'Authorization: Bearer %s\n' "$(cat /etc/huginn-appd/token)") https://127.0.0.1:8787/v1/ping
 ```
 
-The header is read from a process substitution, so the token never shows in the process list,
-where any other account on the server could read it.
+The pin is the daemon's own public key, so curl refuses any other listener before it sends the
+token (see [TLS and pinning](#tls-and-pinning); if you set `HUGINN_APPD_TLS_CERT`, read that file
+instead). The header is read from a process substitution, so the token never shows in the
+process list, where any other account on the server could read it.
 
 ## TLS and pinning
 

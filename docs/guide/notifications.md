@@ -130,9 +130,14 @@ only), turn alerts on from the server, as root:
 
 ```bash
 TOKEN=$(cat /etc/huginn-appd/token)
-curl -s -X POST -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") -H 'Content-Type: application/json' \
-  -d '{"enabled":true}' http://127.0.0.1:8787/v1/alerts
+PIN=$(openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \
+  | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)
+curl -s -k --pinnedpubkey "sha256//$PIN" -X POST -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") \
+  -H 'Content-Type: application/json' -d '{"enabled":true}' https://127.0.0.1:8787/v1/alerts
 ```
+
+The pin is the daemon's own key, so the token reaches nothing else (see
+[API](../reference/api.md#authentication)).
 
 `GET /v1/alerts` shows the state: whether alerts are on, the mode, how many have been delivered,
 whether a relay is configured (`channel`), whether an app is listening (`appOnline`), and whether
