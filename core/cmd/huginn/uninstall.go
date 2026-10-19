@@ -202,15 +202,12 @@ func uninstall(args []string) int {
 
 	// Every path and every step's own output goes to a log outside what is
 	// being removed: the screen gets one line per component.
-	logPath := filepath.Join(os.TempDir(), "huginn-uninstall-"+time.Now().Format("20060102-150405")+".log")
-	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	logPath := ""
 	var log io.Writer = io.Discard
-	if err == nil {
+	if lf, err := openUninstallLog(os.TempDir(), time.Now()); err == nil {
 		defer lf.Close()
-		log = lf
+		log, logPath = lf, lf.Name()
 		fmt.Fprintf(lf, "huginn uninstall %s - %s\n", version.Version, time.Now().Format(time.RFC3339))
-	} else {
-		logPath = ""
 	}
 	failed := false
 	part := func(comp string) *tally { return &tally{comp: comp, home: home, u: u, log: log} }
@@ -284,6 +281,17 @@ func uninstall(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// openUninstallLog makes the log in dir, under a name nobody can guess.
+//
+// ⚠ dir IS THE SHARED /tmp ON LINUX, where any account can make a name first.
+// A name built from the time alone, opened to create or truncate, followed a
+// link planted there into whatever file of this account's it pointed at, and
+// truncated it. os.CreateTemp adds a random part and creates with O_EXCL (a
+// link at the name, even a dangling one, fails it, never followed), mode 0600.
+func openUninstallLog(dir string, now time.Time) (*os.File, error) {
+	return os.CreateTemp(dir, "huginn-uninstall-"+now.Format("20060102-150405")+"-*.log")
 }
 
 // removeLocalTier runs the tier's own `huginn local off --purge`, which also
