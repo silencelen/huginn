@@ -150,11 +150,14 @@ if command -v ssh-keygen >/dev/null 2>&1; then
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
   # The address it is paired on does not carry ssh from here (seen
   # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh finds
-  # the first that answers on port 22. huginn's list is no proof that it is
-  # the same machine, so 'Host huginn' stays as it is and the command that
-  # moves it is printed; --host, the person's own word, moves it. The stub
-  # times out for the paired address and refuses the key everywhere else, so
-  # ssh never shows that the new address holds the old one's host key.
+  # the first that answers on port 22. An entry this run has just written
+  # follows that list (it is huginn's, and pairing proved the server: owner
+  # decision 2026-10-19). An entry that was already there is the person's:
+  # huginn's list is no proof that it is the same machine, so it stays as it is
+  # and the command that moves it is printed; --host, the person's own word,
+  # moves it. The stub times out for the paired address and refuses the key
+  # everywhere else, so ssh never shows that a new address holds the old one's
+  # host key.
   mkdir -p "$T/sshstub2" "$T/sshhome2"
   cat > "$T/sshstub2/ssh" <<'STUB'
 #!/bin/sh
@@ -170,10 +173,15 @@ STUB
   done
   if [ -n "$ANY22" ]; then
     SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
+    grep -q 'this setup wrote the entry' <<<"$SU3" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
+      && ok "a first setup ssh points its own new 'Host huginn' at an address of huginn's that answers ssh" \
+      || { bad "first setup ssh with another address that answers ssh"; printf '%s\n' "$SU3"; }
+    sed -i 's/^  HostName .*/  HostName 127.0.0.1/' "$T/sshhome2/.ssh/config"
+    SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
     ALT=$(sed -n 's/.*huginn setup ssh --host \([^ ]*\)$/\1/p' <<<"$SU3" | head -1)
     grep -q 'does not answer ssh from here' <<<"$SU3" && grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" && [ -n "$ALT" ] \
-      && ok "setup ssh leaves 'Host huginn' alone and prints the command that points it at $ALT, which answers ssh" \
-      || { bad "setup ssh with another address that answers ssh"; printf '%s\n' "$SU3"; }
+      && ok "setup ssh leaves an existing 'Host huginn' alone and prints the command that points it at $ALT" \
+      || { bad "setup ssh with an existing entry and another address that answers ssh"; printf '%s\n' "$SU3"; }
     SU4=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh --host "${ALT:-none}" </dev/null 2>&1)
     grep -qx "  HostName ${ALT:-none}" "$T/sshhome2/.ssh/config" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
       && grep -q 'does not know this key yet' <<<"$SU4" \

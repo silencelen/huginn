@@ -63,6 +63,11 @@ func setup(args []string) int {
 		return 1
 	}
 	key := filepath.Join(sshDir, "id_ed25519")
+	// Whether the entry is one this run just wrote, from the paired core's
+	// address. Only such an entry may follow huginn's own address list without
+	// a host-key proof (owner decision, 2026-10-19): nothing of the person's is
+	// being overwritten, and the list comes from the server pairing proved.
+	wroteNow := false
 	if hn, ok := stanzaHost(cfg, alias); ok {
 		if *host != "" && *host != hn {
 			// The person named the address, which is the consent a move needs:
@@ -119,11 +124,12 @@ func setup(args []string) int {
 			return 1
 		}
 		u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s, as %s (%s)", alias, *host, *user, tilde(home, cfg)))
+		wroteNow = true
 	}
 
 	why := sshTrust(alias)
 	if strings.HasPrefix(why, "unreachable") {
-		if moved := sshFallback(u, cfg, alias, *host); moved != "" {
+		if moved := sshFallback(u, cfg, alias, *host, wroteNow); moved != "" {
 			*host = moved
 			why = sshTrust(alias)
 		}
@@ -188,13 +194,23 @@ func setup(args []string) int {
 // this computer in). Otherwise the addresses are printed, with the command
 // that moves the entry when the person says so. Returns the address the
 // entry now names, or "" when it did not change.
-func sshFallback(u *ui.Out, cfg, alias, host string) string {
+//
+// The one exception is ownEntry: an entry this same setup run wrote a moment
+// ago from the paired core's address. That entry is huginn's, not the
+// person's, and the list comes from the server pairing just proved, so it
+// follows the list (the one-step install an address on another VLAN needs).
+// The trust step that follows still shows the new host's fingerprint.
+func sshFallback(u *ui.Out, cfg, alias, host string, ownEntry bool) string {
 	alt, all := sshAddress(host)
 	if alt == "" {
 		if len(all) > 0 {
 			u.Note("None of huginn's addresses (" + strings.Join(all, ", ") + ") answers ssh from here.")
 		}
 		return ""
+	}
+	if ownEntry && namesHuginn(host, all) && repointStanza(cfg, alias, host, alt, all) {
+		u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s: %s does not answer ssh from here, and %s is another address of the huginn host you paired (this setup wrote the entry)", alias, alt, host, alt))
+		return alt
 	}
 	if namesHuginn(host, all) && sshSameHost(alias, host, alt) && repointStanza(cfg, alias, host, alt, all) {
 		u.Line(ui.OK, "ssh", fmt.Sprintf("'Host %s' -> %s: %s does not answer ssh from here, and %s has the host key this computer knows for %s", alias, alt, host, alt, host))
