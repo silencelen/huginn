@@ -89,10 +89,8 @@ func (t *toastNotifier) run(args ...string) error {
 
 func (t *toastNotifier) Post(n traystate.Notice) error {
 	var b strings.Builder
-	launch := n.URL
-	if launch == "" {
-		launch = "huginn://open"
-	}
+	// huginn:// only: the shell opens this verbatim on a click (see toastLaunch).
+	launch := toastLaunch(n.URL)
 	if n.Urgent {
 		b.WriteString(`<toast activationType="protocol" launch="` + xmlEsc(launch) + `" scenario="reminder">`)
 	} else {
