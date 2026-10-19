@@ -1,6 +1,7 @@
 package com.silencelen.huginn.data
 
 import io.ktor.client.engine.HttpClientEngine
+import io.ktor.http.Url
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -275,6 +276,18 @@ object DaemonTls {
      * "allow plain http" switch is a switch a phishing page can talk somebody
      * into flipping, and its only effect is to put a root-equivalent token on
      * the wire.
+     *
+     * ⚠⚠ "LOOPBACK" IS READ BY THE PARSER THAT DIALS, NOT BY A SECOND ONE. This
+     * used to take the authority as everything before the first `/` and the host
+     * as everything after its last `@`, while Ktor and OkHttp end the authority
+     * at the first of `/ \ ? #`. So `http://evil.example#@127.0.0.1:8787` read
+     * as loopback here and stayed plain, while the request went to
+     * evil.example; only the re-check where requests leave stopped the bearer.
+     * The host now comes from Ktor's own parse of the same string (the parse
+     * every request goes through), and anything carrying userinfo, or a host
+     * that is not a bare literal, is upgraded: upgrading is never the unsafe
+     * direction, because it changes only the scheme and TLS then proves whoever
+     * answers.
      */
     fun secureUrl(url: String, plaintext: Boolean = plaintextLoopback): String {
         val t = url.trim()
@@ -286,10 +299,24 @@ object DaemonTls {
             "://" in t -> return t // not ours to rewrite; RouteGuard refuses it
             else -> t
         }
-        val authority = rest.substringBefore('/')
-        val host = hostOf(authority)
-        return if (plaintext && isLoopbackHost(host)) "http://$rest" else "https://$rest"
+        return if (plaintext && dialsLoopback("http://$rest")) "http://$rest" else "https://$rest"
     }
+
+    /**
+     * Whether the HTTP stack, handed [url], would dial a loopback address and
+     * nothing but one: Ktor's own parse, no userinfo, and a host made of
+     * nothing a loopback literal is not made of.
+     */
+    internal fun dialsLoopback(url: String): Boolean {
+        val u = runCatching { Url(url) }.getOrNull() ?: return false
+        if (u.user != null || u.password != null) return false
+        val host = u.host
+        if (host.isEmpty() || host.any { it !in LITERAL_CHARS }) return false
+        return isLoopbackHost(host)
+    }
+
+    /** What `localhost`, a dotted IPv4 and a bracketed IPv6 literal are spelled with. */
+    private val LITERAL_CHARS: Set<Char> = (('a'..'z') + ('A'..'Z') + ('0'..'9')).toSet() + setOf('.', ':', '[', ']')
 
     /**
      * Why a request to [host] may not carry the bearer over plain http, or null:

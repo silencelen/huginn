@@ -481,6 +481,50 @@ class DaemonTlsTest {
         assertFalse(fresh.intercepted)
     }
 
+    // ------------------------------------------ one parser decides "loopback"
+
+    /**
+     * secureUrl decides "loopback, so it may stay plain" from Ktor's parse of
+     * the very string the request is made with. It used to take everything up
+     * to the first `/` as the authority and the host after its last `@`, so a
+     * `#`, `?` or `\` before `@127.0.0.1` read as loopback while the request
+     * went to the host in front of it.
+     */
+    @Test
+    fun `plain http is kept only where the request itself goes to loopback`() {
+        val upgraded = listOf(
+            "http://evil.example#@127.0.0.1:8787",
+            "http://evil.example?@127.0.0.1:8787",
+            "http://evil.example\\@127.0.0.1:8787",
+            "evil.example#@127.0.0.1:8787",
+            "http://[::1]evil.example:8787",
+            "http://user@127.0.0.1:8787",
+            "http://user:pw@127.0.0.1:8787",
+            "http://@127.0.0.1:8787",
+            "http://127.0.0.1 .evil.example:8787",
+            "http://127.0.0.1%2f.evil.example:8787",
+            "http://128.0.0.1:8787",
+        )
+        val plain = listOf(
+            "http://127.0.0.1:8787",
+            "HTTP://127.0.0.1:8787",
+            "127.0.0.1:8787",
+            "http://127.8.9.10:8787",
+            "http://[::1]:8787",
+            "http://localhost:8787",
+            "http://127.0.0.1/appd",
+        )
+        for (u in upgraded) assertTrue(DaemonTls.secureUrl(u, plaintext = true).startsWith("https://"), u)
+        for (u in plain) assertTrue(DaemonTls.secureUrl(u, plaintext = true).startsWith("http://"), u)
+        // The property itself, over all of them.
+        for (u in upgraded + plain) {
+            val out = DaemonTls.secureUrl(u, plaintext = true)
+            if (!out.startsWith("http://")) continue
+            val host = runCatching { io.ktor.http.Url(out).host }.getOrNull()
+            assertTrue(host != null && DaemonTls.isLoopbackHost(host), "$u stayed plain, and goes to $host")
+        }
+    }
+
     // ----------------------------------------------------- persistence
 
     private class PinStore(initial: String = "") : HuginnSettings by Unused {

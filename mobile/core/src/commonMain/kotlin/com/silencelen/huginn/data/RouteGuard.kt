@@ -180,6 +180,11 @@ object RouteGuard {
         val legal = if (authority.startsWith("[")) HOST6_CHARS else HOST_CHARS
         if (host.any { it !in legal }) return null
         val port = portText?.let { text ->
+            // ⚠ ASCII DIGITS, NOTHING ELSE. `toIntOrNull` alone also takes a
+            // sign and any script's digits (`+8787`, fullwidth `８７８７`), which
+            // Ktor reads as 8787 and OkHttp refuses — two parsers disagreeing
+            // about a string this guard let through.
+            if (text.isEmpty() || text.any { it !in '0'..'9' }) return null
             val n = text.toIntOrNull() ?: return null
             if (n !in 1..65535) return null
             n
