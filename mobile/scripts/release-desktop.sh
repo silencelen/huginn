@@ -481,26 +481,54 @@ cat > "$DEB_TMP/hygiene.sh" <<'HYGIENE_EOF'
 # a name spelled out in full, nothing globbed, and exit 0 unconditionally. A
 # maintainer script that fails leaves the package half-configured, and this one
 # is doing housekeeping — it has no business being able to break an uninstall.
+#
+# ⚠ AND IT RUNS AS ROOT IN HOMES IT DOES NOT OWN. Every name under a home is its
+# account's to choose: a link planted at .config (to /etc, say) or at
+# .config/huginn-desktop-kt turned these rm's into root deleting whatever the
+# link reached. So a home is cleaned only when its account owns it, a path with
+# a symlink anywhere below the home is left alone, and the rm's run AS the
+# home's owner (setpriv, util-linux): what that account could not delete
+# itself, this does not delete either. Root's own home is root's.
 if [ "$1" = purge ]; then
+  hy_nolink() {   # $1 = home, $2 = path under it: true when no part of $2 is a link
+    hy_p="$1"; hy_r="$2"
+    while [ -n "$hy_r" ]; do
+      hy_p="$hy_p/${hy_r%%/*}"
+      case "$hy_r" in */*) hy_r="${hy_r#*/}" ;; *) hy_r="" ;; esac
+      [ -L "$hy_p" ] && return 1
+    done
+    return 0
+  }
+  hy_as() {       # $1 = uid, $2 = gid, then a command to run as that account
+    hy_u="$1"; hy_g="$2"; shift 2
+    if [ "$hy_u" = 0 ]; then "$@"
+    else setpriv --reuid="$hy_u" --regid="$hy_g" --clear-groups -- "$@" 2>/dev/null
+    fi
+  }
   # uid >= 1000 is "a person", and root is added because plenty of these boxes
   # run as root and would otherwise be the one home this never cleaned. nobody
   # (65534) is excluded: it has a home path and no business owning one.
   getent passwd 2>/dev/null \
-    | awk -F: '($3 >= 1000 && $3 < 65534) || $3 == 0 { print $6 }' \
-    | while IFS= read -r h; do
+    | awk -F: '($3 >= 1000 && $3 < 65534) || $3 == 0 { print $3 ":" $4 ":" $6 }' \
+    | while IFS=: read -r uid gid h; do
     case "$h" in
       /*) ;;
       *) continue ;;                 # relative or empty: not a home, not ours
     esac
     [ -d "$h" ] || continue
+    # The account's OWN home only: a shared directory or a system path given as
+    # somebody's home is not theirs to have cleaned.
+    [ "$(stat -L -c %u -- "$h" 2>/dev/null)" = "$uid" ] || continue
     # settings.json holds the daemon's bearer token in plaintext.
-    rm -rf "$h/.config/huginn-desktop-kt"
-    rm -rf "$h/.cache/huginn-desktop-kt"
-    rm -f  "$h/.local/share/applications/huginn-desktop-kt.desktop"
+    hy_nolink "$h" .config/huginn-desktop-kt && hy_as "$uid" "$gid" rm -rf -- "$h/.config/huginn-desktop-kt"
+    hy_nolink "$h" .cache/huginn-desktop-kt && hy_as "$uid" "$gid" rm -rf -- "$h/.cache/huginn-desktop-kt"
+    hy_nolink "$h" .local/share/applications/huginn-desktop-kt.desktop \
+      && hy_as "$uid" "$gid" rm -f -- "$h/.local/share/applications/huginn-desktop-kt.desktop"
     # The app's login entry, only when it starts THIS package (a portable
     # install of the app writes the same name).
-    grep -qs '/opt/huginn-desktop-kt/' "$h/.config/autostart/huginn-desktop-kt.desktop" \
-      && rm -f "$h/.config/autostart/huginn-desktop-kt.desktop"
+    hy_nolink "$h" .config/autostart/huginn-desktop-kt.desktop \
+      && hy_as "$uid" "$gid" grep -qs '/opt/huginn-desktop-kt/' "$h/.config/autostart/huginn-desktop-kt.desktop" \
+      && hy_as "$uid" "$gid" rm -f -- "$h/.config/autostart/huginn-desktop-kt.desktop"
   done
 fi
 ### END huginn-uninstall-hygiene ###

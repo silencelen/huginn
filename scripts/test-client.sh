@@ -2991,7 +2991,8 @@ if [ -f "$NSI" ] && [ -f "$REL" ]; then
   [ -z "$BAD" ] \
     && ok "the desktop uninstallers leave the core, the CLI, the device and the local tier alone" \
     || bad "a desktop uninstaller touches what huginn core owns:$BAD"
-  printf '%s' "$UNSEC" | grep -qF 'RMDir /r "$R1"' && printf '%s' "$HYG" | grep -qF 'rm -rf "$h/.config/huginn-desktop-kt"' \
+  # (The .deb's purge removes it AS the home's owner: scripts/test-home-writes.sh runs it.)
+  printf '%s' "$UNSEC" | grep -qF 'RMDir /r "$R1"' && printf '%s' "$HYG" | grep -qF 'rm -rf -- "$h/.config/huginn-desktop-kt"' \
     && ok "and both still remove the app's settings (the plaintext token)" \
     || bad "a desktop uninstaller no longer removes the app's settings"
 else
