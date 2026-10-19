@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 	"runtime"
@@ -28,7 +29,9 @@ import (
 // seat0 CanGraphical. A desktop at its login screen is locked (the
 // "keep act mode while locked" setting is what lets an always-on desktop act unattended);
 // a box with no graphical seat is unlocked; a probe that fails is unknown, which
-// the fence treats as locked.
+// the fence treats as locked. "No graphical seat" must be logind's own answer:
+// a logind or system bus that cannot be asked is a probe that failed, not a
+// headless box.
 type lockReader struct {
 	mu   sync.Mutex
 	at   time.Time
@@ -75,17 +78,46 @@ func (l *lockReader) decide(ctx context.Context) runner.Lock {
 // loginctl, or no seat0 at all, is a machine with no graphical stack (an LXC,
 // a container): headless, known.
 func seatGraphical(ctx context.Context) (bool, bool) {
+	return seatGraphicalWith(ctx, exec.LookPath, runSplit)
+}
+
+// seatGraphicalWith is seatGraphical with its two calls passed in.
+//
+// ⚠ ONLY LOGIND SAYING SO IS "NO SEAT0". loginctl fails the same way when there
+// is no seat0 and when it cannot reach logind at all (no system bus, logind
+// down or not answering), and a desktop in the second state is not headless:
+// reading it as headless made its locked screen "unlocked, known". So a
+// failure counts as no seat0 only when logind answered that it knows no seat0,
+// and every other failure, or an answer that is neither yes nor no, is unknown.
+func seatGraphicalWith(ctx context.Context, lookPath func(string) (string, error),
+	run func(ctx context.Context, name string, args ...string) (stdout, stderr string, err error)) (graphical, known bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if _, err := exec.LookPath("loginctl"); err != nil {
+	if _, err := lookPath("loginctl"); err != nil {
 		return false, true
 	}
-	out, err := exec.CommandContext(ctx, "loginctl", "show-seat", "seat0", "-p", "CanGraphical", "--value").Output()
+	out, errOut, err := run(ctx, "loginctl", "show-seat", "seat0", "-p", "CanGraphical", "--value")
 	if err != nil {
-		if ctx.Err() != nil {
-			return false, false
+		if ctx.Err() == nil && strings.Contains(errOut, "No seat 'seat0' known") {
+			return false, true // logind's own answer: there is no seat0
 		}
-		return false, true // no seat0
+		return false, false
 	}
-	return strings.TrimSpace(string(out)) == "yes", true
+	switch strings.TrimSpace(out) {
+	case "yes":
+		return true, true
+	case "no":
+		return false, true
+	}
+	return false, false
+}
+
+// runSplit runs a command and returns what it wrote to stdout and to stderr.
+func runSplit(ctx context.Context, name string, args ...string) (string, string, error) {
+	var out, errOut bytes.Buffer
+	c := exec.CommandContext(ctx, name, args...)
+	c.Stdout, c.Stderr = &out, &errOut
+	c.WaitDelay = time.Second
+	err := c.Run()
+	return out.String(), errOut.String(), err
 }

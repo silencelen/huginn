@@ -230,9 +230,41 @@ func TestLinuxHeadlessIsUnknownNotLocked(t *testing.T) {
 	if r := p.Probe(context.Background()); r.Reading != Unknown || !r.NoSession {
 		t.Fatalf("%+v", r)
 	}
-	p.Exec = fakeLoginctl("", nil, errors.New("exec: \"loginctl\": executable file not found in $PATH"))
+	p.Exec = fakeLoginctl("", nil, &exec.Error{Name: "loginctl", Err: exec.ErrNotFound})
 	if r := p.Probe(context.Background()); r.Reading != Unknown || !r.NoSession || !strings.Contains(r.Reason, "loginctl") {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// A logind or system bus that cannot be asked is a lock state that cannot be
+// read, never "no session": NoSession sends the daemon on to its headless
+// check, which read unlocked when logind was down (security review,
+// 2026-10-18). On the old code each of these came back NoSession.
+func TestLinuxLogindUnreachableIsUnreadableNotNoSession(t *testing.T) {
+	busDown := func(context.Context) ([]Session, error) {
+		return nil, errors.New("dial unix /run/dbus/system_bus_socket: connect: no such file or directory")
+	}
+	// Session 1 (the desktop) is listed, but logind times out reading it.
+	stalls := func(ctx context.Context, name string, args ...string) (string, error) {
+		if args[0] == "show-session" && args[1] == "1" {
+			return "Failed to get properties: Connection timed out\n", &exec.ExitError{}
+		}
+		return fakeLoginctl(omarchyList, omarchyShow, nil)(ctx, name, args...)
+	}
+	for name, run := range map[string]func(context.Context, string, ...string) (string, error){
+		"no system bus":            fakeLoginctl("Failed to connect to bus: No such file or directory\n", nil, &exec.ExitError{}),
+		"logind does not answer":   fakeLoginctl("Failed to list sessions: Connection timed out\n", nil, &exec.ExitError{}),
+		"a session cannot be read": stalls,
+	} {
+		p := Prober{GOOS: "linux", UID: 1000, Login1: busDown, Exec: run}
+		if r := p.Probe(context.Background()); r.Reading != Unknown || r.NoSession || !r.Reading.Locked() {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	// A session that went away between the two calls is skipped, as before.
+	p := Prober{GOOS: "linux", UID: 1000, Exec: fakeLoginctl(omarchyList, map[string]string{"2": omarchyShow["2"]}, nil)}
+	if r := p.Probe(context.Background()); r.Reading != Unknown || !r.NoSession {
+		t.Fatalf("a vanished session: %+v", r)
 	}
 }
 

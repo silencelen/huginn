@@ -4,6 +4,7 @@ package lock
 
 import (
 	"context"
+	"errors"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -33,7 +34,12 @@ func login1Sessions(ctx context.Context) ([]Session, error) {
 		err := conn.Object("org.freedesktop.login1", r.Path).CallWithContext(ctx,
 			"org.freedesktop.DBus.Properties.GetAll", 0, "org.freedesktop.login1.Session").Store(&props)
 		if err != nil {
-			continue // gone between the two calls
+			if dbusErrorName(err) == "org.freedesktop.DBus.Error.UnknownObject" {
+				continue // gone between the two calls
+			}
+			// Anything else (a timeout, logind going down) leaves a session
+			// unread, and the one left out could be the locked one.
+			return nil, err
 		}
 		s := Session{ID: r.ID, UID: int(r.UID), User: r.User}
 		str := func(k string) string { v, _ := props[k].Value().(string); return v }
@@ -52,4 +58,17 @@ func login1Sessions(ctx context.Context) ([]Session, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// dbusErrorName is the D-Bus error name of a failed call, or "".
+func dbusErrorName(err error) string {
+	var v dbus.Error
+	if errors.As(err, &v) {
+		return v.Name
+	}
+	var p *dbus.Error
+	if errors.As(err, &p) && p != nil {
+		return p.Name
+	}
+	return ""
 }
