@@ -32,14 +32,39 @@ import java.net.URI
  * Opens [url] in the user's browser. False when this JVM has no desktop
  * integration — headless, a bare WM, or a sandbox — which is not an error so much
  * as a reason to show the link instead of pretending it opened.
+ *
+ * ⚠ http(s) ONLY, HERE AND NOT JUST IN THE HANDLER BELOW. Every caller hands it
+ * an address someone else wrote: the daemon's sign-in URL, an app's address from
+ * the registry, a link in an answer. `Desktop.browse` gives a URI to whatever the
+ * OS has registered for its scheme, so a `huginn://` link would reach this app's
+ * own activation handler, a `file:` one the disk, and any other scheme whatever
+ * program claims it. Refused, and false, so the caller shows the address instead.
  */
-fun openInBrowser(url: String): Boolean = runCatching {
+fun openInBrowser(url: String): Boolean =
+    browseWebLink(url, ::desktopBrowse) { AppLog.warn("link", "refused to open a non-http(s) address") }
+
+/** [openInBrowser] with the browser and the refusal handed in, so the gate can be tested. */
+internal fun browseWebLink(url: String, browse: (URI) -> Boolean, refused: () -> Unit): Boolean = runCatching {
+    if (!isWebLink(url)) {
+        refused()
+        return false
+    }
+    browse(URI(url))
+}.getOrDefault(false)
+
+/** http or https, by the scheme [URI] reads — the one [Desktop.browse] is handed. */
+internal fun isWebLink(url: String): Boolean {
+    val scheme = runCatching { URI(url) }.getOrNull()?.scheme?.lowercase()
+    return scheme == "http" || scheme == "https"
+}
+
+private fun desktopBrowse(uri: URI): Boolean {
     if (!Desktop.isDesktopSupported()) return false
     val desktop = Desktop.getDesktop()
     if (!desktop.isSupported(Desktop.Action.BROWSE)) return false
-    desktop.browse(URI(url))
-    true
-}.getOrDefault(false)
+    desktop.browse(uri)
+    return true
+}
 
 /**
  * The `UriHandler` both the transcript and the settings pages click through.
@@ -58,8 +83,9 @@ fun openInBrowser(url: String): Boolean = runCatching {
 fun rememberLinkUriHandler(onCopy: (String) -> Unit): UriHandler = remember(onCopy) {
     object : UriHandler {
         override fun openUri(uri: String) {
-            val scheme = runCatching { URI(uri) }.getOrNull()?.scheme?.lowercase()
-            if (scheme != "http" && scheme != "https") {
+            // Checked before [openInBrowser] (which checks again) so that a refused
+            // scheme is NOT copied: only a web link that would not open is.
+            if (!isWebLink(uri)) {
                 AppLog.warn("link", "refused a non-http scheme")
                 return
             }
