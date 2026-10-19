@@ -201,11 +201,23 @@ const PERSONA_FILES = [
   '/etc/huginn/persona.md',
   '/usr/local/share/huginn-cli/persona.md',
 ].filter(Boolean);
-function readPersona() {
+/**
+ * The persona a run is handed, as a PATH for `--append-system-prompt-file`: the
+ * first of PERSONA_FILES that can be read, or null when none can or that one is
+ * empty — the same choice the persona text used to be picked by.
+ *
+ * ⚠ A PATH, NEVER THE TEXT. A child's argv is readable by every account on the
+ * host (`ps`, /proc/<pid>/cmdline), and the persona used to ride there whole on
+ * every chat and Round turn; the project sessions already pass a file for the
+ * same reason. Absolute, because the run's cwd is WORKDIR, not this daemon's.
+ */
+function personaFile() {
   for (const f of PERSONA_FILES) {
-    try { return fs.readFileSync(f, 'utf8'); } catch { /* next */ }
+    let text;
+    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    return text ? path.resolve(f) : null;
   }
-  return '';
+  return null;
 }
 const WORKDIR = process.env.HUGINN_APPD_WORKDIR || process.env.HOME || '/root';
 /**
@@ -4051,8 +4063,8 @@ function startRun(meta, userText) {
   else if (downgrade) args.push('--model', downgrade);
   if (meta.effort) args.push('--effort', meta.effort);
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
-  const persona = readPersona();
-  if (persona) args.push('--append-system-prompt', persona);
+  const persona = personaFile();
+  if (persona) args.push('--append-system-prompt-file', persona);
   args.push('--allowedTools', TOOLS[meta.mode] || TOOLS.ask);
   const denied = DISALLOWED[meta.mode] ?? DISALLOWED.ask;
   if (denied) args.push('--disallowedTools', denied);
@@ -7052,6 +7064,22 @@ function saveAlertState(st) {
 }
 
 /**
+ * How the relay is started: SOURCED by a one-line bash shim, so the alert text
+ * never reaches an argv.
+ *
+ * The contract is `bash <script> --message <text> --source huginn-app`, and every
+ * relay parses exactly that. But a child's argv is readable by every account on
+ * the host, and this text is a waiting question's own words or a Round's
+ * verdict. So the text goes in on stdin, the shim rebuilds the same four
+ * arguments as positional parameters inside bash, and then sources the relay with
+ * them: `$0`, `$1`..`$4` and the exit status are what they always were, and no
+ * command line holds the text. `printf .` carries trailing newlines through the
+ * command substitution, and `%.` takes it off again.
+ */
+const RELAY_SHIM = 'huginn_relay_text=$(cat; printf .); '
+  + 'set -- --message "${huginn_relay_text%.}" --source huginn-app; unset huginn_relay_text; . "$0"';
+
+/**
  * Sends through the homelab's existing Telegram path rather than a new one: it is
  * outbound-only, it logs every send, and the owner already has it. House rule
  * from that setup — statements only, never a question, because nothing consumes
@@ -7059,8 +7087,9 @@ function saveAlertState(st) {
  */
 async function deliverTelegram(text) {
   if (!fs.existsSync(TELEGRAM_SCRIPT)) return false;
-  const r = await run('bash', [TELEGRAM_SCRIPT, '--message', text, '--source', 'huginn-app'],
-    { timeout: 30_000 });
+  // `./` before a bare name: `.` would look one up on PATH, where `bash <name>` opened it here.
+  const relay = TELEGRAM_SCRIPT.includes('/') ? TELEGRAM_SCRIPT : `./${TELEGRAM_SCRIPT}`;
+  const r = await runStdin('bash', ['-c', RELAY_SHIM, relay], text, { timeout: 30_000 });
   if (r.err) { log('alerts: telegram send failed', (r.stderr || '').trim().slice(0, 120)); return false; }
   return true;
 }
@@ -7297,7 +7326,9 @@ async function suggestionsFor(id, transcriptPath) {
       log(`suggest: ${id} -> ${entry.suggestions.length} for size ${size} (api lane)`);
       return;
     }
-    const r = await run('claude', [
+    // The prompt goes in on STDIN, as a chat's message does: it quotes the
+    // conversation, and a child's argv is readable by every account on the host.
+    const r = await runStdin('claude', [
       '-p',
       // Caged: no CLAUDE.md (global or project), no tools, one turn, cheap
       // model, scratch cwd. This call must never inherit huginn's persona.
@@ -7305,8 +7336,7 @@ async function suggestionsFor(id, transcriptPath) {
       '--model', 'haiku',
       '--max-turns', '1',
       '--tools', '',
-      '--', buildPrompt(context),
-    ], { timeout: 45_000, cwd: DATA_DIR });
+    ], buildPrompt(context), { timeout: 45_000, cwd: DATA_DIR });
     entry.suggestions = r.err ? [] : parseSuggestions(r.stdout);
     entry.promise = null;
     if (r.err) log(`suggest: ${id} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
@@ -7347,7 +7377,9 @@ async function polishFor(field, draft, cap) {
 
   const entry = { at: Date.now(), promise: null, result: null };
   entry.promise = (async () => {
-    const r = await run('claude', [
+    // The draft goes in on STDIN, like the suggestion call's prompt: a child's
+    // argv is readable by every account on the host.
+    const r = await runStdin('claude', [
       '-p',
       // Caged exactly as the suggestion call is: no CLAUDE.md (global or
       // project), no tools, one turn, scratch cwd. This must never inherit
@@ -7361,8 +7393,7 @@ async function polishFor(field, draft, cap) {
       '--model', 'sonnet',
       '--max-turns', '1',
       '--tools', '',
-      '--', buildPolishPrompt(field, draft, cap),
-    ], { timeout: 90_000, cwd: DATA_DIR });
+    ], buildPolishPrompt(field, draft, cap), { timeout: 90_000, cwd: DATA_DIR });
     if (r.err) {
       log(`polish: ${field} failed: ${(r.stderr || r.err.message || '').slice(0, 120)}`);
       return { error: 'polish is unavailable right now' };
