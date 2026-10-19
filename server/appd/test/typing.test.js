@@ -1422,3 +1422,41 @@ test('the summary after a compaction is neither a turn starting nor the owner ty
   assert.equal(t.boundaryFromTail(`${turn}\n${boundary}\n${summary}\n${notice}\n`).idle, true);
   assert.equal(t.hasHumanUserRecord(`${boundary}\n${summary}\n${notice}\n`), false);
 });
+
+// ---- the trust dialog is a dialog, not a sentence ----------------------------
+//
+// The gate used to call the pane a trust dialog if the trust sentence appeared
+// ANYWHERE on it, so a reply that merely quoted the dialog held every message
+// to that session behind a dialog that was not there.
+
+test('a reply QUOTING the trust dialog over a live composer is not a trust dialog', () => {
+  const quoted = [
+    '● Claude Code shows this on a fresh folder:',
+    '  Quick safety check: Is this a project you created or one you trust?',
+    '  ❯ 1. Yes, I trust this folder',
+    '    2. No, exit',
+    '  Pick "Yes, I trust this folder" and it will not ask again.',
+    '',
+    ...EMPTY_BOX,
+  ];
+  const v = t.paneReadyForInput(quoted);
+  assert.notEqual(v.why, 'trust');
+  assert.equal(t.paneBlocks(v.why), false, 'nothing is in the way of a send');
+  // The same quote under a composer whose top rule carries a session name — a
+  // box the structural reader does not find — is still only conversation.
+  const titled = [...quoted.slice(0, 5), '', `${'─'.repeat(66)} proj/role ─`, '❯ ', R80, '  ? for shortcuts'];
+  assert.notEqual(t.paneReadyForInput(titled).why, 'trust');
+});
+
+test('every real trust dialog is still `trust`, and so is one drawn some unknown way', () => {
+  for (const f of ['trust-dialog-80.txt', 'trust-dialog-unnumbered-80.txt']) {
+    assert.equal(t.paneReadyForInput(fixturePane(f)).why, 'trust', f);
+  }
+  assert.deepEqual(t.paneReadyForInput(TRUST_DIALOG), { ready: false, why: 'trust' });
+  // Neither detector reads this layout (no caret, no numbers), but its own footer
+  // ends the pane and the sentence and a row sit above it: still held, by name.
+  const odd = [' Do you trust the files in this folder?', '', '   Yes, proceed', '   No, exit', '',
+    ' Enter to confirm · Esc to cancel'];
+  assert.equal(t.paneReadyForInput(odd).why, 'trust');
+});
+

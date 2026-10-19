@@ -10,7 +10,7 @@
 // against Claude Code v2.1.258 on a 200x50 pane.
 
 const { randomBytes } = require('node:crypto');
-const { stripAnsi, detectPrompt } = require('./pane');
+const { stripAnsi, detectPrompt, detectTrustDialog } = require('./pane');
 
 /**
  * The `/keys` text cap, raised from 8,000 to match the chat body cap.
@@ -308,8 +308,42 @@ const DIALOG_FOOTER_RE = /enter to (?:select|confirm|set|choose)|esc to cancel|(
 // The trust dialog, which is the one modal whose DESTRUCTIVE option is
 // pre-selected ("No, exit"): a blind Enter here kills the session.
 const TRUST_RE = /Yes,\s+I\s+trust\s+this\s+folder|trust\s+the\s+files\s+in\s+this\s+folder|Is\s+this\s+a\s+project\s+you\s+created\s+or\s+one\s+you\s+trust/i;
+// One of the trust dialog's own ROWS, numbered or not, caret or not.
+const TRUST_ROW_RE = /^\s*(?:[❯>]\s*)?(?:\d{1,2}[.)]\s*)?(?:Yes, I trust this folder|Yes, proceed|No, exit)\s*$/;
 // How far up from the bottom a dialog's own furniture may reach.
 const DIALOG_LOOKBACK = 20;
+
+/**
+ * Is the folder-trust dialog the thing on screen — as a DIALOG, not as words?
+ *
+ * ⚠ THE SENTENCE IS NOT THE DIALOG. This used to be "the trust sentence appears
+ * anywhere on the pane", and a reply that merely QUOTED it — Claude explaining
+ * the dialog, a pasted capture, a doc being edited — read as a trust prompt on a
+ * pane that had a live composer under it. That holds every person's message to
+ * the session with no ceiling and drops appd's own after ten minutes. So it is
+ * recognised the way `detectTrustDialog` recognises it: by its rows and its place.
+ *
+ *   - the unnumbered 2.1.296 dialog: `detectTrustDialog`'s structural match
+ *   - the numbered one: a live selector (`detectPrompt`: one caret, a contiguous
+ *     run, nothing of the composer under it) whose rows are the trust rows
+ *   - a layout neither reads: the dialog's own footer is the last thing on the
+ *     pane, with the sentence AND one of its rows in the block above it. Prose
+ *     never ends a pane while a composer is drawn below it, which is what keeps
+ *     the belt from closing on the conversation again.
+ */
+function trustDialogUp(arr, plain, last, prompt) {
+  const p = prompt === undefined ? detectPrompt(arr) : prompt;
+  if (p && p.unnumbered) return true;
+  if (p && Array.isArray(p.options)) {
+    const labels = p.options.map((o) => String(o.label || ''));
+    if (labels.some((l) => /^No, exit$/i.test(l))
+        && (TRUST_RE.test(p.question || '') || labels.some((l) => TRUST_RE.test(l)))) return true;
+  }
+  if (detectTrustDialog(arr)) return true;
+  if (last < 0 || !DIALOG_FOOTER_RE.test(plain[last])) return false;
+  const block = plain.slice(Math.max(0, last - DIALOG_LOOKBACK), last);
+  return block.some((l) => TRUST_RE.test(l)) && block.some((l) => TRUST_ROW_RE.test(l));
+}
 
 /**
  * Is a selector dialog up? Three nets, in order of how much they know.
@@ -350,12 +384,13 @@ function dialogWhy(arr, plain, last) {
   const box = composerBox(plain, last);
   const regionFrom = box && box.bottom >= 0 ? box.bottom + 1 : Math.max(0, last - DIALOG_LOOKBACK);
   const region = plain.slice(regionFrom, last + 1);
+  const prompt = detectPrompt(arr);
   // Trust first: it is a modal too, but it is the one with a destructive
-  // default, and a caller that logs `why` should be able to say so. Scanned
-  // over the whole pane for the same reason as everything else here.
-  if (plain.slice(0, last + 1).some((l) => TRUST_RE.test(l))) return 'trust';
+  // default, and a caller that logs `why` should be able to say so. Recognised
+  // by its rows, never by its sentence alone (see trustDialogUp).
+  if (trustDialogUp(arr, plain, last, prompt)) return 'trust';
   // 1 — the sibling detector, whole pane, structural.
-  if (detectPrompt(arr)) return 'modal';
+  if (prompt) return 'modal';
   // 2 — a live selector's footer near the bottom, with a numbered row ABOVE it.
   // (2026-10-02: "above", not "anywhere on the pane" — a footer phrase with a
   // numbered line somewhere below it is not drawn the way a selector draws.)
