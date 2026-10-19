@@ -205,14 +205,15 @@ must keep them.
   client will show the alert, which suppresses the fallback relay. Send it only while a person is
   present and the client can actually deliver. A parked SSE carries the header it was opened with,
   so reconnect it when presence changes.
-- **A `huginn://answer` or `huginn://undo` link acts only with this instance's nonce.** The
-  fingerprint (`fp`) is the daemon's staleness check, an unkeyed hash of the question and options
-  that anyone can compute, so it proves nothing about who sent the link. Each toast that carries
-  buttons gets a random per-toast nonce (`ActivationNonces`), held only in memory, single use, five
-  minutes. `Activations.resolve` answers or undoes only on a nonce this process issued; any other
-  link (no nonce, unknown, expired, after a restart, from a browser or another program) opens the
-  session instead, and the owner clicks in the app. A fingerprint that no longer matches the pane
-  still comes back `409` and nothing is typed.
+- **A `huginn://` link acts only with this instance's nonce.** The fingerprint (`fp`) is the
+  daemon's staleness check, an unkeyed hash of the question, options and dialog body that anyone
+  can compute, so it proves nothing about who sent the link. Every toast that carries links gets
+  a random nonce (`ActivationNonces`), held only in memory. `answer` and `undo` need it, single
+  use, within five minutes. `ack` and `open` need it to take a notification down, for 24 hours; a
+  notice-only nonce can never answer or undo. Any other link (no nonce, unknown, expired, after a
+  restart, from a browser or another program) is navigation at most: `open` shows the session
+  and takes nothing down, and `answer`, `undo` and `ack` do nothing but log. A fingerprint that no
+  longer matches the pane still comes back `409` and nothing is typed.
 - **The update source is fixed at build time,** never read from a setting
   (`GithubReleases.REPO`; for the Android app, the `huginn.updateRepo` Gradle property described in
   [building.md](building.md)).
