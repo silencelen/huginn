@@ -22,8 +22,25 @@ case "$VARIANT" in
 esac
 
 # Concurrent sessions share this working tree; a second gradle invocation on the
-# same project dir corrupts the build cache, so serialise on a lock.
-LOCK=/tmp/huginn-app-gradle.lock
+# same project dir corrupts the build cache, so serialise on a lock - the same
+# one scripts/release-desktop.sh takes. It lives in this tree's own .gradle, in a
+# 0700 directory, never under a fixed name in shared /tmp, where any account
+# could create that name first and hold it; and the wait is bounded
+# (HUGINN_GRADLE_LOCK_WAIT seconds), so a build stuck behind a hung one says so
+# instead of waiting for ever.
+LOCK_DIR="$REPO_DIR/.gradle/huginn-lock"
+install -d -m 0700 "$LOCK_DIR"
+LOCK="$LOCK_DIR/gradle.lock"
+LOCK_WAIT="${HUGINN_GRADLE_LOCK_WAIT:-1800}"
+gradle_locked() {
+  local rc=0
+  flock -E 75 -w "$LOCK_WAIT" "$LOCK" ./gradlew "$@" || rc=$?
+  if [ "$rc" = 75 ]; then
+    echo "[build] another gradle build in this tree held $LOCK for ${LOCK_WAIT}s — refusing." >&2
+    echo "[build] wait for it, or set HUGINN_GRADLE_LOCK_WAIT to wait longer." >&2
+  fi
+  return "$rc"
+}
 
 echo "[build 1/3] unit tests"
 # BOTH modules. Most of the logic lives in :core now, and `:app:testDebugUnitTest`
@@ -39,7 +56,7 @@ echo "[build 1/3] unit tests"
 # task outputs: an unchanged tree leaves the test tasks up-to-date, gradle skips
 # them, and the COUNT below is then read from the PREVIOUS run's XML — a green gate
 # over tests that never executed. Forcing a real run is the whole point of a gate.
-flock "$LOCK" ./gradlew --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
+gradle_locked --rerun-tasks --no-build-cache :core:jvmTest :core:testDebugUnitTest :app:testDebugUnitTest :ui:jvmTest
 
 # The COUNT is asserted, not just the exit code — same reason as the server suite
 # below, and the same failure the line above describes: a suite that stops being
@@ -186,7 +203,7 @@ EOF
 fi
 
 echo "[build 2/3] $VARIANT APK"
-flock "$LOCK" ./gradlew "$TASK"
+gradle_locked "$TASK"
 
 [ -f "$MANIFEST" ] || { echo "[build] $MANIFEST missing — export task did not run" >&2; exit 1; }
 APK_NAME="$(grep -oE '"apk":"[^"]+"' "$MANIFEST" | head -1 | sed 's/"apk":"//; s/"$//')"

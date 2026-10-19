@@ -81,9 +81,24 @@ export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
 # Concurrent Claude sessions share this working tree and a second gradle
 # invocation on the same project dir corrupts the build cache. Same lock as
-# scripts/build.sh.
-LOCK=/tmp/huginn-app-gradle.lock
-GRADLE="flock $LOCK ./gradlew"
+# scripts/build.sh: in this tree's own .gradle, in a 0700 directory, never under
+# a fixed name in shared /tmp (any account could create that name first, and
+# hold it), and waited on for HUGINN_GRADLE_LOCK_WAIT seconds at most, so a
+# release stuck behind a hung build says so instead of waiting for ever.
+LOCK_DIR="$PWD/.gradle/huginn-lock"
+install -d -m 0700 "$LOCK_DIR"
+LOCK="$LOCK_DIR/gradle.lock"
+LOCK_WAIT="${HUGINN_GRADLE_LOCK_WAIT:-1800}"
+gradle_locked() {
+  local rc=0
+  flock -E 75 -w "$LOCK_WAIT" "$LOCK" ./gradlew "$@" || rc=$?
+  if [ "$rc" = 75 ]; then
+    echo "REFUSING: another gradle build in this tree held $LOCK for ${LOCK_WAIT}s" >&2
+    echo "          (wait for it, or set HUGINN_GRADLE_LOCK_WAIT to wait longer)" >&2
+  fi
+  return "$rc"
+}
+GRADLE=gradle_locked
 
 LINUX_ONLY=0
 SKIP_TESTS=0
@@ -130,7 +145,12 @@ NOTIFIER=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/notify/Window
 # a language boundary, which is the same reason the AUMID has a gate.
 FIRSTRUN=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/FirstRun.kt
 AUTOSTART=app-desktop/src/main/kotlin/com/silencelen/huginn/desktop/setup/Autostart.kt
-LOG=${TMPDIR:-/tmp}/huginn-desktop-kt-release.log
+# The log, in a directory of this run's own (mktemp -d: 0700, a fresh name) and
+# never under a fixed name in shared /tmp, where any account could create it
+# first - as a link to a file this root-run script would then truncate, or as a
+# file of theirs it would write the build into. Kept after the run; printed below.
+LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/huginn-desktop-kt-release.XXXXXX")"
+LOG="$LOG_DIR/release.log"
 : > "$LOG"
 
 echo "== releasing huginn-desktop-kt $VERSION =="
