@@ -7,7 +7,7 @@
 // it was given, which is how the cage itself is asserted: `--tools ""` and
 // `--setting-sources ""` are the difference between a text rewrite and a headless
 // claude with huginn's persona and a shell, and nothing else in the suite would
-// notice them being dropped.
+// notice them being dropped. The draft itself arrives on stdin, never in argv.
 //
 // SAFETY: no chats, no real claude, no live daemon. Everything lives in a scratch
 // HUGINN_APPD_DATA removed in after().
@@ -80,47 +80,59 @@ const path = require('node:path');
 const F = String.fromCharCode(96, 96, 96);
 const NL = String.fromCharCode(10);
 const argv = process.argv.slice(2);
-const prompt = argv[argv.length - 1] || '';
 
 // Not every claude the daemon runs is a polish: it also asks for 'auth status'
-// and '--version' on its own schedule. Only ours is recorded, or the call count
-// this file asserts on would be counting the daemon's housekeeping.
-if (!prompt.includes('improving one field of a scheduled')) {
+// and '--version' on its own schedule, with nothing on stdin. Only ours is
+// recorded, or the call count this file asserts on would be counting the
+// daemon's housekeeping.
+if (!argv.includes('-p')) {
   console.log('{}');
   process.exit(0);
 }
-fs.appendFileSync(path.join(__dirname, '..', 'calls.log'), JSON.stringify(argv) + NL);
+// The draft comes on STDIN, as a chat's message does: a child's argv is readable
+// by every account on the host.
+let prompt = '';
+process.stdin.on('data', (c) => { prompt += c; });
+process.stdin.on('end', () => answer(prompt));
 
-if (prompt.includes('EMIT_CRASH')) {
-  process.stderr.write('stub refusing on purpose' + NL);
-  process.exit(3);
+function answer(prompt) {
+  if (!prompt.includes('improving one field of a scheduled')) {
+    console.log('{}');
+    process.exit(0);
+  }
+  fs.appendFileSync(path.join(__dirname, '..', 'calls.log'), JSON.stringify({ argv, prompt }) + NL);
+
+  if (prompt.includes('EMIT_CRASH')) {
+    process.stderr.write('stub refusing on purpose' + NL);
+    process.exit(3);
+  }
+  if (prompt.includes('EMIT_SLOW')) {
+    // Long enough that a second request lands while this one is still running.
+    const until = Date.now() + 600;
+    while (Date.now() < until) { /* spin: the point is a call that is still open */ }
+  }
+  if (prompt.includes('EMIT_CONTRACT')) {
+    process.stdout.write('Read the alerts.' + NL + NL + F + 'huginn-report abc' + NL +
+      '{"status":"ok"}' + NL + F + NL);
+    process.exit(0);
+  }
+  if (prompt.includes('EMIT_FENCED')) {
+    process.stdout.write(F + 'text' + NL + 'Polished prompt: Read the alerts and say what changed.' + NL + F + NL);
+    process.exit(0);
+  }
+  if (prompt.includes('EMIT_LONG')) {
+    process.stdout.write('y'.repeat(900) + NL);
+    process.exit(0);
+  }
+  if (prompt.includes('EMIT_EMPTY')) {
+    process.stdout.write(NL + NL);
+    process.exit(0);
+  }
+  // The default: a plausible rewrite that names which field was asked for, so a
+  // test can tell a prompt polish from a goal polish by the answer alone.
+  const field = prompt.includes('REWRITE THE "how will you know it finished" FIELD') ? 'goal' : 'prompt';
+  process.stdout.write('rewritten ' + field + NL);
 }
-if (prompt.includes('EMIT_SLOW')) {
-  // Long enough that a second request lands while this one is still running.
-  const until = Date.now() + 600;
-  while (Date.now() < until) { /* spin: the point is a call that is still open */ }
-}
-if (prompt.includes('EMIT_CONTRACT')) {
-  process.stdout.write('Read the alerts.' + NL + NL + F + 'huginn-report abc' + NL +
-    '{"status":"ok"}' + NL + F + NL);
-  process.exit(0);
-}
-if (prompt.includes('EMIT_FENCED')) {
-  process.stdout.write(F + 'text' + NL + 'Polished prompt: Read the alerts and say what changed.' + NL + F + NL);
-  process.exit(0);
-}
-if (prompt.includes('EMIT_LONG')) {
-  process.stdout.write('y'.repeat(900) + NL);
-  process.exit(0);
-}
-if (prompt.includes('EMIT_EMPTY')) {
-  process.stdout.write(NL + NL);
-  process.exit(0);
-}
-// The default: a plausible rewrite that names which field was asked for, so a
-// test can tell a prompt polish from a goal polish by the answer alone.
-const field = prompt.includes('REWRITE THE "how will you know it finished" FIELD') ? 'goal' : 'prompt';
-process.stdout.write('rewritten ' + field + NL);
 `;
 
 async function api(pathname, init = {}) {
@@ -138,7 +150,7 @@ function polish(body) {
   return api('/v1/rounds/polish', { method: 'POST', body: JSON.stringify(body) });
 }
 
-/** Every polish invocation the stub has seen, newest last, as argv arrays. */
+/** Every polish invocation the stub has seen, newest last, as {argv, prompt}. */
 function calls() {
   try {
     return fs.readFileSync(path.join(tmp, 'calls.log'), 'utf8')
@@ -216,8 +228,9 @@ test('a goal alone is enough to polish the prompt from', async () => {
 
 test('the polish call is caged, on sonnet, one turn, no tools', async () => {
   await polish({ field: 'prompt', prompt: 'CAGE_CHECK look at the alerts' });
-  const argv = calls().find((a) => a.join(' ').includes('CAGE_CHECK'));
-  assert.ok(argv, 'the stub recorded no call for this draft');
+  const call = calls().find((c) => c.prompt.includes('CAGE_CHECK'));
+  assert.ok(call, 'the stub recorded no call for this draft');
+  const { argv } = call;
   assert.equal(argv[0], '-p');
   // ⚠ THE FOUR THAT MATTER. Empty --setting-sources keeps the global CLAUDE.md and
   // huginn's persona out (the webhost lesson); empty --tools means this cannot act;
@@ -226,12 +239,13 @@ test('the polish call is caged, on sonnet, one turn, no tools', async () => {
   assert.equal(argv[argv.indexOf('--tools') + 1], '', 'a rewrite must not be able to DO anything');
   assert.equal(argv[argv.indexOf('--max-turns') + 1], '1');
   assert.equal(argv[argv.indexOf('--model') + 1], 'sonnet', 'not suggest\'s haiku: this text runs for months');
-  assert.equal(argv[argv.length - 2], '--', 'the draft is an operand, never parsed as flags');
+  assert.ok(!argv.some((a) => a.includes('CAGE_CHECK')),
+    'the draft goes on stdin: never in argv, where every account on the host can read it');
 });
 
 test('the draft reaches the model with its mode and its title', async () => {
   await polish({ field: 'goal', title: 'MODE_CHECK', prompt: 'p', goal: 'g', mode: 'act' });
-  const sent = calls().map((a) => a[a.length - 1]).find((s) => s.includes('MODE_CHECK'));
+  const sent = calls().map((c) => c.prompt).find((s) => s.includes('MODE_CHECK'));
   assert.match(sent, /MAY change things/, 'an act Round is described as one');
   assert.match(sent, /REWRITE THE "how will you know it finished" FIELD/);
 });
