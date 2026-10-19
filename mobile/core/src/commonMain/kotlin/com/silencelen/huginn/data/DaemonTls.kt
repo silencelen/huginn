@@ -87,12 +87,25 @@ object DaemonTls {
     const val TOO_OLD: String = "the daemon is older than 3.11 and has no TLS; update it"
 
     /**
-     * Appended to [TOO_OLD] for an address on this machine, which used to be
-     * reached in plain http: what answers there without TLS may not be huginn at
-     * all (a forward that is down, and another app or account on its port).
-     * Display only, like [TOKEN_HINT]; it changes nothing about what is refused.
+     * Appended to [TOO_OLD]. Only an address that has never proved itself can
+     * still earn that sentence (see [judge]'s `tlsRequired`), and there what
+     * says "old daemon" is an answer nobody vouched for: a plain-HTTP reply to
+     * the TLS hello, or a version number in a body. An interceptor can print
+     * both, so the sentence names the other possibility rather than sending the
+     * reader to upgrade a daemon that is already current. Display only, like
+     * [TOKEN_HINT].
      */
-    const val LOOPBACK_HINT: String = " (on this machine that is an old daemon, or another program holding the port)"
+    const val TOO_OLD_HINT: String = " (if it is already 3.11 or newer, something else answered in its place)"
+
+    /**
+     * Appended to [INTERCEPTED] when a port on this machine answered the TLS
+     * hello in plain HTTP. Since security scan F9 a loopback address is dialled
+     * over TLS like any other, so a plain answer there is never the daemon this
+     * client can prove: it is another program (or account) holding the port, or
+     * a daemon too old for TLS. Display only, like [TOKEN_HINT]; it changes
+     * nothing about what is refused.
+     */
+    const val LOOPBACK_HINT: String = " (on this machine that is another program holding the port, or a daemon older than 3.11)"
 
     /**
      * The ONE switch that lets this client send the bearer over plain HTTP, and
@@ -163,6 +176,16 @@ object DaemonTls {
 
         /** Whatever answered is not huginn-shaped at all. */
         data object NotHuginn : Verdict
+
+        /**
+         * No TLS, or a claim to be too old for it, where TLS is known to be
+         * there: the daemon behind this token has already proved itself over
+         * TLS, or the address is on this machine, whose port a 3.11+ daemon
+         * answers in TLS. The real daemon cannot answer like that, so this is
+         * the interception case, never "update it". [plain]: the port answered
+         * the TLS hello in plain HTTP.
+         */
+        data class Downgraded(val plain: Boolean) : Verdict
     }
 
     @Serializable
@@ -183,9 +206,21 @@ object DaemonTls {
      * `tls` block over https is "not proved", full stop; the only thing it may
      * still change is which sentence is printed.
      *
+     * ⚠⚠ "TOO OLD" IS AN UNPROVEN ANSWER'S OWN CLAIM, so it is believed only
+     * where nothing better is known (security review, 2026-10). A plain-HTTP
+     * reply to the TLS hello and a version number in a body are both free for
+     * an interceptor to print, and believing them turned an active
+     * interception into "update the daemon". So with [tlsRequired] — this
+     * token's daemon has already proved itself over TLS, or the address is on
+     * this machine — neither can select [Verdict.TooOld]: the answer is
+     * [Verdict.Downgraded], which the caller says as [INTERCEPTED].
+     *
      * @param notTls the port answered the handshake with plain HTTP — the shape
      *   of a pre-3.11 daemon. [status]/[body]/[appdHeader] are then that plain
-     *   unauthenticated answer, read only to tell "old huginn" from "not huginn".
+     *   unauthenticated answer, read only to tell "old huginn" from "not huginn",
+     *   and only when TLS is not [tlsRequired].
+     * @param tlsRequired TLS is known to be at this address: pins exist for
+     *   [token], or the host is loopback.
      */
     fun judge(
         token: String,
@@ -195,22 +230,27 @@ object DaemonTls {
         body: String,
         appdHeader: String?,
         notTls: Boolean = false,
+        tlsRequired: Boolean = false,
     ): Verdict {
         if (notTls) {
-            return if (HuginnClient.answersLikeDaemon(appdHeader, status, body)) Verdict.TooOld(appdHeader)
+            if (tlsRequired) return Verdict.Downgraded(plain = true)
+            return if (HuginnClient.answersLikeDaemon(appdHeader, status, body)) Verdict.TooOld(versionShape(appdHeader))
             else Verdict.NotHuginn
         }
         val parsed = if (status in 200..299) runCatching { json.decodeFromString<Answer>(body) }.getOrNull() else null
-        val version = parsed?.version?.takeIf { it.isNotBlank() } ?: appdHeader?.takeIf { it.isNotBlank() }
+        val version = versionShape(parsed?.version?.takeIf { it.isNotBlank() } ?: appdHeader)
+        // What a claim to predate TLS becomes: the rule-8 sentence where nothing
+        // better is known, the interception case where TLS is known to be there.
+        val tooOld: Verdict = if (tlsRequired) Verdict.Downgraded(plain = false) else Verdict.TooOld(version)
         if (parsed == null) {
             // A non-2xx or a body that is not the challenge's. An old daemon
             // behind somebody's TLS-terminating proxy 404s the route and still
             // stamps its header; anything else is somebody else's server.
-            return if (isOlderThanTls(version)) Verdict.TooOld(version) else Verdict.NotHuginn
+            return if (isOlderThanTls(version)) tooOld else Verdict.NotHuginn
         }
         val tls = parsed.tls
         if (tls == null || tls.v != VERSION) {
-            return if (isOlderThanTls(version)) Verdict.TooOld(version) else Verdict.Unproven(echoedOurFp = false)
+            return if (isOlderThanTls(version)) tooOld else Verdict.Unproven(echoedOurFp = false)
         }
         val fp = seenFp?.lowercase()
             ?: return Verdict.Unproven(echoedOurFp = false)
@@ -229,6 +269,19 @@ object DaemonTls {
         val minor = parts.getOrNull(1)?.takeWhile { it.isDigit() }?.toIntOrNull() ?: return false
         return major < FIRST_TLS_MAJOR || (major == FIRST_TLS_MAJOR && minor < FIRST_TLS_MINOR)
     }
+
+    private val VERSION_SHAPE = Regex("""v?\d{1,4}(\.\d{1,4}){1,3}([-+][0-9A-Za-z.]{1,16})?""")
+
+    /**
+     * [raw] if it is shaped like a release number (`3.13.2`, `3.14.0-rc.1`),
+     * otherwise null.
+     *
+     * ⚠ A VERSION FROM THE WIRE IS FREE TEXT UNTIL THIS SAYS OTHERWISE. The
+     * header and the challenge body are written by whatever answered, proved or
+     * not, and the setup flow prints the version beside its verdict; a
+     * paragraph, a fake "proved" or a terminal escape must not get that far.
+     */
+    fun versionShape(raw: String?): String? = raw?.trim()?.takeIf { VERSION_SHAPE.matches(it) }
 
     // ----------------------------------------------------------- the URL rule
 
@@ -330,13 +383,6 @@ object DaemonTls {
             "refusing plain http to $host: the token goes only to a daemon that has proved itself over TLS, " +
                 "on this machine too ($PLAINTEXT_ENV=local turns that off, for a daemon here that has no TLS)"
         else -> null
-    }
-
-    /** The host part of an authority, brackets kept off an IPv6 literal. */
-    internal fun hostOf(authority: String): String {
-        val a = authority.substringAfterLast('@')
-        if (a.startsWith("[")) return a.substring(1, a.indexOf(']').takeIf { it > 0 } ?: a.length)
-        return a.substringBefore(':')
     }
 
     // ---------------------------------------------------------------- helpers
@@ -494,8 +540,9 @@ class PinBook {
  *   the probe's own trust manager during the handshake. Null when there was no
  *   TLS (see [notTls]).
  * @param notTls the port answered the TLS hello with plain HTTP — what a
- *   pre-3.11 daemon does. [status]/[body]/[appdHeader] are then from an
- *   unauthenticated plain request, kept only to name it.
+ *   pre-3.11 daemon does, and what anybody in between can do. [status]/[body]/
+ *   [appdHeader] are then from an unauthenticated plain request, kept only to
+ *   name it where TLS is not already known to be there ([DaemonTls.judge]).
  */
 class TlsProbeReply(
     val leafFp: String?,

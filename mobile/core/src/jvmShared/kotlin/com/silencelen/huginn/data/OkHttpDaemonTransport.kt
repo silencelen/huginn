@@ -121,6 +121,13 @@ class OkHttpDaemonTransport(
             // rather than "could not connect". Never a fallback: nothing secret
             // is sent and nothing learned here can be adopted. A port that
             // refused or never connected skips this entirely.
+            //
+            // ⚠ AND IT IS ONLY EVER A CLAIM. Anybody between here and the daemon
+            // can answer the hello in plain HTTP and print a version header, so
+            // the reply is marked `notTls` and the client decides what it means:
+            // the "update the daemon" sentence only for an address whose token
+            // has proved nothing yet and that is not this machine, the
+            // interception sentence everywhere else (DaemonTls.judge).
             if (recorder.leafFp != null || !helloSent.get() || abandoned.get()) throw e
             plaintextPing(url, timeoutMs) ?: throw e
         } finally {

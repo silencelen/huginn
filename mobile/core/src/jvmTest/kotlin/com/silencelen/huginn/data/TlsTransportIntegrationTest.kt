@@ -158,9 +158,14 @@ class TlsTransportIntegrationTest {
         assertEquals(listOf(real.fp), pins.pinsFor(token))
     }
 
-    /** Rule 8: a pre-3.11 daemon's single port speaks plain HTTP to a TLS hello. */
+    /**
+     * Rule 8: a pre-3.11 daemon's single port speaks plain HTTP to a TLS hello.
+     * The real transport notices, asks in plain text with no bearer, and hands
+     * back what answered marked `notTls` — which is rule 8's "too old" only
+     * for an address that has proved nothing and is not this machine.
+     */
     @Test
-    fun `a daemon without TLS is named as too old, and is never sent the bearer`() = runBlocking {
+    fun `a port without TLS is reported as such, and is never sent the bearer`() = runBlocking {
         val s = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         s.createContext("/") { ex ->
             ex.requestHeaders.getFirst("Authorization")?.let { bearersReceived += it }
@@ -168,10 +173,22 @@ class TlsTransportIntegrationTest {
         }
         s.start()
         servers += s
+        val nonce = DaemonChallenge.newNonce()
+        val reply = OkHttpDaemonTransport().probe("https://127.0.0.1:${s.address.port}/v1/challenge?nonce=$nonce", 1_000)
+        assertTrue(reply.notTls)
+        assertEquals(null, reply.leafFp)
+        assertEquals(401, reply.status)
+        assertEquals("3.10.3", reply.appdHeader)
+        assertEquals(
+            DaemonTls.Verdict.TooOld("3.10.3"),
+            DaemonTls.judge(token, nonce, reply.leafFp, reply.status, reply.body, reply.appdHeader, reply.notTls),
+            "off this machine, for a token that has proved nothing, rule 8",
+        )
+        // This port IS this machine, where a 3.11+ daemon answers in TLS: the
+        // interception sentence, and what else it can be here.
         val e = assertFailsWith<DaemonTlsException> { client(s.address.port, PinBook()).ping() }
-        assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
-        // The contract's sentence, and (this is 127.0.0.1) the other thing it can be.
-        assertEquals(DaemonTls.TOO_OLD + DaemonTls.LOOPBACK_HINT, e.message)
+        assertEquals(DaemonTlsException.Kind.INTERCEPTED, e.kind)
+        assertEquals(DaemonTls.INTERCEPTED + DaemonTls.LOOPBACK_HINT, e.message)
         assertTrue(bearersReceived.isEmpty(), "not over https, not over a downgrade: $bearersReceived")
     }
 
@@ -216,8 +233,9 @@ class TlsTransportIntegrationTest {
                 transport = OkHttpDaemonTransport(), pins = PinBook(),
             )
             val e = assertFailsWith<DaemonTlsException> { client.ping() }
-            assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
-            assertTrue(e.message!!.startsWith(DaemonTls.TOO_OLD) && e.message!!.endsWith(DaemonTls.LOOPBACK_HINT), e.message)
+            // Whatever version it prints: plain http where the daemon answers TLS.
+            assertEquals(DaemonTlsException.Kind.INTERCEPTED, e.kind)
+            assertEquals(DaemonTls.INTERCEPTED + DaemonTls.LOOPBACK_HINT, e.message)
             assertTrue(bearersReceived.isEmpty(), "the squatter was handed: $bearersReceived")
         }
     }

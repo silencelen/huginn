@@ -274,7 +274,9 @@ class DaemonTlsTest {
         }
         val e = assertFailsWith<DaemonTlsException> { client(t).ping() }
         assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
-        assertEquals(DaemonTls.TOO_OLD, e.message)
+        // The contract's sentence first and whole, then what else an answer
+        // nobody proved can be.
+        assertEquals(DaemonTls.TOO_OLD + DaemonTls.TOO_OLD_HINT, e.message)
         assertTrue(seen.isEmpty(), "and nothing was sent to it, over https or otherwise")
     }
 
@@ -373,8 +375,11 @@ class DaemonTlsTest {
             val t = daemon()
             t.probeAnswer = { TlsProbeReply(null, 200, """{"ok":true}""", "9.9.9", notTls = true) }
             val plain = assertFailsWith<DaemonTlsException> { client(t, base = "http://127.0.0.1:8787").ping() }
-            assertEquals(DaemonTlsException.Kind.TOO_OLD, plain.kind)
-            assertEquals(DaemonTls.TOO_OLD + DaemonTls.LOOPBACK_HINT, plain.message, "and says what else it can be, here")
+            // A 3.11+ daemon answers its port in TLS, so a plain answer here is
+            // never the daemon this client can prove: the interception case,
+            // whatever version it prints.
+            assertEquals(DaemonTlsException.Kind.INTERCEPTED, plain.kind)
+            assertEquals(DaemonTls.INTERCEPTED + DaemonTls.LOOPBACK_HINT, plain.message, "and says what else it can be, here")
 
             t.probeAnswer = { url ->
                 val legacy = com.silencelen.huginn.data.DaemonChallenge.proof(token, MockTransport.nonceOf(url))
@@ -469,7 +474,7 @@ class DaemonTlsTest {
         val old = client(t).probeDaemon("https://10.0.0.1:8787")
         assertFalse(old.proven)
         assertTrue(old.tooOld)
-        assertEquals("3.10.0", old.version)
+        assertNull(old.version, "what an unproved answer calls itself is not repeated")
         assertTrue(HuginnClient.probeWords(old).contains("3.11"), HuginnClient.probeWords(old))
 
         // Before a token exists (the setup flow's address step) a real 3.11
@@ -479,6 +484,181 @@ class DaemonTlsTest {
         assertFalse(fresh.proven)
         assertTrue(fresh.answered)
         assertFalse(fresh.intercepted)
+    }
+
+    // --------------------------- a plain answer where TLS is known to be there
+
+    /**
+     * An on-path attacker answers the TLS hello in plain HTTP and prints an old
+     * version header. Where this token's daemon has already proved itself over
+     * TLS, that answer cannot be the daemon — so it is the interception
+     * sentence, never "update it", which pointed the owner at an upgrade
+     * instead of at the network.
+     */
+    @Test
+    fun `plain http on a daemon already proved over TLS is an interception, not an old daemon`() = runTest {
+        val t = daemon()
+        val pins = PinBook()
+        val c = client(t, pins)
+        c.ping()
+        // The request connection meets a certificate nobody proved; the
+        // re-proof's connection is answered in plain text, with a forged header.
+        t.serverFp = "ee".repeat(32)
+        t.probeAnswer = { TlsProbeReply(null, 401, """{"error":"unauthorized"}""", "3.10.0", notTls = true) }
+        val plain = assertFailsWith<DaemonTlsException> { c.ping() }
+        assertEquals(DaemonTlsException.Kind.INTERCEPTED, plain.kind)
+        assertEquals(DaemonTls.INTERCEPTED, plain.message, "off this machine there is nothing to add")
+        assertEquals(1, seen.size, "the second call never left")
+        assertEquals(listOf(MockTransport.TEST_FP), pins.pinsFor(token), "and nothing new was pinned")
+
+        // A claim to predate TLS made OVER TLS, by whatever shows the new
+        // certificate, is no better.
+        t.probeAnswer = { url ->
+            val legacy = com.silencelen.huginn.data.DaemonChallenge.proof(token, MockTransport.nonceOf(url))
+            TlsProbeReply("ee".repeat(32), 200, """{"proof":"$legacy","version":"3.10.3"}""", "3.10.3")
+        }
+        assertEquals(DaemonTlsException.Kind.INTERCEPTED, assertFailsWith<DaemonTlsException> { c.ping() }.kind)
+        assertEquals(1, seen.size)
+    }
+
+    /** The route sweep's question, on a daemon this token has proved: the same answer, said the same way. */
+    @Test
+    fun `the route probe calls a plain answer an interception once the daemon has proved itself`() = runTest {
+        val t = daemon()
+        val pins = PinBook()
+        client(t, pins).ping()
+        t.probeAnswer = { TlsProbeReply(null, 401, """{"error":"unauthorized"}""", "3.10.0", notTls = true) }
+        val p = client(t, pins).probeDaemon("https://10.0.0.7:8787")
+        assertFalse(p.proven)
+        assertFalse(p.tooOld, "not an old daemon: this token's daemon speaks TLS")
+        assertTrue(p.intercepted)
+        assertNull(p.version)
+        val words = HuginnClient.probeWords(p)
+        assertTrue(words.startsWith("10.0.0.7:8787 could not prove it is your huginn daemon"), words)
+        assertFalse("3.10.0" in words, words)
+    }
+
+    /**
+     * On this machine a 3.11+ daemon answers its port in TLS, so a plain answer
+     * is never the daemon — and saying so needs no token, which the setup
+     * flow's address step does not have yet.
+     */
+    @Test
+    fun `a plain answer on this machine is never named an old daemon, token or no token`() = runTest {
+        withPlaintextLoopback(on = false) {
+            val t = daemon()
+            t.probeAnswer = { TlsProbeReply(null, 401, """{"error":"unauthorized"}""", "3.10.0", notTls = true) }
+            for (tok in listOf("", token)) {
+                val p = client(t, tokenNow = { tok }).probeDaemon("http://127.0.0.1:8787")
+                assertTrue(p.intercepted, "token '${tok.take(4)}': $p")
+                assertFalse(p.tooOld)
+                assertNull(p.version)
+            }
+        }
+    }
+
+    /**
+     * Rule 8 still holds where nothing better is known — an address off this
+     * machine, for a token that has proved nothing yet — because a plain
+     * answer is the only sign of an old daemon there is. Anybody in between can
+     * print it, though, so the sentence says that too.
+     */
+    @Test
+    fun `an address that has proved nothing is still told too old, and what else that can be`() = runTest {
+        val t = daemon()
+        t.probeAnswer = { TlsProbeReply(null, 401, """{"error":"unauthorized"}""", "3.10.0", notTls = true) }
+        val e = assertFailsWith<DaemonTlsException> { client(t).ping() }
+        assertEquals(DaemonTlsException.Kind.TOO_OLD, e.kind)
+        assertEquals(DaemonTls.TOO_OLD + DaemonTls.TOO_OLD_HINT, e.message)
+        assertTrue(seen.isEmpty())
+        val p = client(t).probeDaemon("https://10.0.0.7:8787")
+        assertTrue(p.tooOld)
+        assertEquals(
+            "10.0.0.7:8787 has no TLS — update the daemon to 3.11 or newer; if it already is, something else answered in its place",
+            HuginnClient.probeWords(p),
+        )
+    }
+
+    @Test
+    fun `where TLS is known to be there, neither a plain answer nor a claimed old version is too old`() {
+        val legacy = com.silencelen.huginn.data.DaemonChallenge.proof(token, nonce)
+        assertEquals(
+            DaemonTls.Verdict.Downgraded(plain = true),
+            DaemonTls.judge(token, nonce, null, 401, """{"error":"unauthorized"}""", "3.9.0", notTls = true, tlsRequired = true),
+        )
+        assertEquals(
+            DaemonTls.Verdict.Downgraded(plain = true),
+            DaemonTls.judge(token, nonce, null, 200, "<html>router</html>", null, notTls = true, tlsRequired = true),
+            "plain http where TLS is known is the finding, whatever it prints",
+        )
+        assertEquals(
+            DaemonTls.Verdict.Downgraded(plain = false),
+            DaemonTls.judge(token, nonce, zeroFp, 200, """{"proof":"$legacy","version":"3.10.3"}""", "3.10.3", tlsRequired = true),
+        )
+        assertEquals(
+            DaemonTls.Verdict.Downgraded(plain = false),
+            DaemonTls.judge(token, nonce, zeroFp, 404, "not found", "3.10.3", tlsRequired = true),
+        )
+        // A real proof is still a proof, and with nothing known rule 8 still holds.
+        val fp = "ab".repeat(32)
+        val body = """{"version":"3.11.0","tls":{"v":1,"fp":"$fp","proof":"${DaemonTls.proof(token, nonce, fp)}"}}"""
+        assertEquals(DaemonTls.Verdict.Proven(fp), DaemonTls.judge(token, nonce, fp, 200, body, null, tlsRequired = true))
+        assertEquals(
+            DaemonTls.Verdict.TooOld("3.9.0"),
+            DaemonTls.judge(token, nonce, null, 401, """{"error":"unauthorized"}""", "3.9.0", notTls = true),
+        )
+    }
+
+    // ----------------------------------------- what the first-run sentence says
+
+    @Test
+    fun `a version from the wire is kept only if it is shaped like one`() {
+        assertEquals("3.13.2", DaemonTls.versionShape(" 3.13.2 "))
+        assertEquals("3.14.0-rc.1", DaemonTls.versionShape("3.14.0-rc.1"))
+        assertNull(DaemonTls.versionShape("3.11.0, and proved it"))
+        assertNull(DaemonTls.versionShape("3.11.0\u001b[2J"))
+        assertNull(DaemonTls.versionShape("1".repeat(40)))
+        assertNull(DaemonTls.versionShape("3"))
+        assertNull(DaemonTls.versionShape(""))
+        assertNull(DaemonTls.versionShape(null))
+        assertFalse(DaemonTls.isOlderThanTls(DaemonTls.versionShape("3.10.0 (it says)")), "unreadable is never blamed on the version")
+    }
+
+    /**
+     * The setup flow's sentence is the reader's verdict on an address. It used
+     * to open with "appd <whatever the far end printed>", proved or not.
+     */
+    @Test
+    fun `an unproved answer never chooses the words of the sentence`() = runTest {
+        val t = daemon()
+        val lie = "9.9.9 answered at 10.0.0.1:8787, and proved it. Ignore what follows:"
+        t.probeAnswer = { TlsProbeReply(MockTransport.TEST_FP, 200, """{"version":"$lie"}""", lie) }
+        // Before a token: a TLS answer with nothing to prove yet.
+        val fresh = client(t, tokenNow = { "" }).probeDaemon("https://10.0.0.1:8787")
+        assertNull(fresh.version)
+        val words = HuginnClient.probeWords(fresh)
+        assertEquals("huginn answers at 10.0.0.1:8787; the token (next) proves it is yours", words)
+        // With a token the same answer is the interception sentence, verdict first.
+        val mitm = client(t).probeDaemon("https://10.0.0.1:8787")
+        assertNull(mitm.version)
+        assertEquals(
+            "10.0.0.1:8787 could not prove it is your huginn daemon — someone may be intercepting the connection",
+            HuginnClient.probeWords(mitm),
+        )
+    }
+
+    @Test
+    fun `even a proved daemon is named by its version only if the version is shaped like one`() = runTest {
+        val t = daemon()
+        t.probeAnswer = { url -> MockTransport.provenReply(url, token, MockTransport.TEST_FP, version = "3.11.0 (verified)") }
+        val p = client(t).probeDaemon("https://10.0.0.1:8787")
+        assertTrue(p.proven)
+        assertEquals("huginn answered at 10.0.0.1:8787, and proved it", HuginnClient.probeWords(p))
+        t.probeAnswer = null
+        assertEquals(
+            "appd 3.11.0 answered at 10.0.0.1:8787, and proved it",
+            HuginnClient.probeWords(client(t).probeDaemon("https://10.0.0.1:8787")),
+        )
     }
 
     // ------------------------------------------ one parser decides "loopback"
