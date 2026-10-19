@@ -243,24 +243,25 @@ fun main(args: Array<String>) {
         summonTick.value += 1
     }
 
+    /** What the window is showing, focused or not. */
+    fun selectedTarget(): NavTarget? = when (store.view.value) {
+        View.CHATS -> store.chatId.value?.let { NavTarget(TargetKind.CHATS, it) }
+        View.SESSIONS -> store.sessionName.value?.let { NavTarget(TargetKind.SESSIONS, it) }
+        else -> null
+    }
+
     /**
      * What the reader is looking at, or null when they are not looking at this
      * window at all. The router suppresses a notification for exactly this target:
      * its question is already on screen in front of them.
      */
-    fun focusedTarget(): NavTarget? {
-        if (!windowFocused.value) return null
-        return when (store.view.value) {
-            View.CHATS -> store.chatId.value?.let { NavTarget(TargetKind.CHATS, it) }
-            View.SESSIONS -> store.sessionName.value?.let { NavTarget(TargetKind.SESSIONS, it) }
-            else -> null
-        }
-    }
+    fun focusedTarget(): NavTarget? = if (!windowFocused.value) null else selectedTarget()
 
     // The nonces this run's toasts carry. In memory only, on purpose: a
     // `huginn://answer` or `huginn://undo` acts only when its nonce is in here,
     // so a forged link, or one from a toast an earlier run posted, opens the
-    // session instead (see Activations.resolve).
+    // session instead; and an `ack`, or the acknowledgement an `open` brings,
+    // takes a notification down only with one (see Activations.resolve).
     val nonces = ActivationNonces()
 
     val router = NotifyRouter(
@@ -289,15 +290,26 @@ fun main(args: Array<String>) {
         traySummary.value = TrayModel.summarize(watch)
     }
 
-    fun navigate(target: NavTarget) {
+    /**
+     * Bring the window up on [target].
+     *
+     * [acknowledge]: whether arriving takes its notification down, as opening a
+     * target does from inside the app (like the phone). True for this app's own
+     * tray and for a toast link carrying that toast's nonce; false for every other
+     * link, which anything on the machine can fire — it opens, and the "needs you"
+     * stays up.
+     */
+    fun navigate(target: NavTarget, acknowledge: Boolean) {
         summon()
         if (target == NavTarget.SETUP_TEST) return
+        // Before the selection moves, so the ACKNOWLEDGEMENT effect below skips the
+        // arrival this causes; and only if it will move, or there is none to skip.
+        if (!acknowledge && selectedTarget() != target) router.arrivedUnproven(target)
         when (target.kind) {
             TargetKind.CHATS -> store.openChat(target.id)
             TargetKind.SESSIONS -> store.openSession(target.id)
         }
-        // Opening a target reads as acknowledgement, like the phone.
-        router.onViewed(target)
+        if (acknowledge) router.acknowledge(target)
     }
 
     /** Only ever reached through [Activations.resolve], with a nonce this run issued. */
@@ -314,12 +326,15 @@ fun main(args: Array<String>) {
             // Reported rather than swallowed — a button that may or may not have
             // worked is worse than one that says which.
             notifier.post(
-                NotifyRequest(
-                    key = "answer:${a.session}",
-                    title = a.session,
-                    body = outcome,
-                    urgent = false,
-                    target = NavTarget(TargetKind.SESSIONS, a.session),
+                router.stamped(
+                    notifier,
+                    NotifyRequest(
+                        key = "answer:${a.session}",
+                        title = a.session,
+                        body = outcome,
+                        urgent = false,
+                        target = NavTarget(TargetKind.SESSIONS, a.session),
+                    ),
                 )
             )
         }
@@ -348,12 +363,15 @@ fun main(args: Array<String>) {
                 )
             store.refreshHeadroom()
             notifier.post(
-                NotifyRequest(
-                    key = "ladder:${a.session}",
-                    title = a.session,
-                    body = outcome,
-                    urgent = false,
-                    target = NavTarget(TargetKind.SESSIONS, a.session),
+                router.stamped(
+                    notifier,
+                    NotifyRequest(
+                        key = "ladder:${a.session}",
+                        title = a.session,
+                        body = outcome,
+                        urgent = false,
+                        target = NavTarget(TargetKind.SESSIONS, a.session),
+                    ),
                 )
             )
         }
@@ -368,6 +386,8 @@ fun main(args: Array<String>) {
             // a nonce this run never issued (a forged link, or a toast from before
             // a restart), one already used, or one past its TTL. The window comes
             // up on the session, the reader sees the question and clicks there.
+            // Acknowledging only with a good nonce: otherwise the notification
+            // stays up, since nobody can say the owner saw anything.
             is ActivationStep.Navigate -> {
                 // The name came from whoever built the link: bounded, and no
                 // control characters, so it cannot write lines of its own.
@@ -375,17 +395,21 @@ fun main(args: Array<String>) {
                     val who = step.target.id.take(40).map { c -> if (c.isISOControl()) '?' else c }.joinToString("")
                     AppLog.info("notify", "$who: $it")
                 }
-                navigate(step.target)
+                navigate(step.target, acknowledge = step.acknowledge)
             }
             is ActivationStep.Answer -> answerFromActivation(step)
             is ActivationStep.Undo -> undoFromActivation(step)
             // Dismissal, and nothing else: no window, no navigation. "OK" on a
             // downgrade means "I have read that" — moving the reader somewhere is
             // a different verb wearing the same word. Its Undo goes with it.
+            // Reached only with that toast's nonce.
             is ActivationStep.Dismiss -> {
                 nonces.revoke(step.key)
                 notifier.withdraw(step.key)
             }
+            // An `ack` without its toast's nonce: anything can fire one, and a
+            // "needs you" that vanished unseen is the worst way to lose one.
+            is ActivationStep.Ignore -> AppLog.info("notify", step.why)
         }
     }
 
@@ -603,7 +627,7 @@ fun main(args: Array<String>) {
                     // that answers "what is waiting on me" without opening
                     // anything.
                     for (name in summary.attention) {
-                        Item("$name needs you", onClick = { navigate(NavTarget(TargetKind.SESSIONS, name)) })
+                        Item("$name needs you", onClick = { navigate(NavTarget(TargetKind.SESSIONS, name), acknowledge = true) })
                     }
                 }
 
@@ -822,8 +846,9 @@ fun main(args: Array<String>) {
             }
 
             // ACKNOWLEDGEMENT. Arriving at a target takes its notification down,
-            // wherever the navigation came from — the tray, an activation, or the
-            // reader simply clicking the row.
+            // wherever the navigation came from — the tray, a toast, or the reader
+            // simply clicking the row — except the one arrival an outside link with
+            // no good nonce caused (`router.arrivedUnproven`, set by `navigate`).
             LaunchedEffect(Unit) {
                 combine(store.view, store.chatId, store.sessionName) { view, chat, session ->
                     when (view) {

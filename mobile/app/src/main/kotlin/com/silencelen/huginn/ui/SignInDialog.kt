@@ -40,6 +40,10 @@ import com.silencelen.huginn.data.LoginState
  *  * **Report what was actually captured.** The new token is asked who it belongs
  *    to, so a duplicate or a wrong account is stated plainly instead of appearing
  *    later as a second row that looks like a second account.
+ *
+ * The sign-in page opens on a TAP, and only when its address is http(s)
+ * ([WebLinks]): the daemon writes that address, and it used to be launched the
+ * instant it arrived, on any scheme.
  */
 @Composable
 fun SignInDialog(
@@ -74,12 +78,20 @@ fun SignInDialog(
 
                     state.awaitingCode -> {
                         Text(
-                            "Sign in in your browser, then paste the code it gives you.",
+                            "Open the sign-in page, sign in, then paste the code it gives you.",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         state.url?.let { url ->
-                            OutlinedButton(onClick = { onOpenUrl(url) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("Open the sign-in page again")
+                            if (WebLinks.browsable(url) != null) {
+                                OutlinedButton(onClick = { onOpenUrl(url) }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Open the sign-in page")
+                                }
+                            } else {
+                                Text(
+                                    "The host's sign-in link is not an http(s) address, so huginn will not open it.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
                             }
                         }
                         OutlinedTextField(

@@ -186,7 +186,7 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
                 """<action content="${esc("${o.number}. ${o.label}".take(40))}" activationType="protocol" arguments="${esc(url)}"/>"""
             }
             return buildString {
-                append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}" scenario="reminder">""")
+                append("""<toast activationType="protocol" launch="${esc(launchUrl(request))}" scenario="reminder">""")
                 append("""<visual><binding template="ToastGeneric">""")
                 append("<text>${esc(request.title.take(100))}</text>")
                 append("<text>${esc(request.body.take(200))}</text>")
@@ -198,7 +198,7 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
         }
 
         internal fun finishedXml(request: NotifyRequest): String = buildString {
-            append("""<toast activationType="protocol" launch="${esc(Activations.openUrl(request.target))}">""")
+            append("""<toast activationType="protocol" launch="${esc(launchUrl(request))}">""")
             append("""<visual><binding template="ToastGeneric">""")
             append("<text>${esc(request.title.take(100))}</text>")
             append("<text>${esc(request.body.take(200))}</text>")
@@ -212,11 +212,29 @@ class WindowsToastNotifier private constructor(private val script: File) : Notif
             append("</toast>")
         }
 
-        /** Up to two non-answer buttons, the same cap the bounded-choice rule implies. */
+        /**
+         * What a click on the toast itself fires: its target, with the toast's
+         * nonce, so the click may also take the toast down.
+         */
+        private fun launchUrl(request: NotifyRequest): String = Activations.openUrl(request.target, request.nonce)
+
+        /**
+         * Up to two non-answer buttons, the same cap the bounded-choice rule implies.
+         *
+         * ⚠ ONLY `huginn://` LINKS THIS APP PARSES. A protocol action hands its
+         * `arguments` to the shell verbatim, so a button carrying anything else
+         * would make a trusted "huginn" toast a launcher for whatever that scheme
+         * opens. Every action is built by [Activations] today; this is what keeps
+         * it that way.
+         */
         private fun actionsXml(request: NotifyRequest): String =
-            request.actions.take(2).joinToString("") { a ->
+            request.actions.filter { isOwnLink(it.url) }.take(2).joinToString("") { a ->
                 """<action content="${esc(a.label.take(40))}" activationType="protocol" arguments="${esc(a.url)}"/>"""
             }
+
+        /** A `huginn://` link [Activations] can read back; nothing else rides on a toast. */
+        internal fun isOwnLink(url: String): Boolean =
+            url.startsWith("${Activations.SCHEME}://") && Activations.parse(url) != null
 
         private fun sessionOf(request: NotifyRequest): String = request.target.id
 
