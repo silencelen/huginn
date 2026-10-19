@@ -149,9 +149,12 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   grep -q "is already in" <<<"$SU2" && grep -q 'does not know this key yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
   # The address it is paired on does not carry ssh from here (seen
-  # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh points
-  # 'Host huginn' at the first that answers on port 22. The stub times out for
-  # the paired address and refuses the key everywhere else.
+  # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh finds
+  # the first that answers on port 22. huginn's list is no proof that it is
+  # the same machine, so 'Host huginn' stays as it is and the command that
+  # moves it is printed; --host, the person's own word, moves it. The stub
+  # times out for the paired address and refuses the key everywhere else, so
+  # ssh never shows that the new address holds the old one's host key.
   mkdir -p "$T/sshstub2" "$T/sshhome2"
   cat > "$T/sshstub2/ssh" <<'STUB'
 #!/bin/sh
@@ -167,10 +170,15 @@ STUB
   done
   if [ -n "$ANY22" ]; then
     SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
-    grep -q 'does not answer ssh from here' <<<"$SU3" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
-      && grep -q 'does not know this key yet' <<<"$SU3" \
-      && ok "setup ssh moves 'Host huginn' to another of huginn's addresses that answers ssh ($(sed -n 's/^ *HostName //p' "$T/sshhome2/.ssh/config"))" \
-      || { bad "setup ssh did not find an ssh address"; printf '%s\n' "$SU3"; }
+    ALT=$(sed -n 's/.*huginn setup ssh --host \([^ ]*\)$/\1/p' <<<"$SU3" | head -1)
+    grep -q 'does not answer ssh from here' <<<"$SU3" && grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" && [ -n "$ALT" ] \
+      && ok "setup ssh leaves 'Host huginn' alone and prints the command that points it at $ALT, which answers ssh" \
+      || { bad "setup ssh with another address that answers ssh"; printf '%s\n' "$SU3"; }
+    SU4=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh --host "${ALT:-none}" </dev/null 2>&1)
+    grep -qx "  HostName ${ALT:-none}" "$T/sshhome2/.ssh/config" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
+      && grep -q 'does not know this key yet' <<<"$SU4" \
+      && ok "setup ssh --host points 'Host huginn' at the address the person names" \
+      || { bad "setup ssh --host ${ALT:-none}"; printf '%s\n' "$SU4"; }
   else
     echo "SKIP  no address of this host answers on port 22: the ssh-address search is untested here"
   fi
