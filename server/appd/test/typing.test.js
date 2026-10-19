@@ -1460,3 +1460,36 @@ test('every real trust dialog is still `trust`, and so is one drawn some unknown
   assert.equal(t.paneReadyForInput(odd).why, 'trust');
 });
 
+// ---- a dead claude's last frame above a shell prompt -------------------------
+
+test('a stale Claude frame above a shell prompt is not a composer: the submit is refused', () => {
+  // claude was killed without cleaning up: its last frame stays on screen and
+  // the login shell `cc` falls through to prints a prompt below it. The caret in
+  // the dead frame is inside the lookback, so this pane read as "Claude is up"
+  // and a chat message went to the root shell.
+  const dead = [
+    '● Done — the backup job is fixed.',
+    R80, '❯ ', R80, ...STATUS,
+    'root@host:~/projects/app#',
+  ];
+  assert.equal(t.composerDrawn(dead), false, 'the prompt under the frame outranks the caret in it');
+  assert.equal(t.shellPrompt(dead), true);
+  assert.ok(t.submitRefusal({ submit: true, composer: t.composerDrawn(dead), shell: t.shellPrompt(dead) }),
+    'the message must not be submitted to the shell');
+  for (const prompt of ['user@box:~$', '% ', '$ ']) {
+    assert.equal(t.composerDrawn([R80, '❯ ', R80, ...STATUS, prompt]), false, prompt);
+  }
+});
+
+test('a LIVE composer is still a composer, even when its status line ends in `%`', () => {
+  // `ctx 43%` with no branch after it ends the pane in a prompt character — but
+  // indented, the way Claude Code draws every row under its box.
+  const live = [R80, '❯ ', R80, '  [dev] Fable 5.1 · ctx 43%'];
+  assert.equal(t.composerDrawn(live), true);
+  assert.equal(t.composerDrawn(LIVE_COMPOSER), true);
+  assert.equal(t.composerDrawn(TRUST_DIALOG), true, 'a dialog is still claude being up');
+  assert.equal(t.shellPromptRow('  [dev] Fable 5.1 · ctx 43%'), false);
+  assert.equal(t.shellPromptRow('❯ echo $'), false, 'the caret row is never a prompt');
+  assert.equal(t.shellPromptRow(R80), false);
+});
+

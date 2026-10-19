@@ -472,8 +472,36 @@ function composerDrawn(lines) {
   let last = -1;
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return false;   // an empty pane has drawn nothing at all
+  // ⚠ A SHELL PROMPT UNDER THE FRAME OUTRANKS THE CARET IN IT. When `claude`
+  // dies without cleaning up — killed, crashed, out of memory — its last frame
+  // stays on screen and the login shell `cc` falls through to prints its prompt
+  // BELOW it. The caret row in that dead frame is still inside the lookback, so
+  // this said "Claude is up", `submitRefusal` stood aside, and a chat message
+  // was pasted and submitted to a root shell: the #15 class, by a second door.
+  // Claude Code draws nothing under its own box at column 0, so a prompt there
+  // is the shell's, and everything above it is history.
+  if (shellPromptRow(plain[last])) return false;
   const from = Math.max(0, last - DIALOG_LOOKBACK);
   return plain.slice(from, last + 1).some((l) => CARET_EMPTY_RE.test(l) || CARET_TYPED_RE.test(l));
+}
+
+/**
+ * Is this (last, right-trimmed) row a SHELL's prompt rather than Claude Code's
+ * own furniture?
+ *
+ * Stricter than `shellPrompt` on purpose, because it has to be safe to read under
+ * a LIVE composer: Claude Code's status line can end in `%` (`ctx 43%` with no
+ * branch after it) and its other rows end in anything, but every row it draws
+ * below the box is indented — `  [name] Fable 5.1 · ctx 43%`, `  ⏵⏵ auto mode
+ * on…`, `  ? for shortcuts` — while a shell prints its prompt from column 0.
+ * The rules, the caret row and a dialog's own rows are never a prompt.
+ */
+function shellPromptRow(row) {
+  const s = String(row || '');
+  if (!s || /^\s/.test(s)) return false;
+  if (!SHELL_PROMPT_RE.test(s)) return false;
+  if (CARET_ROW_RE.test(s) || RULE_RE.test(s)) return false;
+  return true;
 }
 
 /**
@@ -1573,7 +1601,7 @@ module.exports = {
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
   hasHumanUserRecord, kindOf,
-  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
+  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
 };
