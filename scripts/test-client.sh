@@ -394,6 +394,64 @@ cc_try build.box >/dev/null 2>&1; CC_RC=$?
   && ok "cc: a dotted name is refused with exit 2 and never reaches tmux" \
   || bad "cc: 'build.box' exited $CC_RC, tmux saw: $(cat "$CCT/log")"
 
+echo "[5b2/8] Alt-o: this session's other clients go, and no session name reaches a shell"
+# ⚠ WHY: server/tmux.conf's Alt-o (solo) ran `tmux list-clients -t
+# '#{session_name}' ...` through run-shell, with the name spliced in between
+# single quotes, so a quote in a session name ended the quoting and the rest of
+# the name ran as a shell command in the tmux server. The binding names the
+# session by its id now, which tmux makes up. And it must still do what it
+# says: the presser stays, the session's other clients go, and a client on
+# another session is untouched - which `detach-client -a` would NOT honour (it
+# detaches every other client on the server). Driven for real: a private tmux
+# server on the tree's tmux.conf, three clients on ptys, Alt-o typed into one.
+if ! command -v tmux >/dev/null 2>&1 || ! command -v script >/dev/null 2>&1; then
+  skip "Alt-o (needs tmux and script)"
+else
+  AO=$(mktemp -d); STUB_DIRS+=("$AO"); AOS="huginn-cligate-solo-$$"; STUB_TMUX+=("$AOS")
+  # Would end any quoting it is spliced into, and then mark the server.
+  AON="solo';tmux set -g @huginn_injected yes;'"
+  TERM=xterm tmux -L "$AOS" -f server/tmux.conf new-session -d -s "$AON" 2>/dev/null
+  TERM=xterm tmux -L "$AOS" new-session -d -s other 2>/dev/null
+  AOID=$(tmux -L "$AOS" list-sessions -F '#{session_id} #{session_name}' 2>/dev/null | awk '$2 != "other" {print $1}')
+  AOOT=$(tmux -L "$AOS" list-sessions -F '#{session_id} #{session_name}' 2>/dev/null | awk '$2 == "other" {print $1}')
+  if [ -z "$AOID" ] || [ -z "$AOOT" ]; then
+    skip "Alt-o (could not start a private tmux server)"
+  else
+    mkfifo "$AO/k1" "$AO/k2" "$AO/k3"
+    aoclients() { tmux -L "$AOS" list-clients -F '#{client_tty} #{session_id}' 2>/dev/null; }
+    aowait() { for _ in $(seq 1 50); do [ "$(aoclients | grep -c .)" -ge "$1" ] && return 0; sleep 0.1; done; return 1; }
+    # Each client reads its keys from a fifo held open here (closing it ends the
+    # client), and they attach one at a time so each is known by its pty: the
+    # presser, the other client of its session, and one on another session.
+    ( TERM=xterm script -qfc "tmux -L $AOS attach -t '$AOID'" /dev/null < "$AO/k1" > /dev/null 2>&1 & ); exec 7>"$AO/k1"
+    aowait 1; AOME=$(aoclients | awk '{print $1}')
+    ( TERM=xterm script -qfc "tmux -L $AOS attach -t '$AOID'" /dev/null < "$AO/k2" > /dev/null 2>&1 & ); exec 8>"$AO/k2"
+    aowait 2; AOTHEM=$(aoclients | awk -v me="$AOME" '$1 != me {print $1}')
+    ( TERM=xterm script -qfc "tmux -L $AOS attach -t '$AOOT'" /dev/null < "$AO/k3" > /dev/null 2>&1 & ); exec 9>"$AO/k3"
+    aowait 3; AOOTHER=$(aoclients | awk -v s="$AOOT" '$2 == s {print $1}')
+    AOBEFORE=$(aoclients)
+    if [ "$(grep -c . <<<"$AOBEFORE")" != 3 ] || [ -z "$AOME" ] || [ -z "$AOTHEM" ] || [ -z "$AOOTHER" ]; then
+      skip "Alt-o (three clients did not attach: $(tr '\n' ';' <<<"$AOBEFORE"))"
+    else
+      printf '\033o' >&7
+      for _ in $(seq 1 30); do aoclients | grep -q "^$AOTHEM " || break; sleep 0.1; done
+      sleep 0.3
+      AOAFTER=$(aoclients)
+      AOINJ=$(tmux -L "$AOS" show-options -gqv @huginn_injected 2>/dev/null)
+      [ -z "$AOINJ" ] && ok "a quote in a session name stays a name: nothing it carried ran" \
+        || bad "Alt-o ran text from the session name as a shell command (@huginn_injected=$AOINJ)"
+      grep -q "^$AOME " <<<"$AOAFTER" && ! grep -q "^$AOTHEM " <<<"$AOAFTER" \
+        && ok "Alt-o keeps the presser and detaches this session's other client" \
+        || bad "Alt-o did not go solo: before [$(tr '\n' ';' <<<"$AOBEFORE")] after [$(tr '\n' ';' <<<"$AOAFTER")]"
+      grep -q "^$AOOTHER " <<<"$AOAFTER" \
+        && ok "and a client on another session is left alone" \
+        || bad "Alt-o detached a client of another session: after [$(tr '\n' ';' <<<"$AOAFTER")]"
+    fi
+    exec 7>&- 8>&- 9>&-
+  fi
+  tmux -L "$AOS" kill-server 2>/dev/null
+fi
+
 echo "[5c/8] the daemon's own refusal survives the trip home"
 # ⚠ WHY: `curl -sf` discards the response body on every HTTP >= 400 and exits 22,
 # so four different refusals arrived as ONE exit code and `huginn end` answered
