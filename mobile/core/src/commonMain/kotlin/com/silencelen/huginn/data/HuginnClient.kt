@@ -932,7 +932,7 @@ class HuginnClient(
                     when {
                         line.startsWith(":") -> emit(WatchEvent.Alive)
                         line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                        line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                        line.startsWith("data:") -> data.appendSseData(line.removePrefix("data:").trim())
                         line.isEmpty() -> {
                             when (event) {
                                 "state" -> runCatching { decode<Watch>(data.toString()) }
@@ -1938,7 +1938,7 @@ class HuginnClient(
                     when {
                         line.startsWith(":") -> Unit                 // heartbeat comment
                         line.startsWith("event:") -> event = line.removePrefix("event:").trim()
-                        line.startsWith("data:") -> data.append(line.removePrefix("data:").trim())
+                        line.startsWith("data:") -> data.appendSseData(line.removePrefix("data:").trim())
                         line.startsWith("id:") -> Unit
                         line.isEmpty() -> {
                             if (event != null) {
