@@ -22,15 +22,50 @@
  *              HG_FAKE_LAG_MS        handle every stdin chunk this late, in
  *                                    order — an event loop stalled on a loaded
  *                                    host, NOT a pty that drops bytes
+ *              HG_FAKE_DIALOG_FILE   when this file appears, a Bash permission
+ *                                    dialog takes the screen the way a
+ *                                    background subagent's prompt does — the
+ *                                    box is hidden, NOT emptied. Enter answers
+ *                                    it with its highlighted row (Yes), Esc
+ *                                    declines; either is appended to
+ *              HG_FAKE_DIALOG_OUT    ('APPROVED' / 'DENIED'), the file is
+ *                                    removed, and the box comes back as it was.
  */
 const fs = require('node:fs');
 
 const OUT = process.env.HG_FAKE_CLAUDE_OUT || '/dev/null';
 const LAG = Number(process.env.HG_FAKE_LAG_MS || 0);
+const DIALOG_FILE = process.env.HG_FAKE_DIALOG_FILE || '';
+const DIALOG_OUT = process.env.HG_FAKE_DIALOG_OUT || '/dev/null';
 const RULE = '─'.repeat(70);
+const CLEAR = '\x1b[2J\x1b[H';
 let buf = process.env.HG_FAKE_CLAUDE_TYPED || '';
 let inPaste = false;
 let pending = '';
+let dialog = false;
+
+// The 2.1.296 shape (permhook.test.js): the dialog's rules at its edge, every
+// content row one column in, the caret on Yes.
+const DIALOG = [
+  '● Bash(rm -rf /srv/cache)',
+  RULE,
+  ' Bash command',
+  '╌'.repeat(70),
+  ' rm -rf /srv/cache',
+  '╌'.repeat(70),
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  "   2. Yes, and don't ask again for rm commands in /srv",
+  '   3. No',
+  ' Esc to cancel · Tab to amend',
+];
+function answerDialog(verdict) {
+  dialog = false;
+  fs.appendFileSync(DIALOG_OUT, `${verdict}\n`);
+  try { fs.unlinkSync(DIALOG_FILE); } catch { /* the test removed it */ }
+  process.stdout.write(CLEAR);
+  render();
+}
 
 const rowsOf = (s) => {
   const rows = s.split('\n');
@@ -42,6 +77,12 @@ function render() {
 }
 
 function handle(d) {
+  if (dialog) {
+    // A selector takes keys, not text: Enter picks the highlighted row.
+    if (d.includes('\r') || d.includes('\n')) answerDialog('APPROVED');
+    else if (d === '\x1b') answerDialog('DENIED');
+    return;
+  }
   pending += d;
   while (pending.length) {
     if (pending.startsWith('\x1b[200~')) { inPaste = true; pending = pending.slice(6); continue; }
@@ -69,3 +110,10 @@ process.stdin.on('data', (d) => (LAG > 0 ? setTimeout(() => handle(d), LAG) : ha
 process.stdout.write('\x1b[?2004h');
 process.stdin.resume();
 render();
+if (DIALOG_FILE) {
+  setInterval(() => {
+    if (dialog || !fs.existsSync(DIALOG_FILE)) return;
+    dialog = true;
+    process.stdout.write(`${CLEAR}${DIALOG.join('\n')}\n`);
+  }, 10);
+}

@@ -2245,21 +2245,79 @@ async function recoverLostPaste(name, text, settle, before) {
   return { landed: second.landed, enter: true, recovered: true };
 }
 
-async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {}) {
+/**
+ * The Enter that submits a message — pressed only after one more look.
+ *
+ * ⚠ EVERY Enter that follows a paste goes through here (typing.enterRefusal):
+ * the main path after its settle and beat, the lost-paste recoveries, the
+ * resubmit of a message already in the box, and the send-keys fallback. A
+ * dialog raised between the paste and the Enter — a background subagent's tool
+ * prompt, a hook's question — would take the Enter on its highlighted row, which
+ * on a permission prompt is Yes. The capture is the last thing before the key.
+ *
+ * @returns {{held?: object, failed?: object}} `held` when no Enter was pressed
+ *          and why; `failed` is a result to hand straight back (tmux refused)
+ */
+async function enterAfterLook(name, text, { hadComposer = false } = {}) {
+  const lines = await capturePaneLines(name);
+  const held = typing.enterRefusal(lines, text, { hadComposer });
+  if (held) {
+    log(typing.enterHeldLogLine(name, held, lines));
+    return { held };
+  }
+  const en = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+  if (en.err) return { failed: { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr } };
+  return {};
+}
+
+/**
+ * What a send reports when the look before its Enter refused (enterAfterLook).
+ *
+ * A dialog: `ok` with `held` — the text is in the box, nothing was submitted, and
+ * the queue holds the entry until the dialog is answered (pumpQueue). A shell:
+ * a 409 like the gate's own refusal (#15) — the text sits at the prompt, unrun.
+ */
+function heldResult(name, text, held, fields) {
+  notePasteOutcome(name, text, false);
+  if (held.blockedBy === 'shell') {
+    return {
+      ok: false, code: 409, held,
+      message: 'claude stopped running in this session while the message was being typed — it is '
+        + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
+    };
+  }
+  return { ok: true, ...fields, submitted: false, held };
+}
+
+async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false } = {}) {
   const target = `=${name}:`;
   // The spelling that is actually pasted, so the settle and confirm checks below
   // compare against the bytes the pane received (2026-10-02, see pasteSafe).
   text = typing.pasteSafe(text);
+  // ⚠ A SEND HELD AFTER ITS PASTE IS ALREADY IN THE BOX (`typed`, see pumpQueue).
+  // A dialog opened between its paste and its Enter; the box it comes back to is
+  // either still holding the message — then the Enter is all that is owed — or it
+  // is not, and then nothing is typed at all: a second paste behind a first one
+  // that is merely scrolled or collapsed is the message twice.
+  if (submit && typed && !typing.boxIsOurs(boxHolds, text)) {
+    log(`typing: ${name}: a held message is no longer in the composer as it was typed; `
+      + 'not pasting it a second time');
+    notePasteOutcome(name, text, false);
+    return { ok: true, how: 'enter', settled: false, settleMs: 0, submitted: false, recovered: false };
+  }
   // ⚠ THE BOX ALREADY HOLDS EXACTLY THIS MESSAGE (2026-10-02). The 'leave'
   // recovery strands a message on purpose, and the person presses Send again.
   // A second paste behind the first is the message twice in one prompt; the
   // copy that is there only lacks its Enter. `boxHolds` is the gate's ghost-free
   // read of the composer, so a dim suggestion of the same words never gets here.
-  if (submit && typing.boxHoldsExactly(boxHolds, text)) {
+  if (submit && (typed || typing.boxHoldsExactly(boxHolds, text))) {
     log(`typing: ${name}: the message is already sitting in the composer; pressing Enter `
       + 'instead of pasting a second copy');
-    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    const press = await enterAfterLook(name, text, { hadComposer: true });
+    if (press.failed) return press.failed;
+    if (press.held) {
+      return heldResult(name, text, press.held, { how: 'enter', settled: true, settleMs: 0, recovered: false });
+    }
     const conf = await confirmSubmitted(name, text);
     if (!conf.ok) log(typing.submitStalledLogLine(name, conf.waitedMs, conf.lines));
     notePasteOutcome(name, text, conf.ok);
@@ -2294,8 +2352,14 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {
       return { ok: true, how: 'paste', settled: false, settleMs: settle.waitedMs, submitted: false, recovered };
     }
     await sleep(PASTE_BEAT_MS);
-    const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-    if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+    // `before` showing a composer is what lets the look tell "a dialog with no
+    // caret replaced the box" from "this pane never had a box".
+    const pressed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+    if (pressed.failed) return pressed.failed;
+    if (pressed.held) {
+      return heldResult(name, text, pressed.held,
+        { how: 'paste', settled: landed, settleMs: settle.waitedMs, recovered });
+    }
     let submitted = null;
     if (landed) {
       // A pane that took N ms to paint the paste takes about as long to act on
@@ -2319,8 +2383,9 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null } = {
     await sleep(SUBMIT_BEAT_MS);
   }
   if (!submit) return { ok: true, how: 'send-keys' };
-  const en = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-  if (en.err) return { ok: false, code: 500, message: `tmux: ${(en.stderr || '').trim()}`, stderr: en.stderr };
+  const keyed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+  if (keyed.failed) return keyed.failed;
+  if (keyed.held) return heldResult(name, text, keyed.held, { how: 'send-keys' });
   return { ok: true, how: 'send-keys' };
 }
 
@@ -2595,6 +2660,28 @@ function transcriptTail(file, from = null, bytes = 64 * 1024) {
   }
 }
 
+/**
+ * At most `max` bytes of a transcript from byte `from` — never "everything from
+ * there to the end", which is what made a long hold re-read the whole of a
+ * growing turn on every poll. Raw bytes, so a caller can stop at a line end
+ * without splitting a character. `{ buf, size, start }`, or null.
+ */
+function transcriptSlice(file, from, max) {
+  let fd;
+  try {
+    const st = fs.statSync(file);
+    const start = Math.max(0, Math.min(Number(from) || 0, st.size));
+    const len = Math.max(0, Math.min(st.size - start, max));
+    if (len === 0) return { buf: Buffer.alloc(0), size: st.size, start };
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(len);
+    const got = fs.readSync(fd, buf, 0, len, start);
+    return { buf: got === len ? buf : buf.subarray(0, got), size: st.size, start };
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+  }
+}
+
 function transcriptPath(name) {
   const st = readSessionState(name);
   return st && st.transcript ? st.transcript : null;
@@ -2770,9 +2857,10 @@ function humanSpokeSince(entry, name) {
     if (file) { entry.transcript = file; entry.transcriptAt = 0; }
   }
   if (!file || from == null) return false;
-  const tail = transcriptTail(file, from);
-  if (!tail || !tail.text) return false;
-  return typing.hasHumanUserRecord(tail.text);
+  // Incremental and bounded (typing.scanForHuman): each poll reads only what was
+  // appended since the last one, never the whole slice since the entry queued.
+  if (!entry.humanScan || entry.humanScan.file !== file) entry.humanScan = { file, at: from };
+  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max));
 }
 
 function armQueueTimer(name) {
@@ -2822,6 +2910,10 @@ async function pumpQueue(name) {
         // so in the journal, in one grep-able shape, every time.
         log(typing.dropLogLine(name, entry, reason));
         log(`typing: ${name}: ${q.lastError}`);
+        if (entry.typedInBox) {
+          log(`typing: ${name}: the dropped message was typed before a dialog opened and is still `
+            + 'in the composer, unsent');
+        }
         entry.settle({ delivered: false, dropped: reason });
         continue;
       }
@@ -2973,10 +3065,31 @@ async function pumpQueue(name) {
           log(`typing: ${name}: refusing to submit into a shell prompt — claude is not running here`);
           r = { ok: false, code: 409, message: refusal };
         } else if (typeof entry.run === 'function') r = await entry.run();
-        else r = await sendTextToPane(name, entry.text, { submit: entry.submit, boxHolds: gate.composerHolds });
+        else {
+          r = await sendTextToPane(name, entry.text, {
+            submit: entry.submit, boxHolds: gate.composerHolds, typed: !!entry.typedInBox,
+          });
+        }
       } catch (e) {
         r = { ok: false, message: (e && e.message) || String(e) };
       } finally { q.delivering = false; q.inFlight = null; }
+      // ⚠ A DIALOG TOOK THE PANE BETWEEN THE PASTE AND ITS ENTER (enterAfterLook).
+      // The message is in the box and nothing was submitted, so this is not a
+      // delivery and not a failure: it is a send held by a dialog, exactly as if
+      // the dialog had been up when the gate looked. Back to the head of the
+      // queue, marked as already typed — when the dialog has been answered, the
+      // delivery is an Enter into the box (or nothing, if the box no longer holds
+      // it), never a second paste. The sender is told `blockedBy` like any hold.
+      if (r && r.ok && r.held) {
+        entry.typedInBox = true;
+        q.entries.unshift(entry);
+        q.blockedBy = r.held.blockedBy;
+        if (guarded && draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
+        log(`typing: ${name}: holding the send until the dialog is answered; it will be `
+          + 'submitted from the box, never pasted again');
+        armQueueTimer(name);
+        return;
+      }
       // The stamp the NEXT entry's boundary test starts from (see queueFor).
       // Only on success: a paste that never reached the pane started no turn,
       // and moving the window for it would hold the entry behind it for a
@@ -3534,6 +3647,11 @@ function withPendingQuestion(name, st) {
   return since ? { ...st, state: 'attention', stateSince: since, stateSinceMs: since * 1000 } : st;
 }
 
+// The pane module by name, for the two helpers the import block at the top does
+// not destructure (drawsAskRows in promptFor, stripAnsi in the ladder's
+// transcript read).
+const paneLib = require('./lib/pane');
+
 /**
  * The one place "what question is on this pane" is decided, so /screen, /answer
  * and the alert enrichment can never disagree about a label or a fingerprint.
@@ -3574,7 +3692,16 @@ function promptFor(name, lines) {
         };
         ask = { ...degradedAskCard(sidecar, promptFingerprint(synthetic)), multiPart: true };
       } else {
-        prompt = { ...fused.prompt, fingerprint: promptFingerprint(fused.prompt) };
+        // ⚠ THE PANE'S BODY STAYS IN THE IDENTITY UNLESS THIS IS AN ASK. Fusion
+        // matches on labels alone, so a sidecar whose labels happen to read like
+        // a permission dialog's (Yes / … / No — the model writes both) would fuse
+        // onto that dialog and drop its command from the fingerprint. Only a pane
+        // drawing the TUI's own AskUserQuestion rows hands its identity to the
+        // hook's exact text — which is what keeps a fused question width-stable.
+        const keep = panePrompt.bodyDigest && !paneLib.drawsAskRows(panePrompt)
+          ? { bodyDigest: panePrompt.bodyDigest } : {};
+        const base = { ...fused.prompt, ...keep };
+        prompt = { ...base, fingerprint: promptFingerprint(base) };
       }
     }
   }
@@ -7569,12 +7696,12 @@ const PICKER_WAIT_MS = 3_000;
 const LADDER_FEEDBACK_MS = 5_000;
 /** A picker is five or six rows; ten moves means we are not reading it right. */
 const MAX_CURSOR_MOVES = 10;
-/** Both spellings observed for the session-only confirmation (native-rl §4). */
-const LADDER_FEEDBACK_RE = /Set model to .* for this session only|Model set to .* for this session only/;
-/** The `Switch model?` cache-cost dialog that can sit between `s` and the feedback line. */
-const LADDER_CONFIRM_RE = /^\s*Switch model\?\s*$/m;
-/** Its default row, which names the target: `❯ 1. Yes, switch to Sonnet 5.5`. */
-const LADDER_CONFIRM_ROW_RE = /❯\s*1\.\s*Yes, switch to (.+?)\s*$/m;
+/**
+ * Both spellings observed for the session-only confirmation (native-rl §4),
+ * capturing the model. Read ONLY out of Claude Code's own command-output record
+ * in the transcript (ladderSwitchRecorded), never off the pane.
+ */
+const LADDER_FEEDBACK_RE = /^\s*(?:Set model to|Model set to) (.+?) for this session only/;
 
 // ---- auto-resume timings ---------------------------------------------------
 //
@@ -7976,6 +8103,28 @@ async function answerByArrows(name, fingerprint, chosen) {
 }
 
 /**
+ * The second look /answer takes immediately before it types a digit: the
+ * refusal to send when the question on the pane NOW is not the one the
+ * fingerprint was checked against, or null when it still is.
+ *
+ * ⚠ THE FINGERPRINT WAS CHECKED UP TO SECONDS EARLIER. `tryHookAnswer` waits up
+ * to 2.5 s for a hook that may never claim the answer, and only then does the
+ * keystroke path type — into whatever the pane shows by then. A parallel
+ * subagent's next permission prompt drawn in that gap is a different question
+ * with its own identity, and the digit must not land on it.
+ */
+async function answerMovedOn(name, fingerprint) {
+  const lines = await paneLines(name);
+  const prompt = lines ? promptFor(name, lines).prompt : null;
+  if (prompt && prompt.fingerprint === fingerprint) return null;
+  if (!prompt) return { ok: false, reason: 'gone', error: 'that question is no longer on screen' };
+  return {
+    ok: false, reason: 'changed', error: 'the session is asking something else now',
+    prompt, fingerprint: prompt.fingerprint,
+  };
+}
+
+/**
  * Answer the dialog on `name` through its waiting PermissionRequest hook instead
  * of keystrokes (lib/permhook.js; hooks/huginn-permission-hook). True only when
  * the hook took the decision; false — for ANY reason — means nothing was
@@ -8039,15 +8188,26 @@ async function applyLadder(name, to) {
     return { ok: false, delivery: 'delivery_unconfirmed', reason };
   };
 
+  // Whether a composer is drawn BEFORE `/model` goes in: what lets the look below
+  // tell "something with no caret replaced the box" from "this pane has no box".
+  const hadComposer = typing.composerText((await paneLines(name)) || []) !== null;
   const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
   if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
   await sleep(SUBMIT_BEAT_MS);
-  const ent = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+  // ⚠ THE SAME LOOK A MESSAGE'S ENTER GETS (enterAfterLook). A dialog raised in
+  // the beat above — a background agent's tool prompt — would take this Enter on
+  // its Yes. fail() is no way out either: its Escape answers that dialog too. So
+  // nothing at all is pressed, and `/model` is left in the box behind the dialog
+  // for whoever answers it to see.
+  const look = await enterAfterLook(name, '/model', { hadComposer });
+  if (look.held) {
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: `a dialog opened before /model was submitted (${look.held.why})` };
+  }
   // ⚠ THROUGH fail(), because `/model` is ALREADY IN THE COMPOSER by here. This
   // was the one early exit that skipped the Escape after typing text, so the
   // pump released the next entry into a composer holding `/model` and the
   // session received `/modelYour usage limit has reset. Continue the task…`.
-  if (ent.err) return fail('could not submit /model');
+  if (look.failed) return fail('could not submit /model');
 
   let rows = null;
   const openBy = Date.now() + PICKER_WAIT_MS;
@@ -8094,6 +8254,10 @@ async function applyLadder(name, to) {
   }
   const sAt = Date.now();
   const sid = (readSessionState(name) || {}).sessionId || null;
+  // Where the transcript ENDS before `s`: Claude Code's own record of the switch
+  // is looked for after this point and nowhere else (ladderSwitchRecorded).
+  const tFile = transcriptPath(name);
+  const tAt = tFile ? transcriptSize(tFile) : null;
   const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
   if (set.err) return fail('tmux refused the s key');
   // ⚠ THE CACHE-COST CONFIRMATION. Since Claude Code ~2.1.29x, `s` on a session
@@ -8103,34 +8267,91 @@ async function applyLadder(name, to) {
   // `delivery_unconfirmed` (7 of 7 recorded, last 2026-10-05). Enter goes only
   // when the dialog names the row we chose; a dialog about any other model is a
   // surprise, and the rule here is to abort rather than guess.
+  //
+  // ⚠ AND THE MOVE IS CONFIRMED ONLY BY CLAUDE CODE'S OWN STATE. This used to
+  // accept the `… for this session only` sentence anywhere on the pane — so the
+  // same line left over from an earlier move, or the assistant merely writing
+  // it, recorded a switch that never happened on the first read after `s`:
+  // a false "Moved" notification, the real `Switch model?` dialog still open
+  // and never confirmed, and the arbiter reasoning from the wrong family. The
+  // proofs now are the PostModelSwitch hook's record and the transcript record
+  // Claude Code itself writes for the command's output — neither of which a
+  // model's prose can produce.
   let confirmed = false;
   const by = Date.now() + LADDER_FEEDBACK_MS;
   for (;;) {
-    const lines = await paneLines(name);
-    const text = lines ? lines.join('\n') : '';
-    if (LADDER_FEEDBACK_RE.test(text)) {
-      return { ok: true, delivery: 'confirmed', to };
-    }
     // Structured proof (hooks/huginn-modelswitch-hook, PostModelSwitch): a switch
-    // to the target family recorded AFTER `s`, by this claude. Either proof will do.
+    // to the target family recorded AFTER `s`, by this claude.
     const sw = modelswitch.readSwitch(STATE_DIR, name);
     if (sw && sw.ts >= sAt && (!sid || !sw.sessionId || sw.sessionId === sid)
       && headroomLib.familyOf(sw.to) === to) {
       return { ok: true, delivery: 'confirmed', to, via: 'hook' };
     }
-    if (!confirmed && LADDER_CONFIRM_RE.test(text)) {
-      const m = text.match(LADDER_CONFIRM_ROW_RE);
-      if (!m || m[1].trim() !== want.label) {
-        return fail(`the switch confirmation names ${m ? m[1].trim() : 'no model'}, not ${want.label}`);
+    if (ladderSwitchRecorded(tFile, tAt, to)) {
+      return { ok: true, delivery: 'confirmed', to, via: 'transcript' };
+    }
+    if (!confirmed) {
+      // The dialog by its STRUCTURE — a live selector, one caret, nothing of the
+      // composer under it (detectPrompt) — never by its words somewhere on screen.
+      const dialog = detectPrompt((await paneLines(name)) || []);
+      if (dialog && dialog.question === 'Switch model?') {
+        const yes = dialog.options.find((o) => o.number === 1);
+        const m = yes && /^Yes, switch to (.+)$/.exec(yes.label);
+        if (!m || m[1].trim() !== want.label) {
+          return fail(`the switch confirmation names ${m ? m[1].trim() : 'no model'}, not ${want.label}`);
+        }
+        if (!yes.selected) return fail('the switch confirmation does not have Yes highlighted');
+        const ok = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+        if (ok.err) return fail('tmux refused Enter on the switch confirmation');
+        confirmed = true;
       }
-      const ok = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-      if (ok.err) return fail('tmux refused Enter on the switch confirmation');
-      confirmed = true;
     }
     if (Date.now() >= by) break;
     await sleep(200);
   }
-  return fail('no "for this session only" confirmation appeared');
+  return fail('Claude Code recorded no switch for this session');
+}
+
+/**
+ * The text of a transcript record that is Claude Code's OWN local-command
+ * output — `<local-command-stdout>…</local-command-stdout>` and nothing else in
+ * the record — or null.
+ *
+ * Measured on 2.1.280 and 2.1.296: the picker's `s` writes a `user` record whose
+ * whole content is `<local-command-stdout>Set model to \`Sonnet 5.5\` for this
+ * session only</local-command-stdout>`. Builds that keep command output in a
+ * `system`/`local_command` record are read the same way. A model cannot write
+ * either: its words go into `assistant` records, and a tool's into tool_result
+ * blocks, which are never a plain string.
+ */
+function localCommandOutput(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  let c = null;
+  if (rec.type === 'user' && rec.message && rec.isMeta !== true) c = rec.message.content;
+  else if (rec.type === 'system' && rec.subtype === 'local_command') c = rec.content;
+  if (typeof c !== 'string') return null;
+  const m = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>\s*$/.exec(c);
+  return m ? paneLib.stripAnsi(m[1]) : null;
+}
+
+/**
+ * Did Claude Code record a session-only switch to `to` in this transcript after
+ * byte `from` (where it ended just before `s`)? A bounded read: the window is
+ * the few seconds after one keypress.
+ */
+function ladderSwitchRecorded(file, from, to) {
+  if (!file || from == null) return false;
+  const slice = transcriptSlice(file, from, 512 * 1024);
+  if (!slice || !slice.buf.length) return false;
+  for (const line of slice.buf.toString('utf8').split('\n')) {
+    if (!line.includes('local-command')) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    const said = localCommandOutput(rec);
+    const m = said && LADDER_FEEDBACK_RE.exec(said);
+    if (m && headroomLib.familyOf(m[1].replace(/`/g, '').trim()) === to) return true;
+  }
+  return false;
 }
 
 
@@ -11839,6 +12060,10 @@ async function handleRequest(req, res) {
             log(`answer: ${name} <- multi [${desired.join(',')}] via hook (${labelsOf().join(', ').slice(0, 80)})`);
             return sendJson(res, 200, { ok: true, options: desired, labels: labelsOf(), via: 'hook' });
           }
+          // A second look before the first key: the hook attempt above can take
+          // seconds, and the toggles are typed into whatever is up by then.
+          const movedMulti = await answerMovedOn(name, live);
+          if (movedMulti) return sendJson(res, 409, movedMulti);
           const digits = multiToggleDigits(prompt.options, desired);
           for (const d of digits) {
             const t = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', d]);
@@ -11882,6 +12107,11 @@ async function handleRequest(req, res) {
           log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
+        // ⚠ AND LOOK AGAIN BEFORE THE DIGIT (answerMovedOn). The fingerprint above
+        // was checked against a capture taken before the hook attempt, which can
+        // wait seconds; the keystroke goes to whatever is on screen now.
+        const moved = await answerMovedOn(name, live);
+        if (moved) return sendJson(res, 409, moved);
 
         // The digit and Enter separately, literal digit first, so a multi-digit option
         // cannot be split across a submit.

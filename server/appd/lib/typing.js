@@ -10,7 +10,7 @@
 // against Claude Code v2.1.258 on a 200x50 pane.
 
 const { randomBytes } = require('node:crypto');
-const { stripAnsi, detectPrompt } = require('./pane');
+const { stripAnsi, detectPrompt, detectTrustDialog } = require('./pane');
 
 /**
  * The `/keys` text cap, raised from 8,000 to match the chat body cap.
@@ -290,6 +290,47 @@ function hasHumanUserRecord(jsonlSlice) {
   return false;
 }
 
+/**
+ * The most one drop check may read of a held entry's transcript.
+ *
+ * Generous on purpose: a person's message with a pasted image is one record of
+ * several MB of base64, and it has to fit whole to be read as a person. A record
+ * longer than this is a tool's output, never something somebody typed.
+ */
+const HUMAN_SCAN_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Has a person spoken in the part of the transcript not looked at yet?
+ *
+ * ⚠ ONLY WHAT IS NEW, AND NEVER MORE THAN A BOUNDED READ OF IT. The drop check
+ * runs on every 400 ms poll while an automated send is held, and it used to read
+ * and decode EVERYTHING from the moment the entry was queued — so a send held
+ * behind a long agent turn re-read the whole growing turn, tool output and all,
+ * twice and a half times a second for up to ten minutes. Now `cursor.at` moves
+ * past every complete line once it has been read, each check reads only what
+ * was appended since (at most `max` bytes), and a line still being written is
+ * left for the next check.
+ *
+ * @param cursor { at } — byte offset of the first unread byte; advanced here
+ * @param read   (from, max) => { buf, start } | null, raw bytes of the file
+ */
+function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+  const slice = read(cursor.at, max);
+  if (!slice || !slice.buf || !slice.buf.length) return false;
+  const nl = slice.buf.lastIndexOf(0x0a);
+  if (nl < 0) {
+    // No complete line: one still being written — or one longer than a whole
+    // read, which nobody typed. Step over that; wait for the other.
+    if (slice.buf.length >= max) cursor.at = slice.start + slice.buf.length;
+    return false;
+  }
+  const done = slice.buf.subarray(0, nl + 1);
+  cursor.at = slice.start + done.length;
+  // A read that began inside a line it stepped over starts with that line's
+  // tail; it does not parse, and is skipped like any fragment.
+  return hasHumanUserRecord(done.toString('utf8'));
+}
+
 // The composer's input line: a bare caret, or a caret with typed text after it.
 const CARET_EMPTY_RE = /^\s*❯\s*$/;
 const CARET_TYPED_RE = /^\s*❯\s+\S/;
@@ -308,8 +349,42 @@ const DIALOG_FOOTER_RE = /enter to (?:select|confirm|set|choose)|esc to cancel|(
 // The trust dialog, which is the one modal whose DESTRUCTIVE option is
 // pre-selected ("No, exit"): a blind Enter here kills the session.
 const TRUST_RE = /Yes,\s+I\s+trust\s+this\s+folder|trust\s+the\s+files\s+in\s+this\s+folder|Is\s+this\s+a\s+project\s+you\s+created\s+or\s+one\s+you\s+trust/i;
+// One of the trust dialog's own ROWS, numbered or not, caret or not.
+const TRUST_ROW_RE = /^\s*(?:[❯>]\s*)?(?:\d{1,2}[.)]\s*)?(?:Yes, I trust this folder|Yes, proceed|No, exit)\s*$/;
 // How far up from the bottom a dialog's own furniture may reach.
 const DIALOG_LOOKBACK = 20;
+
+/**
+ * Is the folder-trust dialog the thing on screen — as a DIALOG, not as words?
+ *
+ * ⚠ THE SENTENCE IS NOT THE DIALOG. This used to be "the trust sentence appears
+ * anywhere on the pane", and a reply that merely QUOTED it — Claude explaining
+ * the dialog, a pasted capture, a doc being edited — read as a trust prompt on a
+ * pane that had a live composer under it. That holds every person's message to
+ * the session with no ceiling and drops appd's own after ten minutes. So it is
+ * recognised the way `detectTrustDialog` recognises it: by its rows and its place.
+ *
+ *   - the unnumbered 2.1.296 dialog: `detectTrustDialog`'s structural match
+ *   - the numbered one: a live selector (`detectPrompt`: one caret, a contiguous
+ *     run, nothing of the composer under it) whose rows are the trust rows
+ *   - a layout neither reads: the dialog's own footer is the last thing on the
+ *     pane, with the sentence AND one of its rows in the block above it. Prose
+ *     never ends a pane while a composer is drawn below it, which is what keeps
+ *     the belt from closing on the conversation again.
+ */
+function trustDialogUp(arr, plain, last, prompt) {
+  const p = prompt === undefined ? detectPrompt(arr) : prompt;
+  if (p && p.unnumbered) return true;
+  if (p && Array.isArray(p.options)) {
+    const labels = p.options.map((o) => String(o.label || ''));
+    if (labels.some((l) => /^No, exit$/i.test(l))
+        && (TRUST_RE.test(p.question || '') || labels.some((l) => TRUST_RE.test(l)))) return true;
+  }
+  if (detectTrustDialog(arr)) return true;
+  if (last < 0 || !DIALOG_FOOTER_RE.test(plain[last])) return false;
+  const block = plain.slice(Math.max(0, last - DIALOG_LOOKBACK), last);
+  return block.some((l) => TRUST_RE.test(l)) && block.some((l) => TRUST_ROW_RE.test(l));
+}
 
 /**
  * Is a selector dialog up? Three nets, in order of how much they know.
@@ -350,12 +425,13 @@ function dialogWhy(arr, plain, last) {
   const box = composerBox(plain, last);
   const regionFrom = box && box.bottom >= 0 ? box.bottom + 1 : Math.max(0, last - DIALOG_LOOKBACK);
   const region = plain.slice(regionFrom, last + 1);
+  const prompt = detectPrompt(arr);
   // Trust first: it is a modal too, but it is the one with a destructive
-  // default, and a caller that logs `why` should be able to say so. Scanned
-  // over the whole pane for the same reason as everything else here.
-  if (plain.slice(0, last + 1).some((l) => TRUST_RE.test(l))) return 'trust';
+  // default, and a caller that logs `why` should be able to say so. Recognised
+  // by its rows, never by its sentence alone (see trustDialogUp).
+  if (trustDialogUp(arr, plain, last, prompt)) return 'trust';
   // 1 — the sibling detector, whole pane, structural.
-  if (detectPrompt(arr)) return 'modal';
+  if (prompt) return 'modal';
   // 2 — a live selector's footer near the bottom, with a numbered row ABOVE it.
   // (2026-10-02: "above", not "anywhere on the pane" — a footer phrase with a
   // numbered line somewhere below it is not drawn the way a selector draws.)
@@ -437,8 +513,36 @@ function composerDrawn(lines) {
   let last = -1;
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last < 0) return false;   // an empty pane has drawn nothing at all
+  // ⚠ A SHELL PROMPT UNDER THE FRAME OUTRANKS THE CARET IN IT. When `claude`
+  // dies without cleaning up — killed, crashed, out of memory — its last frame
+  // stays on screen and the login shell `cc` falls through to prints its prompt
+  // BELOW it. The caret row in that dead frame is still inside the lookback, so
+  // this said "Claude is up", `submitRefusal` stood aside, and a chat message
+  // was pasted and submitted to a root shell: the #15 class, by a second door.
+  // Claude Code draws nothing under its own box at column 0, so a prompt there
+  // is the shell's, and everything above it is history.
+  if (shellPromptRow(plain[last])) return false;
   const from = Math.max(0, last - DIALOG_LOOKBACK);
   return plain.slice(from, last + 1).some((l) => CARET_EMPTY_RE.test(l) || CARET_TYPED_RE.test(l));
+}
+
+/**
+ * Is this (last, right-trimmed) row a SHELL's prompt rather than Claude Code's
+ * own furniture?
+ *
+ * Stricter than `shellPrompt` on purpose, because it has to be safe to read under
+ * a LIVE composer: Claude Code's status line can end in `%` (`ctx 43%` with no
+ * branch after it) and its other rows end in anything, but every row it draws
+ * below the box is indented — `  [name] Fable 5.1 · ctx 43%`, `  ⏵⏵ auto mode
+ * on…`, `  ? for shortcuts` — while a shell prints its prompt from column 0.
+ * The rules, the caret row and a dialog's own rows are never a prompt.
+ */
+function shellPromptRow(row) {
+  const s = String(row || '');
+  if (!s || /^\s/.test(s)) return false;
+  if (!SHELL_PROMPT_RE.test(s)) return false;
+  if (CARET_ROW_RE.test(s) || RULE_RE.test(s)) return false;
+  return true;
 }
 
 /**
@@ -938,6 +1042,97 @@ function boxHoldsExactly(composerHolds, text) {
   if (composerHolds == null) return false;
   const squashed = squashPane(composerHolds);
   return !!squashed && squashed === squashPane(text);
+}
+
+/**
+ * Is what the box holds the message appd typed into it — and nothing else?
+ *
+ * Broader than `boxHoldsExactly` in the two ways a box legitimately shows a
+ * message that is in it: a long paste collapsed to its `[Pasted text …]` marker,
+ * and a long one scrolled so only a piece of it is on screen (`boxExplainedBy`).
+ * Never true for a box with somebody else's words in it as well.
+ */
+function boxIsOurs(composerHolds, text) {
+  if (composerHolds == null) return false;
+  const squashed = squashPane(composerHolds);
+  if (!squashed) return false;
+  if (boxExplainedBy(squashed, text)) return true;
+  return PASTED_MARKER_RE.test(squashed) && !squashed.replace(PASTED_MARKER_ALL_RE, '')
+    && wouldCollapse(text);
+}
+
+/**
+ * ─── LOOK BEFORE THE ENTER ─────────────────────────────────────────────────
+ *
+ * ⚠ THE ENTER THAT SUBMITS A MESSAGE IS ALSO THE KEY THAT ANSWERS A DIALOG.
+ * A send is released off one capture, pasted, given a settle wait and a beat —
+ * and the Enter went out with no fresh look at the pane. A permission prompt or
+ * an AskUserQuestion that a background subagent or a hook raised in that gap
+ * takes the Enter on its highlighted row, and on a tool prompt that row is Yes:
+ * the owner approves a tool call they never saw, by sending a chat message. The
+ * same is true of the Enter that resubmits a message already in the box, and of
+ * the Enter the lost-paste recoveries press.
+ *
+ * So the pane is captured once more immediately before every such Enter, and
+ * the Enter goes only to the composer:
+ *
+ *   null                       press — the composer holds exactly our message,
+ *                              or nothing on screen is a dialog (a pane with no
+ *                              composer keeps the blind behaviour it always had)
+ *   {blockedBy:'modal'|'trust'} a dialog is up: the message stays in the box,
+ *                              unsent, and the send is HELD until it is answered
+ *   {blockedBy:'shell'}        claude died under the paste and a shell prompt is
+ *                              on the last row: nothing is run, nothing is pressed
+ *   {blockedBy:'modal'}        a composer was drawn before the paste and none is
+ *                              now — something with no caret of its own replaced
+ *                              it, and an Enter there answers whatever it is
+ *
+ * The composer holding our text is checked FIRST because a message is allowed
+ * to look like a dialog: `1. fix the backup` / `2. rerun` in a box with no status
+ * line under it reads as a selector run to `detectPrompt`, and must still go.
+ */
+function enterRefusal(lines, text, { hadComposer = false } = {}) {
+  if (lines == null) return null;    // nothing could be read: the blind rule, as before
+  const arr = Array.isArray(lines) ? lines : String(lines).split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
+  if (last >= 0 && shellPromptRow(plain[last])) {
+    return { blockedBy: 'shell', why: 'claude is no longer running in the pane (a shell prompt is on its last row)' };
+  }
+  const c = composerText(arr);
+  if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return null;
+  const why = paneReadyForInput(arr).why;
+  if (paneBlocks(why)) {
+    return { blockedBy: why === 'trust' ? 'trust' : 'modal', why: 'a dialog opened before the Enter' };
+  }
+  if (hadComposer && c === null) {
+    return { blockedBy: 'modal', why: 'the composer was replaced by something with no caret' };
+  }
+  return null;
+}
+
+/**
+ * Is a dialog drawn BELOW the composer box `composerText` found?
+ *
+ * A frame that left an old box on screen with a selector painted under it reads,
+ * to `composerText`, as a box holding our message — the structural box is found
+ * first. The rows under its closing rule are the status lines and nothing else
+ * while the box is live; a cursored option row, a selector footer or a whole
+ * dialog there means the box is history and the selector has the keyboard.
+ */
+function dialogUnderBox(plain, last) {
+  const box = composerBox(plain, last);
+  if (!box || box.bottom < 0) return false;
+  const below = plain.slice(box.bottom + 1, last + 1);
+  if (!below.length) return false;
+  return below.some((l) => SELECTOR_ROW_RE.test(l) || DIALOG_FOOTER_RE.test(l)
+    || (TRUST_ROW_RE.test(l) && /❯/.test(l))) || !!detectPrompt(below);
+}
+
+function enterHeldLogLine(name, held, lines) {
+  return `typing: ${name}: not pressing Enter — ${held.why}; the message is in the box, unsent `
+    + `(${held.blockedBy}) | pane: ${paneTail(lines)}`;
 }
 
 function composerHoldsDraft(composerHolds, text, ours = null) {
@@ -1529,7 +1724,8 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly,
+  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly, boxIsOurs,
+  enterRefusal, enterHeldLogLine,
   composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
@@ -1537,8 +1733,8 @@ module.exports = {
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
-  hasHumanUserRecord, kindOf,
-  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, startsClaude,
+  hasHumanUserRecord, kindOf, scanForHuman, HUMAN_SCAN_MAX_BYTES,
+  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
 };

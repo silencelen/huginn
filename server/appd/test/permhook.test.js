@@ -207,3 +207,20 @@ test('AskUserQuestion needs the WHOLE question and the same option list', () => 
   assert.equal(ph.matchesPrompt(q('Which color?', ['Red', 'Blue', 'Green']), prompt, ''), false);
   assert.equal(ph.matchesPrompt(q('Which color?', ['Blue', 'Red']), prompt, ''), false);
 });
+
+test('a command that draws its own rules cannot move the command block onto its tail', () => {
+  // The border and the dashed rules are printable glyphs. Read by glyph, the
+  // region started at the command's own `───` row and the "command block" was
+  // the rows between the command's own `╌╌╌` and the dialog's closing rule — so a
+  // live request for just the TAIL matched a dialog showing far more than that.
+  const cmd = ['rm -rf ~/projects', '─'.repeat(40), '╌'.repeat(40), 'echo done'];
+  const pane = ['─'.repeat(60), ' Bash command', '╌'.repeat(60), ...cmd.map((r) => ` ${r}`), '╌'.repeat(60),
+    ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel'];
+  const prompt = detectPrompt(pane);
+  const region = ph.dialogRegion(pane);
+  assert.ok(region.includes('rm -rf ~/projects'), 'the region starts at the dialog\'s own border');
+  assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'echo done' } }, prompt, region), false,
+    'the tail of what is on screen is not what is on screen');
+  assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: cmd.join('\n') } }, prompt, region), true,
+    'the whole command still matches');
+});

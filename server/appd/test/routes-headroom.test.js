@@ -103,14 +103,22 @@ function mkSink(suffix) {
   madeSessions.add(name);
   return { name, out };
 }
-/** A pane drawing the `/model` picker. `rows` order is the test's to choose. */
-function mkPicker(suffix, rows, mode = 'normal') {
+/**
+ * A pane drawing the `/model` picker. `rows` order is the test's to choose.
+ *
+ * The stub records a completed switch where Claude Code would (see the modes in
+ * fixtures/stub-picker.js): the PostModelSwitch hook's file under the state dir,
+ * or the transcript `writeTranscript` creates for this name. `stale` draws an
+ * old feedback line above the `Switch model?` dialog.
+ */
+function mkPicker(suffix, rows, mode = 'normal', { stale = null } = {}) {
   const name = `${PFX}-${suffix}`;
   const script = path.join(__dirname, 'fixtures', 'stub-picker.js');
   const arg = JSON.stringify(JSON.stringify(rows));
-  const extra = mode === 'hookonly' ? ` ${JSON.stringify(stateDir)} ${name}` : '';
+  const env = [`HG_STUB_TRANSCRIPT=${JSON.stringify(path.join(tmp, `${name}.jsonl`))}`,
+    ...(stale ? [`HG_STUB_STALE=${JSON.stringify(stale)}`] : [])].join(' ');
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40',
-    `${process.execPath} ${script} ${arg} ${mode}${extra}`]);
+    `env ${env} ${process.execPath} ${script} ${arg} ${mode} ${JSON.stringify(stateDir)} ${name}`]);
   madeSessions.add(name);
   return name;
 }
@@ -965,6 +973,68 @@ test('a PostModelSwitch record after `s` confirms the move when the pane prints 
     20_000, 'a ladder move confirmed by the PostModelSwitch record');
   assert.equal(body.sessions.find((s) => s.name === name).ladder.to, 'opus');
   assert.doesNotMatch(capture(name), /for this session only/, 'the pane printed no feedback line');
+});
+
+test('the feedback line on the pane ALONE is not a confirmation: nothing recorded the switch', async () => {
+  // The ladder used to accept `… for this session only` anywhere on the pane. A
+  // line left over from an earlier move, or the assistant writing the sentence,
+  // recorded a switch that never happened and announced "Moved". Only Claude
+  // Code's own state counts now — the PostModelSwitch record, or its transcript.
+  const name = mkPicker('paneonly', [
+    { label: 'Opus 5.5', id: 'claude-opus-5-5' },
+    { label: 'Fable 5.1', id: 'claude-fable-5-1', current: true },
+  ], 'paneonly');
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93 });
+  await tick({ cooldownMs: 0 });
+  const body = await until(
+    (b) => b.sessions.some((s) => s.name === name && s.ladder && s.ladder.delivery
+      && s.ladder.delivery !== 'pending'),
+    30_000, 'the ladder move to settle');
+  const row = body.sessions.find((s) => s.name === name);
+  assert.equal(row.ladder.delivery, 'delivery_unconfirmed', JSON.stringify(row.ladder));
+  assert.equal(pushes('headroom_downgraded').some((d) => d.subject === name), false,
+    'no "Moved" notification for a move nobody recorded');
+});
+
+test('Claude Code\'s own transcript record confirms the move on a host without the hook', async () => {
+  // No PostModelSwitch record and no line on the pane: the `user` record whose
+  // whole content is `<local-command-stdout>Set model to … for this session
+  // only</local-command-stdout>` — written by Claude Code itself, after `s`.
+  const name = mkPicker('transcript', [
+    { label: 'Opus 5.5', id: 'claude-opus-5-5' },
+    { label: 'Fable 5.1', id: 'claude-fable-5-1', current: true },
+  ], 'transcript');
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93 });
+  await tick({ cooldownMs: 0 });
+  const body = await until(
+    (b) => b.sessions.some((s) => s.name === name && s.ladder && s.ladder.delivery === 'confirmed'),
+    20_000, 'a ladder move confirmed by the transcript record');
+  assert.equal(body.sessions.find((s) => s.name === name).ladder.to, 'opus');
+  assert.doesNotMatch(capture(name), /for this session only/, 'the pane printed no feedback line');
+});
+
+test('a feedback line LEFT ON SCREEN by an earlier move does not skip the `Switch model?` dialog', async () => {
+  // The old first read after `s` saw the stale line and declared the move done —
+  // leaving the real confirmation dialog open and unanswered.
+  const name = mkPicker('stale', [
+    { label: 'Default (recommended)', desc: 'Opus 5.5' },
+    { label: 'Opus 5.5', desc: 'For complex work' },
+    { label: 'Fable 5.1', desc: 'For your toughest challenges', current: true },
+  ], 'confirm', { stale: 'Opus 5.5' });
+  const transcript = writeTranscript(name, [FABLE, TURN]);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 93 });
+  await tick({ cooldownMs: 0 });
+  await until(
+    (b) => b.sessions.some((s) => s.name === name && s.ladder && s.ladder.delivery === 'confirmed'),
+    20_000, 'a confirmed move through the dialog');
+  const screen = capture(name);
+  assert.doesNotMatch(screen, /Switch model\?/, 'the confirmation dialog was answered, not left open');
+  assert.match(screen, /Set model to Opus 5\.5 for this session only/, 'and the switch happened');
 });
 
 test('the row NUMBER is never trusted: a shuffled picker still lands on opus', async () => {

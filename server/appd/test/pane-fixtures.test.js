@@ -169,3 +169,22 @@ test('the unnumbered detector admits ONLY the trust dialog: two look-alike rows 
   const lines = ['Some prose.', '', ' ❯ No, exit', '   Yes, I trust this folder', '', ' Enter to confirm · Esc to cancel'];
   assert.equal(detectPrompt(lines), null);
 });
+
+test('toggling boxes in the real multi-select capture does not change its fingerprint', () => {
+  // The body now feeds the fingerprint, and the tab strip above this question
+  // flips ☐ -> ☒ as soon as anything is ticked. That mark is answer STATE: a
+  // person who half-answered in tmux must still be able to tap the same card.
+  const before = detectPrompt(load('ask-multi-80.txt'));
+  const after = detectPrompt(load('ask-multi-toggled-80.txt'));
+  assert.ok(before && after);
+  assert.equal(promptFingerprint(after), promptFingerprint(before));
+});
+
+test('every live dialog capture carries a body digest', () => {
+  for (const f of ['plan-approval-80.txt', 'plan-approval-v2-80.txt', 'plan-approval-with-task-80.txt',
+    'switch-model-confirm-80.txt', 'trust-dialog-80.txt', 'trust-dialog-unnumbered-80.txt',
+    'fable-consent-80.txt', 'ask-simple-v2-80.txt']) {
+    const p = detectPrompt(load(f));
+    assert.match(String(p && p.bodyDigest), /^[0-9a-f]{12}$/, f);
+  }
+});

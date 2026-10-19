@@ -1422,3 +1422,196 @@ test('the summary after a compaction is neither a turn starting nor the owner ty
   assert.equal(t.boundaryFromTail(`${turn}\n${boundary}\n${summary}\n${notice}\n`).idle, true);
   assert.equal(t.hasHumanUserRecord(`${boundary}\n${summary}\n${notice}\n`), false);
 });
+
+// ---- the trust dialog is a dialog, not a sentence ----------------------------
+//
+// The gate used to call the pane a trust dialog if the trust sentence appeared
+// ANYWHERE on it, so a reply that merely quoted the dialog held every message
+// to that session behind a dialog that was not there.
+
+test('a reply QUOTING the trust dialog over a live composer is not a trust dialog', () => {
+  const quoted = [
+    '● Claude Code shows this on a fresh folder:',
+    '  Quick safety check: Is this a project you created or one you trust?',
+    '  ❯ 1. Yes, I trust this folder',
+    '    2. No, exit',
+    '  Pick "Yes, I trust this folder" and it will not ask again.',
+    '',
+    ...EMPTY_BOX,
+  ];
+  const v = t.paneReadyForInput(quoted);
+  assert.notEqual(v.why, 'trust');
+  assert.equal(t.paneBlocks(v.why), false, 'nothing is in the way of a send');
+  // The same quote under a composer whose top rule carries a session name — a
+  // box the structural reader does not find — is still only conversation.
+  const titled = [...quoted.slice(0, 5), '', `${'─'.repeat(66)} proj/role ─`, '❯ ', R80, '  ? for shortcuts'];
+  assert.notEqual(t.paneReadyForInput(titled).why, 'trust');
+});
+
+test('every real trust dialog is still `trust`, and so is one drawn some unknown way', () => {
+  for (const f of ['trust-dialog-80.txt', 'trust-dialog-unnumbered-80.txt']) {
+    assert.equal(t.paneReadyForInput(fixturePane(f)).why, 'trust', f);
+  }
+  assert.deepEqual(t.paneReadyForInput(TRUST_DIALOG), { ready: false, why: 'trust' });
+  // Neither detector reads this layout (no caret, no numbers), but its own footer
+  // ends the pane and the sentence and a row sit above it: still held, by name.
+  const odd = [' Do you trust the files in this folder?', '', '   Yes, proceed', '   No, exit', '',
+    ' Enter to confirm · Esc to cancel'];
+  assert.equal(t.paneReadyForInput(odd).why, 'trust');
+});
+
+// ---- a dead claude's last frame above a shell prompt -------------------------
+
+test('a stale Claude frame above a shell prompt is not a composer: the submit is refused', () => {
+  // claude was killed without cleaning up: its last frame stays on screen and
+  // the login shell `cc` falls through to prints a prompt below it. The caret in
+  // the dead frame is inside the lookback, so this pane read as "Claude is up"
+  // and a chat message went to the root shell.
+  const dead = [
+    '● Done — the backup job is fixed.',
+    R80, '❯ ', R80, ...STATUS,
+    'root@host:~/projects/app#',
+  ];
+  assert.equal(t.composerDrawn(dead), false, 'the prompt under the frame outranks the caret in it');
+  assert.equal(t.shellPrompt(dead), true);
+  assert.ok(t.submitRefusal({ submit: true, composer: t.composerDrawn(dead), shell: t.shellPrompt(dead) }),
+    'the message must not be submitted to the shell');
+  for (const prompt of ['user@box:~$', '% ', '$ ']) {
+    assert.equal(t.composerDrawn([R80, '❯ ', R80, ...STATUS, prompt]), false, prompt);
+  }
+});
+
+test('a LIVE composer is still a composer, even when its status line ends in `%`', () => {
+  // `ctx 43%` with no branch after it ends the pane in a prompt character — but
+  // indented, the way Claude Code draws every row under its box.
+  const live = [R80, '❯ ', R80, '  [dev] Fable 5.1 · ctx 43%'];
+  assert.equal(t.composerDrawn(live), true);
+  assert.equal(t.composerDrawn(LIVE_COMPOSER), true);
+  assert.equal(t.composerDrawn(TRUST_DIALOG), true, 'a dialog is still claude being up');
+  assert.equal(t.shellPromptRow('  [dev] Fable 5.1 · ctx 43%'), false);
+  assert.equal(t.shellPromptRow('❯ echo $'), false, 'the caret row is never a prompt');
+  assert.equal(t.shellPromptRow(R80), false);
+});
+
+// ---- the look before the Enter -----------------------------------------------
+
+const PERMISSION_UP = [
+  '● Bash(rm -rf /srv/cache)',
+  '─'.repeat(80),
+  ' Bash command',
+  '╌'.repeat(80),
+  ' rm -rf /srv/cache',
+  '╌'.repeat(80),
+  ' Do you want to proceed?',
+  ' ❯ 1. Yes',
+  "   2. Yes, and don't ask again for rm commands in /srv",
+  '   3. No',
+  ' Esc to cancel · Tab to amend',
+];
+
+test('enterRefusal: the composer holding exactly our message gets its Enter', () => {
+  const msg = 'please rerun the audit tonight';
+  assert.equal(t.enterRefusal(boxOf(msg), msg, { hadComposer: true }), null);
+  // A message that LOOKS like a selector run is still ours — in a box with no
+  // status line under it, detectPrompt reads it as one.
+  const listy = '1. fix the backup job\n2. then rerun the audit';
+  const bare = [R80, '❯ 1. fix the backup job', '  2. then rerun the audit', R80];
+  assert.equal(t.paneReadyForInput(bare).why, 'modal', 'precondition: the run reads as a dialog');
+  assert.equal(t.enterRefusal(bare, listy, { hadComposer: true }), null);
+  // A long paste the TUI collapsed to its marker.
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i + 1} of the log`).join('\n');
+  assert.equal(t.enterRefusal(boxOf('[Pasted text #1 +40 lines]'), long, { hadComposer: true }), null);
+});
+
+test('enterRefusal: a permission dialog drawn after the paste gets NO Enter', () => {
+  const held = t.enterRefusal(PERMISSION_UP, 'please rerun the audit tonight', { hadComposer: true });
+  assert.ok(held, 'an Enter here is a Yes on a tool call nobody saw');
+  assert.equal(held.blockedBy, 'modal');
+  assert.equal(t.enterRefusal(fixturePane('ask-simple-v2-80.txt'), 'thanks', { hadComposer: true }).blockedBy, 'modal');
+  assert.equal(t.enterRefusal(TRUST_DIALOG, 'thanks', { hadComposer: false }).blockedBy, 'trust',
+    'the trust dialog pre-selects "No, exit": an Enter there ends the session');
+  assert.match(t.enterHeldLogLine('jotter', held, PERMISSION_UP), /not pressing Enter .* \(modal\) \| pane: /);
+});
+
+test('enterRefusal: a box replaced by something with no caret is not pressed into either', () => {
+  const notice = ['● Working…', '', '  Press Enter to continue'];
+  assert.equal(t.enterRefusal(notice, 'hello there friend', { hadComposer: true }).blockedBy, 'modal');
+  // …but a pane that never had a box keeps the blind behaviour it always had.
+  assert.equal(t.enterRefusal(notice, 'hello there friend', { hadComposer: false }), null);
+  assert.equal(t.enterRefusal([], 'x', { hadComposer: false }), null);
+  assert.equal(t.enterRefusal(null, 'x', { hadComposer: true }), null, 'an unreadable pane: as before');
+  // An empty box (a TUI behind its input) is still a box: the Enter goes behind the bytes.
+  assert.equal(t.enterRefusal(EMPTY_BOX, 'late text', { hadComposer: true }), null);
+});
+
+test('enterRefusal: claude dying under the paste leaves the text at the prompt, unrun', () => {
+  const dead = [R80, '❯ please rerun the audit tonight', R80, ...STATUS, 'root@host:~#'];
+  assert.equal(t.enterRefusal(dead, 'please rerun the audit tonight', { hadComposer: true }).blockedBy, 'shell');
+});
+
+test('boxIsOurs: the whole message, its collapsed marker, a scrolled piece — never somebody else\'s words', () => {
+  const long = Array.from({ length: 40 }, (_, i) => `line ${i + 1} of the log`).join('\n');
+  assert.equal(t.boxIsOurs('rerun it', 'rerun it'), true);
+  assert.equal(t.boxIsOurs('[Pasted text #1 +40 lines]', long), true);
+  assert.equal(t.boxIsOurs('[Pasted text #1 +40 lines]', 'short'), false, 'a short message is never drawn as a marker');
+  assert.equal(t.boxIsOurs('line 12 of the log line 13 of the log line 14', long), true, 'scrolled');
+  assert.equal(t.boxIsOurs('rerun it and also delete the cache', 'rerun it'), false);
+  assert.equal(t.boxIsOurs('', 'x'), false);
+  assert.equal(t.boxIsOurs(null, 'x'), false);
+});
+
+// ---- the held send's drop check reads only what is new -----------------------
+
+test('scanForHuman reads each byte of a growing transcript once, bounded, and still sees the person', () => {
+  // A held automated send runs this every 400 ms. It used to decode everything
+  // since the entry was queued on every poll — the whole of a long turn, tool
+  // output and all, over and over for up to ten minutes.
+  let file = Buffer.alloc(0);
+  const reads = [];
+  const read = (from, max) => {
+    const buf = file.subarray(from, Math.min(file.length, from + max));
+    reads.push({ from, len: buf.length });
+    return { buf, start: from };
+  };
+  const add = (s) => { file = Buffer.concat([file, Buffer.from(s)]); };
+  const rec = (o) => `${JSON.stringify(o)}\n`;
+  const tool = (n) => rec({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'x'.repeat(n) }] } });
+  const person = rec({ type: 'user', message: { content: 'actually, stop and do the other thing' } });
+
+  add(rec({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }));
+  const cursor = { at: file.length };            // queued here
+  add(tool(300_000));
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(cursor.at, file.length, 'everything complete has been read');
+  const afterFirst = reads.length;
+  add(tool(300_000));
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(reads[afterFirst].from, file.length - Buffer.byteLength(tool(300_000)),
+    'the next look starts where the last one stopped — not where the entry was queued');
+  assert.equal(t.scanForHuman(cursor, read), false);
+  assert.equal(reads[reads.length - 1].len, 0, 'nothing new: nothing read');
+
+  // A person's record arriving in two writes is read once it is whole.
+  const half = Math.floor(person.length / 2);
+  add(person.slice(0, half));
+  const before = cursor.at;
+  assert.equal(t.scanForHuman(cursor, read), false, 'half a line is not a record yet');
+  assert.equal(cursor.at, before, 'and is left for the next look');
+  add(person.slice(half));
+  assert.equal(t.scanForHuman(cursor, read), true, 'the person spoke');
+
+  // Every read was bounded, and the total read is the file, not a multiple of it.
+  assert.ok(reads.every((r) => r.len <= t.HUMAN_SCAN_MAX_BYTES));
+  const total = reads.reduce((a, r) => a + r.len, 0);
+  assert.ok(total < file.length * 1.5, `read ${total} bytes of a ${file.length}-byte transcript`);
+});
+
+test('scanForHuman steps over a line longer than one read, then still sees the person', () => {
+  let file = Buffer.from(`${JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'y'.repeat(5000) }] } })}\n`);
+  file = Buffer.concat([file, Buffer.from(`${JSON.stringify({ type: 'user', message: { content: 'hello?' } })}\n`)]);
+  const read = (from, max) => ({ buf: file.subarray(from, Math.min(file.length, from + max)), start: from });
+  const cursor = { at: 0 };
+  let saw = false;
+  for (let i = 0; i < 20 && !saw; i++) saw = t.scanForHuman(cursor, read, 1024);
+  assert.equal(saw, true);
+});
