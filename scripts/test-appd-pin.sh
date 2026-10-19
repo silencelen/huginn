@@ -4,7 +4,8 @@
 #
 # WHY THIS EXISTS: 8787 is an unprivileged port. The host tools (huginn-rounds,
 # -devices, -archive, -llm, -headroom, -projects), the desktop release's wire
-# checks and the command both CLI clients run on the host over ssh all called
+# checks, the installer's health check (which runs right after it restarts the
+# daemon) and the command both CLI clients run on the host over ssh all called
 # http://127.0.0.1:8787 with the root-equivalent bearer token - so while
 # huginn-appd was stopped or restarting, any account on the host that bound the
 # port first was handed the token by the first call. They now speak HTTPS pinned
@@ -67,6 +68,7 @@ DELETE /v1/chats/c1 200 {"ok":true}
 GET /v1/headroom 200 {"marker":"headroom-answered"}
 GET /v1/projects 200 {"projects":[]}
 POST /v1/sessions/sess/soft-end 200 {"ok":true,"phrase":"WRAPUP","auto":true}
+GET /v1/ping 200 {"ok":true,"version":"9.9.9","secure":true}
 GET /v1/desktop-kt/manifest 200 {"version":"1.2.3"}
 GET /v1/desktop-kt/a.deb 200 abc
 GET /v1/desktop-kt/a.tar.gz 200 abc
@@ -154,8 +156,9 @@ done
 # still spoke plain HTTP is aimed at the same listener and caught there.
 mkdir -p "$T/lib" "$T/sbin"
 cp "$TREE"/server/lib/state-table.* "$T/lib/"
-# Nothing here may read this host's own unit: a systemctl that knows nothing.
-printf '#!/bin/sh\nexit 0\n' > "$T/sbin/systemctl"; chmod 755 "$T/sbin/systemctl"
+# Nothing here may read this host's own unit or its journal: a systemctl and a
+# journalctl that know nothing.
+for c in systemctl journalctl; do printf '#!/bin/sh\nexit 0\n' > "$T/sbin/$c"; chmod 755 "$T/sbin/$c"; done
 TOOLS=(huginn-rounds huginn-devices huginn-archive huginn-llm huginn-headroom huginn-projects)
 for k in daemon impostor; do
   mkdir -p "$T/bin-$k"
@@ -189,6 +192,20 @@ for k in daemon impostor; do
   rel_step 7 "$(cat "$T/$k.port")" > "$T/release-7-$k.sh"
 done
 
+# The installer's step 5 (the health check after it restarts the daemon), cut
+# out of it the same way: the whole of it needs root and systemd. Its wait is cut
+# to two tries, so a refusal takes a second here and not thirty.
+INSTALL="$TREE/server/appd/install.sh"
+{
+  echo 'set -euo pipefail'
+  printf 'TOKEN_FILE=%q\n' "$T/token"
+  grep -E '^(say|die)\(\) ' "$INSTALL"
+  awk '/^unit_env\(\) \{/{on=1} on{print} on && /^\}/{exit}' "$INSTALL"
+  awk '/^TOKEN="\$\(cat "\$TOKEN_FILE"\)"$/{on=1} on{print}' "$INSTALL" | sed 's/seq 1 60/seq 1 2/'
+} > "$T/install-check.sh"
+grep -q 'seq 1 2' "$T/install-check.sh" \
+  || bad "install.sh: could not cut step 5 out of it (the TOKEN= line or the 60-try wait moved - update this gate)"
+
 # The clients' own composed command, run the way ssh would run it on the host:
 # huginn.sh's through `sh -c` (the host account's POSIX shell), huginn.ps1's
 # base64 payload through `bash -s`. Only 127.0.0.1:8787 and the token path are
@@ -208,7 +225,9 @@ chmod 755 "$T/sbin/ssh"
 # kill may fall back to raw tmux when the daemon cannot be reached; never the real one.
 printf '#!/bin/sh\necho "tmux $*"\nexit 0\n' > "$T/sbin/tmux"; chmod 755 "$T/sbin/tmux"
 
-# name|args|the requests it must make|a line its output must hold
+# name|args|the requests it must make|a line its output must hold. A request
+# that must go over plain HTTP WITHOUT the token says so ("GET /v1/ping plain
+# none"); every other one must go over TLS, carrying it.
 CASES=(
   "huginn-rounds||GET /v1/rounds|No rounds yet"
   "huginn-devices||GET /v1/devices|box"
@@ -221,6 +240,7 @@ CASES=(
   "huginn-projects||GET /v1/projects|No projects"
   "release-desktop.sh step 1||GET /v1/desktop-kt/manifest|downgrade gate passed: 1.2.3 -> 1.2.4"
   "release-desktop.sh step 7||GET /v1/desktop-kt/manifest;GET /v1/desktop-kt/a.deb;GET /v1/desktop-kt/a.tar.gz;GET /v1/desktop-kt/a.pkg.tar.zst;GET /v1/desktop-kt/a.exe|a.exe OK (3 bytes)"
+  "install.sh health check||GET /v1/ping;GET /v1/ping plain none|https ok"
   "huginn.sh: huginn end|sess|POST /v1/sessions/sess/soft-end|WRAPUP"
   "huginn.ps1: huginn end|sess|POST /v1/sessions/sess/soft-end|WRAPUP"
 )
@@ -232,6 +252,7 @@ run_case() {   # $1 = name, $2 = args, $3 = daemon|impostor, $4 = the cert the c
   case "$name" in
     "release-desktop.sh step 1") "${env[@]}" bash "$T/release-1-$k.sh" ;;
     "release-desktop.sh step 7") "${env[@]}" bash "$T/release-7-$k.sh" ;;
+    "install.sh health check") "${env[@]}" HUGINN_APPD_PORT="$(cat "$T/$k.port")" bash "$T/install-check.sh" ;;
     "huginn.sh: huginn end")
       "${env[@]}" bash -c '. "$1/client/huginn.sh" >/dev/null 2>&1; huginn end "$2"' sh "$TREE" "$args" ;;
     "huginn.ps1: huginn end")
@@ -256,7 +277,7 @@ for c in "${CASES[@]}"; do
   have "$name" || continue
   : > "$T/daemon.log"
   out="$(run_case "$name" "$args" daemon "$T/daemon.crt" 2>&1)"; rc=$?
-  want="$(tr ';' '\n' <<<"$reqs" | sed 's/$/ tls token/')"
+  want="$(tr ';' '\n' <<<"$reqs" | sed -E '/ (plain|tls) (none|token)$/!s/$/ tls token/')"
   got="$(reqs_of "$T/daemon.log")"
   if [ "$got" != "$want" ]; then
     bad "$name${args:+ $args}: the daemon saw [$(tr '\n' ';' <<<"$got")], wanted [$(tr '\n' ';' <<<"$want")] (exit $rc: $(head -c 300 <<<"$out"))"

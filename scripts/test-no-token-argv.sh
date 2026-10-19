@@ -249,8 +249,10 @@ chmod 755 "$SC/curl" "$SC/python3" "$SS"/*
 export STUB_LOG="$L" STUB_TOKEN_FILE="$T/token" STUB_ROUTES="$T/routes" REAL_PYTHON3
 
 recorded() {  # $1 = label, $2 = requests (;-separated), $3 = expected output line, $4.. = command
+  # A request that must carry no token at all says so ("GET /v1/ping none");
+  # every other one must carry it, through a file.
   local label="$1" want got out rc
-  want="$(tr ';' '\n' <<<"$2" | sed 's/$/ file/')"
+  want="$(tr ';' '\n' <<<"$2" | sed -E '/ (file|none)$/!s/$/ file/')"
   local expect="$3"; shift 3
   : > "$L/argv"; : > "$L/requests"; : > "$L/pyargv"
   out="$(PATH="$SC:$SS:$PATH" "$@" 2>&1)"; rc=$?
@@ -286,8 +288,10 @@ INSTALL="$TREE/server/appd/install.sh"
   awk '/^unit_env\(\) \{/{on=1} on{print} on && /^\}/{exit}' "$INSTALL"
   awk '/^TOKEN="\$\(cat "\$TOKEN_FILE"\)"$/{on=1} on{print}' "$INSTALL"
 } > "$T/install-check.sh"
+# The authenticated ping goes over TLS (scripts/test-appd-pin.sh holds it to the
+# pinned key); the plain listener is only ever asked without the token.
 if grep -q 'seq 1 60' "$T/install-check.sh" && grep -q 'SPING=' "$T/install-check.sh"; then
-  recorded "install.sh health check" "GET /v1/ping;GET /v1/ping" "running: huginn-appd 9.9.9 on port 8787, https ok" \
+  recorded "install.sh health check" "GET /v1/ping;GET /v1/ping none" "running: huginn-appd 9.9.9 on port 8787, https ok" \
     bash "$T/install-check.sh"
 else
   bad "install.sh: could not cut step 5 out of it (TOKEN= line or the ping loop moved - update this gate)"

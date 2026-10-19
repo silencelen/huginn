@@ -112,29 +112,50 @@ systemctl enable --quiet huginn-appd
 systemctl restart huginn-appd
 TOKEN="$(cat "$TOKEN_FILE")"
 PORT="${HUGINN_APPD_PORT:-$(unit_env HUGINN_APPD_PORT)}"; PORT="${PORT:-8787}"
-# ⚠ THE TOKEN NEVER GOES ON A COMMAND LINE. /proc/<pid>/cmdline is readable by
-# every account on this host, the token is root-equivalent and never rotates,
-# and the loop below runs up to sixty curls on every install and update. The
-# header reaches curl through a file descriptor instead (-H @file, curl 7.55+),
-# and printf is a bash builtin, so no process carries the token in its
-# arguments. scripts/test-no-token-argv.sh holds every script to this.
-appd_curl() { curl -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"; }
-PING=
-for _ in $(seq 1 60); do
-  PING="$(appd_curl -sf -m 2 "http://127.0.0.1:$PORT/v1/ping" || true)"
-  [ -n "$PING" ] && break
-  sleep 0.5
-done
-grep -q '"ok":true' <<<"$PING" || {
-  journalctl -u huginn-appd -n 20 --no-pager >&2 || true
-  die "huginn-appd did not answer on 127.0.0.1:$PORT (journal above). If HUGINN_APPD_BIND is set, it must include loopback - use 0.0.0.0."
-}
-SPING="$(appd_curl -sfk -m 5 "https://127.0.0.1:$PORT/v1/ping" || true)"
-grep -q '"secure":true' <<<"$SPING" || die "huginn-appd is up but its HTTPS listener did not answer"
 TLS_CERT="${HUGINN_APPD_TLS_CERT:-$(unit_env HUGINN_APPD_TLS_CERT)}"
 if [ -z "$TLS_CERT" ]; then
   TLS_DATA="${HUGINN_APPD_DATA:-$(unit_env HUGINN_APPD_DATA)}"
   TLS_CERT="${TLS_DATA:-/var/lib/huginn-appd}/tls/cert.pem"
 fi
+# ⚠ THE TOKEN GOES ONLY TO THE DAEMON THAT HOLDS THIS CERTIFICATE'S KEY. Right
+# after the restart above the port is briefly free, and whatever binds it first
+# would be handed the token by the loop below over plain HTTP. So the checks run
+# over HTTPS with curl's --pinnedpubkey, derived from appd's own certificate,
+# which refuses any other key before a byte of the request is sent (-k only
+# skips the name check on the self-signed certificate). The pin is derived on
+# every try: the first start mints the certificate, and a renewal replaces it.
+# ⚠ AND NEVER ON A COMMAND LINE. /proc/<pid>/cmdline is readable by every account
+# on this host, the token is root-equivalent and never rotates, and the loop runs
+# up to sixty curls on every install and update. The header reaches curl
+# through a file descriptor (-H @file, curl 7.55+), and printf is a bash builtin.
+# scripts/test-no-token-argv.sh and scripts/test-appd-pin.sh hold it to both.
+appd_pin() {
+  [ -s "$TLS_CERT" ] || return 1
+  openssl x509 -in "$TLS_CERT" -pubkey -noout 2>/dev/null \
+    | openssl pkey -pubin -outform der 2>/dev/null | openssl dgst -sha256 -binary | base64
+}
+appd_curl() {
+  local pin; pin="$(appd_pin)" && [ -n "$pin" ] || return 1
+  curl -k --pinnedpubkey "sha256//$pin" -H @<(printf 'Authorization: Bearer %s\n' "$TOKEN") "$@"
+}
+SPING= RC=
+for _ in $(seq 1 60); do
+  RC=0; SPING="$(appd_curl -sf -m 2 "https://127.0.0.1:$PORT/v1/ping")" || RC=$?
+  [ -n "$SPING" ] && break
+  sleep 0.5
+done
+grep -q '"ok":true' <<<"$SPING" || {
+  journalctl -u huginn-appd -n 20 --no-pager >&2 || true
+  [ -s "$TLS_CERT" ] || die "huginn-appd wrote no TLS certificate at $TLS_CERT (journal above)"
+  # curl's 90: a listener answered with a key other than the one in appd's certificate.
+  [ "$RC" != 90 ] || die "what holds 127.0.0.1:$PORT is not huginn-appd: its key is not the one in $TLS_CERT, and nothing was sent to it. See what owns the port: ss -ltnp 'sport = :$PORT'"
+  die "huginn-appd did not answer on https://127.0.0.1:$PORT (journal above). If HUGINN_APPD_BIND is set, it must include loopback - use 0.0.0.0."
+}
+grep -q '"secure":true' <<<"$SPING" || die "huginn-appd answered, but not over TLS"
+# The plain listener on the same port, asked WITHOUT the token: any answer from
+# appd (a 401 is the usual one) shows it is there; nothing secret goes over it.
+HCODE="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$PORT/v1/ping" || true)"
+case "$HCODE" in ''|000) die "huginn-appd answers over HTTPS, but its plain HTTP listener on 127.0.0.1:$PORT did not answer" ;; esac
+PING="$SPING"
 FP="$(openssl x509 -in "$TLS_CERT" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2 | tr -d : | tr 'A-F' 'a-f')"
 say "running: $(sed -n 's/.*"version":"\([^"]*\)".*/huginn-appd \1/p' <<<"$PING") on port $PORT, https ok${FP:+ (certificate sha256 $FP)}"
