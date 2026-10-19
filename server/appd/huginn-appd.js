@@ -7665,12 +7665,12 @@ const PICKER_WAIT_MS = 3_000;
 const LADDER_FEEDBACK_MS = 5_000;
 /** A picker is five or six rows; ten moves means we are not reading it right. */
 const MAX_CURSOR_MOVES = 10;
-/** Both spellings observed for the session-only confirmation (native-rl §4). */
-const LADDER_FEEDBACK_RE = /Set model to .* for this session only|Model set to .* for this session only/;
-/** The `Switch model?` cache-cost dialog that can sit between `s` and the feedback line. */
-const LADDER_CONFIRM_RE = /^\s*Switch model\?\s*$/m;
-/** Its default row, which names the target: `❯ 1. Yes, switch to Sonnet 5.5`. */
-const LADDER_CONFIRM_ROW_RE = /❯\s*1\.\s*Yes, switch to (.+?)\s*$/m;
+/**
+ * Both spellings observed for the session-only confirmation (native-rl §4),
+ * capturing the model. Read ONLY out of Claude Code's own command-output record
+ * in the transcript (ladderSwitchRecorded), never off the pane.
+ */
+const LADDER_FEEDBACK_RE = /^\s*(?:Set model to|Model set to) (.+?) for this session only/;
 
 // ---- auto-resume timings ---------------------------------------------------
 //
@@ -8223,6 +8223,10 @@ async function applyLadder(name, to) {
   }
   const sAt = Date.now();
   const sid = (readSessionState(name) || {}).sessionId || null;
+  // Where the transcript ENDS before `s`: Claude Code's own record of the switch
+  // is looked for after this point and nowhere else (ladderSwitchRecorded).
+  const tFile = transcriptPath(name);
+  const tAt = tFile ? transcriptSize(tFile) : null;
   const set = await run('tmux', ['send-keys', '-t', target, '-l', '--', 's']);
   if (set.err) return fail('tmux refused the s key');
   // ⚠ THE CACHE-COST CONFIRMATION. Since Claude Code ~2.1.29x, `s` on a session
@@ -8232,34 +8236,91 @@ async function applyLadder(name, to) {
   // `delivery_unconfirmed` (7 of 7 recorded, last 2026-10-05). Enter goes only
   // when the dialog names the row we chose; a dialog about any other model is a
   // surprise, and the rule here is to abort rather than guess.
+  //
+  // ⚠ AND THE MOVE IS CONFIRMED ONLY BY CLAUDE CODE'S OWN STATE. This used to
+  // accept the `… for this session only` sentence anywhere on the pane — so the
+  // same line left over from an earlier move, or the assistant merely writing
+  // it, recorded a switch that never happened on the first read after `s`:
+  // a false "Moved" notification, the real `Switch model?` dialog still open
+  // and never confirmed, and the arbiter reasoning from the wrong family. The
+  // proofs now are the PostModelSwitch hook's record and the transcript record
+  // Claude Code itself writes for the command's output — neither of which a
+  // model's prose can produce.
   let confirmed = false;
   const by = Date.now() + LADDER_FEEDBACK_MS;
   for (;;) {
-    const lines = await paneLines(name);
-    const text = lines ? lines.join('\n') : '';
-    if (LADDER_FEEDBACK_RE.test(text)) {
-      return { ok: true, delivery: 'confirmed', to };
-    }
     // Structured proof (hooks/huginn-modelswitch-hook, PostModelSwitch): a switch
-    // to the target family recorded AFTER `s`, by this claude. Either proof will do.
+    // to the target family recorded AFTER `s`, by this claude.
     const sw = modelswitch.readSwitch(STATE_DIR, name);
     if (sw && sw.ts >= sAt && (!sid || !sw.sessionId || sw.sessionId === sid)
       && headroomLib.familyOf(sw.to) === to) {
       return { ok: true, delivery: 'confirmed', to, via: 'hook' };
     }
-    if (!confirmed && LADDER_CONFIRM_RE.test(text)) {
-      const m = text.match(LADDER_CONFIRM_ROW_RE);
-      if (!m || m[1].trim() !== want.label) {
-        return fail(`the switch confirmation names ${m ? m[1].trim() : 'no model'}, not ${want.label}`);
+    if (ladderSwitchRecorded(tFile, tAt, to)) {
+      return { ok: true, delivery: 'confirmed', to, via: 'transcript' };
+    }
+    if (!confirmed) {
+      // The dialog by its STRUCTURE — a live selector, one caret, nothing of the
+      // composer under it (detectPrompt) — never by its words somewhere on screen.
+      const dialog = detectPrompt((await paneLines(name)) || []);
+      if (dialog && dialog.question === 'Switch model?') {
+        const yes = dialog.options.find((o) => o.number === 1);
+        const m = yes && /^Yes, switch to (.+)$/.exec(yes.label);
+        if (!m || m[1].trim() !== want.label) {
+          return fail(`the switch confirmation names ${m ? m[1].trim() : 'no model'}, not ${want.label}`);
+        }
+        if (!yes.selected) return fail('the switch confirmation does not have Yes highlighted');
+        const ok = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+        if (ok.err) return fail('tmux refused Enter on the switch confirmation');
+        confirmed = true;
       }
-      const ok = await run('tmux', ['send-keys', '-t', target, 'Enter']);
-      if (ok.err) return fail('tmux refused Enter on the switch confirmation');
-      confirmed = true;
     }
     if (Date.now() >= by) break;
     await sleep(200);
   }
-  return fail('no "for this session only" confirmation appeared');
+  return fail('Claude Code recorded no switch for this session');
+}
+
+/**
+ * The text of a transcript record that is Claude Code's OWN local-command
+ * output — `<local-command-stdout>…</local-command-stdout>` and nothing else in
+ * the record — or null.
+ *
+ * Measured on 2.1.280 and 2.1.296: the picker's `s` writes a `user` record whose
+ * whole content is `<local-command-stdout>Set model to \`Sonnet 5.5\` for this
+ * session only</local-command-stdout>`. Builds that keep command output in a
+ * `system`/`local_command` record are read the same way. A model cannot write
+ * either: its words go into `assistant` records, and a tool's into tool_result
+ * blocks, which are never a plain string.
+ */
+function localCommandOutput(rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  let c = null;
+  if (rec.type === 'user' && rec.message && rec.isMeta !== true) c = rec.message.content;
+  else if (rec.type === 'system' && rec.subtype === 'local_command') c = rec.content;
+  if (typeof c !== 'string') return null;
+  const m = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>\s*$/.exec(c);
+  return m ? paneLib.stripAnsi(m[1]) : null;
+}
+
+/**
+ * Did Claude Code record a session-only switch to `to` in this transcript after
+ * byte `from` (where it ended just before `s`)? A bounded read: the window is
+ * the few seconds after one keypress.
+ */
+function ladderSwitchRecorded(file, from, to) {
+  if (!file || from == null) return false;
+  const slice = transcriptSlice(file, from, 512 * 1024);
+  if (!slice || !slice.buf.length) return false;
+  for (const line of slice.buf.toString('utf8').split('\n')) {
+    if (!line.includes('local-command')) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    const said = localCommandOutput(rec);
+    const m = said && LADDER_FEEDBACK_RE.exec(said);
+    if (m && headroomLib.familyOf(m[1].replace(/`/g, '').trim()) === to) return true;
+  }
+  return false;
 }
 
 
