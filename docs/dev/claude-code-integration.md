@@ -347,10 +347,12 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
    it times out. Tests: `typing.test.js`, `routes-queue-boundary.test.js`.
 9. **Sign-in wording** (`extractLoginUrl`, `loginPaneState`): `Paste code here`,
    `Login successful` and the other success phrases. Test: `pane.test.js`.
-10. **`/answer` key sequences**: a single answer is the digit, then `Enter`. A multi-select
-    answer toggles digits (120 ms apart), presses `Right` for the review tab, waits 250 ms, then
-    `Enter`. The trust dialog is answered with arrow keys. Tests: `pane.test.js`
-    (`multiToggleDigits`), `routes-permhook.test.js`, `routes-answer.test.js`.
+10. **`/answer` key sequences**: a single answer is the digit alone, which the selector answers
+    on; an `Enter` follows only when a look after the digit shows it merely moved the caret onto
+    an input row (`No, keep planning`, `Type something.`). A multi-select answer toggles digits
+    (120 ms apart), presses `Right` for the review tab, waits 250 ms, then `Enter`. The trust
+    dialog is answered with arrow keys. Tests: `pane.test.js` (`multiToggleDigits`),
+    `routes-permhook.test.js`, `routes-answer.test.js`, `routes-answer-keystrokes.test.js`.
 11. **Injected-text list** (`machineText`). Test: `transcript.test.js`.
 12. **Bash wrapper argv** (`lib/tasks.js`): the `~/.claude/shell-snapshots` source plus
     `eval '…'` shape. Test: `tasks.test.js`.

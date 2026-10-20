@@ -122,6 +122,55 @@ function staticSession(suffix, frame) {
     `sh -c 'printf "${frame.join('\\n')}\\n"; stty raw -echo; cat > ${out}'`]);
   return { name, out };
 }
+/**
+ * A pane running fixtures/stub-dialog.js — a numbered question that answers,
+ * focuses and re-asks the way the real selector does. Every byte typed at it
+ * lands in `keys`; what it did with them, in `events`.
+ */
+function stubSession(suffix, spec) {
+  const name = `${PFX}-${suffix}`;
+  const keys = path.join(tmp, `${suffix}.keys`);
+  const events = path.join(tmp, `${suffix}.events`);
+  const q = (s) => `'${String(s).replace(/'/g, "'\\''")}'`;
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `env HG_STUB_SPEC=${q(JSON.stringify(spec))} HG_STUB_KEYS=${q(keys)} HG_STUB_EVENTS=${q(events)} `
+    + `${q(process.execPath)} ${q(path.join(__dirname, 'fixtures', 'stub-dialog.js'))}`]);
+  return { name, keys, events };
+}
+
+// ---- the digit answers its row; the Enter after it is not blind -------------
+
+const PERMISSION = {
+  question: 'Do you want to create probe.txt?',
+  options: [{ label: 'Yes' }, { label: 'Yes, and do not ask again' }, { label: 'No' }],
+  draft: 'half a thought, not sent yet',
+};
+/** Plan approval's last row is an input row: a digit only moves the caret onto it. */
+const PLAN = {
+  question: 'Would you like to proceed?',
+  options: [{ label: 'Yes, and use auto mode' }, { label: 'Yes, manually approve edits' },
+    { label: 'No, keep planning', input: true }],
+};
+
+test('a digit that answers the question gets no Enter after it: the draft in the box stays unsent', async () => {
+  const { name, keys, events } = stubSession('digit', PERMISSION);
+  const p = await promptOn(name);
+  const r = await answer(name, { option: 1, fingerprint: p.fingerprint });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  await until('the answer', () => readOr(events).includes('ANSWERED 1 by digit'));
+  await wait(500);
+  assert.equal(readOr(keys), '1', 'the digit, and nothing after it');
+  assert.doesNotMatch(readOr(events), /SUBMITTED/, 'the half-typed draft under the dialog was not sent');
+});
+
+test('a digit that only focuses its row gets the Enter that answers it', async () => {
+  const { name, keys, events } = stubSession('focus', PLAN);
+  const p = await promptOn(name);
+  const r = await answer(name, { option: 3, fingerprint: p.fingerprint });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  await until('the answer', () => readOr(events).includes('ANSWERED 3 by enter'));
+  assert.equal(readOr(keys), '3\r');
+});
 
 // ---- a multi-select question takes a SET -----------------------------------
 

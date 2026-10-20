@@ -1414,9 +1414,14 @@ test('the consent auto-answer RE-READS the pane immediately before the digit', a
     const prev = calls[at - 1] || [];
     assert.ok(prev.includes('capture-pane') && !prev.includes('-e'),
       `the digit was pressed against a stale capture; the call before it was: ${prev.join(' ')}`);
-    // And it really did answer: a pressed digit is followed by its Enter.
-    assert.ok(calls.slice(at + 1).some((a) => a.includes('send-keys') && a.includes('Enter')),
-      'the digit must be submitted, not merely typed');
+    // And no blind Enter after it. On Claude Code 2.1.302 the digit answers its
+    // row, so an Enter would land on whatever has focus next; one follows only
+    // when the look after the digit sees it merely focus an input row, and this
+    // fixture is a still frame. Wait out that look before reading the calls.
+    await wait(2_500);
+    const after = tmuxCalls(name).slice(at + 1);
+    assert.ok(!after.some((a) => a.includes('send-keys') && a.includes('Enter')),
+      `an Enter followed the digit:\n${after.map((c) => c.join(' ')).join('\n')}`);
   } finally {
     try { sh('tmux', ['kill-session', '-t', `=${name}`]); } catch { /* gone */ }
     madeSessions.delete(name);

@@ -8114,14 +8114,67 @@ async function answerByArrows(name, fingerprint, chosen) {
  * with its own identity, and the digit must not land on it.
  */
 async function answerMovedOn(name, fingerprint) {
+  return movedOnFrom(await questionNow(name), fingerprint);
+}
+
+/** The question on the pane right now, read straight (no geometry round trip), or null. */
+async function questionNow(name) {
   const lines = await paneLines(name);
-  const prompt = lines ? promptFor(name, lines).prompt : null;
+  return lines ? promptFor(name, lines).prompt : null;
+}
+
+/** `answerMovedOn`'s verdict on a question already read. */
+function movedOnFrom(prompt, fingerprint) {
   if (prompt && prompt.fingerprint === fingerprint) return null;
   if (!prompt) return { ok: false, reason: 'gone', error: 'that question is no longer on screen' };
   return {
     ok: false, reason: 'changed', error: 'the session is asking something else now',
     prompt, fingerprint: prompt.fingerprint,
   };
+}
+
+/** The number of the row the question's caret is on, or null. */
+function caretRow(prompt) {
+  const o = prompt && Array.isArray(prompt.options) ? prompt.options.find((x) => x.selected) : null;
+  return o ? o.number : null;
+}
+
+/** How long a typed answer may take to show on the pane, and how often to look. */
+const ANSWER_SETTLE_MS = 1500;
+const ANSWER_SETTLE_POLL_MS = 50;
+
+/**
+ * What a typed option digit did, read off the pane after it went in.
+ *
+ *   'gone'     the question left the screen: the digit answered it
+ *   'focused'  the same question is up and the digit moved its caret onto the
+ *              chosen row without answering it
+ *   'still'    nothing moved within ANSWER_SETTLE_MS
+ *
+ * ⚠ THE DIGIT ANSWERS ITS ROW, SO THE ENTER AFTER IT MUST NOT BE BLIND. In
+ * Claude Code 2.1.302 a digit on a numbered selector calls the Select's
+ * onChange at once, and this route used to follow it with an Enter regardless:
+ * that Enter reached whatever had focus next — a draft in the composer, which
+ * it submitted, appd's own message held in the box behind the dialog, or the
+ * next dialog in the queue. The one row a digit only FOCUSES is an input row
+ * with nothing typed in it (plan approval's "No, keep planning",
+ * AskUserQuestion's "Type something."), and that row's own Enter is what
+ * answers it. So the Enter goes only on 'focused', which this look sees only
+ * when the caret was elsewhere before the digit; a pane that has not caught up
+ * reads 'still', and still gets no Enter.
+ */
+async function watchAnswer(name, fingerprint, { option = null, caretWas = null } = {}) {
+  const started = Date.now();
+  for (;;) {
+    const lines = await paneLines(name);      // a read that failed says nothing either way
+    if (lines) {
+      const prompt = promptFor(name, lines).prompt;
+      if (!prompt || prompt.fingerprint !== fingerprint) return 'gone';
+      if (option != null && caretWas !== option && caretRow(prompt) === option) return 'focused';
+    }
+    if (Date.now() - started >= ANSWER_SETTLE_MS) return 'still';
+    await sleep(ANSWER_SETTLE_POLL_MS);
+  }
 }
 
 /**
@@ -9665,7 +9718,10 @@ async function consentWatch(state, settings, sessions, now) {
       }
       const t = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
       if (t.err) { log(`headroom: consent answer failed on ${s.name}: ${t.stderr.trim()}`); return false; }
-      await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+      // The digit answers the row; no blind Enter after it (see watchAnswer).
+      const took = await watchAnswer(s.name, fresh.fingerprint,
+        { option: prompt.recommended, caretWas: caretRow(fresh) });
+      if (took === 'focused') await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
       rememberAnswered(s.name, fresh.fingerprint, now);
       return true;
     });
@@ -12131,16 +12187,20 @@ async function handleRequest(req, res) {
         }
         // ⚠ AND LOOK AGAIN BEFORE THE DIGIT (answerMovedOn). The fingerprint above
         // was checked against a capture taken before the hook attempt, which can
-        // wait seconds; the keystroke goes to whatever is on screen now.
-        const moved = await answerMovedOn(name, live);
+        // wait seconds; the keystroke goes to whatever is on screen now. The
+        // same look says where the caret is, which watchAnswer needs.
+        const now = await questionNow(name);
+        const moved = movedOnFrom(now, live);
         if (moved) return sendJson(res, 409, moved);
 
-        // The digit and Enter separately, literal digit first, so a multi-digit option
-        // cannot be split across a submit.
+        // The digit alone answers its row; an Enter follows only when the look
+        // after it shows the digit merely focused the row (see watchAnswer).
         const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
         if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-        const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-        if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+        if ((await watchAnswer(name, live, { option, caretWas: caretRow(now) })) === 'focused') {
+          const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+          if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+        }
         rememberAnswered(name, live);
         log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
         return sendJson(res, 200, { ok: true, option, label: chosen.label });

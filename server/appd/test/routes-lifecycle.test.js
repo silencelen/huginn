@@ -542,12 +542,15 @@ async function screenDecided(name, ms = 20_000) {
   }
 }
 
-/** The COLOR_PANE dialog, with every keystroke sent into the pane captured. */
+/**
+ * The COLOR_PANE dialog, with every keystroke sent into the pane captured RAW:
+ * an answer is the digit alone, with no Enter to end a line for a cooked tty.
+ */
 function mkAnswerable(suffix) {
   const name = `${PFX}-${suffix}`;
   const out = path.join(tmp, `${suffix}.keys`);
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
-    `sh -c 'printf "${COLOR_PANE}\\n"; stty -echo; cat > ${out}'`]);
+    `sh -c 'printf "${COLOR_PANE}\\n"; stty raw -echo; cat > ${out}'`]);
   madeSessions.add(name);
   return { name, out };
 }
@@ -576,7 +579,7 @@ test('two answers to the same question type ONE digit (#11)', async () => {
 
   await wait(500);
   const typed = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '';
-  assert.equal('1\n', typed, 'one digit and one Enter reached the pane, not two');
+  assert.equal('1', typed, 'one digit reached the pane, not two, and no Enter after it');
 });
 
 test('the same answer sent twice is refused the second time (#11)', async () => {
@@ -595,7 +598,7 @@ test('the same answer sent twice is refused the second time (#11)', async () => 
   assert.equal(409, second.status, JSON.stringify(second.body));
   assert.equal(false, second.body.ok);
   await wait(400);
-  assert.equal('1\n', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '');
+  assert.equal('1', fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '');
 });
 
 test('/soft-end and /compact refuse a pane with a dialog on it (#9)', async () => {
