@@ -1957,7 +1957,24 @@ function huginn {
     if (-not (_Huginn-ValidName $args[2])) { _Huginn-BadName ([string]$args[2]) 'new name' }
     if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }
     $ro = _Huginn-CanonName $args[1]; $rn = _Huginn-CanonName $args[2]
-    ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
+    # THROUGH THE DAEMON'S RENAME, LIKE KILL. A bare tmux rename-session left
+    # everything the daemon keeps by name under the OLD one: the state file, the
+    # send queue (a message queued for the old name was never delivered), the
+    # restore-registry row, and the project record (a member renamed this way
+    # dropped out of its project, and a lead's project was archived). The route
+    # moves all of it, and refuses a project member or lead in a sentence that
+    # says what to do instead. Raw tmux only when nothing answered at all (a
+    # terminal-only server has no daemon); never on an HTTP refusal.
+    $rr = _Huginn-Appd -H $H -Method 'POST' -Path "/v1/sessions/$ro/rename" -Body ('{"name":"' + $rn + '"}')
+    if (-not $rr.Reached) {
+      ssh -T $H "tmux rename-session -t '$(_Huginn-TmuxTarget $ro)' '$rn' && echo 'renamed: $ro -> $rn'"
+    } elseif ($rr.Code -match '^2') {
+      Write-Host "renamed: $ro -> $rn"
+    } else {
+      $m = _Huginn-AppdError $rr.Body
+      if (-not $m) { $m = "huginn-appd answered HTTP $($rr.Code)" }
+      _Huginn-Fail "huginn: could not rename '$ro': $m"
+    }
   } elseif ($args[0] -eq 'kill') {
     if ($args.Count -lt 2) { _Huginn-Fail "usage: huginn kill <name>" }
     if (-not (_Huginn-ValidName $args[1])) { _Huginn-BadName ([string]$args[1]) }

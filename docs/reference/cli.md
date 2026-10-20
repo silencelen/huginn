@@ -10,8 +10,8 @@ sub-verbs and the names of live sessions.
 
 | Kind | Commands | Needs |
 |---|---|---|
-| Over SSH | sessions, `list`, `status`, `rename`, `usage`, `-p`, `-y` | SSH to the server (`Host huginn`, or the alias in `HUGINN_HOST`) |
-| Over SSH, through the daemon | `end`, `kill`, `archive`, `revive`, `rounds`, `devices`, `headroom`, `projects`, `llm` | SSH, and the daemon (`huginn-appd`) running on the server. The command runs on the server and reads the access token there, so the token never reaches this computer. `kill` also works when the daemon is down. |
+| Over SSH | sessions, `list`, `status`, `usage`, `-p`, `-y` | SSH to the server (`Host huginn`, or the alias in `HUGINN_HOST`) |
+| Over SSH, through the daemon | `rename`, `end`, `kill`, `archive`, `revive`, `rounds`, `devices`, `headroom`, `projects`, `llm` | SSH, and the daemon (`huginn-appd`) running on the server. The command runs on the server and reads the access token there, so the token never reaches this computer. `rename` and `kill` also work when the daemon is down. |
 | On this computer, through huginn core | `huginn` (the console), `console`, `setup`, `core`, `device`, `uninstall` | huginn core installed (and, for most, running and paired) |
 | On this computer only | `desktop`, `update`, `version`, `help` | Nothing; `desktop` and `update` download from GitHub Releases |
 
@@ -29,7 +29,7 @@ See [Sessions](../guide/sessions.md).
 | `huginn solo [name]` | Attach and detach every other device from the session, so this one gets the full screen. Default: `main`. |
 | `huginn list` (`ls`) | List sessions on the server, and which ones have a device attached. |
 | `huginn status` (`st`) | The server's health: uptime, Claude Code sign-in, sessions, disk. |
-| `huginn rename <old> <new>` (`mv`) | Rename a session. |
+| `huginn rename <old> <new>` (`mv`) | Rename a session. A session that belongs to a project is refused, with what to do first. |
 | `huginn end <name> [--force]` | Soft end: type the wrap-up message into the session and, with auto-end on (the default), end it once Claude Code settles. Refused while a question waits. `--force` sends the message even when the server has no record of Claude Code running in the session. |
 | `huginn kill <name>` | Hard end: stop the session now. Unsaved work is lost. |
 | `huginn archive <name> [--now]` | End the session for good and keep the way back: title, working directory, a copy of the transcript and the exact `claude --resume` command. Wraps up first, like `end`; `--now` skips the wrap-up. |
