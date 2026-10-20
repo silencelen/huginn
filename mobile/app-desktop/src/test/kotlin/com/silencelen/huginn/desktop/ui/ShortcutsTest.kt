@@ -374,3 +374,27 @@ class TrayHelpLineTest {
         assertEquals(SHORTCUT_HELP.size, shortcutHelp(true).size)
     }
 }
+
+/**
+ * A palette hit on an app goes straight to the browser, so the palette lists
+ * only the rows the Apps pane would let you press: an address the app rules
+ * refuse (a public host, however it is spelled) is not a palette entry.
+ */
+class PaletteAppsGateTest {
+
+    private fun app(id: String, url: String) = com.silencelen.huginn.data.App(id = id, name = id, url = url)
+
+    @Test
+    fun `only openable apps reach the palette`() {
+        val items = paletteItems(
+            emptyList(), emptyList(),
+            apps = listOf(
+                app("local", "http://huginn:8088/"),
+                app("lan", "http://192.168.1.20:8096/"),
+                app("public", "https://example.com/"),
+                app("dotless-public", "http://0x08080808/"),
+            ),
+        ).filterIsInstance<PaletteItem.OpenApp>()
+        assertEquals(listOf("local", "lan"), items.map { it.id })
+    }
+}

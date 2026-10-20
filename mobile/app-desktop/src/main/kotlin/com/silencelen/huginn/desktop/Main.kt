@@ -56,6 +56,7 @@ import com.silencelen.huginn.desktop.tray.RavenMark
 import com.silencelen.huginn.desktop.tray.TrayIcons
 import com.silencelen.huginn.desktop.tray.TrayModel
 import com.silencelen.huginn.desktop.ui.Shell
+import com.silencelen.huginn.ui.AppRules
 import com.silencelen.huginn.ui.HeadroomRules
 import com.silencelen.huginn.ui.LocalAttachmentImages
 import com.silencelen.huginn.ui.LocalLinkPeek
@@ -964,8 +965,11 @@ fun main(args: Array<String>) {
                                     // reader then has to search again is a step
                                     // backwards. A URL that will not open is
                                     // copied instead of silently doing nothing.
+                                    // The palette only lists openable rows; the
+                                    // address is judged again here, as the
+                                    // link handler judges every link twice.
                                     is PaletteItem.OpenApp ->
-                                        if (!openInBrowser(item.url)) {
+                                        if (AppRules.urlProblem(item.url) != null || !openInBrowser(item.url)) {
                                             store.openView(View.APPS)
                                         }
                                     is PaletteItem.Verb -> when (item.shortcut) {

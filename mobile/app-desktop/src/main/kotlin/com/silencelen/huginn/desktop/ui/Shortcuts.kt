@@ -426,7 +426,13 @@ fun paletteItems(
                     .joinToString(" · "),
             )
         } +
-        apps.map {
+        // ⚠ ONLY THE ROWS THE APPS PANE WOULD LET YOU PRESS. A palette hit goes
+        // straight to the browser, so it gets the pane's guard
+        // ([AppRules.openable]: the host as a browser reads it, on this host, the
+        // LAN, the tailnet or the mesh) and not merely the http(s) check every
+        // link gets; otherwise the palette is a way round the rule that the
+        // registry is not a list of links to anywhere.
+        apps.filter(AppRules::openable).map {
             PaletteItem.OpenApp(
                 it.id,
                 it.url,
