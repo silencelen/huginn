@@ -165,6 +165,13 @@ class ScratchpadSaver(
         /** Writes issued for this page and not yet answered. */
         var inFlight: Int = 0
 
+        /**
+         * The newest TEXT write issued for this page, until it answers. Sending
+         * empties [held], so while the request is out this is the only copy of
+         * the words outside it — see [open].
+         */
+        var sending: Write? = null
+
         var line: State = State.IDLE
         var note: String? = null
 
@@ -186,6 +193,8 @@ class ScratchpadSaver(
         val name: String?,
         val rev: Int,
         val gen: Long,
+        /** The page as it stood when [text] left: what [open] shows while this is out. */
+        val pad: Scratchpad? = null,
     )
 
     /**
@@ -227,7 +236,13 @@ class ScratchpadSaver(
             page.held != null ||
             page.inFlight > 0 ||
             fresh.rev < page.rev
-        val ours = page.held ?: _pad.value?.takeIf { it.id == fresh.id }
+        // ⚠ A WRITE IN THE AIR IS LOCAL TEXT TOO. Leaving a page sends what was
+        // typed and empties the hold, so a page re-opened before that write
+        // answered had nothing "local" left: the fetch from before the write was
+        // shown, and the write then either stamped its rev onto that stale copy
+        // (the next keystroke overwrote the saved text) or failed with nothing to
+        // hold. Both silent.
+        val ours = page.held ?: _pad.value?.takeIf { it.id == fresh.id } ?: page.sending?.pad
 
         // Whatever is still in the air lands under its OWN id first: content is
         // fetched on open and never polled, so this is not a merge point.
@@ -238,9 +253,18 @@ class ScratchpadSaver(
         // the next write conflict instead of overwriting the newer copy silently,
         // and a conflict is an answer the person gets to see.
         val shown = if (older) (ours ?: fresh) else fresh
-        page.rev = if (shown === fresh) fresh.rev else maxOf(page.rev, shown.rev)
-        page.mark = tick()
-        page.broke = page.mark
+        if (shown === fresh) {
+            page.rev = fresh.rev
+            page.mark = tick()
+            page.broke = page.mark
+        } else {
+            // ⚠ OUR OWN TEXT BACK ON SCREEN IS NOT A CHANGE. Marking it as one
+            // made every write still owed look superseded: its failure was not
+            // re-held (invariant 3) and its rev could not be stamped (invariant
+            // 2), which turned the next save into a conflict that threw the
+            // text away.
+            page.rev = maxOf(page.rev, shown.rev)
+        }
         // A page with nothing owed has nothing to report: the server's copy IS
         // what is true, so an old line about a write that has since been settled
         // would be a claim about work that is over. A page that is still holding
@@ -395,7 +419,8 @@ class ScratchpadSaver(
             page.held = null
             page.heldName = null
             page.inFlight += 1
-            val write = Write(id, text?.content, name, text?.rev ?: page.rev, page.mark)
+            val write = Write(id, text?.content, name, text?.rev ?: page.rev, page.mark, pad = text)
+            if (text != null) page.sending = write
             val previous = writeJob
             writeJob = scope.launch(lane) {
                 // Single-file, so a burst of typing cannot put two PATCHes on the
@@ -409,20 +434,26 @@ class ScratchpadSaver(
 
     private suspend fun persist(w: Write): Result<Scratchpad> {
         val page = pageOf(w.id)
-        val lineage = page.broke <= w.gen
         // The write goes out on the newest rev of ITS OWN lineage. A rev learned
         // from a copy this text does not descend from would turn a conflict the
         // daemon should refuse into an overwrite nobody sees (invariant 2).
-        val rev = if (lineage) page.rev else w.rev
+        val rev = if (page.broke <= w.gen) page.rev else w.rev
         page.line = State.SAVING
         if (showing(w.id)) _state.value = State.SAVING
 
         val result = runCatching { save(w.id, rev, w.name, w.text) }
         page.inFlight -= 1
+        if (page.sending === w) page.sending = null
+        // ⚠ ASKED AGAIN NOW, not before the save: an open() while it was in the
+        // air can have put a copy on screen that this write did not produce, and
+        // the answer's rev belongs only to text that descends from the write. A
+        // rename writes no text, so a copy adopted at exactly the rev it went out
+        // on holds the very text the answer describes.
+        val lineage = page.broke <= w.gen || (w.text == null && page.rev == rev)
 
         result.onSuccess { r ->
-            page.rev = r.pad.rev
             if (r.conflict) {
+                page.rev = r.pad.rev
                 // The other device saved first, and their copy is what is true
                 // now. The unsent tail goes with it — that is what losing a
                 // conflict means — but never quietly: the line says so.
@@ -449,6 +480,10 @@ class ScratchpadSaver(
                     _note.value = note
                 }
             } else {
+                // Outside the lineage the screen holds a copy adopted with its OWN
+                // rev, kept so the next write conflicts; taking this one too would
+                // let that write overwrite the text just saved.
+                if (lineage) page.rev = r.pad.rev
                 page.note = null
                 page.line = if (page.held != null || page.heldName != null) State.PENDING else State.SAVED
                 // Only the REV is news — and only for text this write produced.
