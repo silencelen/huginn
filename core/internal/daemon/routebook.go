@@ -161,7 +161,7 @@ func (d *Daemon) routeHandlers(mux *http.ServeMux) {
 			bad(w, 500, err.Error())
 			return
 		}
-		d.restartRunner(d.ctx)
+		d.reroute()
 		answer(w)
 	})
 	mux.HandleFunc("DELETE /core/routes", func(w http.ResponseWriter, r *http.Request) {
@@ -189,7 +189,7 @@ func (d *Daemon) routeHandlers(mux *http.ServeMux) {
 			bad(w, 500, err.Error())
 			return
 		}
-		d.restartRunner(d.ctx)
+		d.reroute()
 		answer(w)
 	})
 	mux.HandleFunc("PATCH /core/routes", func(w http.ResponseWriter, r *http.Request) {
@@ -222,7 +222,7 @@ func (d *Daemon) routeHandlers(mux *http.ServeMux) {
 			bad(w, 500, err.Error())
 			return
 		}
-		d.restartRunner(d.ctx)
+		d.reroute()
 		answer(w)
 	})
 }

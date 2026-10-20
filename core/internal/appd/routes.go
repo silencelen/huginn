@@ -60,34 +60,95 @@ type routeState struct {
 	onRoute  func(RouteEvent)
 	dialT    time.Duration
 	lastNote []time.Time // last health report per address, to report a steady state rarely
+	gen      uint64      // bumped by every Reroute: an index from before it means nothing
 }
 
 func (c *Client) initRoutes(base *url.URL, cfg Config) error {
-	c.routes = []*url.URL{base}
+	list, err := routeList(base, cfg.Routes)
+	if err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	c.onRoute = cfg.OnRoute
+	c.setRoutes(base, list, cfg.Fixed)
+	return nil
+}
+
+// routeList is base and then the other addresses, normalised and refused as
+// New refuses its URL, without repeats.
+func routeList(base *url.URL, others []string) ([]*url.URL, error) {
+	list := []*url.URL{base}
 	seen := map[string]bool{base.String(): true}
-	for _, r := range cfg.Routes {
+	for _, r := range others {
 		raw := NormalizeURL(r)
 		if err := URLRefusal(raw); err != nil {
-			return fmt.Errorf("route %s: %w", r, err)
+			return nil, fmt.Errorf("route %s: %w", r, err)
 		}
 		u, _ := url.Parse(raw)
 		if seen[u.String()] {
 			continue
 		}
 		seen[u.String()] = true
-		c.routes = append(c.routes, u)
+		list = append(list, u)
 	}
-	c.fixed = cfg.Fixed
-	c.onRoute = cfg.OnRoute
-	c.health = make([]RouteHealth, len(c.routes))
-	c.lastNote = make([]time.Time, len(c.routes))
-	for i, u := range c.routes {
-		c.health[i].URL = trimURL(u)
+	return list, nil
+}
+
+// setRoutes makes list the address book, on its first address. What is known
+// about an address that stays in the book is kept. rmu held.
+func (c *Client) setRoutes(base *url.URL, list []*url.URL, fixed bool) {
+	was := map[string]int{}
+	for i, h := range c.health {
+		was[h.URL] = i
 	}
-	if len(c.routes) > 1 && !c.fixed {
+	health := make([]RouteHealth, len(list))
+	lastNote := make([]time.Time, len(list))
+	for i, u := range list {
+		health[i].URL = trimURL(u)
+		if j, ok := was[health[i].URL]; ok {
+			health[i], lastNote[i] = c.health[j], c.lastNote[j]
+		}
+	}
+	c.base, c.routes, c.health, c.lastNote = base, list, health, lastNote
+	c.active, c.fixed, c.dialT = 0, fixed, 0
+	if len(list) > 1 && !fixed {
 		c.dialT = RouteDialTimeout
 	}
+	c.gen++
+}
+
+// Reroute makes first and others this client's addresses, first preferred,
+// with no switching when fixed - what New does with Config.URL, Routes and
+// Fixed - for the same daemon: its route book was edited, or it was paired
+// again on another address.
+//
+// ⚠ IN PLACE, UNDER WHATEVER IS RUNNING. The core used to rebuild the client
+// and restart the device runner for a route edit; a job running then had its
+// delivery cut off and its answer lost, and the edit's IPC call waited for the
+// job. Everything holding this client (the runner and its job, the watch
+// stream, the /appd proxy) uses the new book from its next request; a request
+// already on its way finishes where it went.
+func (c *Client) Reroute(first string, others []string, fixed bool) error {
+	raw := NormalizeURL(first)
+	if err := URLRefusal(raw); err != nil {
+		return err
+	}
+	base, _ := url.Parse(raw)
+	list, err := routeList(base, others)
+	if err != nil {
+		return err
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	c.setRoutes(base, list, fixed)
 	return nil
+}
+
+func (c *Client) dialTimeout() time.Duration {
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	return c.dialT
 }
 
 func trimURL(u *url.URL) string { return strings.TrimSuffix(u.String(), "/") }
@@ -117,25 +178,25 @@ func (c *Client) Routes() []RouteHealth {
 // withRoutes runs attempt on the active address and, when it never reached
 // appd there and another address is allowed, once more on the next one.
 func (c *Client) withRoutes(ctx context.Context, attempt func() error) error {
-	i := c.activeIndex()
+	i, gen := c.activeIndex()
 	err := attempt()
-	c.note(i, err)
+	c.note(i, gen, err)
 	if !c.notDelivered(ctx, err) {
 		return err
 	}
-	next, ok := c.switchFrom(i, err)
+	next, gen, ok := c.switchFrom(i, gen, err)
 	if !ok {
 		return err
 	}
 	err = attempt()
-	c.note(next, err)
+	c.note(next, gen, err)
 	return err
 }
 
-func (c *Client) activeIndex() int {
+func (c *Client) activeIndex() (int, uint64) {
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
-	return c.active
+	return c.active, c.gen
 }
 
 // notDelivered: the request never reached appd at this address, so another
@@ -147,17 +208,6 @@ func (c *Client) notDelivered(ctx context.Context, err error) bool {
 	var se *StatusError
 	if errors.As(err, &se) || errors.Is(err, errBodySent) || Classify(err) == KindAuth {
 		return false
-	}
-	// The address did not prove to be this daemon: a certificate that is not
-	// the pinned one, a proof that fails, or no TLS at all ("older than
-	// 3.11" - on an address that is somebody else's machine, that is what
-	// they say). The proof never carries the token, so nothing was sent.
-	var pm *PinMismatchError
-	if errors.As(err, &pm) || errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) {
-		c.rmu.Lock()
-		several := len(c.routes) > 1
-		c.rmu.Unlock()
-		return several // see the top of this file
 	}
 	var oe *net.OpError
 	if errors.As(err, &oe) && oe.Op == "dial" {
@@ -171,6 +221,20 @@ func (c *Client) notDelivered(ctx context.Context, err error) bool {
 			return true
 		}
 	}
+	// The address did not prove to be this daemon: a certificate that is not
+	// the pinned one, a proof that fails or is answered with anything else (a
+	// 404, a web page, a stall), a handshake that could not be finished, or no
+	// TLS at all ("older than 3.11" - on an address that is somebody else's
+	// machine, that is what they say). The proof never carries the token, so
+	// nothing was sent.
+	var pm *PinMismatchError
+	var ns notSent
+	if errors.As(err, &pm) || errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) || errors.As(err, &ns) {
+		c.rmu.Lock()
+		several := len(c.routes) > 1
+		c.rmu.Unlock()
+		return several // see the top of this file
+	}
 	return false
 }
 
@@ -178,17 +242,18 @@ func (c *Client) notDelivered(ctx context.Context, err error) bool {
 // other address that has not failed more recently than it answered, else
 // simply the next one. false: switching is not allowed or there is nowhere
 // to go.
-func (c *Client) switchFrom(failed int, why error) (int, bool) {
+func (c *Client) switchFrom(failed int, gen uint64, why error) (int, uint64, bool) {
 	c.rmu.Lock()
 	if c.fixed || len(c.routes) < 2 {
 		c.rmu.Unlock()
-		return 0, false
+		return 0, 0, false
 	}
-	if c.active != failed {
-		// Another request already moved it; use what it chose.
-		i := c.active
+	if c.gen != gen || c.active != failed {
+		// The book was edited, or another request already moved it: once
+		// more on what is active now.
+		i, g := c.active, c.gen
 		c.rmu.Unlock()
-		return i, true
+		return i, g, true
 	}
 	next := -1
 	for k := 1; k < len(c.routes); k++ {
@@ -210,12 +275,12 @@ func (c *Client) switchFrom(failed int, why error) (int, bool) {
 	if on != nil {
 		on(RouteEvent{From: from, To: to, Why: why.Error()})
 	}
-	return next, true
+	return next, gen, true
 }
 
-// note records how one attempt on address i went. A failure that is appd's
-// own answer (a status) still proves the address works.
-func (c *Client) note(i int, err error) {
+// note records how one attempt on address i of book gen went. A failure that
+// is appd's own answer (a status) still proves the address works.
+func (c *Client) note(i int, gen uint64, err error) {
 	var se *StatusError
 	ok := err == nil || errors.As(err, &se)
 	link := !ok && c.notDelivered(context.Background(), err)
@@ -223,9 +288,9 @@ func (c *Client) note(i int, err error) {
 		return // not about the address (the token, the caller, an interception)
 	}
 	c.rmu.Lock()
-	if i >= len(c.health) {
+	if gen != c.gen || i >= len(c.health) {
 		c.rmu.Unlock()
-		return
+		return // about an address of a book edited since
 	}
 	h := &c.health[i]
 	now := time.Now()
@@ -260,7 +325,7 @@ func (c *Client) TryPreferred(ctx context.Context) bool {
 		c.rmu.Unlock()
 		return false
 	}
-	pref := c.routes[0]
+	pref, gen := c.routes[0], c.gen
 	c.rmu.Unlock()
 	tok, err := ResolveToken(c.tokens)
 	if err != nil || pref.Scheme != "https" {
@@ -272,12 +337,16 @@ func (c *Client) TryPreferred(ctx context.Context) bool {
 	}
 	conn, err := c.dialPinned(pins)(ctx, "tcp", hostPort(pref))
 	if err != nil {
-		c.note(0, err)
+		c.note(0, gen, err)
 		return false
 	}
 	conn.Close()
-	c.note(0, nil)
+	c.note(0, gen, nil)
 	c.rmu.Lock()
+	if c.gen != gen {
+		c.rmu.Unlock()
+		return false // edited meanwhile, and a new book starts on its first address
+	}
 	from := trimURL(c.routes[c.active])
 	c.active = 0
 	on := c.onRoute

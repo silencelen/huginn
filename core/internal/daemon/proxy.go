@@ -36,7 +36,15 @@ func (d *Daemon) apiClient() *appd.Client {
 }
 
 func (d *Daemon) proxy(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/appd")
+	// ⚠ THE PATH AS IT ARRIVED, STILL ESCAPED, never r.URL.Path. That one is
+	// decoded, and the appd client parses its path as a URL: a segment a front
+	// end escaped on purpose (HuginnClient.seg makes the chat id
+	// "../sessions/main?" the one segment "..%2Fsessions%2Fmain%3F") came back
+	// to life as "/", "?" and "..", and the chat's Delete reached appd as
+	// DELETE /v1/sessions/main. Escaped, appd reads exactly what the front end
+	// sent, as it does when the front end talks to it directly, and an address
+	// inside a segment keeps its slashes there.
+	path := strings.TrimPrefix(r.URL.EscapedPath(), "/appd")
 	if !strings.HasPrefix(path, "/v1/") {
 		ipc.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "the core forwards /appd/v1/... only"})
 		return

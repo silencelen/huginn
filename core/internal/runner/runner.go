@@ -91,8 +91,10 @@ type Runner struct {
 
 	mu         sync.Mutex
 	status     Status
-	active     func() // cancels the in-flight run, if any
-	pollCancel func() // cancels the in-flight long poll, if any
+	active     func()        // cancels the in-flight run, if any
+	pollCancel func()        // cancels the in-flight long poll, if any
+	beatNow    chan struct{} // the enrolled session's "beat now", if any
+	cancelAll  bool          // CancelJobs was called: every job is cancelled as it starts
 }
 
 // New returns a runner; call Serve.
@@ -111,21 +113,50 @@ func New(h Hooks) *Runner {
 
 // Kick makes a settings change (on/off, scope, lock policy) take effect now.
 //
-// ⚠ IT MUST CUT THE LONG POLL. The loop re-reads its settings between polls, and
-// a poll is held open for up to 25 s — so without this, "turn off" and a scope
-// change waited for the next empty poll (caught by core/test/e2e.sh). Only the
-// POLL is cut, never a running job: a job finishes under the settings it started
-// with, and the next one sees the new ones.
+// ⚠ IT CUTS THE LONG POLL ONLY TO TURN THE MACHINE OFF. The loop re-reads its
+// settings between polls, and a poll is held open for up to 25 s, so without a
+// kick "turn off" and a scope change waited for the next empty poll (caught by
+// core/test/e2e.sh). But a cut poll may be the one appd is answering with work
+// at that instant: the item goes into a closed connection, and the next poll
+// made appd fail the chat as "the runner restarted" (Settings sends a change
+// per keystroke in its path fields). So a change that keeps the machine on
+// rides a beat at once (scope and lock policy are on it) and the poll stays
+// open; a job that arrives meanwhile starts under the settings of that moment.
+// Turning off still cuts it: no poll follows, the row is retired, and appd
+// says of anything in flight that the device was removed, which is true.
+// Never a running job: it finishes under the settings it started with.
 func (r *Runner) Kick() {
+	off := !r.h.Conf().Enabled
 	r.mu.Lock()
-	c := r.pollCancel
+	cut, beat := r.pollCancel, r.beatNow
 	r.mu.Unlock()
-	if c != nil {
-		c()
+	if off && cut != nil {
+		cut()
+	}
+	if beat != nil {
+		select {
+		case beat <- struct{}{}:
+		default:
+		}
 	}
 	select {
 	case r.wake <- struct{}{}:
 	default:
+	}
+}
+
+// CancelJobs stops the job running now as a Stop from huginn does (the child
+// is killed and the run ends as cancelled), and any job that starts after it.
+// For a runner leaving its pairing for good (unpair, a pairing with another
+// huginn): cancelling Serve's context alone leaves a running child to finish
+// on its own, with nobody left to hear its answer.
+func (r *Runner) CancelJobs() {
+	r.mu.Lock()
+	r.cancelAll = true
+	c := r.active
+	r.mu.Unlock()
+	if c != nil {
+		c()
 	}
 }
 
@@ -151,6 +182,9 @@ var (
 	pollBlipPause  = 3 * time.Second
 	flushEvery     = 500 * time.Millisecond
 	startupSilence = 180 * time.Second
+	// endPatience bounds the retries of a run's last POSTs: appd gives a run
+	// up after five minutes without a word, and the next job waits on this one.
+	endPatience = 5 * time.Minute
 )
 
 const pollFailuresBeforeReenrol = 5
@@ -248,10 +282,20 @@ func (r *Runner) session(ctx context.Context, conf Config) error {
 	defer stop()
 	beatNow := make(chan struct{}, 1)
 	go r.beatLoop(sctx, id, beatNow)
+	r.mu.Lock()
+	r.beatNow = beatNow // Kick's way to the daemon while the poll stays open
+	r.mu.Unlock()
+	defer func() { r.mu.Lock(); r.beatNow = nil; r.mu.Unlock() }()
 
 	failures := 0
 	lastScope := policy.ParseScope(conf.Scope)
 	for sctx.Err() == nil {
+		// The settings are read again just below, which is what a Kick asks
+		// for; a wake left over would cut Serve's next wait short.
+		select {
+		case <-r.wake:
+		default:
+		}
 		live := r.h.Conf()
 		if !live.Enabled {
 			return nil // Serve sees Enabled=false and pays the unenrol debt

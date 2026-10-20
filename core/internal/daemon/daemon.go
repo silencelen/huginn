@@ -42,6 +42,8 @@ type Daemon struct {
 	watch     *watcher        // appd watch stream -> tray summary + notices
 	installID string          // X-Huginn-Client
 
+	restartMu sync.Mutex // one runner stop-then-start at a time (restartRunner)
+
 	mu      sync.Mutex
 	api     *appd.Client
 	run     *runner.Runner
@@ -137,7 +139,9 @@ func Run(ctx context.Context, o Options) error {
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(sctx)
-	d.stopRunner()
+	// A job still running is not stopped here: an update waits for it before
+	// asking, and a service manager stopping the core signals the child too.
+	d.stopRunner(false)
 	return err
 }
 
@@ -181,20 +185,47 @@ func (p pinStore) SavePins(ps appd.PinSet) error {
 }
 
 // restartRunner (re)builds the appd client from the current config and starts
-// a fresh runner on it. Called at start and after a re-pair.
+// a fresh runner on it: at start, after a pairing with another huginn, and
+// after an unpair (which leaves none). A route edit, or the same huginn paired
+// again, re-routes the running client instead (reroute).
+//
+// ⚠ ONE AT A TIME, AND THE OLD RUNNER IS GONE BEFORE THE NEW ONE IS PUBLISHED.
+// stopRunner used to unpublish the runner first and wait for it after, so a
+// second call (a retried change, the next address the desktop added) found
+// nothing to stop and started a runner of its own, which the first call then
+// overwrote. That runner could no longer be stopped by anything, kept polling
+// as this same device, and each of its polls made appd drop the other
+// runner's job. Until the swap, the old client keeps serving the /appd proxy
+// and busy() still sees the old runner's job.
+//
+// ⚠ A JOB THE OLD RUNNER IS RUNNING IS STOPPED. It ran for the huginn this
+// core is leaving and can no longer report to it; left alone, the restart
+// waited on it (an IPC call hung for the rest of the job) while an act run
+// went on changing files for nobody.
 func (d *Daemon) restartRunner(ctx context.Context) {
-	d.stopRunner()
+	d.restartMu.Lock()
+	defer d.restartMu.Unlock()
+	d.restartRunnerLocked(ctx)
+}
+
+func (d *Daemon) restartRunnerLocked(ctx context.Context) {
+	if old := d.haltRunner(true); old != nil {
+		defer old.Close()
+	}
 	cfg, _, err := d.st.Load()
 	if err != nil {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Note: "Cannot read core.json: " + err.Error()})
 		return
 	}
 	if cfg.Appd.URL == "" {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "Not paired with huginn — run `huginn core pair`"})
 		return
 	}
 	api, err := appd.New(d.apiConfig(cfg))
 	if err != nil {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "The saved huginn address is refused: " + err.Error()})
 		return
 	}
@@ -211,9 +242,7 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 	})
 	rctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	d.mu.Lock()
-	d.api, d.run, d.stopRun, d.runDone = api, r, cancel, done
-	d.mu.Unlock()
+	d.setRunner(api, r, cancel, done)
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
@@ -239,18 +268,63 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 	}()
 }
 
-func (d *Daemon) stopRunner() {
+// stopRunner stops the runner and leaves none; cancelJobs stops a job it is
+// running too (see haltRunner).
+func (d *Daemon) stopRunner(cancelJobs bool) {
+	d.restartMu.Lock()
+	defer d.restartMu.Unlock()
+	old := d.haltRunner(cancelJobs)
+	d.setRunner(nil, nil, nil, nil)
+	if old != nil {
+		old.Close()
+	}
+}
+
+// haltRunner stops the runner and waits until it has. restartMu is held. The
+// runner and its client stay published until the caller replaces them, and
+// the client is returned for the caller to close after that. Without
+// cancelJobs a job it is running is left to finish, and this waits for it.
+func (d *Daemon) haltRunner(cancelJobs bool) *appd.Client {
 	d.mu.Lock()
-	stop, done, api := d.stopRun, d.runDone, d.api
-	d.stopRun, d.runDone, d.run, d.api = nil, nil, nil, nil
+	stop, done, api, r := d.stopRun, d.runDone, d.api, d.run
 	d.mu.Unlock()
 	if stop != nil {
+		if cancelJobs && r != nil {
+			r.CancelJobs()
+		}
 		stop()
 		<-done
 	}
-	if api != nil {
-		api.Close()
+	return api
+}
+
+// reroute gives the running client the saved route book, in place
+// (appd.Client.Reroute): a route edit, or the same huginn paired again on
+// another address, leaves the runner and any job it is running alone, and
+// the IPC call that asked for it answers at once.
+func (d *Daemon) reroute() {
+	d.restartMu.Lock()
+	defer d.restartMu.Unlock()
+	cfg, _, err := d.st.Load()
+	if api := d.apiClient(); err == nil && api != nil {
+		ac := d.apiConfig(cfg)
+		if err = api.Reroute(ac.URL, ac.Routes, ac.Fixed); err == nil {
+			// A runner waiting to retry after "Not reaching huginn" tries the
+			// new book now, as a fresh runner would have.
+			d.kick()
+			return
+		}
+		d.logf("the saved huginn addresses are refused (%v); starting the runner again on them", err)
 	}
+	// No client to re-route (the saved address was refused before), or a book
+	// it refuses: built from the saved config, which reports why.
+	d.restartRunnerLocked(d.ctx)
+}
+
+func (d *Daemon) setRunner(api *appd.Client, r *runner.Runner, stop context.CancelFunc, done chan struct{}) {
+	d.mu.Lock()
+	d.api, d.run, d.stopRun, d.runDone = api, r, stop, done
+	d.mu.Unlock()
 }
 
 func (d *Daemon) runnerConf() runner.Config {
@@ -264,10 +338,25 @@ func (d *Daemon) runnerConf() runner.Config {
 		name = defaultName()
 	}
 	return runner.Config{
-		Enabled: dv.Enabled, ID: dv.ID, Name: name, Scope: dv.Scope, Root: dv.Root,
+		Enabled: dv.Enabled, ID: dv.ID, Name: name, Scope: deviceScope(dv), Root: dv.Root,
 		Claude: dv.Claude, LLM: dv.LLM, Node: dv.Node, ActWhileLocked: dv.ActWhileLocked,
 		UnenrolOwed: dv.UnenrolOwed,
 	}
+}
+
+// deviceScope is the scope this machine offers: the saved one, or the
+// enrolment default while none has been chosen.
+//
+// ⚠ ONE ANSWER FOR SETTINGS AND THE RUNNER. Nothing saves a scope until the
+// owner picks one (turning the device on sends only `enabled`), and ParseScope
+// floors "" to generate, as it does any junk: the runner enrolled a
+// local-model server that could run no ask or act work while Settings showed
+// Look selected.
+func deviceScope(dv store.Device) string {
+	if dv.Scope == "" {
+		return policy.EnrolDefault
+	}
+	return policy.ParseScope(dv.Scope)
 }
 
 func defaultName() string {
@@ -331,10 +420,7 @@ func (d *Daemon) deviceView(s *runner.Status) DeviceView {
 	}
 	cfg, _, _ := d.st.Load()
 	dv := cfg.Device
-	scope := policy.ParseScope(dv.Scope)
-	if dv.Scope == "" {
-		scope = policy.EnrolDefault
-	}
+	scope := deviceScope(dv)
 	name := dv.Name
 	if name == "" {
 		name = defaultName()
@@ -663,9 +749,12 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 	// POST /core/unpair: Settings → Remove this computer. The GUI has already
 	// deleted this machine's rows on appd; the core stops its runner and forgets
 	// the token, the address, the pins and the device id, so nothing here can
-	// re-enrol with a credential the owner just took away.
+	// re-enrol with a credential the owner just took away. A job it is running
+	// is stopped with it: appd dropped that run with the rows, and the call
+	// must not wait out a job (the desktop gives up after 30 s and calls the
+	// removal failed) while an act run goes on with the machine removed.
 	mux.HandleFunc("POST /core/unpair", func(w http.ResponseWriter, r *http.Request) {
-		d.stopRunner()
+		d.stopRunner(true)
 		if err := d.secrets.Delete(store.SecretToken); err != nil && !errors.Is(err, store.ErrNotFound) {
 			ipc.WriteJSON(w, 500, map[string]string{"error": "forgetting the token: " + err.Error()})
 			return
@@ -689,12 +778,28 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
+		// The huginn paired until now: its token and the certificates it proved.
+		tokBefore, _ := d.secrets.Get(store.SecretToken)
+		var pinsBefore []string
+		if cfg, _, err := d.st.Load(); err == nil {
+			for _, ps := range cfg.Pins {
+				pinsBefore = append(pinsBefore, ps...)
+			}
+		}
 		fp, saved, err := d.pair(r.Context(), p)
 		if err != nil {
 			ipc.WriteJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
-		d.restartRunner(d.ctx)
+		// ⚠ THE SAME HUGINN KEEPS ITS RUNNER: the same token, or a certificate
+		// it had already proved (its token was rotated). Its device row and a
+		// job running for it stay valid, so only the addresses change. Another
+		// huginn starts over (restartRunner).
+		if strings.TrimSpace(tokBefore) == strings.TrimSpace(p.Token) || (fp != "" && slices.Contains(pinsBefore, fp)) {
+			d.reroute()
+		} else {
+			d.restartRunner(d.ctx)
+		}
 		ipc.WriteJSON(w, 200, map[string]string{"ok": "paired", "fingerprint": fp, "url": saved})
 	})
 }

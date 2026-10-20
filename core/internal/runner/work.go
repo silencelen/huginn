@@ -97,18 +97,41 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 		tail := pending
 		pending = nil
 		mu.Unlock()
+		// ⚠ THE END IS RETRIED LIKE THE MIDDLE. The child usually prints its
+		// result and exits before the next flush, so the answer rides the tail.
+		// Sent once, one 502 or reset lost the answer while the run still ended
+		// as a clean finish, and a lost ending let the next poll fail the run as
+		// "the runner restarted". Sending again is safe: appd drops a chunk it
+		// has seen (its chunk hashes) and answers 404 to an ending it applied.
+		// Given up on a refusal, a dead token, a stopped runner or endPatience.
+		giveUp := time.Now().Add(endPatience)
+		deliver := func(ev appd.Events) error {
+			for blips := 1; ; blips++ {
+				_, err := post(ev)
+				wait := retryDelay(blips)
+				if err == nil || appd.IsPermanent(err) || appd.IsAuth(err) || ctx.Err() != nil || time.Now().Add(wait).After(giveUp) {
+					return err
+				}
+				r.h.Logf("could not send the end of %s (retrying in %s): %v", w.ID, wait, err)
+				select {
+				case <-ctx.Done():
+					return err
+				case <-time.After(wait):
+				}
+			}
+		}
 		// ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. In one POST, an oversized tail
 		// took the terminal frame down with it and its retry was identically 413:
 		// the ending could NEVER be delivered.
 		for _, chunk := range batchLines(tail) {
-			if _, err := post(appd.Events{Lines: chunk}); err != nil {
+			if err := deliver(appd.Events{Lines: chunk}); err != nil {
 				r.h.Logf("could not send part of the output of %s: %v", w.ID, err)
 				if appd.IsPermanent(err) {
 					break
 				}
 			}
 		}
-		if _, err := post(appd.Events{Done: true, ExitCode: exitCode, Error: errText}); err != nil {
+		if err := deliver(appd.Events{Done: true, ExitCode: exitCode, Error: errText}); err != nil {
 			r.h.Logf("could not report the ending of %s: %v", w.ID, err)
 		}
 		if errText != "" {
@@ -176,8 +199,12 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 	}
 	r.mu.Lock()
 	r.active = kill
+	cancelAll := r.cancelAll // a CancelJobs that came before this kill was registered
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.active = nil; r.mu.Unlock() }()
+	if cancelAll {
+		kill()
+	}
 
 	// Startup-liveness watchdog: a child that wedges at startup (a hung
 	// auto-update, broken credentials) emits NOTHING and would hold the job slot

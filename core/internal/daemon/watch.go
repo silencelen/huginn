@@ -159,7 +159,13 @@ func (w *watcher) digest(wd notify.Watch) {
 	w.mu.Unlock()
 	w.publishSummary(summarize(wd))
 	for _, dc := range decisions {
-		w.d.hub.Publish(ipc.Event{Name: traystate.EventNotice, Data: render(dc)})
+		// ⚠ SENT, NEVER RETAINED. A notice is news of the moment it was
+		// decided. Retained, the newest one was replayed to every tray that
+		// connected later (the next sign-in, a reconnect): a toast hours after
+		// the fact, which appd had already sent to Telegram because no tray was
+		// there to show it. What is still true rides the summary above, which
+		// IS retained: the icon and menu name the sessions that need you.
+		w.d.hub.Send(ipc.Event{Name: traystate.EventNotice, Data: render(dc)})
 	}
 }
 
