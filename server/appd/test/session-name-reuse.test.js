@@ -360,3 +360,35 @@ test('a member spawn leaves a live session that already has the name alone', asy
   const row = (await api('/v1/sessions')).body.sessions.find((x) => x.name === squatter);
   assert.equal(row && row.state, 'attention', 'it still reads as needing an answer');
 });
+
+// ------------------------------------------------------------- a rename
+
+test('a session renamed while its archive is pending is archived when it settles, not just ended', async () => {
+  // A graceful archive waits for the wrap-up turn to settle, and a rename in
+  // that window is an ordinary thing to do. The archive is what was asked for:
+  // ending the session without the card and the transcript copy loses the
+  // conversation once Claude Code sweeps its own transcript.
+  const name = mkPane('arch-ren');
+  const id = crypto.randomUUID();
+  const transcript = writeTranscript(id, 'the last thing it said');
+  writeState(name, 'running', { sessionId: id, transcript });
+  const r = await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ note: 'keep me' }) });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal(r.body.pending, true);
+  writeState(name, 'running', { sessionId: id, transcript });   // the wrap-up turn: the settle timer arms
+  await wait(500);
+
+  const to = 'arch-renamed';
+  madeSessions.add(to);
+  const rn = await api(`/v1/sessions/${name}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+  assert.equal(rn.status, 200, JSON.stringify(rn.body));
+  // The hook names the state file after whatever tmux calls the session now.
+  await settle(to, { sessionId: id, transcript });
+
+  const archived = await untilTrue(async () => (await archives()).some((a) => a.id === id && a.endedAt), 20_000, 200);
+  assert.ok(archived, 'the conversation was archived when it settled');
+  const row = (await archives()).find((a) => a.id === id);
+  assert.equal(row.tmuxName, to, 'under the name it had when it ended');
+  assert.equal(row.note, 'keep me', 'with the note the archive was asked for with');
+  assert.equal(alive(to), false, 'and the session was ended');
+});

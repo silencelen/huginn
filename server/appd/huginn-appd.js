@@ -11603,6 +11603,14 @@ async function handleRequest(req, res) {
       if (actual !== from) {
         if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
         if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
+        // ⚠ AND THE ARCHIVE INTENT BESIDE IT, which is the half that says what the
+        // settle does. Left on the old name, a graceful archive renamed mid wrap-up
+        // was killed with no card and no transcript copy, and the stray intent then
+        // archived the next session to be soft-ended under the old name.
+        if (archiveIntents.has(from)) {
+          archiveIntents.set(actual, archiveIntents.get(from));
+          archiveIntents.delete(from);
+        }
         // ⚠ AND THE TWO THE RENAME USED TO DROP ON THE FLOOR. Both belong to a
         // session that was created SECONDS ago, which is exactly when a client
         // renames one — the app's create sheet names the session after the fact.
