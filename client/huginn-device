@@ -1705,9 +1705,19 @@ async function main() {
         console.error(termSafe(`  --force: clearing this machine anyway. The row ${conf.id} ("${conf.name}")`));
         console.error('  is STILL enrolled and nothing here can remove it any more — the token');
         console.error('  that could is being deleted with everything else. Retire it from the');
-        console.error('  host, where the token lives:');
-        console.error(`    curl -X DELETE -H @<(printf 'Authorization: Bearer %s\\n' "$(cat /etc/huginn-appd/token)") \\`);
-        console.error(termSafe(`      http://127.0.0.1:8787/v1/devices/${conf.id}`));
+        console.error('  host, where the token lives, as root:');
+        // ⚠ PINNED HTTPS, NEVER http://127.0.0.1:8787. This gets pasted during a
+        // cleanup, which is when appd is likely stopped or restarting, and any
+        // account on the host can take its port meanwhile: a plain request
+        // hands that account the root-equivalent token. The pin is the daemon's
+        // own key, so curl refuses any other listener before the token leaves
+        // (the recipe in docs/reference/api.md, as the host tools do it).
+        console.error('    PIN=$(openssl x509 -in /var/lib/huginn-appd/tls/cert.pem -pubkey -noout \\');
+        console.error('      | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)');
+        console.error('    curl -sS -k --pinnedpubkey "sha256//$PIN" -X DELETE \\');
+        console.error(`      -H @<(printf 'Authorization: Bearer %s\\n' "$(cat /etc/huginn-appd/token)") \\`);
+        console.error(termSafe(`      https://127.0.0.1:8787/v1/devices/${conf.id}`));
+        console.error('  (with HUGINN_APPD_TLS_CERT set on the host, read that certificate instead)');
         console.error('');
       }
       const gone = forget();
