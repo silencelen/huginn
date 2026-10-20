@@ -304,6 +304,7 @@ What it reads off the screen:
 | The usage-credits consent dialog | `consentRecommended` | A prompt card with a recommended row |
 | The `/model` picker and the `Switch model?` confirmation | `parseModelPicker`, `LADDER_*_RE` in `huginn-appd.js` | The headroom ladder's session-only switch |
 | The composer (`❯` between `─` rules) and a settled paste | `composerDrawn`, `pasteLanded` and others in `lib/typing.js` | The send queue |
+| The composer in shell mode (`!` where the `❯` was; Enter runs the box as a command) | `composerShellMode` | Nothing is submitted into it (409) |
 | Spinner, progress rows, `N/M agents done` | `parseSpinner`, `parseStatusExtras` | Working status in the apps |
 | Mode hint (`⏵⏵ accept edits on`, `⏸ plan mode on`) | `MODE_HINT_RE`, `parseStatusLine` | Live mode |
 | A status line `[<session>] <model> · ctx <N>% · <branch>` | `parseStatusLine` | Live model, context percentage, branch |

@@ -529,6 +529,7 @@ function composerDrawn(lines) {
   // Claude Code draws nothing under its own box at column 0, so a prompt there
   // is the shell's, and everything above it is history.
   if (shellPromptRow(plain[last])) return false;
+  if (shellModeBox(plain, last)) return true;      // the box with `!` for its caret
   const from = Math.max(0, last - DIALOG_LOOKBACK);
   return plain.slice(from, last + 1).some((l) => CARET_EMPTY_RE.test(l) || CARET_TYPED_RE.test(l));
 }
@@ -686,6 +687,11 @@ function stripGhost(line) {
 // unsent while the POST answered delivered:true.
 const RULE_RE = /^[─━—–_=-]{3,}$/;
 const CARET_ROW_RE = /^\s*❯/;
+// The composer's input row in SHELL MODE. A `!` typed into an empty box (or a
+// paste that starts with one) switches Claude Code 2.1.302 into it: the box's
+// `❯` is drawn as `!` (`mode==="bash" ? "!\xA0" : [pointer, "\xA0"]`), the
+// footer reads `! for shell mode`, and Enter runs the box as a shell command.
+const SHELL_CARET_ROW_RE = /^!(?:\s|$)/;
 
 /**
  * Where the live composer BOX is: its top rule, its caret row, its closing rule.
@@ -703,16 +709,44 @@ const CARET_ROW_RE = /^\s*❯/;
  *
  * Null when no such box is drawn in the bottom region; callers fall back to
  * what they did before, so a pane shaped some other way reads as it always did.
+ *
+ * ⚠ AND THE BOX IN SHELL MODE IS THE SAME BOX (`shellMode`). Its caret row
+ * starts with `!` instead of `❯`, and a rule for the box that only knew the `❯`
+ * saw no composer at all once the last echoed `❯` had scrolled out of the
+ * lookback: no draft to hold for, no shell refusal, a paste that "landed" in
+ * the bottom rows — and an Enter that ran the message as a root shell command.
+ * The `!` row counts only with the box's closing rule under it as well.
  */
 function composerBox(plain, last) {
   const from = Math.max(1, last - DIALOG_LOOKBACK);
   for (let i = last; i >= from; i--) {
-    if (!CARET_ROW_RE.test(plain[i]) || !RULE_RE.test(plain[i - 1])) continue;
+    const shellMode = SHELL_CARET_ROW_RE.test(plain[i]);
+    if (!(shellMode || CARET_ROW_RE.test(plain[i])) || !RULE_RE.test(plain[i - 1])) continue;
     let bottom = -1;
     for (let j = i + 1; j <= last; j++) { if (RULE_RE.test(plain[j])) { bottom = j; break; } }
-    return { top: i - 1, caret: i, bottom };
+    if (shellMode && bottom < 0) continue;
+    return { top: i - 1, caret: i, bottom, shellMode };
   }
   return null;
+}
+
+/** Is the composer box drawn, and in shell mode? (`plain` rows, `last` non-blank.) */
+function shellModeBox(plain, last) {
+  const box = last >= 0 ? composerBox(plain, last) : null;
+  return !!(box && box.shellMode);
+}
+
+/**
+ * Is the session's composer in SHELL MODE, where Enter runs what is in the box
+ * as a shell command? (See composerBox.) Nothing may be submitted into it: the
+ * message would run as a command in the session's directory.
+ */
+function composerShellMode(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let last = -1;
+  for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
+  return shellModeBox(plain, last);
 }
 
 function composerText(lines, { dropGhost = false } = {}) {
@@ -728,7 +762,8 @@ function composerText(lines, { dropGhost = false } = {}) {
     for (let i = last; i >= from; i--) { if (CARET_ROW_RE.test(plain[i])) { caret = i; break; } }
   }
   if (caret < 0) return null;
-  const out = [plain[caret].replace(/^\s*❯\s?/, '')];
+  // The `!` of shell mode is the box's mode, like the `❯`, not text in it.
+  const out = [plain[caret].replace(box && box.shellMode ? /^!\s?/ : /^\s*❯\s?/, '')];
   for (let i = caret + 1; i <= last; i++) {
     if (RULE_RE.test(plain[i])) break;   // column 0 only — see RULE_RE
     out.push(plain[i]);
@@ -1090,6 +1125,9 @@ function boxIsOurs(composerHolds, text) {
  *                              unsent, and the send is HELD until it is answered
  *   {blockedBy:'shell'}        claude died under the paste and a shell prompt is
  *                              on the last row: nothing is run, nothing is pressed
+ *   {blockedBy:'shell',        the box is in shell mode (a `!` typed before the
+ *    shellMode:true}           paste, or a paste that starts with one), where the
+ *                              Enter runs the box as a command: nothing is pressed
  *   {blockedBy:'modal'}        a composer was drawn before the paste and none is
  *                              now — something with no caret of its own replaced
  *                              it, and an Enter there answers whatever it is
@@ -1106,6 +1144,11 @@ function enterRefusal(lines, text, { hadComposer = false } = {}) {
   for (let i = plain.length - 1; i >= 0; i--) { if (plain[i].trim()) { last = i; break; } }
   if (last >= 0 && shellPromptRow(plain[last])) {
     return { blockedBy: 'shell', why: 'claude is no longer running in the pane (a shell prompt is on its last row)' };
+  }
+  // Before "the box holds our message", which shell mode does too: there the
+  // Enter is a command, whoever's text it is.
+  if (shellModeBox(plain, last)) {
+    return { blockedBy: 'shell', shellMode: true, why: 'the prompt is in shell mode (!), where Enter runs it as a command' };
   }
   const c = composerText(arr);
   if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return null;
@@ -1547,6 +1590,9 @@ function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
  * The discriminator is the PANE, not the state file — a session whose Claude
  * exited after running still has one — and it is narrow on purpose:
  *
+ *   shell mode       the composer's caret is a `!` (composerShellMode): Claude
+ *                    is up, and its Enter runs the box as a shell command — the
+ *                    same harm by a second door. Refuse the SUBMIT.
  *   composer drawn   Claude is up. Nothing to refuse.
  *   shell prompt     the pane's last line ends in $ # % >. Refuse the SUBMIT.
  *   neither          a pane mid-redraw, an empty pane, a TUI that is not
@@ -1557,8 +1603,14 @@ function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
  * tab types into whatever is there and sends its Enter as a raw key), and raw
  * keys have never come through the queue at all.
  */
-function submitRefusal({ submit = true, composer = false, shell = false } = {}) {
-  if (!submit || composer || !shell) return null;
+function submitRefusal({ submit = true, composer = false, shell = false, shellMode = false } = {}) {
+  if (!submit) return null;
+  if (shellMode) {
+    return "this session's prompt is in shell mode (it starts with !), where Enter runs it as a "
+      + 'shell command, so the message was not typed. Leave shell mode in the Screen tab '
+      + '(Backspace on the empty prompt), then send it again.';
+  }
+  if (composer || !shell) return null;
   return 'claude is not running in this session — it dropped to a shell, so the message '
     + 'was not typed. Start claude in the pane, or use the Screen tab to drive the shell.';
 }
@@ -1742,7 +1794,7 @@ module.exports = {
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
   hasHumanUserRecord, kindOf, scanForHuman, HUMAN_SCAN_MAX_BYTES,
-  paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
+  paneReadyForInput, paneBlocks, composerDrawn, composerShellMode, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
 };

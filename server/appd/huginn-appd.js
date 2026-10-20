@@ -2296,8 +2296,11 @@ function heldResult(name, text, held, fields) {
   if (held.blockedBy === 'shell') {
     return {
       ok: false, code: 409, held,
-      message: 'claude stopped running in this session while the message was being typed — it is '
-        + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
+      message: held.shellMode
+        ? "this session's prompt is in shell mode (!), where Enter would have run the message as a "
+          + 'shell command, so it was NOT sent. It is sitting in the prompt: clear it from the Screen tab.'
+        : 'claude stopped running in this session while the message was being typed — it is '
+          + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
     };
   }
   return { ok: true, ...fields, submitted: false, held };
@@ -2794,11 +2797,14 @@ async function checkGates(name) {
   // and is what is down there a shell prompt waiting to run whatever it is given.
   const composer = lines ? typing.composerDrawn(lines) : false;
   const shell = lines ? typing.shellPrompt(lines) : false;
+  // The third: Claude is up, but its prompt is in shell mode (`!`), where an
+  // Enter runs the box as a command — the #15 harm with a composer drawn.
+  const shellMode = lines ? typing.composerShellMode(lines) : false;
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell,
+  return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell, shellMode,
     sessionState: readSessionState(name) };
 }
 
@@ -3071,7 +3077,9 @@ async function pumpQueue(name) {
         // job that finds the family already changed must be binned, not run.
         // One queue, two payload shapes; nothing else differs.
         const refusal = typeof entry.run === 'function' ? null
-          : typing.submitRefusal({ submit: entry.submit, composer: gate.composer, shell: gate.shell });
+          : typing.submitRefusal({
+            submit: entry.submit, composer: gate.composer, shell: gate.shell, shellMode: gate.shellMode,
+          });
         if (refusal) {
           // ⚠ NOT DELIVERED, AND SAID SO. The pane is a root shell and the Enter
           // would make bash run the owner's message (#15). 409 rather than 500:

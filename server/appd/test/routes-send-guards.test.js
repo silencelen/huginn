@@ -195,6 +195,42 @@ test('a message and a soft-end wait for a selector drawn with no numbers', async
   assert.equal(readOr(out), '', 'nothing was pasted into the selector');
 });
 
+// ---- a prompt in shell mode -------------------------------------------------
+
+/**
+ * Claude Code's box in shell mode (`!` typed into it): the same column-0 rules,
+ * `!` where the `❯` was, `! for shell mode` under it. A long reply above, so no
+ * echoed `❯` is anywhere near the box.
+ */
+const SHELL_MODE = [
+  '● Here is what changed in the deploy:',
+  ...Array.from({ length: 16 }, (_, i) => `  - item ${i + 1}: adjusted the config for service ${i + 1}`),
+  '', '─'.repeat(80), '! ', '─'.repeat(80), '  [bp] Fable 5.1 · main ~5', '  ! for shell mode',
+].join('\\n');
+
+test('a message is never submitted into a prompt in shell mode, where Enter runs it', async () => {
+  // Submitted there, `please rewrite > notes.txt tomorrow` runs as a shell
+  // command and the redirect empties notes.txt before the command fails — the
+  // shell refusal's harm, with a Claude composer on screen.
+  const name = `${PFX}-bang`;
+  const out = path.join(tmp, 'bang.keys');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${SHELL_MODE}\\n"; stty raw -echo; cat > ${out}'`]);
+  await until('the box on screen', () => /for shell mode/.test(capture(name)));
+  const r = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'please rewrite > notes.txt tomorrow', keys: ['Enter'] }),
+  });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /shell mode/);
+  await wait(800);
+  assert.equal(readOr(out), '', 'nothing was typed, so nothing could run');
+  // Live-view typing has no Enter, and is still the person's to put there.
+  const typing = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ text: 'ls' }) });
+  assert.equal(typing.status, 200, JSON.stringify(typing.body));
+  await until('the live-view text', () => readOr(out).includes('ls'));
+  assert.doesNotMatch(readOr(out), /\r/, 'and no Enter went with it');
+});
+
 test('with nothing in the way the page goes at once, submitted by its one Enter', async () => {
   // The same misread left the Enter as a live-view keypress into an empty box,
   // and the draft guard then held the page for a draft nobody was typing.
