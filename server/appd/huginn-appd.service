@@ -2,14 +2,16 @@
 Description=huginn-appd - the Huginn server daemon (sessions, chats, devices, apps API)
 After=network-online.target
 Wants=network-online.target
+# The network may not be up yet right after boot - keep retrying. ⚠ This is a
+# [Unit] setting: under [Service] systemd ignores it, and the default limit (5
+# starts in 10 s) left the daemon down after a burst of failed starts.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/node /opt/huginn-appd/huginn-appd.js
 Restart=on-failure
 RestartSec=3
-# The network may not be up yet right after boot - keep retrying.
-StartLimitIntervalSec=0
 # This server's own settings (bind address, where chats run, alert script) belong
 # in a drop-in, not here: install.sh replaces this file on every update and writes
 # site.conf once. See systemd.d/README.md for every variable.
