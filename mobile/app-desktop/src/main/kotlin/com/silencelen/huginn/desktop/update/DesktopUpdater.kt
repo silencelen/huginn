@@ -138,26 +138,33 @@ class DesktopUpdater(
      * Once [UpdateState.Ready], further checks are a no-op unless the release has
      * moved on again — re-downloading 90 MB every four hours while the owner has
      * not restarted yet is the kind of thing nobody notices until the link bill.
+     * And a check that FAILS leaves it Ready: see [fail].
      */
     suspend fun check(): UpdateState {
         val plat = key ?: return fail("no build for this platform")
 
+        // ⚠ READ BEFORE `Checking` REPLACES IT. It used to be read after, where
+        // it was always null: the "already fetched" short-cut below never fired,
+        // and a check that failed (offline, GitHub's API answering 403) turned a
+        // verified, parked update into an Error — no Install button, with the
+        // installer still sitting in the cache.
+        val parked = _state.value as? UpdateState.Ready
         _state.value = UpdateState.Checking
         val releases = runCatching { feed.list() }
-            .getOrElse { return fail("could not reach GitHub releases: ${it.message}") }
+            .getOrElse { return fail("could not reach GitHub releases: ${it.message}", parked) }
         val release = GithubReleaseIndex.newest(releases, tagPrefix)
-            ?: return fail("no $tagPrefix release published yet")
+            ?: return fail("no $tagPrefix release published yet", parked)
         val tagVersion = GithubReleaseIndex.versionOf(release, tagPrefix)
         if (!Semver.isNewer(tagVersion, currentVersion)) {
             return settle(UpdateState.UpToDate(currentVersion))
         }
 
         val manifestAsset = release.asset(MANIFEST_NAME)
-            ?: return fail("release $tagVersion has no $MANIFEST_NAME — cannot verify it, so it is refused")
+            ?: return fail("release $tagVersion has no $MANIFEST_NAME — cannot verify it, so it is refused", parked)
         val text = runCatching { feed.getText(manifestAsset.browserDownloadUrl) }
-            .getOrElse { return fail("could not fetch the release manifest: ${it.message}") }
+            .getOrElse { return fail("could not fetch the release manifest: ${it.message}", parked) }
         val manifest = UpdateManifestCodec.parseOrNull(text)
-            ?: return fail("the release manifest was not readable")
+            ?: return fail("the release manifest was not readable", parked)
 
         // The tag says newer; the manifest is the authority on the artifact + its
         // hash. Guard against a manifest that is somehow NOT newer than us.
@@ -165,21 +172,22 @@ class DesktopUpdater(
             return settle(UpdateState.UpToDate(currentVersion))
         }
         val artifact = manifest.artifactFor(plat)
-            ?: return fail("release ${manifest.version} has no $plat build")
+            ?: return fail("release ${manifest.version} has no $plat build", parked)
         val asset = release.asset(artifact.file)
-            ?: return fail("release ${manifest.version} lists ${artifact.file} but does not carry it")
+            ?: return fail("release ${manifest.version} lists ${artifact.file} but does not carry it", parked)
 
-        val ready = _state.value as? UpdateState.Ready
-        if (ready != null && ready.version == manifest.version && Sha256.matches(ready.file, artifact.sha256)) {
-            return ready // already fetched and verified; wait for the human
+        if (parked != null && parked.version == manifest.version && Sha256.matches(parked.file, artifact.sha256)) {
+            // Settled, not just returned: the state reads Checking until it is.
+            return settle(parked) // already fetched and verified; wait for the human
         }
-        return download(asset.browserDownloadUrl, manifest, artifact)
+        return download(asset.browserDownloadUrl, manifest, artifact, parked)
     }
 
     private suspend fun download(
         url: String,
         manifest: UpdateManifest,
         artifact: UpdateArtifact,
+        parked: UpdateState.Ready?,
     ): UpdateState {
         val dest = File(cacheDir, artifact.file)
 
@@ -195,14 +203,14 @@ class DesktopUpdater(
                     manifest.version, seen, if (total > 0) total else artifact.size,
                 )
             }
-        }.getOrElse { return fail("download failed: ${it.message}") }
+        }.getOrElse { return fail("download failed: ${it.message}", parked) }
 
         // THE GATE. Verified before the file is named as installable and long
         // before anything is allowed to execute it — these builds are unsigned,
         // so this hash is the only integrity check in the chain.
         if (!Sha256.matches(dest, artifact.sha256)) {
             dest.delete()
-            return fail("downloaded ${artifact.file} did not match its sha256 — discarded")
+            return fail("downloaded ${artifact.file} did not match its sha256 — discarded", parked)
         }
         return settle(readyState(manifest, artifact, dest))
     }
@@ -279,7 +287,17 @@ class DesktopUpdater(
 
     private fun settle(s: UpdateState): UpdateState { _state.value = s; return s }
 
-    private fun fail(message: String): UpdateState = settle(UpdateState.Error(message))
+    /**
+     * A pass that could not finish. It says nothing about an update already
+     * [parked], so that one stays Ready and installable: the check's own failure
+     * is no reason to take the Install button away.
+     *
+     * ⚠ RE-HASHED FIRST. A re-download of the same version writes over the very
+     * file that was parked, and a parked file that no longer matches must come
+     * back as the Error, never as installable.
+     */
+    private fun fail(message: String, parked: UpdateState.Ready? = null): UpdateState =
+        settle(parked?.takeIf { it.file.isFile && Sha256.matches(it.file, it.sha256) } ?: UpdateState.Error(message))
 
     companion object {
         /** The manifest asset every release carries — the sha256 authority. */
