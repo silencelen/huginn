@@ -172,6 +172,44 @@ test('a digit that only focuses its row gets the Enter that answers it', async (
   assert.equal(readOr(keys), '3\r');
 });
 
+// ---- the answer memo lasts only until the question leaves the pane ----------
+
+const answeredByDigit = (events) => readOr(events).split('\n').filter((l) => l === 'ANSWERED 1 by digit').length;
+
+test('the same question asked again after its answer can be answered: the memo ends with the question', async () => {
+  // Claude runs `npm test` again after a fix: the second dialog is the first one
+  // byte for byte, fingerprint and all, and a flat-minute memo refused the Yes
+  // to it as "already answered" while the session sat waiting on it.
+  const { name, events } = stubSession('reask', { ...PERMISSION, reaskMs: 1200 });
+  const first = await promptOn(name);
+  assert.equal((await answer(name, { option: 1, fingerprint: first.fingerprint })).status, 200);
+  await until('the same question again', () => readOr(events).includes('ASKED AGAIN'));
+  const again = await promptOn(name);
+  assert.equal(again.fingerprint, first.fingerprint, 'precondition: the second question is the first one again');
+  const r = await answer(name, { option: 1, fingerprint: again.fingerprint });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  await until('the second answer', () => answeredByDigit(events) === 2);
+});
+
+test('a pane slow to show its answer keeps the memo until a look sees the question gone', async () => {
+  // What the memo is for: a second copy of the answer reading a pane that has
+  // not caught up, which would type the digit twice. Once the question has been
+  // SEEN to leave, the identical question after it is a new one.
+  const { name, keys, events } = stubSession('slow', { ...PERMISSION, answerDelayMs: 2500, reaskMs: 1500 });
+  const first = await promptOn(name);
+  assert.equal((await answer(name, { option: 1, fingerprint: first.fingerprint })).status, 200);
+  const twice = await answer(name, { option: 1, fingerprint: first.fingerprint });
+  assert.equal(twice.status, 409, JSON.stringify(twice.body));
+  assert.equal(twice.body.error, 'that question has already been answered');
+  await until('a screen without the question', async () => !(await api(`/v1/sessions/${name}/screen`)).body?.prompt);
+  await until('the same question again', () => readOr(events).includes('ASKED AGAIN'));
+  const again = await promptOn(name);
+  const r = await answer(name, { option: 1, fingerprint: again.fingerprint });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  await until('the second answer', () => answeredByDigit(events) === 2);
+  assert.equal(readOr(keys), '11', 'one digit per answer, none for the refused copy');
+});
+
 // ---- a multi-select question takes a SET -----------------------------------
 
 /** AskUserQuestion with multiSelect, as 2.1.x draws it (test/pane.test.js MULTI_DIALOG). */

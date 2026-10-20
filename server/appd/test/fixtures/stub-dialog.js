@@ -9,9 +9,10 @@
 //   Enter after it was answered       submits the composer's draft, the harm a
 //                                     blind Enter after an answering digit does
 //
-// HG_STUB_SPEC (JSON): { question, options: [{label, input?}], draft?, reaskMs? }
-//   reaskMs   draw the SAME question again this long after it was answered, once:
-//             Claude asking to run the same command a second time
+// HG_STUB_SPEC (JSON): { question, options: [{label, input?}], draft?, reaskMs?, answerDelayMs? }
+//   reaskMs        draw the SAME question again this long after it was answered,
+//                  once: Claude asking to run the same command a second time
+//   answerDelayMs  a digit's answer shows this late: a TUI behind its input
 // HG_STUB_KEYS     file every byte typed at the pane is appended to, raw
 // HG_STUB_EVENTS   file the stub appends what happened to, one line each
 const fs = require('node:fs');
@@ -24,6 +25,7 @@ const RULE = '─'.repeat(60);
 let caret = 1;
 let up = true;
 let reasked = false;
+let asked = 0;          // which asking of the question is on screen
 
 const event = (line) => fs.appendFileSync(EVENTS, `${line}\n`);
 function draw() {
@@ -41,7 +43,7 @@ function answered(n, how) {
   draw();
   if (spec.reaskMs && !reasked) {
     reasked = true;
-    setTimeout(() => { up = true; draw(); event('ASKED AGAIN'); }, spec.reaskMs);
+    setTimeout(() => { up = true; asked += 1; draw(); event('ASKED AGAIN'); }, spec.reaskMs);
   }
 }
 
@@ -54,7 +56,11 @@ process.stdin.on('data', (d) => {
       const n = Number(ch);
       const row = spec.options[n - 1];
       if (!row) continue;
-      if (row.input) { caret = n; draw(); event(`FOCUSED ${n}`); } else answered(n, 'digit');
+      if (row.input) { caret = n; draw(); event(`FOCUSED ${n}`); }
+      else if (spec.answerDelayMs) {
+        const which = asked;
+        setTimeout(() => { if (up && asked === which) answered(n, 'digit'); }, spec.answerDelayMs);
+      } else answered(n, 'digit');
     } else if (ch === '\r') {
       if (up) answered(caret, 'enter');
       else event(`SUBMITTED ${spec.draft || ''}`);

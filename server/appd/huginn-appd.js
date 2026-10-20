@@ -1767,9 +1767,18 @@ function withAnswerLock(name, fn) {
  * is refused rather than typed twice at a pane that has not caught up.
  *
  * Short-lived on purpose: it is a de-duplicator for a double tap or a retried
- * delivery, not a record. A genuinely new question has a different fingerprint,
- * and the same question legitimately re-asked after the TTL is a new question as
- * far as anyone tapping a notification is concerned.
+ * delivery, not a record.
+ *
+ * ⚠ AND IT LASTS ONLY UNTIL A LOOK SHOWS THE QUESTION GONE. It was a flat
+ * minute, on the belief that a genuinely new question has a different
+ * fingerprint — and a repeated one does not: Claude asking to run `npm test`
+ * again after a fix draws the same dialog byte for byte, so the owner's Yes to
+ * the second one was refused as "already answered" while the session sat
+ * waiting on it. What the memo covers is the pane that has not caught up yet,
+ * and that ends the first time the pane is read without the question on it:
+ * `settleAnswer` looks right after the answer goes in and writes no memo when
+ * the question has already left, and every screen capture ends one
+ * (`forgetAnsweredIfGone`). The TTL stays as the bound for a pane nobody reads.
  */
 const ANSWER_MEMO_TTL_MS = 60_000;
 const answeredMemo = new Map();     // session name -> { fingerprint, at }
@@ -1781,6 +1790,11 @@ function answeredRecently(name, fingerprint, now = Date.now()) {
 }
 function rememberAnswered(name, fingerprint, now = Date.now()) {
   answeredMemo.set(name, { fingerprint, at: now });
+}
+/** A look at the pane that does not show the answered question ends its memo. */
+function forgetAnsweredIfGone(name, prompt) {
+  const memo = answeredMemo.get(name);
+  if (memo && !(prompt && prompt.fingerprint === memo.fingerprint)) answeredMemo.delete(name);
 }
 
 /**
@@ -3823,6 +3837,8 @@ async function captureScreen(name, {
     // the degraded card / pending-plan fields.
     ...(() => {
       const pf = promptFor(name, lines);
+      // A look without the answered question on it ends that answer's memo.
+      forgetAnsweredIfGone(name, pf.prompt);
       return { prompt: pf.prompt, ask: pf.ask, planPending: pf.planPending };
     })(),
     // The moment-to-moment status ("Gallivanting… · 3m 15s") exists only here:
@@ -8178,6 +8194,16 @@ async function watchAnswer(name, fingerprint, { option = null, caretWas = null }
 }
 
 /**
+ * After an answer went in: the memo, but only if the question is still on the
+ * pane once the look is over. A question that has left needs none — a second
+ * copy of the answer reads the pane and the ordinary guards refuse it — and a
+ * memo written for it would refuse the identical question asked next.
+ */
+async function settleAnswer(name, fingerprint, now = Date.now()) {
+  if ((await watchAnswer(name, fingerprint)) !== 'gone') rememberAnswered(name, fingerprint, now);
+}
+
+/**
  * Answer the dialog on `name` through its waiting PermissionRequest hook instead
  * of keystrokes (lib/permhook.js; hooks/huginn-permission-hook). True only when
  * the hook took the decision; false — for ANY reason — means nothing was
@@ -9685,33 +9711,34 @@ async function consentWatch(state, settings, sessions, now) {
     const on = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume !== false;
     if (!on) continue;
     const row = prompt.options.find((o) => o.number === prompt.recommended);
-    // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
-    //
-    // consentRecommended's own contract says the number is validated against a
-    // freshly-read fingerprint, the way /answer does it for a person's tap. This
-    // path did not: it pressed a digit against a capture taken a grace period
-    // ago. If the owner answered in that window — or the dialog simply moved —
-    // a bare digit and an Enter are submitted as a chat message into a working
-    // conversation. The row is matched by LABEL as well as by number, because
-    // the number alone is what a renumbered list keeps.
-    // A LEAN read: the pane, straight, with none of captureScreen's geometry
-    // round trip — the only question being asked is "is the same dialog still
-    // there", and this has to sit as close to the keystroke as it can.
-    const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
-    const fresh = again.err
-      ? null
-      : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
-    if (!row || !sameConsent(prompt, fresh)) {
-      log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
-      consentSeen.delete(s.name);
-      continue;
-    }
     // ⚠ UNDER /answer's LOCK (#11). This types a digit at the same pane the
     // /answer route does, and the two can meet: a person taps the notification
     // in the same second the grace expires here, and both digits land. The lock
-    // is per session and the memo is checked inside it, so whichever gets there
-    // second types nothing.
+    // is per session and the pane is re-read inside it, so whichever gets there
+    // second finds the dialog gone and types nothing. (The re-read used to sit
+    // outside the lock and the memo alone stood in for it; the memo now ends as
+    // soon as an answer is seen to leave the pane, so it cannot.)
     const pressed = await withAnswerLock(s.name, async () => {
+      // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
+      //
+      // consentRecommended's own contract says the number is validated against a
+      // freshly-read fingerprint, the way /answer does it for a person's tap. This
+      // path did not: it pressed a digit against a capture taken a grace period
+      // ago. If the owner answered in that window — or the dialog simply moved —
+      // a bare digit and an Enter are submitted as a chat message into a working
+      // conversation. The row is matched by LABEL as well as by number, because
+      // the number alone is what a renumbered list keeps.
+      // A LEAN read: the pane, straight, with none of captureScreen's geometry
+      // round trip — the only question being asked is "is the same dialog still
+      // there", and this has to sit as close to the keystroke as it can.
+      const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
+      const fresh = again.err
+        ? null
+        : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
+      if (!row || !sameConsent(prompt, fresh)) {
+        log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
+        return false;
+      }
       if (answeredRecently(s.name, fresh.fingerprint, now)) {
         log(`headroom: the consent dialog on ${s.name} was answered elsewhere — nothing typed`);
         return false;
@@ -9721,8 +9748,12 @@ async function consentWatch(state, settings, sessions, now) {
       // The digit answers the row; no blind Enter after it (see watchAnswer).
       const took = await watchAnswer(s.name, fresh.fingerprint,
         { option: prompt.recommended, caretWas: caretRow(fresh) });
-      if (took === 'focused') await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
-      rememberAnswered(s.name, fresh.fingerprint, now);
+      if (took === 'focused') {
+        await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+        await settleAnswer(s.name, fresh.fingerprint, now);
+      } else if (took === 'still') {
+        rememberAnswered(s.name, fresh.fingerprint, now);
+      }
       return true;
     });
     if (!pressed) { consentSeen.delete(s.name); continue; }
@@ -12121,7 +12152,7 @@ async function handleRequest(req, res) {
             .filter((o) => desired.includes(o.number)).map((o) => o.label);
           const viaHook = await tryHookAnswer(name, prompt, screen.lines, { options: desired });
           if (viaHook) {
-            rememberAnswered(name, live);
+            await settleAnswer(name, live);
             log(`answer: ${name} <- multi [${desired.join(',')}] via hook (${labelsOf().join(', ').slice(0, 80)})`);
             return sendJson(res, 200, { ok: true, options: desired, labels: labelsOf(), via: 'hook' });
           }
@@ -12142,7 +12173,7 @@ async function handleRequest(req, res) {
           if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
           const labels = prompt.options
             .filter((o) => desired.includes(o.number)).map((o) => o.label);
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
           return sendJson(res, 200, { ok: true, options: desired, labels });
         }
@@ -12174,14 +12205,14 @@ async function handleRequest(req, res) {
           if (!r.ok) {
             return sendJson(res, 409, { ok: false, reason: 'changed', error: r.reason, prompt, fingerprint: live });
           }
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- ${option} by arrows (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'arrows' });
         }
 
         const viaHook = await tryHookAnswer(name, prompt, screen.lines, { option });
         if (viaHook) {
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
@@ -12197,11 +12228,14 @@ async function handleRequest(req, res) {
         // after it shows the digit merely focused the row (see watchAnswer).
         const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
         if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-        if ((await watchAnswer(name, live, { option, caretWas: caretRow(now) })) === 'focused') {
+        const took = await watchAnswer(name, live, { option, caretWas: caretRow(now) });
+        if (took === 'focused') {
           const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
           if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+          await settleAnswer(name, live);
+        } else if (took === 'still') {
+          rememberAnswered(name, live);   // the pane has not caught up: the memo covers that
         }
-        rememberAnswered(name, live);
         log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
         return sendJson(res, 200, { ok: true, option, label: chosen.label });
       });
