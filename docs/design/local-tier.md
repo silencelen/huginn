@@ -169,7 +169,8 @@ produces and emits exactly what the daemon's event handler reads: `system/init` 
 minted uuid, `version+contenthash`), `stream_event` text deltas, `assistant` frames (chunked at
 100 KB or less, so no oversized line is ever emitted), and one terminal `result` with `is_error`,
 `duration_ms`, `total_cost_usd: 0` and `num_turns: 1`. `--resume` replays a size-capped per-session
-JSONL. A 120 s no-token watchdog aborts with an honest error. An unknown `--model` is an error
+JSONL. A 120 s watchdog aborts with an honest error when the engine streams nothing for that long
+(a reasoning model's thinking counts). An unknown `--model` is an error
 result, never a substitution. Failures after startup are error *results* (exit 0); a non-zero exit
 is reserved for contract-level failure. `--contract-check` emits a canned transcript for the drift
 test.
