@@ -9895,7 +9895,9 @@ function headroomForSession(claudeSessionId) {
   const autoResume = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume;
   return {
     family: (rec && rec.family) || null,
-    ladder: (rec && rec.ladder && rec.ladder.to) || null,
+    // The rung the ladder MOVED it to, not whatever a record names: a queued or
+    // unconfirmed move is not one (lib/headroom.js ladderedTo).
+    ladder: headroomLib.ladderedTo(rec),
     autoResume,
     // Stall detection and auto-resume are the next component; the field exists
     // now so the clients can be built against the final shape.
@@ -9919,8 +9921,13 @@ function headroomFacts() {
     if (!r.stall || !r.stall.at) continue;
     stalls[r.name] = r.stall.resetsAt ? new Date(Number(r.stall.resetsAt)).toISOString() : null;
   }
+  // Moves that HAPPENED (ladderedTo): the apps announce a name arriving here as
+  // "moved down", with an Undo, and a name leaving as "moved back up".
   const laddered = {};
-  for (const r of rows) if (r.ladder && r.ladder.to) laddered[r.name] = r.ladder.to;
+  for (const r of rows) {
+    const to = headroomLib.ladderedTo(r);
+    if (to) laddered[r.name] = to;
+  }
   return {
     mode: st.mode || 'ok',
     stalled,

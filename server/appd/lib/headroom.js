@@ -435,6 +435,25 @@ function settleLadder(ladder, family) {
 }
 
 /**
+ * The rung appd's ladder holds this session on, or null. The one answer behind
+ * the watch digest's `laddered` map and a session row's `ladder` mark.
+ *
+ * ⚠ A LADDER RECORD IS NOT A MOVE. `ladder.to` is written when a move is merely
+ * QUEUED, when one could not be confirmed, and while the owner's "Back to
+ * Fable" on a NATIVE switch is on its way (`how: 'undo-native'`, pointing up).
+ * The apps read a name appearing in `laddered` as "moved down" (with an Undo)
+ * and one leaving as "moved back up", so each of those announced a move that
+ * had not happened — and a queued move that was then dropped announced a move
+ * back that had not happened either. A session is on its laddered rung when it
+ * reads as that family; a move back still on its way leaves it there.
+ */
+function ladderedTo(rec) {
+  const l = rec && rec.ladder;
+  if (!l || !l.to || l.how === 'undo-native') return null;
+  return rec.family === l.to ? l.to : null;
+}
+
+/**
  * Which sentinels should exist, given the ACTIVE account's windows.
  *
  * Hysteresis, which is why `current` is an argument: arming at `stopPct` and
@@ -786,7 +805,7 @@ module.exports = {
   FAMILIES, WINDOWS, HUMAN_MODEL_GRACE_MS,
   defaults, validateSettings, migrateAutoswitch,
   windowsOf, classify, worstWindow, detectResets,
-  familyOf, nextDown, canLadderUp, settleLadder,
+  familyOf, nextDown, canLadderUp, settleLadder, ladderedTo,
   sentinelPlan, decide, explain,
   // Re-exported so the tick and the routes have one import for "headroom", and
   // so `isLimitStall` sits beside the arbiter that consumes it (design §1).
