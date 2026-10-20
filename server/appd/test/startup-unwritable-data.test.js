@@ -20,6 +20,7 @@
 // nothing real. A private tmux socket, a scratch HOME and Claude directory, and
 // a port the kernel just handed out.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn, execFileSync } = require('node:child_process');

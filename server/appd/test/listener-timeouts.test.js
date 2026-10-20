@@ -23,6 +23,7 @@
 // on the daemon's PATH is an inert shim, HOME and the Claude directory are
 // scratch, and every port is one the kernel just handed out.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');

@@ -18,6 +18,7 @@
 // data root, HOME and Claude directory, an inert `claude`, a private tmux socket
 // that never gets a session, and a port the kernel just handed out.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');

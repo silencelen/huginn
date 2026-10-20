@@ -17,6 +17,7 @@
 // one subcommand on request; the test's own tmux calls go to the real binary. The
 // port is one the kernel just handed out, and every path is scratch.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn, execFileSync } = require('node:child_process');
