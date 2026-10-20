@@ -3571,11 +3571,16 @@ async function restoreSessionsAfterReboot() {
   log(`session restore: tmux server is gone (reboot?); ${plan.length} recorded session(s) to bring back`);
   await ensureTmuxServer();
 
+  // Which of them are project sessions, and as what: a project session comes
+  // back launched as it was (projectRestoreCommand). An archived project claims
+  // nothing, the same rule the session list uses.
+  const membership = projectsLib.membershipIndex(listProjects());
   let restored = 0, fresh = 0;
   for (const entry of plan) {
     const cwd = entry.cwd || WORKDIR;
     const hasTranscript = !!(entry.claudeSessionId && findTranscriptFile(entry.claudeSessionId));
-    const { canResume, command } = sessreg.resumeCommand(entry, hasTranscript);
+    const { canResume, command } = projectRestoreCommand(membership.get(entry.name), entry, hasTranscript)
+      || sessreg.resumeCommand(entry, hasTranscript);
     const r = await run('tmux', ['new-session', '-d', '-s', entry.name, '-c', cwd, command]);
     if (r.err) {
       log(`session restore: ${entry.name} could not be recreated: ${(r.stderr || r.err.message || '').trim().slice(0, 120)}`);
@@ -6573,13 +6578,66 @@ function cwdIsTrusted(dir) {
  * vocabulary is about `--allowedTools` for headless chats and has no meaning as
  * a `--permission-mode` for an interactive pane, and inventing a mapping would
  * mean guessing a flag value on the owner's behalf.
+ *
+ * `resume` is a reboot restore's conversation id, uuid-checked by the caller
+ * (projectRestoreCommand), the same check session-registry makes.
  */
-function claudeLaunchCommand({ claudeName, persona, model, effort }) {
-  const parts = ['claude', '--name', claudeName];
+function claudeLaunchCommand({ claudeName, persona, model, effort, resume = null }) {
+  const parts = ['claude'];
+  if (resume) parts.push('--resume', resume);
+  parts.push('--name', claudeName);
   if (model) parts.push('--model', model);
   if (effort) parts.push('--effort', effort);
   parts.push('--append-system-prompt-file', persona);
   return `${parts.join(' ')}; exec "$SHELL" -l`;
+}
+
+/**
+ * The command a reboot restore runs for a PROJECT session, or null to leave it to
+ * the plain resume.
+ *
+ * ⚠ THE PERSONA EXISTS ONLY IN A RUN THAT IS GIVEN THE FILE. The plain
+ * `claude --resume <id>` a restore runs for any session kept it only while
+ * Claude Code's recorded prompt did: gone at the first compaction after the
+ * restore, and at once for a conversation with no recording. The lead then had
+ * no manifest contract or tag (so detectManifest never adopted a proposal) and
+ * every member lost the peer-safety paragraph, while the dashboard showed the
+ * cluster alive. So a project session comes back launched as it was, plus the
+ * resume, with the persona rewritten from the project as it stands.
+ *
+ * Only the sessions appd launched with a persona: the lead, and members spawned
+ * from a manifest, which are the only ones recorded with a first prompt. An
+ * adopted member was started by somebody else and comes back as it was.
+ *
+ * `--model` only on a fresh start: a resumed conversation keeps the model it was
+ * on, which may be one the ladder moved it to, and the manifest's would undo it.
+ * `--effort` is not carried by a resume, so it is passed every time.
+ */
+function projectRestoreCommand(hit, entry, hasTranscript) {
+  if (!hit) return null;
+  const { project, member } = hit;
+  const lead = member.role === projectsLib.LEAD_ROLE;
+  if (!lead && !member.firstPrompt) return null;
+  let persona;
+  try {
+    persona = writePersona(project.id, member.role,
+      lead ? projectsLib.leadPersona(project) : projectsLib.memberPersona(project, member));
+  } catch (e) {
+    log(`session restore: ${entry.name}: the persona could not be written (${e.message}); resuming without it`);
+    return null;
+  }
+  const id = entry.claudeSessionId;
+  const canResume = !!id && sessreg.UUID_RE.test(id) && !!hasTranscript;
+  return {
+    canResume,
+    command: claudeLaunchCommand({
+      claudeName: member.claudeName,
+      persona,
+      model: canResume ? null : member.model,
+      effort: member.effort,
+      resume: canResume ? id : null,
+    }),
+  };
 }
 
 /**
