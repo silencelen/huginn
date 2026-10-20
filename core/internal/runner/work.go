@@ -109,7 +109,7 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 			for blips := 1; ; blips++ {
 				_, err := post(ev)
 				wait := retryDelay(blips)
-				if err == nil || appd.IsPermanent(err) || appd.IsAuth(err) || time.Now().Add(wait).After(giveUp) {
+				if err == nil || appd.IsPermanent(err) || appd.IsAuth(err) || ctx.Err() != nil || time.Now().Add(wait).After(giveUp) {
 					return err
 				}
 				r.h.Logf("could not send the end of %s (retrying in %s): %v", w.ID, wait, err)
