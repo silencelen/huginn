@@ -5703,33 +5703,51 @@ function reconcileInterruptedRuns() {
   for (const id of ids) {
     const meta = loadMeta(id);
     if (!meta || !meta.runStartedAt || activeRuns.has(id)) continue;
-    const ts = Math.floor(Date.now() / 1000);
-    const text = 'interrupted: huginn-appd restarted while this was running';
-    appendMsg(id, { type: 'error', text, ts });
-    updateMeta(id, (m) => {
-      m.finishedRuns = (m.finishedRuns || 0) + 1;
-      m.finishedAt = ts;
-      m.updatedAt = ts;
-      // The snippet is what the notification says, so it has to stop claiming the
-      // question was the answer.
-      m.lastSnippet = text.slice(0, 120);
-      delete m.runStartedAt;
-    });
-    reconcileInterruptedRound(loadMeta(id) || meta);
-    log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
+    // ⚠ BEST EFFORT, ONE CHAT AT A TIME. This runs in the startup chain before
+    // the port opens, and that chain's only handler is FATAL + exit(1) — so a
+    // full or read-only data disk turned one interrupted run into a daemon
+    // that died on every start, in a 3 s systemd loop, taking the session list,
+    // the screens and typing (none of which needs the disk) down with it. The
+    // marker stays on disk when this fails, so the next start with room left
+    // records it; nothing is lost by skipping it now.
+    try {
+      const ts = Math.floor(Date.now() / 1000);
+      const text = 'interrupted: huginn-appd restarted while this was running';
+      appendMsg(id, { type: 'error', text, ts });
+      updateMeta(id, (m) => {
+        m.finishedRuns = (m.finishedRuns || 0) + 1;
+        m.finishedAt = ts;
+        m.updatedAt = ts;
+        // The snippet is what the notification says, so it has to stop claiming the
+        // question was the answer.
+        m.lastSnippet = text.slice(0, 120);
+        delete m.runStartedAt;
+      });
+      reconcileInterruptedRound(loadMeta(id) || meta);
+      log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
+    } catch (e) {
+      log(`chat ${id}: could not record the run a restart interrupted, left for the next start: ${e.message}`);
+    }
   }
 }
 
 function deliverOrphanedQueues() {
   for (const meta of listChats()) {
     if (!meta.pending || activeRuns.has(meta.id)) continue;
-    const full = loadMeta(meta.id);
-    if (!full) continue;
-    const next = takePending(full);
-    if (!next) continue;
-    saveMeta(full);
-    log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
-    startQueuedRun(full, next);
+    // Best effort for the reason reconcileInterruptedRuns gives. A save that
+    // fails leaves the queue on disk for the next start; a run that fails to
+    // start after the save is the same drop the settle path's catch makes.
+    try {
+      const full = loadMeta(meta.id);
+      if (!full) continue;
+      const next = takePending(full);
+      if (!next) continue;
+      saveMeta(full);
+      log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
+      startQueuedRun(full, next);
+    } catch (e) {
+      log(`chat ${meta.id}: could not deliver the queue left by the restart: ${e.message}`);
+    }
   }
 }
 
