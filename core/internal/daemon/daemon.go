@@ -264,10 +264,25 @@ func (d *Daemon) runnerConf() runner.Config {
 		name = defaultName()
 	}
 	return runner.Config{
-		Enabled: dv.Enabled, ID: dv.ID, Name: name, Scope: dv.Scope, Root: dv.Root,
+		Enabled: dv.Enabled, ID: dv.ID, Name: name, Scope: deviceScope(dv), Root: dv.Root,
 		Claude: dv.Claude, LLM: dv.LLM, Node: dv.Node, ActWhileLocked: dv.ActWhileLocked,
 		UnenrolOwed: dv.UnenrolOwed,
 	}
+}
+
+// deviceScope is the scope this machine offers: the saved one, or the
+// enrolment default while none has been chosen.
+//
+// ⚠ ONE ANSWER FOR SETTINGS AND THE RUNNER. Nothing saves a scope until the
+// owner picks one (turning the device on sends only `enabled`), and ParseScope
+// floors "" to generate, as it does any junk: the runner enrolled a
+// local-model server that could run no ask or act work while Settings showed
+// Look selected.
+func deviceScope(dv store.Device) string {
+	if dv.Scope == "" {
+		return policy.EnrolDefault
+	}
+	return policy.ParseScope(dv.Scope)
 }
 
 func defaultName() string {
@@ -331,10 +346,7 @@ func (d *Daemon) deviceView(s *runner.Status) DeviceView {
 	}
 	cfg, _, _ := d.st.Load()
 	dv := cfg.Device
-	scope := policy.ParseScope(dv.Scope)
-	if dv.Scope == "" {
-		scope = policy.EnrolDefault
-	}
+	scope := deviceScope(dv)
 	name := dv.Name
 	if name == "" {
 		name = defaultName()
