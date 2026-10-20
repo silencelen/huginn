@@ -67,6 +67,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -154,6 +155,9 @@ class MainActivity : FragmentActivity() {
     /** Compose reads these; the lifecycle below writes them. */
     private val locked = mutableStateOf(AppLock.lockedNow)
     private val lockError = mutableStateOf<String?>(null)
+
+    /** Whether this activity's lock is up: what a teardown asks; see rememberStillHere. */
+    internal val lockShowing: Boolean get() = locked.value
 
     /**
      * Where a notification tap wants the app to land.
@@ -265,8 +269,17 @@ class MainActivity : FragmentActivity() {
         // ORIGINAL launch intent again, extras and all, and reading it here
         // re-navigated to a notification dealt with long before.
         if (savedInstanceState == null) readTarget(intent)
+        else restoreTarget(savedInstanceState)
         setContent {
             HuginnTheme {
+                // ⚠ THE APP'S PLACE OUTLIVES THE LOCK. The lock replaces the whole
+                // app tree, on purpose: a locked screen narrates nothing and never
+                // counts as looking at a chat. But a tree that leaves composition
+                // loses everything it kept in rememberSaveable, so every unlock
+                // landed on the sessions list with the open screen, the tab and
+                // the scroll gone. Held here, outside the branch, it comes back
+                // the way a fold already brings it back.
+                val appState = rememberSaveableStateHolder()
                 if (locked.value) {
                     LockedScreen(
                         error = lockError.value,
@@ -305,15 +318,60 @@ class MainActivity : FragmentActivity() {
                         LocalUriHandler provides linkHandler,
                         LocalWrapUpPhrase provides wrapUpPhrase,
                     ) {
-                        HuginnApp(
-                            target = openTarget.value,
-                            onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },
-                            vm = vm,
-                        )
+                        appState.SaveableStateProvider(APP_STATE_KEY) {
+                            HuginnApp(
+                                target = openTarget.value,
+                                // Consumed once acted on (see the target effect in
+                                // HuginnApp): only the target that was handled is
+                                // cleared, never a newer one that came in since.
+                                onTargetHandled = { handled ->
+                                    if (openTarget.value?.seq == handled.seq) openTarget.value = null
+                                },
+                                onLockNow = { lockError.value = null; AppLock.lockedNow = true; locked.value = true },
+                                vm = vm,
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    /**
+     * ⚠ A TARGET NOT YET ACTED ON OUTLIVES A REBUILD. While the lock is up nothing
+     * acts on it (the app is not composed), and the intent it came in on has been
+     * stripped, so a fold, a rotate or a process kill behind the unlock prompt
+     * lost the tap or the share outright. One that was acted on is gone by now:
+     * see onTargetHandled.
+     */
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt(SAVED_TARGET_SEQ, targetSeq)
+        openTarget.value?.let { t ->
+            outState.putBundle(SAVED_TARGET, Bundle().apply {
+                putString("session", t.session)
+                putString("chat", t.chat)
+                putInt("seq", t.seq)
+                putString("project", t.project)
+                putString("shareText", t.shareText)
+                putParcelable("shareImage", t.shareImage)
+                putBoolean("newChat", t.newChat)
+            })
+        }
+    }
+
+    private fun restoreTarget(saved: Bundle) {
+        targetSeq = saved.getInt(SAVED_TARGET_SEQ)
+        val t = saved.getBundle(SAVED_TARGET) ?: return
+        openTarget.value = OpenTarget(
+            session = t.getString("session"),
+            chat = t.getString("chat"),
+            seq = t.getInt("seq"),
+            project = t.getString("project"),
+            shareText = t.getString("shareText"),
+            shareImage = androidx.core.os.BundleCompat.getParcelable(t, "shareImage", Uri::class.java),
+            newChat = t.getBoolean("newChat"),
+        )
     }
 
     override fun onStart() {
@@ -430,11 +488,21 @@ internal fun backFrom(dest: Dest, tab: Int): Dest? = when (dest) {
  * A context that is not an Activity cannot answer, and then this reports "gone" —
  * the pre-existing behaviour, so an unexpected host degrades to eager cleanup
  * rather than to a leak.
+ *
+ * ⚠ THE APP LOCK IS NOT LEAVING EITHER. It takes the whole app out of
+ * composition, so pocketing the phone for a minute ran every one of these
+ * teardowns: the photo staged in the open session or chat was thrown away, and
+ * a chat just created and not yet written in was deleted on the host. The lock
+ * is up on THIS activity before the app goes, so that is the tell. Not the
+ * process-wide [AppLock.lockedNow]: another instance, or the ask sheet, can set
+ * or clear that while this one stays as it is.
  */
 @Composable
 private fun rememberStillHere(): () -> Boolean {
     val activity = LocalContext.current as? android.app.Activity
-    return { activity?.isChangingConfigurations == true }
+    return {
+        activity?.isChangingConfigurations == true || (activity as? MainActivity)?.lockShowing == true
+    }
 }
 
 /**
@@ -650,10 +718,19 @@ internal sealed interface Dest {
 private const val PAD_WATCH_LIST = "list"
 private const val PAD_WATCH_EDITOR = "editor"
 
+// A target not yet acted on, in the saved state; see MainActivity.onSaveInstanceState.
+private const val SAVED_TARGET = "huginn.openTarget"
+private const val SAVED_TARGET_SEQ = "huginn.openTargetSeq"
+
+// The app tree whose saveable state is held while the lock is up; see setContent.
+private const val APP_STATE_KEY = "app"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HuginnApp(
     target: OpenTarget? = null,
+    /** Called once [target] has been acted on, so it is not acted on again. */
+    onTargetHandled: (OpenTarget) -> Unit = {},
     onLockNow: () -> Unit = {},
     vm: HuginnViewModel = viewModel(factory = HuginnViewModel.Factory),
 ) {
@@ -769,6 +846,13 @@ fun HuginnApp(
                 pendingShare = t
             }
         }
+        // ⚠ HANDED BACK, so it is acted on once. The lock composes this tree
+        // afresh on every unlock, which ran a target still standing all over
+        // again. A target that landed is also a choice the cold-start restore
+        // above must not override; it used to learn that from the target never
+        // going away, so it is told directly now.
+        restored = true
+        onTargetHandled(t)
     }
 
     val chats by vm.chats.collectAsState()
