@@ -396,6 +396,53 @@ function takeCompleteLines(cursor, read, max) {
   return done.toString('utf8');
 }
 
+/**
+ * How long the transcript may show nothing of a delivery before its tail is
+ * trusted again (DELIVERY_SHOW_MAX_MS), unless the title hook says a turn is
+ * running.
+ *
+ * ⚠ BOUNDED, BECAUSE NOT EVERY PANE WRITES A TRANSCRIPT. Claude Code writes the
+ * prompt's record within a flush (100 ms) plus its synchronous hooks, and its
+ * title hook marks the session `running` sooner still — while that mark stands
+ * the wait is not cut short at all. A pane that will never write anything (a
+ * shell left with a stale state file, a stand-in) would otherwise hold every
+ * automated send to it until the ten-minute drop.
+ */
+const DELIVERY_SHOW_MAX_MS = 5_000;
+
+/**
+ * Has the conversation moved past the point a delivery was made at?
+ *
+ * ⚠ THE TAIL CANNOT SEE A TURN THAT HAS NOT BEEN WRITTEN YET. Claude Code
+ * flushes its transcript in batches (every 100 ms in 2.1.302, after any
+ * synchronous UserPromptSubmit hook), so for a moment after appd submits a
+ * message the last record is still the boundary that released it — and the next
+ * automated send, read against that tail, was released into the turn the first
+ * one had just started. One boundary, one automated message; the state file's
+ * stamp already said so (`q.deliveredAt` in the pump), the transcript did not.
+ *
+ * So after a delivery the tail's `idle` counts only once a conversational record
+ * that is NOT a boundary has been written after it: the delivered prompt, or —
+ * for a message Claude Code absorbed into a running turn, which gets no record
+ * of its own — that turn going on. A turn marker flushed late for the turn that
+ * ended before the delivery is a boundary, and does not count.
+ *
+ * Incremental and bounded like scanForHuman: `cursor.at` starts at the size the
+ * transcript had when the delivery was released.
+ */
+function scanForTurnStart(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+  const text = takeCompleteLines(cursor, read, max);
+  if (text == null) return false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (rec && typeof rec === 'object' && isConversationalRecord(rec) && !isBoundaryRecord(rec)) return true;
+  }
+  return false;
+}
+
 // The composer's input line: a bare caret, or a caret with typed text after it.
 const CARET_EMPTY_RE = /^\s*❯\s*$/;
 const CARET_TYPED_RE = /^\s*❯\s+\S/;
@@ -1829,7 +1876,8 @@ module.exports = {
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
-  hasHumanUserRecord, kindOf, scanForHuman, promptSpelling, HUMAN_SCAN_MAX_BYTES,
+  hasHumanUserRecord, kindOf, scanForHuman, scanForTurnStart, DELIVERY_SHOW_MAX_MS, promptSpelling,
+  HUMAN_SCAN_MAX_BYTES,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
