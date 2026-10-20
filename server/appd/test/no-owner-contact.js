@@ -14,3 +14,5 @@
 process.env.HUGINN_APPD_TELEGRAM_SCRIPT = '';
 // A path that cannot exist, so no account can put a key there first.
 process.env.HUGINN_FCM_KEY = '/nonexistent/huginn-test-fcm-service-account.json';
+// And no other host: appd would ssh to a configured MemPalace host to check it.
+process.env.HUGINN_APPD_MEMPALACE_HOST = '';

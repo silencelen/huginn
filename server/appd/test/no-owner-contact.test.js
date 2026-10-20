@@ -27,6 +27,7 @@ test('the module points both at nothing', () => {
   require('./no-owner-contact');
   assert.equal(process.env.HUGINN_APPD_TELEGRAM_SCRIPT, '');
   assert.ok(!fs.existsSync(process.env.HUGINN_FCM_KEY), process.env.HUGINN_FCM_KEY);
+  assert.equal(process.env.HUGINN_APPD_MEMPALACE_HOST, '');
   process.env.HUGINN_APPD_TELEGRAM_SCRIPT = saved.t; process.env.HUGINN_FCM_KEY = saved.k;
   if (saved.t === undefined) delete process.env.HUGINN_APPD_TELEGRAM_SCRIPT;
   if (saved.k === undefined) delete process.env.HUGINN_FCM_KEY;
