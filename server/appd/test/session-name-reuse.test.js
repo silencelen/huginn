@@ -436,3 +436,38 @@ test('a session renamed away leaves no "already sent" behind under its old name'
   assert.ok(await untilTrue(() => readOr(outFor(name)) === `${text}\n${text}\n`),
     'and it reaches the new session');
 });
+
+// ------------------------------------------------- a rename mid-delivery
+
+test('a rename that lands while a message is being typed waits for it, and loses nothing', async () => {
+  // A pump pass reads the session's name once and uses it across every await,
+  // and the queue only moves to the new name after tmux has renamed the session.
+  // A message pasted at the old name in between was answered "could not reach
+  // the pane buffer" and dropped, with every message queued behind it.
+  const name = 'slowren';
+  standIn(name, 'slow');
+  await createSession(name);
+  assert.ok(await untilTrue(() => /❯/.test(capture(name))), 'precondition: the composer is up');
+
+  const a = 'first message, painted slowly';
+  const b = 'second message, queued behind it';
+  const pa = send(name, a);
+  assert.ok(await untilTrue(async () => (await api(`/v1/sessions/${name}/typing`)).body.delivering === true, 5_000, 20),
+    'precondition: the first message is being typed');
+  const pb = send(name, b);
+
+  const to = 'slowren-moved';
+  madeSessions.add(to);
+  const rn = await api(`/v1/sessions/${name}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+  assert.equal(rn.status, 200, JSON.stringify(rn.body));
+  const [ra, rb] = await Promise.all([pa, pb]);
+
+  // The stand-in records under the name it was LAUNCHED with; that is the fixture.
+  assert.ok(await untilTrue(() => readOr(outFor(name)) === `${a}\n${b}\n`),
+    `both messages went in, in order; the pane got ${JSON.stringify(readOr(outFor(name)))}`);
+  assert.equal(ra.status, 200, JSON.stringify(ra.body));
+  assert.equal(rb.status, 200, JSON.stringify(rb.body));
+  const st = (await api(`/v1/sessions/${to}/typing`)).body;
+  assert.equal(st.queued, 0, 'nothing left behind');
+  assert.equal(st.lastError, null, 'and nothing reported as failed');
+});

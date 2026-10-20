@@ -2894,6 +2894,39 @@ function armQueueTimer(name) {
   if (q.timer.unref) q.timer.unref();
 }
 
+/** How long a rename waits for a pump pass that is already typing to finish. */
+const QUEUE_HOLD_WAIT_MS = 15_000;
+
+/**
+ * Keep the pump off a session's queue for a moment (a rename's window), after
+ * letting a pass that is already running finish.
+ *
+ * `pumping` is the queue's own lock: pumpQueue returns at once while it is set,
+ * so holding it is the whole mechanism, and releaseQueue re-arms the poll under
+ * whatever name the queue lives at by then. Null when there is no queue; false
+ * when a running pass did not finish inside the wait, which the caller refuses
+ * rather than racing it.
+ */
+async function holdQueue(name, waitMs = QUEUE_HOLD_WAIT_MS) {
+  const q = sendQueues.get(name);
+  if (!q) return null;
+  const until = Date.now() + waitMs;
+  while (q.pumping) {
+    if (Date.now() >= until) return false;
+    await sleep(25);
+  }
+  q.pumping = true;
+  return q;
+}
+
+function releaseQueue(q) {
+  if (!q) return;
+  q.pumping = false;
+  for (const [name, held] of sendQueues) {
+    if (held === q) { armQueueTimer(name); return; }
+  }
+}
+
 /**
  * Release everything at the head of the queue whose gates are open, drop what
  * has gone stale, and re-arm the poll if anything is left waiting.
@@ -11580,8 +11613,23 @@ async function handleRequest(req, res) {
             + 'then rename it');
         }
       }
+      // ⚠ NOT IN THE MIDDLE OF A DELIVERY, AND NO PUMP PASS UNTIL THE QUEUE HAS
+      // MOVED. A pass reads the session's name once and uses it across every
+      // await, and the queue only moves below, after tmux has renamed the session
+      // and said what it called it. A pass already typing a message, or one that
+      // started in between, pasted at the old name, was told "could not reach
+      // the pane buffer", and settled that message and every one behind it as
+      // failed. So a running pass finishes first, and the queue's lock is held
+      // until the queue has moved (released on every way out below).
+      const heldQueue = await holdQueue(from);
+      if (heldQueue === false) {
+        return sendErr(res, 409, 'a message is being typed into this session right now; rename it again in a moment');
+      }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
-      if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      if (r.err) {
+        releaseQueue(heldQueue);
+        return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      }
       // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
       // `-t '=<to>'` WITHOUT the trailing colon, and tmux resolves a colon-less
       // target by applying the same '.'-to-'_' rewrite it applies to a name — so
@@ -11597,6 +11645,7 @@ async function handleRequest(req, res) {
       // the live list, and returns null rather than guessing.
       const actual = await tmuxNameReadback(to);
       if (!actual) {
+        releaseQueue(heldQueue);
         return sendErr(res, 500, 'tmux renamed the session but will not say what it is called now');
       }
       // The state file is keyed by name; move it so state/transcript survive.
@@ -11669,6 +11718,7 @@ async function handleRequest(req, res) {
       // The restore registry is keyed by name too; move it or the live session goes
       // unrecorded under the new name and the old name gets pruned as "ended".
       registryRename(from, actual);
+      releaseQueue(heldQueue);
       return sendJson(res, 200, { ok: true, name: actual });
     }
 
