@@ -224,13 +224,16 @@ logout.
 
 - **Linux uses system units behind one elevation prompt**, the Windows shape. `huginn local on
   --system` re-runs the whole verb under `pkexec` (then `sudo`), carrying `HOME`, `HUGINN_LOCAL_DIR`
-  and `HUGINN_LOCAL_USER` explicitly because both elevators wipe the environment. Afterwards it chowns
-  the tier directory back to the user: a root-owned 0600 `api-key` is a model server
-  that answers 401 to its own runner. The desktop passes `--system` and lets the manager own the
-  elevation, so one implementation stays behind both doors.
+  and `HUGINN_LOCAL_USER` explicitly because both elevators wipe the environment. An elevated run
+  hands the tier directory back to the user before it starts anything that runs as the user, and
+  again however it ends: a root-owned 0600 `api-key` is a model server that answers 401 to its own
+  runner, and a root-owned `local.json` reads as "not set up". The desktop passes `--system` and
+  lets the manager own the elevation, so one implementation stays behind both doors.
 - **Declined or unavailable elevation falls back to linger**, out loud. `loginctl enable-linger` is
   attempted for user units on every Linux install, and the result is printed either way;
-  `org.freedesktop.login1.set-self-linger` usually needs no password in an active session.
+  `org.freedesktop.login1.set-self-linger` usually needs no password in an active session. An
+  elevated run that started and then failed is that failure, not a declined prompt (the elevated run
+  leaves a mark to say it started), so nothing falls back over what it wrote as root.
 - **`huginn local persist`** migrates an existing user install. The user half runs unelevated first
   (root's `--user` bus is root's own, and would exit 0 having stopped nothing), then the `/etc` half
   takes the one prompt. If the prompt is declined, it puts the user units back and enables linger

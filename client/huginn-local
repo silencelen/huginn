@@ -440,6 +440,9 @@ function elevateOnce(argv, say = () => {}, opts = {}) {
     const r = runElevated(tool, argv);
     if (r.ok) return { ok: true, tool, reason: 'elevated' };
     last = { ok: false, tool, status: r.status, error: r.error };
+    // The elevated run STARTED and then failed: it has said why on this
+    // terminal, and it may have written as root. Not a prompt to fall back from.
+    if (r.ran) return { ...last, declined: false, ran: true, reason: 'ran' };
     if (!(r.status === 127 || r.error)) return { ...last, declined: true, reason: 'declined' };
   }
   return { ...last, declined: false, reason: 'failed' };
@@ -459,16 +462,45 @@ const elevationDetail = (r) => (r.error || `exit ${r.status}`);
 const updateElevationRefusal = (detail) =>
   `refused: could not elevate (${detail}) — nothing was changed. This install runs as system units, so re-run it as root:  sudo huginn local update`;
 
+/** Where an elevated run is told to leave its mark: see runElevated. */
+const ELEVATED_MARK = 'HUGINN_LOCAL_ELEVATED';
+
+/**
+ * ⚠ THE MARK, NOT THE STATUS, SAYS WHETHER THE ELEVATED RUN STARTED. pkexec and
+ * sudo pass the program's own exit status through, and sudo's own refusal is
+ * exit 1 as well, so an elevated `on` that started, wrote as root and then
+ * failed looked exactly like a dismissed prompt: `on --system` fell back to
+ * installing user units, unprivileged, over the tree root had just written,
+ * and `update` said "nothing was changed" over a half-done update. The
+ * elevated run writes the mark first thing (markElevatedRun), as a fresh file
+ * in a directory only this account can write.
+ */
 function runElevated(tool, argv) {
-  const [cmd, args] = elevationArgv(tool, argv, {
-    HOME: os.homedir(),
-    HUGINN_LOCAL_DIR: localDir(),
-    HUGINN_LOCAL_USER: serviceUser(),
-    HUGINN_SHIM_SOURCE: process.env.HUGINN_SHIM_SOURCE,
-  });
-  const r = RUN(cmd, args, { stdio: 'inherit' });
-  if (r && !r.error && r.status === 0) return { ok: true };
-  return { ok: false, status: r ? r.status : null, error: r && r.error ? r.error.message : null };
+  const markDir = fs.mkdtempSync(path.join(os.tmpdir(), 'huginn-local-'));
+  const mark = path.join(markDir, 'started');
+  try {
+    const [cmd, args] = elevationArgv(tool, argv, {
+      HOME: os.homedir(),
+      HUGINN_LOCAL_DIR: localDir(),
+      HUGINN_LOCAL_USER: serviceUser(),
+      HUGINN_SHIM_SOURCE: process.env.HUGINN_SHIM_SOURCE,
+      [ELEVATED_MARK]: mark,
+    });
+    const r = RUN(cmd, args, { stdio: 'inherit' });
+    if (r && !r.error && r.status === 0) return { ok: true };
+    return { ok: false, ran: fs.existsSync(mark), status: r ? r.status : null, error: r && r.error ? r.error.message : null };
+  } finally {
+    try { fs.rmSync(markDir, { recursive: true, force: true }); } catch { /* a temp dir */ }
+  }
+}
+
+/** The elevated half's first act: the mark runElevated looks for. */
+function markElevatedRun() {
+  const mark = process.env[ELEVATED_MARK];
+  if (!mark) return;
+  delete process.env[ELEVATED_MARK];   // nothing this run starts writes it again
+  // 'wx': a new file, never through whatever might already be at that name.
+  try { fs.writeFileSync(mark, '', { flag: 'wx' }); } catch { /* the parent then has only the status */ }
 }
 
 /**
@@ -495,6 +527,24 @@ function handBackOwnership(dir = localDir(), user = serviceUser()) {
   };
   walk(dir);
   return true;
+}
+
+/** handBackOwnership where this run is root on Linux (an elevation, or sudo by hand). */
+const handBackNow = () => { if (process.platform === 'linux' && isRoot()) handBackOwnership(); };
+
+/**
+ * ⚠ AN ELEVATED RUN HANDS THE TREE BACK HOWEVER IT ENDS, not only where it
+ * remembers to. Every file it writes is root's, and the services, the shim and
+ * every later unelevated `huginn local` read them as the account: the managed
+ * `update` ended on saveConf's fresh 0600 local.json with no hand-back, so a
+ * box that had just updated answered every run "this machine has no
+ * local-engine config" and every verb "not set up". At exit, so the early
+ * process.exit()s are covered too. A run that starts something AS the account
+ * part-way also hands back before that (handBackNow).
+ */
+function handBackAtExit() {
+  if (process.platform !== 'linux' || !isRoot()) return;
+  process.once('exit', () => { handBackOwnership(); });
 }
 
 // -------------------------------------------------------------- detection
@@ -1409,6 +1459,9 @@ function resolveSystemInstall(flags, argv = process.argv.slice(2)) {
   const r = elevateOnce(argv, (tool) =>
     console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`));
   if (r.ok) return 'done';
+  // It ran as root and failed, and said why: a user-unit install now would go
+  // in over what it wrote, beside system units it may have enabled.
+  if (r.ran) process.exit(r.status || 1);
   if (r.reason === 'none') {
     console.log('  no pkexec and no sudo here — falling back to a user unit kept alive by linger');
   } else {
@@ -1438,6 +1491,7 @@ async function cmdOn(flags) {
   if (!MANIFEST) { console.error('this file was not generated correctly — run: node scripts/gen-local-manifest.js'); process.exit(2); }
   refuseUnelevated('turning on');
   if (resolveSystemInstall(flags) === 'done') return;
+  handBackAtExit();
   lockTree();
   seedTokenFromStage(); // only after the tree is locked; no-op unless one was staged
   const det = detectClass();
@@ -1530,8 +1584,8 @@ async function cmdOn(flags) {
     // service's own enrolment must find the id already on disk.
     const e = enrolDevice(conf, models);
     conf.llmSlug = e.llmSlug; saveConf(conf);
+    handBackNow();   // before the runner starts: it reads device/ and local.json as the account
     installRunnerService(flags);
-    if (process.platform === 'linux' && isRoot()) handBackOwnership();
     reportPersistence(conf);
     console.log(`\nOn. ${conf.deviceName} serves ${models.length} adopted model(s) from ${kind} to huginn.`);
     return;
@@ -1587,6 +1641,12 @@ async function cmdOn(flags) {
   installShimCopy();
   saveConf(conf);
   // 5: services
+  // ⚠ HANDED BACK BEFORE ANYTHING STARTS AS THE ACCOUNT. An elevated run has
+  // just minted api-key as root at 0600, and the llm unit runs as `User=`: the
+  // first completion makes llama-swap start llama-server with --api-key-file,
+  // which it cannot read, so the keyless probe below met a dead upstream
+  // instead of a 401 and refused the install.
+  handBackNow();
   if (process.platform === 'win32') { installServiceWindows('llm'); } else { installServiceLinux('llm', { system: !!flags.system }); }
   settlePersistence(conf);
   // 6: health, honestly
@@ -1621,6 +1681,7 @@ async function cmdOn(flags) {
   // losing its slug here would strand it in a misleading half-enrolled state.
   conf.llmSlug = e.llmSlug;
   saveConf(conf);
+  handBackNow();   // before the runner starts: it reads device/ and local.json as the account
   installRunnerService(flags);
   conf.installed = {
     llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version,
@@ -1928,6 +1989,7 @@ async function cmdUpdate(flags) {
     const r = elevateOnce(process.argv.slice(2), (tool) =>
       console.log(`  elevating once with ${tool} — this install runs as system units`));
     if (r.ok) return;
+    if (r.ran) process.exit(r.status || 1);   // it ran, failed, and said why
     if (r.reason === 'none') {
       console.error('refused: this install runs as system units and there is no pkexec or sudo here — re-run as root');
     } else {
@@ -1935,6 +1997,7 @@ async function cmdUpdate(flags) {
     }
     process.exit(1);
   }
+  handBackAtExit();
   installShimCopy();
   console.log('  shim + runner copies refreshed from ~/.huginn');
   if (conf.mode === 'adapter') {
@@ -1982,6 +2045,7 @@ async function cmdUpdate(flags) {
   for (const m of plan.models) conf.modelsBySlug[m.slug] = { file: m.file, display: m.display, ctx: m.ctx, gpu: m.gpu };
   conf.defaultModel = plan.models.find((m) => m.role === 'chat').slug;
   fs.writeFileSync(P('llama-swap.yaml'), swapYamlFor(conf, plan.models));
+  handBackNow();   // the restarted engine reads the new runtime, yaml and models as the account
   if (process.platform === 'win32') {
     const exe = P('runtime', 'winsw', `${LLM_SERVICE}.exe`);
     spawnSync(exe, ['restart'], { encoding: 'utf8' });
@@ -2154,6 +2218,7 @@ async function cmdPersist(flags) {
     const r = elevateOnce(['persist', ...(flags.yes ? ['--yes'] : [])], (tool) =>
       console.log(`  elevating once with ${tool} — the units move into /etc/systemd/system`));
     if (r.ok) return;
+    if (r.ran) process.exit(r.status || 1);   // it ran, failed, and said why: no fallback over it
     if (r.reason === 'none') {
       console.error('  no pkexec and no sudo here');
     } else {
@@ -2170,6 +2235,8 @@ async function cmdPersist(flags) {
     process.exit(failed || !lingered ? 1 : 0);
   }
 
+  // The `record` step writes local.json after the hand-back step has run.
+  handBackAtExit();
   run(steps);
   console.log(`  persist ${persistenceLine(persistence(loadConf() || {}))}`);
   if (failed) { console.error(`\n${failed} step(s) failed - not migrated.`); process.exit(1); }
@@ -2261,6 +2328,7 @@ function usage() {
 }
 
 async function main() {
+  markElevatedRun();
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
   const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'purge-models', 'purge', 'which'];
@@ -2305,6 +2373,6 @@ if (require.main === module) {
     // Where the engine identity check is used here (it lives in the shim).
     engineKit, serviceUid, health, identifyAdapter,
     // The elevated hand-back (an update run with sudo writes as root).
-    userIds, handBackOwnership,
+    userIds, handBackOwnership, ELEVATED_MARK,
   };
 }
