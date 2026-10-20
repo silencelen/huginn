@@ -49,6 +49,8 @@
 // without a daemon.
 
 const nodeFs = require('node:fs');
+const nodeHttps = require('node:https');
+const nodeNet = require('node:net');
 const nodeOs = require('node:os');
 const path = require('node:path');
 
@@ -1154,19 +1156,24 @@ function fixLines(rec, addresses = [], remotes = {}, fw = FIREWALL) {
   return out;
 }
 
+/** The codes Node and OpenSSL give a TLS failure, as [reachError] passes them through. */
+const TLS_FAILURE = /^(?:EPROTO|ERR_SSL_\w+|ERR_TLS_\w+|\w*CERT\w*|UNABLE_TO_\w+)$/;
+
 /**
  * Whether this failure happened AFTER something took the connection.
  *
  * `timed out` is the probe's deadline: the socket was not refused, so either the
  * app accepted and went quiet or a DROP (not a REJECT) ate the packets. `http
- * 5xx` is the server answering to say it is broken. Neither is a bind. Anything
- * else — refused, no route, a name that does not resolve, an unrecognised errno
- * — is treated as "nothing is listening there", which is the bind story and the
- * safe default for a word this function has not seen before.
+ * 5xx` is the server answering to say it is broken. A TLS failure (a handshake
+ * alert, `https://` on a port that speaks plain http, a certificate) needs a
+ * listener to fail against. None of those is a bind. Anything else — refused,
+ * no route, a name that does not resolve, an unrecognised errno — is treated as
+ * "nothing is listening there", which is the bind story and the safe default
+ * for a word this function has not seen before.
  */
 function reachedButSilent(row) {
   const e = String((row && row.error) || '');
-  return e === 'timed out' || /^http \d/.test(e);
+  return e === 'timed out' || /^http \d/.test(e) || TLS_FAILURE.test(e);
 }
 
 /**
@@ -1343,9 +1350,70 @@ function reachError(e) {
   return code || 'did not answer';
 }
 
+/**
+ * How a probe dials an app when no `fetch` was injected: plain `fetch` for
+ * http://, and for https:// one GET that DOES NOT VERIFY THE CERTIFICATE and
+ * puts `servername` (the STORED host) in SNI.
+ *
+ * ⚠⚠ VERIFICATION IS OFF HERE ON PURPOSE, AND ONLY FOR THE PROBES. A probe asks
+ * whether something answers at an address and reads nothing but the status: it
+ * carries no credential and no cookie, and the body is never read. What it
+ * must not do is fail an app because nothing vouches for its certificate. With
+ * verification on, the self-signed certificate Proxmox, Cockpit or UniFi ships
+ * with — and a valid one for `huginn.<tailnet>.ts.net` once the reachability
+ * probe dials 127.0.0.1 instead of the name — read as "nothing is listening,
+ * fix the bind": every such add was a 422 and every such row was red, while
+ * the app was listening fine. Whether a DEVICE trusts the certificate is for
+ * its own browser to ask. The favicon fetch ([getBounded]) still verifies:
+ * those bytes are kept and served back to every client.
+ *
+ * Resolves `{status, body:null}`, and hangs up at once instead of draining the
+ * body. Rejects in fetch's own shapes, so [reachError] reads both transports
+ * alike: the signal's reason at the deadline, `cause.code` for the rest.
+ */
+function probeFetch(url, init = {}, servername = '') {
+  if (!/^https:/i.test(String(url))) return globalThis.fetch(url, init);
+  return new Promise((resolve, reject) => {
+    const signal = init.signal;
+    const failed = (e) => (signal && signal.aborted ? signal.reason : new TypeError('fetch failed', { cause: e }));
+    let req;
+    try {
+      req = nodeHttps.request(url, {
+        method: init.method || 'GET',
+        headers: init.headers || {},
+        signal,
+        // A one-off agent: a socket that skipped verification is never pooled
+        // where another request could pick it up.
+        agent: false,
+        rejectUnauthorized: false,
+        ...(servername ? { servername } : {}),
+      }, (res) => {
+        res.on('error', () => { /* hung up on purpose */ });
+        resolve({ status: res.statusCode, body: null });
+        res.destroy();
+      });
+    } catch (e) {
+      reject(failed(e));
+      return;
+    }
+    req.on('error', (e) => reject(failed(e)));
+    req.end();
+  });
+}
+
+/**
+ * What a reachability probe puts in SNI: the host the row STORES, because the
+ * probe dials a bare address and a server that picks its certificate by name
+ * has nothing to pick by otherwise. Never an IP literal (RFC 6066).
+ */
+function sniName(rawUrl) {
+  const host = hostnameOf(rawUrl).replace(/^\[|\]$/g, '');
+  return host && !nodeNet.isIP(host) ? host : '';
+}
+
 /** One address, one bounded GET. `{addr, ok}` or `{addr, ok:false, error}`. */
 async function reachOne(rawUrl, addr, opts = {}) {
-  const doFetch = opts.fetch || globalThis.fetch;
+  const doFetch = opts.fetch || ((url, init) => probeFetch(url, init, sniName(rawUrl)));
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   let url;
   try { url = reachUrl(rawUrl, addr); } catch { return { addr, ok: false, error: 'not an address' }; }
@@ -1818,7 +1886,9 @@ function iconDue(meta, rec, nowMs) {
  * as a daemon that will not exit.
  */
 async function probeApp(rec, opts = {}) {
-  const doFetch = opts.fetch || globalThis.fetch;
+  // [probeFetch]: an https:// app is not failed for its certificate. The stored
+  // URL is dialled as it is, so SNI already names its host.
+  const doFetch = opts.fetch || probeFetch;
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   const nowMs = opts.nowMs || (() => Date.now());
   const started = nowMs();
@@ -2129,7 +2199,10 @@ function createStore(opts = {}) {
   // The address the DAEMON binds, handed down rather than discovered here (see
   // [pickHostAddr]). Empty is honest: it is simply not counted as one of ours.
   const hostAddr = typeof opts.hostAddr === 'string' ? opts.hostAddr.trim() : '';
-  const doFetch = opts.fetch || globalThis.fetch;
+  // ⚠ UNDEFINED UNLESS INJECTED, never `globalThis.fetch`: each caller below then
+  // dials the way it must — the probes through [probeFetch], which does not fail
+  // an https:// app for its certificate, the favicon through plain fetch, which does.
+  const doFetch = opts.fetch;
   const nowMs = opts.nowMs || (() => Date.now());
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : PROBE_INTERVAL_MS;
