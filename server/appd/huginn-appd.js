@@ -10209,8 +10209,19 @@ async function alertTickInner(st) {
     for (const a of undelivered) {
       if (a.kind === 'chat_finished') {
         const before = (prevObs.chats || {})[a.subject];
+        const cur = observation.chats[a.subject];
         if (before) observation.chats[a.subject] = before;
-        else delete observation.chats[a.subject];
+        else if (cur) {
+          // ⚠ A CHAT BORN SINCE THE LAST TICK HAS NO `before` TO GO BACK TO, and
+          // deleting it was no rollback: prevAt is stamped below, so on the next
+          // tick its createdAt is older than prevAt, decideAlerts reads it as
+          // history, and the finish is announced on no channel at all. That is a
+          // quick `huginn ask` during a WAN blip, exactly what this retry is for.
+          // An entry one run short keeps the finishedRuns edge for the next tick.
+          observation.chats[a.subject] = {
+            ...cur, running: false, finishedRuns: Math.max(0, (Number(cur.finishedRuns) || 1) - 1),
+          };
+        }
       } else {
         const before = (prevObs.sessions || {})[a.subject];
         if (before === undefined) delete observation.sessions[a.subject];
