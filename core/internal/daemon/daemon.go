@@ -42,6 +42,8 @@ type Daemon struct {
 	watch     *watcher        // appd watch stream -> tray summary + notices
 	installID string          // X-Huginn-Client
 
+	restartMu sync.Mutex // one runner stop-then-start at a time (restartRunner)
+
 	mu      sync.Mutex
 	api     *appd.Client
 	run     *runner.Runner
@@ -182,19 +184,35 @@ func (p pinStore) SavePins(ps appd.PinSet) error {
 
 // restartRunner (re)builds the appd client from the current config and starts
 // a fresh runner on it. Called at start and after a re-pair.
+//
+// ⚠ ONE AT A TIME, AND THE OLD RUNNER IS GONE BEFORE THE NEW ONE IS PUBLISHED.
+// stopRunner used to unpublish the runner first and wait for it after, so a
+// second call (a retried change, the next address the desktop added) found
+// nothing to stop and started a runner of its own, which the first call then
+// overwrote. That runner could no longer be stopped by anything, kept polling
+// as this same device, and each of its polls made appd drop the other
+// runner's job. Until the swap, the old client keeps serving the /appd proxy
+// and busy() still sees the old runner's job.
 func (d *Daemon) restartRunner(ctx context.Context) {
-	d.stopRunner()
+	d.restartMu.Lock()
+	defer d.restartMu.Unlock()
+	if old := d.haltRunner(); old != nil {
+		defer old.Close()
+	}
 	cfg, _, err := d.st.Load()
 	if err != nil {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Note: "Cannot read core.json: " + err.Error()})
 		return
 	}
 	if cfg.Appd.URL == "" {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "Not paired with huginn — run `huginn core pair`"})
 		return
 	}
 	api, err := appd.New(d.apiConfig(cfg))
 	if err != nil {
+		d.setRunner(nil, nil, nil, nil)
 		d.publishDevice(runner.Status{Enabled: cfg.Device.Enabled, Note: "The saved huginn address is refused: " + err.Error()})
 		return
 	}
@@ -211,9 +229,7 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 	})
 	rctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	d.mu.Lock()
-	d.api, d.run, d.stopRun, d.runDone = api, r, cancel, done
-	d.mu.Unlock()
+	d.setRunner(api, r, cancel, done)
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
@@ -240,17 +256,33 @@ func (d *Daemon) restartRunner(ctx context.Context) {
 }
 
 func (d *Daemon) stopRunner() {
+	d.restartMu.Lock()
+	defer d.restartMu.Unlock()
+	old := d.haltRunner()
+	d.setRunner(nil, nil, nil, nil)
+	if old != nil {
+		old.Close()
+	}
+}
+
+// haltRunner stops the runner and waits until it has. restartMu is held. The
+// runner and its client stay published until the caller replaces them, and
+// the client is returned for the caller to close after that.
+func (d *Daemon) haltRunner() *appd.Client {
 	d.mu.Lock()
 	stop, done, api := d.stopRun, d.runDone, d.api
-	d.stopRun, d.runDone, d.run, d.api = nil, nil, nil, nil
 	d.mu.Unlock()
 	if stop != nil {
 		stop()
 		<-done
 	}
-	if api != nil {
-		api.Close()
-	}
+	return api
+}
+
+func (d *Daemon) setRunner(api *appd.Client, r *runner.Runner, stop context.CancelFunc, done chan struct{}) {
+	d.mu.Lock()
+	d.api, d.run, d.stopRun, d.runDone = api, r, stop, done
+	d.mu.Unlock()
 }
 
 func (d *Daemon) runnerConf() runner.Config {
