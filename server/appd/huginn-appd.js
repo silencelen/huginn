@@ -2345,8 +2345,11 @@ function heldResult(name, text, held, fields) {
 async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false } = {}) {
   const target = `=${name}:`;
   // The spelling that is actually pasted, so the settle and confirm checks below
-  // compare against the bytes the pane received (2026-10-02, see pasteSafe).
-  text = typing.pasteSafe(text);
+  // compare against the bytes the pane received (2026-10-02, see pasteSafe). A
+  // message also loses what Claude Code would refuse to submit with it in
+  // (typing.sendable); the Screen tab's own typing does not — that person is at
+  // the box, and answers Claude Code's notice themselves.
+  text = submit ? typing.sendable(text) : typing.pasteSafe(text);
   // ⚠ A SEND HELD AFTER ITS PASTE IS ALREADY IN THE BOX (`typed`, see pumpQueue).
   // A dialog opened between its paste and its Enter; the box it comes back to is
   // either still holding the message — then the Enter is all that is owed — or it
@@ -2869,7 +2872,7 @@ async function checkGates(name) {
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
   return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell, shellMode,
-    sessionState: readSessionState(name) };
+    sessionState: readSessionState(name), transcript: file };
 }
 
 /**
@@ -2944,7 +2947,110 @@ function humanSpokeSince(entry, name) {
   // Incremental and bounded (typing.scanForHuman): each poll reads only what was
   // appended since the last one, never the whole slice since the entry queued.
   if (!entry.humanScan || entry.humanScan.file !== file) entry.humanScan = { file, at: from };
-  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max));
+  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max),
+    typing.HUMAN_SCAN_MAX_BYTES, { ours: ownPromptTest(name) });
+}
+
+/**
+ * What appd itself typed into each session as an AUTOMATED prompt, lately — so
+ * the 'human' drop rule does not read appd's own words back as the owner's.
+ *
+ * ⚠ CLAUDE CODE RECORDS A PASTE EXACTLY AS IT RECORDS TYPING (`origin.kind:
+ * "human"`, `promptSource: "typed"`), so no field of the record says who wrote
+ * it. Two automated messages queued behind one turn — two relays, a heads-up
+ * and a resume — and the first went in; its record was written; and the second,
+ * whose drop scan starts where IT was queued, before that record, was dropped
+ * with "you typed first". Only the queue knows what it typed, so it writes it
+ * down here before every automated delivery, and the scan steps over a record
+ * whose `typing.promptSpelling` matches.
+ *
+ * Automated sends only. A message the owner sent from the app, a soft end they
+ * asked for, an Undo they pressed: those ARE the owner speaking, and still count.
+ *
+ * NOT ON THE QUEUE STRUCT, for the reason `intoDraftAt` gives: the struct is
+ * reaped the moment the queue empties, and the record lands ~100 ms later. Kept
+ * as long as an automated send may wait, a few per session, as hashes.
+ */
+const ownPrompts = new Map();   // session name -> [{ hash, at }]
+const OWN_PROMPTS_KEEP = 8;
+
+function promptHash(spelling) {
+  return crypto.createHash('sha256').update(spelling).digest('base64');
+}
+
+function noteOwnPrompt(name, text) {
+  const spelling = typing.promptSpelling(text);
+  if (!spelling) return;
+  const now = Date.now();
+  for (const [k, list] of ownPrompts) {
+    const fresh = list.filter((p) => now - p.at <= typing.QUEUE_MAX_WAIT_MS);
+    if (fresh.length) ownPrompts.set(k, fresh);
+    else ownPrompts.delete(k);
+  }
+  const list = ownPrompts.get(name) || [];
+  list.push({ hash: promptHash(spelling), at: now });
+  ownPrompts.set(name, list.slice(-OWN_PROMPTS_KEEP));
+}
+
+/** The drop scan's `ours`: did appd type this (a promptSpelling) here itself? */
+function ownPromptTest(name) {
+  const list = ownPrompts.get(name);
+  if (!list || !list.length) return null;
+  return (spelling) => {
+    const h = promptHash(spelling);
+    return list.some((p) => p.hash === h);
+  };
+}
+
+/**
+ * Where each session's transcript ended when the queue last SUBMITTED something
+ * into it — until the conversation has visibly moved past that point.
+ *
+ * ⚠ THE TRANSCRIPT HALF OF "ONE BOUNDARY, ONE AUTOMATED MESSAGE". The pump's
+ * `Math.max(entry.at, q.deliveredAt)` keeps the hook's idle stamp from releasing
+ * the next automated entry after a delivery, but the transcript gate had no such
+ * window: Claude Code writes the delivered prompt ~100 ms after the Enter, and
+ * until then the tail still ends on the boundary that released it. The next
+ * automated send was read as idle and pasted into the turn the first had just
+ * started — Claude Code splices it in (`absorbed_mid_turn`), the measured harm
+ * the queue exists for. So until typing.scanForTurnStart sees something after
+ * this mark, the tail's `idle` does not count for the automated lane.
+ *
+ * NOT ON THE QUEUE STRUCT, like `ownPrompts`: a heads-up and a ladder move queued
+ * by one arbiter tick for one session are two queues in a row, the first reaped
+ * the instant its message went in — and that pair is the ladder's `/model`
+ * opening its picker on top of the turn the heads-up just started.
+ */
+const unseenDelivery = new Map();   // session name -> { file, cursor: { at }, at: released, doneAt: submitted }
+
+/**
+ * Has the transcript moved past this session's last delivery (or is there none)?
+ * `st` is the gate's state-file read: a `running` stamped after the release is
+ * the turn that delivery started, and keeps the wait from lapsing
+ * (typing.DELIVERY_SHOW_MAX_MS). Called on every pass for the automated lane, so
+ * the mark is settled as soon as the record lands, whatever else holds the entry.
+ */
+function deliveryShownUp(name, file, st) {
+  const d = unseenDelivery.get(name);
+  if (!d) return true;
+  // A different transcript (a /clear, a resume) owes nothing to the old mark.
+  if (!file || d.file !== file) {
+    unseenDelivery.delete(name);
+    return true;
+  }
+  if (typing.scanForTurnStart(d.cursor, (at, max) => transcriptSlice(file, at, max))) {
+    unseenDelivery.delete(name);
+    // ⚠ BUT NOT ON THIS PASS. The gate read the tail BEFORE this scan, and the
+    // record that settled the mark can have landed in between — so this pass's
+    // `idle` may still be the old boundary. The next pass reads the tail afresh.
+    return false;
+  }
+  const running = !!st && st.state === 'running' && (typing.stateStampMs(st) || 0) >= d.at;
+  if (running || Date.now() - d.doneAt < typing.DELIVERY_SHOW_MAX_MS) return false;
+  unseenDelivery.delete(name);
+  log(`typing: ${name}: the transcript shows nothing of the last delivery after `
+    + `${Math.round((Date.now() - d.doneAt) / 1000)}s; reading its tail as it stands`);
+  return true;
 }
 
 function armQueueTimer(name) {
@@ -3136,9 +3242,9 @@ async function pumpQueue(name) {
       // again, side note: …"`. The composer is the person's; a send waits for
       // it, the way it already waits for a dialog.
       //
-      // Text only. A pane SCRIPT types no text, and the Screen tab's own
-      // keystrokes (`submit:false`) ARE the draft — holding those would take the
-      // terminal keyboard away exactly as the modal refusal once did.
+      // Text sends here. The Screen tab's own keystrokes (`submit:false`) ARE the
+      // draft — holding those would take the terminal keyboard away exactly as the
+      // modal refusal once did. A pane SCRIPT has its own, stricter rule below.
       const guarded = textEntry && entry.submit !== false;
       // Read ONCE and reused three times below — the hold, the journal line that
       // says how the hold ended, and the `intoDraft` notice. They were three
@@ -3153,6 +3259,18 @@ async function pumpQueue(name) {
         waitedMs: now - entry.at,
         keysWindowMs: LIVE_KEYS_WINDOW_MS,
       });
+      // ⚠ A JOB WAITS FOR A BARE CARET (typing.jobHold). It used to be exempt here
+      // on the premise that a pane script types no text; the ladder's types
+      // `/model` and presses Enter, and into a box holding somebody's words that
+      // submits their draft with `/model` stuck to the end of it. The promise in
+      // enqueueJob — "starts only at a turn boundary with a bare caret" — is kept
+      // here now, not just written down.
+      const holdForBox = !textEntry && typing.jobHold({
+        composerHolds: gate.composerHolds, waitedMs: now - entry.at,
+      });
+      // The automated lane's view of the last delivery (deliveryShownUp), read on
+      // every pass, not only when the tail looks idle.
+      const shownUp = humanText || deliveryShownUp(name, gate.transcript, gate.sessionState);
       const d = typing.releaseDecision(humanText
         ? {
           ...gate,
@@ -3168,7 +3286,14 @@ async function pumpQueue(name) {
           idle: true,
           state: holdForQuestion ? 'hold' : null,
         }
-        : { ...gate, state: stateSays, draft: holdForDraft });
+        // The tail's `idle` only once the conversation shows the last delivery
+        // (deliveryShownUp): before that it is the boundary that released it.
+        : {
+          ...gate,
+          idle: gate.idle && shownUp,
+          state: stateSays,
+          draft: holdForDraft || holdForBox,
+        });
       // ⚠ LOGGED OFF `d`, NOT OFF THE HOLD. A trust dialog has a caret of its own
       // (`❯ 1. Yes, I trust this folder`), so the draft rule says "true" about a
       // pane whose real answer is `modal` — and modal outranks it. Writing the
@@ -3210,6 +3335,17 @@ async function pumpQueue(name) {
       q.blockedBy = null;
       q.delivering = true;
       q.inFlight = entry;   // still visible to the duplicate guard (pendingEntries)
+      // Written down BEFORE anything is typed: Claude Code's record of it can land
+      // within milliseconds of the Enter, and it is appd's, not the owner's. In the
+      // spelling that is pasted (typing.sendable), which is the one it records.
+      if (entry.automated) {
+        noteOwnPrompt(name, typeof entry.run === 'function' ? entry.prompt : typing.sendable(entry.text));
+      }
+      // Where the transcript ends NOW, the instant before the paste: whatever this
+      // delivery causes is written after it (deliveryShownUp). Not the gate's read
+      // a few awaits earlier — the last records of the turn that just ended can
+      // land in between, and one of them would pass for this delivery's turn.
+      const markAt = textEntry && gate.transcript ? transcriptSize(gate.transcript) : null;
       let r;
       try {
         // A JOB rather than a message: the ladder's `/model` picker script is
@@ -3259,6 +3395,27 @@ async function pumpQueue(name) {
       // and moving the window for it would hold the entry behind it for a
       // boundary that has nothing to do with anything appd did.
       if (r.ok) q.deliveredAt = Date.now();
+      // And the transcript's half of the same window (deliveryShownUp), from where
+      // the transcript ended as this entry was pasted (`markAt`). Only for a
+      // MESSAGE, because only a prompt starts a turn — not the Screen tab's own
+      // keystrokes, not the ladder's `/model` (a local command) — and only where
+      // a composer was there to judge the submit (`submitted` true or false). A
+      // `false` counts: a confirm that ran out on a loaded host says the box still
+      // held a message that had in fact gone, and if it really is still there,
+      // the wait only delays the leftovers rule by its bound. A pane with no
+      // composer to judge by (`null` — a shell, a pane that never drew one) has
+      // no Claude to start a turn, and would only make the next message wait.
+      // Two clocks: `at` is when it was RELEASED (`now`, before the paste),
+      // because the hook marks the turn it starts `running` while the paste is
+      // still being confirmed; `doneAt` is when it was submitted, which is what
+      // the record's lateness is counted from — a paste that took seconds to
+      // settle must not use up the wait.
+      if (r.ok && typeof r.submitted === 'boolean' && textEntry && entry.submit !== false
+          && markAt != null) {
+        unseenDelivery.set(name, {
+          file: gate.transcript, cursor: { at: markAt }, at: now, doneAt: Date.now(),
+        });
+      }
       // ⚠ AND SAY SO WHEN IT WENT IN ON TOP OF SOMEBODY (decision 59). Written
       // from the SAME verdict the journal line is written from, at the moment of
       // release rather than afterwards: by the time the paste lands the composer
@@ -3339,6 +3496,9 @@ function enqueueSend(name, text, opts = {}) {
     text,
     // Set only by enqueueJob: an async function run INSTEAD of pasting text.
     run: typeof opts.run === 'function' ? opts.run : null,
+    // What such a job types as a PROMPT (the ladder's `/model`), so the drop
+    // rule can tell Claude Code's record of it from the owner's (ownPrompts).
+    prompt: typeof opts.prompt === 'string' ? opts.prompt : null,
     at: Date.now(),
     automated: !!opts.automated,
     origin: opts.origin || null,
@@ -8714,7 +8874,20 @@ async function applyLadder(name, to) {
 
   // Whether a composer is drawn BEFORE `/model` goes in: what lets the look below
   // tell "something with no caret replaced the box" from "this pane has no box".
-  const hadComposer = typing.composerText((await paneLines(name)) || []) !== null;
+  // Captured WITH its escapes, because the same read answers the question under
+  // it, and that one must not count Claude Code's dim suggestion as text (P-14).
+  const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', target]);
+  const before = cap.err ? [] : cap.stdout.replace(/\n$/, '').split('\n');
+  const hadComposer = typing.composerText(before) !== null;
+  // ⚠ ONLY INTO A BARE CARET, looked at once more before the first key. The queue
+  // holds this job while the box has anything in it (typing.jobHold), but a key
+  // can land between that capture and this one, and an Undo a person asked for
+  // reaches here once that hold's ceiling has passed. `/model` typed after
+  // somebody's words submits their sentence for them. Nothing is pressed — not
+  // fail()'s Escape and C-u either: C-u is the key that would wipe their draft.
+  if (typing.jobHold({ composerHolds: typing.composerText(before, { dropGhost: true }) })) {
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: 'there is unsent text in the composer; /model was not typed' };
+  }
   const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
   if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
   await sleep(SUBMIT_BEAT_MS);
@@ -9400,7 +9573,7 @@ async function applyHeadroomAction(action, ctx) {
       const from = action.from;
       const to = action.to;
       const r = await enqueueJob(action.name, () => ladderUnlessStalled(action.name, to), {
-        automated: true, origin: 'headroom', kind: 'model', family: from,
+        automated: true, origin: 'headroom', kind: 'model', family: from, prompt: '/model',
         onSettle: (v) => resolvePendingLadder(state, action, v),
       });
       // One cooldown for every ladder move on the host, spent when the move is
@@ -12538,7 +12711,7 @@ async function handleRequest(req, res) {
         // (`submitted === false`) is the very message this press is asking for,
         // and answering it `duplicate:true` stranded it with nothing to say so.
         const recent = wantsEnter && !dup ? lastPasted.get(name) : null;
-        if (recent && recent.submitted !== false && recent.text === typing.pasteSafe(typedKeys) && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
+        if (recent && recent.submitted !== false && recent.text === typing.sendable(typedKeys) && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
             && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
           log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
             + 'not sending it a second time');
@@ -13570,22 +13743,37 @@ async function handleRequest(req, res) {
         // phrase queues in the composer, and the settle timer will not end
         // anything until idle has held. The 202 says so.
         const queued = st.state === 'running';
-        const r = await sendTextToPane(name, SOFT_END_PHRASE);
-        if (!r.ok) return sendErr(res, r.code || 500, r.message);
-        // …and only when the phrase demonstrably landed. `submitted === false` is
-        // the pane telling us it is still sitting in a composer, and ending a
-        // session whose wrap-up never ran is the one outcome this must not
-        // produce. Same rule as /soft-end's onSettle.
-        if (r.submitted === false) {
-          log(`archive: ${name}: the wrap-up phrase did not submit; not arming the end`);
-          return sendErr(res, 409,
-            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
-        }
+        // ⚠ THROUGH THE QUEUE, AND ARMED FROM THE SETTLE — the rule written above
+        // `sendQueues` for every fixed phrase, and what /soft-end and a project's
+        // graceful delete already do. This route used to paste the phrase straight
+        // at the pane, past every gate the queue has: the draft guard (the phrase
+        // went in after the owner's half-typed sentence and the Enter submitted
+        // both, as an instruction carried out in the wrap-up turn), the shell
+        // refusal (a pane that had dropped to a shell was handed the phrase and an
+        // Enter), and the pump's lock (a message mid-delivery could be welded to
+        // it). `automated` is false: a person asked for this, so the turn gate does
+        // not hold it and every other gate does.
+        //
         // Armed regardless of the host's softEndAuto. That setting decides
         // whether a WIND-DOWN ends the session; an archive was asked for by name
         // and has to end it, or the row would describe a session still running.
-        softEnds.set(name, createPending(Date.now()));
-        archiveIntents.set(name, { note });
+        // And only when the phrase demonstrably landed (armSoftEndFromSettle):
+        // ending a session whose wrap-up never ran is the one outcome this must
+        // not produce.
+        const out = await enqueueSend(name, SOFT_END_PHRASE, {
+          origin: 'archive',
+          submit: true,
+          onSettle: (v) => {
+            if (armSoftEndFromSettle(name, v, 'archive')) archiveIntents.set(name, { note });
+          },
+        });
+        if (out.result && !out.result.ok) return sendErr(res, out.result.code || 500, out.result.message);
+        // `submitted === false` is the pane telling us the phrase is still
+        // sitting in a composer — said now, as before, when that is known now.
+        if (out.result && out.submitted === false) {
+          return sendErr(res, 409,
+            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
+        }
         return sendJson(res, 202, {
           ok: true,
           id: st.sessionId,
@@ -13593,7 +13781,9 @@ async function handleRequest(req, res) {
           pending: true,
           mode: 'graceful',
           phrase: SOFT_END_PHRASE,
-          queued,
+          queued: queued || !out.delivered,
+          delivered: out.delivered,
+          blockedBy: out.blockedBy || null,
         });
       }
       const r = await archiveAndEnd(name, { note });

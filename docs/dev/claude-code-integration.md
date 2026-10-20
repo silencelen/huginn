@@ -247,7 +247,23 @@ Notes:
   (`isBoundaryRecord` in `lib/typing.js`): a `system` record with subtype `turn_duration`, an
   `assistant` record with `isApiErrorMessage: true`, or an `assistant` record whose
   `message.stop_reason` is `end_turn`. Only `user`, `assistant` and `system`/`turn_duration`
-  count as conversation; every other record type is bookkeeping.
+  count as conversation; every other record type is bookkeeping. After the queue submits a
+  message, the tail's boundary counts again only once a later non-boundary record appears
+  (`scanForTurnStart`): Claude Code writes the prompt's record about 100 ms after the Enter, after
+  any synchronous UserPromptSubmit hook. The wait lapses after `DELIVERY_SHOW_MAX_MS` unless the
+  title hook has marked the turn `running`.
+- **Who wrote a `user` record.** A paste is recorded exactly like typing (`origin.kind: "human"`,
+  `promptSource: "typed"`), so the automated-send drop rule (`hasHumanUserRecord`) tells appd's
+  own messages apart only by remembering what it typed (`promptSpelling`, which also drops a long
+  paste's `<pasted_content>` tags). A record with any other `origin.kind` (a task notification, a
+  peer), `promptSource: "system"`, or command or bash output never counts as the owner.
+- **Invisible characters.** Since 2.1.30x Claude Code will not submit a prompt holding characters
+  its classifier calls invisible: it removes them, puts the text back in the box and shows
+  `Removed N invisible characters · review and press Enter to send`. `sendable` in
+  `lib/typing.js` removes, before a message is pasted, the ones it removes in every context, and
+  every pane comparison ignores the whole set (`INVISIBLE_RE`, read from the binary). A classifier
+  change in a later build shows up as messages answered `submitted: false`. Tests:
+  `invisible-characters.test.js`, `routes-invisible-characters.test.js`.
 - **Usage-limit stalls.** An interactive session stalled on a limit ends on an `assistant` record
   with `isApiErrorMessage: true` and `apiErrorStatus: 429`. `parseLimitError` reads the window
   and reset time from its text (`You've hit your session limit · resets …`,

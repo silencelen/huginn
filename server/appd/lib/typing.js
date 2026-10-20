@@ -263,6 +263,39 @@ function stateStampMs(st) {
 }
 
 /**
+ * What Claude Code writes as a `user` record about ITSELF: a command's output,
+ * its caveat, a background task's notification. The OUTPUT of `!cmd` and of a
+ * slash command, never the command — the `<bash-input>` and `<command-name>`
+ * records before them are what somebody typed, and are read as such.
+ */
+const CLAUDE_CODE_OWN_RE = /^\s*<(?:local-command-stdout|local-command-stderr|local-command-caveat|bash-stdout|bash-stderr|task-notification)\b/;
+
+/**
+ * A prompt, in the spelling two copies of it can be compared in.
+ *
+ * Whitespace-free (`squashPane`), because Claude Code trims what it records and a
+ * paste can arrive with its line ends changed. And a slash command is put back
+ * the way it was TYPED: Claude Code records `/model` as
+ * `<command-name>/model</command-name>…<command-args></command-args>`.
+ *
+ * ⚠ AND A LONG PASTE IS RECORDED WRAPPED. One Claude Code collapsed in the box
+ * (`[Pasted text #1 …]`) is stored as `<pasted_content id="d842">\n…\n
+ * </pasted_content id="d842">` — every long brief or relay appd sends. The tags
+ * are dropped (PASTED_CONTENT_TAG_RE, a plain linear match: the body is not
+ * needed, only the words around it); the whitespace they leave goes with the rest.
+ */
+const PASTED_CONTENT_TAG_RE = /<\/?pasted_content id="[0-9a-f]+">/g;
+function promptSpelling(text) {
+  let s = String(text == null ? '' : text);
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(s);
+  if (name) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(s);
+    s = `${name[1]} ${args ? args[1] : ''}`;
+  }
+  return squashPane(s.replace(PASTED_CONTENT_TAG_RE, ''));
+}
+
+/**
  * Did a HUMAN speak in this slice of transcript?
  *
  * Used for the automated-send drop rule: an automated message queued behind a
@@ -271,8 +304,24 @@ function stateStampMs(st) {
  * handing a tool's output back to the model) and meta records; neither is a
  * person typing, so both are skipped — the same distinction transcript.js
  * makes at `case 'user'`.
+ *
+ * ⚠ AND TWO MORE KINDS OF `user` RECORD THAT NO PERSON WROTE. Read as the owner,
+ * each one dropped an automated send with "you typed first" that nobody had:
+ *   - Claude Code's own: a background task's notification draining into an idle
+ *     session (`origin.kind: "task-notification"`, `promptSource: "system"` —
+ *     every one of the 364 on the author's host), and the output of a command
+ *     (CLAUDE_CODE_OWN_RE) — the ladder's own `/model` leaves one of those.
+ *     Keyed on the harness's fields first, as transcript.js does: `origin.kind`
+ *     other than `human` is never a person; no origin at all is an older
+ *     transcript or a slash command, and the content decides.
+ *   - appd's own: Claude Code records a message appd pasted EXACTLY as it
+ *     records one the owner typed (`origin.kind: "human"`, `promptSource:
+ *     "typed"`), so no field can tell them apart. `ours` is the caller's
+ *     memory of what it typed (a `promptSpelling` → true); the second of two
+ *     queued automated messages was dropped as soon as the first one's record
+ *     was written, every time.
  */
-function hasHumanUserRecord(jsonlSlice) {
+function hasHumanUserRecord(jsonlSlice, { ours = null } = {}) {
   for (const raw of String(jsonlSlice || '').split('\n')) {
     const line = raw.trim();
     if (!line) continue;
@@ -281,11 +330,24 @@ function hasHumanUserRecord(jsonlSlice) {
     if (!rec || rec.type !== 'user' || rec.isMeta === true) continue;
     // Claude Code's own summary after a compaction, not a person.
     if (rec.isCompactSummary === true) continue;
+    const kind = rec.origin && rec.origin.kind;
+    if ((typeof kind === 'string' && kind !== 'human') || rec.promptSource === 'system') continue;
     const c = rec.message && rec.message.content;
-    if (typeof c === 'string') { if (c.trim()) return true; continue; }
-    if (!Array.isArray(c)) continue;
-    // A record made only of tool_result blocks is plumbing, not a person.
-    if (c.some((b) => b && typeof b === 'object' && b.type !== 'tool_result')) return true;
+    let text;
+    if (typeof c === 'string') {
+      if (!c.trim()) continue;
+      text = c;
+    } else if (Array.isArray(c)) {
+      const blocks = c.filter((b) => b && typeof b === 'object');
+      // A record made only of tool_result blocks is plumbing, not a person.
+      if (!blocks.some((b) => b.type !== 'tool_result')) continue;
+      // Anything but words (an image) was attached by somebody; appd sends text.
+      if (blocks.some((b) => b.type !== 'text' && b.type !== 'tool_result')) return true;
+      text = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
+    } else continue;
+    if (CLAUDE_CODE_OWN_RE.test(text)) continue;
+    if (typeof ours === 'function' && ours(promptSpelling(text))) continue;
+    return true;
   }
   return false;
 }
@@ -313,22 +375,79 @@ const HUMAN_SCAN_MAX_BYTES = 8 * 1024 * 1024;
  *
  * @param cursor { at } — byte offset of the first unread byte; advanced here
  * @param read   (from, max) => { buf, start } | null, raw bytes of the file
+ * @param opts   { ours } — handed to hasHumanUserRecord
  */
-function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES, opts = {}) {
+  const text = takeCompleteLines(cursor, read, max);
+  return text != null && hasHumanUserRecord(text, opts);
+}
+
+/**
+ * The complete lines appended since `cursor.at`, at most `max` bytes of them, as
+ * text — and the cursor moved past them. Null when there is nothing new to read.
+ */
+function takeCompleteLines(cursor, read, max) {
   const slice = read(cursor.at, max);
-  if (!slice || !slice.buf || !slice.buf.length) return false;
+  if (!slice || !slice.buf || !slice.buf.length) return null;
   const nl = slice.buf.lastIndexOf(0x0a);
   if (nl < 0) {
     // No complete line: one still being written — or one longer than a whole
     // read, which nobody typed. Step over that; wait for the other.
     if (slice.buf.length >= max) cursor.at = slice.start + slice.buf.length;
-    return false;
+    return null;
   }
   const done = slice.buf.subarray(0, nl + 1);
   cursor.at = slice.start + done.length;
   // A read that began inside a line it stepped over starts with that line's
   // tail; it does not parse, and is skipped like any fragment.
-  return hasHumanUserRecord(done.toString('utf8'));
+  return done.toString('utf8');
+}
+
+/**
+ * How long the transcript may show nothing of a delivery before its tail is
+ * trusted again (DELIVERY_SHOW_MAX_MS), unless the title hook says a turn is
+ * running.
+ *
+ * ⚠ BOUNDED, BECAUSE NOT EVERY PANE WRITES A TRANSCRIPT. Claude Code writes the
+ * prompt's record within a flush (100 ms) plus its synchronous hooks, and its
+ * title hook marks the session `running` sooner still — while that mark stands
+ * the wait is not cut short at all. A pane that will never write anything (a
+ * shell left with a stale state file, a stand-in) would otherwise hold every
+ * automated send to it until the ten-minute drop.
+ */
+const DELIVERY_SHOW_MAX_MS = 5_000;
+
+/**
+ * Has the conversation moved past the point a delivery was made at?
+ *
+ * ⚠ THE TAIL CANNOT SEE A TURN THAT HAS NOT BEEN WRITTEN YET. Claude Code
+ * flushes its transcript in batches (every 100 ms in 2.1.302, after any
+ * synchronous UserPromptSubmit hook), so for a moment after appd submits a
+ * message the last record is still the boundary that released it — and the next
+ * automated send, read against that tail, was released into the turn the first
+ * one had just started. One boundary, one automated message; the state file's
+ * stamp already said so (`q.deliveredAt` in the pump), the transcript did not.
+ *
+ * So after a delivery the tail's `idle` counts only once a conversational record
+ * that is NOT a boundary has been written after it: the delivered prompt, or —
+ * for a message Claude Code absorbed into a running turn, which gets no record
+ * of its own — that turn going on. A turn marker flushed late for the turn that
+ * ended before the delivery is a boundary, and does not count.
+ *
+ * Incremental and bounded like scanForHuman: `cursor.at` starts at the size the
+ * transcript had when the delivery was released.
+ */
+function scanForTurnStart(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+  const text = takeCompleteLines(cursor, read, max);
+  if (text == null) return false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (rec && typeof rec === 'object' && isConversationalRecord(rec) && !isBoundaryRecord(rec)) return true;
+  }
+  return false;
 }
 
 // The composer's input line: a bare caret, or a caret with typed text after it.
@@ -772,14 +891,33 @@ function composerText(lines, { dropGhost = false } = {}) {
 }
 
 /**
+ * The characters Claude Code 2.1.302 calls invisible — `k()` in the classifier
+ * its prompt submit runs (read from the binary), less TAB and LF. Some it always
+ * removes, some only out of context (a joiner inside an emoji or an Indic word
+ * stays); either way a pane may not show them.
+ */
+const INVISIBLE_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\u{1107F}\u{13430}-\u{1343F}\u{16FE4}\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/gu;
+
+/**
  * Comparison spelling for pane text: ANSI stripped and ALL whitespace removed.
  *
  * Whitespace goes because tmux wraps a long line at the pane width with no
  * separator at all, so a 200-character message arrives as three rows split
  * mid-word. Removing whitespace from both sides of the comparison makes the
  * wrap invisible instead of making the match impossible.
+ *
+ * ⚠ AND THE INVISIBLE CHARACTERS GO TOO (INVISIBLE_RE). Claude Code 2.1.30x will
+ * not submit a prompt holding them: it removes them, puts the rest back in the
+ * box, and sends nothing — and its renderer draws some of them not at all. With
+ * them left in, a message carrying one either never "landed" (the recovery left
+ * it in the box, and every retry pasted another copy) or "left the box" the
+ * moment Claude Code cleaned it (a refused message reported submitted, and the
+ * person's retry swallowed as its duplicate). Judged without them on both sides,
+ * the box is read as a person would read it.
  */
-function squashPane(s) { return stripAnsi(String(s || '')).replace(/\s+/g, ''); }
+function squashPane(s) {
+  return stripAnsi(String(s || '')).replace(/\s+/g, '').replace(INVISIBLE_RE, '');
+}
 
 /**
  * What a COLLAPSED paste looks like in the composer — and it is most of them.
@@ -1072,6 +1210,49 @@ function pasteSafe(text) {
 }
 
 /**
+ * The spelling of a MESSAGE that Claude Code 2.1.30x will submit as it is: what
+ * pasteSafe leaves, minus what its prompt submit would take out at the Enter.
+ *
+ * ⚠ A PROMPT WITH INVISIBLE CHARACTERS IS NOT SUBMITTED. On Enter, Claude Code
+ * removes them, puts the cleaned text back in the box, says `Removed 1 invisible
+ * character · review and press Enter to send`, and sends nothing — and the
+ * person who pressed Send in the app is not looking at that box. A soft hyphen or
+ * a zero-width joiner copied off a web page was enough to make a message
+ * impossible to send from the app at all.
+ *
+ * So the characters it would remove are removed here first, and the prompt it
+ * receives is the one it would have sent after that second Enter. Only where the
+ * removal is certain, so this never takes out a character Claude Code keeps:
+ *   - line breaks it rewrites (VT, FF, NEL, LS, PS, a lone CR) become the LF it
+ *     would make of them; CRLF becomes LF;
+ *   - ALWAYS_REMOVED_RE, which its classifier removes in every context (the
+ *     tag characters too, except the three flag sequences it keeps);
+ *   - the rest of INVISIBLE_RE — joiners, ZWSP, LRM/RLM, variation selectors,
+ *     CGJ — only on a line that is otherwise plain ASCII. Each of those is kept
+ *     only beside a particular script, an emoji or a combining mark, none of
+ *     which an ASCII line has; anywhere else Claude Code decides, and whatever it
+ *     refuses is reported honestly (squashPane) and goes on the person's retry.
+ *
+ * Messages only. The Screen tab's own typing is a person at the box, who sees
+ * the notice and answers it; it keeps pasteSafe.
+ */
+const LINE_BREAK_RE = /\r\n|[\r\u000B\u000C\u0085\u2028\u2029]/g;
+const ALWAYS_REMOVED_RE = /[\u0000-\u0008\u000E-\u001F\u007F-\u0084\u0086-\u009F\u00AD\u115F\u1160\u202A-\u202E\u2060-\u206F\u3164\uFE03-\uFE0D\uFEFF\uFFA0\uFFF0-\uFFFB\u{16FE4}\u{1D173}-\u{1D17A}]/gu;
+// The subdivision flags (England, Scotland, Wales) are the one use of tag
+// characters it keeps; every other one goes.
+const TAG_RE = /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u{E0000}-\u{E0FFF}]/gu;
+function sendable(text) {
+  const s = pasteSafe(text)
+    .replace(LINE_BREAK_RE, '\n')
+    .replace(ALWAYS_REMOVED_RE, '')
+    .replace(TAG_RE, (m) => (m.codePointAt(0) === 0x1F3F4 ? m : ''));
+  return s.split('\n').map((line) => {
+    const bare = line.replace(INVISIBLE_RE, '');
+    return /^[\x00-\x7F]*$/.test(bare) ? bare : line;
+  }).join('\n');
+}
+
+/**
  * Is the box holding exactly this message already — so the send is an Enter?
  *
  * The 'leave' recovery strands a message in the box on purpose, and the person's
@@ -1277,6 +1458,37 @@ function draftHold({ draft = null, keysAgoMs = null, waitedMs = 0,
   return ago < (draft === true ? keysWindowMs : LIVE_KEYS_QUIET_MS);
 }
 const LIVE_KEYS_QUIET_MS = 5_000;
+
+/**
+ * Should a pane SCRIPT (a queue job) wait because the box is not a bare caret?
+ *
+ * ⚠ A JOB TYPES TOO. The draft guard left every job out on the grounds that "a
+ * pane script types no text" — and the one job there is, the ladder's picker
+ * walk, starts by typing `/model` and pressing Enter. Into a box holding the
+ * owner's half-written sentence that is `please check the backup and then/model`
+ * submitted as a prompt: the picker never opens, and their draft is sent for
+ * them, which is the 2026-09-19 harm the guard exists to prevent.
+ *
+ * Stricter than `draftHold`, on purpose: no live-keys condition and no "our own
+ * leftovers" exemption. A message may be joined to what is in the box (decision
+ * 59 says when); `/model` only means anything typed into an EMPTY box, so
+ * anything a person could see in it holds the job — a draft typed in an attached
+ * terminal, a message appd stranded there, Claude Code's own queued messages.
+ * `composerHolds` is the ghost-free read, so the dim suggestion is not text, and
+ * the placeholder hint is not either.
+ *
+ * Bounded like every other hold. An automated job is dropped at the same ten
+ * minutes before this lets go; one a person asked for (Undo) is released, and
+ * applyLadder looks again before typing and refuses rather than type into text.
+ * `composerHolds === null` — no composer at all — never holds, as above.
+ */
+function jobHold({ composerHolds = null, waitedMs = 0, maxMs = DRAFT_HOLD_MAX_MS } = {}) {
+  if (composerHolds === null || composerHolds === undefined) return false;
+  const waited = Number(waitedMs);
+  if (Number.isFinite(waited) && waited >= maxMs) return false;
+  const squashed = squashPane(composerHolds);
+  return !!squashed && !COMPOSER_PLACEHOLDER_RE.test(squashed);
+}
 
 function draftHeldLogLine(name, holds) {
   return `typing: ${name}: holding a send — there is unsent text in the live view `
@@ -1784,16 +1996,17 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly, boxIsOurs,
+  composerEmpty, recoveryDecision, stripGhost, pasteSafe, sendable, boxHoldsExactly, boxIsOurs,
   enterRefusal, enterHeldLogLine,
-  composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
+  composerHoldsDraft, draftHold, jobHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   draftHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
-  hasHumanUserRecord, kindOf, scanForHuman, HUMAN_SCAN_MAX_BYTES,
+  hasHumanUserRecord, kindOf, scanForHuman, scanForTurnStart, DELIVERY_SHOW_MAX_MS, promptSpelling,
+  HUMAN_SCAN_MAX_BYTES,
   paneReadyForInput, paneBlocks, composerDrawn, composerShellMode, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
