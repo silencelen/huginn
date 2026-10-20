@@ -27,6 +27,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const typing = require('../lib/typing');
+const { untilDrawn } = require('./until-drawn');
 
 // PORT ALLOCATION — every file here binds a real socket and `node --test` runs
 // the files CONCURRENTLY, so these ranges must not overlap. They did: two files
@@ -96,7 +97,11 @@ function mkSink(suffix) {
   madeSessions.add(name);
   return { name, out };
 }
-/** A pane drawing a selector dialog — the thing that swallows a message whole. */
+/** A pane drawing a selector dialog — the thing that swallows a message whole.
+ *  ⚠ Returned once the dialog is ON SCREEN, like every helper here that draws
+ *  something: on tmux 3.6 `new-session` returns before the pane's command has
+ *  even started (until-drawn.js says why), and a test that reads the pane at
+ *  once would read a blank one. */
 function mkModal(suffix) {
   const name = `${PFX}-${suffix}`;
   // A REAL caret glyph: `printf` in /bin/sh does not expand \u, so a \u276f
@@ -105,6 +110,7 @@ function mkModal(suffix) {
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     `sh -c 'printf "${dialog}"; sleep 600'`]);
   madeSessions.add(name);
+  untilDrawn(TMUX_SOCK, name, /Enter to confirm/);   // its last row: all of it is up
   return name;
 }
 /**
@@ -120,6 +126,7 @@ function mkTrust(suffix) {
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     `sh -c 'printf "${dialog}"; sleep 600'`]);
   madeSessions.add(name);
+  untilDrawn(TMUX_SOCK, name, /Esc to cancel/);
   return name;
 }
 function writeState(name, { state = 'idle', transcript = null } = {}) {
@@ -412,6 +419,7 @@ function mkComposer(suffix) {
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     'sh -c \'printf "────────────\\n\u276f \\n"; sleep 600\'']);
   madeSessions.add(name);
+  untilDrawn(TMUX_SOCK, name, /\u276f/);
   return name;
 }
 
@@ -467,6 +475,9 @@ function mkClearingModal(suffix, holdMs = 3) {
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
     `sh -c 'printf "${dialog}"; sleep ${holdMs}; printf "${blank}────────────\\n\u276f \\n"; cat >/dev/null'`]);
   madeSessions.add(name);
+  // The dialog, not the composer that replaces it: the hold starts when the
+  // pane's command does, so the dialog is up for all of it once this returns.
+  untilDrawn(TMUX_SOCK, name, /Enter to confirm/);
   return name;
 }
 
