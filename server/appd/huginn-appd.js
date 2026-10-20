@@ -4713,6 +4713,10 @@ const remoteRuns = new Map();     // workId -> { run_, deviceId, chatId, lastHea
 const MAX_WORK_QUEUE = 5;
 const WORK_WAIT_DEFAULT_S = 25;
 const WORK_WAIT_MAX_S = 60;
+// Lines of one remote run remembered for replay (see the events route). A replay
+// re-sends everything since the last batch that fully landed, which after a flaky
+// spell can be minutes of streaming, so this is generous: about 2 MB at the cap.
+const SEEN_LINES_MAX = 20_000;
 
 /**
  * How long a started remote run may go without a word before it is declared
@@ -12646,42 +12650,47 @@ async function handleRequest(req, res) {
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 
         /**
-         * ⚠ A REPLAYED BATCH IS APPLIED TWICE (#40). The runner re-queues a whole
-         * batch when any chunk of it fails — a batch that split at MAX_BATCH_BYTES
-         * and failed on a later part replays the accepted ones — and more
-         * generally ANY batch whose response is lost (a timeout, a socket reset,
-         * a 5xx after the daemon already applied it) comes back, because the
-         * runner's `permanent()` treats only 400/403/404/413 as final. The route
-         * had no idempotency at all, so the chat showed the answer, the tool
-         * records and the result twice, and meta.turns double-counted.
+         * ⚠ A REPLAYED LINE IS APPLIED ONCE (#40), AND ONLY A REPLAY IS DROPPED.
+         * The runner re-queues a whole batch when any chunk of it fails, and ANY
+         * batch whose response is lost (a timeout, a socket reset, a 5xx after the
+         * daemon already applied it) comes back, because the runner's `permanent()`
+         * treats only 400/403/404/413 as final. With no idempotency at all the chat
+         * showed the answer, the tool records and the result twice.
          *
-         * A ring of recent chunk hashes on the run, daemon-side by design: it
-         * closes both paths without a protocol change, so `client/huginn-device`
-         * needs no update and an older runner is covered too. Bounded because a
-         * long run streams thousands of chunks, and generous enough to cover a
-         * retry storm.
+         * The first guard hashed each whole BATCH, and was wrong both ways. By the
+         * time a runner retries, more output has arrived and rides along, so the
+         * usual replay hashed differently and was applied twice anyway; and two
+         * batches that genuinely matched (a slow local model's one-token deltas,
+         * " the" twice within 64 batches) were dropped as replays, leaving words
+         * missing from the live answer and from a stopped run's partial.
+         *
+         * So the unit is the LINE, and only a line that carries its own identity
+         * can be a replay: Claude Code puts a uuid on every stream-json line, and
+         * the local-model shim does too. Seen again byte for byte, it is the same
+         * line. A line with no uuid is applied as it arrives, because content alone
+         * cannot tell a replay from a model saying the same thing twice. Still
+         * daemon-side, so an older runner is covered without an update.
          */
-        const stamp = crypto.createHash('sha256').update(JSON.stringify({
-          lines: body.lines ?? null, done: body.done ?? null,
-          exitCode: body.exitCode ?? null, error: body.error ?? null,
-        })).digest('hex');
-        if (!entry.seenChunks) entry.seenChunks = [];
-        if (entry.seenChunks.includes(stamp)) {
-          log(`device ${devId} replayed a batch for ${workId}; ignoring it`);
-          return sendJson(res, 200, { ok: true, duplicate: true, cancel: !!entry.run_.cancelled });
-        }
-        entry.seenChunks.push(stamp);
-        if (entry.seenChunks.length > 64) entry.seenChunks.shift();
-
+        const lines = Array.isArray(body.lines) ? body.lines : [];
+        if (!entry.seenLines) entry.seenLines = new Set();
+        let replayed = 0;
         const meta = loadMeta(entry.chatId);
         if (meta) {
-          for (const line of Array.isArray(body.lines) ? body.lines : []) {
+          for (const line of lines) {
             let ev;
             try { ev = typeof line === 'string' ? JSON.parse(line) : line; } catch { continue; }
+            if (ev && typeof ev.uuid === 'string') {
+              const seen = crypto.createHash('sha256')
+                .update(typeof line === 'string' ? line : JSON.stringify(line)).digest('base64');
+              if (entry.seenLines.has(seen)) { replayed += 1; continue; }
+              entry.seenLines.add(seen);
+              if (entry.seenLines.size > SEEN_LINES_MAX) entry.seenLines.delete(entry.seenLines.values().next().value);
+            }
             try { handleClaudeEvent(meta, entry.run_, ev); }
             catch (e) { log(`device ${devId} sent an event we could not handle: ${e.message}`); }
           }
         }
+        if (replayed) log(`device ${devId} replayed ${replayed} line(s) for ${workId}; each applied once`);
 
         if (body.done === true) {
           remoteRuns.delete(workId);
@@ -12693,7 +12702,8 @@ async function handleRequest(req, res) {
         }
         // The one thing a device needs told mid-run: stop. It kills its own child
         // and posts a terminal frame, so the ending still comes from the device.
-        return sendJson(res, 200, { ok: true, cancel: !!entry.run_.cancelled });
+        const duplicate = lines.length > 0 && replayed === lines.length;
+        return sendJson(res, 200, { ok: true, ...(duplicate ? { duplicate: true } : {}), cancel: !!entry.run_.cancelled });
       }
 
       return sendErr(res, 404, 'no such device route');

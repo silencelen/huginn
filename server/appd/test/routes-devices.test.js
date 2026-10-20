@@ -323,7 +323,9 @@ test('a replayed events batch is applied once (#40)', async () => {
   await send(chat.body.id, 'check the logs');
   const work = (await poll(d.id)).body.work;
 
-  const batch = [assistant('I checked. Nothing burning.')];
+  // With the uuid every Claude Code stream-json line carries: a line's identity
+  // is what makes a replay recognisable (a line with none is applied as sent).
+  const batch = [{ ...assistant('I checked. Nothing burning.'), uuid: crypto.randomUUID() }];
   const first = await postEvents(d.id, work.id, batch);
   assert.equal(200, first.status);
   assert.notEqual(true, first.body.duplicate);
@@ -336,8 +338,8 @@ test('a replayed events batch is applied once (#40)', async () => {
     .filter((m) => m.type === 'assistant' && /Nothing burning/.test(m.text || ''));
   assert.equal(1, answers.length, `one answer, not ${answers.length}`);
 
-  // A DIFFERENT batch still lands, which is the whole point of hashing the
-  // content rather than counting requests.
+  // A DIFFERENT batch still lands, which is the whole point of keying on what
+  // was sent rather than counting requests.
   await postEvents(d.id, work.id, [assistant('And the disk is fine.')]);
   const more = await api(`/v1/chats/${chat.body.id}`);
   assert.ok((more.body.messages || []).some((m) => /disk is fine/.test(m.text || '')));
