@@ -554,7 +554,7 @@ fun Shell(store: AppStore) {
                                         archives = if (archiveAvailable == true) archives else emptyList(),
                                         archiveAvailable = archiveAvailable,
                                         onRevive = { row -> act { store.reviveArchive(row) } },
-                                        onCopyResume = { row -> row.resumeCommand?.let { copy(it) } },
+                                        onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { copy(it) } },
                                         onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
                                         // READ it without bringing it back: the
                                         // detail pane, read only, no decision made.

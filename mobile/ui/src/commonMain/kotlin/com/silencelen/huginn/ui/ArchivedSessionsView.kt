@@ -222,7 +222,7 @@ private fun ArchivedSessionRow(
                 // a control and a trap — the same rule `canRevive` follows, and
                 // the warning above this row already says why it matters.
                 if (onView != null && ArchiveRules.canView(row)) RowAction("View", onView)
-                if (row.resumeCommand != null) RowAction(ARCHIVE_COPY_RESUME, onCopyResume)
+                if (ArchiveRules.resumeCommandOf(row) != null) RowAction(ARCHIVE_COPY_RESUME, onCopyResume)
             }
         }
         // The house menu: Delete loses the archived transcript, so it lands in

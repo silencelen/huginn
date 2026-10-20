@@ -82,6 +82,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import com.silencelen.huginn.ui.ArchiveRules
 import com.silencelen.huginn.ui.bottomNavInsets
 import com.silencelen.huginn.ui.sideNavInsets
 import com.silencelen.huginn.ui.systemNavPadding
@@ -1445,7 +1446,7 @@ fun HuginnApp(
                 // NAME has to be the host's answer — the old one is taken when
                 // free and numbered when not.
                 onRevive = { row -> vm.reviveArchive(row) { name -> dest = Dest.SessionView(name) } },
-                onCopyResume = { row -> row.resumeCommand?.let { vm.copy(it, "claude --resume") } },
+                onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { vm.copy(it, "claude --resume") } },
                 onDeleteArchive = { vm.deleteArchive(it) },
                 // READ it without bringing it back. A child destination, so the
                 // list is still one Back away — and no decision was made.

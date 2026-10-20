@@ -235,7 +235,7 @@ fun sessionEndedCopy(name: String, title: String?, archived: ArchivedSession?): 
                 "transcript, so resuming it would open an empty conversation in the " +
                 "right folder rather than this one."
         },
-        resume = archived.resumeCommand?.takeIf { it.isNotBlank() },
+        resume = ArchiveRules.safeResumeCommand(archived.resumeCommand),
         archiveId = archived.id.takeIf { readable },
     )
 }

