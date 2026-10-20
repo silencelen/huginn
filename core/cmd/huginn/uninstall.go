@@ -468,6 +468,22 @@ func removeCoreFiles(t *tally, home string, p store.Paths, l install.Layout) {
 	rm(l.Root)
 }
 
+// sshKeyword reads one ~/.ssh/config line as ssh does: the keyword, lower
+// case, and its arguments, which may follow an `=` (`Host=build01`). "" for a
+// blank line or a comment.
+func sshKeyword(line string) (string, []string) {
+	s := strings.TrimSpace(line)
+	if s == "" || s[0] == '#' {
+		return "", nil
+	}
+	i := strings.IndexAny(s, " \t=")
+	if i < 0 {
+		return strings.ToLower(s), nil
+	}
+	rest := strings.TrimPrefix(strings.TrimLeft(s[i:], " \t"), "=")
+	return strings.ToLower(s[:i]), strings.Fields(rest)
+}
+
 // sshStanzaPresent: ~/.ssh/config has a `Host huginn` block.
 func sshStanzaPresent(home string) bool {
 	b, err := os.ReadFile(filepath.Join(home, ".ssh", "config"))
@@ -475,7 +491,7 @@ func sshStanzaPresent(home string) bool {
 		return false
 	}
 	for _, line := range strings.Split(string(b), "\n") {
-		if f := strings.Fields(line); len(f) == 2 && strings.EqualFold(f[0], "host") && f[1] == "huginn" {
+		if kw, args := sshKeyword(line); kw == "host" && len(args) == 1 && args[0] == "huginn" {
 			return true
 		}
 	}
@@ -491,20 +507,34 @@ func sshStep(t *tally, home string, all bool) {
 	if err != nil {
 		return
 	}
-	var out []string
+	// ⚠ The stanza ends where ssh ends it: at the next Host OR Match line.
+	// The installers append it at the end of the file, so whatever the person
+	// adds later follows it, and ending it at Host alone took a Match block
+	// (for other hosts entirely) with it. A comment after its last option is
+	// kept for the same reason: it heads what follows (a tool's marker, a note).
+	var out, held []string
 	key, in, found := "", false, false
 	for _, line := range strings.Split(string(b), "\n") {
-		f := strings.Fields(line)
-		if len(f) > 0 && strings.EqualFold(f[0], "host") {
-			in = len(f) == 2 && f[1] == "huginn"
+		kw, args := sshKeyword(line)
+		if kw == "host" || kw == "match" {
+			in = kw == "host" && len(args) == 1 && args[0] == "huginn"
 			found = found || in
+			out, held = append(out, held...), nil
 		}
-		if in && len(f) >= 2 && strings.EqualFold(f[0], "identityfile") && key == "" {
-			key = f[1]
-		}
-		if !in {
+		switch {
+		case !in:
 			out = append(out, line)
+		case kw == "" && strings.TrimSpace(line) != "":
+			held = append(held, line) // a comment: whose it is depends on what comes next
+		case kw != "":
+			held = nil // another option of huginn's: the comments were inside its stanza
+			if kw == "identityfile" && len(args) > 0 && key == "" {
+				key = args[0]
+			}
 		}
+	}
+	if len(held) > 0 {
+		out = append(append(out, held...), "")
 	}
 	if !found {
 		return
