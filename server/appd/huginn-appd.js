@@ -11646,17 +11646,6 @@ async function handleRequest(req, res) {
       if (keys.length > 32) return sendErr(res, 400, 'too many keys');
       for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
       /**
-       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
-       * own submit.
-       *
-       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
-       * that Enter is part of the message, not an interrupt: the paste path
-       * presses it, with the right beat, once. Everything else in `keys` — an
-       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
-       * cannot wait, which is what the modal refusal below is about.
-       */
-      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
-      /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
        * A pane takes a message and a page holds up to 100,000 characters, so
@@ -11686,6 +11675,26 @@ async function handleRequest(req, res) {
         const overflow = scratchpadsLib.sessionFitProblem(typedKeys, frame, typing.SESSION_TEXT_MAX);
         if (overflow) return sendErr(res, 413, overflow);
       }
+      /**
+       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
+       * own submit.
+       *
+       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
+       * that Enter is part of the message, not an interrupt: the paste path
+       * presses it, with the right beat, once. Everything else in `keys` — an
+       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
+       * cannot wait, which is what the modal refusal below is about.
+       *
+       * ⚠ DECIDED ONLY ONCE THE TEXT IS FINAL, i.e. after the page above is
+       * composed. It used to be decided before, while `text` was still empty for
+       * a page sent on its own — so `{scratchpadId, keys:["Enter"]}`, the shape
+       * the API reference gives for sending, kept its Enter as a raw press. That
+       * Enter went in at once, ahead of the queued page: into the dialog the page
+       * was being held for, where Enter on the highlighted row is Yes, or into
+       * an empty box, where it stamped the live-view mark and the draft guard
+       * then held the page for a draft nobody was typing.
+       */
+      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
       /**
        * ⚠ RAW KEYS ARE NEVER REFUSED FOR A MODAL, and there is no gate here.
        *
