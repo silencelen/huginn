@@ -1164,6 +1164,20 @@ function runWork(id, work, conf) {
     const cwd = cwdFor(scope, gate, conf.root);
     log(`running ${work.id} (${work.mode}) in ${cwd}`);
 
+    // ⚠ EVERYTHING finish() READS IS DECLARED HERE, ABOVE ITS FIRST CALL. The cwd
+    // guard and the spawn catch below end a run that never got a child, and they
+    // used to sit above these lines: finish() then read a `let` before its
+    // declaration, threw inside an async function nothing awaits, and the
+    // unhandled rejection exited the runner. Its restart lost the job as "the
+    // runner restarted mid-run", on every job, and the reason never reached the
+    // chat. The timers are assigned further down; clearing a null one is a no-op.
+    let pending = [];
+    let cancelled = false;
+    let done = false;
+    let deliveryDead = false;   // a 401 / no token: stop delivering, keep the child
+    let startupTimer = null;
+    let flush = null;
+
     // ⚠ CHECKED BEFORE THE SPAWN, because spawn() raises ENOENT for a missing
     // EXECUTABLE and for a missing CWD, and the error handler below could only
     // guess. It guessed "claude is not on this machine's PATH" — so a deleted
@@ -1186,10 +1200,6 @@ function runWork(id, work, conf) {
       return finish(`could not start ${engineWords(work.mode).label} on ${conf.name}: ${e.message}`);
     }
 
-    let pending = [];
-    let cancelled = false;
-    let done = false;
-
     // Startup-liveness watchdog. An engine child that wedges at startup (a hung
     // auto-update, broken credentials) emits NOTHING and would otherwise hold this
     // device's single job slot until the daemon gives up — looking healthy the
@@ -1199,7 +1209,7 @@ function runWork(id, work, conf) {
     // failure the daemon-side /beat liveness fix exists to prevent. First output ⇒
     // the engine is alive, and from then on silence is allowed.
     let sawOutput = false;
-    const startupTimer = setTimeout(() => {
+    startupTimer = setTimeout(() => {
       if (sawOutput || done) return;
       log(`${work.id}: no output in ${Math.round(STARTUP_SILENCE_MS / 1000)}s — stopping a wedged engine`);
       cancelled = true;
@@ -1216,10 +1226,9 @@ function runWork(id, work, conf) {
     };
 
     let flushing = false;
-    let deliveryDead = false;   // a 401 / no token: stop delivering, keep the child
     let blips = 0;
     let backoffUntil = 0;
-    const flush = setInterval(async () => {
+    flush = setInterval(async () => {
       if (done || flushing) return;
       if (deliveryDead) { pending = []; return; }
       if (!pending.length || Date.now() < backoffUntil) return;
@@ -1845,7 +1854,7 @@ if (require.main === module) {
 } else {
   module.exports = {
     VERSION, MAX_LINE_BYTES, MAX_BATCH_BYTES,
-    shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor, refusal,
+    shrinkLine, batchLines, parseFlags, tokenOrWhy, cwdFor, effectiveScope, allows, argvFor, refusal, runWork,
     execFor, cliBesideShim, windowsTaskScript,
     locked, gateLocked,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
