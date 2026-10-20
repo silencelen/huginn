@@ -133,6 +133,24 @@ function clear(dir, name) {
   }
 }
 
+/**
+ * When a sentinel with no stored `since` was armed.
+ *
+ * ⚠ NOT ITS MTIME ALONE. The mtime is the heartbeat: the tick touches every
+ * armed sentinel, a hand-armed one included, so for a `touch`ed STOP the mtime
+ * is the last tick and "armed seconds ago" was the answer all night. The file's
+ * BIRTH time is the one stamp a `touch` sets and a heartbeat cannot move. The
+ * earlier of the two, so an mtime the operator set into the past
+ * (`touch -d`) still counts. A filesystem that records no birth time reports 0
+ * (and a stat without statx reports ctime, which the heartbeat moves as well):
+ * both leave the mtime, which is what this read before.
+ */
+function armedAt(st) {
+  const mtime = Math.floor(st.mtimeMs);
+  const born = Number(st.birthtimeMs);
+  return Number.isFinite(born) && born > 0 ? Math.min(Math.floor(born), mtime) : mtime;
+}
+
 function readSentinel(file) {
   let st;
   try {
@@ -142,7 +160,7 @@ function readSentinel(file) {
   }
   let reason = '';
   let by = null;
-  let since = Math.floor(st.mtimeMs);
+  let since = armedAt(st);
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed && typeof parsed === 'object') {
@@ -152,8 +170,8 @@ function readSentinel(file) {
       if (stored !== null) since = stored;
     }
   } catch {
-    // Armed by hand with `touch`, or half-written. Still armed — mtime is the
-    // arming time and that is the whole reason the file carries one.
+    // Armed by hand with `touch`, or half-written. Still armed — and armedAt
+    // above is its arming time.
   }
   // `by` stays null for a hand-armed file AND for one an older daemon wrote.
   // Both are "not mine to reap", which is the safe side of that ambiguity: the
