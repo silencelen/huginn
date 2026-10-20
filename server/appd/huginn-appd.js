@@ -5325,6 +5325,51 @@ function roundRunFailure(meta, run_) {
 }
 
 /**
+ * Puts a run at the head of a Round's history and deletes the transcript of any
+ * run that falls off the end.
+ *
+ * ⚠ WHAT FALLS OFF THE END IS DELETED, and this used to be a slow leak with a
+ * false promise on top of it. `finishRoundRun` says the conversation "stays
+ * readable forever — that is the whole point of keeping it", and after the 11th
+ * run the chat id was evicted from runs[] — while round chats are filtered out
+ * of /v1/chats by design, so there was no other path to it. It could not be
+ * opened, listed or deleted through any route. A daily Round left ~355 orphan
+ * transcript directories a year, invisible and impossible to count against.
+ *
+ * So the promise is narrowed to what is true — readable while it is in the
+ * history — and the transcript goes when the row does, rather than becoming
+ * something only `du` can find.
+ *
+ * ⚠ EVERY WRITER OF `runs` COMES THROUGH HERE. recordSkippedRound pushed its row
+ * without the prune, so once the history was full every skip (a laptop asleep,
+ * a full pool, a missed slot) evicted the oldest REAL run and left its transcript
+ * with nothing pointing at it — and the next real run pruned only what was at the
+ * end by then. A daily Round on a laptop asleep two nights a week orphaned 50
+ * transcripts a year: the same leak, reopened by the second writer.
+ *
+ * @param edit further changes to make to the Round in the same write, or null
+ */
+function pushRoundRun(roundId, run, edit = null) {
+  let evicted = [];
+  updateRound(roundId, (r) => {
+    const prior = Array.isArray(r.runs) ? r.runs : [];
+    const kept = [run, ...prior].slice(0, MAX_RUN_HISTORY);
+    evicted = prior.slice(MAX_RUN_HISTORY - 1)
+      .map((x) => x && x.chatId)
+      .filter((id) => id && id !== run.chatId && !kept.some((k) => k.chatId === id));
+    r.lastRun = run;
+    r.runs = kept;
+    if (edit) edit(r);
+  });
+  for (const id of evicted) {
+    // Never a live one: a chat still running is not in this Round's history tail.
+    if (activeRuns.has(id)) { log(`round ${roundId}: not pruning ${id}, still running`); continue; }
+    try { fs.rmSync(chatDir(id), { recursive: true, force: true }); log(`round ${roundId} pruned run transcript ${id}`); }
+    catch (e) { log(`round ${roundId}: could not prune ${id}: ${e.message}`); }
+  }
+}
+
+/**
  * A Round's run has ended: read what it said, record it, decide whether that is
  * worth interrupting somebody for.
  *
@@ -5443,34 +5488,7 @@ function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
     manual: !!meta.roundManual,
     durationSec: meta.roundStartedAt ? at - meta.roundStartedAt : null,
   };
-  // ⚠ WHAT FALLS OFF THE END IS DELETED, and this used to be a slow leak with a
-  // false promise on top of it. `finishRoundRun` says the conversation "stays
-  // readable forever — that is the whole point of keeping it", and after the 11th
-  // run the chat id was evicted from runs[] — while round chats are filtered out
-  // of /v1/chats by design, so there was no other path to it. It could not be
-  // opened, listed or deleted through any route. A daily Round left ~355 orphan
-  // transcript directories a year, invisible and impossible to count against.
-  //
-  // So the promise is narrowed to what is true — readable while it is in the
-  // history — and the transcript goes when the row does, rather than becoming
-  // something only `du` can find.
-  let evicted = [];
-  updateRound(round.id, (r) => {
-    const prior = Array.isArray(r.runs) ? r.runs : [];
-    const kept = [run, ...prior].slice(0, MAX_RUN_HISTORY);
-    evicted = prior.slice(MAX_RUN_HISTORY - 1)
-      .map((x) => x && x.chatId)
-      .filter((id) => id && id !== meta.id && !kept.some((k) => k.chatId === id));
-    r.lastRun = run;
-    r.runs = kept;
-    if (r.currentChatId === meta.id) r.currentChatId = null;
-  });
-  for (const id of evicted) {
-    // Never a live one: a chat still running is not in this Round's history tail.
-    if (activeRuns.has(id)) { log(`round ${round.id}: not pruning ${id}, still running`); continue; }
-    try { fs.rmSync(chatDir(id), { recursive: true, force: true }); log(`round ${round.id} pruned run transcript ${id}`); }
-    catch (e) { log(`round ${round.id}: could not prune ${id}: ${e.message}`); }
-  }
+  pushRoundRun(round.id, run, (r) => { if (r.currentChatId === meta.id) r.currentChatId = null; });
   // On the chat too, so opening a past run shows its verdict without re-parsing.
   // `sealed` is the auto-end: a Round's run is one turn against a stated goal and
   // then it is over. The conversation stays readable for as long as the run is in
@@ -5581,10 +5599,7 @@ function recordSkippedRound(roundId, reason) {
     manual: false,
     durationSec: 0,
   };
-  updateRound(round.id, (r) => {
-    r.lastRun = run;
-    r.runs = [run, ...(Array.isArray(r.runs) ? r.runs : [])].slice(0, MAX_RUN_HISTORY);
-  });
+  pushRoundRun(round.id, run);
   log(`round ${round.id}: could not start (${reason}) — recorded as a skipped run`);
   if (roundsLib.shouldNotify(round.notifyWhen, 'attention')) {
     deliverRoundReport(round, report, null)

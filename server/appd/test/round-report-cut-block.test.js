@@ -84,7 +84,7 @@ test('finishRoundRun files the wrap-up report over a cut partial message', async
   const round = { id: 'r1', title: 'PBS check', notifyWhen: 'attention', runs: [], currentChatId: 'c1' };
   const meta = { id: 'c1', roundId: 'r1', reportTag: TAG, roundStartedAt: ts - 960 };
   const delivered = [];
-  const { fns } = lift(['finishRoundRun'], {
+  const { fns } = lift(['finishRoundRun', 'pushRoundRun'], {
     log: () => {},
     roundsLib: R,
     drainPending: () => [],

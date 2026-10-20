@@ -25,6 +25,11 @@ function piece(name) {
   const [head, i] = found[0];
   assert.equal(SRC.indexOf(head, i + 1), -1, `${name} is defined twice in huginn-appd.js`);
   const start = i + 1;
+  // A one-liner (`function chatDir(id) { return ...; }`) closes on its own line.
+  const eol = SRC.indexOf('\n', start);
+  const first = SRC.slice(start, eol);
+  const count = (s, ch) => s.split(ch).length - 1;
+  if (first.trimEnd().endsWith('}') && count(first, '{') === count(first, '}')) return `${first}\n`;
   const end = SRC.indexOf('\n}\n', start);
   assert.ok(end > start, `${name} has no closing brace at column 0`);
   return SRC.slice(start, end + 2);
