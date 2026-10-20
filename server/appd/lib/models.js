@@ -40,7 +40,16 @@ function parseModelId(id) {
 }
 
 /**
- * The FAMILY behind an id or a menu label — `claude-opus-5`, `opus`,
+ * Claude Code's spelling of the 1M-context variant in a model SETTING:
+ * `opus[1m]`, `fable[1m]`, `claude-opus-5-5[1m]`. Its own `/model` picker and
+ * its own settings migrations write it into `~/.claude/settings.json`. It names
+ * a context window, not another model, so the family is that of what it is
+ * attached to.
+ */
+const CONTEXT_SUFFIX_RE = /\[\d+[km]\]$/i;
+
+/**
+ * The FAMILY behind an id or a menu label — `claude-opus-5`, `opus`, `opus[1m]`,
  * `Opus (1M context)` and `Sonnet \u2714` all answer.
  *
  * Labels are read by their FIRST WORD and never by the description beside them.
@@ -51,7 +60,7 @@ function parseModelId(id) {
  */
 function familyOf(model) {
   if (typeof model !== 'string') return null;
-  const s = model.trim();
+  const s = model.trim().replace(CONTEXT_SUFFIX_RE, '');
   if (!s) return null;
   const p = parseModelId(s);
   if (p) return p.family;
@@ -141,4 +150,7 @@ function discoverModels(binPath, timeoutMs = 60_000) {
   });
 }
 
-module.exports = { parseModelId, familyOf, formatModel, selectModels, aliasModels, discoverModels, compareVersions };
+module.exports = {
+  CONTEXT_SUFFIX_RE,
+  parseModelId, familyOf, formatModel, selectModels, aliasModels, discoverModels, compareVersions,
+};

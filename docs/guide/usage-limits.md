@@ -51,7 +51,9 @@ Huginn holds back from a move when:
   that; after the weekly window resets it offers, once, to move the session back);
 - it moved a session in the last 30 minutes (one move at a time, so sessions do not all change
   model at once);
-- an account switch is going out at the same time.
+- an account switch is going out at the same time;
+- the session is stalled on a usage limit (it is resumed after the reset instead; see
+  [Resume after a limit resets](#resume-after-a-limit-resets)).
 
 **Moving back up.** After the Fable week resets and reads below **Move back up below** (default
 50 %), Huginn moves each session it moved back to its own model, one at a time, while the
