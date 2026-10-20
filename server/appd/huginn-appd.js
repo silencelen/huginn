@@ -6447,8 +6447,19 @@ function claudeLaunchCommand({ claudeName, persona, model, effort }) {
  */
 async function launchProjectSession(tmuxName, cwd, command) {
   await ensureTmuxServer();
+  // ⚠ ONLY A NAME NOBODY HOLDS. The clear below deletes the state file, the
+  // question sidecars and the permission hand-offs filed under this name, and
+  // tmux refusing the duplicate comes AFTER it — so a member whose name was
+  // already live (a session a previous project left behind, `web` + `api-lead`
+  // meeting `web-api`'s lead) wiped a running session's "needs you" and then
+  // failed anyway. The create route asks first for the same reason; the wording
+  // is tmux's own, so the spawn report reads the same either way.
+  const taken = await sessionExists(tmuxName);
+  if (taken !== false) {
+    return { error: taken ? `duplicate session: ${tmuxName}` : 'tmux is not answering right now' };
+  }
   // Whatever the last holder of this name left behind goes before the new
-  // session can be observed — the create route's own first move.
+  // session can be observed.
   clearSessionState(tmuxName);
   const r = await run('tmux', ['new-session', '-d', '-s', tmuxName, '-c', cwd, command]);
   if (r.err) {
