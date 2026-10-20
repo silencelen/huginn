@@ -277,13 +277,15 @@ fun main(args: Array<String>) {
     )
 
     // The core suppresses a toast for what this window is showing (its rules
-    // take the focused key): re-sent every 20 s, since the core forgets a report
-    // older than 45 s — a window that died must not mute notifications forever.
+    // take the focused key), so it is told the moment that changes: focus,
+    // the window hiding or minimizing, another chat or session opening. See
+    // CoreDevice.followPresence for why the old 20 s timer alone lost alerts.
     scope.launch {
-        while (isActive) {
-            store.coreDevice.reportPresence(focusedTarget()?.key)
-            delay(20_000)
-        }
+        store.coreDevice.followPresence(
+            combine(windowFocused, presence.visible, store.view, store.chatId, store.sessionName) { focused, shown, _, _, _ ->
+                if (focused && shown) selectedTarget()?.key else null
+            },
+        )
     }
 
     store.onDigest = { watch ->
