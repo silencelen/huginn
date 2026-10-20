@@ -552,9 +552,10 @@ function minutes(ms) { return Math.ceil(ms / 60000); }
  *   active      {slug, email, windows|limits}
  *   candidates  [{slug, email, windows|limits, aged}]
  *   sessions    [{claudeSessionId, name, state, model, family, ladder, headsUpAt,
- *                nativeSwitch, humanSetModelAt, ladderFailedAt}]
+ *                nativeSwitch, humanSetModelAt, ladderFailedAt, stall}]
  *               `ladderFailedAt` is ms of the session's last move attempt
- *               that could not be confirmed, or absent.
+ *               that could not be confirmed, or absent. `stall` is its
+ *               headroom.json stall record (lib/resume), or absent.
  *   state       {lastSwitchAt, lastLadderAt}
  *   lastFableResetAt  ms of the most recent weekly_fable reset EVENT for the
  *                active account (from detectResets), or 0. Not in the original
@@ -644,6 +645,14 @@ function decide(input = {}) {
     const ladder = settleLadder(s.ladder || null, family);
     const native = s.nativeSwitch && s.nativeSwitch.seenAt ? s.nativeSwitch : null;
     const failedAt = Number(s.ladderFailedAt) || 0;
+    // ⚠ A STALLED SESSION IS NOT A CANDIDATE FOR A MOVE, either way. Its last
+    // record is the 429 and auto-resume waits for exactly that to still be true
+    // at the reset; the `/model` a move types lands after it as two user
+    // records, which the resume pass cannot tell from a person answering — so
+    // the move cancelled the resume, and the session sat idle on the new model
+    // with nothing to continue it. It moves, if it still needs to, once it has
+    // been resumed.
+    const stalled = !!(s.stall && s.stall.at && !s.stall.resumedAt);
 
     // heads-up: once per Fable window, and never into a session that is already
     // asking the owner something.
@@ -667,6 +676,7 @@ function decide(input = {}) {
     if (!ladderDown && family === 'fable' && fableEffective !== null && fableEffective >= settings.ladderPct) {
       const to = nextDown(family, settings.ladder);
       if (!to) blocked.push(`${s.name} is already at the bottom of the ladder`);
+      else if (stalled) blocked.push(`${s.name} is stalled on a usage limit — it is resumed after the reset, not moved`);
       // IN FLIGHT is not "already there". A queued job has not opened the picker
       // yet — the session is still on the rung it was on — but a second move
       // must not be started behind it either.
@@ -705,7 +715,7 @@ function decide(input = {}) {
       // own before the next try: the global one does not hold moves back up,
       // and a picker that never opens was otherwise typed at every tick.
       const retryLater = failedAt > (Number(ladder.at) || 0) && now - failedAt < settings.cooldownMs;
-      if (reset && low && s.state === 'idle' && !retryLater && canLadderUp(ladder.to, settings.ladder)) {
+      if (reset && low && s.state === 'idle' && !stalled && !retryLater && canLadderUp(ladder.to, settings.ladder)) {
         ladderUp = { type: 'ladder_up', claudeSessionId: s.claudeSessionId, name: s.name, from: ladder.to, to: ladder.from };
       }
     }
