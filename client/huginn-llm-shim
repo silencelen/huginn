@@ -59,8 +59,8 @@ const RESULT_CAP_BYTES = 8 * 1024;
 const SESSION_CAP_BYTES = 512 * 1024;
 const SESSION_MAX_FILES = 200;
 const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
-// No token for this long (model load included) ends the run with an honest
-// error rather than orphaning the device's single job slot.
+// Nothing streamed for this long (model load included; thinking counts) ends
+// the run with an honest error rather than orphaning the device's single job slot.
 const WATCHDOG_MS = Number(process.env.HUGINN_SHIM_WATCHDOG_MS || '') || 120_000;
 
 const SESSION_ID_RE = /^[0-9a-fA-F-]{36}$/;
@@ -723,7 +723,7 @@ function probeEngine(endpoint) {
 
 // ----------------------------------------------------------------- request
 
-function postChat(endpoint, key, body, onDelta, { want } = {}) {
+function postChat(endpoint, key, body, onDelta, { want, onAlive } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL('/v1/chat/completions', endpoint);
     const mod = u.protocol === 'https:' ? https : http;
@@ -780,6 +780,14 @@ function postChat(endpoint, key, body, onDelta, { want } = {}) {
           if (data === '[DONE]') continue;
           try {
             const ev = JSON.parse(data);
+            // ⚠ EVERY EVENT IS A SIGN OF LIFE, not only an answer token. A
+            // reasoning model streams its thinking first, in a field this shim
+            // does not show (`delta.reasoning` from Ollama, `reasoning_content`
+            // from llama-server), and its answer only after that, minutes later
+            // on a CPU box. The watchdog is for an engine that is dead or wedged;
+            // re-armed by `content` alone, it stopped a thinking model as "no
+            // output", and the retry it suggested failed the same way.
+            if (onAlive) onAlive();
             const delta = ev.choices?.[0]?.delta?.content;
             if (typeof delta === 'string' && delta.length) { full += delta; onDelta(delta); }
           } catch { /* a partial or foreign line is not an answer */ }
@@ -880,9 +888,8 @@ async function main() {
     full = await postChat(endpointOf(conf), apiKey(conf), {
       model: backendModel, messages, stream: true,
     }, (delta) => {
-      arm();
       emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: delta } } });
-    }, { want });
+    }, { want, onAlive: arm });
   } catch (e) {
     clearTimeout(watchdog);
     if (dead) {

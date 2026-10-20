@@ -443,6 +443,10 @@ test('off then off --purge removes the units it really installed, and only those
   stubBin(bin, 'systemctl', `echo "$@" >> ${log}\nexit 0`);
   stubBin(bin, 'loginctl', 'echo Linger=yes');
   stubRunuser(bin);
+  // System units make off ask for root once; run as anyone but root, nothing
+  // here can, and off then stops them as this account (through the stub).
+  stubBin(bin, 'pkexec', 'exit 127');
+  stubBin(bin, 'sudo', 'exit 127');
   // A deregistration that succeeds, so run 1 gets as far as deleting local.json
   // - which is the precondition this whole case is about.
   fs.writeFileSync(path.join(dir, 'bin', 'huginn-device.js'), 'process.exit(0);\n');
@@ -493,6 +497,8 @@ test('off --purge with no config keeps an adopted engine key and its engine', ()
   stubBin(bin, 'systemctl', `echo "$@" >> ${log}\nexit 0`);
   stubBin(bin, 'loginctl', 'echo Linger=yes');
   stubRunuser(bin);
+  stubBin(bin, 'pkexec', 'exit 127');   // as above: nothing here can ask for root
+  stubBin(bin, 'sudo', 'exit 127');
   fs.writeFileSync(path.join(dir, 'bin', 'huginn-device.js'), 'process.exit(0);\n');
   fs.writeFileSync(path.join(dir, 'api-key'), 'somebody-elses-key\n');
   // Adapter mode: the runner unit only. No local.json - this is the second run.

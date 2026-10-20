@@ -153,13 +153,14 @@ consent, fetch pinned, validate, install, enrol. The **manager** (`client/huginn
   same keyless-completions gate a managed install does, it is refused on top of a managed install
   (they would share `local.json` and `api-key`), and `off` takes only the runner down. An adopted
   engine is never stopped, uninstalled or stripped of its key.
-- **`off`:** stop the runner first, then the engine; deregister with the same honesty as
-  `huginn device off`; then **the credentials go with the row**: `local.json`, `api-key` and
-  `device/appd-token` are removed, because a tier that is off has no business keeping a live bearer
-  token on disk. Models are kept by default and deleted only behind an explicit typed confirmation:
-  `--purge-models` for the models and sessions, `--purge` for the whole tier including the runtime,
-  the unit files and the tier directory itself. `--purge` refuses to delete a `HUGINN_LOCAL_DIR`
-  that resolves to a home directory or a filesystem root.
+- **`off`:** stop the runner first, then the engine (as root, behind the one prompt, on system
+  units); a service that did not stop keeps the row, `local.json` and the keys, so `off` can be run
+  again; deregister with the same honesty as `huginn device off`; then **the credentials go with
+  the row**: `local.json`, `api-key` and `device/appd-token` are removed, because a tier that is off
+  has no business keeping a live bearer token on disk. Models are kept by default and deleted only
+  behind an explicit typed confirmation: `--purge-models` for the models and sessions, `--purge` for
+  the whole tier including the runtime, the unit files and the tier directory itself. `--purge`
+  refuses to delete a `HUGINN_LOCAL_DIR` that resolves to a home directory or a filesystem root.
 - **`update`:** the manager and shim update through the client's own update path; runtime and model
   bumps come only through a manifest change in a CLI release.
 - **`status --json`** feeds the desktop.
@@ -169,7 +170,8 @@ produces and emits exactly what the daemon's event handler reads: `system/init` 
 minted uuid, `version+contenthash`), `stream_event` text deltas, `assistant` frames (chunked at
 100 KB or less, so no oversized line is ever emitted), and one terminal `result` with `is_error`,
 `duration_ms`, `total_cost_usd: 0` and `num_turns: 1`. `--resume` replays a size-capped per-session
-JSONL. A 120 s no-token watchdog aborts with an honest error. An unknown `--model` is an error
+JSONL. A 120 s watchdog aborts with an honest error when the engine streams nothing for that long
+(a reasoning model's thinking counts). An unknown `--model` is an error
 result, never a substitution. Failures after startup are error *results* (exit 0); a non-zero exit
 is reserved for contract-level failure. `--contract-check` emits a canned transcript for the drift
 test.
@@ -223,13 +225,16 @@ logout.
 
 - **Linux uses system units behind one elevation prompt**, the Windows shape. `huginn local on
   --system` re-runs the whole verb under `pkexec` (then `sudo`), carrying `HOME`, `HUGINN_LOCAL_DIR`
-  and `HUGINN_LOCAL_USER` explicitly because both elevators wipe the environment. Afterwards it chowns
-  the tier directory back to the user: a root-owned 0600 `api-key` is a model server
-  that answers 401 to its own runner. The desktop passes `--system` and lets the manager own the
-  elevation, so one implementation stays behind both doors.
+  and `HUGINN_LOCAL_USER` explicitly because both elevators wipe the environment. An elevated run
+  hands the tier directory back to the user before it starts anything that runs as the user, and
+  again however it ends: a root-owned 0600 `api-key` is a model server that answers 401 to its own
+  runner, and a root-owned `local.json` reads as "not set up". The desktop passes `--system` and
+  lets the manager own the elevation, so one implementation stays behind both doors.
 - **Declined or unavailable elevation falls back to linger**, out loud. `loginctl enable-linger` is
   attempted for user units on every Linux install, and the result is printed either way;
-  `org.freedesktop.login1.set-self-linger` usually needs no password in an active session.
+  `org.freedesktop.login1.set-self-linger` usually needs no password in an active session. An
+  elevated run that started and then failed is that failure, not a declined prompt (the elevated run
+  leaves a mark to say it started), so nothing falls back over what it wrote as root.
 - **`huginn local persist`** migrates an existing user install. The user half runs unelevated first
   (root's `--user` bus is root's own, and would exit 0 having stopped nothing), then the `/etc` half
   takes the one prompt. If the prompt is declined, it puts the user units back and enables linger
