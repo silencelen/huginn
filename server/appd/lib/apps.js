@@ -186,6 +186,13 @@ const MAX_CLIENT_REMOTES = 16;
  *
  * A reported route lives a month, not a week: it is a fact about a device's
  * settings, which change rarely, where an arrival is a fact about traffic.
+ *
+ * ⚠ THE MONTH RUNS FROM THE CLIENT'S LAST WORD, NOT ITS LAST REPORT. A client
+ * reports once per launch and again only when its routes change, and an
+ * always-on desktop can run for months — so a route measured from the report
+ * alone dropped out of the required set on day 31 while the device was still
+ * using it, with no log line. Every request that carries the reporting
+ * client's `X-Huginn-Client` renews its report ([noteClientAddress]).
  */
 const LOOPBACK_ADDR = '127.0.0.1';
 const REPORTED_ADDR_TTL_SEC = 30 * 24 * 3600;
@@ -2011,6 +2018,9 @@ function addrEntry(raw) {
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, remotes };
 }
 
+/** The one id every header-less client files under (see [reportedClientId]). */
+const SHARED_CLIENT_ID = 'a client';
+
 /**
  * The id a report is filed under: `X-Huginn-Client`, printable ASCII only.
  *
@@ -2021,7 +2031,7 @@ function addrEntry(raw) {
  * always send the header.
  */
 function reportedClientId(raw) {
-  return String(raw == null ? '' : raw).replace(/[^\x21-\x7e]/g, '').slice(0, 64) || 'a client';
+  return String(raw == null ? '' : raw).replace(/[^\x21-\x7e]/g, '').slice(0, 64) || SHARED_CLIENT_ID;
 }
 
 /**
@@ -2259,9 +2269,11 @@ function createStore(opts = {}) {
   }
 
   /**
-   * A month unreported and a client's report is gone; past [MAX_REPORTERS] the
-   * client heard from longest ago goes — a whole client, never `keep` (the one
-   * reporting right now), and never a slice of anybody's routes.
+   * A month without a word from a client — a report, or any request carrying its
+   * id (see [REPORTED_ADDR_TTL_SEC]) — and its report is gone; past
+   * [MAX_REPORTERS] the client heard from longest ago goes — a whole client,
+   * never `keep` (the one reporting right now), and never a slice of anybody's
+   * routes.
    */
   function pruneReported(keep = null) {
     const cutoff = stamp() - REPORTED_ADDR_TTL_SEC;
@@ -2658,8 +2670,13 @@ function createStore(opts = {}) {
    *
    * A NEW address is flushed at once, because it changes what an add would
    * refuse. A refreshed stamp waits — see [CLIENT_ADDR_FLUSH_SEC].
+   *
+   * `rawClient` is the request's `X-Huginn-Client`: a client that has reported
+   * its routes and is talking to huginn now still uses them, so its report is
+   * renewed — see the ⚠ on [REPORTED_ADDR_TTL_SEC]. A refreshed stamp, so it
+   * waits for the next flush like the others.
    */
-  function noteClientAddress(raw, rawRemote) {
+  function noteClientAddress(raw, rawRemote, rawClient) {
     const addr = normalizeAddr(raw);
     if (!addr) return false;
     // See the ⚠ on loadAddrs: one file read on the first authorised request of
@@ -2667,6 +2684,13 @@ function createStore(opts = {}) {
     ensureLoaded();
     const fresh = !addrs.has(addr);
     addrs.set(addr, stamp());
+
+    // Only a client that NAMES itself renews a report: every header-less caller
+    // files under one shared id, and one of them talking says nothing about the
+    // routes another one reported.
+    const who = reportedClientId(rawClient);
+    const report = who !== SHARED_CLIENT_ID ? reports.get(who) : null;
+    if (report) report.lastSeenAt = stamp();
 
     // The client. Absent is ordinary — a caller with only one address to hand,
     // and a socket whose peer this process could not read, both land here — and

@@ -59,7 +59,8 @@ an app the server itself serves, Huginn checks the app at every address it **mus
 
 - `127.0.0.1`;
 - every address your devices have pinned as a route to the server (each desktop app and Android
-  app reports its routes when it starts, and a reported route counts for 30 days);
+  app reports its routes when it starts, and a reported route counts for as long as that device
+  keeps talking to the server, and for 30 days after it last did);
 - any address in the app's **Also check from**.
 
 When one of those saved addresses stops answering, the Apps page names the device that saved it
