@@ -1,5 +1,5 @@
 #!/bin/bash
-# cc [session] [solo] — attach to (or create) a persistent, reattachable Claude Code tmux session.
+# cc [session [solo]] — attach to (or create) a persistent, reattachable Claude Code tmux session.
 #   default : attach/create; if other devices are attached, the view mirrors (smallest screen wins)
 #   solo    : attach detaching ALL other clients -> resume as the sole client, full size
 # Detach with Alt-d (or Ctrl-b d); reattach from any device. New sessions start `claude` for you.
@@ -11,11 +11,21 @@ export TERM="${TERM:-xterm-256color}"
 # whose locale is not UTF-8, and an SSH login lands in the server's locale (LANG=C on a
 # stock Debian container) unless the client sends its own, which Windows never does.
 # Claude Code's screen is mostly box drawing and symbols.
+# ⚠ THE NAME COMES FIRST; `solo` IS THE FLAG ONLY IN SECOND PLACE. `solo` is also
+# a session name: the daemon creates one, the desktop's "Open in terminal" sends
+# `huginn attach 'solo'`, and every client opens it as `cc solo` (`cc solo solo`
+# to take it solo). Read as the flag wherever it stood, the word sent that attach
+# to MAIN instead, with `attach -d`, which detaches every other device there, and
+# a session called solo could not be opened at all.
+# Every client since 2026-06-16 sends the name first (`cc main solo` for a bare
+# `huginn solo`). `cc solo <name>` is the order the very first clients sent, and
+# it still means <name>, solo: no caller puts anything else second.
 SESSION=main
 SOLO=
-for a in "$@"; do
-  if [ "$a" = solo ]; then SOLO=1; else SESSION="$a"; fi
-done
+[ $# -ge 1 ] && SESSION="$1"
+if [ "${2:-}" = solo ]; then SOLO=1
+elif [ $# -ge 2 ] && [ "$1" = solo ]; then SESSION="$2"; SOLO=1
+fi
 # Session names are case-insensitive: lowercase so 'Test' and 'test' map to ONE
 # tmux session (tmux itself is case-sensitive). Backstop to the client-side canon,
 # and done BEFORE the check so the rule is written once, in one case.
