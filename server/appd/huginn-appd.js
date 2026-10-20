@@ -2860,7 +2860,59 @@ function humanSpokeSince(entry, name) {
   // Incremental and bounded (typing.scanForHuman): each poll reads only what was
   // appended since the last one, never the whole slice since the entry queued.
   if (!entry.humanScan || entry.humanScan.file !== file) entry.humanScan = { file, at: from };
-  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max));
+  return typing.scanForHuman(entry.humanScan, (at, max) => transcriptSlice(file, at, max),
+    typing.HUMAN_SCAN_MAX_BYTES, { ours: ownPromptTest(name) });
+}
+
+/**
+ * What appd itself typed into each session as an AUTOMATED prompt, lately — so
+ * the 'human' drop rule does not read appd's own words back as the owner's.
+ *
+ * ⚠ CLAUDE CODE RECORDS A PASTE EXACTLY AS IT RECORDS TYPING (`origin.kind:
+ * "human"`, `promptSource: "typed"`), so no field of the record says who wrote
+ * it. Two automated messages queued behind one turn — two relays, a heads-up
+ * and a resume — and the first went in; its record was written; and the second,
+ * whose drop scan starts where IT was queued, before that record, was dropped
+ * with "you typed first". Only the queue knows what it typed, so it writes it
+ * down here before every automated delivery, and the scan steps over a record
+ * whose `typing.promptSpelling` matches.
+ *
+ * Automated sends only. A message the owner sent from the app, a soft end they
+ * asked for, an Undo they pressed: those ARE the owner speaking, and still count.
+ *
+ * NOT ON THE QUEUE STRUCT, for the reason `intoDraftAt` gives: the struct is
+ * reaped the moment the queue empties, and the record lands ~100 ms later. Kept
+ * as long as an automated send may wait, a few per session, as hashes.
+ */
+const ownPrompts = new Map();   // session name -> [{ hash, at }]
+const OWN_PROMPTS_KEEP = 8;
+
+function promptHash(spelling) {
+  return crypto.createHash('sha256').update(spelling).digest('base64');
+}
+
+function noteOwnPrompt(name, text) {
+  const spelling = typing.promptSpelling(text);
+  if (!spelling) return;
+  const now = Date.now();
+  for (const [k, list] of ownPrompts) {
+    const fresh = list.filter((p) => now - p.at <= typing.QUEUE_MAX_WAIT_MS);
+    if (fresh.length) ownPrompts.set(k, fresh);
+    else ownPrompts.delete(k);
+  }
+  const list = ownPrompts.get(name) || [];
+  list.push({ hash: promptHash(spelling), at: now });
+  ownPrompts.set(name, list.slice(-OWN_PROMPTS_KEEP));
+}
+
+/** The drop scan's `ours`: did appd type this (a promptSpelling) here itself? */
+function ownPromptTest(name) {
+  const list = ownPrompts.get(name);
+  if (!list || !list.length) return null;
+  return (spelling) => {
+    const h = promptHash(spelling);
+    return list.some((p) => p.hash === h);
+  };
 }
 
 function armQueueTimer(name) {
@@ -3057,6 +3109,9 @@ async function pumpQueue(name) {
       q.blockedBy = null;
       q.delivering = true;
       q.inFlight = entry;   // still visible to the duplicate guard (pendingEntries)
+      // Written down BEFORE anything is typed: Claude Code's record of it can land
+      // within milliseconds of the Enter, and it is appd's, not the owner's.
+      if (entry.automated) noteOwnPrompt(name, typeof entry.run === 'function' ? entry.prompt : entry.text);
       let r;
       try {
         // A JOB rather than a message: the ladder's `/model` picker script is
@@ -3180,6 +3235,9 @@ function enqueueSend(name, text, opts = {}) {
     text,
     // Set only by enqueueJob: an async function run INSTEAD of pasting text.
     run: typeof opts.run === 'function' ? opts.run : null,
+    // What such a job types as a PROMPT (the ladder's `/model`), so the drop
+    // rule can tell Claude Code's record of it from the owner's (ownPrompts).
+    prompt: typeof opts.prompt === 'string' ? opts.prompt : null,
     at: Date.now(),
     automated: !!opts.automated,
     origin: opts.origin || null,
@@ -8853,7 +8911,7 @@ async function applyHeadroomAction(action, ctx) {
       const from = action.from;
       const to = action.to;
       const r = await enqueueJob(action.name, () => applyLadder(action.name, to), {
-        automated: true, origin: 'headroom', kind: 'model', family: from,
+        automated: true, origin: 'headroom', kind: 'model', family: from, prompt: '/model',
         onSettle: (v) => resolvePendingLadder(state, action, v),
       });
       // One cooldown for every ladder move on the host, spent when the move is

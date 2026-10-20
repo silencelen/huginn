@@ -263,6 +263,32 @@ function stateStampMs(st) {
 }
 
 /**
+ * What Claude Code writes as a `user` record about ITSELF: a command's output,
+ * its caveat, a background task's notification. The OUTPUT of `!cmd` and of a
+ * slash command, never the command — the `<bash-input>` and `<command-name>`
+ * records before them are what somebody typed, and are read as such.
+ */
+const CLAUDE_CODE_OWN_RE = /^\s*<(?:local-command-stdout|local-command-stderr|local-command-caveat|bash-stdout|bash-stderr|task-notification)\b/;
+
+/**
+ * A prompt, in the spelling two copies of it can be compared in.
+ *
+ * Whitespace-free (`squashPane`), because Claude Code trims what it records and a
+ * paste can arrive with its line ends changed. And a slash command is put back
+ * the way it was TYPED: Claude Code records `/model` as
+ * `<command-name>/model</command-name>…<command-args></command-args>`.
+ */
+function promptSpelling(text) {
+  let s = String(text == null ? '' : text);
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(s);
+  if (name) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(s);
+    s = `${name[1]} ${args ? args[1] : ''}`;
+  }
+  return squashPane(s);
+}
+
+/**
  * Did a HUMAN speak in this slice of transcript?
  *
  * Used for the automated-send drop rule: an automated message queued behind a
@@ -271,8 +297,24 @@ function stateStampMs(st) {
  * handing a tool's output back to the model) and meta records; neither is a
  * person typing, so both are skipped — the same distinction transcript.js
  * makes at `case 'user'`.
+ *
+ * ⚠ AND TWO MORE KINDS OF `user` RECORD THAT NO PERSON WROTE. Read as the owner,
+ * each one dropped an automated send with "you typed first" that nobody had:
+ *   - Claude Code's own: a background task's notification draining into an idle
+ *     session (`origin.kind: "task-notification"`, `promptSource: "system"` —
+ *     every one of the 364 on the author's host), and the output of a command
+ *     (CLAUDE_CODE_OWN_RE) — the ladder's own `/model` leaves one of those.
+ *     Keyed on the harness's fields first, as transcript.js does: `origin.kind`
+ *     other than `human` is never a person; no origin at all is an older
+ *     transcript or a slash command, and the content decides.
+ *   - appd's own: Claude Code records a message appd pasted EXACTLY as it
+ *     records one the owner typed (`origin.kind: "human"`, `promptSource:
+ *     "typed"`), so no field can tell them apart. `ours` is the caller's
+ *     memory of what it typed (a `promptSpelling` → true); the second of two
+ *     queued automated messages was dropped as soon as the first one's record
+ *     was written, every time.
  */
-function hasHumanUserRecord(jsonlSlice) {
+function hasHumanUserRecord(jsonlSlice, { ours = null } = {}) {
   for (const raw of String(jsonlSlice || '').split('\n')) {
     const line = raw.trim();
     if (!line) continue;
@@ -281,11 +323,24 @@ function hasHumanUserRecord(jsonlSlice) {
     if (!rec || rec.type !== 'user' || rec.isMeta === true) continue;
     // Claude Code's own summary after a compaction, not a person.
     if (rec.isCompactSummary === true) continue;
+    const kind = rec.origin && rec.origin.kind;
+    if ((typeof kind === 'string' && kind !== 'human') || rec.promptSource === 'system') continue;
     const c = rec.message && rec.message.content;
-    if (typeof c === 'string') { if (c.trim()) return true; continue; }
-    if (!Array.isArray(c)) continue;
-    // A record made only of tool_result blocks is plumbing, not a person.
-    if (c.some((b) => b && typeof b === 'object' && b.type !== 'tool_result')) return true;
+    let text;
+    if (typeof c === 'string') {
+      if (!c.trim()) continue;
+      text = c;
+    } else if (Array.isArray(c)) {
+      const blocks = c.filter((b) => b && typeof b === 'object');
+      // A record made only of tool_result blocks is plumbing, not a person.
+      if (!blocks.some((b) => b.type !== 'tool_result')) continue;
+      // Anything but words (an image) was attached by somebody; appd sends text.
+      if (blocks.some((b) => b.type !== 'text' && b.type !== 'tool_result')) return true;
+      text = blocks.filter((b) => b.type === 'text').map((b) => b.text || '').join('\n');
+    } else continue;
+    if (CLAUDE_CODE_OWN_RE.test(text)) continue;
+    if (typeof ours === 'function' && ours(promptSpelling(text))) continue;
+    return true;
   }
   return false;
 }
@@ -313,22 +368,32 @@ const HUMAN_SCAN_MAX_BYTES = 8 * 1024 * 1024;
  *
  * @param cursor { at } — byte offset of the first unread byte; advanced here
  * @param read   (from, max) => { buf, start } | null, raw bytes of the file
+ * @param opts   { ours } — handed to hasHumanUserRecord
  */
-function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES) {
+function scanForHuman(cursor, read, max = HUMAN_SCAN_MAX_BYTES, opts = {}) {
+  const text = takeCompleteLines(cursor, read, max);
+  return text != null && hasHumanUserRecord(text, opts);
+}
+
+/**
+ * The complete lines appended since `cursor.at`, at most `max` bytes of them, as
+ * text — and the cursor moved past them. Null when there is nothing new to read.
+ */
+function takeCompleteLines(cursor, read, max) {
   const slice = read(cursor.at, max);
-  if (!slice || !slice.buf || !slice.buf.length) return false;
+  if (!slice || !slice.buf || !slice.buf.length) return null;
   const nl = slice.buf.lastIndexOf(0x0a);
   if (nl < 0) {
     // No complete line: one still being written — or one longer than a whole
     // read, which nobody typed. Step over that; wait for the other.
     if (slice.buf.length >= max) cursor.at = slice.start + slice.buf.length;
-    return false;
+    return null;
   }
   const done = slice.buf.subarray(0, nl + 1);
   cursor.at = slice.start + done.length;
   // A read that began inside a line it stepped over starts with that line's
   // tail; it does not parse, and is skipped like any fragment.
-  return hasHumanUserRecord(done.toString('utf8'));
+  return done.toString('utf8');
 }
 
 // The composer's input line: a bare caret, or a caret with typed text after it.
@@ -1764,7 +1829,7 @@ module.exports = {
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
-  hasHumanUserRecord, kindOf, scanForHuman, HUMAN_SCAN_MAX_BYTES,
+  hasHumanUserRecord, kindOf, scanForHuman, promptSpelling, HUMAN_SCAN_MAX_BYTES,
   paneReadyForInput, paneBlocks, composerDrawn, shellPrompt, shellPromptRow, startsClaude,
   startingUp, startingUnmarked, bufferName,
   releaseDecision, dropReason, dropMessage, dropLogLine, typingSnapshot, intoDraftView,
