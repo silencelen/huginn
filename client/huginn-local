@@ -278,12 +278,17 @@ function serviceUser() {
   return named || os.userInfo().username;
 }
 
-/** The numeric pair the elevated half needs to hand a tree back. */
+/**
+ * The numeric pair the elevated half needs to hand a tree back, or nulls.
+ * ⚠ An `id` that fails prints nothing, and Number('') is 0: read that way, an
+ * unknown account handed the tree to root. Only digits from an `id` that
+ * succeeded count (as in serviceUid).
+ */
 function userIds(user = serviceUser()) {
   const one = (flag) => {
     const r = RUN('id', [flag, user]);
-    const n = Number(String((r && r.stdout) || '').trim());
-    return Number.isInteger(n) ? n : null;
+    const out = String((r && r.stdout) || '').trim();
+    return r && !r.error && r.status === 0 && /^\d+$/.test(out) ? Number(out) : null;
   };
   return { uid: one('-u'), gid: one('-g') };
 }
@@ -476,10 +481,12 @@ function handBackOwnership(dir = localDir(), user = serviceUser()) {
   if (!isRoot() || user === 'root') return false;
   const { uid, gid } = userIds(user);
   if (uid == null || gid == null) return false;
+  // ⚠ lchown, never chown: this runs as root over a tree the account owns, and
+  // chown follows a link the account planted there to whatever it names.
   const walk = (p) => {
     let st;
     try { st = fs.lstatSync(p); } catch { return; }
-    try { fs.chownSync(p, uid, gid); } catch { /* best effort, per entry */ }
+    try { fs.lchownSync(p, uid, gid); } catch { /* best effort, per entry */ }
     if (st.isDirectory()) {
       let names = [];
       try { names = fs.readdirSync(p); } catch { return; }
@@ -2297,5 +2304,7 @@ if (require.main === module) {
     verifyLockDecision, seedTokenFromStage, writeTokenSecure,
     // Where the engine identity check is used here (it lives in the shim).
     engineKit, serviceUid, health, identifyAdapter,
+    // The elevated hand-back (an update run with sudo writes as root).
+    userIds, handBackOwnership,
   };
 }

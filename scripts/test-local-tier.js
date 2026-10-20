@@ -921,3 +921,44 @@ test('the health check sends a squatter on the engine port nothing — not the k
     assert.match(String(s.engine.refused), /not this machine's local engine/, 'status says so, in the field the desktop decodes');
   } finally { await new Promise((r) => sq.close(r)); }
 });
+
+// ------------------------------------------------------- the elevated hand-back
+//
+// `huginn local update` under sudo writes local.json as root and hands the tree
+// back to the account. Two ways that went wrong: an `id` that failed read as
+// uid 0 (Number('') is 0), so the tree went to root; and chown followed a link
+// the account had planted in its own tree, as root.
+
+test('userIds: an `id` that fails is no account, not root', () => {
+  shim({ id: () => ({ status: 1, stdout: '', stderr: 'id: no such user' }) });
+  assert.deepEqual(local.userIds('ghost'), { uid: null, gid: null });
+  shim({ id: () => ({ status: 0, stdout: 'not-a-number\n' }) });
+  assert.deepEqual(local.userIds('odd'), { uid: null, gid: null });
+  shim({ id: (args) => ({ stdout: args[0] === '-u' ? '1000\n' : '1001\n' }) });
+  assert.deepEqual(local.userIds('owner'), { uid: 1000, gid: 1001 });
+});
+
+test('the hand-back changes the tree, never what a link in it names', {
+  skip: !(LINUX && typeof process.getuid === 'function' && process.getuid() === 0) && 'Linux, as root',
+}, () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'handback-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'handback-target-'));
+  const target = path.join(outside, 'root-file');
+  fs.writeFileSync(target, 'root file');
+  fs.writeFileSync(path.join(d, 'local.json'), '{}');
+  fs.symlinkSync(target, path.join(d, 'planted'));
+  shim({ id: () => ({ stdout: '65534\n' }) });
+  try {
+    assert.equal(local.handBackOwnership(d, 'nobody'), true);
+    assert.equal(fs.statSync(path.join(d, 'local.json')).uid, 65534);
+    assert.equal(fs.lstatSync(path.join(d, 'planted')).uid, 65534, 'the link itself is handed back');
+    assert.equal(fs.statSync(target).uid, 0, 'what the link names stays root\'s');
+    shim({ id: () => ({ status: 1, stdout: '' }) });
+    fs.chownSync(path.join(d, 'local.json'), 0, 0);
+    assert.equal(local.handBackOwnership(d, 'ghost'), false, 'an account id cannot name is no hand-back');
+    assert.equal(fs.statSync(path.join(d, 'local.json')).uid, 0);
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
