@@ -65,6 +65,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -561,6 +562,23 @@ internal val DestSaver = androidx.compose.runtime.saveable.Saver<Dest, String>(
     restore = { keyToDest(it) },
 )
 
+/**
+ * Keeps a share that is still waiting for its destination across a rebuild.
+ *
+ * ⚠ THE SHEET IS THE ONLY PLACE THE SHARE STILL EXISTS. readTarget strips the
+ * extras and the action from the intent the moment it reads them, and the
+ * target was a field of the activity being replaced, so with a plain `remember`
+ * a fold, an unfold or a rotate before a destination was picked dropped the
+ * share without a word, and it had to be shared again from the other app. Only
+ * what the sheet needs is kept, the words and the photo, and a Bundle holds both.
+ */
+internal val PendingShareSaver = listSaver<OpenTarget?, Any?>(
+    save = { t -> if (t == null) emptyList() else listOf(t.shareText, t.shareImage) },
+    restore = { saved ->
+        OpenTarget(session = null, chat = null, seq = 0, shareText = saved[0] as String?, shareImage = saved[1] as Uri?)
+    },
+)
+
 internal sealed interface Dest {
     data object Chats : Dest
     data class Chat(val id: String) : Dest
@@ -648,7 +666,9 @@ fun HuginnApp(
     // a sealed type Compose cannot bundle on its own.
     var dest by rememberSaveable(stateSaver = DestSaver) { mutableStateOf<Dest>(Dest.Sessions) }
     var sessionTab by rememberSaveable { mutableStateOf(0) }
-    var pendingShare by remember { mutableStateOf<OpenTarget?>(null) }
+    // Saveable for the reason `dest` is: a fold or a rotate while the sheet is
+    // open must not drop the share. See [PendingShareSaver].
+    var pendingShare by rememberSaveable(stateSaver = PendingShareSaver) { mutableStateOf<OpenTarget?>(null) }
     // The widget's quick chat, handed to ChatsScreen as the target's seq so a
     // second tap on the widget re-opens the question a first tap dismissed.
     var newChatAsk by remember { mutableStateOf(0) }
