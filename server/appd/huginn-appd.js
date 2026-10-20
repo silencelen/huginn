@@ -2561,6 +2561,9 @@ function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
  * notice and live-keys stamp came along too. The rename route moves them instead.
  */
 function forgetSessionMemory(name) {
+  // Messages still queued for the previous holder are failed, never handed on:
+  // the next session under the name is a different conversation.
+  failQueued(name, SEND_SESSION_ENDED);
   lastPasted.delete(name);
   intoDraftAt.delete(name);
   liveKeysAt.delete(name);
@@ -2927,6 +2930,28 @@ function releaseQueue(q) {
   }
 }
 
+const SEND_SESSION_ENDED = 'the session it was sent to has ended, so it was not delivered';
+const SEND_SESSION_REPLACED = 'the session it was sent to was replaced by a new one under the same name, '
+  + 'so it was not delivered';
+
+/** A send whose session is gone: an error, as every failed delivery is, and never a paste elsewhere. */
+function failSend(name, entry, why) {
+  log(`typing: ${name}: delivery failed: ${why}`);
+  entry.settle({ delivered: false, submitted: null, result: { ok: false, code: 410, message: why } });
+}
+
+/**
+ * Let go of a session's queue because its session is gone, failing whatever is
+ * still in it. A pass already delivering keeps its own entry and settles it.
+ */
+function failQueued(name, why) {
+  const q = sendQueues.get(name);
+  if (!q) return;
+  if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+  sendQueues.delete(name);
+  for (const entry of q.entries.splice(0)) failSend(name, entry, why);
+}
+
 /**
  * Release everything at the head of the queue whose gates are open, drop what
  * has gone stale, and re-arm the poll if anything is left waiting.
@@ -2942,6 +2967,24 @@ async function pumpQueue(name) {
   try {
     while (q.entries.length) {
       const entry = q.entries[0];
+      // ⚠ ADDRESSED TO A SESSION, NOT TO A NAME. A session killed at a terminal
+      // leaves a state file no hook can update, and its `attention` held a
+      // person's reply for ten minutes against a pane that no longer existed —
+      // until a new session under the same name (`cc` defaults to one) painted
+      // its composer, and the reply was typed into a conversation it was never
+      // written for, with Enter. So each pass asks tmux whether the session is
+      // there and whether it is still the one this entry was queued for (tmux's
+      // birth time, which a rename keeps). Gone or replaced, the send is an
+      // error. Null is tmux not answering, which says nothing (#14).
+      const here = await sessionExists(name);
+      if (here === false) { failQueued(name, SEND_SESSION_ENDED); break; }
+      if (here && entry.born == null) entry.born = sessionBorn.get(name) || null;
+      if (here && entry.born && sessionBorn.get(name) !== entry.born) {
+        q.entries.shift();
+        q.lastError = SEND_SESSION_REPLACED;
+        failSend(name, entry, SEND_SESSION_REPLACED);
+        continue;
+      }
       // What the LAST pass decided about this queue's head, read before the
       // gate is re-read: a non-null value means this queue was HELD, and that
       // is what makes the entries behind the head queued prompts rather than
@@ -3187,7 +3230,11 @@ async function pumpQueue(name) {
     q.blockedBy = null;
   } finally {
     q.pumping = false;
-    if (q.entries.length) armQueueTimer(name);
+    // ⚠ ONLY WHILE THIS IS STILL THE NAME'S QUEUE. One let go of because its
+    // session ended (failQueued) must not be re-armed, and deleting the name's
+    // row after it would take the queue of a session made under the name since.
+    if (sendQueues.get(name) !== q) { /* let go of: nothing to arm or reap */ }
+    else if (q.entries.length) armQueueTimer(name);
     // ⚠ AND A QUEUE WHOSE SESSION IS GONE. `lastError` kept the map entry alive
     // so `GET /typing` could still report the failure — but nothing ever removed
     // it afterwards, so a long-lived daemon accumulated one row per session that
@@ -3195,7 +3242,7 @@ async function pumpQueue(name) {
     // ⚠ `=== false`, NOT falsy. A tmux that did not answer says nothing about
     // whether this session is gone, and dropping the queue on it would throw
     // away a message that is merely waiting for a busy host (#14).
-    else if (!q.lastError || (await sessionExists(name)) === false) {
+    else if ((!q.lastError || (await sessionExists(name)) === false) && sendQueues.get(name) === q) {
       sendQueues.delete(name);
       unmarkedHeld.delete(name);
       draftHeld.delete(name);
@@ -3236,6 +3283,10 @@ function enqueueSend(name, text, opts = {}) {
     submit: opts.submit !== false,
     transcript: file,
     transcriptAt: at,
+    // Which session this was sent to: tmux's birth time for the session holding
+    // the name now. The pump fails the entry if the name comes to belong to
+    // another one (see pumpQueue). Unknown here, it is taken on the first pass.
+    born: sessionBorn.get(name) || null,
     settle: () => { },
   };
   const done = new Promise((resolve) => {

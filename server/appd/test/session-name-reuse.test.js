@@ -471,3 +471,57 @@ test('a rename that lands while a message is being typed waits for it, and loses
   assert.equal(st.queued, 0, 'nothing left behind');
   assert.equal(st.lastError, null, 'and nothing reported as failed');
 });
+
+// ------------------------------------------------------ held messages
+
+test('a message held for a session killed at a terminal is never typed into the next session of that name', async () => {
+  // A reply typed in the app while a dialog is up is held. The owner gives up on
+  // the session and kills it at a terminal: no hook can resolve a dead pane, so
+  // its state file goes on saying `attention`. The next session made under the
+  // name — `cc` defaults to one — is a new conversation with full tools and no
+  // context, and the old reply would be its first prompt.
+  const name = 'held-kill';
+  standIn(name, 'trust');
+  mkPane(name, 'claude; exec "$SHELL" -l');   // made the way `cc` makes one
+  assert.ok(await untilTrue(() => /trust this folder/.test(capture(name))), 'precondition: a dialog is up');
+  writeState(name, 'attention', { sessionId: crypto.randomUUID() });
+  const text = 'yes, delete both old branches and force-push';
+  const r = await send(name, text);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.delivered, false, 'precondition: held by the dialog');
+
+  sh('tmux', ['kill-session', '-t', `=${name}`]);   // at a terminal: no hook, no daemon
+  await wait(1_500);
+  standIn(name, null);
+  mkPane(name, 'claude; exec "$SHELL" -l');
+  await wait(UP_MS + 2_500);
+  assert.match(capture(name), /❯/, 'precondition: the new session is up and reading input');
+  assert.equal(readOr(outFor(name)), '', 'the reply written for the old conversation never reached the new one');
+  assert.equal((await api(`/v1/sessions/${name}/typing`)).body.queued, 0, 'nor is it still waiting to');
+  assert.match(readOr(daemonLog), new RegExp(`${name}: delivery failed: the session it was sent to has ended`),
+    'it failed, and said so');
+});
+
+test('a message held for a session replaced in one stroke is not typed into its replacement', async () => {
+  // No pump pass ever sees the name missing: the old session dies and the new
+  // one is made in a single tmux invocation. The birth time is what tells them
+  // apart.
+  const name = 'held-swap';
+  standIn(name, 'trust');
+  mkPane(name, 'claude; exec "$SHELL" -l');
+  assert.ok(await untilTrue(() => /trust this folder/.test(capture(name))), 'precondition: a dialog is up');
+  const r = await send(name, 'merge it and close the ticket');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.delivered, false, 'precondition: held by the dialog');
+
+  await wait(1_100);   // tmux stamps a birth in whole seconds; the next one must not share it
+  standIn(name, null);
+  sh('tmux', ['kill-session', '-t', `=${name}`, ';',
+    'new-session', '-d', '-s', name, '-c', tmp, '-x', '120', '-y', '40', 'claude; exec "$SHELL" -l']);
+  await wait(UP_MS + 2_500);
+  assert.match(capture(name), /❯/, 'precondition: the new session is up and reading input');
+  assert.equal(readOr(outFor(name)), '', 'the message was for the session that was replaced');
+  const st = (await api(`/v1/sessions/${name}/typing`)).body;
+  assert.equal(st.queued, 0, 'nor is it still waiting to');
+  assert.match(st.lastError || '', /replaced by a new one/, 'it failed, and the queue says why');
+});
