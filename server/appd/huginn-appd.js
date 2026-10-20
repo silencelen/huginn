@@ -2530,6 +2530,25 @@ const LIVE_KEYS_WINDOW_MS = (() => {
 })();
 
 /**
+ * How long a send that needs an EMPTY box (a pane script, a wrap-up phrase —
+ * see `bareCaret` in the pump) waits for one: ten minutes, the ceiling every
+ * hold shares. `HUGINN_APPD_EMPTY_BOX_WAIT_MS` exists for the same reader as the
+ * window above: giving up is the subject of a test, and ten real minutes per
+ * case is a suite nobody runs. Nonsense falls back, as above.
+ */
+const EMPTY_BOX_WAIT_MS = (() => {
+  const raw = process.env.HUGINN_APPD_EMPTY_BOX_WAIT_MS;
+  if (raw == null || raw === '') return typing.DRAFT_HOLD_MAX_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : typing.DRAFT_HOLD_MAX_MS;
+})();
+
+/** What a wrap-up phrase reports when that wait runs out with text still in the box. */
+const EMPTY_BOX_GAVE_UP = `the message box still held unsent text after ${EMPTY_BOX_WAIT_MS >= 60_000
+  ? `${Math.round(EMPTY_BOX_WAIT_MS / 60_000)} minutes` : `${Math.round(EMPTY_BOX_WAIT_MS / 1000)} seconds`}, `
+  + 'so the wrap-up phrase was not typed and nothing was set to end the session';
+
+/**
  * The sessions being held by the UNMARKED rule, so its journal line is written
  * once per session rather than once per 400 ms poll.
  */
@@ -3265,16 +3284,38 @@ async function pumpQueue(name) {
       // submits their draft with `/model` stuck to the end of it. The promise in
       // enqueueJob — "starts only at a turn boundary with a bare caret" — is kept
       // here now, not just written down.
-      const holdForBox = !textEntry && typing.jobHold({
-        composerHolds: gate.composerHolds, waitedMs: now - entry.at,
-      });
+      //
+      // ⚠ AND SO DOES A WRAP-UP PHRASE (`bareCaret`, owner decision 2026-10-20).
+      // The draft guard above holds an ordinary message only while the Screen tab
+      // is being typed in; after that, or for a draft left at an attached
+      // terminal, the message goes in after it (decision 59). For the phrase that
+      // ends a session that was the draft submitted with it, carried out in the
+      // wrap-up turn, and the session ended behind it. So /soft-end, a graceful
+      // archive and a project's graceful delete wait while the box holds anything.
+      const needsEmptyBox = !textEntry || entry.bareCaret === true;
+      const boxBusy = needsEmptyBox && typing.jobHold({ composerHolds: gate.composerHolds });
+      const boxOverdue = boxBusy && now - entry.at >= EMPTY_BOX_WAIT_MS;
+      if (boxOverdue && textEntry) {
+        // ⚠ THE WAIT RAN OUT AND THE BOX STILL HOLDS SOMEBODY'S TEXT. A wrap-up
+        // phrase is not typed after it: the send is an error, said in the journal
+        // and in `lastError`, and its settle arms nothing (armSoftEndFromSettle).
+        // A job is different — it is let go, and applyLadder refuses to type.
+        q.entries.shift();
+        draftHeld.delete(name);
+        q.lastError = EMPTY_BOX_GAVE_UP;
+        log(`typing: ${name}: ${EMPTY_BOX_GAVE_UP} | composer: `
+          + `${String(gate.composerHolds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`);
+        entry.settle({ delivered: false, submitted: null, result: { ok: false, code: 409, message: EMPTY_BOX_GAVE_UP } });
+        continue;
+      }
+      const holdForBox = boxBusy && !boxOverdue;
       // The automated lane's view of the last delivery (deliveryShownUp), read on
       // every pass, not only when the tail looks idle.
       const shownUp = humanText || deliveryShownUp(name, gate.transcript, gate.sessionState);
       const d = typing.releaseDecision(humanText
         ? {
           ...gate,
-          draft: holdForDraft,
+          draft: holdForDraft || holdForBox,
           // A person's message never waits for CLAUDE (3.0.3) — but one they
           // QUEUED behind a gate is not an interjection, and flushing it into
           // the turn the previous message just started is how the first
@@ -3303,7 +3344,9 @@ async function pumpQueue(name) {
       if (d.blockedBy === 'draft') {
         if (!draftHeld.has(name)) {
           draftHeld.add(name);
-          log(typing.draftHeldLogLine(name, gate.composerHolds));
+          log(holdForBox && textEntry
+            ? typing.emptyBoxHeldLogLine(name, gate.composerHolds)
+            : typing.draftHeldLogLine(name, gate.composerHolds));
         }
       } else if (draftHeld.delete(name)) {
         // Which way the hold ended matters: the person sent or cleared their
@@ -3499,6 +3542,10 @@ function enqueueSend(name, text, opts = {}) {
     // What such a job types as a PROMPT (the ladder's `/model`), so the drop
     // rule can tell Claude Code's record of it from the owner's (ownPrompts).
     prompt: typeof opts.prompt === 'string' ? opts.prompt : null,
+    // Text that goes only into an EMPTY box, as a job does: the wrap-up phrases
+    // that end a session. Held while the box holds anything; given up, unsent,
+    // when EMPTY_BOX_WAIT_MS runs out (pumpQueue).
+    bareCaret: opts.bareCaret === true,
     at: Date.now(),
     automated: !!opts.automated,
     origin: opts.origin || null,
@@ -12816,9 +12863,11 @@ async function handleRequest(req, res) {
       // exactly that case. `automated:false` because a person asked for it: the
       // modal gate holds it, the turn gate does not.
       if (!auto) softEnds.delete(name);
+      // `bareCaret`: never typed after somebody's unsent text (see the pump).
       const out = await enqueueSend(name, phrase, {
         origin: 'soft-end',
         submit: true,
+        bareCaret: true,
         onSettle: (v) => { if (auto) armSoftEndFromSettle(name, v); },
       });
       if (out.result && !out.result.ok) {
@@ -13763,6 +13812,7 @@ async function handleRequest(req, res) {
         const out = await enqueueSend(name, SOFT_END_PHRASE, {
           origin: 'archive',
           submit: true,
+          bareCaret: true,   // waits for an empty box, like /soft-end (see the pump)
           onSettle: (v) => {
             if (armSoftEndFromSettle(name, v, 'archive')) archiveIntents.set(name, { note });
           },
@@ -14453,6 +14503,7 @@ async function handleRequest(req, res) {
               const out = await enqueueSend(member.name, SOFT_END_PHRASE, {
                 origin: 'soft-end',
                 submit: true,
+                bareCaret: true,   // waits for an empty box, like /soft-end (see the pump)
                 onSettle: (v) => armSoftEndFromSettle(member.name, v, `project ${project.slug}`),
               });
               if (out.result && !out.result.ok) {

@@ -180,6 +180,9 @@ to end the session.") so Claude Code can finish and commit. With auto-end on, wh
 default, the session then ends by itself once Claude Code settles.
 
 - If a question is waiting in the session, `huginn end` refuses: answer it first.
+- If the session's message box holds text nobody has sent, the wrap-up message waits until the box
+  is empty, so it is never sent along with that text. If the box is still not empty after 10
+  minutes, nothing is sent, the session is not ended, and the session's send status says why.
 - If Claude Code asks a question while it wraps up, auto-end is cancelled and the session stays
   open for you.
 - If Claude Code exits before it settles, or the session is ended another way, auto-end stands
