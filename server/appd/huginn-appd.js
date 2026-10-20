@@ -5517,12 +5517,11 @@ const ROUND_MARK = { ok: GLYPH.ok, attention: GLYPH.info, action: GLYPH.needsYou
 const ROUND_WORD = { ok: 'all clear', attention: 'worth a look', action: 'needs you', unknown: 'unclear' };
 
 /**
- * Push first, Telegram only if the app did not get it.
+ * Push first, Telegram only if the push reached no device.
  *
- * Not a new delivery policy — this is the rule the alert watcher already applies,
- * and the reason it exists is written in lib/clients: "a duplicate of every alert
- * on two channels is worse than one channel: the reader learns to ignore both".
- * A weekly report arriving twice is exactly what would train that habit.
+ * The reason for holding at all is written in lib/clients: "a duplicate of every
+ * alert on two channels is worse than one channel: the reader learns to ignore
+ * both". A weekly report arriving twice is exactly what would train that habit.
  */
 async function deliverRoundReport(round, report, chatId) {
   // ⚠ BUILT ONCE, USED BY BOTH CHANNELS. These were computed separately and
@@ -5539,8 +5538,16 @@ async function deliverRoundReport(round, report, chatId) {
     title: round.title,
     text,
   });
-  if (pushed.sent > 0 || clientsLib.appOnline(clientState, Date.now())) {
-    log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
+  // ⚠ HELD ONLY BY A DELIVERED PUSH, never because an app checked in recently.
+  // The alert watcher may hold on a check-in, because the phone's own watch
+  // baseline sees the same transition; nothing does that for a Round. The watch
+  // digest carries no Round runs, neither client's notification rules know one,
+  // and the phone shows a round_report only when FCM brings it. So with no FCM key
+  // (every self-hosted install), an FCM outage or a dead token, a phone's alarm or
+  // an open desktop held every report and every "did not run" notice off the relay,
+  // and it reached nobody until somebody opened the Rounds screen.
+  if (pushed.sent > 0) {
+    log(`round ${round.id}: telegram held (pushed to the app)`);
     return;
   }
   const lines = [`${ROUND_MARK[status] || ROUND_MARK.unknown} ${round.title} \u00b7 ${ROUND_WORD[status] || ROUND_WORD.unknown}`, text];
