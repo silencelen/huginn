@@ -8,10 +8,10 @@
 // The spawned cases run the manager from a COPY whose generated MANIFEST block
 // pins tiny local files, already in place with matching hashes, so nothing is
 // downloaded; outside that block the copy is the shipped file byte for byte
-// (checked below). Every external command goes to a stand-in first on PATH,
-// and system units are written to a scratch directory. They need Linux and
-// root: root to hand a tree to another account, and to run the unelevated half
-// as that account.
+// (local-tier-kit.js checks). Every external command goes to a stand-in first
+// on PATH, and system units are written to a scratch directory. They need
+// Linux and root: root to hand a tree to another account, and to run the
+// unelevated half as that account.
 //
 // PORT 0 — ephemeral ports only, so this file takes NO block from the port table.
 
@@ -24,6 +24,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const readline = require('node:readline');
 const { spawn, spawnSync } = require('node:child_process');
+const { buildKit } = require('./local-tier-kit');
 
 const CLIENT = path.join(__dirname, '..', '..', '..', 'client');
 const MGR = path.join(CLIENT, 'huginn-local');
@@ -40,8 +41,6 @@ const ACCOUNT = LINUX ? { name: 'nobody', uid: idOf('-u'), gid: idOf('-g') } : {
 const SPAWNED = (!LINUX && 'Linux only') || (!ROOT && 'needs root')
   || ((ACCOUNT.uid === null || ACCOUNT.uid === 0) && 'needs a `nobody` account');
 
-const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
-
 let tmp;     // 0711, so the account can reach what is handed to it below
 let kit;     // the manager copy and its pinned files
 
@@ -49,65 +48,12 @@ before(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'local-handback-'));
   fs.chmodSync(tmp, 0o711);
   process.env.HUGINN_LOCAL_DIR = path.join(tmp, 'in-process');
-  if (!SPAWNED) kit = buildKit(path.join(tmp, 'kit'));
+  if (!SPAWNED) kit = buildKit(path.join(tmp, 'kit'), { manager: MGR, shim: SHIM });
 });
 after(() => {
   local.setRunner(null);
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
 });
-
-/** The manager with a MANIFEST of tiny local files, the shim beside it. */
-function buildKit(dir) {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o755 });
-  fs.chmodSync(dir, 0o755);
-  const stage = path.join(dir, 'stage');
-  const exe = (f) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '#!/bin/sh\nexit 0\n', { mode: 0o755 }); };
-  exe(path.join(stage, 'llama', 'llama-b1', 'llama-server'));
-  exe(path.join(stage, 'swap', 'llama-swap'));
-  const files = {
-    llama: path.join(dir, 'llama-b1-bin-ubuntu-x64.tar.gz'),
-    swap: path.join(dir, 'llama-swap_2_linux_amd64.tar.gz'),
-    chat: path.join(dir, 'tiny-chat.gguf'),
-    embed: path.join(dir, 'tiny-embed.gguf'),
-  };
-  for (const [tar, from, what] of [[files.llama, 'llama', 'llama-b1'], [files.swap, 'swap', 'llama-swap']]) {
-    const r = spawnSync('tar', ['-czf', tar, '-C', path.join(stage, from), what], { encoding: 'utf8' });
-    assert.equal(r.status, 0, r.stderr);
-  }
-  fs.writeFileSync(files.chat, 'tiny chat model\n');
-  fs.writeFileSync(files.embed, 'tiny embed model\n');
-  const asset = (f) => ({ name: path.basename(f), sha256: sha(f), bytes: fs.statSync(f).size });
-  const model = (slug, role, f) => ({
-    slug, display: slug, role, ctx: 512, gpu: false, repo: 'example/none', file: path.basename(f),
-    sha256: sha(f), bytes: fs.statSync(f).size, license: 'test',
-  });
-  const models = [model('tiny-chat', 'chat', files.chat), model('tiny-embed', 'embed', files.embed)];
-  const never = 'http://127.0.0.1:9/never-fetched/';
-  const M = {
-    manifestVersion: 1,
-    llamaCpp: {
-      release: 'b1', urlBase: never,
-      serverBinary: { linux: 'llama-b1/llama-server', win32: 'llama-server.exe' },
-      assets: Object.fromEntries(['linux-x64', 'linux-arm64', 'win-x64-cpu', 'win-x64-cuda', 'win-cudart'].map((k) => [k, asset(files.llama)])),
-    },
-    llamaSwap: { version: 'v2', urlBase: never, assets: Object.fromEntries(['linux-x64', 'linux-arm64', 'win-x64'].map((k) => [k, asset(files.swap)])) },
-    winsw: { version: 'v0', url: `${never}winsw.exe`, sha256: '00', bytes: 1 },
-    models: { G8: models, C: models, A: models },
-  };
-  const src = fs.readFileSync(MGR, 'utf8');
-  const begin = src.indexOf('// ---8<--- BEGIN GENERATED MANIFEST');
-  const bodyAt = src.indexOf('\n', begin) + 1;
-  const end = src.indexOf('// ---8<--- END GENERATED MANIFEST');
-  assert.ok(begin > 0 && end > bodyAt, 'the generated block is where the generator puts it');
-  const out = `${src.slice(0, bodyAt)}const MANIFEST = ${JSON.stringify(M, null, 2)};\n${src.slice(end)}`;
-  assert.equal(out.slice(0, bodyAt), src.slice(0, bodyAt));
-  assert.equal(out.slice(out.indexOf('// ---8<--- END GENERATED MANIFEST')), src.slice(end), 'only the manifest differs');
-  const mgr = path.join(dir, 'huginn-local');
-  fs.writeFileSync(mgr, out, { mode: 0o755 });
-  fs.copyFileSync(SHIM, path.join(dir, 'huginn-llm-shim'));
-  fs.chmodSync(path.join(dir, 'huginn-llm-shim'), 0o644);
-  return { mgr, files, M };
-}
 
 /** A stand-in for each command the manager runs; `systemctl` records its calls. */
 function stubBin(dir, systemctlBody) {

@@ -2089,6 +2089,24 @@ async function cmdUpdate(flags) {
   for (const m of plan.models) conf.modelsBySlug[m.slug] = { file: m.file, display: m.display, ctx: m.ctx, gpu: m.gpu };
   conf.defaultModel = plan.models.find((m) => m.role === 'chat').slug;
   fs.writeFileSync(P('llama-swap.yaml'), swapYamlFor(conf, plan.models));
+  // ⚠ THE SERVICE NAMES ITS llama-swap BY VERSION (runtime/llama-swap-<v>), in
+  // the unit or the WinSW XML that `on` wrote. A new llama-swap unpacks beside
+  // the old one, so the restart below kept running the old binary while
+  // `installed` recorded the new one. Rewritten only when the version moved.
+  if (!conf.installed || conf.installed.swapVersion !== MANIFEST.llamaSwap.version) {
+    if (process.platform === 'win32') {
+      const xml = P('runtime', 'winsw', `${LLM_SERVICE}.xml`);
+      if (fs.existsSync(xml)) fs.writeFileSync(xml, winswXml('llm'));
+    } else {
+      const system = !!conf.systemUnits;
+      const unit = unitFile(LLM_SERVICE, { system });
+      if (fs.existsSync(unit)) {
+        fs.writeFileSync(unit, unitText('llm', { system }));
+        const r = sysctl(['daemon-reload'], { user: !system });
+        if (r.status !== 0) throw new Error(`daemon-reload failed: ${String(r.stderr || '').trim()} — the new llama-swap is unpacked, the restart did not happen`);
+      }
+    }
+  }
   handBackNow();   // the restarted engine reads the new runtime, yaml and models as the account
   if (process.platform === 'win32') {
     const exe = P('runtime', 'winsw', `${LLM_SERVICE}.exe`);
