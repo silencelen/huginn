@@ -802,6 +802,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     private val slots = AttachmentSlots()
 
+    /** One press of Send at a time per composer, the box emptied at the tap. */
+    private val presses = SendPresses(slots)
+
     /** Everything staged, for every composer; each item names its own owner. */
     val attachments: StateFlow<List<PendingAttachment>> = slots.items
 
@@ -1005,6 +1008,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun clearDraft(key: String) {
         if (_drafts.value.containsKey(key)) setDraft(key, "")
+    }
+
+    /**
+     * Puts a refused message back in its composer. Appended, never clobbered:
+     * the box was emptied at the press, and anything typed since outranks the
+     * restore.
+     */
+    private fun restoreDraft(key: String, text: String) {
+        val cur = _drafts.value[key].orEmpty()
+        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
     }
 
     /** Takes a held shade reply into the drafts; registered once they are loaded. */
@@ -3780,8 +3793,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun sendText(name: String, text: String, thenEnter: Boolean) {
-        viewModelScope.launch {
-            slots.settle(sessionDraftKey(name))
+        // ⚠ THE BOX EMPTIES NOW, NOT AFTER THE UPLOADS. Waiting with the text
+        // still in it let a second tap send the same words again. See [SendPresses].
+        val key = sessionDraftKey(name)
+        presses.press(viewModelScope, key, clearDraft = { clearDraft(key) }) {
             sendTextNow(name, text, thenEnter)
         }
     }
@@ -3805,7 +3820,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // composes the reference itself — the pane gets a path, not the page.
         val padKey = ScratchpadRules.sessionRefKey(name)
         val padId = padRefFor(padKey)
-        clearDraft(sessionDraftKey(name))
+        // The box was emptied at the press. Clearing it again here wiped whatever
+        // was typed while the uploads settled, without sending it.
         setPadRef(padKey, null)
         viewModelScope.launch {
             runCatching {
@@ -3827,9 +3843,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 // on press, so without this the text and the attached page existed
                 // nowhere but a toast. Appended, never clobbered — newer typing
                 // outranks the restore, same as the chat path.
-                val key = sessionDraftKey(name)
-                val cur = _drafts.value[key].orEmpty()
-                setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+                restoreDraft(sessionDraftKey(name), text)
                 if (padId != null && padRefFor(padKey) == null) setPadRef(padKey, padId)
             }
         }
@@ -4420,10 +4434,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * used to when a chat was busy.
      */
     fun send(id: String, text: String) {
-        viewModelScope.launch {
-            slots.settle(chatDraftKey(id))
-            sendNow(id, text)
-        }
+        // ⚠ THE BOX EMPTIES NOW, NOT AFTER THE UPLOADS. Waiting with the text
+        // still in it let a second tap send the same words again, as a queued
+        // second turn once the first had started. See [SendPresses].
+        val key = chatDraftKey(id)
+        presses.press(viewModelScope, key, clearDraft = { clearDraft(key) }) { sendNow(id, text) }
     }
 
     private fun sendNow(id: String, text: String) {
@@ -4443,20 +4458,26 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         val padId = padRefFor(padKey)
         if (_sending.value) {
             viewModelScope.launch {
-                // Cleared only when the queue ACCEPTS: a refused send must not
-                // cost the typed message — the audit caught a 409 destroying it
-                // with nothing left but a transient snackbar. The reference goes
-                // with it, for the same reason.
+                // A refused send must not cost the typed message — the audit
+                // caught a 409 destroying it with nothing left but a transient
+                // snackbar. The box was emptied at the press, so a refusal puts
+                // the message back, and it is the COMPOSED message: the photos
+                // were taken off the composer above, and their markers are what
+                // carries them to a retry. The page reference is dropped only
+                // when the queue accepts, for the same reason.
                 runCatching { client.queueMessage(id, text, scratchpadId = padId) }
                     .onSuccess {
-                        clearDraft(chatDraftKey(id)); setPadRef(padKey, null)
+                        setPadRef(padKey, null)
                         loadChatTranscript(id); refreshChats()
                     }
-                    .onFailure { _toast.value = errText(it) }
+                    .onFailure {
+                        _toast.value = errText(it)
+                        restoreDraft(chatDraftKey(id), text)
+                    }
             }
             return
         }
-        clearDraft(chatDraftKey(id))
+        // The box was emptied at the press; see [send].
         setPadRef(padKey, null)
         _sending.value = true
         _chatStarted.value = true
@@ -4583,9 +4604,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                             // it was cleared from a moment earlier — and so does
                             // the page it was carrying, which is part of the
                             // message as far as the person who attached it is
-                            // concerned.
+                            // concerned. Folded in, not assigned: the box was
+                            // emptied at the press and may hold newer typing.
                             _sending.value = false
-                            sentText?.let { setDraft(chatDraftKey(id), it) }
+                            sentText?.let { restoreDraft(chatDraftKey(id), it) }
                             sentPadId?.let { setPadRef(ScratchpadRules.chatRefKey(id), it) }
                         }
                     }
