@@ -266,6 +266,44 @@ function deadSince(rec) {
   return null;
 }
 
+/** How a refusal to switch to an `unrefreshable` login reads, after its name. */
+function unrefreshableClause(rec) {
+  const at = deadSince(rec);
+  const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
+  return `cannot be switched to: its login expired on ${when} — sign in again`;
+}
+
+/**
+ * Why the AUTO-SWITCHER must pass this saved login over on this pass — as the
+ * clause after its name — or null when it may pick it.
+ *
+ * ⚠ DECIDED BEFORE THE PICK, NOT AFTER IT. The switch gate refuses these, and a
+ * refusal used to change nothing for the next tick: `agedLimits` reads a login
+ * nobody has used for weeks as 0% everywhere, so the arbiter picked the same
+ * dead profile every minute, never reached a healthy one, and held the model
+ * ladder ("one lever per tick") while the active account ran into its cap. A
+ * login whose refresh keeps failing was POSTed on each of those ticks too: the
+ * gate refreshes before it switches, and only the refresh timer honours the
+ * back-off. So two states are passed over:
+ *
+ *   * `unrefreshable` — only a sign-in brings it back;
+ *   * `expired` while the refresher has put it off (`nextAt` ahead: a failed
+ *     attempt's floor) — asking now is the retry storm the floor exists to
+ *     stop. The timer tries again at `nextAt`, and a success ends this.
+ *
+ * The owner's own Use button still asks the gate, once per press.
+ */
+function switchRefusal(rec, nowMs = Date.now()) {
+  const f = freshnessOf(rec, nowMs);
+  if (f === 'unrefreshable') return unrefreshableClause(rec);
+  const r = refreshOf(rec);
+  if (f === 'expired' && r && typeof r.nextAt === 'number' && r.nextAt > nowMs) {
+    const when = new Date(r.nextAt).toISOString().slice(0, 16).replace('T', ' ');
+    return `cannot be switched to before ${when} UTC: its last refresh ended in ${r.lastStatus || 'a failure'}`;
+  }
+  return null;
+}
+
 /** True when the refresh token's own expiry is close enough to tell the owner. */
 function refreshTokenWarnDue(rec, nowMs = Date.now()) {
   const o = oauthOf(rec);
@@ -479,6 +517,7 @@ module.exports = {
   SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, WARN_SLACK_MS, WARN_RETRY_MS,
   NOT_REFRESHABLE_RETRY_MS,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
-  deadSince, refreshTokenWarnDue, refreshTokenWarned, projectScopes, oauthOf, refreshOf, printOf,
+  deadSince, unrefreshableClause, switchRefusal,
+  refreshTokenWarnDue, refreshTokenWarned, projectScopes, oauthOf, refreshOf, printOf,
   refreshWithStore, statusLine,
 };

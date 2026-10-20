@@ -507,7 +507,9 @@ function minutes(ms) { return Math.ceil(ms / 60000); }
  *
  * @param input {{active, candidates, sessions, settings, state, now, lastFableResetAt}}
  *   active      {slug, email, windows|limits}
- *   candidates  [{slug, email, windows|limits, aged}]
+ *   candidates  [{slug, email, windows|limits, aged, blocked}] — `blocked` is
+ *               why the switch gate would refuse one, and such a one is never
+ *               picked (autoswitch.decideSwitch)
  *   sessions    [{claudeSessionId, name, state, model, family, ladder, headsUpAt,
  *                nativeSwitch, humanSetModelAt}]
  *   state       {lastSwitchAt, lastLadderAt}
@@ -545,7 +547,7 @@ function decide(input = {}) {
   if (acctCfg.enabled) {
     const activeForSwitch = { slug: active.slug, email: active.email ?? null, limits: limitsOf(active) };
     const candidates = (input.candidates || []).map((c) => ({
-      slug: c.slug, email: c.email ?? null, limits: limitsOf(c), _src: c,
+      slug: c.slug, email: c.email ?? null, limits: limitsOf(c), blocked: c.blocked || null, _src: c,
     }));
     const base = decideSwitch({
       active: activeForSwitch,
@@ -563,7 +565,9 @@ function decide(input = {}) {
       // down for no reason.
       const bar = acctCfg.threshold - acctCfg.margin;
       const eligible = candidates.filter((c) => {
-        if (c.slug === active.slug) return false;
+        // ⚠ The re-pick must pass over what decideSwitch passed over, or a dead
+        // login with Fable room left would win it straight back.
+        if (c.slug === active.slug || c.blocked) return false;
         const w = worstLimit(c.limits);
         return w && w.percent <= bar;
       });
@@ -689,7 +693,9 @@ function decide(input = {}) {
   } else if (acctCfg.enabled) {
     why = explainSwitch({
       active: { slug: active.slug, email: active.email ?? null, limits: limitsOf(active) },
-      candidates: (input.candidates || []).map((c) => ({ slug: c.slug, email: c.email ?? null, limits: limitsOf(c) })),
+      candidates: (input.candidates || []).map((c) => ({
+        slug: c.slug, email: c.email ?? null, limits: limitsOf(c), blocked: c.blocked || null,
+      })),
       now,
       lastSwitchAt,
       threshold: acctCfg.threshold,

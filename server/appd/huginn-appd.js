@@ -7578,7 +7578,8 @@ async function polishFor(field, draft, cap) {
  * at 3am signs the host out with nothing to read afterwards. And the arbiter is
  * the MORE likely of the two to pick a dead profile: `agedLimits` zeroes every
  * window whose reset time has passed, so the profile nobody has read for weeks
- * scores as the freshest candidate on the host.
+ * scores as the freshest candidate on the host. (The arbiter now passes those
+ * over before it picks — oauthRefresh.switchRefusal — and this stays the gate.)
  *
  * Refuses a login whose refresh token is gone, and refreshes a stale one FIRST —
  * synchronously, because handing out a stale token to save thirty seconds means
@@ -7594,13 +7595,8 @@ async function ensureSwitchable(slug) {
   if (sameAccount(rec.credentials, accounts.readActive())) return { ok: true };
   const freshness = oauthRefresh.freshnessOf(rec, Date.now());
   if (freshness === 'unrefreshable') {
-    const at = oauthRefresh.deadSince(rec);
-    const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
-    return {
-      ok: false,
-      why: 'unrefreshable',
-      error: `${rec.email || slug} cannot be switched to: its login expired on ${when} — sign in again`,
-    };
+    // The same sentence the arbiter's `why` uses when it passes this login over.
+    return { ok: false, why: 'unrefreshable', error: `${rec.email || slug} ${oauthRefresh.unrefreshableClause(rec)}` };
   }
   if (freshness === 'expired' || freshness === 'expiring') {
     const status = await refreshProfile(slug);
@@ -8647,7 +8643,12 @@ async function headroomTickInner() {
   // ---- 4. the arbiter ------------------------------------------------------
   const candidates = Object.entries(nextAccounts)
     .filter(([slug]) => slug !== activeSlug)
-    .map(([slug, a]) => ({ slug, email: a.email, windows: a.windows }));
+    .map(([slug, a]) => ({
+      slug, email: a.email, windows: a.windows,
+      // A login the switch gate would refuse is passed over BEFORE the pick,
+      // not refused after it: oauthRefresh.switchRefusal has the wedge that was.
+      blocked: oauthRefresh.switchRefusal(accounts.readProfile(slug), now),
+    }));
   const verdict = headroomLib.decide({
     active: haveActive ? { slug: activeSlug, email: activeEmail, windows: activeWindows } : null,
     candidates,

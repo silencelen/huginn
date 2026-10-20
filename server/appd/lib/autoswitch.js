@@ -73,7 +73,9 @@ function worstLimit(limits) {
 
 /**
  * @param active     {slug, email, limits}
- * @param candidates [{slug, email, limits}] — the OTHER saved accounts
+ * @param candidates [{slug, email, limits, blocked}] — the OTHER saved accounts.
+ *   `blocked` is why the switch gate would refuse one (a dead login, a refresh
+ *   still backing off), as the clause after its name; such a one is not picked.
  * @returns {{to, toEmail, toPercent, from, fromEmail, fromPercent, fromLabel}|null}
  */
 function decideSwitch({ active, candidates, now, lastSwitchAt = 0,
@@ -87,6 +89,10 @@ function decideSwitch({ active, candidates, now, lastSwitchAt = 0,
   let best = null;
   for (const c of candidates || []) {
     if (!c || c.slug === active.slug) continue;
+    // ⚠ NOT PICKED, RATHER THAN PICKED AND REFUSED. A refusal changes nothing
+    // the next tick reads, so the same dead login — 0% everywhere once its old
+    // windows have rolled over — won every pass and a healthy one never came up.
+    if (c.blocked) continue;
     const cw = worstLimit(c.limits);
     if (!cw) continue;                              // no numbers: not a candidate
     if (!best || cw.percent < best.percent) best = { ...c, percent: cw.percent };
@@ -119,6 +125,14 @@ function explain({ active, candidates, now, lastSwitchAt = 0,
   if (!w) return 'the active account reports no usage figures';
   if (w.percent < threshold) return `active account at ${w.percent}% (${w.label}), below the ${threshold}% threshold`;
   const priced = (candidates || []).filter((c) => c && c.slug !== active.slug && worstLimit(c.limits));
+  // A login decideSwitch passed over is the answer when it is the one that would
+  // have been chosen: "sign in again" is something the owner can act on, and
+  // naming the next-best account at 99% would hide it.
+  const bar = threshold - margin;
+  const under = (c) => worstLimit(c.limits).percent <= bar;
+  const stuck = priced.filter((c) => c.blocked && under(c))
+    .sort((a, b) => worstLimit(a.limits).percent - worstLimit(b.limits).percent)[0];
+  if (stuck && !priced.some((c) => !c.blocked && under(c))) return `${stuck.email || stuck.slug} ${stuck.blocked}`;
   if (!priced.length) {
     const others = (candidates || []).filter((c) => c && c.slug !== active.slug).length;
     return others
