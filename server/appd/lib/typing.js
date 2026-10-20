@@ -1481,6 +1481,9 @@ const LIVE_KEYS_QUIET_MS = 5_000;
  * minutes before this lets go; one a person asked for (Undo) is released, and
  * applyLadder looks again before typing and refuses rather than type into text.
  * `composerHolds === null` — no composer at all — never holds, as above.
+ *
+ * The wrap-up phrases that end a session are held by this same rule (the pump's
+ * `bareCaret`), and give up unsent when the wait runs out.
  */
 function jobHold({ composerHolds = null, waitedMs = 0, maxMs = DRAFT_HOLD_MAX_MS } = {}) {
   if (composerHolds === null || composerHolds === undefined) return false;
@@ -1492,6 +1495,12 @@ function jobHold({ composerHolds = null, waitedMs = 0, maxMs = DRAFT_HOLD_MAX_MS
 
 function draftHeldLogLine(name, holds) {
   return `typing: ${name}: holding a send — there is unsent text in the live view `
+    + `| composer: ${String(holds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`;
+}
+/** A wrap-up phrase waiting for an empty box — wherever the text in it was typed. */
+function emptyBoxHeldLogLine(name, holds) {
+  return `typing: ${name}: holding the wrap-up phrase until the message box is empty — it ends the `
+    + `session, and is never submitted with somebody's unsent text `
     + `| composer: ${String(holds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`;
 }
 function draftClearedLogLine(name, waitedMs) {
@@ -2001,7 +2010,7 @@ module.exports = {
   composerHoldsDraft, draftHold, jobHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
-  draftHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
+  draftHeldLogLine, emptyBoxHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
   sendKeysFits, chunks,
   isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
