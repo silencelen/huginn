@@ -12,7 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const PORT = 12400 + (process.pid % 300); // 12400-12699 (port-blocks.test.js checks for overlaps)
+const PORT = 12500 + (process.pid % 300); // 12500-12799 (port-blocks.test.js checks for overlaps)
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
 const TMUX_SOCK = `huginn-test-ph-${process.pid}`;
