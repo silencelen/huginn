@@ -58,6 +58,19 @@ test('a record the caller typed itself is not the owner, matched however it was 
   assert.equal(t.hasHumanUserRecord(image, { ours: () => true }), true, 'an image was attached by somebody');
 });
 
+test('a long message is recorded wrapped as a paste, and is still recognised', () => {
+  // Claude Code stores a paste it collapsed in the box inside <pasted_content>
+  // tags (docs/dev/claude-code-integration.md, "Pastes"); every long brief or
+  // relay appd sends comes back that way.
+  const sent = `[Huginn project brief]\n${'step one, then step two. '.repeat(60)}\n[End brief]`;
+  const recorded = one({
+    type: 'user', origin: { kind: 'human' }, promptSource: 'typed',
+    message: { content: `\n\n<pasted_content id="d842">\n${sent}\n</pasted_content id="d842">\n` },
+  });
+  assert.equal(t.promptSpelling(JSON.parse(recorded).message.content), t.promptSpelling(sent));
+  assert.equal(t.hasHumanUserRecord(recorded, { ours: (s) => s === t.promptSpelling(sent) }), false);
+});
+
 test('scanForHuman hands the memory through to the record test', () => {
   const sent = 'Your usage limit has reset. Continue the task.';
   const buf = Buffer.from(one({ type: 'user', message: { content: sent }, origin: { kind: 'human' } }));

@@ -99,13 +99,14 @@ const NOTIFICATION = rec({
 });
 
 /** A recording stand-in mid-turn, as the transcript and the title hook say. */
-async function startMidTurn(suffix) {
+async function startMidTurn(suffix, { wrapChars = 0 } = {}) {
   const name = `${PFX}-${suffix}`;
   const transcript = path.join(tmp, `${name}.jsonl`);
   fs.writeFileSync(transcript, `${PROMPT}\n${TOOL_USE}\n`);
   madeSessions.add(name);
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
-    `env HG_FAKE_CLAUDE_OUT=${outFor(name)} HG_FAKE_TRANSCRIPT=${transcript} ${process.execPath} ${FAKE}`]);
+    `env HG_FAKE_CLAUDE_OUT=${outFor(name)} HG_FAKE_TRANSCRIPT=${transcript} `
+    + `HG_FAKE_WRAP_CHARS=${wrapChars} ${process.execPath} ${FAKE}`]);
   await until(() => composerOf(name) !== null, 10_000, `${name}'s composer`);
   writeState(name, 'running', transcript);
   return { name, transcript };
@@ -235,6 +236,31 @@ test('the second of two automated sends behind one turn is not dropped by the fi
   await until(() => submitted(name).length === 2, 15_000, 'the second relay at the next boundary');
   assert.match(submitted(name)[1], /MARKER-TWO/);
   assert.doesNotMatch(submitted(name)[1], /MARKER-ONE/, 'a prompt of its own');
+});
+
+test('the same holds for long messages, which Claude Code records wrapped as a paste', async () => {
+  // A paste Claude Code collapses in the box is recorded inside <pasted_content>
+  // tags, so a long relay's record is not spelled like the relay appd typed.
+  const { name, transcript } = await startMidTurn('long', { wrapChars: 800 });
+  const { id, role } = seedProject(name);
+  const body = 'rebuild the import, then compare row counts against last night. '.repeat(20);
+  await relay(id, role, `LONG-ONE ${body}`);
+  const second = await relay(id, role, `LONG-TWO ${body}`);
+  assert.equal(second.body.queued, 2, JSON.stringify(second.body));
+
+  append(transcript, TOOL_RESULT, END_TURN, TURN);
+  writeState(name, 'idle', transcript);
+  await until(() => submitted(name).length === 1, 15_000, 'the first long relay to be submitted');
+  assert.match(fs.readFileSync(transcript, 'utf8'), /<pasted_content id=/, 'the stand-in recorded it wrapped');
+  await wait(2_500);
+  const held = await typingOf(name);
+  assert.equal(held.queued, 1, `the second long relay is waiting, not dropped (lastError: ${held.lastError})`);
+  assert.doesNotMatch(String(held.lastError || ''), /typed first/);
+
+  append(transcript, END_TURN, TURN);
+  writeState(name, 'idle', transcript);
+  await until(() => submitted(name).length === 2, 15_000, 'the second long relay at the next boundary');
+  assert.match(submitted(name)[1], /LONG-TWO/);
 });
 
 test('a background task\'s notification is not the owner typing', async () => {

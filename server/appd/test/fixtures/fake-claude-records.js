@@ -23,12 +23,19 @@
  *                                        lands that much later — Claude Code
  *                                        flushes its transcript in batches, after
  *                                        any synchronous UserPromptSubmit hook.
+ *              HG_FAKE_WRAP_CHARS        a prompt this long or longer is recorded
+ *                                        the way Claude Code records a paste it
+ *                                        collapsed in the box: `\n\n<pasted_content
+ *                                        id="d842">\n…\n</pasted_content id="d842">\n`
+ *                                        (the shape of 39 of 39 such records on the
+ *                                        author's host). 0 (default): never.
  */
 const fs = require('node:fs');
 
 const OUT = process.env.HG_FAKE_CLAUDE_OUT || '/dev/null';
 const TRANSCRIPT = process.env.HG_FAKE_TRANSCRIPT || '';
 const DELAY = Number(process.env.HG_FAKE_RECORD_DELAY_MS || 0);
+const WRAP = Number(process.env.HG_FAKE_WRAP_CHARS || 0);
 const RULE = '─'.repeat(70);
 let buf = '';
 let inPaste = false;
@@ -43,8 +50,11 @@ function render() {
     + '  [fake-rec] Fable 5.1 · ctx 4%\n  ⏵⏵ auto mode on (shift+tab to cycle)\n');
 }
 
-function record(content) {
+function record(text) {
   if (!TRANSCRIPT) return;
+  const content = WRAP > 0 && text.length >= WRAP
+    ? `\n\n<pasted_content id="d842">\n${text}\n</pasted_content id="d842">\n`
+    : text;
   const line = `${JSON.stringify({
     type: 'user',
     message: { role: 'user', content },

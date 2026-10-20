@@ -277,7 +277,14 @@ const CLAUDE_CODE_OWN_RE = /^\s*<(?:local-command-stdout|local-command-stderr|lo
  * paste can arrive with its line ends changed. And a slash command is put back
  * the way it was TYPED: Claude Code records `/model` as
  * `<command-name>/model</command-name>…<command-args></command-args>`.
+ *
+ * ⚠ AND A LONG PASTE IS RECORDED WRAPPED. One Claude Code collapsed in the box
+ * (`[Pasted text #1 …]`) is stored as `<pasted_content id="d842">\n…\n
+ * </pasted_content id="d842">` — every long brief or relay appd sends. The tags
+ * are dropped (PASTED_CONTENT_TAG_RE, a plain linear match: the body is not
+ * needed, only the words around it); the whitespace they leave goes with the rest.
  */
+const PASTED_CONTENT_TAG_RE = /<\/?pasted_content id="[0-9a-f]+">/g;
 function promptSpelling(text) {
   let s = String(text == null ? '' : text);
   const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(s);
@@ -285,7 +292,7 @@ function promptSpelling(text) {
     const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(s);
     s = `${name[1]} ${args ? args[1] : ''}`;
   }
-  return squashPane(s);
+  return squashPane(s.replace(PASTED_CONTENT_TAG_RE, ''));
 }
 
 /**
