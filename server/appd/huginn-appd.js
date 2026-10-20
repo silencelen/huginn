@@ -7992,6 +7992,10 @@ function readSessionModel(name) {
       }
     }
   } catch { /* unreadable transcript is not fatal for a tick */ }
+  // The same window readTranscript starts from, so a switch it could have seen
+  // is never one this misses.
+  const switched = sessionOnlyModel(transcriptTail(st.transcript, null, 256 * 1024));
+  if (switched) out.model = switched;
   const tail = transcriptTail(st.transcript, null, 32 * 1024);
   if (tail && tail.text.includes('model_consent_fallback')) {
     for (const line of tail.text.split('\n')) {
@@ -8009,6 +8013,52 @@ function readSessionModel(name) {
     }
   }
   return out;
+}
+
+/**
+ * The model a session-only switch put this session on, when that switch is the
+ * newest record in the tail that names a model at all — or null.
+ *
+ * ⚠ readTranscript takes the model from the last ASSISTANT record (and from a
+ * typed `/model <name>`), and the picker's `s` writes neither. Claude Code
+ * records the switch as its own command output, `Set model to <label> for this
+ * session only`, and the first assistant record on the new model comes with the
+ * session's next reply — minutes later, or days. Until then the read named the
+ * OLD model, so the tick after every ladder move put the session straight back
+ * on Fable: `fable-sessions` listed it again (its next spawn held by
+ * STOP-FABLE, on the session moved precisely so it could keep working), and
+ * once the week reset its move back up was dropped as "the family already
+ * changed" on every tick until it replied.
+ */
+function sessionOnlyModel(tail) {
+  if (!tail || !tail.text) return null;
+  let model = null;
+  for (const line of tail.text.split('\n')) {
+    const reply = /"type"\s*:\s*"assistant"/.test(line);
+    if (!reply && !line.includes('local-command-stdout') && !line.includes('command-name')) continue;
+    let rec;
+    try { rec = JSON.parse(line); } catch { continue; }      // the partial first line
+    if (!rec || typeof rec !== 'object') continue;
+    if (rec.type === 'assistant') {
+      // A reply names its model; `<synthetic>` (an API error the CLI wrote)
+      // names none and changes nothing.
+      if (headroomLib.familyOf(rec.message && rec.message.model)) model = null;
+      continue;
+    }
+    const said = localCommandOutput(rec);
+    const m = said && LADDER_FEEDBACK_RE.exec(said);
+    if (m) {
+      const label = m[1].replace(/`/g, '').trim();
+      // A row that names no family (`Default`) says nothing this can use.
+      model = headroomLib.familyOf(label) ? label : null;
+      continue;
+    }
+    // A typed `/model <name>` is newer still; readTranscript reads that one.
+    const c = rec.type === 'user' && rec.message && typeof rec.message.content === 'string'
+      ? rec.message.content : '';
+    if (/<command-name>\s*\/model\s*<\/command-name>/.test(c) && /<command-args>\s*\S/.test(c)) model = null;
+  }
+  return model;
 }
 
 /**

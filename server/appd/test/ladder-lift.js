@@ -46,14 +46,24 @@ function between(startNeedle, endNeedle) {
   return src.slice(a, b + endNeedle.length);
 }
 
+/** Is this a top-level function or const of huginn-appd.js? */
+function declared(src, name) {
+  return [`\nasync function ${name}(`, `\nfunction ${name}(`, `\nconst ${name} =`].some((h) => src.includes(h));
+}
+
 /**
  * Run the named declarations (plus any `extra` source) in a fresh context whose
  * globals are `globals`; returns the context and the named functions.
+ *
+ * `helpers` are lifted only where the source declares them: the private
+ * helpers of a lifted function come and go between versions, and a test that
+ * named them all would fail on the version without one for the wrong reason.
  */
-function lift(names, globals = {}, extra = '') {
+function lift(names, globals = {}, { extra = '', helpers = [] } = {}) {
   const src = fs.readFileSync(SRC_FILE, 'utf8');
-  const exported = names.filter((n) => !/^[A-Z0-9_]+$/.test(n));
-  const code = `${names.map((n) => pick(src, n)).join('\n')}\n${extra}\n`
+  const all = [...names, ...helpers.filter((n) => declared(src, n))];
+  const exported = all.filter((n) => !/^[A-Z0-9_]+$/.test(n));
+  const code = `${all.map((n) => pick(src, n)).join('\n')}\n${extra}\n`
     + `this.__lifted = { ${exported.join(', ')} };`;
   const box = vm.createContext({ ...globals });
   vm.runInContext(code, box, { filename: 'huginn-appd.js (lifted)' });
