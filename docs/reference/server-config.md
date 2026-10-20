@@ -17,7 +17,7 @@ the commands on this page as root on the server.
 | `/etc/systemd/system/huginn-appd.service.d/site.conf` | **Your settings.** Written once at install. | Never touched |
 | `/usr/local/bin/` | Host tools: `cc`, `huginn-status`, `huginn-rounds`, `huginn-devices`, `huginn-headroom`, `huginn-archive`, `huginn-projects`, `huginn-claude-title`, `huginn-llm`, `huginn-ask`. | Replaced, except copies edited here and newer than the release (`HUGINN_FORCE=1` replaces those too) |
 | `/usr/local/lib/huginn/` | The state table the host tools share. | Replaced |
-| `/root/.tmux.conf` | tmux configuration. A different existing file is saved as `/root/.tmux.conf.pre-huginn` first. | Replaced |
+| `/root/.tmux.conf` | tmux configuration. A different existing file is saved first: as `/root/.tmux.conf.pre-huginn`, or as the first free `.pre-huginn.1`, `.2`, ... once that exists. No backup is overwritten. | Replaced |
 | `/root/.claude/settings.json` | Claude Code settings. The installer merges Huginn's hooks into `hooks` and leaves everything else alone. | Hooks re-merged |
 | `/run/huginn-claude-state/` | Per-session state written by the hooks (memory only, cleared at boot). | |
 | `/etc/huginn/persona.md` | Optional text appended to the system prompt of chats, rounds and `huginn -p`/`-y`. Read on every run; no restart needed. | Yours |

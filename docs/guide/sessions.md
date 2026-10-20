@@ -85,7 +85,9 @@ The status bar at the bottom shows the session name and the three keys you need 
 
 Mouse scrolling is off by default. To turn it on, uncomment `set -g mouse on` in `~/.tmux.conf` of
 the server's session user (selecting text with the mouse then needs `Shift`). Running the server
-installer again replaces that file and keeps your previous copy as `~/.tmux.conf.pre-huginn`.
+installer again replaces that file and keeps your previous copy beside it: as
+`~/.tmux.conf.pre-huginn` the first time, then as `~/.tmux.conf.pre-huginn.1`, `.2` and so on. No
+earlier copy is overwritten.
 
 On Termux, `Ctrl-b d` takes three taps. This adds a one-tap `DTACH` key to Termux's extra-keys row
 (it backs up your current `~/.termux/termux.properties` first):
