@@ -12099,6 +12099,19 @@ async function handleRequest(req, res) {
             prompt, fingerprint: live,
           });
         }
+        // ⚠ A CHECKBOX ROW IS ONE ANSWER OF SEVERAL, never a digit and an Enter.
+        // On a multi-select question a digit only ticks its box and the answer
+        // is submitted from the review tab (the `options` branch above). A lone
+        // `{option}` here ticked one box, left the question waiting, answered
+        // `ok`, and wrote the memo that then refused the real answer for a
+        // minute. The mirror of the single-answer refusal above. The rows that
+        // are not boxes ("Chat about this") still take a single option.
+        if (prompt.multiSelect && typeof chosen.checked === 'boolean') {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: 'this question takes several answers', prompt, fingerprint: live,
+          });
+        }
 
         if (prompt.unnumbered) {
           const r = await answerByArrows(name, live, chosen);
