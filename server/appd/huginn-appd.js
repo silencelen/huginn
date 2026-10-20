@@ -12309,6 +12309,14 @@ async function handleRequest(req, res) {
             reject(err);
           };
           req.on('data', (chunk) => {
+            // ⚠ AFTER `stop()`, A CHUNK IS ONLY DRAINED. Without this the drain
+            // re-paused itself: the next chunk went to `out.write()` on the
+            // stream `stop()` had destroyed, which returns false, so
+            // `req.pause()` ran with no 'drain' ever coming to undo it. The
+            // answer then went out under a stalled body, and a client that
+            // writes everything before reading got a reset ~6 s later instead
+            // of the errno. readBodyRaw's `over` flag is the same guard.
+            if (failed) return;
             bytes += chunk.length;
             if (bytes > UPLOAD_MAX_BYTES) {
               const tooBig = new Error('too large');
