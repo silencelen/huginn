@@ -35,13 +35,16 @@ function piece(name) {
   return SRC.slice(start, end + 2);
 }
 
-/** One top-level `const NAME = ...;` statement, by name. */
+/** One top-level `const NAME = ...;` statement, by name (a trailing `// note` allowed). */
 function constant(name) {
   const head = `\nconst ${name} = `;
   const i = SRC.indexOf(head);
   assert.ok(i >= 0, `const ${name} is gone from huginn-appd.js`);
-  const end = SRC.indexOf(';\n', i);
-  return SRC.slice(i + 1, end + 2);
+  const end = /;[ \t]*(\/\/[^\n]*)?\n/g;
+  end.lastIndex = i;
+  const m = end.exec(SRC);
+  assert.ok(m, `const ${name} has no end`);
+  return SRC.slice(i + 1, m.index + m[0].length);
 }
 
 /** The text from `startNeedle` to the first `endNeedle` after it, both included. */
@@ -72,7 +75,9 @@ function lift(names, stubs = {}, { constants = [], extra = '', exports = [] } = 
     `globalThis.__lifted = { ${all.join(', ')} };`,
   ].join('\n');
   new vm.Script(code, { filename: 'huginn-appd.js (lifted)' });   // compiles, or says why here
-  const ctx = vm.createContext({ ...stubs });
+  // Node's own globals are not part of a bare context; the daemon code uses them.
+  const node = { setTimeout, clearTimeout, setInterval, clearInterval, setImmediate, clearImmediate, Buffer, console };
+  const ctx = vm.createContext({ ...node, ...stubs });
   vm.runInContext(code, ctx, { filename: 'huginn-appd.js (lifted)' });
   return { fns: ctx.__lifted, ctx };
 }

@@ -4257,9 +4257,17 @@ function startRun(meta, userText) {
 
   run_.emit('started', { chatId, ts: now });
 
+  // ⚠ DECODED AS A STREAM, NOT CHUNK BY CHUNK. A line longer than one read (any
+  // frame over 64 KiB, or a backed-up pipe) arrives in pieces, and a piece can end
+  // inside a multi-byte character: decoding each Buffer alone turned both halves
+  // of a "—" or a Cyrillic letter into U+FFFD, and JSON.parse took the line anyway,
+  // so the damage reached the transcript, the live stream and a Round's report.
+  // setEncoding's decoder holds a split character back for the next read.
+  proc.stdout.setEncoding('utf8');
+  proc.stderr.setEncoding('utf8');
   let outBuf = '';
   proc.stdout.on('data', (chunk) => {
-    outBuf += chunk.toString('utf8');
+    outBuf += chunk;
     let idx;
     while ((idx = outBuf.indexOf('\n')) >= 0) {
       const line = outBuf.slice(0, idx).trim();
@@ -4280,7 +4288,7 @@ function startRun(meta, userText) {
     }
   });
   let errBuf = '';
-  proc.stderr.on('data', (c) => { errBuf = (errBuf + c.toString('utf8')).slice(-4000); });
+  proc.stderr.on('data', (c) => { errBuf = (errBuf + c).slice(-4000); });
 
   proc.on('close', (code) => {
     clearTimeout(killer);
