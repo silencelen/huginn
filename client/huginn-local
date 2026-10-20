@@ -1194,7 +1194,17 @@ function installServiceWindows(which) {
   const dir = P('runtime', 'winsw');
   fs.mkdirSync(dir, { recursive: true });
   const exe = path.join(dir, `${name}.exe`);
-  fs.copyFileSync(P('runtime', 'WinSW-x64.exe'), exe);
+  // ⚠ NOT COPIED OVER A RUNNING SERVICE. `exe` is the service's own process: on
+  // a re-run of `on` (the retry its enrolment failure asks for) it is running,
+  // and Windows will not open a running image for writing, so the copy threw
+  // EBUSY and `on` failed over services that were fine. The same WinSW stays
+  // where it is; a different one stops its service before it is replaced, and
+  // the start below brings it back.
+  const winsw = P('runtime', 'WinSW-x64.exe');
+  if (!(fs.existsSync(exe) && sha256File(exe) === sha256File(winsw))) {
+    if (fs.existsSync(exe)) spawnSync(exe, ['stop'], { encoding: 'utf8' });
+    fs.copyFileSync(winsw, exe);
+  }
   fs.writeFileSync(path.join(dir, `${name}.xml`), winswXml(which));
   let r = spawnSync(exe, ['install'], { encoding: 'utf8' });
   if (r.status !== 0 && !/already exists/i.test(r.stderr + r.stdout)) {
@@ -2408,5 +2418,7 @@ if (require.main === module) {
     engineKit, serviceUid, health, identifyAdapter,
     // The elevated hand-back (an update run with sudo writes as root).
     userIds, handBackOwnership, ELEVATED_MARK,
+    // The Windows service install, driven on any OS with a stand-in WinSW.
+    installServiceWindows,
   };
 }
