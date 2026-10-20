@@ -69,7 +69,17 @@ function hold(connect, start, ms) {
   });
 }
 const plainTo = (port) => () => net.connect(port, '127.0.0.1');
-const tlsTo = (port) => () => tls.connect({ port, host: '127.0.0.1', rejectUnauthorized: false });
+// TLS to a listener holding exactly this certificate: it is the only CA, and the
+// identity check is its fingerprint (the name in it is not the address dialled).
+const trusting = (pem) => {
+  const fp = new crypto.X509Certificate(pem).fingerprint256;
+  return {
+    ca: pem,
+    checkServerIdentity: (_host, peer) => (peer.fingerprint256 === fp ? undefined
+      : new Error(`not this test's listener (certificate ${peer.fingerprint256})`)),
+  };
+};
+const tlsTo = (port, pem) => () => tls.connect({ port, host: '127.0.0.1', ...trusting(pem) });
 
 // ------------------------------------------------------------- lib/tls.js
 
@@ -85,9 +95,9 @@ test('the sniffing listener arms the request timeouts of the servers it feeds', 
   try {
     const [plainG, tlsG, tlsSilent] = await Promise.all([
       hold(plainTo(port), (s) => s.write('G'), 4000),
-      hold(tlsTo(port), (s) => s.write('G'), 4000),
+      hold(tlsTo(port, m.cert), (s) => s.write('G'), 4000),
       // A finished handshake and then nothing at all.
-      hold(tlsTo(port), () => { }, 4000),
+      hold(tlsTo(port, m.cert), () => { }, 4000),
     ]);
     assert.equal(true, plainG.closed, `one plain byte must not hold a connection: open after ${plainG.ms} ms`);
     assert.match(plainG.first, /^HTTP\/1\.1 408 /, 'and the answer is the timeout Node writes');
@@ -141,7 +151,8 @@ before(async () => {
   // headersTimeout is a minute and its checker runs every 30 s, so the cut lands
   // between 60 and 90 s.
   probes.stallPlain = hold(plainTo(port), (s) => s.write('G'), 100_000);
-  probes.stallTls = hold(tlsTo(port), (s) => s.write('GET /v1/sessions HTTP/1.1\r\nHost: x\r\n'), 100_000);
+  const daemonCert = fs.readFileSync(path.join(tmp, 'data', 'tls', 'cert.pem'));
+  probes.stallTls = hold(tlsTo(port, daemonCert), (s) => s.write('GET /v1/sessions HTTP/1.1\r\nHost: x\r\n'), 100_000);
   // A request with no token, complete headers, and a body that never finishes:
   // the 401 comes at once, and then a byte every half second.
   probes.trickle = hold(plainTo(port), (s) => {
