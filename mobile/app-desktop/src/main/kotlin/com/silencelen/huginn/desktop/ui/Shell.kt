@@ -806,24 +806,16 @@ fun Shell(store: AppStore) {
                                 store.refreshChats()
                                 check(refused.isEmpty()) { "not deleted: ${refused.joinToString("; ")}" }
                             }
+                            // Per session, like the chats above: one refusal must not
+                            // leave the rest running. The store names the refusals.
                             is ConfirmTarget.KillSessions -> act {
-                                target.names.forEach { store.client.killSession(it) }
-                                target.names.forEach { store.drafts.clear(DraftBook.sessionKey(it)) }
-                                target.names.forEach { store.sentHistory.clear(DraftBook.sessionKey(it)) }
-                                if (store.sessionName.value in target.names) store.openSession(null)
                                 sessionSel = Selection()
-                                store.refreshSessions()
+                                store.killSessions(target.names)
                             }
                             // A soft end SENDS a message; the session lives on and may
                             // even stay (a wrap-up question cancels the auto-end) — so
-                            // drafts and history are deliberately NOT cleared here.
-                            is ConfirmTarget.SoftEndSessions -> act {
-                                target.names.forEach {
-                                    store.notingSoftEnd(it)
-                                    store.client.softEndSession(it)
-                                }
-                                store.refreshSessions()
-                            }
+                            // drafts and history are deliberately NOT cleared there.
+                            is ConfirmTarget.SoftEndSessions -> act { store.softEndSessions(target.names) }
                             // Drafts and history ARE cleared, unlike a wrap-up:
                             // this session is going, and the text typed at it is
                             // not coming with it. The store re-throws a refusal so

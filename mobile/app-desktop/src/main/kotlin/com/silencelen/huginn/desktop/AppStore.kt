@@ -2014,6 +2014,47 @@ class AppStore(
     }
 
     /**
+     * Kill sessions, each on its own, with its draft and history going with it.
+     *
+     * ⚠ ONE REFUSAL DOES NOT STOP THE REST. This was a plain loop: a session
+     * that ended while the confirm dialog was open answered 404, the loop threw
+     * there, and every session after it kept running while even the ones
+     * already killed kept their drafts. Refusals are NAMED, as in
+     * [archiveSessions]: the daemon's bare sentence did not say which session.
+     */
+    suspend fun killSessions(names: List<String>, kill: suspend (String) -> Unit = { client.killSession(it) }) {
+        val refused = mutableListOf<String>()
+        for (n in names) {
+            runCatching { kill(n) }
+                .onSuccess {
+                    drafts.clear(DraftBook.sessionKey(n))
+                    sentHistory.clear(DraftBook.sessionKey(n))
+                    if (_sessionName.value == n) openSession(null)
+                }
+                .onFailure { refused += "$n: ${it.message}" }
+        }
+        refreshSessions()
+        check(refused.isEmpty()) { "not killed: ${refused.joinToString("; ")}" }
+    }
+
+    /**
+     * Wrap sessions up, each on its own: a session waiting on a question (or a
+     * plain shell) answers 409, and that must not keep the wrap-up from the
+     * rest — the same loop as [killSessions]. A soft end SENDS a message and the
+     * session lives on (a wrap-up question cancels the auto-end), so drafts and
+     * history are deliberately NOT cleared here.
+     */
+    suspend fun softEndSessions(names: List<String>, end: suspend (String) -> Unit = { client.softEndSession(it) }) {
+        val refused = mutableListOf<String>()
+        for (n in names) {
+            notingSoftEnd(n)
+            runCatching { end(n) }.onFailure { refused += "$n: ${it.message}" }
+        }
+        refreshSessions()
+        check(refused.isEmpty()) { "not wrapped up: ${refused.joinToString("; ")}" }
+    }
+
+    /**
      * Bring one back and open it.
      *
      * The name comes from the HOST, never from the row: the old one is taken when
