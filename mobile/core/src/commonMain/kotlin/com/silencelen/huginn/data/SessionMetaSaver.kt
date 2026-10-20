@@ -127,6 +127,19 @@ class SessionMetaSaver(
 
         /** Writes carrying this field that have not answered yet. */
         var inFlight: Int = 0
+
+        /**
+         * The text of the newest write carrying this field, while one is in the
+         * air. Sending empties [held], so for as long as the request is out this
+         * is the only copy of the words outside it — see [openOnLane].
+         */
+        var sending: String? = null
+
+        /** A write carrying this field answered, either way. */
+        fun answered() {
+            inFlight -= 1
+            if (inFlight == 0) sending = null
+        }
     }
 
     /** What one session still owes, and what its line says. */
@@ -153,8 +166,8 @@ class SessionMetaSaver(
      * Whatever is still in the air lands under its OWN session first. Switching
      * sessions with an unsent sentence is the ordinary case here — the tab is left
      * by tapping another one — and dropping it would be losing work silently. Text
-     * this client is still HOLDING for the session being opened outranks the copy
-     * handed in: the hold is newer by construction.
+     * this client is still HOLDING for the session being opened, or still SENDING,
+     * outranks the copy handed in: it is newer by construction.
      *
      * The generation this copy is stamped with is taken HERE, on the caller's
      * thread, before the lane runs: any [generation] read after open() returns is
@@ -178,19 +191,33 @@ class SessionMetaSaver(
         // opened. Reading after put an empty editor over unsent notes.
         val heldGoals = h.goals.held
         val heldNotes = h.notes.held
+        // ⚠ AND A WRITE IN THE AIR IS STILL THIS CLIENT'S TEXT. Both shells open
+        // with an empty placeholder on every return to a session, and sending
+        // empties the hold — so coming back before the write answered blanked
+        // the editor over notes nobody but that request still had.
+        val ownGoals = heldGoals ?: h.goals.sending
+        val ownNotes = heldNotes ?: h.notes.sending
         if (open != null && open != name) land()
         open = name
         _session.value = name
-        _goals.value = heldGoals ?: meta.goals
-        _notes.value = heldNotes ?: meta.notes
+        _goals.value = ownGoals ?: meta.goals
+        _notes.value = ownNotes ?: meta.notes
         if (heldGoals == null && heldNotes == null && !h.busy()) {
             h.line = State.IDLE
             h.note = null
         }
+        // The stamp dates the copy handed in, so it goes only on a field that is
+        // SHOWING that copy. ⚠ Not on one showing this client's own text: a failed
+        // write is re-held only while nothing newer has marked its field, and an
+        // open is not newer than the words it puts back on screen — stamping them
+        // is how a failure after a return was never retried. Such a field needs
+        // no stamp against old polls either: held and in-flight text already
+        // refuse them, and a write that lands raises [FieldState.settled].
+        //
         // maxOf: the stamp was taken before this ran, and a keystroke that reached
         // the lane in between (re-opening the session already open) is newer.
-        h.goals.mark = maxOf(h.goals.mark, stamp)
-        h.notes.mark = maxOf(h.notes.mark, stamp)
+        if (ownGoals == null) h.goals.mark = maxOf(h.goals.mark, stamp)
+        if (ownNotes == null) h.notes.mark = maxOf(h.notes.mark, stamp)
         _state.value = h.line
         _note.value = h.note
     }
@@ -316,8 +343,8 @@ class SessionMetaSaver(
             val gen = maxOf(h.goals.mark, h.notes.mark)
             h.goals.held = null
             h.notes.held = null
-            if (goals != null) h.goals.inFlight += 1
-            if (notes != null) h.notes.inFlight += 1
+            if (goals != null) { h.goals.inFlight += 1; h.goals.sending = goals }
+            if (notes != null) { h.notes.inFlight += 1; h.notes.sending = notes }
             val previous = writeJob
             writeJob = scope.launch(lane) {
                 previous?.join()
@@ -332,8 +359,8 @@ class SessionMetaSaver(
         if (open == name) _state.value = State.SAVING
         runCatching { save(name, goals, notes) }
             .onSuccess {
-                if (goals != null) h.goals.inFlight -= 1
-                if (notes != null) h.notes.inFlight -= 1
+                if (goals != null) h.goals.answered()
+                if (notes != null) h.notes.answered()
                 // The write landed, so every poll that was read before now is a
                 // photograph of the text as it was BEFORE it — invariant 1.
                 val settled = tick()
@@ -343,8 +370,8 @@ class SessionMetaSaver(
                 h.line = if (h.owes()) State.PENDING else State.SAVED
             }
             .onFailure { e ->
-                if (goals != null) h.goals.inFlight -= 1
-                if (notes != null) h.notes.inFlight -= 1
+                if (goals != null) h.goals.answered()
+                if (notes != null) h.notes.answered()
                 if (e is CancellationException) throw e
                 // HELD, not dropped, and held for the SESSION: the next keystroke
                 // or the next flush retries it. Only where nothing newer is
