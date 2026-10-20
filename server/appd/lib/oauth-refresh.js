@@ -390,7 +390,16 @@ async function refreshWithStore(store, slug, deps = {}) {
     // good. Routed through save() so the record is filed under its accountUuid —
     // the slug survives, which is the whole point of the identity ladder — and
     // the superseded pair is archived rather than dropped.
-    store.save(rec.email, { claudeAiOauth: fresh }, {
+    //
+    // ⚠ THE WHOLE FILE, NOT JUST THE LOGIN. A profile is a snapshot of Claude
+    // Code's entire credentials file, and that file also holds the OAuth logins
+    // of the owner's MCP servers (`mcpOAuth`), their client registrations and
+    // secrets (`mcpOAuthClientConfig`) and keys this daemon has never heard of.
+    // Writing `{claudeAiOauth}` alone dropped every one of them from the profile,
+    // and the next switch to it installed that over the live file — every OAuth
+    // MCP server signed out, and a client secret typed in once, gone. Only the
+    // key this refresh changed is replaced.
+    store.save(rec.email, { ...rec.credentials, claudeAiOauth: fresh }, {
       accountUuid: rec.accountUuid || null,
       // ⚠ THE SLUG WE ARE REPLACING. With a uuid this is redundant; WITHOUT one
       // the record is keyed by its refresh-token fingerprint, and we have just
