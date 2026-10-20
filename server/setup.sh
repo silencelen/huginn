@@ -176,15 +176,34 @@ home_replace() {    # stdin -> $1, as the owner: a mktemp file beside it, its mo
 # Same idempotency rule as the hook merge below: identical content backs up nothing.
 # The source is read by root and handed over on stdin: the checkout may sit where
 # the home's owner cannot read it.
+#
+# ⚠ A BACKUP IS NEVER WRITTEN OVER. Re-running this script is how a server is
+# updated, and every update after a release that changed server/tmux.conf (or
+# after the `set -g mouse on` edit that file invites) finds ~/.tmux.conf
+# different again. A plain copy to .pre-huginn then put Huginn's own older
+# config over the backup, and the bindings it was made to keep were in neither
+# file. So .pre-huginn is written once and keeps what was there before Huginn;
+# a later copy goes to the first free .pre-huginn.N, and a config that is
+# already one of those backups is not saved twice. A name in that series that
+# is a link, or not the home owner's, ends the search and is refused below,
+# exactly as .pre-huginn itself always was.
 TMUXRC="$TARGET_HOME/.tmux.conf"
 if home_path_ok "$TMUXRC"; then
   TMUXRC_WRITE=1
   if [ -e "$TMUXRC" ] && ! as_home_owner cmp -s - "$TMUXRC" < "$HERE/tmux.conf"; then
-    if home_path_ok "$TMUXRC.pre-huginn"; then
-      as_home_owner cp -p "$TMUXRC" "$TMUXRC.pre-huginn"
-      echo "[huginn] your existing $TMUXRC was saved as $TMUXRC.pre-huginn"
-    else
+    TMUXRC_BAK="$TMUXRC.pre-huginn"; TMUXRC_N=0
+    while [ -e "$TMUXRC_BAK" ] && [ ! -L "$TMUXRC_BAK" ] \
+          && [ "$(stat -c %u -- "$TMUXRC_BAK")" = "$HOME_UID" ] \
+          && ! as_home_owner cmp -s -- "$TMUXRC" "$TMUXRC_BAK"; do
+      TMUXRC_N=$((TMUXRC_N + 1)); TMUXRC_BAK="$TMUXRC.pre-huginn.$TMUXRC_N"
+    done
+    if ! home_path_ok "$TMUXRC_BAK"; then
       TMUXRC_WRITE=
+    elif [ -e "$TMUXRC_BAK" ]; then
+      echo "[huginn] your existing $TMUXRC is already saved as $TMUXRC_BAK"
+    else
+      as_home_owner cp -p "$TMUXRC" "$TMUXRC_BAK"
+      echo "[huginn] your existing $TMUXRC was saved as $TMUXRC_BAK"
     fi
   fi
   [ -z "$TMUXRC_WRITE" ] || as_home_owner sh -c 'cat > "$1"' sh "$TMUXRC" < "$HERE/tmux.conf"

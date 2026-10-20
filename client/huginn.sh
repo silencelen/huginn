@@ -828,7 +828,12 @@ _huginn_uninstall() {
   # 5. SSH. Left by default; see the note on this function.
   local key='' ours=
   if [ -f "$cfg" ]; then
-    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")} h && tolower($1)=="identityfile"{print $2; exit}' "$cfg")"
+    # The installers write the key path in double quotes (a home with a space in
+    # it is otherwise a fatal line to ssh), so a quoted value is read whole.
+    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")}
+      h && tolower($1)=="identityfile"{v=$0; sub(/^[ \t]*[^ \t]+[ \t]+/, "", v)
+        if (v ~ /^"/) { v=substr(v, 2); sub(/".*/, "", v) } else sub(/[ \t].*/, "", v)
+        print v; exit}' "$cfg")"
   fi
   if [ -n "$key" ]; then
     case "${key##*/}" in *huginn*) ours=1 ;; esac
@@ -1061,8 +1066,12 @@ _huginn_appd_why() {   # $1 = the host, $2 = what _huginn_appd printed
   esac
 }
 # The daemon's own sentence out of an error body ({"error":"..."}), or empty.
+# Read to the CLOSING quote, past escaped ones: a rename refusal names the
+# project "in quotes", and stopping at the first one cut the sentence off before
+# it said what to do. Then \" \\ \/ are unescaped. Plain BRE, no \| alternation.
 _huginn_appd_error() {
-  printf '%s' "$1" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+  printf '%s' "$1" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\(\([^"\\]*\\.\)*[^"\\]*\)".*/\1/p' \
+    | sed 's/\\\(["\\/]\)/\1/g'
 }
 
 # --- desktop download links ---
@@ -2056,7 +2065,26 @@ EOF
       _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }
       _huginn_valid_name "$3" || { _huginn_bad_name "$3" "new name"; return 1; }
       local ro rn; ro="$(_huginn_canon_name "$2")"; rn="$(_huginn_canon_name "$3")"
-      ssh -T "$H" "tmux rename-session -t '$(_huginn_tmux_target "$ro")' '$rn' && echo 'renamed: $ro -> $rn'" ;;
+      # ⚠ THROUGH THE DAEMON'S RENAME, LIKE KILL. A bare tmux rename-session left
+      # everything the daemon keeps by name under the OLD one: the state file (the
+      # apps showed no state or conversation until the next hook event), the send
+      # queue (a message queued for the old name was never delivered), the
+      # restore-registry row (a reboot in that window started a fresh claude
+      # instead of resuming), and the project record (a member renamed this way
+      # dropped out of its project, and a lead's project was archived). The route
+      # moves all of it, and refuses a project member or lead in a sentence that
+      # says what to do instead. Raw tmux only when nothing answered at all (a
+      # terminal-only server has no daemon); never on an HTTP refusal.
+      local rr rrc; rr="$(_huginn_appd POST "/v1/sessions/$ro/rename" "{\"name\":\"$rn\"}")"; rrc=$?
+      if [ "$rrc" -eq 0 ]; then
+        echo "renamed: $ro -> $rn"
+      elif [ "$rrc" -eq 7 ]; then
+        ssh -T "$H" "tmux rename-session -t '$(_huginn_tmux_target "$ro")' '$rn' && echo 'renamed: $ro -> $rn'"
+      else
+        local rmsg; rmsg="$(_huginn_appd_error "$rr")"
+        echo "huginn: could not rename '$ro': ${rmsg:-huginn-appd answered HTTP $(_huginn_appd_http "$rr")}" >&2
+        return 1
+      fi ;;
     kill)
       [ -n "$2" ] || { echo "usage: huginn kill <name>" >&2; return 1; }
       _huginn_valid_name "$2" || { _huginn_bad_name "$2"; return 1; }

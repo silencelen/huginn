@@ -481,7 +481,35 @@ func sshKeyword(line string) (string, []string) {
 		return strings.ToLower(s), nil
 	}
 	rest := strings.TrimPrefix(strings.TrimLeft(s[i:], " \t"), "=")
-	return strings.ToLower(s[:i]), strings.Fields(rest)
+	return strings.ToLower(s[:i]), sshFields(rest)
+}
+
+// sshFields splits an option's arguments the way ssh does: a double-quoted
+// argument is ONE argument, quotes removed. The installers quote IdentityFile
+// (a home folder can have a space in it), and splitting that on the space read
+// half a path as the key.
+func sshFields(s string) []string {
+	var out []string
+	for {
+		s = strings.TrimLeft(s, " \t")
+		if s == "" {
+			return out
+		}
+		if s[0] == '"' {
+			if j := strings.IndexByte(s[1:], '"'); j >= 0 {
+				out = append(out, s[1:1+j])
+				s = s[2+j:]
+				continue
+			}
+			return append(out, s) // unterminated: ssh refuses the line; keep it as written
+		}
+		j := strings.IndexAny(s, " \t")
+		if j < 0 {
+			return append(out, s)
+		}
+		out = append(out, s[:j])
+		s = s[j:]
+	}
 }
 
 // sshStanzaPresent: ~/.ssh/config has a `Host huginn` block.

@@ -51,10 +51,14 @@ else {
 }
 
 # 2. `Host huginn` SSH alias (idempotent)
+# The key path goes in double quotes: a Windows profile is often C:\Users\First
+# Last, and unquoted that line is "extra arguments at end of line" to OpenSSH, a
+# fatal error for EVERY host in the file (git over ssh too), not only huginn.
+# huginn uninstall reads it back quoted.
 $cfg = "$HOME\.ssh\config"
 if (-not (Test-Path $cfg)) { New-Item -ItemType File -Force $cfg | Out-Null }
 if (-not (Select-String -Path $cfg -Pattern '^\s*Host\s+huginn\s*$' -Quiet)) {
-  Add-Content $cfg "`nHost huginn`n  HostName $HuginnHost`n  User $User`n  IdentityFile $Key`n  IdentitiesOnly yes`n  RequestTTY yes`n  ServerAliveInterval 30"
+  Add-Content $cfg "`nHost huginn`n  HostName $HuginnHost`n  User $User`n  IdentityFile `"$Key`"`n  IdentitiesOnly yes`n  RequestTTY yes`n  ServerAliveInterval 30"
   _Huginn-UiLine 'ok' 'ssh' "'Host huginn' -> $HuginnHost, as $User ($(Tilde $cfg))"
 } else {
   _Huginn-UiLine 'ok' 'ssh' "'Host huginn' is already in $(Tilde $cfg) - kept as it is"

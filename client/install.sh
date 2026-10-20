@@ -55,9 +55,12 @@ else
 fi
 
 # 2. `Host huginn` SSH alias (idempotent)
+# The key path goes in double quotes: unquoted, a home with a space in it makes
+# the line "extra arguments at end of line" to OpenSSH, a fatal error for EVERY
+# host in the file, not only huginn. huginn uninstall reads it back quoted.
 CFG="$HOME/.ssh/config"; touch "$CFG"; chmod 600 "$CFG"
 if ! grep -qE '^[[:space:]]*Host[[:space:]]+huginn[[:space:]]*$' "$CFG"; then
-  printf '\nHost huginn\n  HostName %s\n  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n' "$HHOST" "$HUSER" "$KEY" >> "$CFG"
+  printf '\nHost huginn\n  HostName %s\n  User %s\n  IdentityFile "%s"\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n' "$HHOST" "$HUSER" "$KEY" >> "$CFG"
   _huginn_ui_line ok ssh "'Host huginn' -> $HHOST, as $HUSER ($(tilde "$CFG"))"
 else
   _huginn_ui_line ok ssh "'Host huginn' is already in $(tilde "$CFG") - kept as it is"

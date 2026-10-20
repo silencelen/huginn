@@ -113,7 +113,8 @@ func setup(args []string) int {
 		} else {
 			u.Line(ui.OK, "key", tilde(home, key)+" (yours, reused)")
 		}
-		stanza := fmt.Sprintf("\nHost %s\n  HostName %s\n  User %s\n  IdentityFile %s\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n", alias, *host, *user, key)
+		// The key path in double quotes: see sshArg.
+		stanza := fmt.Sprintf("\nHost %s\n  HostName %s\n  User %s\n  IdentityFile \"%s\"\n  IdentitiesOnly yes\n  RequestTTY yes\n  ServerAliveInterval 30\n", alias, *host, *user, key)
 		f, err := os.OpenFile(cfg, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 		if err == nil {
 			_, err = f.WriteString(stanza)
@@ -478,7 +479,7 @@ func stanzaKey(cfg, alias, home string) string {
 			continue
 		}
 		if in && len(f) >= 2 && strings.EqualFold(f[0], "identityfile") {
-			k := f[1]
+			k := sshArg(line, f)
 			if strings.HasPrefix(k, "~/") || strings.HasPrefix(k, `~\`) {
 				k = filepath.Join(home, k[2:])
 			}
