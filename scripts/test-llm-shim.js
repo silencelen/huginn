@@ -628,7 +628,11 @@ test('probeEngine names who serves a port and sends nothing', { skip: !LINUX && 
     assert.equal(seen.uid, MY_UID);
     assert.ok(seen.holders.some((h) => h.exe === process.execPath), JSON.stringify(seen));
     assert.deepEqual(shim.pinFor(seen), { uid: MY_UID, exe: process.execPath });
-    assert.match(shim.describePeer(seen), new RegExp(`uid ${MY_UID}, pid \\d+ \\(${process.execPath.replace(/[/.]/g, '\\$&')}\\)`));
+    // EVERY metacharacter escaped, the backslash included, not just `/` and `.`:
+    // node can live under any path (a `+` or a `(` in a version directory), and
+    // one left bare turns the path into a pattern that no longer matches itself.
+    const exe = process.execPath.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+    assert.match(shim.describePeer(seen), new RegExp(`uid ${MY_UID}, pid \\d+ \\(${exe}\\)`));
     await wait(200);
     assert.equal(bytesOf(sq), 0);
   } finally { await sq.close(); }
