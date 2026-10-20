@@ -47,7 +47,9 @@ object LocalEcho {
 
     fun backspace(e: Echo): Echo = when {
         e.muted -> e
-        e.text.isNotEmpty() -> e.copy(text = e.text.dropLast(1))
+        // A whole character, as the pane deletes it: dropLast(1) left half an
+        // emoji on screen as a replacement glyph until the next frame.
+        e.text.isNotEmpty() -> e.copy(text = e.text.substring(0, Graphemes.lastStart(e.text)))
         // Deleting before our anchor: the effect on screen is unknowable here.
         else -> Echo(muted = true)
     }

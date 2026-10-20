@@ -128,8 +128,14 @@ object LiveInput {
      */
     fun diff(previous: String, current: String): Typed {
         if (current == previous) return Typed(0, "", false)
-        val shared = sharedPrefix(previous, current)
-        val backspaces = previous.length - shared
+        val starts = Graphemes.boundaries(previous)
+        val shared = sharedPrefix(previous, current, starts)
+        // ⚠ ONE BACKSPACE PER CHARACTER AS THE PANE COUNTS THEM, not per UTF-16
+        // unit. Claude Code's prompt deletes a grapheme per Backspace and a
+        // keyboard deletes an emoji whole, so `previous.length - shared` sent two
+        // for 😀, four for 👍🏽 and eight for a family — each one past the first
+        // erasing a character the person never deleted.
+        val backspaces = starts.count { it > shared }
         val tail = normalizeNewlines(current.substring(shared))
 
         val trailing = tail.endsWith("\n")
@@ -149,16 +155,18 @@ object LiveInput {
     /**
      * How much of [a] and [b] is the same run of characters from the start.
      *
-     * ⚠ NEVER SPLITS A SURROGATE PAIR. Half a code point is not a keystroke, and
-     * an emoji typed into the pane would otherwise be reported as one backspace
-     * and a lone low surrogate.
+     * ⚠ NEVER SPLITS A CHARACTER of [a] — a surrogate pair or a whole cluster
+     * ([starts], from [Graphemes.boundaries]). Half a code point is not a
+     * keystroke, and an emoji typed into the pane would otherwise be reported as
+     * one backspace and a lone low surrogate; likewise a keyboard that removes
+     * only the accent from `é` is one Backspace, which takes the whole `é` in
+     * the pane, and then the `e` typed again.
      */
-    private fun sharedPrefix(a: String, b: String): Int {
+    private fun sharedPrefix(a: String, b: String, starts: List<Int>): Int {
         val n = minOf(a.length, b.length)
         var i = 0
         while (i < n && a[i] == b[i]) i++
-        if (i in 1..(a.length - 1) && a[i - 1].isHighSurrogate()) i--
-        return i
+        return starts.last { it <= i }
     }
 
     private fun normalizeNewlines(s: String): String =
