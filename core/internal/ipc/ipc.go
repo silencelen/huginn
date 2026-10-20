@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/silencelen/huginn/core/internal/version"
@@ -46,8 +47,14 @@ type Server struct {
 	Path string
 	Mux  *http.ServeMux
 	Log  *log.Logger
-	srv  *http.Server
 	ln   net.Listener
+
+	// mu guards srv and closed: Serve runs on its own goroutine and Shutdown
+	// on another, and a Shutdown that lands before Serve has started must
+	// still stop it.
+	mu     sync.Mutex
+	srv    *http.Server
+	closed bool
 }
 
 // New prepares a server for the socket at path; register handlers on Mux, then Serve.
@@ -103,7 +110,7 @@ func (s *Server) Serve() error {
 	if s.ln == nil {
 		return errors.New("ipc: Serve before Listen")
 	}
-	s.srv = &http.Server{
+	srv := &http.Server{
 		Handler:           protoGate(s.Mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
@@ -113,7 +120,15 @@ func (s *Server) Serve() error {
 			return ctx
 		},
 	}
-	err := s.srv.Serve(s.ln)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		s.ln.Close()
+		return nil
+	}
+	s.srv = srv
+	s.mu.Unlock()
+	err := srv.Serve(s.ln)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -123,9 +138,15 @@ func (s *Server) Serve() error {
 // Shutdown stops accepting, lets in-flight requests finish until ctx ends, and
 // removes the socket file.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	srv := s.srv
+	s.closed = true
+	s.mu.Unlock()
 	var err error
-	if s.srv != nil {
-		err = s.srv.Shutdown(ctx)
+	if srv != nil {
+		err = srv.Shutdown(ctx)
+	} else if s.ln != nil {
+		s.ln.Close() // Serve has not started: it sees closed and returns
 	}
 	os.Remove(s.Path)
 	return err
