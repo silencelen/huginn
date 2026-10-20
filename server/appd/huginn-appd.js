@@ -10320,6 +10320,9 @@ function noTranscriptMessage(file) {
 
 // ---------------------------------------------------------------- routing
 
+/** How long a request answered before the token check may go on sending its body. */
+const PREAUTH_BODY_GRACE_MS = 10_000;
+
 async function handleRequest(req, res) {
   const t0 = Date.now();
   // ⚠ THE REQUEST TARGET IS UNTRUSTED, AND THIS IS THE FIRST LINE THAT READS IT —
@@ -10340,6 +10343,21 @@ async function handleRequest(req, res) {
   const peer = req.socket.remoteAddress;
   const plainOffHost = !req.socket.encrypted && !tlsLib.isLoopback(peer);
   res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms${plainOffHost ? ` PLAIN ${peer}` : ''}`));
+  // ⚠ AN ANSWER GIVEN BEFORE THE TOKEN CHECK DOES NOT HOLD ITS CONNECTION OPEN
+  // FOR THE BODY. After any response Node goes on reading the rest of the body
+  // to throw it away, and with requestTimeout off (see HTTP_TIMEOUTS) nothing
+  // bounded that: a peer with no token could follow its own 401 with a body
+  // trickled a byte at a time and keep the connection for as long as it liked.
+  // A real client's body has arrived moments after its headers, so whatever is
+  // still unread PREAUTH_BODY_GRACE_MS after a refusal is cut. A refusal with
+  // no body is already complete here and keeps its connection for the next
+  // request, which is the probe-then-ask pattern both clients use.
+  let authed = false;
+  res.on('finish', () => {
+    if (authed || req.complete) return;
+    const cut = setTimeout(() => req.socket.destroy(), PREAUTH_BODY_GRACE_MS).unref();
+    req.once('end', () => clearTimeout(cut));
+  });
 
   // ⚠ ON EVERY RESPONSE, INCLUDING THE 401 (cross-batch contract 2). The
   // clients' route probe has to be able to tell huginn-appd from ANY OTHER
@@ -10397,6 +10415,7 @@ async function handleRequest(req, res) {
   }
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
+  authed = true;
 
   // ⚠ THE APPS PREREQUISITE'S ONLY INPUT (decision 54). `req.socket.localAddress`
   // is WHICH OF THIS HOST'S ADDRESSES the client dialled — the same value
@@ -14374,9 +14393,20 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
 
 // The same handler behind both protocols. Neither server is listen()ed: the
 // sniffing listener (lib/tls.js) hands each connection to the one whose
-// protocol it opened with, on the one port clients already know.
-const server = http.createServer(serveRequest);
-const tlsServer = https.createServer({ cert: TLS.cert, key: TLS.key, minVersion: 'TLSv1.2' }, serveRequest);
+// protocol it opened with, on the one port clients already know, and starts
+// their request timeouts for them.
+//
+// ⚠ BOTH NUMBERS ARE STATED, AND requestTimeout IS OFF ON PURPOSE. Node's
+// default is five minutes for the WHOLE request, body included, which would
+// cut a 128 MB upload from a phone on a slow link with a 408. But 0 on its own
+// is a trap: Node then derives headersTimeout as min(60 s, requestTimeout),
+// which is 0, and with both at 0 its checker does nothing at all. The peers
+// these bound are the ones with no token, and they get two limits that do not
+// need one: their headers within a minute, and an unread body cut soon after
+// their refusal (PREAUTH_BODY_GRACE_MS).
+const HTTP_TIMEOUTS = { headersTimeout: 60_000, requestTimeout: 0 };
+const server = http.createServer(HTTP_TIMEOUTS, serveRequest);
+const tlsServer = https.createServer({ ...HTTP_TIMEOUTS, cert: TLS.cert, key: TLS.key, minVersion: 'TLSv1.2' }, serveRequest);
 const listener = tlsLib.createSniffingListener(net, server, tlsServer);
 
 // SSE heartbeat so half-open phone connections die fast instead of lingering.

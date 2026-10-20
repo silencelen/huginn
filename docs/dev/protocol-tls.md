@@ -37,6 +37,10 @@ moves to `https://` on the address it already has; there is no second port to op
 
 - The HTTPS server accepts TLS 1.2 and later and speaks HTTP/1.1.
 - A connection that sends nothing within 10 seconds is closed before either server sees it.
+- A request whose headers are not complete within 60 seconds is answered `408` and closed. There is
+  no limit on how long a request with a valid token may take to send its body (an upload on a slow
+  link), but a request refused before the token check is closed if its body is still arriving 10
+  seconds after the refusal.
 
 ### The certificate
 

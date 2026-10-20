@@ -139,10 +139,11 @@ function plaintextPolicy(env) {
  *
  * `httpServer` and `tlsServer` are never `listen()`ed themselves; they only
  * receive sockets. A connection that sends nothing within `idleMs` is dropped
- * before either sees it.
+ * before either sees it; once it has spoken, the servers' own headersTimeout
+ * and requestTimeout apply, armed when this listener starts listening.
  */
 function createSniffingListener(net, httpServer, tlsServer, { idleMs = 10_000 } = {}) {
-  return net.createServer((socket) => {
+  const listener = net.createServer((socket) => {
     const onTimeout = () => socket.destroy();
     const onError = () => socket.destroy();
     socket.setTimeout(idleMs, onTimeout);
@@ -157,6 +158,19 @@ function createSniffingListener(net, httpServer, tlsServer, { idleMs = 10_000 } 
       process.nextTick(() => socket.resume());
     });
   });
+  // ⚠ NODE STARTS ITS REQUEST TIMEOUTS ON A SERVER'S OWN 'listening', AND THESE
+  // TWO NEVER LISTEN. headersTimeout and requestTimeout are enforced by a timer
+  // each http/https server sets up when it emits 'listening'. A server that only
+  // ever gets sockets through emit('connection') never does, so the idle timer
+  // above was the only bound: one byte — or a finished TLS handshake — cleared
+  // it, and the connection was then held for as long as the peer liked, before
+  // any token check. The servers are listening when this listener is, so they
+  // hear it from here.
+  listener.on('listening', () => {
+    httpServer.emit('listening');
+    tlsServer.emit('listening');
+  });
+  return listener;
 }
 
 module.exports = {
