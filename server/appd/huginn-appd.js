@@ -2572,15 +2572,17 @@ function clearIntoDraft(name) { intoDraftAt.delete(name); }
 function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
 
 /**
- * What the typing path remembers IN MEMORY under a session's name, dropped when
- * the name changes hands (clearSessionState).
+ * What this daemon remembers IN MEMORY under a session's name — the typing
+ * path's memory, the messages still queued, a pending auto-end — dropped when the
+ * name changes hands (clearSessionState).
  *
- * ⚠ THE FILES ARE NOT ALL A NAME CARRIES. These maps are facts about the session
- * that HAD the name, exactly like its state file, and they were only ever pruned
- * by age. So a session deleted and made again under its old name inherited the
- * old one's duplicate memory: the same message sent to the new session inside
+ * ⚠ THE FILES ARE NOT ALL A NAME CARRIES. These are facts about the session that
+ * HAD the name, exactly like its state file, and the typing maps were only ever
+ * pruned by age. So a session deleted and made again under its old name inherited
+ * the old one's duplicate memory: the same message sent to the new session inside
  * half a minute was answered `duplicate:true` and never typed, and its into-draft
- * notice and live-keys stamp came along too. The rename route moves them instead.
+ * notice and live-keys stamp came along too. The rename route moves all of it
+ * instead.
  */
 function forgetSessionMemory(name) {
   // Messages still queued for the previous holder are failed, never handed on:
@@ -3003,7 +3005,12 @@ async function pumpQueue(name) {
       // birth time, which a rename keeps). Gone or replaced, the send is an
       // error. Null is tmux not answering, which says nothing (#14).
       const here = await sessionExists(name);
-      if (here === false) { failQueued(name, SEND_SESSION_ENDED); break; }
+      if (here === false) {
+        // Its own queue only: one let go of at a hand-over while tmux answered
+        // has been failed already, and another under the name is not this pass's.
+        if (sendQueues.get(name) === q) failQueued(name, SEND_SESSION_ENDED);
+        break;
+      }
       if (here && entry.born == null) entry.born = sessionBorn.get(name) || null;
       if (here && entry.born && sessionBorn.get(name) !== entry.born) {
         q.entries.shift();
