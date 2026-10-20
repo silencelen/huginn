@@ -128,8 +128,9 @@ type model struct {
 
 	cur map[screen]int // cursor per screen, kept across refetches
 
-	chat chatState
-	proj projState
+	chat    chatState
+	follows int // numbers each follow of a chat's events (chatState.gen)
+	proj    projState
 
 	filter    map[screen]string // kept `/` filters, per screen
 	filtering *textinput.Model  // the `/` field while it has focus
@@ -262,8 +263,8 @@ func (m *model) back() bool {
 	if len(m.stack) == 0 {
 		return false
 	}
-	if m.scr == scrChat && m.chat.cancel != nil {
-		m.chat.cancel() // stop following; the run itself goes on on the host
+	if m.scr == scrChat {
+		m.stopFollow() // the run itself goes on on the host
 	}
 	m.scr = m.stack[len(m.stack)-1]
 	m.stack = m.stack[:len(m.stack)-1]

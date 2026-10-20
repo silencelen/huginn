@@ -192,6 +192,7 @@ type chatLoaded struct {
 }
 type chatEvent struct {
 	id, event string
+	gen       int // the follow it came from (chatState.gen)
 	data      json.RawMessage
 }
 type dashLoaded struct {
@@ -330,6 +331,7 @@ type openChatMsg struct {
 }
 
 func (m *model) openChat(id string) tea.Cmd {
+	m.stopFollow()
 	m.chat = chatState{id: id, loading: true}
 	m.open(scrChat)
 	return m.loadChat(id)
@@ -354,8 +356,32 @@ type chatState struct {
 	live    strings.Builder // the answer as it streams
 	tool    string          // the tool running now
 	busy    bool
-	cancel  context.CancelFunc
-	scroll  int // lines up from the bottom
+	cancel  context.CancelFunc // stops the follow below
+	gen     int                // the follow whose events are shown; 0: none
+	scroll  int                // lines up from the bottom
+}
+
+// startFollow stops whatever follows the open chat and numbers the follow
+// that replaces it; onChatEvent shows only that one's events.
+//
+// ⚠ One follow at a time. appd sends every event of a run to every stream on
+// it, and a send while a run answers is queued, reloads the chat and follows
+// the run again: a stream left open beside that one showed each token twice.
+func (m *model) startFollow() (context.Context, int) {
+	m.stopFollow()
+	m.follows++
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.chat.cancel, m.chat.gen = cancel, m.follows
+	return ctx, m.follows
+}
+
+// stopFollow stops following the open chat, and drops whatever its stream
+// still delivers. The run itself goes on on the host.
+func (m *model) stopFollow() {
+	if m.chat.cancel != nil {
+		m.chat.cancel()
+	}
+	m.chat.cancel, m.chat.gen = nil, 0
 }
 
 func (m *model) send(text string) tea.Cmd {
@@ -365,8 +391,7 @@ func (m *model) send(text string) tea.Cmd {
 	m.chat.busy = true
 	m.chat.d.Messages = append(m.chat.d.Messages, chatMsg{Type: "user", Text: text})
 	m.chat.scroll = 0
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.chat.cancel = cancel
+	ctx, gen := m.startFollow()
 	events := m.events
 	go func() {
 		pctx, pcancel := context.WithTimeout(ctx, 30*time.Second)
@@ -377,25 +402,25 @@ func (m *model) send(text string) tea.Cmd {
 		err := b.do(pctx, http.MethodPost, "/appd/v1/chats/"+esc(id)+"/messages", map[string]string{"text": text}, &r)
 		pcancel()
 		if err != nil {
-			events <- chatEvent{id: id, event: "error", data: mustJSON(map[string]string{"text": err.Error()})}
-			events <- chatEvent{id: id, event: "done"}
+			events <- chatEvent{id: id, gen: gen, event: "error", data: mustJSON(map[string]string{"text": err.Error()})}
+			events <- chatEvent{id: id, gen: gen, event: "done"}
 			return
 		}
 		if r.Queued {
-			events <- chatEvent{id: id, event: "queued", data: mustJSON(map[string]int{"position": r.Position})}
-			events <- chatEvent{id: id, event: "done"}
+			events <- chatEvent{id: id, gen: gen, event: "queued", data: mustJSON(map[string]int{"position": r.Position})}
+			events <- chatEvent{id: id, gen: gen, event: "done"}
 			return
 		}
 		err = b.followChat(ctx, id, 0, func(ev string, data json.RawMessage) {
 			select {
-			case events <- chatEvent{id: id, event: ev, data: data}:
+			case events <- chatEvent{id: id, gen: gen, event: ev, data: data}:
 			case <-ctx.Done():
 			}
 		})
 		if err != nil && ctx.Err() == nil {
-			events <- chatEvent{id: id, event: "error", data: mustJSON(map[string]string{"text": "the stream dropped: " + err.Error()})}
+			events <- chatEvent{id: id, gen: gen, event: "error", data: mustJSON(map[string]string{"text": "the stream dropped: " + err.Error()})}
 		}
-		events <- chatEvent{id: id, event: "done"}
+		events <- chatEvent{id: id, gen: gen, event: "done"}
 	}()
 	return nil
 }
@@ -403,8 +428,8 @@ func (m *model) send(text string) tea.Cmd {
 func mustJSON(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 
 func (m *model) onChatEvent(e chatEvent) tea.Cmd {
-	if e.id != m.chat.id {
-		return nil
+	if e.id != m.chat.id || e.gen != m.chat.gen {
+		return nil // from a follow that was stopped or replaced
 	}
 	var d struct {
 		Text     string `json:"text"`
@@ -425,9 +450,7 @@ func (m *model) onChatEvent(e chatEvent) tea.Cmd {
 		m.say(d.Text, false)
 	case "done":
 		m.chat.busy, m.chat.tool = false, ""
-		if m.chat.cancel != nil {
-			m.chat.cancel()
-		}
+		m.stopFollow()
 		return m.loadChat(m.chat.id)
 	}
 	return nil
@@ -864,18 +887,17 @@ func (m *model) follow1() tea.Cmd {
 	id, since := m.chat.id, m.chat.d.Seq
 	m.chat.live.Reset()
 	m.chat.live.WriteString(m.chat.d.PartialText)
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.chat.cancel = cancel
+	ctx, gen := m.startFollow()
 	b, events := m.b, m.events
 	go func() {
 		b.followChat(ctx, id, since, func(ev string, data json.RawMessage) {
 			select {
-			case events <- chatEvent{id: id, event: ev, data: data}:
+			case events <- chatEvent{id: id, gen: gen, event: ev, data: data}:
 			case <-ctx.Done():
 			}
 		})
 		select {
-		case events <- chatEvent{id: id, event: "done"}:
+		case events <- chatEvent{id: id, gen: gen, event: "done"}:
 		case <-ctx.Done():
 		}
 	}()
