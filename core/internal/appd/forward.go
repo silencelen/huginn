@@ -79,7 +79,7 @@ func (c *Client) forward1(ctx context.Context, method, pathQuery string, in http
 		pins := c.loadPins(tok)
 		if len(pins) == 0 {
 			if pins, err = c.proveAndPin(ctx, tok, nil); err != nil {
-				return nil, err
+				return nil, notSent{err}
 			}
 		}
 		res, err := c.forwardOnce(ctx, c.pinnedTransport(tok, pins), tok, method, target, in, cr)
@@ -88,7 +88,7 @@ func (c *Client) forward1(ctx context.Context, method, pathQuery string, in http
 			return res, err
 		}
 		if pins, err = c.proveAndPin(ctx, tok, pins); err != nil {
-			return nil, err
+			return nil, notSent{err} // see pinnedRequest
 		}
 		res, err = c.forwardOnce(ctx, c.pinnedTransport(tok, pins), tok, method, target, in, cr)
 		if errors.As(err, &pm) {

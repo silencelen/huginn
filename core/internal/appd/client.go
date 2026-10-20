@@ -259,6 +259,15 @@ func (c *Client) resolve(path string) (*url.URL, error) {
 	return t, nil
 }
 
+// notSent is a failure before any byte of the request left for this
+// address: the address did not prove to be the daemon (whatever it answered
+// to the proof, which never carries the token), or the pinned handshake with
+// it failed. It reads as the failure it wraps; notDelivered tells it apart.
+type notSent struct{ err error }
+
+func (e notSent) Error() string { return e.err.Error() }
+func (e notSent) Unwrap() error { return e.err }
+
 // pinnedRequest is a token-carrying request over https, pinned. Proves first
 // when there is no pin for this token; on a leaf that is not pinned, re-proves
 // (rule 5) and retries ONCE — a certificate that changes again between the
@@ -268,7 +277,7 @@ func (c *Client) pinnedRequest(ctx context.Context, tok, method string, target *
 	if len(pins) == 0 {
 		var err error
 		if pins, err = c.proveAndPin(ctx, tok, nil); err != nil {
-			return nil, err
+			return nil, notSent{err}
 		}
 	}
 	resp, err := c.send(ctx, c.pinnedTransport(tok, pins), tok, method, target, payload)
@@ -276,8 +285,13 @@ func (c *Client) pinnedRequest(ctx context.Context, tok, method string, target *
 	if !errors.As(err, &pm) {
 		return resp, err
 	}
+	// ⚠ A FAILED RE-PROOF IS STILL "NOTHING SENT". The leaf was refused inside
+	// the handshake; whatever holds the address then answered the proof with
+	// a 404, a web page or nothing at all. Returned bare, that answer was not
+	// a reason to try the next address, and a NAS on the home LAN address kept
+	// the core off huginn while another route answered.
 	if pins, err = c.proveAndPin(ctx, tok, pins); err != nil {
-		return nil, err
+		return nil, notSent{err}
 	}
 	resp, err = c.send(ctx, c.pinnedTransport(tok, pins), tok, method, target, payload)
 	if errors.As(err, &pm) {
@@ -552,7 +566,9 @@ func (c *Client) dialPinned(pins []string) func(context.Context, string, string)
 			if refused != nil {
 				return nil, refused
 			}
-			return nil, c.handshakeErr(hctx, ctx, addr, c.hs, err, true, true)
+			// Before any request byte, like the refusal above (an old router
+			// that speaks only TLS 1.1 ends up here).
+			return nil, notSent{c.handshakeErr(hctx, ctx, addr, c.hs, err, true, true)}
 		}
 		return tc, nil
 	}
@@ -716,7 +732,7 @@ func (c *Client) stream1(ctx context.Context, path string) (*http.Response, erro
 		pins := c.loadPins(tok)
 		if len(pins) == 0 {
 			if pins, err = c.proveAndPin(ctx, tok, nil); err != nil {
-				return nil, err
+				return nil, notSent{err}
 			}
 		}
 		res, err := c.openStream(ctx, c.pinnedTransport(tok, pins), tok, target)
@@ -725,7 +741,7 @@ func (c *Client) stream1(ctx context.Context, path string) (*http.Response, erro
 			return res, err
 		}
 		if pins, err = c.proveAndPin(ctx, tok, pins); err != nil {
-			return nil, err
+			return nil, notSent{err} // see pinnedRequest
 		}
 		res, err = c.openStream(ctx, c.pinnedTransport(tok, pins), tok, target)
 		if errors.As(err, &pm) {

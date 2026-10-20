@@ -148,17 +148,6 @@ func (c *Client) notDelivered(ctx context.Context, err error) bool {
 	if errors.As(err, &se) || errors.Is(err, errBodySent) || Classify(err) == KindAuth {
 		return false
 	}
-	// The address did not prove to be this daemon: a certificate that is not
-	// the pinned one, a proof that fails, or no TLS at all ("older than
-	// 3.11" - on an address that is somebody else's machine, that is what
-	// they say). The proof never carries the token, so nothing was sent.
-	var pm *PinMismatchError
-	if errors.As(err, &pm) || errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) {
-		c.rmu.Lock()
-		several := len(c.routes) > 1
-		c.rmu.Unlock()
-		return several // see the top of this file
-	}
 	var oe *net.OpError
 	if errors.As(err, &oe) && oe.Op == "dial" {
 		return true
@@ -170,6 +159,20 @@ func (c *Client) notDelivered(ctx context.Context, err error) bool {
 		if strings.Contains(m, s) {
 			return true
 		}
+	}
+	// The address did not prove to be this daemon: a certificate that is not
+	// the pinned one, a proof that fails or is answered with anything else (a
+	// 404, a web page, a stall), a handshake that could not be finished, or no
+	// TLS at all ("older than 3.11" - on an address that is somebody else's
+	// machine, that is what they say). The proof never carries the token, so
+	// nothing was sent.
+	var pm *PinMismatchError
+	var ns notSent
+	if errors.As(err, &pm) || errors.Is(err, ErrIntercepted) || errors.Is(err, ErrOldDaemon) || errors.As(err, &ns) {
+		c.rmu.Lock()
+		several := len(c.routes) > 1
+		c.rmu.Unlock()
+		return several // see the top of this file
 	}
 	return false
 }
