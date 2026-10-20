@@ -244,6 +244,10 @@ function parseArgv(argv) {
 
 let emitted = 0;
 function emit(obj) {
+  // Every line carries its own uuid, as Claude Code's do. It is what lets the
+  // daemon apply a line a device re-sends after a lost response exactly once,
+  // without mistaking a model's two identical tokens for a replay.
+  if (obj && typeof obj === 'object' && !obj.uuid) obj = { ...obj, uuid: crypto.randomUUID() };
   let line = JSON.stringify(obj);
   if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
     // Never an oversized line at the source. Truncated IN the text, admitted.

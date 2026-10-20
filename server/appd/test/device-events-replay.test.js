@@ -11,15 +11,18 @@
 // missing from the live answer and from a stopped run's saved partial.
 //
 // The daemon's own events route (wrapped as a function), Run and handleClaudeEvent,
-// lifted into a sandbox.
+// lifted into a sandbox; and the real local-model shim, for the ids it emits.
 
 const { test } = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { lift, between } = require('./appd-lift');
 
 const DEV = 'aaaaaaaa-0000-4000-8000-000000000001';
 const WORK = 'bbbbbbbb-0000-4000-8000-000000000002';
+const SHIM = path.join(__dirname, '..', '..', '..', 'client', 'huginn-llm-shim');
 
 const ROUTE = between(
   "if ((m = dsub.match(/^\\/work\\/([0-9a-f-]{36})\\/events$/)) && req.method === 'POST') {",
@@ -72,7 +75,7 @@ const delta = (text) => JSON.stringify({
 const said = (text) => JSON.stringify({
   type: 'assistant', message: { content: [{ type: 'text', text }] }, uuid: crypto.randomUUID(),
 });
-// A local-model shim line with no uuid at all.
+// A line from an older local-model shim, which put no uuid on its lines.
 const bareDelta = (text) => JSON.stringify({
   type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } },
 });
@@ -119,3 +122,19 @@ test('identical one-token batches from a local model are all applied', async () 
   assert.equal(d.live(), ' the disk is fine; the pool is fine.');
 });
 
+
+test('the local-model shim puts its own uuid on every line', async () => {
+  // Which is what lets a re-sent local-model line be recognised as a replay.
+  const lines = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SHIM, '--contract-check'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (c) => { out += c; });
+    child.on('error', reject);
+    child.on('close', () => resolve(out.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l))));
+    child.stdin.end('');
+  });
+  assert.ok(lines.length >= 5, `only ${lines.length} lines`);
+  const ids = lines.map((l) => l.uuid);
+  for (const id of ids) assert.match(String(id), /^[0-9a-f-]{36}$/);
+  assert.equal(new Set(ids).size, ids.length, 'one uuid per line');
+});
