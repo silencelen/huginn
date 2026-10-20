@@ -7880,7 +7880,15 @@ function seedHeadroomDefaults() {
   const s = headroomLib.defaults();
   try {
     const cur = JSON.parse(fs.readFileSync(path.join(CLAUDE_DIR, 'settings.json'), 'utf8'));
-    if (cur && typeof cur.model === 'string' && cur.model.trim()) s.defaultModel = cur.model.trim();
+    if (cur && typeof cur.model === 'string' && cur.model.trim()) {
+      // ⚠ JUDGED BY THE RULE THE LOADER USES, before it is written. A value
+      // loadHeadroomSettings rejects fails the WHOLE file on every load, so the
+      // account-switch preference migrated just below was silently off from the
+      // first boot. A model this daemon cannot read keeps the contract default.
+      const v = headroomLib.validateSettings({ defaultModel: cur.model.trim() });
+      if (v.ok) s.defaultModel = v.settings.defaultModel;
+      else log(`headroom: Claude Code's default model ${JSON.stringify(cur.model.trim()).slice(0, 60)} is not one this daemon reads; seeding ${s.defaultModel}`);
+    }
   } catch { /* no settings file: the contract default stands */ }
   let migrated = null;
   try {

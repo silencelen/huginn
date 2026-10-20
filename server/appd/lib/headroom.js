@@ -36,7 +36,7 @@
 // `arbiter.lastResumeAt` were seconds, sitting in the same payload as `ladder.at`
 // and `lastSwitchAt` in ms, with no field-name tell. A reader cannot guess.
 
-const { parseModelId, familyOf } = require('./models');
+const { parseModelId, familyOf, CONTEXT_SUFFIX_RE } = require('./models');
 const { isLimitStall, parseLimitError, lastNonAttachmentRecord } = require('./limits');
 // The account-switch decision is absorbed rather than reimplemented: its rules
 // and its anti-flap guards were tested against real accounts and there is no
@@ -89,6 +89,27 @@ function defaults() {
 }
 
 const PCT_KEYS = ['headsUpPct', 'ladderPct', 'ladderUpBelowPct', 'stopPct', 'stopFablePct', 'clearBelowPct'];
+
+/** Claude Code's own model aliases that are neither a family nor an id. */
+const CLI_MODEL_ALIASES = ['best', 'opusplan'];
+
+/**
+ * A model setting as Claude Code itself writes one into `~/.claude/settings.json`
+ * — `opus[1m]`, `claude-opus-5-5[1m]`, `opusplan`, `best` — beyond the plain
+ * family alias or id.
+ *
+ * ⚠ `defaultModel` IS "YOUR CLAUDE CODE DEFAULT". It is seeded from that file
+ * and written back to it verbatim when the Fable consent dialog persisted
+ * another model, so it has to accept what the CLI puts there. Rejecting
+ * `opus[1m]` (written by the CLI's own picker and its own settings migration)
+ * failed the WHOLE stored settings file on every load, and the daemon ran on
+ * the contract defaults: account switching that was migrated on was off.
+ */
+function isCliModelSetting(id) {
+  if (CLI_MODEL_ALIASES.includes(id)) return true;
+  const base = id.replace(CONTEXT_SUFFIX_RE, '');
+  return base !== id && (FAMILIES.includes(base) || !!parseModelId(base));
+}
 
 /** C0 controls are invisible in every UI that would show these strings back. */
 function stripC0(s, keepNewlines = false) {
@@ -158,7 +179,7 @@ function validateSettings(patch, base = defaults(), { knownModels = null } = {})
     const known = Array.isArray(knownModels) && knownModels.length
       ? knownModels.some((m) => (typeof m === 'string' ? m : m && m.id) === id)
       : false;
-    if (!known && !FAMILIES.includes(id) && !parseModelId(id)) {
+    if (!known && !FAMILIES.includes(id) && !parseModelId(id) && !isCliModelSetting(id)) {
       return { ok: false, error: 'defaultModel must be a model id or family alias' };
     }
     s.defaultModel = id;
