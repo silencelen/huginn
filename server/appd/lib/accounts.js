@@ -329,13 +329,14 @@ class AccountStore {
       // Headroom last seen for this login, kept across rotations — it is the only
       // thing the auto-switcher can read once the stored access token expires.
       lastPlan: (base && base.lastPlan) ?? null,
-      // The refresher's own bookkeeping, carried across rotations for the same
+      // The refresher's own bookkeeping, carried across rewrites for the same
       // reason lastPlan is: every other writer of this record (the identity
       // sweep on /v1/accounts, a switch, consolidate) calls save() without it,
       // and a field that only survives when its own writer happens to be the
       // last one is a field that silently resets — which here would mean a dead
-      // login being retried against the token endpoint forever.
-      refresh: rest.refresh ?? (base && base.refresh) ?? null,
+      // login being retried against the token endpoint forever. Carried only as
+      // far as it still describes THESE credentials, though: see carryRefresh.
+      refresh: rest.refresh ?? carryRefresh(base, creds),
       oauthAccount,
       credentials: creds,
     };
@@ -509,7 +510,10 @@ class AccountStore {
           firstSeen: Math.min(...members.map((m) => m.rec.firstSeen ?? m.rec.savedAt ?? 0).filter(Boolean)),
           savedAt: Math.max(...members.map((m) => m.rec.savedAt ?? 0)),
           lastPlan: ranked.map((m) => m.rec.lastPlan).find((v) => v != null) ?? null,
-          refresh: ranked.map((m) => m.rec.refresh).find((v) => v != null) ?? null,
+          // From the freshest member that has one, as far as it still describes
+          // the credentials kept: an older member's dead mark is about an older
+          // token (see carryRefresh).
+          refresh: carryRefresh(ranked.find((m) => m.rec.refresh != null)?.rec ?? null, freshest.credentials),
           oauthAccount: freshest.oauthAccount ?? first('oauthAccount'),
           credentials: freshest.credentials,
         };
@@ -626,6 +630,27 @@ function pickExtra(rec) {
   if (rec.accountUuid) extra.accountUuid = rec.accountUuid;
   if (rec.taggedId) extra.taggedId = rec.taggedId;
   return extra;
+}
+
+/**
+ * The refresher's bookkeeping a rewrite may carry from record `from` onto `creds`.
+ *
+ * ⚠ ONLY WHILE IT IS STILL ABOUT THESE CREDENTIALS. `deadAt` is a verdict on one
+ * refresh token, and `nextAt`, `lastStatus` and `lastAt` are a schedule and an
+ * outcome for that token. Carried onto a NEW one — the owner signing in again,
+ * which is the very remedy the dead row asks for — the mark made the new login
+ * `unrefreshable` from birth: the switch gate refused it for good, the refresher
+ * never touched it, a manual refresh answered without asking, and signing in
+ * once more inherited it again. `warnedAt` alone is kept: it is about the
+ * token's expiry, which a rotation restates rather than moves, and
+ * oauth-refresh's refreshTokenWarned already tells an old warning from a
+ * current one.
+ */
+function carryRefresh(from, creds) {
+  const block = from && from.refresh;
+  if (!block || typeof block !== 'object') return null;
+  if (sameAccount(from.credentials, creds)) return block;
+  return typeof block.warnedAt === 'number' && block.warnedAt ? { warnedAt: block.warnedAt } : null;
 }
 
 /** How recent a record's credentials are, for picking the freshest of a group. */
