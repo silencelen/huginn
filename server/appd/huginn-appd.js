@@ -1803,9 +1803,18 @@ function withAnswerLock(name, fn) {
  * is refused rather than typed twice at a pane that has not caught up.
  *
  * Short-lived on purpose: it is a de-duplicator for a double tap or a retried
- * delivery, not a record. A genuinely new question has a different fingerprint,
- * and the same question legitimately re-asked after the TTL is a new question as
- * far as anyone tapping a notification is concerned.
+ * delivery, not a record.
+ *
+ * ⚠ AND IT LASTS ONLY UNTIL A LOOK SHOWS THE QUESTION GONE. It was a flat
+ * minute, on the belief that a genuinely new question has a different
+ * fingerprint — and a repeated one does not: Claude asking to run `npm test`
+ * again after a fix draws the same dialog byte for byte, so the owner's Yes to
+ * the second one was refused as "already answered" while the session sat
+ * waiting on it. What the memo covers is the pane that has not caught up yet,
+ * and that ends the first time the pane is read without the question on it:
+ * `settleAnswer` looks right after the answer goes in and writes no memo when
+ * the question has already left, and every screen capture ends one
+ * (`forgetAnsweredIfGone`). The TTL stays as the bound for a pane nobody reads.
  */
 const ANSWER_MEMO_TTL_MS = 60_000;
 const answeredMemo = new Map();     // session name -> { fingerprint, at }
@@ -1817,6 +1826,11 @@ function answeredRecently(name, fingerprint, now = Date.now()) {
 }
 function rememberAnswered(name, fingerprint, now = Date.now()) {
   answeredMemo.set(name, { fingerprint, at: now });
+}
+/** A look at the pane that does not show the answered question ends its memo. */
+function forgetAnsweredIfGone(name, prompt) {
+  const memo = answeredMemo.get(name);
+  if (memo && !(prompt && prompt.fingerprint === memo.fingerprint)) answeredMemo.delete(name);
 }
 
 /**
@@ -2318,8 +2332,11 @@ function heldResult(name, text, held, fields) {
   if (held.blockedBy === 'shell') {
     return {
       ok: false, code: 409, held,
-      message: 'claude stopped running in this session while the message was being typed — it is '
-        + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
+      message: held.shellMode
+        ? "this session's prompt is in shell mode (!), where Enter would have run the message as a "
+          + 'shell command, so it was NOT sent. It is sitting in the prompt: clear it from the Screen tab.'
+        : 'claude stopped running in this session while the message was being typed — it is '
+          + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
     };
   }
   return { ok: true, ...fields, submitted: false, held };
@@ -2844,11 +2861,14 @@ async function checkGates(name) {
   // and is what is down there a shell prompt waiting to run whatever it is given.
   const composer = lines ? typing.composerDrawn(lines) : false;
   const shell = lines ? typing.shellPrompt(lines) : false;
+  // The third: Claude is up, but its prompt is in shell mode (`!`), where an
+  // Enter runs the box as a command — the #15 harm with a composer drawn.
+  const shellMode = lines ? typing.composerShellMode(lines) : false;
   // A capture that FAILED says nothing about startup — the session is probably
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
-  return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell,
+  return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell, shellMode,
     sessionState: readSessionState(name) };
 }
 
@@ -3199,7 +3219,9 @@ async function pumpQueue(name) {
         // job that finds the family already changed must be binned, not run.
         // One queue, two payload shapes; nothing else differs.
         const refusal = typeof entry.run === 'function' ? null
-          : typing.submitRefusal({ submit: entry.submit, composer: gate.composer, shell: gate.shell });
+          : typing.submitRefusal({
+            submit: entry.submit, composer: gate.composer, shell: gate.shell, shellMode: gate.shellMode,
+          });
         if (refusal) {
           // ⚠ NOT DELIVERED, AND SAID SO. The pane is a root shell and the Enter
           // would make bash run the owner's message (#15). 409 rather than 500:
@@ -3994,6 +4016,8 @@ async function captureScreen(name, {
     // the degraded card / pending-plan fields.
     ...(() => {
       const pf = promptFor(name, lines);
+      // A look without the answered question on it ends that answer's memo.
+      forgetAnsweredIfGone(name, pf.prompt);
       return { prompt: pf.prompt, ask: pf.ask, planPending: pf.planPending };
     })(),
     // The moment-to-moment status ("Gallivanting… · 3m 15s") exists only here:
@@ -8532,14 +8556,77 @@ async function answerByArrows(name, fingerprint, chosen) {
  * with its own identity, and the digit must not land on it.
  */
 async function answerMovedOn(name, fingerprint) {
+  return movedOnFrom(await questionNow(name), fingerprint);
+}
+
+/** The question on the pane right now, read straight (no geometry round trip), or null. */
+async function questionNow(name) {
   const lines = await paneLines(name);
-  const prompt = lines ? promptFor(name, lines).prompt : null;
+  return lines ? promptFor(name, lines).prompt : null;
+}
+
+/** `answerMovedOn`'s verdict on a question already read. */
+function movedOnFrom(prompt, fingerprint) {
   if (prompt && prompt.fingerprint === fingerprint) return null;
   if (!prompt) return { ok: false, reason: 'gone', error: 'that question is no longer on screen' };
   return {
     ok: false, reason: 'changed', error: 'the session is asking something else now',
     prompt, fingerprint: prompt.fingerprint,
   };
+}
+
+/** The number of the row the question's caret is on, or null. */
+function caretRow(prompt) {
+  const o = prompt && Array.isArray(prompt.options) ? prompt.options.find((x) => x.selected) : null;
+  return o ? o.number : null;
+}
+
+/** How long a typed answer may take to show on the pane, and how often to look. */
+const ANSWER_SETTLE_MS = 1500;
+const ANSWER_SETTLE_POLL_MS = 50;
+
+/**
+ * What a typed option digit did, read off the pane after it went in.
+ *
+ *   'gone'     the question left the screen: the digit answered it
+ *   'focused'  the same question is up and the digit moved its caret onto the
+ *              chosen row without answering it
+ *   'still'    nothing moved within ANSWER_SETTLE_MS
+ *
+ * ⚠ THE DIGIT ANSWERS ITS ROW, SO THE ENTER AFTER IT MUST NOT BE BLIND. In
+ * Claude Code 2.1.302 a digit on a numbered selector calls the Select's
+ * onChange at once, and /answer and the consent backstop used to follow it with
+ * an Enter regardless: that Enter reached whatever had focus next — a draft in
+ * the composer, which it submitted, appd's own message held in the box behind
+ * the dialog, or the next dialog in the queue. The one row a digit only
+ * FOCUSES is an input row with nothing typed in it (plan approval's "No, keep
+ * planning", AskUserQuestion's "Type something."), and that row's own Enter is
+ * what answers it. So the Enter goes only on 'focused', which this look sees
+ * only when the caret was elsewhere before the digit; a pane that has not
+ * caught up reads 'still', and still gets no Enter.
+ */
+async function watchAnswer(name, fingerprint, { option = null, caretWas = null } = {}) {
+  const started = Date.now();
+  for (;;) {
+    const lines = await paneLines(name);      // a read that failed says nothing either way
+    if (lines) {
+      const prompt = promptFor(name, lines).prompt;
+      if (!prompt || prompt.fingerprint !== fingerprint) return 'gone';
+      if (option != null && caretWas !== option && caretRow(prompt) === option) return 'focused';
+    }
+    if (Date.now() - started >= ANSWER_SETTLE_MS) return 'still';
+    await sleep(ANSWER_SETTLE_POLL_MS);
+  }
+}
+
+/**
+ * After an answer went in: the memo, but only if the question is still on the
+ * pane once the look is over. A question that has left needs none — a second
+ * copy of the answer reads the pane and the ordinary guards refuse it — and a
+ * memo written for it would refuse the identical question asked next.
+ */
+async function settleAnswer(name, fingerprint, now = Date.now()) {
+  if ((await watchAnswer(name, fingerprint)) !== 'gone') rememberAnswered(name, fingerprint, now);
 }
 
 /**
@@ -10139,41 +10226,49 @@ async function consentWatch(state, settings, sessions, now) {
     const on = meta && typeof meta.autoResume === 'boolean' ? meta.autoResume : settings.autoResume !== false;
     if (!on) continue;
     const row = prompt.options.find((o) => o.number === prompt.recommended);
-    // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
-    //
-    // consentRecommended's own contract says the number is validated against a
-    // freshly-read fingerprint, the way /answer does it for a person's tap. This
-    // path did not: it pressed a digit against a capture taken a grace period
-    // ago. If the owner answered in that window — or the dialog simply moved —
-    // a bare digit and an Enter are submitted as a chat message into a working
-    // conversation. The row is matched by LABEL as well as by number, because
-    // the number alone is what a renumbered list keeps.
-    // A LEAN read: the pane, straight, with none of captureScreen's geometry
-    // round trip — the only question being asked is "is the same dialog still
-    // there", and this has to sit as close to the keystroke as it can.
-    const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
-    const fresh = again.err
-      ? null
-      : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
-    if (!row || !sameConsent(prompt, fresh)) {
-      log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
-      consentSeen.delete(s.name);
-      continue;
-    }
     // ⚠ UNDER /answer's LOCK (#11). This types a digit at the same pane the
     // /answer route does, and the two can meet: a person taps the notification
     // in the same second the grace expires here, and both digits land. The lock
-    // is per session and the memo is checked inside it, so whichever gets there
-    // second types nothing.
+    // is per session and the pane is re-read inside it, so whichever gets there
+    // second finds the dialog gone and types nothing. (The re-read used to sit
+    // outside the lock and the memo alone stood in for it; the memo now ends as
+    // soon as an answer is seen to leave the pane, so it cannot.)
     const pressed = await withAnswerLock(s.name, async () => {
+      // ⚠ RE-READ IMMEDIATELY BEFORE THE KEY, and require the SAME dialog.
+      //
+      // consentRecommended's own contract says the number is validated against a
+      // freshly-read fingerprint, the way /answer does it for a person's tap. This
+      // path did not: it pressed a digit against a capture taken a grace period
+      // ago. If the owner answered in that window — or the dialog simply moved —
+      // a bare digit and an Enter are submitted as a chat message into a working
+      // conversation. The row is matched by LABEL as well as by number, because
+      // the number alone is what a renumbered list keeps.
+      // A LEAN read: the pane, straight, with none of captureScreen's geometry
+      // round trip — the only question being asked is "is the same dialog still
+      // there", and this has to sit as close to the keystroke as it can.
+      const again = await run('tmux', ['capture-pane', '-p', '-t', `=${s.name}:`]);
+      const fresh = again.err
+        ? null
+        : promptFor(s.name, again.stdout.replace(/\n$/, '').split('\n')).prompt;
+      if (!row || !sameConsent(prompt, fresh)) {
+        log(`headroom: the consent dialog on ${s.name} moved between the read and the keypress — nothing typed`);
+        return false;
+      }
       if (answeredRecently(s.name, fresh.fingerprint, now)) {
         log(`headroom: the consent dialog on ${s.name} was answered elsewhere — nothing typed`);
         return false;
       }
       const t = await run('tmux', ['send-keys', '-t', `=${s.name}:`, '-l', '--', String(prompt.recommended)]);
       if (t.err) { log(`headroom: consent answer failed on ${s.name}: ${t.stderr.trim()}`); return false; }
-      await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
-      rememberAnswered(s.name, fresh.fingerprint, now);
+      // The digit answers the row; no blind Enter after it (see watchAnswer).
+      const took = await watchAnswer(s.name, fresh.fingerprint,
+        { option: prompt.recommended, caretWas: caretRow(fresh) });
+      if (took === 'focused') {
+        await run('tmux', ['send-keys', '-t', `=${s.name}:`, 'Enter']);
+        await settleAnswer(s.name, fresh.fingerprint, now);
+      } else if (took === 'still') {
+        rememberAnswered(s.name, fresh.fingerprint, now);
+      }
       return true;
     });
     if (!pressed) { consentSeen.delete(s.name); continue; }
@@ -12238,17 +12333,6 @@ async function handleRequest(req, res) {
       if (keys.length > 32) return sendErr(res, 400, 'too many keys');
       for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
       /**
-       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
-       * own submit.
-       *
-       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
-       * that Enter is part of the message, not an interrupt: the paste path
-       * presses it, with the right beat, once. Everything else in `keys` — an
-       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
-       * cannot wait, which is what the modal refusal below is about.
-       */
-      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
-      /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
        * A pane takes a message and a page holds up to 100,000 characters, so
@@ -12278,6 +12362,26 @@ async function handleRequest(req, res) {
         const overflow = scratchpadsLib.sessionFitProblem(typedKeys, frame, typing.SESSION_TEXT_MAX);
         if (overflow) return sendErr(res, 413, overflow);
       }
+      /**
+       * The keys that are genuinely KEY PRESSES, as opposed to the composer's
+       * own submit.
+       *
+       * Both clients send `{text, keys:["Enter"]}` for "send this message", and
+       * that Enter is part of the message, not an interrupt: the paste path
+       * presses it, with the right beat, once. Everything else in `keys` — an
+       * Escape, a BTab, an arrow — is a raw press that cannot be queued and
+       * cannot wait, which is what the modal refusal below is about.
+       *
+       * ⚠ DECIDED ONLY ONCE THE TEXT IS FINAL, i.e. after the page above is
+       * composed. It used to be decided before, while `text` was still empty for
+       * a page sent on its own — so `{scratchpadId, keys:["Enter"]}`, the shape
+       * the API reference gives for sending, kept its Enter as a raw press. That
+       * Enter went in at once, ahead of the queued page: into the dialog the page
+       * was being held for, where Enter on the highlighted row is Yes, or into
+       * an empty box, where it stamped the live-view mark and the draft guard
+       * then held the page for a draft nobody was typing.
+       */
+      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
       /**
        * ⚠ RAW KEYS ARE NEVER REFUSED FOR A MODAL, and there is no gate here.
        *
@@ -12648,7 +12752,7 @@ async function handleRequest(req, res) {
             .filter((o) => desired.includes(o.number)).map((o) => o.label);
           const viaHook = await tryHookAnswer(name, prompt, screen.lines, { options: desired });
           if (viaHook) {
-            rememberAnswered(name, live);
+            await settleAnswer(name, live);
             log(`answer: ${name} <- multi [${desired.join(',')}] via hook (${labelsOf().join(', ').slice(0, 80)})`);
             return sendJson(res, 200, { ok: true, options: desired, labels: labelsOf(), via: 'hook' });
           }
@@ -12669,7 +12773,7 @@ async function handleRequest(req, res) {
           if (enter2.err) return sendErr(res, 500, `tmux: ${enter2.stderr.trim()}`);
           const labels = prompt.options
             .filter((o) => desired.includes(o.number)).map((o) => o.label);
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- multi [${desired.join(',')}] (${labels.join(', ').slice(0, 80)})`);
           return sendJson(res, 200, { ok: true, options: desired, labels });
         }
@@ -12682,36 +12786,56 @@ async function handleRequest(req, res) {
             prompt, fingerprint: live,
           });
         }
+        // ⚠ A CHECKBOX ROW IS ONE ANSWER OF SEVERAL, never a digit and an Enter.
+        // On a multi-select question a digit only ticks its box and the answer
+        // is submitted from the review tab (the `options` branch above). A lone
+        // `{option}` here ticked one box, left the question waiting, answered
+        // `ok`, and wrote the memo that then refused the real answer for a
+        // minute. The mirror of the single-answer refusal above. The rows that
+        // are not boxes ("Chat about this") still take a single option.
+        if (prompt.multiSelect && typeof chosen.checked === 'boolean') {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed',
+            error: 'this question takes several answers', prompt, fingerprint: live,
+          });
+        }
 
         if (prompt.unnumbered) {
           const r = await answerByArrows(name, live, chosen);
           if (!r.ok) {
             return sendJson(res, 409, { ok: false, reason: 'changed', error: r.reason, prompt, fingerprint: live });
           }
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- ${option} by arrows (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'arrows' });
         }
 
         const viaHook = await tryHookAnswer(name, prompt, screen.lines, { option });
         if (viaHook) {
-          rememberAnswered(name, live);
+          await settleAnswer(name, live);
           log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
         // ⚠ AND LOOK AGAIN BEFORE THE DIGIT (answerMovedOn). The fingerprint above
         // was checked against a capture taken before the hook attempt, which can
-        // wait seconds; the keystroke goes to whatever is on screen now.
-        const moved = await answerMovedOn(name, live);
+        // wait seconds; the keystroke goes to whatever is on screen now. The
+        // same look says where the caret is, which watchAnswer needs.
+        const fresh = await questionNow(name);
+        const moved = movedOnFrom(fresh, live);
         if (moved) return sendJson(res, 409, moved);
 
-        // The digit and Enter separately, literal digit first, so a multi-digit option
-        // cannot be split across a submit.
+        // The digit alone answers its row; an Enter follows only when the look
+        // after it shows the digit merely focused the row (see watchAnswer).
         const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
         if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-        const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-        if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
-        rememberAnswered(name, live);
+        const took = await watchAnswer(name, live, { option, caretWas: caretRow(fresh) });
+        if (took === 'focused') {
+          const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
+          if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
+          await settleAnswer(name, live);
+        } else if (took === 'still') {
+          rememberAnswered(name, live);   // the pane has not caught up: the memo covers that
+        }
         log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
         return sendJson(res, 200, { ok: true, option, label: chosen.label });
       });

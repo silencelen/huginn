@@ -486,6 +486,66 @@ function detectPrompt(lines) {
   return detectNumberedPrompt(lines) || detectTrustDialog(lines);
 }
 
+// ---- any other unnumbered selector -------------------------------------------
+//
+// Claude Code 2.1.302 draws 58 of its selectors with `hideIndexes`: no `1.`
+// before a row, and digits do nothing. EnterPlanMode ("❯ Yes, enter plan mode"),
+// the decline-first permission ask ("❯ No" over "Yes"), "Claude wants to use
+// your browser", a message held from another session. While one is up the
+// composer is not drawn at all, so a message pasted then goes into the
+// selector, which takes arrows, Tab, space and digits and nothing else — it was
+// lost with no trace while every check here read the pane as an idle one.
+//
+// Recognised by the frame a selector is drawn in, the way detectTrustDialog
+// recognises its one dialog, never by the words on it:
+//   - a run of rows with ONE caret, `❯` INDENTED inside the frame, and at least
+//     one sibling whose label starts in the column the caret row's label does
+//     (rows indented deeper are a row's description)
+//   - below the run, at most a few footer rows and none of the chrome a live
+//     selector replaces: a rule, a caret, the status line, the mode hint, a
+//     spinner
+//   - above it, the frame's top border: a column-0 rule, with every row
+//     between it and the run indented as the dialog's own content
+// The composer's caret and an echoed message's are drawn at column 0, so
+// neither can start a run. This says only that a selector has the keyboard; it
+// is not offered as a prompt, so nothing here answers one.
+const UNNUMBERED_CARET_RE = /^(\s+)❯\s+(\S.*)$/;
+const FRAME_TOP_RE = /^─{3,}$/;
+const UNNUMBERED_FOOTER_MAX = 4;
+const UNNUMBERED_SCAN_MAX = 24;   // rows under the caret: options, their descriptions, the footer
+
+function detectUnnumberedSelector(lines) {
+  const plain = (lines || []).map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  const chrome = (row) => RULE_RE.test(row) || PROMPT_MARK_RE.test(row) || STATUS_RE.test(row)
+    || MODE_HINT_RE.test(row) || SPINNER_RE.test(row);
+  // Up from the bottom to the caret row, past nothing that is chrome.
+  let at = -1;
+  for (let i = plain.length - 1, seen = 0; i >= 0; i--) {
+    const row = plain[i];
+    if (!row.trim()) continue;
+    if (UNNUMBERED_CARET_RE.test(row)) { at = i; break; }
+    if (chrome(row) || ++seen > UNNUMBERED_SCAN_MAX) return false;
+  }
+  if (at < 0) return false;
+  const m = UNNUMBERED_CARET_RE.exec(plain[at]);
+  const col = plain[at].length - m[2].length;          // where the caret row's label starts
+  const inRun = (row) => !!row.trim() && !row.includes('❯') && indentOf(row) >= col;
+  let top = at;
+  while (top > 0 && inRun(plain[top - 1])) top--;
+  let end = at;
+  while (end < plain.length - 1 && inRun(plain[end + 1])) end++;
+  let siblings = 0;
+  for (let k = top; k <= end; k++) if (k !== at && indentOf(plain[k]) === col) siblings++;
+  if (!siblings) return false;
+  if (plain.slice(end + 1).filter((r) => r.trim()).length > UNNUMBERED_FOOTER_MAX) return false;
+  for (let k = top - 1; k >= 0; k--) {
+    const row = plain[k];
+    if (!row.trim() || /^\s/.test(row)) continue;       // the dialog's own content
+    return FRAME_TOP_RE.test(row);
+  }
+  return false;
+}
+
 // ---- the Fable consent dialog ----------------------------------------------
 //
 // When a Fable session passes the point where further Fable use bills usage
@@ -975,7 +1035,7 @@ function loginPaneState(lines) {
 
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
-  detectTrustDialog, dialogBodyRows, drawsAskRows,
+  detectTrustDialog, detectUnnumberedSelector, dialogBodyRows, drawsAskRows,
   consentRecommended,
   sameConsent,
   parseModelPicker,
