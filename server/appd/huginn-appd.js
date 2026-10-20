@@ -4159,7 +4159,9 @@ class Run {
     this.done = true;
     for (const res of this.subscribers) { try { res.end(); } catch { } }
     this.subscribers.clear();
-    activeRuns.delete(this.chatId);
+    // Only its OWN slot: by the time a stale run finishes, the chat may already
+    // hold the next run (started from the queue), which this must not orphan.
+    if (activeRuns.get(this.chatId) === this) activeRuns.delete(this.chatId);
   }
 }
 
@@ -4494,6 +4496,13 @@ function droppedNote(dropped, why) {
 function settleRun(run_, { exitCode = null, failureText = null } = {}) {
   const chatId = run_.chatId;
   const ts = Math.floor(Date.now() / 1000);
+  // ⚠ A RUN SETTLES ONCE. A remote run can be ended from two places at once (the
+  // device's done frame, and a loss: silence, the hard cap, an unenrolled device),
+  // and a second settle wrote a second ending and counted a second finished run.
+  if (run_.done) {
+    log(`chat ${chatId}: a run that already ended was ended again; ignored`);
+    return;
+  }
 
   // ⚠ THE SLOT IS RELEASED WHATEVER HAPPENS. Everything above `run_.finish()`
   // touches the disk, and `appendMsg` on a full or read-only disk throws — which
@@ -12627,6 +12636,12 @@ async function handleRequest(req, res) {
         // OLDER runner does not know to, and rejecting its batch loses the whole
         // answer rather than the oversized part of it.
         const body = await readJsonBody(req, 1024 * 1024);
+        // ⚠ STILL THE RUN WE LOOKED UP? `entry` was read before the body arrived,
+        // and a run can end while it does: the device's done frame overtaking this
+        // batch on another connection, or a loss. Applying the batch anyway wrote
+        // the answer and a result AFTER the run had been settled ("ended without a
+        // result") and, for a Round, filed and sealed. A 404 is final to a runner.
+        if (remoteRuns.get(workId) !== entry) return sendErr(res, 404, 'that run has ended');
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 
