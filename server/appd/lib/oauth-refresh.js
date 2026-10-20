@@ -79,6 +79,14 @@ const FRESH_MS = 60 * 60 * 1000;
 
 /** Warn the owner this far ahead of the refresh token's OWN expiry. */
 const WARN_AHEAD_MS = 48 * 60 * 60 * 1000;
+/**
+ * How far an expiry may move and still be the one the owner was warned about.
+ * Each rotation restates the same absolute expiry as "now + whole seconds", so
+ * it wobbles by about one request's latency; signing in again moves it by weeks.
+ */
+const WARN_SLACK_MS = 60 * 60 * 1000;
+/** A warning that reached nobody is tried again after this long, not every tick. */
+const WARN_RETRY_MS = 60 * 60 * 1000;
 
 /**
  * Every status one attempt can end in. Deliberately the CLI's own vocabulary so
@@ -265,6 +273,26 @@ function refreshTokenWarnDue(rec, nowMs = Date.now()) {
   return rt > nowMs && rt - nowMs <= WARN_AHEAD_MS;
 }
 
+/**
+ * Has the owner already been told about THIS refresh token's expiry?
+ *
+ * ⚠ SCOPED TO THE EXPIRY, NOT TO THE ACCOUNT. `warnedAt` rides along every time
+ * the record is rewritten — a refresh, a switch, signing in again — and the test
+ * used to be just "is it set", so one warning silenced that login for good: its
+ * next expiry, a month after the owner had signed back in, arrived unannounced
+ * and the login lapsed. A warning is only ever sent inside the WARN_AHEAD_MS
+ * before the expiry it is about, so one sent before the CURRENT expiry's window
+ * opened was about an earlier one.
+ */
+function refreshTokenWarned(rec) {
+  const o = oauthOf(rec);
+  const r = refreshOf(rec);
+  const rt = typeof o.refreshTokenExpiresAt === 'number' ? o.refreshTokenExpiresAt : null;
+  const at = r && typeof r.warnedAt === 'number' ? r.warnedAt : null;
+  if (rt === null || !at) return false;
+  return at >= rt - WARN_AHEAD_MS - WARN_SLACK_MS;
+}
+
 /** Same truncated SHA-256 of the refresh token the store keys profiles by. */
 function printOf(x) {
   const rt = oauthOf(x).refreshToken;
@@ -445,8 +473,9 @@ function statusLine(status) {
 
 module.exports = {
   TOKEN_URL, CLIENT_ID, SCOPES, STATUSES,
-  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, NOT_REFRESHABLE_RETRY_MS,
+  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, WARN_SLACK_MS, WARN_RETRY_MS,
+  NOT_REFRESHABLE_RETRY_MS,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
-  deadSince, refreshTokenWarnDue, projectScopes, oauthOf, refreshOf, printOf,
+  deadSince, refreshTokenWarnDue, refreshTokenWarned, projectScopes, oauthOf, refreshOf, printOf,
   refreshWithStore, statusLine,
 };

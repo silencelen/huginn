@@ -6001,25 +6001,33 @@ async function refreshProfile(slug) {
 }
 
 /**
- * Tells the owner a refresh token is about to expire, once.
+ * Tells the owner a refresh token is about to expire, once per expiry.
  *
  * Past `refreshTokenExpiresAt` nothing this daemon can do brings the login back —
  * only an interactive `claude auth login` does — so the warning has to arrive
- * BEFORE the cliff. Sent once per profile and then recorded, because the
+ * BEFORE the cliff. Sent once per expiry and then recorded, because the
  * condition stays true for the whole two days and a daily reminder of something
  * the owner has already been told is how a channel gets muted.
+ *
+ * @returns whether anybody was reached: a push to at least one device, or the
+ *   Telegram relay accepting it.
  */
 async function notifyRefreshWarning(rec) {
   const at = rec.credentials.claudeAiOauth.refreshTokenExpiresAt;
   const when = new Date(at).toISOString().slice(0, 16).replace('T', ' ');
   const text = `${rec.email || rec.slug} needs a fresh sign-in by ${when} UTC — its refresh token `
     + `expires then and huginn cannot renew it after that. Run \`claude auth login\` for that account.`;
-  log(`refresh ${rec.slug}: warning owner, refresh token expires soon`);
   const push = await deliverPush({
     kind: 'account_refresh', title: 'A saved Claude login is expiring', text, subject: rec.slug,
   });
-  if (!push.sent) await deliverTelegram(`${GLYPH.needsYou} a saved Claude login is expiring\n${text}`);
-  return true;
+  // ⚠ THE ANSWER IS WHETHER SOMEBODY GOT IT. This used to answer true however
+  // both channels went, and the caller recorded the warning as given — so a host
+  // whose push reached no device and whose relay failed (or was never set up)
+  // marked it done having told nobody, and never tried again.
+  const reached = push.sent > 0
+    || await deliverTelegram(`${GLYPH.needsYou} a saved Claude login is expiring\n${text}`);
+  log(`refresh ${rec.slug}: refresh token expires soon — ${reached ? 'owner warned' : 'the warning reached nobody'}`);
+  return reached;
 }
 
 /**
@@ -6042,10 +6050,16 @@ async function refreshTick() {
       // reach for the lock on the owner's own account.
       if (activePrint && fingerprint(rec.credentials) === activePrint) continue;
 
-      if (oauthRefresh.refreshTokenWarnDue(rec, now) && !(rec.refresh && rec.refresh.warnedAt)) {
+      // Once per EXPIRY (refreshTokenWarned says why that is not "once ever"),
+      // recorded only once it reached somebody. One that reached nobody is tried
+      // again an hour later rather than every tick: on a host with no push and no
+      // relay, every tick for two days would be a journal line a minute.
+      const triedAt = rec.refresh && typeof rec.refresh.warnTriedAt === 'number' ? rec.refresh.warnTriedAt : 0;
+      if (oauthRefresh.refreshTokenWarnDue(rec, now) && !oauthRefresh.refreshTokenWarned(rec)
+        && now - triedAt >= oauthRefresh.WARN_RETRY_MS) {
         try {
-          await notifyRefreshWarning(rec);
-          accounts.recordRefresh(a.slug, { warnedAt: now });
+          const reached = await notifyRefreshWarning(rec);
+          accounts.recordRefresh(a.slug, reached ? { warnedAt: now } : { warnTriedAt: now });
         } catch (e) { log(`refresh ${a.slug}: warning failed`, e.message); }
       }
 
