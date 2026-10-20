@@ -550,6 +550,101 @@ function startsAtBoundary(path, start) {
   }
 }
 
+const QUEUE_OP = Buffer.from('queue-operation');
+const SCAN_CHUNK = 4 * 1024 * 1024;
+
+/**
+ * Which of a history page's still-queued messages a record BELOW the page
+ * delivered: the first `remove` of the same text (the queue hands copies over
+ * oldest first), or any `dequeue`, which drains everything waiting.
+ *
+ * Reads forward from `from` only as far as it takes to account for every one of
+ * them, and parses only the lines that are queue records — the rest of a long
+ * session is tool output, and a page should not pay for parsing it.
+ */
+function deliveredBelow(path, from, to, queued) {
+  const waiting = new Map();
+  for (const [content, evs] of queued) if (evs.length) waiting.set(content, evs.slice());
+  const done = new Set();
+  let fd;
+  try { fd = fs.openSync(path, 'r'); } catch { return done; }
+  try {
+    let pos = from;
+    let carry = Buffer.alloc(0);
+    while (pos < to && waiting.size) {
+      const buf = Buffer.alloc(Math.min(SCAN_CHUNK, to - pos));
+      const n = fs.readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      pos += n;
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
+      for (let at = 0; waiting.size;) {
+        const hit = chunk.indexOf(QUEUE_OP, at);
+        if (hit === -1) break;
+        const lineEnd = chunk.indexOf(0x0a, hit);
+        if (lineEnd === -1) break;                   // still being written: the carry has it
+        const lineStart = chunk.lastIndexOf(0x0a, hit) + 1;
+        at = lineEnd + 1;
+        let d;
+        try { d = JSON.parse(chunk.toString('utf8', lineStart, lineEnd)); } catch { continue; }
+        if (!d || d.type !== 'queue-operation') continue;
+        if (d.operation === 'dequeue') {
+          for (const evs of waiting.values()) for (const ev of evs) done.add(ev);
+          waiting.clear();
+        } else if (d.operation === 'remove') {
+          const content = typeof d.content === 'string' ? d.content : '';
+          const evs = waiting.get(content);
+          if (evs) {
+            done.add(evs.shift());
+            if (!evs.length) waiting.delete(content);
+          }
+        }
+      }
+      const lastNl = chunk.lastIndexOf(0x0a);
+      carry = Buffer.from(lastNl === -1 ? chunk : chunk.subarray(lastNl + 1));
+    }
+  } finally { try { fs.closeSync(fd); } catch { } }
+  return done;
+}
+
+const DRAIN_LOOKBACK_BYTES = 256 * 1024;
+
+/**
+ * The queue drain just above `start` whose echoes may still be arriving: the
+ * last `dequeue` before `start`, unless an assistant record of the turn it fed
+ * (stamped at or after it) has followed it since. Null when there is none.
+ *
+ * Bounded: an echo lands a second or two behind its drain, behind at most a few
+ * records the old turn flushed late, so a drain further up than
+ * DRAIN_LOOKBACK_BYTES is not one this window can be the rest of.
+ */
+function drainAbove(path, start) {
+  if (!(start > 0)) return null;
+  const from = Math.max(0, start - DRAIN_LOOKBACK_BYTES);
+  let buf;
+  let fd;
+  try {
+    fd = fs.openSync(path, 'r');
+    buf = Buffer.alloc(start - from);
+    buf = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, from));
+  } catch { return null; } finally {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+  }
+  // The first line is a fragment unless the read began at the top of the file.
+  const first = from > 0 ? buf.indexOf(0x0a) + 1 : 0;
+  if (from > 0 && first === 0) return null;
+  let drain = null;
+  for (const line of buf.toString('utf8', first).split('\n')) {
+    if (!line) continue;
+    let d;
+    try { d = JSON.parse(line); } catch { continue; }
+    const tsMs = d.timestamp ? Date.parse(d.timestamp) || null : null;
+    if (d.type === 'queue-operation' && d.operation === 'dequeue') drain = { tsMs };
+    else if (drain && d.type === 'assistant'
+      && (drain.tsMs === null || tsMs === null || tsMs >= drain.tsMs)) drain = null;
+  }
+  return drain;
+}
+
 function readTranscript(path, { offset = null, limit = 400, until = null, peerIds = null, _resuming = null } = {}) {
   const st = fs.statSync(path);
   // Where this window ENDS. Normally the end of the file; `until` walks backwards
@@ -735,6 +830,15 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
   let drainedAboveTs = null;
   let drainedHere = false;
   const DRAIN_ECHO_S = 120;
+  /**
+   * What this window knows of a drain on the other side of its own start: whether
+   * it has a dequeue of its own, whether it has already asked above (once per
+   * read), and the newest assistant record it has passed — a turn that began in
+   * here ends the echoes of a drain up there. See [drainAbove].
+   */
+  let sawDequeue = false;
+  let lookedAbove = false;
+  let newestAssistantMs = null;
   let seq = 0;
   /**
    * A queued message has been delivered: un-badge it and move it to HERE.
@@ -908,6 +1012,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             }
           }
         } else if (d.operation === 'dequeue') {
+          sawDequeue = true;
           // THE QUEUE DRAINED, into a Claude that had gone idle: everything
           // still waiting was delivered HERE, in the order it was sent.
           //
@@ -1102,10 +1207,34 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           if (rest) out.events.push({ seq: ++seq, kind: 'user', ts, sidechain, text: rest });
           continue;
         }
+        // ⚠ THE DRAIN MAY BE JUST ABOVE THIS WINDOW. Claude Code writes the
+        // dequeue and then its echoes, and a poll can end between the two —
+        // right after the dequeue, or after records the old turn flushed behind
+        // it. Knowing only a dequeue in its own window, the next read took each
+        // echo for a new message: the bubble twice, and the badge on the
+        // reader's copy never cleared. So a resumed read that reaches a message
+        // with no drain of its own in view asks the records above its start
+        // whether one is still waiting for echoes — the state this guard would
+        // have had if the poll had not split there.
+        if (!drainedAbove && resuming && !sawDequeue && !lookedAbove) {
+          lookedAbove = true;
+          const above = drainAbove(path, windowStart);
+          if (above && (newestAssistantMs === null || above.tsMs === null || newestAssistantMs < above.tsMs)) {
+            drainedAbove = true;
+            drainedAboveTs = above.tsMs;
+          }
+        }
         // The records a drain we could not see delivered — see [drainedAbove].
         // Reported, not emitted: the reader is resuming and already has them.
+        //
+        // ⚠ ONLY RECORDS STAMPED AT OR AFTER THE DRAIN. An echo is written behind
+        // its dequeue — across this host's transcripts, 1,663 echoes and every one
+        // 4 ms to 9 s after it — but the old turn's own records are flushed behind
+        // the dequeue too, stamped BEFORE it, and a person's message among those
+        // is a message, not the echo of one. Taking it for an echo dropped it.
         if (drainedAbove
-          && (drainedAboveTs === null || tsMs === null || Math.abs(tsMs - drainedAboveTs) <= DRAIN_ECHO_S * 1000)) {
+          && (drainedAboveTs === null || tsMs === null
+            || (tsMs >= drainedAboveTs && tsMs - drainedAboveTs <= DRAIN_ECHO_S * 1000))) {
           out.deliveredQueued.push(t);
           continue;
         }
@@ -1123,6 +1252,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         // the new turn released the guard before the drained `user` record it
         // exists for even arrived.
         if (drainedAboveTs === null || tsMs === null || tsMs >= drainedAboveTs) drainedAbove = false;
+        if (tsMs !== null && (newestAssistantMs === null || tsMs > newestAssistantMs)) newestAssistantMs = tsMs;
         const m = d.message || {};
         if (m.model) out.model = m.model;
         // Claude Code stamps the effort level on each assistant record, so the
@@ -1214,6 +1344,22 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         recordAt.set(out.events[k], recordOffset);
       }
     }
+  }
+
+  // ⚠ A HISTORY PAGE DOES NOT DRAW A MESSAGE THAT WAS DELIVERED BELOW IT. A
+  // window that ends at `until` sees a mid-turn enqueue but not the remove or
+  // dequeue that delivered it minutes of tool output later — and kept it
+  // `queued`, floated to the bottom of the page. The page below already drew it:
+  // it was read cold (a tail, or a newer history page; `until` is always where
+  // one of those began), and a cold read draws a delivery whose enqueue it
+  // cannot see as the message itself, at its delivery point. The client
+  // prepends pages without reconciling them, so the view showed it twice, one
+  // copy forever claiming to be waiting. Only a message nothing below delivered
+  // is still waiting, and only that one keeps its badge and its float.
+  // Not in the window-size probes at the top, which only count.
+  if (until != null && _resuming == null && end < st.size && queued.size) {
+    const below = deliveredBelow(path, end, st.size, queued);
+    if (below.size) out.events = out.events.filter((e) => !below.has(e));
   }
 
   // Anything STILL waiting floats to the bottom.

@@ -34,6 +34,7 @@
 // -> native row BY `sessionId`, and never touches that field. [joinMembers]
 
 const { SESSION_TEXT_MAX } = require('./typing');
+const { ACTIVE_S } = require('./agents');
 
 /** Display name of a project. Same number, same argument, as a scratchpad's. */
 const MAX_NAME = 60;
@@ -795,32 +796,55 @@ function aggregateDashboard(rows) {
  * that can be 30 MB. Twelve members on a five-second poll against an eight-entry
  * LRU evicted EVERY member on EVERY tick, and the two sessions a desktop was
  * watching along with them. The cache is now 24 (lib/sessiongraph.js), and this
- * holds `{sessionId -> {size, overview}}` so a member whose transcript has not
- * grown is not walked at all.
+ * holds `{sessionId -> {size, agentBytes, overview}}` so a member whose
+ * transcripts have not grown is not walked at all.
  *
- * `overview` and `sizeOf` are injected so the rule can be asserted with a spy —
- * "twelve members, three polls, twelve walks" is the assertion, and it is not
- * one a live daemon can be asked for.
+ * `overview`, `sizeOf` and `agentBytesOf` are injected so the rule can be
+ * asserted with a spy — "twelve members, three polls, twelve walks" is the
+ * assertion, and it is not one a live daemon can be asked for.
  */
-function rollupMembers(members, { cache, sizeOf, overview }) {
+function rollupMembers(members, { cache, sizeOf, overview, agentBytesOf = () => 0, now = Date.now() }) {
+  const nowSec = Math.floor(now / 1000);
   const rows = [];
   for (const m of members || []) {
     if (!m.sessionId || !m.transcript) { rows.push({ ...m, overview: null }); continue; }
     const size = sizeOf(m.transcript);
     if (size == null) { rows.push({ ...m, overview: null }); continue; }
+    // ⚠ TWO NUMBERS, the cursor /graph keeps, and for its reason: a member's
+    // spend also lives in its AGENTS' files, and a parent writes nothing at all
+    // while its agents run. Keyed on the parent alone, a fan-out's tokens and
+    // cost stayed frozen at their pre-fan-out values for as long as it lasted.
+    const agentBytes = agentBytesOf(m.transcript, m.sessionId);
     const hit = cache.get(m.sessionId);
-    // Equal size means an unchanged answer — a transcript is append-only. A
+    // Equal sizes mean an unchanged walk — transcripts are append-only. A
     // SMALLER file is a different conversation at the same path and must forget,
     // which falls out of `!==` rather than needing a branch of its own.
-    if (hit && hit.size === size && hit.file === m.transcript) {
-      rows.push({ ...m, overview: hit.overview });
+    if (hit && hit.size === size && hit.agentBytes === agentBytes && hit.file === m.transcript) {
+      rows.push({ ...m, overview: overviewAt(hit.overview, nowSec) });
       continue;
     }
     const o = overview(m.transcript, m.sessionId);
-    cache.set(m.sessionId, { size, file: m.transcript, overview: o });
+    cache.set(m.sessionId, { size, agentBytes, file: m.transcript, overview: o });
     rows.push({ ...m, overview: o });
   }
   return rows;
+}
+
+/**
+ * A remembered overview as it reads at `nowSec`.
+ *
+ * ⚠ EVERY FIELD IS A FACT ABOUT BYTES EXCEPT `rate.activeRecently`, which is a
+ * fact about the CLOCK (sessiongraph's rateOf: the last record within ACTIVE_S
+ * of now). Served from the cache it said what was true at the last walk, so a
+ * member polled while it worked stayed "active" for hours after it stopped and
+ * the pace line never said "nothing recent". Re-asked here with the same rule,
+ * which costs nothing; with no new bytes it can only go from true to false.
+ */
+function overviewAt(o, nowSec) {
+  const r = o && o.rate;
+  if (!r || !r.activeRecently) return o;
+  if (r.lastActivityTs && nowSec - r.lastActivityTs <= ACTIVE_S) return o;
+  return { ...o, rate: { ...r, activeRecently: false } };
 }
 
 /** One member's row as a client reads it: the join, plus its share of the spend. */

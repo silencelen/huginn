@@ -912,10 +912,27 @@ function sessionOverview(file, sessionId, opts) {
   return rest;
 }
 
+/**
+ * The cursor's second number without parsing anything: the bytes this session's
+ * agent transcripts hold, summed over the same files collectAgents sums.
+ *
+ * For a caller that keeps an overview and has to know when it went stale. The
+ * parent's size cannot tell it: a parent writes nothing while its agents run,
+ * so on its own it says "unchanged" for the whole of a fan-out.
+ */
+function agentBytesOf(file, sessionId) {
+  if (!file || !sessionId) return 0;
+  let total = 0;
+  for (const f of listAgentFiles(path.join(path.dirname(file), sessionId, 'subagents'))) {
+    try { total += fs.statSync(f.file).size; } catch { /* gone between the listing and the stat */ }
+  }
+  return total;
+}
+
 function resetCache() { cache.clear(); }
 
 module.exports = {
-  sessionGraph, sessionOverview, resetCache,
+  sessionGraph, sessionOverview, agentBytesOf, resetCache,
   walkLines, usageOnce, turnNodes, newState, consume, buildWire, clip,
   CACHE_MAX, LABEL_MAX,
 };

@@ -106,7 +106,7 @@ pin changes when the certificate is replaced.
 
 | Stream | How |
 |---|---|
-| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. |
+| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. It answers `503` when tmux cannot be read, never an empty session list. |
 | A chat run | `POST /v1/chats/<id>/messages?stream=1` answers with an event stream of the run. Each event has an `id:` (its sequence number) and one of the types `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`, `error`, `done`. Reattach after a dropped connection with `GET /v1/chats/<id>/stream?since=<last id>`; the daemon replays what you missed. |
 | A session's screen | `GET /v1/sessions/<name>/screen?hash=<h>&wait=<ms>` holds the request until the screen differs from `h`, or the wait ends. |
 
@@ -200,7 +200,7 @@ See [Security](../security.md#chats-ask-and-act) for what each mode may do.
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/rounds` | Scheduled runs. |
-| POST | `/v1/rounds` | `{title, prompt, goal?, schedule, ...}`: create one. `schedule` is `{kind: "weekly", days: [0-6], at: "HH:MM", tz?}`, or `daily` or `hourly`. |
+| POST | `/v1/rounds` | `{title, prompt, goal?, schedule, ...}`: create one. `schedule` is one of `{kind: "daily", at: "HH:MM", tz?}`, `{kind: "weekly", days: [0-6], at, tz?}` (0 is Sunday), `{kind: "monthly", dates: [1-31], at, tz?}` (a date a month does not have is skipped that month) or `{kind: "interval", everyMinutes: 5-10080, tz?}`. `tz` is an IANA zone name; without it the round uses the server's zone. |
 | GET, PATCH, DELETE | `/v1/rounds/<id>` | View, change or delete a round. |
 | POST | `/v1/rounds/<id>/run` | Run it now. |
 | POST | `/v1/rounds/<id>/ack` | Mark its latest report as read and dealt with. |

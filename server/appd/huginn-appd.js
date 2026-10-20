@@ -55,7 +55,7 @@ const devicesLib = require('./lib/devices');
 const appsLib = require('./lib/apps');           // next to devices on purpose: it is the registry devices is NOT (lib/apps.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
-const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
+const { sessionGraph, sessionOverview, agentBytesOf, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
 // Projects: the name grammars, the manifest contract and its parser, the
 // membership join across three registries, and the dashboard rollup. Pure, so
 // "never join a member by the native row's `tmux` field" and "the LAST tagged
@@ -5951,20 +5951,31 @@ function reconcileInterruptedRuns() {
   for (const id of ids) {
     const meta = loadMeta(id);
     if (!meta || !meta.runStartedAt || activeRuns.has(id)) continue;
-    const ts = Math.floor(Date.now() / 1000);
-    const text = 'interrupted: huginn-appd restarted while this was running';
-    appendMsg(id, { type: 'error', text, ts });
-    updateMeta(id, (m) => {
-      m.finishedRuns = (m.finishedRuns || 0) + 1;
-      m.finishedAt = ts;
-      m.updatedAt = ts;
-      // The snippet is what the notification says, so it has to stop claiming the
-      // question was the answer.
-      m.lastSnippet = text.slice(0, 120);
-      delete m.runStartedAt;
-    });
-    reconcileInterruptedRound(loadMeta(id) || meta);
-    log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
+    // ⚠ BEST EFFORT, ONE CHAT AT A TIME. This runs in the startup chain before
+    // the port opens, and that chain's only handler is FATAL + exit(1) — so a
+    // full or read-only data disk turned one interrupted run into a daemon
+    // that died on every start, in a 3 s systemd loop, taking the session list,
+    // the screens and typing (none of which needs the disk) down with it. The
+    // marker stays on disk when this fails, so the next start with room left
+    // records it; nothing is lost by skipping it now.
+    try {
+      const ts = Math.floor(Date.now() / 1000);
+      const text = 'interrupted: huginn-appd restarted while this was running';
+      appendMsg(id, { type: 'error', text, ts });
+      updateMeta(id, (m) => {
+        m.finishedRuns = (m.finishedRuns || 0) + 1;
+        m.finishedAt = ts;
+        m.updatedAt = ts;
+        // The snippet is what the notification says, so it has to stop claiming the
+        // question was the answer.
+        m.lastSnippet = text.slice(0, 120);
+        delete m.runStartedAt;
+      });
+      reconcileInterruptedRound(loadMeta(id) || meta);
+      log(`chat ${id}: run interrupted by restart (started ${meta.runStartedAt}) — recorded`);
+    } catch (e) {
+      log(`chat ${id}: could not record the run a restart interrupted, left for the next start: ${e.message}`);
+    }
   }
 }
 
@@ -5991,13 +6002,20 @@ function deliverOrphanedQueues() {
       log(`chat ${meta.id}: ${meta.pending} queued message(s) wait for the usage-limit re-run`);
       continue;
     }
-    const full = loadMeta(meta.id);
-    if (!full) continue;
-    const next = takePending(full);
-    if (!next) continue;
-    saveMeta(full);
-    log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
-    startQueuedRun(full, next);
+    // Best effort for the reason reconcileInterruptedRuns gives. A save that
+    // fails leaves the queue on disk for the next start; a run that fails to
+    // start after the save is the same drop the settle path's catch makes.
+    try {
+      const full = loadMeta(meta.id);
+      if (!full) continue;
+      const next = takePending(full);
+      if (!next) continue;
+      saveMeta(full);
+      log(`chat ${meta.id}: delivering ${meta.pending} message(s) queued before restart`);
+      startQueuedRun(full, next);
+    } catch (e) {
+      log(`chat ${meta.id}: could not deliver the queue left by the restart: ${e.message}`);
+    }
   }
 }
 
@@ -7061,6 +7079,7 @@ async function projectDashboard(project) {
   const rows = projectsLib.rollupMembers(withFiles, {
     cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
     sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
+    agentBytesOf,
     overview: (f, id) => { try { return sessionOverview(f, id); } catch { return null; } },
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
@@ -10922,6 +10941,9 @@ function noTranscriptMessage(file) {
 
 // ---------------------------------------------------------------- routing
 
+/** How long a request answered before the token check may go on sending its body. */
+const PREAUTH_BODY_GRACE_MS = 10_000;
+
 async function handleRequest(req, res) {
   const t0 = Date.now();
   // ⚠ THE REQUEST TARGET IS UNTRUSTED, AND THIS IS THE FIRST LINE THAT READS IT —
@@ -10942,6 +10964,21 @@ async function handleRequest(req, res) {
   const peer = req.socket.remoteAddress;
   const plainOffHost = !req.socket.encrypted && !tlsLib.isLoopback(peer);
   res.on('finish', () => log(`${req.method} ${p} ${res.statusCode} ${Date.now() - t0}ms${plainOffHost ? ` PLAIN ${peer}` : ''}`));
+  // ⚠ AN ANSWER GIVEN BEFORE THE TOKEN CHECK DOES NOT HOLD ITS CONNECTION OPEN
+  // FOR THE BODY. After any response Node goes on reading the rest of the body
+  // to throw it away, and with requestTimeout off (see HTTP_TIMEOUTS) nothing
+  // bounded that: a peer with no token could follow its own 401 with a body
+  // trickled a byte at a time and keep the connection for as long as it liked.
+  // A real client's body has arrived moments after its headers, so whatever is
+  // still unread PREAUTH_BODY_GRACE_MS after a refusal is cut. A refusal with
+  // no body is already complete here and keeps its connection for the next
+  // request, which is the probe-then-ask pattern both clients use.
+  let authed = false;
+  res.on('finish', () => {
+    if (authed || req.complete) return;
+    const cut = setTimeout(() => req.socket.destroy(), PREAUTH_BODY_GRACE_MS).unref();
+    req.once('end', () => clearTimeout(cut));
+  });
 
   // ⚠ ON EVERY RESPONSE, INCLUDING THE 401 (cross-batch contract 2). The
   // clients' route probe has to be able to tell huginn-appd from ANY OTHER
@@ -10999,6 +11036,7 @@ async function handleRequest(req, res) {
   }
 
   if (!authorized(req)) return sendErr(res, 401, 'unauthorized');
+  authed = true;
 
   // ⚠ THE APPS PREREQUISITE'S ONLY INPUT (decision 54). `req.socket.localAddress`
   // is WHICH OF THIS HOST'S ADDRESSES the client dialled — the same value
@@ -11312,6 +11350,15 @@ async function handleRequest(req, res) {
         d = digest(sess ?? [], chatStates(), headroomFacts());
       }
       if (req.destroyed) return;
+      // ⚠ A FAILED LOOK IS NOT AN EMPTY HOST, here any more than in the stream
+      // above. Hashed as `[]`, it went out as `sessions: {}` with `changed: true`
+      // — and every Android caller of this branch (heartbeat, watch worker,
+      // widget refresh, push reconcile) asks with no hash, so it took that as
+      // every session gone: the notifications of questions still waiting were
+      // cancelled, the widget emptied, and the next good look re-posted them all
+      // as new. GET /v1/sessions answers this failure with a 503, and each of
+      // those callers keeps its baseline when the call fails.
+      if (sess === null) return sendErr(res, 503, 'tmux is not answering right now');
       const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
       const pushSt = installId ? loadPushState() : null;
       return sendJson(res, 200, {
@@ -13017,6 +13064,14 @@ async function handleRequest(req, res) {
             reject(err);
           };
           req.on('data', (chunk) => {
+            // ⚠ AFTER `stop()`, A CHUNK IS ONLY DRAINED. Without this the drain
+            // re-paused itself: the next chunk went to `out.write()` on the
+            // stream `stop()` had destroyed, which returns false, so
+            // `req.pause()` ran with no 'drain' ever coming to undo it. The
+            // answer then went out under a stalled body, and a client that
+            // writes everything before reading got a reset ~6 s later instead
+            // of the errno. readBodyRaw's `over` flag is the same guard.
+            if (failed) return;
             bytes += chunk.length;
             if (bytes > UPLOAD_MAX_BYTES) {
               const tooBig = new Error('too large');
@@ -15068,9 +15123,20 @@ process.on('uncaughtExceptionMonitor', (err, origin) => {
 
 // The same handler behind both protocols. Neither server is listen()ed: the
 // sniffing listener (lib/tls.js) hands each connection to the one whose
-// protocol it opened with, on the one port clients already know.
-const server = http.createServer(serveRequest);
-const tlsServer = https.createServer({ cert: TLS.cert, key: TLS.key, minVersion: 'TLSv1.2' }, serveRequest);
+// protocol it opened with, on the one port clients already know, and starts
+// their request timeouts for them.
+//
+// ⚠ BOTH NUMBERS ARE STATED, AND requestTimeout IS OFF ON PURPOSE. Node's
+// default is five minutes for the WHOLE request, body included, which would
+// cut a 128 MB upload from a phone on a slow link with a 408. But 0 on its own
+// is a trap: Node then derives headersTimeout as min(60 s, requestTimeout),
+// which is 0, and with both at 0 its checker does nothing at all. The peers
+// these bound are the ones with no token, and they get two limits that do not
+// need one: their headers within a minute, and an unread body cut soon after
+// their refusal (PREAUTH_BODY_GRACE_MS).
+const HTTP_TIMEOUTS = { headersTimeout: 60_000, requestTimeout: 0 };
+const server = http.createServer(HTTP_TIMEOUTS, serveRequest);
+const tlsServer = https.createServer({ ...HTTP_TIMEOUTS, cert: TLS.cert, key: TLS.key, minVersion: 'TLSv1.2' }, serveRequest);
 const listener = tlsLib.createSniffingListener(net, server, tlsServer);
 
 // SSE heartbeat so half-open phone connections die fast instead of lingering.
