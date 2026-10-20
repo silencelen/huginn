@@ -138,8 +138,11 @@ function discoverModels(binPath, timeoutMs = 60_000) {
   if (!key) return Promise.resolve(aliasModels());
   if (cache.key === key && cache.models) return Promise.resolve(cache.models);
   return new Promise((resolve) => {
+    // The path goes in as "$1", never into the script text: inside double
+    // quotes sh still expands $(...), backticks and $VAR, so a binary path
+    // holding one would have run it.
     execFile('sh', ['-c',
-      `strings -n 6 ${JSON.stringify(binPath)} | grep -oE 'claude-(fable|opus|sonnet|haiku)-[0-9][0-9a-z-]*' | sort -u`],
+      `strings -n 6 "$1" | grep -oE 'claude-(fable|opus|sonnet|haiku)-[0-9][0-9a-z-]*' | sort -u`, 'sh', binPath],
     { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       const ids = err ? [] : stdout.split('\n').map((l) => l.trim()).filter(Boolean);
       const picked = selectModels(ids);
