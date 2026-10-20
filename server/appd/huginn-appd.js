@@ -12808,22 +12808,37 @@ async function handleRequest(req, res) {
         // phrase queues in the composer, and the settle timer will not end
         // anything until idle has held. The 202 says so.
         const queued = st.state === 'running';
-        const r = await sendTextToPane(name, SOFT_END_PHRASE);
-        if (!r.ok) return sendErr(res, r.code || 500, r.message);
-        // …and only when the phrase demonstrably landed. `submitted === false` is
-        // the pane telling us it is still sitting in a composer, and ending a
-        // session whose wrap-up never ran is the one outcome this must not
-        // produce. Same rule as /soft-end's onSettle.
-        if (r.submitted === false) {
-          log(`archive: ${name}: the wrap-up phrase did not submit; not arming the end`);
-          return sendErr(res, 409,
-            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
-        }
+        // ⚠ THROUGH THE QUEUE, AND ARMED FROM THE SETTLE — the rule written above
+        // `sendQueues` for every fixed phrase, and what /soft-end and a project's
+        // graceful delete already do. This route used to paste the phrase straight
+        // at the pane, past every gate the queue has: the draft guard (the phrase
+        // went in after the owner's half-typed sentence and the Enter submitted
+        // both, as an instruction carried out in the wrap-up turn), the shell
+        // refusal (a pane that had dropped to a shell was handed the phrase and an
+        // Enter), and the pump's lock (a message mid-delivery could be welded to
+        // it). `automated` is false: a person asked for this, so the turn gate does
+        // not hold it and every other gate does.
+        //
         // Armed regardless of the host's softEndAuto. That setting decides
         // whether a WIND-DOWN ends the session; an archive was asked for by name
         // and has to end it, or the row would describe a session still running.
-        softEnds.set(name, createPending(Date.now()));
-        archiveIntents.set(name, { note });
+        // And only when the phrase demonstrably landed (armSoftEndFromSettle):
+        // ending a session whose wrap-up never ran is the one outcome this must
+        // not produce.
+        const out = await enqueueSend(name, SOFT_END_PHRASE, {
+          origin: 'archive',
+          submit: true,
+          onSettle: (v) => {
+            if (armSoftEndFromSettle(name, v, 'archive')) archiveIntents.set(name, { note });
+          },
+        });
+        if (out.result && !out.result.ok) return sendErr(res, out.result.code || 500, out.result.message);
+        // `submitted === false` is the pane telling us the phrase is still
+        // sitting in a composer — said now, as before, when that is known now.
+        if (out.result && out.submitted === false) {
+          return sendErr(res, 409,
+            'the wrap-up phrase did not go in — the pane is holding something else. Try again, or archive with mode "now"');
+        }
         return sendJson(res, 202, {
           ok: true,
           id: st.sessionId,
@@ -12831,7 +12846,9 @@ async function handleRequest(req, res) {
           pending: true,
           mode: 'graceful',
           phrase: SOFT_END_PHRASE,
-          queued,
+          queued: queued || !out.delivered,
+          delivered: out.delivered,
+          blockedBy: out.blockedBy || null,
         });
       }
       const r = await archiveAndEnd(name, { note });
