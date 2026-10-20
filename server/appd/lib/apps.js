@@ -2800,6 +2800,26 @@ function createStore(opts = {}) {
 
   // ------------------------------------------------------------------- icons
 
+  /**
+   * Whether what was learned about `rec` still describes a row: it is still
+   * listed, at the address it had when the asking began.
+   *
+   * ⚠ ASKED AFTER THE AWAIT, BEFORE ANYTHING IS KEPT. A sweep reads the rows once
+   * and then waits on the network, up to the deadline per row. A PATCH that
+   * re-points a row, or a DELETE, lands in that wait and clears what the row
+   * had — and the answer about the OLD address then arrived on top of it: a
+   * healthy new address read as down, with the dead one's fix lines and a
+   * "needs retrofit" in the journal, and a deleted app's favicon was written
+   * back to disk and served for a row that no longer existed. [add] re-reads
+   * after its own await for the same reason.
+   */
+  function stillPointsAt(rec) {
+    let env;
+    try { env = readStore(); } catch { return false; }
+    const cur = env ? findApp(env.consoles, rec.id) : null;
+    return !!cur && cur.url === rec.url;
+  }
+
   /** Fetch and cache this app's favicon, if it is due one. Never throws. */
   async function refreshIcon(rec) {
     if (!iconsOn) return false;
@@ -2811,6 +2831,9 @@ function createStore(opts = {}) {
     } catch (e) {
       got = { ok: false, why: (e && e.message) || 'failed' };
     }
+    // Removed or re-pointed while the icon was in flight: these bytes belong to
+    // no row now, and writing them would bring the files back. See [stillPointsAt].
+    if (!stillPointsAt(rec)) return false;
     // ⚠ CARRIED ACROSS BOTH BRANCHES. The stamp belongs to the BYTES, not to the
     // fetch: an hourly refresh that brings back the identical picture must not
     // move it, or every client re-downloads every icon every hour for nothing.
@@ -2925,7 +2948,8 @@ function createStore(opts = {}) {
         const rec = recs[i];
         try {
           const { probe, reach } = await observe(rec);
-          record(rec, probe, reach);
+          // `recs` was read before the wait; see [stillPointsAt].
+          if (stillPointsAt(rec)) record(rec, probe, reach);
         } catch { /* the next sweep asks again */ }
       }
     };
@@ -3041,6 +3065,13 @@ function createStore(opts = {}) {
       const rec = findApp(load().consoles, id);
       if (!rec) return null;
       const { probe, reach } = await observe(rec);
+      // Re-pointed or removed while it was being asked: the answer is about an
+      // address the row no longer has, so it is not kept and not shown. See
+      // [stillPointsAt].
+      if (!stillPointsAt(rec)) {
+        const cur = findApp(load().consoles, id);
+        return cur ? rowOf(cur) : null;
+      }
       record(rec, probe, reach);
       return appRow(rec, probe, { ...iconFacts(rec.id), reachable: reach });
     },
