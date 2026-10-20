@@ -199,7 +199,7 @@ class SessionWatchWorker(
             androidx.core.app.Person.Builder().setKey("owner").setName("You").build()
 
         fun huginn(): androidx.core.app.Person =
-            androidx.core.app.Person.Builder().setKey("huginn").setName("huginn").setBot(true).build()
+            androidx.core.app.Person.Builder().setKey(ChatThread.HUGINN).setName("huginn").setBot(true).build()
 
         /**
          * The chat's thread as it currently stands on the shade, or a new one.
@@ -338,10 +338,16 @@ class SessionWatchWorker(
                 // APPENDED to whatever is already on the shade, not a fresh thread.
                 // Building a new one here is what silently discarded the exchange
                 // every time huginn answered a reply.
-                builder.setStyle(
-                    threadFor(context, notificationId, title)
-                        .addMessage(text, System.currentTimeMillis(), huginn())
-                )
+                val thread = threadFor(context, notificationId, title)
+                // ⚠ BUT NOT TWICE. The same finish arrives by push and again by the
+                // next observation, and appended both times it showed the answer
+                // twice and could buzz again. Left as it is instead, the way a
+                // second post of any other notice only replaces the first.
+                // See [ChatThread].
+                val last = thread.messages.lastOrNull()
+                val lastSender = last?.person?.let { it.key ?: it.name?.toString() }
+                if (ChatThread.repeatsLast(lastSender, last?.text, text)) return
+                builder.setStyle(thread.addMessage(text, System.currentTimeMillis(), huginn()))
                 // Deliberately NO setShortcutId. Android's Conversations section
                 // wants one, but only alongside a published long-lived dynamic
                 // shortcut — and naming a shortcut that does not exist gets the
