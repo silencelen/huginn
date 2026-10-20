@@ -2736,15 +2736,11 @@ async function checkGates(name) {
   const file = transcriptPath(name);
   let idle = true;
   let lastKind = null;
-  // Where the transcript ended at this read: the mark a delivery released off
-  // this gate is judged from afterwards (deliveryShownUp).
-  let transcriptSize = null;
   if (file) {
     let bytes = 64 * 1024;
     for (;;) {
       const tail = transcriptTail(file, null, bytes);
       if (!tail) break;
-      transcriptSize = tail.size;
       const b = typing.boundaryFromTail(tail.text);
       // Widen only on "I could not SEE a boundary", never on "there isn't one":
       // a window holding a conversational record has answered the question.
@@ -2792,7 +2788,7 @@ async function checkGates(name) {
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
   return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell,
-    sessionState: readSessionState(name), transcript: file, transcriptSize };
+    sessionState: readSessionState(name), transcript: file };
 }
 
 /**
@@ -2947,7 +2943,8 @@ const unseenDelivery = new Map();   // session name -> { file, cursor: { at }, a
  * Has the transcript moved past this session's last delivery (or is there none)?
  * `st` is the gate's state-file read: a `running` stamped after the release is
  * the turn that delivery started, and keeps the wait from lapsing
- * (typing.DELIVERY_SHOW_MAX_MS).
+ * (typing.DELIVERY_SHOW_MAX_MS). Called on every pass for the automated lane, so
+ * the mark is settled as soon as the record lands, whatever else holds the entry.
  */
 function deliveryShownUp(name, file, st) {
   const d = unseenDelivery.get(name);
@@ -2959,7 +2956,10 @@ function deliveryShownUp(name, file, st) {
   }
   if (typing.scanForTurnStart(d.cursor, (at, max) => transcriptSlice(file, at, max))) {
     unseenDelivery.delete(name);
-    return true;
+    // ⚠ BUT NOT ON THIS PASS. The gate read the tail BEFORE this scan, and the
+    // record that settled the mark can have landed in between — so this pass's
+    // `idle` may still be the old boundary. The next pass reads the tail afresh.
+    return false;
   }
   const running = !!st && st.state === 'running' && (typing.stateStampMs(st) || 0) >= d.at;
   if (running || Date.now() - d.doneAt < typing.DELIVERY_SHOW_MAX_MS) return false;
@@ -3106,6 +3106,9 @@ async function pumpQueue(name) {
       const holdForBox = !textEntry && typing.jobHold({
         composerHolds: gate.composerHolds, waitedMs: now - entry.at,
       });
+      // The automated lane's view of the last delivery (deliveryShownUp), read on
+      // every pass, not only when the tail looks idle.
+      const shownUp = humanText || deliveryShownUp(name, gate.transcript, gate.sessionState);
       const d = typing.releaseDecision(humanText
         ? {
           ...gate,
@@ -3125,7 +3128,7 @@ async function pumpQueue(name) {
         // (deliveryShownUp): before that it is the boundary that released it.
         : {
           ...gate,
-          idle: gate.idle && deliveryShownUp(name, gate.transcript, gate.sessionState),
+          idle: gate.idle && shownUp,
           state: stateSays,
           draft: holdForDraft || holdForBox,
         });
@@ -3176,6 +3179,11 @@ async function pumpQueue(name) {
       if (entry.automated) {
         noteOwnPrompt(name, typeof entry.run === 'function' ? entry.prompt : typing.sendable(entry.text));
       }
+      // Where the transcript ends NOW, the instant before the paste: whatever this
+      // delivery causes is written after it (deliveryShownUp). Not the gate's read
+      // a few awaits earlier — the last records of the turn that just ended can
+      // land in between, and one of them would pass for this delivery's turn.
+      const markAt = textEntry && gate.transcript ? transcriptSize(gate.transcript) : null;
       let r;
       try {
         // A JOB rather than a message: the ladder's `/model` picker script is
@@ -3224,19 +3232,24 @@ async function pumpQueue(name) {
       // boundary that has nothing to do with anything appd did.
       if (r.ok) q.deliveredAt = Date.now();
       // And the transcript's half of the same window (deliveryShownUp), from where
-      // the transcript ended when this entry was released. Only for a MESSAGE
-      // that was submitted, because only a prompt starts a turn: the Screen tab's
-      // own keystrokes do not, nor does the ladder's `/model` (a local command),
-      // and a message left in the box (`submitted: false`) is the leftovers
-      // rule's business, not this one's. Two clocks: `at` is when it was RELEASED
-      // (`now`, before the paste), because the hook marks the turn it starts
-      // `running` while the paste is still being confirmed; `doneAt` is when it
-      // was submitted, which is what the record's lateness is counted from — a
-      // paste that took seconds to settle must not use up the wait.
-      if (r.ok && r.submitted !== false && textEntry && entry.submit !== false
-          && gate.transcript && gate.transcriptSize != null) {
+      // the transcript ended as this entry was pasted (`markAt`). Only for a
+      // MESSAGE, because only a prompt starts a turn — not the Screen tab's own
+      // keystrokes, not the ladder's `/model` (a local command) — and only where
+      // a composer was there to judge the submit (`submitted` true or false). A
+      // `false` counts: a confirm that ran out on a loaded host says the box still
+      // held a message that had in fact gone, and if it really is still there,
+      // the wait only delays the leftovers rule by its bound. A pane with no
+      // composer to judge by (`null` — a shell, a pane that never drew one) has
+      // no Claude to start a turn, and would only make the next message wait.
+      // Two clocks: `at` is when it was RELEASED (`now`, before the paste),
+      // because the hook marks the turn it starts `running` while the paste is
+      // still being confirmed; `doneAt` is when it was submitted, which is what
+      // the record's lateness is counted from — a paste that took seconds to
+      // settle must not use up the wait.
+      if (r.ok && typeof r.submitted === 'boolean' && textEntry && entry.submit !== false
+          && markAt != null) {
         unseenDelivery.set(name, {
-          file: gate.transcript, cursor: { at: gate.transcriptSize }, at: now, doneAt: Date.now(),
+          file: gate.transcript, cursor: { at: markAt }, at: now, doneAt: Date.now(),
         });
       }
       // ⚠ AND SAY SO WHEN IT WENT IN ON TOP OF SOMEBODY (decision 59). Written

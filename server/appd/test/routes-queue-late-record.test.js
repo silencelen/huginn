@@ -263,6 +263,24 @@ test('a record slower than the wait\'s bound is still waited for while the hook 
   assert.match(submitted(name)[1], /MARKER-SLOW-TWO/);
 });
 
+test('a pane with no composer to judge by does not hold the next automated send', async () => {
+  // Only a message the composer was SEEN to let go of starts a turn worth waiting
+  // for. A pane that never draws a composer (here a silent sink) cannot say, has
+  // no Claude in it to write a record, and must not make the next message wait.
+  const name = `${PFX}-sink`;
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.writeFileSync(transcript, `${PROMPT}\n${END_TURN}\n${TURN}\n`);
+  madeSessions.add(name);
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'stty -echo; cat > ${path.join(tmp, `${name}.sink`)}'`]);
+  writeState(name, 'idle', transcript);
+  const { id, role } = seedProject(name);
+  const first = await relay(id, role, 'MARKER-SINK-ONE');
+  assert.equal(first.body.delivered, true, JSON.stringify(first.body));
+  const second = await relay(id, role, 'MARKER-SINK-TWO');
+  assert.equal(second.body.delivered, true, `not held behind a turn nobody can start: ${JSON.stringify(second.body)}`);
+});
+
 test('an automated send into a session nobody has typed into lately still goes at once', async () => {
   // The guard must not become a wall: with no delivery behind it there is
   // nothing to wait for, and an idle session is told straight away.
