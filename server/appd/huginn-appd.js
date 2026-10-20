@@ -55,7 +55,7 @@ const devicesLib = require('./lib/devices');
 const appsLib = require('./lib/apps');           // next to devices on purpose: it is the registry devices is NOT (lib/apps.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
 const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
-const { sessionGraph, sessionOverview, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
+const { sessionGraph, sessionOverview, agentBytesOf, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
 // Projects: the name grammars, the manifest contract and its parser, the
 // membership join across three registries, and the dashboard rollup. Pure, so
 // "never join a member by the native row's `tmux` field" and "the LAST tagged
@@ -6725,6 +6725,7 @@ async function projectDashboard(project) {
   const rows = projectsLib.rollupMembers(withFiles, {
     cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
     sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
+    agentBytesOf,
     overview: (f, id) => { try { return sessionOverview(f, id); } catch { return null; } },
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
