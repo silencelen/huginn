@@ -1164,10 +1164,59 @@ function serviceState(which, conf) {
 
 // ----------------------------------------------------------------- health
 
-function getJson(url, key) {
+/**
+ * The engine identity check, from client/huginn-llm-shim: who holds the
+ * engine's port, and whether that is the engine this tier started (or
+ * adopted). The shim runs it before every request that carries the key and a
+ * prompt; this manager runs the same code where it, too, hands the engine a
+ * key, and where it records which account serves an adopted engine. ONE copy,
+ * in the file that runs on every generate request, loaded from beside this
+ * one (where every door fetches both), the copy this run installs, or the one
+ * it installed. Null when there is none, and then nothing is sent a key.
+ */
+function engineKit() {
+  for (const f of [
+    process.env.HUGINN_SHIM_SOURCE,
+    path.join(__dirname, 'huginn-llm-shim'),
+    path.join(os.homedir(), '.huginn', 'huginn-llm-shim'),
+    P('bin', 'huginn-llm-shim.js'),
+  ]) {
+    if (!f) continue;
+    try {
+      const m = require(f);
+      if (m && typeof m.connectEngine === 'function' && typeof m.expectedEngine === 'function') return m;
+    } catch { /* absent, or older than the check: try the next */ }
+  }
+  return null;
+}
+
+/**
+ * The uid the tier's services run as (Linux): this account's, or, under an
+ * elevation, the account they were installed for (serviceUser). Null where
+ * there is no such thing.
+ */
+function serviceUid() {
+  if (typeof process.getuid !== 'function') return null;
+  if (!isRoot()) return process.getuid();
+  const user = serviceUser();
+  if (user === 'root') return 0;
+  // Its own lookup, not userIds(): an `id` that fails prints nothing, and
+  // Number('') is 0, which would expect the engine to run as root.
+  const r = RUN('id', ['-u', user]);
+  const out = String((r && r.stdout) || '').trim();
+  return r && !r.error && r.status === 0 && /^\d+$/.test(out) ? Number(out) : null;
+}
+
+/**
+ * GET a JSON body. `connect`, when given, supplies the socket (callback
+ * style), and the request writes nothing - the key included - until it has.
+ */
+function getJson(url, key, { connect = null } = {}) {
   return new Promise((resolve) => {
     const mod = url.startsWith('https:') ? https : http;
-    const req = mod.get(url, { headers: key ? { authorization: `Bearer ${key}` } : {} }, (res) => {
+    const opts = { headers: key ? { authorization: `Bearer ${key}` } : {} };
+    if (connect) opts.createConnection = (_o, cb) => { connect(cb); };   // the socket arrives through cb
+    const req = mod.get(url, opts, (res) => {
       let text = '';
       res.setEncoding('utf8');
       res.on('data', (c) => { if (text.length < 65536) text += c; });
@@ -1176,7 +1225,7 @@ function getJson(url, key) {
         catch { resolve({ status: res.statusCode, body: null }); }
       });
     });
-    req.on('error', (e) => resolve({ status: 0, error: e.message }));
+    req.on('error', (e) => resolve({ status: 0, error: e.message, engineRefused: !!e.engineRefused, engineUnknown: !!e.engineUnknown }));
     req.setTimeout(8000, () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
   });
 }
@@ -1208,11 +1257,51 @@ async function health(conf) {
   const base = conf.mode === 'adapter' ? conf.adapter.url : `http://127.0.0.1:${conf.port}`;
   const key = conf.mode === 'adapter' ? (conf.adapter.key || null) : readKey();
   const listPath = conf.mode === 'adapter' && conf.adapter.kind === 'ollama' ? '/api/tags' : '/v1/models';
-  const r = await getJson(base + listPath, key);
+  // ⚠ THE KEY GOES ONLY TO THE ENGINE (security review, 2026-10-18). This asked
+  // whatever held the port, key attached, on every `on`, `update`, `status` and
+  // `doctor`, and another account can hold that port while the engine is down.
+  // So a keyed request goes over a connection whose far side has been judged
+  // (the shim's check, see engineKit), and one that is NOT the engine is asked
+  // nothing at all. Where the far side could not even be named (an account
+  // this one may not inspect), the list is asked for WITHOUT the key: there is
+  // then nothing to give away, and llama-swap's list needs none.
+  let r = null;
+  let unverified = null;
+  if (key) {
+    const kit = engineKit();
+    const want = kit
+      ? kit.expectedEngine(conf, { uid: serviceUid(), dir: localDir() })
+      : { refuse: 'the engine identity check (huginn-llm-shim) is not beside this manager' };
+    if (want.refuse) {
+      unverified = want.refuse;
+    } else {
+      r = await getJson(base + listPath, key, { connect: (cb) => kit.connectEngine(base, want).then((s) => cb(null, s), cb) });
+      if (r.engineRefused && !r.engineUnknown) return { reachable: true, status: 0, models: [], base, refused: r.error };
+      if (r.engineRefused) { unverified = r.error; r = null; }
+    }
+  }
+  if (!r) r = await getJson(base + listPath, null);
   const list = r.body && (r.body.data || r.body.models);
   const names = Array.isArray(list)
     ? list.map((m) => m.id || m.name || m.model).filter(Boolean) : [];
-  return { reachable: r.status > 0, status: r.status, models: names, base };
+  return { reachable: r.status > 0, status: r.status, models: names, base, ...(unverified ? { unverified } : {}) };
+}
+
+/**
+ * Who serves an engine about to be adopted, as the record the shim holds every
+ * later connection to (expectedEngine: the account; an adopted engine lives
+ * wherever it was installed). Read off a connection that carries nothing,
+ * BEFORE the health check sends the engine any key. Trust on first use, said
+ * out loud: the caller prints who it found ahead of the consent question.
+ */
+async function identifyAdapter(url) {
+  const kit = engineKit();
+  if (!kit) return { error: 'the engine identity check is missing: huginn-llm-shim is not beside this manager (run through the shell wrapper, which fetches it)' };
+  let seen;
+  try { seen = await kit.probeEngine(url); } catch (e) { return { error: `${url} is not answering (${e.message})` }; }
+  const pin = kit.pinFor(seen);
+  if (!pin) return { error: `could not tell which account serves ${url} (${kit.describePeer(seen)})` };
+  return { pin, line: kit.describePeer(seen) };
 }
 
 // -------------------------------------------------------------- enrolment
@@ -1381,7 +1470,15 @@ async function cmdOn(flags) {
     // that before it stops or deletes anything.
     conf.adopted = true;
     conf.adapter = { kind, url, key: flags['adapter-key'] || null };
+    // ⚠ WHO SERVES IT, RECORDED BEFORE ANYTHING IS SENT. The shim holds every
+    // later connection to this account and sends nothing to any other (see
+    // engineKit); a loopback port by itself says nothing about who holds it.
+    const who = await identifyAdapter(url);
+    if (who.error) { console.error(`refused: ${who.error}`); process.exit(1); }
+    conf.adapter.engine = who.pin;
+    console.log(`  engine  ${url} is served by ${who.line}; this tier talks to that account only`);
     const h = await health(conf);
+    if (h.refused) { console.error(h.refused); process.exit(1); }
     if (!h.models.length) {
       console.error(`refused: ${url} ${h.reachable ? `answered but serves NO models — an alive endpoint with an empty list is the trap, not a healthy install` : `is not answering (${h.error || h.status})`}`);
       process.exit(1);
@@ -1487,7 +1584,8 @@ async function cmdOn(flags) {
   settlePersistence(conf);
   // 6: health, honestly
   let h = null;
-  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length) break; await new Promise((r) => setTimeout(r, 2000)); }
+  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length || h.refused) break; await new Promise((r) => setTimeout(r, 2000)); }
+  if (h.refused) throw new Error(`the model server's port is held by something other than the engine this install started — ${h.refused}`);
   if (!h.models.length) throw new Error(`the model server came up but lists no models (${JSON.stringify(h)}) — NOT healthy; fix before enrolling`);
   console.log(`  serving ${h.models.join(', ')}`);
   const keyless = await getJson(`http://127.0.0.1:${conf.port}/v1/models`, null);
@@ -1773,7 +1871,12 @@ async function statusInfo() {
     linger: p.linger,
     persistent: p.persistent,
     services: { llm: conf.mode === 'adapter' ? `n/a (adopted ${(conf.adapter && conf.adapter.kind) || 'engine'})` : serviceState('llm', conf), runner: serviceState('runner', conf) },
-    engine: { reachable: h.reachable, models: h.models, base: h.base },
+    engine: { reachable: h.reachable, models: h.models, base: h.base, ...(h.refused ? { refused: h.refused } : {}) },
+    // Whether the shim will talk to this engine at all. An adopted engine is
+    // held to the account recorded when it was adopted, and one adopted before
+    // that was recorded is refused until `update` records it.
+    identity: conf.mode === 'adapter' && !(conf.adapter && conf.adapter.engine)
+      ? 'not recorded, so the shim refuses this engine until it is: huginn local update' : null,
     models: Object.keys(conf.modelsBySlug || {}),
     defaultModel: conf.defaultModel || null,
     shimVersion,
@@ -1793,7 +1896,9 @@ async function cmdStatus(flags) {
   console.log(`device      ${s.deviceName}${s.llmSlug ? ` (slug ${s.llmSlug})` : ''}`);
   console.log(`services    llm: ${s.services.llm}  .  runner: ${s.services.runner}`);
   console.log(`persistence ${persistenceLine({ systemUnits: s.systemUnits, linger: s.linger, persistent: s.persistent })}`);
-  console.log(`engine      ${s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'not answering'} at ${s.engine.base || '?'}`);
+  console.log(`engine      ${s.engine.refused ? `NOT this tier's engine, asked nothing: ${s.engine.refused}`
+    : s.engine.reachable ? `serving ${s.engine.models.length} model(s): ${s.engine.models.join(', ')}` : 'not answering'} at ${s.engine.base || '?'}`);
+  if (s.identity) console.log(`identity    ${s.identity}`);
   console.log(`shim        ${s.shimVersion || 'not installed'}`);
   console.log(`sessions    ${s.sessions} file(s)`);
   if (s.installed) console.log(`pins        llama.cpp ${s.installed.llamaTag}  .  llama-swap ${s.installed.swapVersion}  .  manifest ${s.installed.manifestHash}`);
@@ -1825,7 +1930,25 @@ async function cmdUpdate(flags) {
   }
   installShimCopy();
   console.log('  shim + runner copies refreshed from ~/.huginn');
-  if (conf.mode === 'adapter') { console.log('adapter mode: nothing else to update.'); return; }
+  if (conf.mode === 'adapter') {
+    // An engine adopted before identities were recorded: the shim refuses it
+    // until one is, and this is the verb its refusal names.
+    if (conf.adapter && conf.adapter.url && !conf.adapter.engine) {
+      const who = await identifyAdapter(conf.adapter.url);
+      if (who.pin) {
+        conf.adapter.engine = who.pin;
+        saveConf(conf);
+        // Elevated for a system-unit install: the runner reads local.json as
+        // the account it was installed for, not as root.
+        if (process.platform === 'linux' && isRoot()) handBackOwnership();
+        console.log(`  engine  recorded: ${conf.adapter.url} is served by ${who.line}`);
+      } else {
+        console.log(`  engine  NOT recorded: ${who.error}. The shim refuses this engine until it is; start it, then run: huginn local update`);
+      }
+    }
+    console.log('adapter mode: nothing else to update.');
+    return;
+  }
   if (conf.installed && conf.installed.manifestHash === manifestHash()) {
     console.log(`pins unchanged (manifest ${manifestHash()}) — done.`);
     return;
@@ -1859,7 +1982,8 @@ async function cmdUpdate(flags) {
     sysctl(['restart', LLM_SERVICE], { user: !conf.systemUnits });
   }
   let h = null;
-  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length) break; await new Promise((r) => setTimeout(r, 2000)); }
+  for (let i = 0; i < 30; i++) { h = await health(conf); if (h.models.length || h.refused) break; await new Promise((r) => setTimeout(r, 2000)); }
+  if (h.refused) { console.error(`the model server's port is held by something other than this install's engine — ${h.refused}`); process.exit(1); }
   if (!h.models.length) { console.error('the updated server lists NO models — the previous runtime generation is still on disk; investigate before deleting anything'); process.exit(1); }
   conf.installed = { llamaTag: MANIFEST.llamaCpp.release, swapVersion: MANIFEST.llamaSwap.version, models: plan.models.map((m) => m.slug), manifestHash: manifestHash() };
   saveConf(conf);
@@ -1897,6 +2021,7 @@ async function cmdDoctor() {
     && frames[0].includes('"subtype":"init"') && frames[frames.length - 1].includes('"type":"result"');
   if (!okShape) failed += 1;
   console.log(`  ${okShape ? 'ok    ' : 'fail  '}shim --contract-check (${frames.length} frames)`);
+  if (s.identity) { failed += 1; console.log(`  fail  engine identity: ${s.identity}`); }
   const pv = persistenceVerdict(s);
   if (pv.level === 'fail') failed += 1;
   console.log(`  ${pv.level.padEnd(6)}persistence: ${pv.line}`);
@@ -2170,5 +2295,7 @@ if (require.main === module) {
     // (owner/ACE decisions, the icacls step sequence, ACL-verify parsing).
     WIN_SID, ownerTrusted, lockTreeSteps, aclSidsUnexpected, parseAclLines,
     verifyLockDecision, seedTokenFromStage, writeTokenSecure,
+    // Where the engine identity check is used here (it lives in the shim).
+    engineKit, serviceUid, health, identifyAdapter,
   };
 }

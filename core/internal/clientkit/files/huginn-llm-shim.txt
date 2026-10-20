@@ -33,10 +33,13 @@
 
 const fs = require('node:fs');
 const os = require('node:os');
+const net = require('node:net');
+const tls = require('node:tls');
 const path = require('node:path');
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 
 const VERSION = '2.6.2';
 
@@ -121,6 +124,47 @@ function mapModel(raw, conf) {
 
 function sessionsDir() { return path.join(localDir(), 'sessions'); }
 
+/**
+ * The sessions directory, owner-only: created 0700, and set back to 0700 when
+ * it already exists.
+ *
+ * ⚠ TRANSCRIPTS ARE THE OWNER'S PROMPTS AND THE MODEL'S ANSWERS, and they were
+ * written under the default umask: 0755 here and 0644 per file, readable by
+ * every account on a machine whose key, config and token are all 0600. The
+ * mode on the directory also covers files an older shim left at 0644 (they
+ * cannot be reached through it), and each save replaces its file with a 0600
+ * one. On Windows the tier's tree is already locked to its owners (lockTree).
+ */
+function privateSessionsDir() {
+  const dir = sessionsDir();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    try { fs.chmodSync(dir, 0o700); } catch { /* not ours to change: the files are 0600 regardless */ }
+  }
+  return dir;
+}
+
+/**
+ * Write `text` to `dest` as a 0600 file: a random temp created O_EXCL at 0600
+ * (never a planted file, never a moment at the umask), then renamed over.
+ */
+function writePrivate(dest, text) {
+  const tmp = path.join(path.dirname(dest), `.${path.basename(dest)}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  const fd = fs.openSync(tmp, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, text);
+  } catch (e) {
+    try { fs.closeSync(fd); } catch { /* closed */ }
+    try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+  fs.closeSync(fd);
+  try { fs.renameSync(tmp, dest); } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* gone */ }
+    throw e;
+  }
+}
+
 function loadSession(id) {
   try {
     return fs.readFileSync(path.join(sessionsDir(), `${id}.jsonl`), 'utf8')
@@ -132,8 +176,7 @@ function loadSession(id) {
 }
 
 function saveSession(id, history) {
-  const dir = sessionsDir();
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = privateSessionsDir();
   let lines = history.map((m) => JSON.stringify({ role: m.role, content: m.content, ts: m.ts || Date.now() }));
   // Cap by dropping the OLDEST non-system turns: the system line anchors the
   // conversation, the newest turns are the ones a resume actually needs.
@@ -144,15 +187,21 @@ function saveSession(id, history) {
     lines.splice(idx, 1);
     text = lines.join('\n') + '\n';
   }
-  fs.writeFileSync(path.join(dir, `${id}.jsonl`), text);
+  writePrivate(path.join(dir, `${id}.jsonl`), text);
 }
 
 /** Old and surplus session files go, newest stay. Called once per spawn. */
 function pruneSessions(now = Date.now()) {
-  const dir = sessionsDir();
+  if (!fs.existsSync(sessionsDir())) return;
+  const dir = privateSessionsDir();
   let entries;
   try {
-    entries = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))
+    const names = fs.readdirSync(dir);
+    // A temp left by a run that died mid-save is never loaded; it goes once stale.
+    for (const f of names.filter((n) => n.endsWith('.tmp'))) {
+      try { if (now - fs.statSync(path.join(dir, f)).mtimeMs > 60 * 60 * 1000) fs.unlinkSync(path.join(dir, f)); } catch { /* gone */ }
+    }
+    entries = names.filter((f) => f.endsWith('.jsonl'))
       .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }));
   } catch {
     return;
@@ -249,9 +298,432 @@ function versionString() {
   return `${VERSION}+${hash}`;
 }
 
+// --------------------------------------------------------- engine identity
+//
+// ⚠ A LOOPBACK PORT IS NOT AN IDENTITY (security review, 2026-10-18). The
+// engine's key and the owner's prompt went to whatever held 127.0.0.1:8748 (or
+// an adopted engine's port), and its reply was filed as the model's answer.
+// Every account on the machine can bind that port while llama-swap restarts
+// (Restart=always, ten seconds apart) or before an adopted engine comes up. So
+// before one byte is written, the process on the far side of THIS connection is
+// identified and judged, and the verdict belongs to that connection alone:
+//
+//   Linux    /proc/net/tcp{,6} names the server side of the connection: the uid
+//            of the process that accepted it and the socket's inode. The
+//            /proc/<pid>/fd links name the process holding that inode, and
+//            /proc/<pid>/exe the program it runs.
+//   Windows  netstat -ano names the PID that owns the server side of the
+//            connection, and Win32_Process its image path and owner SID.
+//
+// What passes (expectedEngine): in managed mode, the engine this tier started,
+// which is a program under this tier's own runtime directory running as the
+// service account. On Linux that is this process's own uid, because both units
+// run as the same User=. On Windows it is LocalSystem, because both WinSW
+// services are. In adapter mode it is the account recorded when the engine was
+// adopted (`huginn local on --adapter`). Anything else is refused and is sent
+// nothing (no key, no prompt), and nothing it says is read.
+
+// How long the far side may take to accept() our connection before the check
+// gives up: llama-swap accepts at once, so this only ends a wait on a listener
+// that holds the connection in its backlog and never takes it.
+const ACCEPT_WAIT_MS = 3000;
+// The account both WinSW services run as, so the account the managed engine
+// runs as on Windows.
+const LOCAL_SYSTEM_SID = 'S-1-5-18';
+// /proc/net/tcp's state code for an established connection.
+const TCP_ESTABLISHED = 1;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * An IP literal as 32 hex digits (16 bytes): IPv4 as its v4-mapped IPv6 form,
+ * so 127.0.0.1 and ::ffff:127.0.0.1 compare equal. Brackets and a %zone are
+ * dropped. Null for anything that is not an IP literal. Pure.
+ */
+function ipKey(ip) {
+  let s = String(ip || '').trim().replace(/^\[|\]$/g, '').replace(/%.*$/, '').toLowerCase();
+  const quad = (t) => {
+    const p = t.split('.');
+    if (p.length !== 4 || !p.every((x) => /^\d{1,3}$/.test(x) && Number(x) <= 255)) return null;
+    return p.map((x) => Number(x).toString(16).padStart(2, '0')).join('');
+  };
+  if (!s.includes(':')) {
+    const h = quad(s);
+    return h ? `00000000000000000000ffff${h}` : null;
+  }
+  const dotted = /^(.*:)(\d+\.\d+\.\d+\.\d+)$/.exec(s);
+  if (dotted) {
+    const h = quad(dotted[2]);
+    if (!h) return null;
+    s = `${dotted[1]}${h.slice(0, 4)}:${h.slice(4)}`;
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return null;
+  const groups = (x) => (x === '' ? [] : x.split(':'));
+  const head = groups(halves[0]);
+  const tail = halves.length === 2 ? groups(halves[1]) : [];
+  if (![...head, ...tail].every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 ? fill < 1 : fill !== 0) return null;
+  return [...head, ...Array(halves.length === 2 ? fill : 0).fill('0'), ...tail]
+    .map((g) => g.padStart(4, '0')).join('');
+}
+
+/**
+ * An address column of /proc/net/tcp or tcp6 as an ipKey. The kernel prints
+ * each 32-bit word of the address as the integer it is in memory, so on a
+ * little-endian machine 127.0.0.1 reads 0100007F; writing each word back in
+ * this machine's own byte order recovers the address bytes. Pure.
+ */
+function procAddrKey(hex, littleEndian = os.endianness() === 'LE') {
+  if (!/^[0-9A-Fa-f]+$/.test(String(hex)) || (hex.length !== 8 && hex.length !== 32)) return null;
+  const b = Buffer.alloc(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 8) {
+    const word = parseInt(hex.slice(i, i + 8), 16);
+    if (littleEndian) b.writeUInt32LE(word, i / 2); else b.writeUInt32BE(word, i / 2);
+  }
+  return hex.length === 8 ? `00000000000000000000ffff${b.toString('hex')}` : b.toString('hex');
+}
+
+/** The rows of /proc/net/tcp or tcp6: both ends, the state, the uid and the inode. Pure. */
+function parseProcNet(text, littleEndian = os.endianness() === 'LE') {
+  const rows = [];
+  for (const line of String(text || '').split('\n').slice(1)) {
+    const f = line.trim().split(/\s+/);
+    if (f.length < 10) continue;
+    const [la, lp] = f[1].split(':');
+    const [ra, rp] = f[2].split(':');
+    const local = procAddrKey(la || '', littleEndian);
+    const remote = procAddrKey(ra || '', littleEndian);
+    if (!local || !remote || !/^\d+$/.test(f[7]) || !/^\d+$/.test(f[9])) continue;
+    rows.push({
+      local, localPort: parseInt(lp, 16), remote, remotePort: parseInt(rp, 16),
+      state: parseInt(f[3], 16), uid: Number(f[7]), inode: f[9],
+    });
+  }
+  return rows;
+}
+
+/**
+ * The server side of OUR connection: its local end is our remote end and its
+ * remote end is ours. Established only: a socket still in the SYN queue, or
+ * one from an earlier connection in TIME_WAIT, accepted nothing. Pure.
+ */
+function peerRow(rows, conn) {
+  const lk = ipKey(conn.localAddress);
+  const rk = ipKey(conn.remoteAddress);
+  if (!lk || !rk) return null;
+  return rows.find((r) => r.state === TCP_ESTABLISHED
+    && r.local === rk && r.localPort === conn.remotePort
+    && r.remote === lk && r.remotePort === conn.localPort) || null;
+}
+
+/** A connection that reached itself: nothing was listening, and TCP joined the two ends. */
+const selfConnected = (conn) => conn.localPort === conn.remotePort
+  && ipKey(conn.localAddress) === ipKey(conn.remoteAddress);
+
+/** The TCP rows of `netstat -ano` (Windows): both ends and the owning PID. Pure. */
+function parseNetstat(text) {
+  const rows = [];
+  const end = (s) => {
+    const i = String(s).lastIndexOf(':');
+    if (i <= 0) return null;
+    const port = Number(s.slice(i + 1));
+    const key = ipKey(s.slice(0, i));
+    return key && Number.isInteger(port) ? { key, port } : null;
+  };
+  for (const line of String(text || '').split(/\r?\n/)) {
+    // Proto, Local, Foreign, State (localised, so never read), PID.
+    const f = line.trim().split(/\s+/);
+    if (f.length < 4 || !/^TCP/i.test(f[0])) continue;
+    const pid = Number(f[f.length - 1]);
+    const l = end(f[1]);
+    const r = end(f[2]);
+    if (!l || !r || !Number.isInteger(pid) || pid <= 0) continue;
+    rows.push({ local: l.key, localPort: l.port, remote: r.key, remotePort: r.port, pid });
+  }
+  return rows;
+}
+
+/** The netstat row for the server side of OUR connection. Pure. */
+function netstatPeer(rows, conn) {
+  const lk = ipKey(conn.localAddress);
+  const rk = ipKey(conn.remoteAddress);
+  if (!lk || !rk) return null;
+  return rows.find((r) => r.local === rk && r.localPort === conn.remotePort
+    && r.remote === lk && r.remotePort === conn.localPort) || null;
+}
+
+/** What winProcScript prints: EXE= and SID= lines. Pure. */
+function parseWinProc(text) {
+  const out = { exe: null, sid: null };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('EXE=')) out.exe = line.slice(4).trim() || null;
+    else if (line.startsWith('SID=')) out.sid = line.slice(4).trim() || null;
+  }
+  return out;
+}
+
+/** The PowerShell that names one process's image and owner. The pid is a number, never text. */
+const winProcScript = (pid) => "$ErrorActionPreference='Stop';[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+  + `$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}';`
+  + "'EXE=' + $p.ExecutablePath;"
+  + "'SID=' + (Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid).Sid";
+
+/**
+ * Is `file` inside `dir`? Resolved first, case-insensitive on Windows, and a
+ * binary replaced while it ran (" (deleted)" in /proc/<pid>/exe) still counts
+ * where it was. Pure.
+ */
+function withinDir(file, dir, flavor = 'posix') {
+  if (!file || !dir) return false;
+  const p = flavor === 'win32' ? path.win32 : path.posix;
+  const norm = (x) => { const r = p.resolve(String(x)); return flavor === 'win32' ? r.toLowerCase() : r; };
+  const rel = p.relative(norm(dir), norm(String(file).replace(/ \(deleted\)$/, '')));
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${p.sep}`) && !p.isAbsolute(rel);
+}
+
+/**
+ * What the engine behind `conf` must be: { uid, exeDir? } on Linux, { sid,
+ * exeDir? } on Windows, or { refuse } when there is nothing to hold it to.
+ * `env` carries the facts about the caller: the uid the service account has
+ * (this process's own, for the shim) and the tier's directory. Pure.
+ */
+function expectedEngine(conf, { platform = process.platform, uid = (typeof process.getuid === 'function' ? process.getuid() : null), dir = localDir() } = {}) {
+  if (platform !== 'linux' && platform !== 'win32') {
+    return { refuse: `this machine (${platform}) has no way to tell which process holds the engine's port` };
+  }
+  if (conf && conf.mode === 'adapter') {
+    const a = conf.adapter || {};
+    const pin = a.engine || {};
+    const hint = `if the engine moved to another account on purpose, adopt it again: huginn local on --adapter ${a.kind || '<kind>'}`;
+    if (platform === 'linux' && Number.isInteger(pin.uid)) return { uid: pin.uid, hint };
+    if (platform === 'win32' && /^S-1-[0-9-]+$/.test(String(pin.sid || ''))) return { sid: pin.sid, hint };
+    return {
+      refuse: `nothing records which account serves the adopted ${a.kind || 'engine'} at ${a.url || '?'}, `
+        + 'so nothing says who may receive its prompts. Record it on this machine: huginn local update',
+    };
+  }
+  const exeDir = (platform === 'win32' ? path.win32 : path.posix).join(dir, 'runtime');
+  if (platform === 'win32') return { sid: LOCAL_SYSTEM_SID, exeDir };
+  if (!Number.isInteger(uid)) return { refuse: 'cannot tell which account the engine should run as' };
+  return { uid, exeDir };
+}
+
+/**
+ * The verdict on one connection's far side: { why: null } when it is the
+ * engine `want` describes, otherwise { why, unknown }: `unknown` when the
+ * operating system could not NAME the far side (so a caller with nothing
+ * secret to send may still ask it something), false when it named it and it is
+ * the wrong one. `seen` is what the operating system said (see peerIdentity).
+ * Fails closed: an expectation with no account in it, or a far side nobody
+ * could name, never passes. Pure.
+ */
+function engineVerdict(seen, want, platform = process.platform) {
+  const no = (why, unknown = false) => ({ why, unknown });
+  if (!want || want.refuse) return no((want && want.refuse) || 'there is nothing to hold the engine to');
+  if (!seen) return no('nothing on this machine could say which process holds that port', true);
+  if (seen.self) return no('the connection reached itself, so nothing is listening there');
+  if (platform === 'win32') {
+    if (!want.sid) return no('there is no account to hold the engine to');
+    if (!seen.pid) return no('netstat did not name the process that owns the connection', true);
+    if (seen.sid !== want.sid) return no(`pid ${seen.pid} runs as ${seen.sid || 'an account Windows would not name'}, not ${want.sid}`, !seen.sid);
+    if (want.exeDir && !withinDir(seen.exe, want.exeDir, 'win32')) {
+      return no(`pid ${seen.pid} runs ${seen.exe || 'a program Windows would not name'}, which is not under ${want.exeDir}`, !seen.exe);
+    }
+    return { why: null, unknown: false };
+  }
+  if (!Number.isInteger(want.uid)) return no('there is no account to hold the engine to');
+  if (seen.noProc) return no('this machine\'s /proc lists no TCP sockets, so nothing can say who holds the port', true);
+  if (!Number.isInteger(seen.uid)) return no('the connection was not accepted in time, so nothing says who holds the port', true);
+  if (seen.uid !== want.uid) return no(`it runs as uid ${seen.uid}, not uid ${want.uid}`);
+  if (want.exeDir) {
+    const holders = seen.holders || [];
+    if (!holders.length) return no('no process this account can see holds the connection', true);
+    const bad = holders.find((h) => !withinDir(h.exe, want.exeDir, 'posix'));
+    if (bad) return no(`pid ${bad.pid} runs ${bad.exe || 'a program /proc would not name'}, which is not under ${want.exeDir}`, !bad.exe);
+  }
+  return { why: null, unknown: false };
+}
+
+/** engineVerdict's reason alone: null passes. Pure. */
+const judgeEngine = (seen, want, platform = process.platform) => engineVerdict(seen, want, platform).why;
+
+/** The sockets of /proc/net/tcp and tcp6, as rows. */
+function readProcNet(procRoot = '/proc') {
+  const rows = [];
+  for (const f of ['tcp', 'tcp6']) {
+    try { rows.push(...parseProcNet(fs.readFileSync(path.join(procRoot, 'net', f), 'utf8'))); } catch { /* no IPv6 here */ }
+  }
+  return rows;
+}
+
+/**
+ * Every process holding socket `inode`, with the program it runs. The
+ * accepting account's own processes are searched first: that is where the
+ * socket is, and the only other account whose descriptors are readable here
+ * is root's.
+ */
+function socketHolders(inode, uid, procRoot = '/proc') {
+  const link = `socket:[${inode}]`;
+  let pids;
+  try { pids = fs.readdirSync(procRoot).filter((d) => /^\d+$/.test(d)); } catch { return []; }
+  const holds = (pid) => {
+    let fds;
+    try { fds = fs.readdirSync(path.join(procRoot, pid, 'fd')); } catch { return false; }
+    return fds.some((fd) => { try { return fs.readlinkSync(path.join(procRoot, pid, 'fd', fd)) === link; } catch { return false; } });
+  };
+  const owned = new Set(pids.filter((pid) => { try { return fs.statSync(path.join(procRoot, pid)).uid === uid; } catch { return false; } }));
+  let found = [...owned].filter(holds);
+  if (!found.length) found = pids.filter((pid) => !owned.has(pid)).filter(holds);
+  return found.map((pid) => {
+    let exe = null;
+    try { exe = fs.readlinkSync(path.join(procRoot, pid, 'exe')); } catch { /* not ours to read */ }
+    return { pid: Number(pid), exe };
+  });
+}
+
+/**
+ * Linux: who accepted this connection. The server side has no inode until the
+ * far end calls accept(), and the uid /proc reports for it until then is not
+ * the accepting process's, so this waits for the accept (bounded) and then
+ * reads both.
+ */
+async function linuxPeer(conn, { holders = true, procRoot = '/proc', waitMs = ACCEPT_WAIT_MS } = {}) {
+  if (selfConnected(conn)) return { self: true };
+  // A /proc mounted to show processes only (subset=pid) lists no sockets:
+  // nothing can be named, so say that rather than wait for an accept.
+  try { fs.accessSync(path.join(procRoot, 'net', 'tcp'), fs.constants.R_OK); } catch { return { uid: null, holders: [], noProc: true }; }
+  const until = Date.now() + waitMs;
+  for (let pause = 5; ; pause = Math.min(pause * 2, 100)) {
+    const row = peerRow(readProcNet(procRoot), conn);
+    if (row && row.inode !== '0') {
+      return { uid: row.uid, inode: row.inode, holders: holders ? socketHolders(row.inode, row.uid, procRoot) : [] };
+    }
+    if (Date.now() >= until) return { uid: null, holders: [] };
+    await sleep(pause);
+  }
+}
+
+/** Windows: the PID that owns the server side of this connection, its image and its owner. */
+async function windowsPeer(conn) {
+  if (selfConnected(conn)) return { self: true };
+  const sys = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  let row = null;
+  for (let i = 0; i < 3 && !row; i++) {
+    if (i) await sleep(100);
+    const ns = spawnSync(path.win32.join(sys, 'System32', 'netstat.exe'), ['-ano'],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true });
+    row = netstatPeer(parseNetstat(ns.stdout || ''), conn);
+  }
+  if (!row) return { pid: null };
+  const ps = spawnSync(path.win32.join(sys, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-Command', winProcScript(row.pid)],
+    { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  return { pid: row.pid, ...parseWinProc(ps.stdout || '') };
+}
+
+/** What the operating system says about the far side of `conn`, on this platform. */
+function peerIdentity(conn, want = {}) {
+  if (process.platform === 'linux') return linuxPeer(conn, { holders: !!want.exeDir || want.holders === true });
+  if (process.platform === 'win32') return windowsPeer(conn);
+  return Promise.resolve(null);
+}
+
+/** The far side in one phrase, for a refusal or a consent card. */
+function describePeer(seen, platform = process.platform) {
+  if (!seen) return 'a process nothing here could name';
+  if (seen.self) return 'nothing (the connection reached itself)';
+  if (platform === 'win32') return `pid ${seen.pid || '?'} (${seen.exe || 'program unknown'}), running as ${seen.sid || 'an unknown account'}`;
+  const h = (seen.holders || [])[0];
+  return `uid ${Number.isInteger(seen.uid) ? seen.uid : '?'}${h ? `, pid ${h.pid} (${h.exe || 'program unknown'})` : ''}`;
+}
+
+/** What `huginn local on --adapter` records about the engine it adopts, or null. */
+function pinFor(seen, platform = process.platform) {
+  if (!seen || seen.self) return null;
+  if (platform === 'win32') return /^S-1-[0-9-]+$/.test(String(seen.sid || '')) ? { sid: seen.sid, exe: seen.exe || null } : null;
+  const h = (seen.holders || [])[0];
+  return Number.isInteger(seen.uid) ? { uid: seen.uid, exe: (h && h.exe) || null } : null;
+}
+
+const engineRefusal = (endpoint, why, hint, unknown = false) => Object.assign(new Error(
+  `refused: whatever holds ${endpoint} is not this machine's local engine: ${why}. `
+  + 'Nothing was sent to it (no key, no prompt) and nothing it said was used. '
+  + `If the engine is restarting, retry in a moment; otherwise find out what holds that port${hint ? ` (${hint})` : ''}.`,
+), { engineRefused: true, engineUnknown: unknown });
+
+// Each connection's verdict, kept with the connection: a socket is handed to a
+// request only with a passing verdict of its own, never on the strength of an
+// earlier connection's.
+const VERDICTS = new WeakMap();
+
+/**
+ * A connection to the engine at `endpoint` that is handed over only after its
+ * far side has passed `want`: a TCP socket, TLS-wrapped for an https endpoint.
+ * Rejects with err.engineRefused when it did not pass, having written nothing.
+ * `identify` and `judge` are seams for tests.
+ */
+function connectEngine(endpoint, want, { identify = peerIdentity, judge = engineVerdict } = {}) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(endpoint); } catch { return reject(new Error(`the engine address "${endpoint}" is not a url`)); }
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
+    const sock = net.connect({ host, port });
+    let done = false;
+    const onError = (e) => fail(e);
+    const onClose = () => fail(new Error(`the far side of ${endpoint} closed the connection before it could be identified`));
+    function fail(e) {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      reject(e);
+    }
+    sock.once('error', onError);
+    sock.once('close', onClose);
+    sock.once('connect', () => {
+      const conn = {
+        localAddress: sock.localAddress, localPort: sock.localPort,
+        remoteAddress: sock.remoteAddress, remotePort: sock.remotePort,
+      };
+      Promise.resolve()
+        .then(() => identify(conn, want))
+        .then((seen) => {
+          if (done) return;
+          const v = judge(seen, want);
+          if (v && v.why) return fail(engineRefusal(endpoint, v.why, want && want.hint, v.unknown));
+          done = true;
+          sock.removeListener('error', onError);
+          sock.removeListener('close', onClose);
+          const verdict = { seen, at: Date.now() };
+          VERDICTS.set(sock, verdict);
+          if (u.protocol !== 'https:') return resolve(sock);
+          const t = tls.connect({ socket: sock, host, ...(net.isIP(host) ? {} : { servername: host }) });
+          VERDICTS.set(t, verdict);
+          resolve(t);
+        })
+        .catch(fail);
+    });
+  });
+}
+
+/**
+ * Who serves `endpoint`, read off a connection that is then closed having
+ * carried nothing. For adopting an engine (huginn-local), not for using one.
+ */
+function probeEngine(endpoint) {
+  let seen = null;
+  return connectEngine(endpoint, { holders: true }, {
+    identify: (conn) => peerIdentity(conn, { holders: true }),
+    judge: (s) => { seen = s; return { why: null }; },
+  }).then((sock) => { sock.destroy(); return seen; });
+}
+
 // ----------------------------------------------------------------- request
 
-function postChat(endpoint, key, body, onDelta) {
+function postChat(endpoint, key, body, onDelta, { want } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL('/v1/chat/completions', endpoint);
     const mod = u.protocol === 'https:' ? https : http;
@@ -262,6 +734,17 @@ function postChat(endpoint, key, body, onDelta) {
         'content-type': 'application/json',
         'content-length': payload.length,
         ...(key ? { authorization: `Bearer ${key}` } : {}),
+      },
+      // ⚠ NO SOCKET UNTIL THE FAR SIDE IS JUDGED. With a callback-style
+      // createConnection and no agent, the request holds its head (the key
+      // included) and its body (the prompt) until it is handed a socket, and
+      // connectEngine hands one over only with a passing verdict for that very
+      // connection. A refusal arrives as the request's 'error', having sent
+      // nothing (see the engine identity section).
+      createConnection: (_opts, cb) => {
+        connectEngine(endpoint, want).then(
+          (s) => (VERDICTS.has(s) ? cb(null, s) : cb(new Error('an engine connection arrived without a verdict'))),
+          (e) => cb(e));
       },
     }, (res) => {
       if (res.statusCode === 401 || res.statusCode === 403) {
@@ -305,7 +788,7 @@ function postChat(endpoint, key, body, onDelta) {
       res.on('end', () => resolve(full));
       res.on('error', reject);
     });
-    req.on('error', (e) => reject(new Error(`could not reach the local engine at ${endpoint}: ${e.message}`)));
+    req.on('error', (e) => reject(e.engineRefused ? e : new Error(`could not reach the local engine at ${endpoint}: ${e.message}`)));
     req.end(payload);
     resolve.abortReq = req;
     postChat.lastReq = req;
@@ -353,6 +836,10 @@ async function main() {
   if (!conf) return fail(`this machine has no local-engine config (${path.join(localDir(), 'local.json')}) — run: huginn local on`);
   if (mapped.error) return fail(mapped.error);
   if (!mapped.key) return fail('this machine serves no models — run: huginn local status');
+  // Which engine may hear this run, settled before anything is read or sent:
+  // with nothing to hold the far side to, nothing goes to it.
+  const want = expectedEngine(conf);
+  if (want.refuse) return fail(`refused: ${want.refuse}`);
 
   try { pruneSessions(); } catch { /* housekeeping never kills a run */ }
 
@@ -395,7 +882,7 @@ async function main() {
     }, (delta) => {
       arm();
       emit({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: delta } } });
-    });
+    }, { want });
   } catch (e) {
     clearTimeout(watchdog);
     if (dead) {
@@ -432,5 +919,11 @@ if (require.main === module) {
     SESSION_CAP_BYTES, SESSION_MAX_FILES, SESSION_MAX_AGE_MS,
     versionString, mapModel, parseArgv, splitText, capBytes, shrinkFrame,
     loadSession, saveSession, pruneSessions, localDir,
+    // The engine identity check: pure parts, then the ones that touch the OS.
+    // huginn-local loads these from here rather than keeping a second copy.
+    ACCEPT_WAIT_MS, LOCAL_SYSTEM_SID,
+    ipKey, procAddrKey, parseProcNet, peerRow, parseNetstat, netstatPeer, parseWinProc, winProcScript,
+    withinDir, expectedEngine, engineVerdict, judgeEngine, describePeer, pinFor,
+    readProcNet, socketHolders, linuxPeer, peerIdentity, connectEngine, probeEngine, postChat,
   };
 }
