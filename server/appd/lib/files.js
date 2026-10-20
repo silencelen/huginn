@@ -113,14 +113,34 @@ function imageContentType(p) {
  * else entirely.
  */
 function canonicalRoots(roots, fs = nodeFs) {
-  const out = [];
+  return liveRoots(roots, fs).canon;
+}
+
+/**
+ * Every root that exists, under BOTH its names: `canon`, its realpath, and
+ * `named`, the spelling it was configured by (normalised, not resolved).
+ *
+ * ⚠ THE LEXICAL PASS NEEDS THE CONFIGURED NAME. A request is spelled the way
+ * the daemon hands paths out — an upload's `path` is built from DATA_DIR as
+ * configured, a relative request hangs off the cwd as recorded — and when that
+ * spelling runs through a symlink (DATA_DIR moved to a bigger disk and linked
+ * back) it never starts with the realpath. Testing it against `canon` alone
+ * refused every file in the root by the very name the daemon gave it. Pass 2
+ * still compares realpath to realpath, so the second name widens nothing.
+ * Same drop rule as [canonicalRoots]: a root that does not exist has no names.
+ */
+function liveRoots(roots, fs = nodeFs) {
+  const canon = [];
+  const named = [];
   for (const r of roots || []) {
     if (!r || typeof r !== 'string' || !path.isAbsolute(r)) continue;
     let real;
     try { real = fs.realpathSync(r); } catch { continue; }   // no such root widens nothing
-    if (!out.includes(real)) out.push(real);
+    if (!canon.includes(real)) canon.push(real);
+    const asNamed = path.resolve(r);
+    if (!named.includes(asNamed)) named.push(asNamed);
   }
-  return out;
+  return { canon, named };
 }
 
 /** Is `file` inside `root`, both already canonical? */
@@ -192,14 +212,15 @@ function resolveImage(o = {}) {
     return { ok: false, status: 400, error: 'path must be absolute' };
   }
 
-  const canon = canonicalRoots(o.roots, fs);
+  const { canon, named } = liveRoots(o.roots, fs);
   if (!canon.length) return { ok: false, status: 403, error: 'that path is not in an allowed directory' };
 
   // PASS 1 — lexical. path.resolve has already collapsed `..`, so a traversal
   // out of a root fails here, on a string, before the disk is touched. This is
   // also what keeps the route from being an existence oracle: a path that was
-  // never ours is 403 whether or not it exists.
-  if (!canon.some((r) => within(abs, r))) {
+  // never ours is 403 whether or not it exists. A root counts under either of
+  // its names — see [liveRoots].
+  if (![...named, ...canon].some((r) => within(abs, r))) {
     return { ok: false, status: 403, error: 'that path is not in an allowed directory' };
   }
 
