@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.4 — 2026-10-20
+
+### Changed
+- Soft end, graceful archive and a project's graceful delete no longer send the wrap-up message
+  along with unsent text in the session's message box: they wait until the box is empty, and after
+  10 minutes they give up without ending the session and say why.
+
 ## 3.13.3 — 2026-10-20
 
 ### Changed
