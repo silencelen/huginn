@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## 3.12.2 — 2026-10-18
+## 3.12.2 — 2026-10-19
 
 ### Added
 - **The Apps page names the device that saved an address that does not answer**, and can forget
@@ -12,6 +12,17 @@
 - The app proves the daemon on a loopback route (a USB or ssh forward) before sending the token.
 - Debug builds are signed with a key kept outside the repository. A debug install from an earlier
   build has to be uninstalled before a new debug build installs.
+- The sign-in page opens on a tap, and only at an http(s) address.
+- A notification answer without the dialog's fingerprint is refused instead of sent without one.
+- A plain HTTP answer from a daemon the app has already proved, or on a loopback address, is
+  reported as an interception, not as an old daemon.
+- An app's address is judged as a browser will read it, after percent-decoding and every IPv4
+  spelling, so a public host cannot pass as a local name.
+- A loopback address is decided by the parser that dials it, and a port must be ASCII digits.
+- Server-sent event lines and frames are capped at 1 MiB, the terminal view clamps the pane width
+  and colours the daemon sends, and wrapped message blocks are folded in one linear pass.
+- An archived session's resume command is offered for copying only in the form the daemon builds
+  it, so a pasted command can only resume the conversation.
 
 ## 3.12.1 — 2026-10-18
 

@@ -8,7 +8,14 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [2.6.2] - 2026-10-18
+## [2.6.2] - 2026-10-19
+
+### Changed
+- `huginn setup ssh` moves an `ssh_config` entry to a new address only when this run wrote the
+  entry, or when the host key proves the address is the same server. Otherwise it prints
+  `huginn setup ssh --host <address>` to run.
+- Local AI with an engine you run yourself needs `huginn local update` once, to record which
+  account the engine runs as.
 
 ### Security
 - **The appd token never appears on a command line.** The server scripts (`huginn llm`,
@@ -31,6 +38,25 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 - `huginn console` and `huginn llm` strip terminal control sequences from server and model text.
 - `setup.sh` and `uninstall.sh` write the session account's home as that account, and refuse
   symlinks and files another account owns there.
+- **The server's tools and the clients' calls on the server use HTTPS pinned to the daemon's own
+  key**, and refuse when its certificate cannot be read. While the daemon restarted, any account
+  that took its port was handed the token over plain HTTP. The tools read the daemon's answers on
+  stdin, not from a command line.
+- A session name can no longer run a command through the Alt-o key binding.
+- huginn core cleans what an unproved address says before printing it, and reports a plain HTTP
+  answer where it holds a pin as an interception. `huginn` reads at most 4 MB of the core's answer.
+- A lock state that cannot be read counts as locked: on Linux when logind does not answer, and on
+  Windows any session but the core's own account's.
+- A Windows notification launches only `huginn://` links.
+- `huginn uninstall` creates its log under a name that cannot be guessed, so a planted link
+  cannot redirect it.
+- PowerShell on Linux writes the appd token readable by its owner only.
+- The device runner bounds the daemon's challenge answer in size and time, strips terminal
+  control sequences from what it prints, and reports a plain answer where it holds a pin as an
+  interception.
+- Local AI checks that the engine's own account holds its port before sending it the key, and
+  writes local-model transcripts readable by their owner only. An update run with `sudo` hands
+  its folder back to the account without following links, and never to root by mistake.
 
 ### Fixed
 - `huginn devices` lists devices again.

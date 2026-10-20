@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## 3.13.2 — 2026-10-18
+## 3.13.2 — 2026-10-19
 
 ### Added
 - `PUT /v1/apps/routes` takes the client's `name`. A failing address that clients saved is listed
@@ -26,6 +26,19 @@ version number collided. Entries below are reconstructed from the shipping commi
   only the dialog's line wrapping is ignored, and case and spaces count.
 - The favicon scan reads only a page's head, with a bounded tag search, so a hostile page cannot
   stall the daemon.
+- The installer's health check pins the daemon's key before it sends the token. It used plain
+  HTTP right after the restart, while any account could take the port.
+- A malformed request target gets `400` instead of stopping the daemon.
+- A send is held, not entered, when a dialog appears between the paste and Enter.
+- An answer is bound to the dialog's whole body as drawn. If the dialog has been redrawn since,
+  after a resize for example, the answer gets `409`.
+- The trust dialog is recognised by its rows, not by its sentence.
+- A session whose Claude Code exited to the shell reads as a shell, even with Claude's last frame
+  still on screen, so a message is not typed into the shell.
+- A model ladder move is confirmed from Claude Code's own records, not from text on the screen.
+- The persona, prompts and relay text stay off child processes' command lines.
+- Pasted blocks are unwrapped in one linear pass, and a held send's transcript is read
+  incrementally and bounded, so crafted text cannot stall the daemon.
 
 ## 3.13.1 — 2026-10-18
 

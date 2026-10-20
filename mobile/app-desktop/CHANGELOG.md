@@ -17,6 +17,21 @@ Carries core 2.6.2.
   config folder is private on Linux.
 - Local AI on Windows hands the token to the elevated step instead of writing it into ProgramData
   unelevated.
+- An acknowledge or open link withdraws a notice only with that notification's nonce.
+- The browser opens only http(s) addresses, the sign-in address included, and the command palette
+  lists only the apps the Apps page can open.
+- The single-instance hand-off reads a short, bounded line per connection, so an idle local
+  connection cannot stall the next launch.
+- Purging the `.deb` cleans each home as its owner and follows no link.
+- A plain HTTP answer from a daemon the app has already proved, or on a loopback address, is
+  reported as an interception, not as an old daemon.
+- An app's address is judged as a browser will read it, after percent-decoding and every IPv4
+  spelling, so a public host cannot pass as a local name.
+- A loopback address is decided by the parser that dials it, and a port must be ASCII digits.
+- Server-sent event lines and frames are capped at 1 MiB, the terminal view clamps the pane width
+  and colours the daemon sends, and wrapped message blocks are folded in one linear pass.
+- An archived session's resume command is offered for copying only in the form the daemon builds
+  it, so a pasted command can only resume the conversation.
 
 ### Fixed
 - **The first launch after an install, a reinstall or an update re-maximizes the window once**,
