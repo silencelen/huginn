@@ -442,16 +442,23 @@ const CLOSE_FENCE = /^ {0,3}(`{3,})[ \t]*$/;
  * An UNTERMINATED block is not returned — it is not a block, it is a run that
  * stopped mid-sentence — but [fenceOpensAt] lets the fallback cut it off the
  * prose so half a JSON object cannot become somebody's notification.
+ *
+ * ⚠ AN OPENING FENCE INSIDE A BLOCK STARTS A NEW ONE. A Round's run cut off by
+ * its cap while writing the block leaves an unterminated fence in the partial
+ * message, and finishRoundRun joins every assistant message, the partial one
+ * and the wrap-up turn's complete report alike. The report's opening line was
+ * read as body text of the cut block, which then ran on to the report's closing
+ * fence: one block, not JSON, and the report the wrap-up turn exists to save was
+ * filed as "unknown". A line that opens a report fence can never be part of the
+ * JSON a block must hold, so starting afresh there cannot lose a real report.
  */
 function reportBlocks(text) {
   const out = [];
   let fence = null; let body = null; let tag = null;
   for (const line of String(text).split(/\r?\n/)) {
-    if (fence === null) {
-      const m = OPEN_FENCE.exec(line);
-      if (m) { fence = m[1]; tag = m[2] || null; body = []; }
-      continue;
-    }
+    const m = OPEN_FENCE.exec(line);
+    if (m) { fence = m[1]; tag = m[2] || null; body = []; continue; }
+    if (fence === null) continue;
     const c = CLOSE_FENCE.exec(line);
     if (c && c[1].length >= fence.length) {
       out.push({ body: body.join('\n'), tag });
@@ -463,15 +470,18 @@ function reportBlocks(text) {
   return out;
 }
 
-/** Where an unterminated report block starts, or -1. Used to cut debris off prose. */
+/**
+ * Where an unterminated report block starts, or -1. Used to cut debris off prose.
+ * Scans by reportBlocks' rules, an opening fence inside a block included.
+ */
 function fenceOpensAt(text) {
   const lines = String(text).split(/\r?\n/);
   let at = -1; let fence = null; let pos = 0;
   for (const line of lines) {
-    if (fence === null) {
-      const m = OPEN_FENCE.exec(line);
-      if (m) { fence = m[1]; at = pos; }
-    } else {
+    const m = OPEN_FENCE.exec(line);
+    if (m) {
+      fence = m[1]; at = pos;
+    } else if (fence !== null) {
       const c = CLOSE_FENCE.exec(line);
       if (c && c[1].length >= fence.length) { fence = null; at = -1; }
     }
