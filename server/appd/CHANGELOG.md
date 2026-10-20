@@ -9,7 +9,70 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## Unreleased
+## 3.13.3 — 2026-10-20
+
+### Changed
+- `/answer` and the consent backstop type the option's digit and press Enter only when the
+  question is still on screen with the caret on that row. A draft left under a dialog stays unsent.
+- A message held for a session that was then killed or replaced outside the app fails with `410`
+  and a reason, instead of being typed into the new session. Messages still queued when a session
+  ends, or when its name is reused, fail the same way.
+- A rename waits for a message being typed, and answers `409` if one is still being typed after
+  15 s.
+- A send into Claude Code's shell mode (`!`) is refused with `409`; a message that starts with `!`
+  is refused rather than run.
+- Graceful archive sends its wrap-up phrase through the send queue, like soft end: it can answer
+  `202` with `queued` and `blockedBy`, and `409` on a shell.
+- The model ladder waits for an empty message box; a move is reported once Claude Code confirms
+  it, never while it is queued; a stalled session is not moved; a failed move back is retried
+  after the cooldown.
+- Headroom settings load on hosts whose Claude Code default model is written like `opus[1m]` or
+  `opusplan`. An account-switch preference carried over from 2.x starts acting there.
+- On a spring-forward night a Round set for a time that does not exist runs at the later hour, in
+  every zone.
+- Round reports and "did not run" notices go to Telegram unless a push actually reached a device.
+  While a Round run waits for a usage-limit reset, slots that come due are recorded as "did not
+  run", and the re-run gets its full budget.
+- `GET /v1/watch` answers `503` while tmux does not answer, instead of an empty session list.
+- Self-signed HTTPS apps can be added and read as up; their icons still verify the certificate.
+- A reported route is renewed while its device keeps talking to the server.
+
+### Fixed
+- An auto soft end or graceful archive no longer ends, or archives, the next session to take the
+  same name, and stands down if Claude Code exits first.
+- A recreated session no longer answers "already sent"; a new project member never wipes a live
+  session's state under the same name; a conversation resumed by hand from its archive is listed.
+- Project sessions come back from a reboot with their name, effort and persona.
+- A second automated message for a busy session waits for the turn the first one started, and
+  appd's and Claude Code's own records no longer count as the owner typing.
+- Messages carrying invisible characters go through in one press, with those characters removed.
+- Unnumbered selectors and the shell-mode prompt are recognised, so nothing is pasted into them;
+  a page sent with Enter goes with the page; a lone option on a multi-select question is refused.
+- A repeated question can be answered from a notification straight away.
+- The live login is no longer marked dead after the CLI rotates its token; a background refresh
+  keeps MCP logins; a login signed back in starts clean; a stolen OAuth lock is left alone;
+  expiry warnings come once per expiry and retry when nobody was reached; an unswitchable login
+  is skipped.
+- Ladder records settle from the next read, a picker move is read back correctly, and a native
+  "Back to Fable" undo moves the session once.
+- Round reports cut by the cap keep the wrap-up's report; history prunes its transcripts; same-name
+  local models resolve; a stalled chat's queue waits for the reset across a restart.
+- Device events after a run settled are refused; replays are detected per line, so repeated tokens
+  are kept; local run output keeps characters split across reads.
+- The daemon starts on a full or read-only data disk, logging what it skipped.
+- An upload onto a full store returns its `507` promptly.
+- The project dashboard updates agent spend and goes quiet with its members.
+- "Load earlier" and drain seams no longer duplicate a message.
+- `~/` image mentions and image folders reached through a symlink draw.
+- Hand-edited or newer stored app rows survive a start; a sweep never writes back a stale result.
+- A hand-armed STOP reports when it was really armed.
+- The unit keeps restarting the daemon after a burst of failed starts.
+
+### Security
+- A connection that never finishes its request headers is closed after 60–90 s, and a refused
+  request whose body is still arriving 10 s later is cut.
+- The relay script is started from its own call with a fixed argument list, and the model scan
+  passes the Claude Code binary's path to `sh` as an argument.
 
 ### Removed
 - The legacy seed machinery: rows that older builds pre-filled are ordinary rows now.

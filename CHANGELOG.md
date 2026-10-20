@@ -8,6 +8,45 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.3] - 2026-10-20
+
+### Changed
+- `huginn rename` goes through the daemon, so it is refused for a project member or lead, with the
+  daemon's reason.
+- `huginn core install` over a core that is running a device job restarts it once the job ends.
+- Route edits and pairing the same server again no longer restart huginn core's runner; unpairing,
+  or pairing a different server, stops a running job at once.
+- A machine turned on without choosing a scope enrols as Look, as its settings show.
+- `huginn local off` on a Linux system install asks for elevation once. If a service does not
+  stop, it keeps the enrolment and its files and says so.
+- `cc solo` opens the session named solo; `cc <name> solo` is the solo form.
+- The console's delete and forget prompts name the chat or conversation.
+
+### Fixed
+- The console's cursor stays on its row when a list refreshes, so delete and forget act on the
+  row shown.
+- The console shows each streamed token once, and Ctrl-C stops reconnecting to a session.
+- `huginn uninstall --all` keeps `Match` blocks and comments after the `Host huginn` stanza.
+- Windows: a UTF-16 PowerShell profile is read and written in its own encoding, and a profile
+  damaged by 2.6.x is repaired.
+- The installers quote the key path in `ssh_config`, so a home folder with a space in it works.
+- `setup.sh` keeps every earlier `~/.tmux.conf` backup instead of overwriting the first.
+- `huginn -p` and `-y` get every tool in a multi-word `HUGINN_APPD_EXTRA_TOOLS`.
+- PowerShell 5.1: `huginn usage week` and project text with double quotes work.
+- huginn core shows a tray notice once, retries a run's last output, fails over from a preferred
+  address held by another HTTPS server, and keeps the device's poll open through settings changes.
+- The device runner reports why a run could not start, and sends a run's last output before its
+  end.
+- Local AI: reasoning models are not stopped while they think; an elevated update hands its folder
+  back before anything runs as the account; a llama-swap version change rewrites the service
+  definition; on Windows an unchanged service wrapper is not replaced.
+
+### Security
+- huginn core's proxy forwards escaped paths to the daemon unchanged, so a crafted link cannot turn
+  one request into another.
+- `huginn-device off --force` prints only a well-formed device id in the command it gives for the
+  server.
+
 ## [2.6.2] - 2026-10-19
 
 ### Changed

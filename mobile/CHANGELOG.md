@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## 3.12.3 — 2026-10-20
+
+### Fixed
+- Watch continuously works on Android 10 to 13 instead of stopping the app.
+- A finished chat's answer appears once in its notification.
+- Send empties the box at once and keeps the message until the server accepts it; a refused or
+  unsent message comes back to the composer.
+- A chat restored after the app was closed in the background loads and reattaches a running answer.
+- With the app lock on, unlocking returns to where you were, without replaying the last
+  notification.
+- A share in progress survives folding or rotating.
+- Notifications offer no answer buttons for a question that takes several answers.
+- Coming back to a page or session notes whose save is in flight shows what you typed; a page whose
+  rename was refused keeps saving.
+- Backspace in live typing deletes a whole emoji.
+- Dependencies: Gradle 9.8.1, core-ktx 1.19.1, Firebase BoM 35.0.2, google-services 4.5.0.
+
 ## 3.12.2 — 2026-10-19
 
 ### Added

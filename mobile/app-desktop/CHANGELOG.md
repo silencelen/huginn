@@ -1,5 +1,22 @@
 # Huginn Desktop changelog
 
+## 2.6.3
+
+Carries core 2.6.3.
+
+### Fixed
+- huginn core learns at once which session you are looking at, and stops holding back its alerts
+  when the app quits.
+- Setup records each check on the step it checked, and the step rail waits while a check runs.
+- Batch kill and wrap up finish past a refusal and name each one.
+- A project dashboard is never shown under another project.
+- Telegram fallback resumes promptly when notifications are turned off or stop working.
+- A downloaded update stays installable when a later check fails.
+- Coming back to a page or session notes whose save is in flight shows what you typed; a page whose
+  rename was refused keeps saving.
+- Backspace in live typing deletes a whole emoji.
+- Dependencies: Gradle 9.8.1, core-ktx 1.19.1, Firebase BoM 35.0.2.
+
 ## 2.6.2
 
 Carries core 2.6.2.
