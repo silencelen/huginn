@@ -1145,13 +1145,16 @@ function removeArchive(id) {
  * from the list is worse than one that cannot open it"). A REVIVED row is out for
  * the same reason: the session it names is back, and it is the archive list that
  * marks it as running, not this one that hides it.
+ *
+ * Each id maps to its `endedAt`, which is what listSessions needs to tell the
+ * archived run's own leftovers from a conversation that has come back since.
  */
-const archivedIds = new Set();
+const archivedIds = new Map();   // claude session id -> endedAt (epoch seconds)
 
 function refreshArchivedIds() {
   archivedIds.clear();
   for (const rec of listArchives()) {
-    if (rec.endedAt && !rec.revivedAt) archivedIds.add(rec.id);
+    if (rec.endedAt && !rec.revivedAt) archivedIds.set(rec.id, rec.endedAt);
   }
 }
 
@@ -1250,11 +1253,20 @@ function restoreArchivedTranscript(id, cwd) {
  *
  * The ID has to match either way: a tmux name is reused within hours here, and a
  * stranger holding the old name is not this archive coming back.
+ *
+ * ⚠ AND THEN ANY NAME. Revive is not the only way back: the row's own resume
+ * command, or Claude Code's /resume list, runs the conversation in whatever
+ * session it was typed into, under the same id. The revive route's own guard
+ * already looks under every name; a row that looked under two said "not
+ * running" and offered a Revive that guard then refused.
  */
 function archiveLiveName(rec, liveIds) {
   if (!liveIds) return null;
   for (const name of [rec.revivedAs, rec.tmuxName]) {
     if (name && liveIds.get(name) === rec.id) return name;
+  }
+  for (const [name, id] of liveIds) {
+    if (id === rec.id) return name;
   }
   return null;
 }
@@ -1458,13 +1470,23 @@ async function listSessions({ preview = false } = {}) {
   // forgotten it — and it exists for the window where that is not yet true: a
   // crash between the row being written and the kill landing. Matched on the
   // CLAUDE SESSION ID, never the name, so a reused name cannot hide a live
-  // stranger; and only finished, un-revived archives are in that set, so this can
-  // never hide a session that is genuinely still yours to use (see archivedIds).
-  const hidden = archivedIds.size
-    ? rows.filter((r) => r.claudeSessionId && archivedIds.has(r.claudeSessionId)).map((r) => r.name)
-    : [];
+  // stranger; and only finished, un-revived archives are in that set (see
+  // archivedIds).
+  //
+  // ⚠ AND ONLY WHAT THE ARCHIVED RUN ITSELF LEFT: state stamped before the
+  // archive ended. A plain `--resume` keeps the session id, so the row's own
+  // "copy resume" command pasted into any session, or the conversation picked
+  // from Claude Code's /resume list, reports the archived id again — and hiding
+  // that took a session somebody was using off every list and out of every alert
+  // (alertTick reads this list), while the archive row offered Revive for it.
+  // Anything the conversation says after the end means it is running again.
+  const archivedRun = (r) => {
+    const endedAt = r.claudeSessionId ? archivedIds.get(r.claudeSessionId) : undefined;
+    return endedAt != null && r.stateSince != null && r.stateSince < endedAt;
+  };
+  const hidden = archivedIds.size ? rows.filter(archivedRun).map((r) => r.name) : [];
   if (hidden.length) {
-    rows = rows.filter((r) => !(r.claudeSessionId && archivedIds.has(r.claudeSessionId)));
+    rows = rows.filter((r) => !archivedRun(r));
     log(`sessions: ${hidden.join(', ')} still in tmux but archived; listed under /v1/archive instead`);
   }
 

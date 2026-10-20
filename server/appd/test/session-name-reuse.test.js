@@ -575,3 +575,48 @@ test('an archive whose Claude exits before it settles neither archives nor ends 
   assert.ok(alive(name), 'the new Claude is still running');
   assert.equal((await archives()).some((a) => a.id === fresh), false, 'and its conversation was not archived');
 });
+
+// ------------------------------------------------- a resume by hand
+
+/** A session ended through the archive route, at once. */
+async function archiveNow(suffix) {
+  const name = mkPane(suffix);
+  const id = crypto.randomUUID();
+  writeState(name, 'idle', { sessionId: id, transcript: writeTranscript(id) });
+  const r = await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal(r.body.archived, true);
+  return { name, id };
+}
+
+test('a conversation resumed by hand from its archive row is a session again, listed where it runs', async () => {
+  // The row's own "copy resume" command pasted into another session, or the
+  // conversation picked from Claude Code's /resume list: a plain --resume keeps
+  // the session id, so the hook reports the archived id under that session.
+  // Hiding it took a live session off every list and out of every alert, and
+  // the archive row offered Revive for a conversation that was running.
+  const { id } = await archiveNow('arch-resumed');
+  const into = mkPane('main-resumed');
+  writeState(into, 'idle', { sessionId: id, transcript: writeTranscript(id) });
+
+  assert.ok(await listed(into), 'the session running it is listed');
+  const row = (await archives()).find((a) => a.id === id);
+  assert.equal(row.live, true, 'the archive row says it is running');
+  const rv = await api(`/v1/archive/${id}/revive`, { method: 'POST' });
+  assert.equal(rv.status, 409, 'and a second Claude on it is refused');
+  assert.match(rv.body.error, /already running as 'main-resumed'/);
+
+  writeState(into, 'attention', { sessionId: id });
+  const s = (await api('/v1/sessions')).body.sessions.find((x) => x.name === into);
+  assert.equal(s && s.state, 'attention', 'a question in it is seen, which is what an alert is drawn from');
+});
+
+test('a conversation resumed by hand under its own old name is listed too', async () => {
+  // `cc <old name>` and then the copied command: the name the archive row
+  // remembers, holding the conversation the row is about.
+  const { name, id } = await archiveNow('arch-samename');
+  mkPane(name);
+  writeState(name, 'idle', { sessionId: id, transcript: writeTranscript(id) });
+  assert.ok(await listed(name), 'the session running it is listed');
+  assert.equal((await archives()).find((a) => a.id === id).live, true, 'and the archive row says it is running');
+});
