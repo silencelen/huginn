@@ -11405,7 +11405,19 @@ async function handleRequest(req, res) {
       if (!st || !st.sessionId) return sendErr(res, 409, 'this session has no Claude session id yet');
       const state = hstate();
       const rec = state.sessions[st.sessionId];
-      const laddered = !!(rec && rec.ladder && rec.ladder.to);
+      // ⚠ THE OWNER'S OWN "BACK TO FABLE" IS NOT A LADDER MOVE. While a native
+      // undo is on its way its record points UP, from the rung Claude Code put
+      // the session on back to fable, and reading it as appd's ladder made a
+      // second press undo the undo: back = `ladder.from`, the native rung, so the
+      // session went to fable and straight back to opus. A press while that job
+      // is still queued is answered by the job already waiting; a record whose
+      // job is gone (the daemon restarted under it) moves nothing at all.
+      const undoing = !!(rec && rec.ladder && rec.ladder.how === 'undo-native');
+      if (undoing && rec.ladder.delivery === 'pending'
+        && pendingEntries(name).some((e) => e.kind === 'model' && !e.automated)) {
+        return sendJson(res, 200, { ok: true, applied: false, queued: true, to: rec.ladder.to });
+      }
+      const laddered = !undoing && !!(rec && rec.ladder && rec.ladder.to);
       const native = !laddered && rec && rec.nativeSwitch && rec.nativeSwitch.to ? rec.nativeSwitch : null;
       if (!laddered && !native) return sendErr(res, 409, 'huginn has not moved this session');
       // Where it was BEFORE the move. A native switch is observed rather than
@@ -11454,7 +11466,22 @@ async function handleRequest(req, res) {
         automated: false,
         origin: 'headroom',
         kind: 'model',
-        onSettle: (v) => { if (v && v.result && v.result.ok) landed(); },
+        onSettle: (v) => {
+          if (v && v.result && v.result.ok) { landed(); return; }
+          // ⚠ A NATIVE UNDO THAT DID NOT LAND LEAVES NO RECORD BEHIND, queued or
+          // not. Left pending, it held every ladder move off the session for good
+          // ("a model move waiting for a turn boundary"), kept the session out of
+          // native-fallback detection, and pointed the next press at opus. The
+          // native mark stays: nothing moved, so it is still the truth.
+          if (!native) return;
+          const st2 = hstate();
+          const r2 = st2.sessions[st.sessionId];
+          if (r2 && r2.ladder && r2.ladder.how === 'undo-native' && r2.ladder.delivery === 'pending') {
+            r2.ladder = null;
+            log(`headroom: ${name} was not put back on ${back} (${(v && v.dropped) || (v && v.result && v.result.reason) || 'no confirmation'})`);
+            saveHeadroomState(st2);
+          }
+        },
       });
       const result = out.result || {};
       // A native undo that RAN and could not confirm must not leave behind a
