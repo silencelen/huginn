@@ -91,11 +91,13 @@ setTimeout(finish, 1500);
  * as "$2" and keeps them; next to them it keeps the command line of the process
  * it is running in, which is what `ps` would have shown anybody.
  */
+// The .msg file is the one the test waits for, so it appears LAST, whole (a
+// rename): its .args and .cmdline are already there when it is seen.
 const RELAY = `#!/usr/bin/env bash
 n="$RELAY_TEST_DIR/$(date +%s%N)-$$"
-printf '%s' "$2" > "$n.msg"
 cat /proc/$$/cmdline > "$n.cmdline" 2>/dev/null || :
 printf '%s\\n' "$#" "$1" "$3" "$4" "$0" > "$n.args"
+printf '%s' "$2" > "$n.msg.part" && mv "$n.msg.part" "$n.msg"
 exit 0
 `;
 
