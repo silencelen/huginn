@@ -68,6 +68,11 @@ grep -E '^# (pass|fail)' /tmp/appd-tests.tap; echo "floor: $APPD_MIN"
 - **Adding a route test file:** take the next free port block and add it to the
   `PORT ALLOCATION` table at the top of the route test files, in every file that carries the
   table.
+- **A fixture pane has not drawn anything when `new-session` returns.** tmux 3.6 built with
+  systemd, which is what Ubuntu 26.04 and so CI run, starts a new pane's command only once
+  systemd has given the pane a scope of its own, and wherever a user bus is reachable that is
+  after `new-session` has returned. A helper that hands a test a pane showing something waits
+  for it with `untilDrawn` from `server/appd/test/until-drawn.js`.
 - `server/appd/test/docs-truth.test.js` reads the `/v1/ping` and `/v1/challenge` rows of the
   API table in `docs/reference/api.md`. Keep those rows, and what they say about the token, when
   you edit that page.
