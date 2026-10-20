@@ -215,6 +215,10 @@ The unit always points at the stable path, never into `versions/<version>`, so a
 swaps `current` is picked up by the next start. One core per machine: a per-user install
 refuses to install its service beside a package-owned `/usr/bin/huginn`.
 
+A core in the middle of a device job is not restarted, on either platform (a restart of the unit,
+or ending the Windows task, would stop the job's `claude` with it): `core install` asks it to
+restart onto the installed binary once the job is done, as an update does.
+
 The tray is a StatusNotifierItem (`fyne.io/systray`) and notifications go over D-Bus
 (`org.freedesktop.Notifications`), with the body escaped. A lock file in the runtime directory
 allows one tray per user. The lock probe finds the user's graphical session among their logind

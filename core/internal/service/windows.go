@@ -344,6 +344,10 @@ type WindowsOptions struct {
 	NoTray    bool
 	Runner    Runner
 	StartupFn func(appData string) string // tests override the Startup-folder join
+	// KeepRunning: the running core is in the middle of a device job, so its
+	// task is not ended (the caller asks it to restart itself once the job is
+	// done).
+	KeepRunning bool
 }
 
 // StartupLnk is the tray shortcut's path.
@@ -423,7 +427,11 @@ func InstallWindows(o WindowsOptions) Report {
 			// huginn.exe.old) until the next reboot, while status reports the new
 			// one installed. AFTER the registration on purpose: a registration
 			// that fails (no admin) must leave the running core alone, not stop
-			// it. Not running / no task yet is fine.
+			// it. Not running / no task yet is fine. Nor a core in the middle of
+			// a job: /End kills the job with it, halfway.
+			if o.KeepRunning {
+				return Skipped, "left running: it is in the middle of a job"
+			}
 			res := r.Run("schtasks", "/End", "/TN", TaskName)
 			if !res.OK() {
 				return Unchanged, "none running"

@@ -305,6 +305,8 @@ func coreInstall(args []string) int {
 		retireNodeRunner(u)
 		u.Spin("service", "installing "+service.UnitName+" and starting it")
 		before := service.ParseLinger(o.Runner.Run("loginctl", "show-user", o.User, "--property=Linger"))
+		cur, busy := jobInProgress()
+		o.KeepRunning = busy
 		rep, linger := service.InstallLinux(o)
 		if before == service.LingerOff && linger == service.LingerOn {
 			// huginn turned it on, so `huginn uninstall` turns it off again.
@@ -320,6 +322,9 @@ func coreInstall(args []string) int {
 			}
 			return ""
 		})
+		if busy && rep.OK() {
+			restartAfterJob(u, cur)
+		}
 		if rep.OK() {
 			afterServiceInstallUI(u, bin, fileExists(o.TrayPath()), trayC)
 		} else if trayC != nil {
@@ -363,6 +368,8 @@ func coreInstall(args []string) int {
 			return 2
 		}
 		u.Spin("service", `registering the "`+service.TaskName+`" task and starting it`)
+		cur, busy := jobInProgress()
+		o.KeepRunning = busy
 		rep := service.InstallWindows(o)
 		trayC := renderServiceReport(u, rep, func(c compResult) string {
 			if c.comp == "service" {
@@ -370,6 +377,9 @@ func coreInstall(args []string) int {
 			}
 			return ""
 		})
+		if busy && rep.OK() {
+			restartAfterJob(u, cur)
+		}
 		if rep.OK() {
 			afterServiceInstallUI(u, bin, fileExists(o.StartupLnk()), trayC)
 		} else if trayC != nil {
@@ -384,6 +394,37 @@ func coreInstall(args []string) int {
 		u.Took("done")
 	}
 	return rc
+}
+
+// jobInProgress: this user's core answers and is in the middle of a device
+// job.
+//
+// ⚠ `core install` (so every re-run of the one-liner, and the console's i)
+// must not restart such a core: the restart stops the job's claude with it,
+// halfway. It is left running and asked to restart itself once the job is
+// done, as an update asks it (docs/design/core.md, the upgrade path).
+func jobInProgress() (coreSnapshot, bool) {
+	st, running := coreState(2 * time.Second)
+	return st, running && st.Device.Status.Busy
+}
+
+// restartAfterJob asks the core to restart onto the installed binary once its
+// job is done (POST /core/restart), and says so.
+func restartAfterJob(u *ui.Out, cur coreSnapshot) {
+	var out struct {
+		AfterJob bool `json:"afterJob"`
+	}
+	if _, err := call(http.MethodPost, "/core/restart", nil, &out); err != nil {
+		u.Line(ui.Warn, "core", "running a job, so it was not restarted, and asking it to restart after the job failed ("+err.Error()+")")
+		u.Note("Run huginn core install again once the job is done.")
+		return
+	}
+	if out.AfterJob {
+		u.Line(ui.OK, "core", "running a job: it restarts onto "+version.Version+" when the job is done"+windowsRetryNote())
+		return
+	}
+	// The job ended a moment ago, so it is restarting now: see it back.
+	startAndWait(cur)
 }
 
 // retireNodeRunner: the pre-core Node runner (huginn-device.service) is

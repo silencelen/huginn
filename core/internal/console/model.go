@@ -128,8 +128,9 @@ type model struct {
 
 	cur map[screen]int // cursor per screen, kept across refetches
 
-	chat chatState
-	proj projState
+	chat    chatState
+	follows int // numbers each follow of a chat's events (chatState.gen)
+	proj    projState
 
 	filter    map[screen]string // kept `/` filters, per screen
 	filtering *textinput.Model  // the `/` field while it has focus
@@ -262,8 +263,8 @@ func (m *model) back() bool {
 	if len(m.stack) == 0 {
 		return false
 	}
-	if m.scr == scrChat && m.chat.cancel != nil {
-		m.chat.cancel() // stop following; the run itself goes on on the host
+	if m.scr == scrChat {
+		m.stopFollow() // the run itself goes on on the host
 	}
 	m.scr = m.stack[len(m.stack)-1]
 	m.stack = m.stack[:len(m.stack)-1]
@@ -279,7 +280,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.gen < m.gen && m.loaded {
 			return m, nil
 		}
+		// ⚠ A cursor stays on its ROW, not its index: a refetch reorders the
+		// lists (chats and the archive newest first, sessions by state), and an
+		// index kept across one put x (delete, forget) on another row.
+		was := m.selectedKeys()
 		m.data, m.loaded, m.fetchAt = msg, true, time.Now()
+		m.reselect(was)
 		if msg.coreErr == nil && msg.appdErr == nil {
 			m.live = true
 		}
@@ -486,6 +492,67 @@ func (m *model) move(s string, n int) {
 	m.cur[m.scr] = c
 }
 
+// listScreens are the screens whose rows come from a fetch.
+var listScreens = []screen{scrSessions, scrChats, scrProjects, scrRounds, scrArchive, scrDevices}
+
+// rowKeys are the ids (names, for sessions) of screen s's rows, in the order
+// it shows them.
+func (m *model) rowKeys(s screen) []string {
+	var keys []string
+	switch s {
+	case scrSessions:
+		vis, _ := m.sessionRows()
+		for _, x := range vis {
+			keys = append(keys, x.Name)
+		}
+	case scrChats:
+		for _, x := range m.chatRows() {
+			keys = append(keys, x.ID)
+		}
+	case scrProjects:
+		for _, x := range m.projectRows() {
+			keys = append(keys, x.ID)
+		}
+	case scrRounds:
+		for _, x := range m.roundRows() {
+			keys = append(keys, x.ID)
+		}
+	case scrArchive:
+		for _, x := range m.archiveRows() {
+			keys = append(keys, x.ID)
+		}
+	case scrDevices:
+		for _, x := range m.deviceRows() {
+			keys = append(keys, x.ID)
+		}
+	}
+	return keys
+}
+
+// selectedKeys: the key of the row each list's cursor is on.
+func (m *model) selectedKeys() map[screen]string {
+	sel := map[screen]string{}
+	for _, s := range listScreens {
+		if keys, c := m.rowKeys(s), m.cur[s]; c >= 0 && c < len(keys) {
+			sel[s] = keys[c]
+		}
+	}
+	return sel
+}
+
+// reselect puts each list's cursor back on the row it was on, wherever that
+// row is now. A row that is gone leaves the cursor where it was.
+func (m *model) reselect(sel map[screen]string) {
+	for s, key := range sel {
+		for i, k := range m.rowKeys(s) {
+			if k == key {
+				m.cur[s] = i
+				break
+			}
+		}
+	}
+}
+
 // ---- running children with the real terminal ------------------------------------
 
 func (m *model) attachTo(name string, solo bool) tea.Cmd {
@@ -499,6 +566,9 @@ func (m *model) attachTo(name string, solo bool) tea.Cmd {
 		return nil
 	}
 	return tea.Exec(a, func(err error) tea.Msg {
+		if errors.Is(err, errStopped) {
+			return done{text: "stopped reconnecting to " + name, refetch: true}
+		}
 		if err != nil {
 			return done{err: err, refetch: true}
 		}

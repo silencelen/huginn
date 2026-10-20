@@ -1,11 +1,13 @@
 package console
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ import (
 //   - never resurrect a session that was killed meanwhile; mirror when another
 //     client is attached, else take it solo (evicts our own ghost);
 //   - jittered backoff, 2 s doubling to 15 s;
+//   - Ctrl-C while the link is down stops reconnecting;
 //   - push the terminal title, set it to the session, pop it on the way out.
 type attach struct {
 	host, session string
@@ -63,6 +66,13 @@ func (a *attach) Run() error {
 		remote += " solo"
 	}
 	tgt := "=" + a.session
+	// ⚠ Ctrl-C must stop the loop, as it stops the shell client's. The console
+	// runs this inside tea.Exec, and Bubble Tea's own handler DROPS SIGINT while
+	// a command has the terminal; Go gives every registered channel its own
+	// copy of a signal, so this one still hears it.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+	defer signal.Stop(stop)
 	delay, quick := 2.0, 0
 	for {
 		t0 := time.Now()
@@ -75,6 +85,14 @@ func (a *attach) Run() error {
 		if _, isExit := err.(*exec.ExitError); !isExit {
 			return fmt.Errorf("could not run ssh: %w (attaching needs the OpenSSH client and a 'Host %s' entry)", err, a.host)
 		}
+		// A Ctrl-C while ssh was still connecting went to ssh as well (the
+		// terminal signals the whole foreground group): the person stopping, not
+		// the host failing. Its copy here can land a moment after ssh died.
+		select {
+		case <-stop:
+			return interrupted()
+		case <-time.After(100 * time.Millisecond):
+		}
 		if time.Since(t0) < 5*time.Second {
 			quick++
 			if quick >= 3 {
@@ -83,14 +101,29 @@ func (a *attach) Run() error {
 		} else {
 			quick = 0
 		}
-		fmt.Fprintf(a.stderr, "\r\nhuginn: link to %s dropped (%v) - reconnecting in %.0fs...\r\n", a.host, err, delay)
-		time.Sleep(time.Duration(delay * (0.75 + rand.Float64()*0.5) * float64(time.Second)))
+		fmt.Fprintf(a.stderr, "\r\nhuginn: link to %s dropped (%v) - reconnecting in %.0fs (Ctrl-C to stop)...\r\n", a.host, err, delay)
+		select {
+		case <-stop:
+			return interrupted()
+		case <-time.After(time.Duration(delay * (0.75 + rand.Float64()*0.5) * float64(time.Second))):
+		}
 		remote = "tmux has-session -t " + tgt + " 2>/dev/null || { echo 'huginn: session " + a.session + " no longer exists on " + a.host +
 			"'; exit 0; }; if [ \"$(tmux list-clients -t " + tgt + " 2>/dev/null | wc -l)\" -ge 2 ]; then cc " + a.session + "; else cc " + a.session + " solo; fi"
 		if delay *= 2; delay > 15 {
 			delay = 15
 		}
 	}
+}
+
+// errStopped: the person pressed Ctrl-C while the link was down.
+var errStopped = errors.New("stopped reconnecting")
+
+// interrupted ends the loop on Ctrl-C. Bubble Tea heard the same signal, and
+// drops its copy only while the terminal is released: it gets a moment to do
+// so before the terminal goes back, or the copy would quit the console.
+func interrupted() error {
+	time.Sleep(100 * time.Millisecond)
+	return errStopped
 }
 
 // sshHost is the alias the clients use: HUGINN_HOST, else `huginn`.
