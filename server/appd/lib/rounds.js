@@ -75,6 +75,16 @@ function epochForWallClock(tz, y, mo, d, h, mi) {
   const t = naive - offsetMs(tz, first);
   // The two-pass above is right for every wall-clock time that EXISTS. One class
   // does not: the hour a spring-forward deletes.
+  const p = partsIn(tz, t);
+  if (p.y === y && p.mo === mo && p.d === d && p.h === h && p.mi === mi) return t;
+
+  // ⚠ A DELETED TIME RESOLVES FORWARD, WEST OF UTC TOO. Its two candidates are the
+  // instants either side of the gap, and WHICH of `t` and `first` is the later one
+  // flips with the sign of the offset: east of UTC `t` is after the gap, west of it
+  // `t` is before. Taking `t` whenever it was on the right day sent London's 01:30
+  // forward to 02:30 BST but Los Angeles' 02:30 BACK to 01:30 PST, an hour early
+  // and before the 02:00 job a Round at 02:30 exists to check, in every US and
+  // Canadian zone once a year. So the later candidate on the day asked for wins.
   //
   // ⚠ AND WHEN THAT GAP BEGINS AT LOCAL MIDNIGHT, the resolution lands on the
   // PREVIOUS local day — 23:xx — which is a different date, a different weekday
@@ -87,10 +97,9 @@ function epochForWallClock(tz, y, mo, d, h, mi) {
   //
   // So: if the instant does not land on the day that was asked for, take the
   // other candidate — the far side of the transition, which is the first instant
-  // that day actually has. Eastern-offset gaps already resolve forward and keep
-  // their date, which is why Cairo, Chatham, Troll and Lord Howe were correct.
-  if (onDay(tz, t, y, mo, d)) return t;
-  if (onDay(tz, first, y, mo, d)) return first;
+  // that day actually has.
+  const onTheDay = [t, first].filter((c) => onDay(tz, c, y, mo, d));
+  if (onTheDay.length) return Math.max(...onTheDay);
   // Neither side is on the right day, which should not happen for any real zone.
   // Later of the two: a Round that fires late is recoverable, one that fires on
   // the wrong date is a job silently running on a day nobody scheduled.
@@ -433,16 +442,23 @@ const CLOSE_FENCE = /^ {0,3}(`{3,})[ \t]*$/;
  * An UNTERMINATED block is not returned — it is not a block, it is a run that
  * stopped mid-sentence — but [fenceOpensAt] lets the fallback cut it off the
  * prose so half a JSON object cannot become somebody's notification.
+ *
+ * ⚠ AN OPENING FENCE INSIDE A BLOCK STARTS A NEW ONE. A Round's run cut off by
+ * its cap while writing the block leaves an unterminated fence in the partial
+ * message, and finishRoundRun joins every assistant message, the partial one
+ * and the wrap-up turn's complete report alike. The report's opening line was
+ * read as body text of the cut block, which then ran on to the report's closing
+ * fence: one block, not JSON, and the report the wrap-up turn exists to save was
+ * filed as "unknown". A line that opens a report fence can never be part of the
+ * JSON a block must hold, so starting afresh there cannot lose a real report.
  */
 function reportBlocks(text) {
   const out = [];
   let fence = null; let body = null; let tag = null;
   for (const line of String(text).split(/\r?\n/)) {
-    if (fence === null) {
-      const m = OPEN_FENCE.exec(line);
-      if (m) { fence = m[1]; tag = m[2] || null; body = []; }
-      continue;
-    }
+    const m = OPEN_FENCE.exec(line);
+    if (m) { fence = m[1]; tag = m[2] || null; body = []; continue; }
+    if (fence === null) continue;
     const c = CLOSE_FENCE.exec(line);
     if (c && c[1].length >= fence.length) {
       out.push({ body: body.join('\n'), tag });
@@ -454,15 +470,18 @@ function reportBlocks(text) {
   return out;
 }
 
-/** Where an unterminated report block starts, or -1. Used to cut debris off prose. */
+/**
+ * Where an unterminated report block starts, or -1. Used to cut debris off prose.
+ * Scans by reportBlocks' rules, an opening fence inside a block included.
+ */
 function fenceOpensAt(text) {
   const lines = String(text).split(/\r?\n/);
   let at = -1; let fence = null; let pos = 0;
   for (const line of lines) {
-    if (fence === null) {
-      const m = OPEN_FENCE.exec(line);
-      if (m) { fence = m[1]; at = pos; }
-    } else {
+    const m = OPEN_FENCE.exec(line);
+    if (m) {
+      fence = m[1]; at = pos;
+    } else if (fence !== null) {
       const c = CLOSE_FENCE.exec(line);
       if (c && c[1].length >= fence.length) { fence = null; at = -1; }
     }

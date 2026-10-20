@@ -29,8 +29,9 @@ written to fit how a round actually runs. The draft is shown beside yours with *
 a one-turn Claude call with no tools.
 
 A new round uses your device's time zone, and keeps it: it fires at the same wall-clock time
-across daylight-saving changes, whatever device you later edit it from. A monthly date that a
-month does not have (the 31st in April) is skipped that month.
+across daylight-saving changes, whatever device you later edit it from. A time the clocks skip
+when they go forward (2:30 AM on that night) runs just after the jump, at 3:30 AM. A monthly
+date that a month does not have (the 31st in April) is skipped that month.
 
 ## Ask or act
 
@@ -183,7 +184,9 @@ desktop app, run `huginn setup ssh` once first.
 ## Usage limits
 
 Rounds use your Claude plan like any other work. A round that stops on a usage limit is re-run
-when the limit resets, if auto-resume is on; see [Usage limits](usage-limits.md).
+when the limit resets, if auto-resume is on; see [Usage limits](usage-limits.md). The re-run
+gets the round's whole time budget, and a slot that comes due while it waits is recorded as not
+run.
 
 ## Related
 

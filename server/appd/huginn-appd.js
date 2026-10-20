@@ -597,14 +597,24 @@ const isLocalFamily = (id) => typeof id === 'string' && id.startsWith('local-');
 
 function resolveLocalModel(rawId) {
   const modelId = String(rawId || '').trim().toLowerCase();
-  for (const [devId, d] of Object.entries(deviceState.devices || {})) {
-    if (d.scope !== 'generate' || !d.llmSlug) continue;
-    const prefix = `local-${d.llmSlug}-`;
-    if (!modelId.startsWith(prefix)) continue;
-    const slug = modelId.slice(prefix.length);
+  // ⚠ EVERY ROW WHOSE PREFIX MATCHES, LONGEST FIRST — not the first row walked.
+  // Slugs minted before mintLlmSlug checked its own output can dash-prefix each
+  // other ("gpubox-llm" and "gpubox-llm-2dad" for a re-enrolled machine), and
+  // rows are walked in enrolment order, so the OLDER row's shorter prefix matched
+  // first: every model on the newer machine answered 400 "does not serve" while
+  // the picker listed it as available. The row that serves the rest of the id wins.
+  const hits = Object.entries(deviceState.devices || {})
+    .filter(([, d]) => d.scope === 'generate' && d.llmSlug && modelId.startsWith(`local-${d.llmSlug}-`))
+    .sort(([, a], [, b]) => b.llmSlug.length - a.llmSlug.length);
+  for (const [devId, d] of hits) {
+    const slug = modelId.slice(`local-${d.llmSlug}-`.length);
     if ((d.models || []).some((x) => x.slug === slug)) {
       return { deviceId: devId, device: d, slug, id: modelId };
     }
+  }
+  if (hits.length) {
+    const [, d] = hits[0];
+    const slug = modelId.slice(`local-${d.llmSlug}-`.length);
     return { error: `${devicesLib.machineDisplayName(deviceState, d)} does not serve "${slug}" — it advertises: ${(d.models || []).map((x) => x.slug).join(', ') || '(nothing)'}` };
   }
   return { error: 'no enrolled machine serves this model — its machine may have been unenrolled' };
@@ -4310,7 +4320,9 @@ class Run {
     this.done = true;
     for (const res of this.subscribers) { try { res.end(); } catch { } }
     this.subscribers.clear();
-    activeRuns.delete(this.chatId);
+    // Only its OWN slot: by the time a stale run finishes, the chat may already
+    // hold the next run (started from the queue), which this must not orphan.
+    if (activeRuns.get(this.chatId) === this) activeRuns.delete(this.chatId);
   }
 }
 
@@ -4408,9 +4420,17 @@ function startRun(meta, userText) {
 
   run_.emit('started', { chatId, ts: now });
 
+  // ⚠ DECODED AS A STREAM, NOT CHUNK BY CHUNK. A line longer than one read (any
+  // frame over 64 KiB, or a backed-up pipe) arrives in pieces, and a piece can end
+  // inside a multi-byte character: decoding each Buffer alone turned both halves
+  // of a "—" or a Cyrillic letter into U+FFFD, and JSON.parse took the line anyway,
+  // so the damage reached the transcript, the live stream and a Round's report.
+  // setEncoding's decoder holds a split character back for the next read.
+  proc.stdout.setEncoding('utf8');
+  proc.stderr.setEncoding('utf8');
   let outBuf = '';
   proc.stdout.on('data', (chunk) => {
-    outBuf += chunk.toString('utf8');
+    outBuf += chunk;
     let idx;
     while ((idx = outBuf.indexOf('\n')) >= 0) {
       const line = outBuf.slice(0, idx).trim();
@@ -4431,7 +4451,7 @@ function startRun(meta, userText) {
     }
   });
   let errBuf = '';
-  proc.stderr.on('data', (c) => { errBuf = (errBuf + c.toString('utf8')).slice(-4000); });
+  proc.stderr.on('data', (c) => { errBuf = (errBuf + c).slice(-4000); });
 
   proc.on('close', (code) => {
     clearTimeout(killer);
@@ -4637,6 +4657,13 @@ function droppedNote(dropped, why) {
 function settleRun(run_, { exitCode = null, failureText = null } = {}) {
   const chatId = run_.chatId;
   const ts = Math.floor(Date.now() / 1000);
+  // ⚠ A RUN SETTLES ONCE. A remote run can be ended from two places at once (the
+  // device's done frame, and a loss: silence, the hard cap, an unenrolled device),
+  // and a second settle wrote a second ending and counted a second finished run.
+  if (run_.done) {
+    log(`chat ${chatId}: a run that already ended was ended again; ignored`);
+    return;
+  }
 
   // ⚠ THE SLOT IS RELEASED WHATEVER HAPPENS. Everything above `run_.finish()`
   // touches the disk, and `appendMsg` on a full or read-only disk throws — which
@@ -4847,6 +4874,10 @@ const remoteRuns = new Map();     // workId -> { run_, deviceId, chatId, lastHea
 const MAX_WORK_QUEUE = 5;
 const WORK_WAIT_DEFAULT_S = 25;
 const WORK_WAIT_MAX_S = 60;
+// Lines of one remote run remembered for replay (see the events route). A replay
+// re-sends everything since the last batch that fully landed, which after a flaky
+// spell can be minutes of streaming, so this is generous: about 2 MB at the cap.
+const SEEN_LINES_MAX = 20_000;
 
 /**
  * How long a started remote run may go without a word before it is declared
@@ -5369,6 +5400,16 @@ function fireRound(round, { manual = false } = {}) {
   if (round.currentChatId && activeRuns.has(round.currentChatId)) {
     return { error: 'previous run is still going', code: 409 };
   }
+  // ⚠ A RUN HELD OPEN FOR A USAGE-LIMIT RESET IS STILL GOING. settleRun keeps it
+  // as currentChatId and files nothing until the re-run, but it is not in
+  // activeRuns while it waits, so the next slot fired a second run beside it;
+  // after the reset both re-ran at once, the older one no longer currentChatId
+  // and so under no Round cap at all. Only while auto-resume is on: with it off
+  // nothing will re-run the held one, and refusing would stop the Round for good.
+  if (round.currentChatId && waitingForReset(loadMeta(round.currentChatId))
+      && loadHeadroomSettings().autoResume !== false) {
+    return { error: 'previous run is waiting for the usage limit to reset', code: 409 };
+  }
   // Defensive: only reachable by hand-editing the round file — both write
   // paths refuse the local family. The tick records this refusal as an
   // attention run, so the bypass fails closed AND visibly.
@@ -5473,6 +5514,51 @@ function roundRunFailure(meta, run_) {
   if (run_.remote) return `${base}; a run on a device gets no wrap-up turn`;
   if (!meta.claudeSessionId) return `${base}; no session to resume for a wrap-up`;
   return base;
+}
+
+/**
+ * Puts a run at the head of a Round's history and deletes the transcript of any
+ * run that falls off the end.
+ *
+ * ⚠ WHAT FALLS OFF THE END IS DELETED, and this used to be a slow leak with a
+ * false promise on top of it. `finishRoundRun` says the conversation "stays
+ * readable forever — that is the whole point of keeping it", and after the 11th
+ * run the chat id was evicted from runs[] — while round chats are filtered out
+ * of /v1/chats by design, so there was no other path to it. It could not be
+ * opened, listed or deleted through any route. A daily Round left ~355 orphan
+ * transcript directories a year, invisible and impossible to count against.
+ *
+ * So the promise is narrowed to what is true — readable while it is in the
+ * history — and the transcript goes when the row does, rather than becoming
+ * something only `du` can find.
+ *
+ * ⚠ EVERY WRITER OF `runs` COMES THROUGH HERE. recordSkippedRound pushed its row
+ * without the prune, so once the history was full every skip (a laptop asleep,
+ * a full pool, a missed slot) evicted the oldest REAL run and left its transcript
+ * with nothing pointing at it — and the next real run pruned only what was at the
+ * end by then. A daily Round on a laptop asleep two nights a week orphaned 50
+ * transcripts a year: the same leak, reopened by the second writer.
+ *
+ * @param edit further changes to make to the Round in the same write, or null
+ */
+function pushRoundRun(roundId, run, edit = null) {
+  let evicted = [];
+  updateRound(roundId, (r) => {
+    const prior = Array.isArray(r.runs) ? r.runs : [];
+    const kept = [run, ...prior].slice(0, MAX_RUN_HISTORY);
+    evicted = prior.slice(MAX_RUN_HISTORY - 1)
+      .map((x) => x && x.chatId)
+      .filter((id) => id && id !== run.chatId && !kept.some((k) => k.chatId === id));
+    r.lastRun = run;
+    r.runs = kept;
+    if (edit) edit(r);
+  });
+  for (const id of evicted) {
+    // Never a live one: a chat still running is not in this Round's history tail.
+    if (activeRuns.has(id)) { log(`round ${roundId}: not pruning ${id}, still running`); continue; }
+    try { fs.rmSync(chatDir(id), { recursive: true, force: true }); log(`round ${roundId} pruned run transcript ${id}`); }
+    catch (e) { log(`round ${roundId}: could not prune ${id}: ${e.message}`); }
+  }
 }
 
 /**
@@ -5594,34 +5680,7 @@ function finishRoundRun(meta, failure, { status: statusOverride = null } = {}) {
     manual: !!meta.roundManual,
     durationSec: meta.roundStartedAt ? at - meta.roundStartedAt : null,
   };
-  // ⚠ WHAT FALLS OFF THE END IS DELETED, and this used to be a slow leak with a
-  // false promise on top of it. `finishRoundRun` says the conversation "stays
-  // readable forever — that is the whole point of keeping it", and after the 11th
-  // run the chat id was evicted from runs[] — while round chats are filtered out
-  // of /v1/chats by design, so there was no other path to it. It could not be
-  // opened, listed or deleted through any route. A daily Round left ~355 orphan
-  // transcript directories a year, invisible and impossible to count against.
-  //
-  // So the promise is narrowed to what is true — readable while it is in the
-  // history — and the transcript goes when the row does, rather than becoming
-  // something only `du` can find.
-  let evicted = [];
-  updateRound(round.id, (r) => {
-    const prior = Array.isArray(r.runs) ? r.runs : [];
-    const kept = [run, ...prior].slice(0, MAX_RUN_HISTORY);
-    evicted = prior.slice(MAX_RUN_HISTORY - 1)
-      .map((x) => x && x.chatId)
-      .filter((id) => id && id !== meta.id && !kept.some((k) => k.chatId === id));
-    r.lastRun = run;
-    r.runs = kept;
-    if (r.currentChatId === meta.id) r.currentChatId = null;
-  });
-  for (const id of evicted) {
-    // Never a live one: a chat still running is not in this Round's history tail.
-    if (activeRuns.has(id)) { log(`round ${round.id}: not pruning ${id}, still running`); continue; }
-    try { fs.rmSync(chatDir(id), { recursive: true, force: true }); log(`round ${round.id} pruned run transcript ${id}`); }
-    catch (e) { log(`round ${round.id}: could not prune ${id}: ${e.message}`); }
-  }
+  pushRoundRun(round.id, run, (r) => { if (r.currentChatId === meta.id) r.currentChatId = null; });
   // On the chat too, so opening a past run shows its verdict without re-parsing.
   // `sealed` is the auto-end: a Round's run is one turn against a stated goal and
   // then it is over. The conversation stays readable for as long as the run is in
@@ -5650,12 +5709,11 @@ const ROUND_MARK = { ok: GLYPH.ok, attention: GLYPH.info, action: GLYPH.needsYou
 const ROUND_WORD = { ok: 'all clear', attention: 'worth a look', action: 'needs you', unknown: 'unclear' };
 
 /**
- * Push first, Telegram only if the app did not get it.
+ * Push first, Telegram only if the push reached no device.
  *
- * Not a new delivery policy — this is the rule the alert watcher already applies,
- * and the reason it exists is written in lib/clients: "a duplicate of every alert
- * on two channels is worse than one channel: the reader learns to ignore both".
- * A weekly report arriving twice is exactly what would train that habit.
+ * The reason for holding at all is written in lib/clients: "a duplicate of every
+ * alert on two channels is worse than one channel: the reader learns to ignore
+ * both". A weekly report arriving twice is exactly what would train that habit.
  */
 async function deliverRoundReport(round, report, chatId) {
   // ⚠ BUILT ONCE, USED BY BOTH CHANNELS. These were computed separately and
@@ -5672,8 +5730,16 @@ async function deliverRoundReport(round, report, chatId) {
     title: round.title,
     text,
   });
-  if (pushed.sent > 0 || clientsLib.appOnline(clientState, Date.now())) {
-    log(`round ${round.id}: telegram held (${pushed.sent > 0 ? 'pushed to the app' : 'app checked in recently'})`);
+  // ⚠ HELD ONLY BY A DELIVERED PUSH, never because an app checked in recently.
+  // The alert watcher may hold on a check-in, because the phone's own watch
+  // baseline sees the same transition; nothing does that for a Round. The watch
+  // digest carries no Round runs, neither client's notification rules know one,
+  // and the phone shows a round_report only when FCM brings it. So with no FCM key
+  // (every self-hosted install), an FCM outage or a dead token, a phone's alarm or
+  // an open desktop held every report and every "did not run" notice off the relay,
+  // and it reached nobody until somebody opened the Rounds screen.
+  if (pushed.sent > 0) {
+    log(`round ${round.id}: telegram held (pushed to the app)`);
     return;
   }
   const lines = [`${ROUND_MARK[status] || ROUND_MARK.unknown} ${round.title} \u00b7 ${ROUND_WORD[status] || ROUND_WORD.unknown}`, text];
@@ -5732,10 +5798,7 @@ function recordSkippedRound(roundId, reason) {
     manual: false,
     durationSec: 0,
   };
-  updateRound(round.id, (r) => {
-    r.lastRun = run;
-    r.runs = [run, ...(Array.isArray(r.runs) ? r.runs : [])].slice(0, MAX_RUN_HISTORY);
-  });
+  pushRoundRun(round.id, run);
   log(`round ${round.id}: could not start (${reason}) — recorded as a skipped run`);
   if (roundsLib.shouldNotify(round.notifyWhen, 'attention')) {
     deliverRoundReport(round, report, null)
@@ -5881,9 +5944,29 @@ function reconcileInterruptedRuns() {
   }
 }
 
+/**
+ * A chat whose run died on a usage limit and is still waiting for the reset to
+ * re-run it: the same test resumeStalledChats makes before re-running one.
+ */
+function waitingForReset(meta) {
+  const s = meta && meta.stall;
+  return !!(s && s.at && !s.resumedAt && !s.gaveUpAt);
+}
+
 function deliverOrphanedQueues() {
   for (const meta of listChats()) {
     if (!meta.pending || activeRuns.has(meta.id)) continue;
+    // ⚠ NOT A CHAT WAITING FOR A RESET (#39, across a restart). settleRun leaves a
+    // stalled chat's queue on disk ON PURPOSE, to drain when the re-run after the
+    // reset finishes. This runs at every start, and it drained that queue straight
+    // into the window the stall had just proved empty: the queued message died on
+    // the same limit, noteRunStall kept the FIRST stall (as it must), and nothing
+    // put the message back. Accepted with a 202, consumed, never answered, and a
+    // routine deploy during the wait was enough. The re-run's own settle drains it.
+    if (waitingForReset(meta)) {
+      log(`chat ${meta.id}: ${meta.pending} queued message(s) wait for the usage-limit re-run`);
+      continue;
+    }
     const full = loadMeta(meta.id);
     if (!full) continue;
     const next = takePending(full);
@@ -9890,7 +9973,16 @@ function rerunStalledRun(chatId) {
       m.stall.attempts = (Number(m.stall.attempts) || 0) + 1;
     }
     // A Round run that was held open for this is live again.
-    if (m.roundId) m.sealed = false;
+    if (m.roundId) {
+      m.sealed = false;
+      // ⚠ AND ITS CLOCK STARTS AGAIN. roundsTick measures the Round's cap from
+      // roundStartedAt, the ORIGINAL fire, so a reset more than timeoutSec later
+      // (the normal case for a five-hour or weekly window) had the re-run cancelled
+      // by the cap on its first tick, and the wrap-up turn told the model it had
+      // used 2 h 31 min of a 15 min budget. The budget is for the work; the hours
+      // spent waiting for the reset were not work.
+      m.roundStartedAt = ts;
+    }
   });
   appendMsg(chatId, { type: 'system', text: 'resumed after the limit reset', ts });
   const fresh = loadMeta(chatId);
@@ -10560,8 +10652,19 @@ async function alertTickInner(st) {
     for (const a of undelivered) {
       if (a.kind === 'chat_finished') {
         const before = (prevObs.chats || {})[a.subject];
+        const cur = observation.chats[a.subject];
         if (before) observation.chats[a.subject] = before;
-        else delete observation.chats[a.subject];
+        else if (cur) {
+          // ⚠ A CHAT BORN SINCE THE LAST TICK HAS NO `before` TO GO BACK TO, and
+          // deleting it was no rollback: prevAt is stamped below, so on the next
+          // tick its createdAt is older than prevAt, decideAlerts reads it as
+          // history, and the finish is announced on no channel at all. That is a
+          // quick `huginn ask` during a WAN blip, exactly what this retry is for.
+          // An entry one run short keeps the finishedRuns edge for the next tick.
+          observation.chats[a.subject] = {
+            ...cur, running: false, finishedRuns: Math.max(0, (Number(cur.finishedRuns) || 1) - 1),
+          };
+        }
       } else {
         const before = (prevObs.sessions || {})[a.subject];
         if (before === undefined) delete observation.sessions[a.subject];
@@ -13027,46 +13130,57 @@ async function handleRequest(req, res) {
         // OLDER runner does not know to, and rejecting its batch loses the whole
         // answer rather than the oversized part of it.
         const body = await readJsonBody(req, 1024 * 1024);
+        // ⚠ STILL THE RUN WE LOOKED UP? `entry` was read before the body arrived,
+        // and a run can end while it does: the device's done frame overtaking this
+        // batch on another connection, or a loss. Applying the batch anyway wrote
+        // the answer and a result AFTER the run had been settled ("ended without a
+        // result") and, for a Round, filed and sealed. A 404 is final to a runner.
+        if (remoteRuns.get(workId) !== entry) return sendErr(res, 404, 'that run has ended');
         entry.lastHeard = Date.now();
         devicesLib.noteSeen(deviceState, devId, entry.lastHeard, body);
 
         /**
-         * ⚠ A REPLAYED BATCH IS APPLIED TWICE (#40). The runner re-queues a whole
-         * batch when any chunk of it fails — a batch that split at MAX_BATCH_BYTES
-         * and failed on a later part replays the accepted ones — and more
-         * generally ANY batch whose response is lost (a timeout, a socket reset,
-         * a 5xx after the daemon already applied it) comes back, because the
-         * runner's `permanent()` treats only 400/403/404/413 as final. The route
-         * had no idempotency at all, so the chat showed the answer, the tool
-         * records and the result twice, and meta.turns double-counted.
+         * ⚠ A REPLAYED LINE IS APPLIED ONCE (#40), AND ONLY A REPLAY IS DROPPED.
+         * The runner re-queues a whole batch when any chunk of it fails, and ANY
+         * batch whose response is lost (a timeout, a socket reset, a 5xx after the
+         * daemon already applied it) comes back, because the runner's `permanent()`
+         * treats only 400/403/404/413 as final. With no idempotency at all the chat
+         * showed the answer, the tool records and the result twice.
          *
-         * A ring of recent chunk hashes on the run, daemon-side by design: it
-         * closes both paths without a protocol change, so `client/huginn-device`
-         * needs no update and an older runner is covered too. Bounded because a
-         * long run streams thousands of chunks, and generous enough to cover a
-         * retry storm.
+         * The first guard hashed each whole BATCH, and was wrong both ways. By the
+         * time a runner retries, more output has arrived and rides along, so the
+         * usual replay hashed differently and was applied twice anyway; and two
+         * batches that genuinely matched (a slow local model's one-token deltas,
+         * " the" twice within 64 batches) were dropped as replays, leaving words
+         * missing from the live answer and from a stopped run's partial.
+         *
+         * So the unit is the LINE, and only a line that carries its own identity
+         * can be a replay: Claude Code puts a uuid on every stream-json line, and
+         * the local-model shim does too. Seen again byte for byte, it is the same
+         * line. A line with no uuid is applied as it arrives, because content alone
+         * cannot tell a replay from a model saying the same thing twice. Still
+         * daemon-side, so an older runner is covered without an update.
          */
-        const stamp = crypto.createHash('sha256').update(JSON.stringify({
-          lines: body.lines ?? null, done: body.done ?? null,
-          exitCode: body.exitCode ?? null, error: body.error ?? null,
-        })).digest('hex');
-        if (!entry.seenChunks) entry.seenChunks = [];
-        if (entry.seenChunks.includes(stamp)) {
-          log(`device ${devId} replayed a batch for ${workId}; ignoring it`);
-          return sendJson(res, 200, { ok: true, duplicate: true, cancel: !!entry.run_.cancelled });
-        }
-        entry.seenChunks.push(stamp);
-        if (entry.seenChunks.length > 64) entry.seenChunks.shift();
-
+        const lines = Array.isArray(body.lines) ? body.lines : [];
+        if (!entry.seenLines) entry.seenLines = new Set();
+        let replayed = 0;
         const meta = loadMeta(entry.chatId);
         if (meta) {
-          for (const line of Array.isArray(body.lines) ? body.lines : []) {
+          for (const line of lines) {
             let ev;
             try { ev = typeof line === 'string' ? JSON.parse(line) : line; } catch { continue; }
+            if (ev && typeof ev.uuid === 'string') {
+              const seen = crypto.createHash('sha256')
+                .update(typeof line === 'string' ? line : JSON.stringify(line)).digest('base64');
+              if (entry.seenLines.has(seen)) { replayed += 1; continue; }
+              entry.seenLines.add(seen);
+              if (entry.seenLines.size > SEEN_LINES_MAX) entry.seenLines.delete(entry.seenLines.values().next().value);
+            }
             try { handleClaudeEvent(meta, entry.run_, ev); }
             catch (e) { log(`device ${devId} sent an event we could not handle: ${e.message}`); }
           }
         }
+        if (replayed) log(`device ${devId} replayed ${replayed} line(s) for ${workId}; each applied once`);
 
         if (body.done === true) {
           remoteRuns.delete(workId);
@@ -13078,7 +13192,8 @@ async function handleRequest(req, res) {
         }
         // The one thing a device needs told mid-run: stop. It kills its own child
         // and posts a terminal frame, so the ending still comes from the device.
-        return sendJson(res, 200, { ok: true, cancel: !!entry.run_.cancelled });
+        const duplicate = lines.length > 0 && replayed === lines.length;
+        return sendJson(res, 200, { ok: true, ...(duplicate ? { duplicate: true } : {}), cancel: !!entry.run_.cancelled });
       }
 
       return sendErr(res, 404, 'no such device route');

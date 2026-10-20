@@ -472,12 +472,24 @@ function slugify(name, cap = 16) {
  * Unique against every taken slug INCLUDING prefix-with-dash ambiguity, so
  * `local-<llmSlug>-` prefixes always parse unambiguously: if "box" exists,
  * "box-2" would make `local-box-2-chat` unparseable, so collisions get a hash
- * suffix instead of a counter.
+ * instead of a counter (after the base, or before it where after would clash).
  */
 function mintLlmSlug(name, uuid, taken) {
-  const base = slugify(name) || String(uuid).replace(/-/g, '').slice(0, 8);
-  const clash = taken.some((t) => t === base || t.startsWith(`${base}-`) || base.startsWith(`${t}-`));
-  return clash ? `${base.slice(0, 11)}-${String(uuid).replace(/-/g, '').slice(0, 4)}` : base;
+  const hex = String(uuid).replace(/-/g, '');
+  const base = slugify(name) || hex.slice(0, 8);
+  const clashes = (s) => taken.some((t) => t === s || t.startsWith(`${s}-`) || s.startsWith(`${t}-`));
+  if (!clashes(base)) return base;
+  // ⚠ THE DISAMBIGUATED SLUG IS HELD TO THE SAME RULE. `<base>-<hash>` still
+  // starts with `<base>-` when the base fits in 11 characters (a re-enrolled
+  // "gpubox-llm" became "gpubox-llm-2dad"), and still starts with `<taken>-` when
+  // the clash was the base extending a taken slug ("box" taken, "box-2" asked
+  // for). Both are the ambiguity this function exists to prevent: the older row's
+  // prefix matched first and every model on the new machine answered 400. A hash
+  // IN FRONT of the base breaks both relations.
+  const stem = base.slice(0, 11).replace(/-+$/, '');
+  const candidates = [`${stem}-${hex.slice(0, 4)}`];
+  for (let i = 0; i + 4 <= hex.length; i += 4) candidates.push(`${hex.slice(i, i + 4)}-${stem}`);
+  return candidates.find((c) => !clashes(c)) || hex.slice(0, 16);
 }
 
 /** Control characters out, whitespace collapsed, bounded. Display text only. */
