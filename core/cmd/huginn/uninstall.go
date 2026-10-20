@@ -500,7 +500,7 @@ func sshStep(t *tally, home string, all bool) {
 			found = found || in
 		}
 		if in && len(f) >= 2 && strings.EqualFold(f[0], "identityfile") && key == "" {
-			key = f[1]
+			key = sshArg(line, f)
 		}
 		if !in {
 			out = append(out, line)

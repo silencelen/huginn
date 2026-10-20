@@ -828,7 +828,12 @@ _huginn_uninstall() {
   # 5. SSH. Left by default; see the note on this function.
   local key='' ours=
   if [ -f "$cfg" ]; then
-    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")} h && tolower($1)=="identityfile"{print $2; exit}' "$cfg")"
+    # The installers write the key path in double quotes (a home with a space in
+    # it is otherwise a fatal line to ssh), so a quoted value is read whole.
+    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")}
+      h && tolower($1)=="identityfile"{v=$0; sub(/^[ \t]*[^ \t]+[ \t]+/, "", v)
+        if (v ~ /^"/) { v=substr(v, 2); sub(/".*/, "", v) } else sub(/[ \t].*/, "", v)
+        print v; exit}' "$cfg")"
   fi
   if [ -n "$key" ]; then
     case "${key##*/}" in *huginn*) ours=1 ;; esac

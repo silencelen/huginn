@@ -1129,7 +1129,9 @@ function _Huginn-Uninstall {
       # -match is case-insensitive in PowerShell, which is also how ssh reads
       # these keywords.
       if ($t -match '^host\s+(.+)$') { $inH = ($matches[1].Trim() -eq 'huginn'); continue }
-      if ($inH -and ($t -match '^identityfile\s+(.+)$')) { $key = $matches[1].Trim(); break }
+      # The installers write the key path in double quotes (a profile path with a
+      # space in it is otherwise a fatal line to ssh): a quoted value is read whole.
+      if ($inH -and ($t -match '^identityfile\s+(.+)$')) { $key = $matches[1].Trim() -replace '^"([^"]*)".*$', '$1'; break }
     }
   }
   $ours = $false
