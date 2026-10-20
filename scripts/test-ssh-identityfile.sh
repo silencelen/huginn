@@ -85,18 +85,22 @@ else
   reads "$H/.ssh/config" "$KEY" install.ps1
 fi
 
-echo "[3/3] huginn uninstall --all reads a quoted key path back"
+echo "[3/3] huginn uninstall --all reads a quoted key path back, and ends the stanza where ssh does"
 mkhome() {   # $1 = a scratch home holding a quoted huginn key and the client
   mkdir -p "$1/.ssh" "$1/.huginn"
   cp "$TREE/client/huginn.sh" "$TREE/client/huginn.ps1" "$1/.huginn/"
   printf 'not a real key\n' > "$1/.ssh/id_ed25519_huginn"
   printf 'ssh-ed25519 AAAA alex@example.net\n' > "$1/.ssh/id_ed25519_huginn.pub"
-  printf 'Host git.example.net\n  User git\n\nHost huginn\n  HostName 192.0.2.10\n  IdentityFile "%s/.ssh/id_ed25519_huginn"\n' "$1" \
+  # A Match block after the stanza ends it, as ssh reads the file, and the
+  # comment heading that block is its, not the stanza's.
+  printf 'Host git.example.net\n  User git\n\nHost huginn\n  HostName 192.0.2.10\n  IdentityFile "%s/.ssh/id_ed25519_huginn"\n# work hosts below\nMatch host *.corp.example\n  User alex\n' "$1" \
     > "$1/.ssh/config"
 }
 took() {     # $1 = the home, $2 = which client -> huginn's key went, the other stanza stayed
   if [ ! -e "$1/.ssh/id_ed25519_huginn" ] && [ ! -e "$1/.ssh/id_ed25519_huginn.pub" ] \
-     && grep -q '^Host git.example.net' "$1/.ssh/config" && ! grep -q huginn "$1/.ssh/config"; then
+     && grep -q '^Host git.example.net' "$1/.ssh/config" && ! grep -q huginn "$1/.ssh/config" \
+     && grep -q '^# work hosts below$' "$1/.ssh/config" && grep -q '^Match host \*\.corp\.example$' "$1/.ssh/config" \
+     && grep -q '^  User alex$' "$1/.ssh/config"; then
     ok "$2: huginn's own key goes with its stanza, and nothing else does"
   else
     bad "$2: left $(cd "$1/.ssh" && ls | tr '\n' ' ')and the config: $(tr '\n' '|' < "$1/.ssh/config")"

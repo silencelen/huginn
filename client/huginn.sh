@@ -826,12 +826,19 @@ _huginn_uninstall() {
   done
 
   # 5. SSH. Left by default; see the note on this function.
+  # ssh_config as ssh reads it: a keyword in any case, then its value after
+  # spaces or an `=`; a comment or a blank line has no keyword.
+  local _HUGINN_SSH_AWK='
+    function kwof(l,   k) { sub(/^[ \t]+/, "", l); if (l == "" || l ~ /^#/) return ""
+      k = l; sub(/[ \t=].*/, "", k); return tolower(k) }
+    function argof(l) { sub(/^[ \t]+/, "", l); sub(/^[^ \t=]+[ \t]*=?[ \t]*/, "", l); sub(/[ \t]+$/, "", l); return l }'
   local key='' ours=
   if [ -f "$cfg" ]; then
     # The installers write the key path in double quotes (a home with a space in
     # it is otherwise a fatal line to ssh), so a quoted value is read whole.
-    key="$(awk 'tolower($1)=="host"{h=(NF==2 && $2=="huginn")}
-      h && tolower($1)=="identityfile"{v=$0; sub(/^[ \t]*[^ \t]+[ \t]+/, "", v)
+    key="$(awk "$_HUGINN_SSH_AWK"'
+      { k=kwof($0) } k=="host" || k=="match" { h=(k=="host" && argof($0)=="huginn") }
+      h && k=="identityfile"{v=argof($0)
         if (v ~ /^"/) { v=substr(v, 2); sub(/".*/, "", v) } else sub(/[ \t].*/, "", v)
         print v; exit}' "$cfg")"
   fi
@@ -842,8 +849,18 @@ _huginn_uninstall() {
   if [ -n "$all" ] && [ -f "$cfg" ]; then
     # Only a stanza that is EXACTLY `Host huginn`. `Host huginn build01` serves
     # another alias too, and taking it out would break a host this never
-    # installed.
-    awk 'tolower($1)=="host"{drop=(NF==2 && $2=="huginn")} !drop' "$cfg" > "$cfg.huginn-uninstall" \
+    # installed. ⚠ It ends where ssh ends it, at the next Host OR Match line: the
+    # installers append it at the end of the file, so whatever the person adds
+    # later follows it, and ending it at Host alone took a Match block (for other
+    # hosts entirely) with it. A comment after its last option is kept for the
+    # same reason: it heads what follows.
+    awk "$_HUGINN_SSH_AWK"'
+      { k=kwof($0) }
+      k=="host" || k=="match" { for (i=1; i<=n; i++) print held[i]; n=0; drop=(k=="host" && argof($0)=="huginn") }
+      !drop { print; next }
+      k=="" { if ($0 ~ /[^ \t]/) held[++n]=$0; next }
+      { n=0 }
+      END { for (i=1; i<=n; i++) print held[i] }' "$cfg" > "$cfg.huginn-uninstall" \
       && mv -f "$cfg.huginn-uninstall" "$cfg" && chmod 600 "$cfg" \
       && removed+=("the 'Host huginn' stanza in $cfg")
     rm -f "$cfg.huginn-uninstall"

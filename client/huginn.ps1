@@ -1147,7 +1147,9 @@ function _Huginn-Uninstall {
       $t = $l.Trim()
       # -match is case-insensitive in PowerShell, which is also how ssh reads
       # these keywords.
-      if ($t -match '^host\s+(.+)$') { $inH = ($matches[1].Trim() -eq 'huginn'); continue }
+      # A stanza ends where ssh ends it: at the next Host OR Match line (a value
+      # follows spaces or an '=').
+      if ($t -match '^(host|match)(\s*=\s*|\s+)(.*)$') { $inH = (($matches[1] -eq 'host') -and ($matches[3].Trim() -eq 'huginn')); continue }
       # The installers write the key path in double quotes (a profile path with a
       # space in it is otherwise a fatal line to ssh): a quoted value is read whole.
       if ($inH -and ($t -match '^identityfile\s+(.+)$')) { $key = $matches[1].Trim() -replace '^"([^"]*)".*$', '$1'; break }
@@ -1162,12 +1164,23 @@ function _Huginn-Uninstall {
     # Only a stanza that is EXACTLY `Host huginn`. `Host huginn build01` serves
     # another alias too, and taking it out would break a host this never
     # installed.
-    $keep = @(); $drop = $false
+    # It ends where ssh ends it, at the next Host OR Match line: the installers
+    # append it at the end of the file, so whatever the person adds later
+    # follows it, and ending it at Host alone took a Match block (for other
+    # hosts entirely) with it. A comment after its last option is kept for the
+    # same reason: it heads what follows.
+    $keep = @(); $held = @(); $drop = $false
     foreach ($l in $slines) {
       $t = $l.Trim()
-      if ($t -match '^host\s+(.+)$') { $drop = ($matches[1].Trim() -eq 'huginn') }
-      if (-not $drop) { $keep += $l }
+      if ($t -match '^(host|match)(\s*=\s*|\s+)(.*)$') {
+        $keep += $held; $held = @()
+        $drop = (($matches[1] -eq 'host') -and ($matches[3].Trim() -eq 'huginn'))
+      }
+      if (-not $drop) { $keep += $l; continue }
+      if ($t.StartsWith('#')) { $held += $l; continue }
+      if ($t -ne '') { $held = @() }
     }
+    $keep += $held
     # ascii, and this one IS the encoding that matters: a BOM on the first line
     # of ~/.ssh/config is a keyword OpenSSH does not recognise.
     Set-Content -Path $cfg -Value $keep -Encoding ascii
