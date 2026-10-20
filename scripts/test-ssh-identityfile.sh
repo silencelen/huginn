@@ -29,7 +29,12 @@ skip() { echo "  SKIP  $*  <-- not a pass" >&2; }
 
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-REAL_SSH="$(command -v ssh || true)"
+# The REAL OpenSSH, which `ssh -G` asks how it reads the file: a gate that runs
+# this one (test-client.sh) has its own stand-in ssh first on PATH by then.
+REAL_SSH=''
+for c in /usr/bin/ssh /usr/local/bin/ssh /bin/ssh $(type -ap ssh); do
+  if [ -x "$c" ] && "$c" -V 2>&1 | grep -q OpenSSH; then REAL_SSH="$c"; break; fi
+done
 PWSH="$(command -v pwsh || true)"
 mkdir -p "$T/bin"
 cat > "$T/bin/ssh" <<'STUB'
