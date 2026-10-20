@@ -8719,7 +8719,7 @@ async function headroomTickInner() {
       offeredLadderUpAt: rec.offeredLadderUpAt,
       humanSetModelAt: rec.humanSetModelAt,
       ladderFailedAt: rec.ladderFailedAt || 0,
-      // Read by noteStall just above: what keeps a move off a stalled session.
+      // As noteStall just above left it: a stalled session is not moved.
       stall: rec.stall,
     });
   }
