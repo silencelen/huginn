@@ -10688,6 +10688,15 @@ async function handleRequest(req, res) {
         d = digest(sess ?? [], chatStates(), headroomFacts());
       }
       if (req.destroyed) return;
+      // ⚠ A FAILED LOOK IS NOT AN EMPTY HOST, here any more than in the stream
+      // above. Hashed as `[]`, it went out as `sessions: {}` with `changed: true`
+      // — and every Android caller of this branch (heartbeat, watch worker,
+      // widget refresh, push reconcile) asks with no hash, so it took that as
+      // every session gone: the notifications of questions still waiting were
+      // cancelled, the widget emptied, and the next good look re-posted them all
+      // as new. GET /v1/sessions answers this failure with a 503, and each of
+      // those callers keeps its baseline when the call fails.
+      if (sess === null) return sendErr(res, 503, 'tmux is not answering right now');
       const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
       const pushSt = installId ? loadPushState() : null;
       return sendJson(res, 200, {

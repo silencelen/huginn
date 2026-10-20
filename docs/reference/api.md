@@ -106,7 +106,7 @@ pin changes when the certificate is replaced.
 
 | Stream | How |
 |---|---|
-| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. |
+| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. It answers `503` when tmux cannot be read, never an empty session list. |
 | A chat run | `POST /v1/chats/<id>/messages?stream=1` answers with an event stream of the run. Each event has an `id:` (its sequence number) and one of the types `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`, `error`, `done`. Reattach after a dropped connection with `GET /v1/chats/<id>/stream?since=<last id>`; the daemon replays what you missed. |
 | A session's screen | `GET /v1/sessions/<name>/screen?hash=<h>&wait=<ms>` holds the request until the screen differs from `h`, or the wait ends. |
 
