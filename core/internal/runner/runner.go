@@ -94,6 +94,7 @@ type Runner struct {
 	active     func()        // cancels the in-flight run, if any
 	pollCancel func()        // cancels the in-flight long poll, if any
 	beatNow    chan struct{} // the enrolled session's "beat now", if any
+	cancelAll  bool          // CancelJobs was called: every job is cancelled as it starts
 }
 
 // New returns a runner; call Serve.
@@ -141,6 +142,21 @@ func (r *Runner) Kick() {
 	select {
 	case r.wake <- struct{}{}:
 	default:
+	}
+}
+
+// CancelJobs stops the job running now as a Stop from huginn does (the child
+// is killed and the run ends as cancelled), and any job that starts after it.
+// For a runner leaving its pairing for good (unpair, a pairing with another
+// huginn): cancelling Serve's context alone leaves a running child to finish
+// on its own, with nobody left to hear its answer.
+func (r *Runner) CancelJobs() {
+	r.mu.Lock()
+	r.cancelAll = true
+	c := r.active
+	r.mu.Unlock()
+	if c != nil {
+		c()
 	}
 }
 

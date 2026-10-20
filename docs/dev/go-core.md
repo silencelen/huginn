@@ -141,8 +141,8 @@ curl -s --unix-socket "$XDG_RUNTIME_DIR/huginn/core.sock" \
 |---|---|
 | `GET /core/status` | Version, pairing, address, proved pins, device status, whether a tray is attached |
 | `GET /core/events` | Server-sent events: core state, the tray summary and notices. The tray and the desktop app attach here |
-| `POST /core/pair`, `POST /core/unpair` | Pair with a daemon (the core proves the address with the token before keeping it), or forget it |
-| `GET`, `POST`, `PATCH`, `DELETE /core/routes` | The route book |
+| `POST /core/pair`, `POST /core/unpair` | Pair with a daemon (the core proves the address with the token before keeping it), or forget it. Pairing the same daemon again keeps the device runner and its job; pairing another one, or unpairing, stops a job that is running |
+| `GET`, `POST`, `PATCH`, `DELETE /core/routes` | The route book. An edit applies to the running client in place: a job that is running carries on |
 | `GET`, `PATCH /core/device` | The device runner's state and settings |
 | `POST /core/presence` | The desktop app reports what it is showing, so the core does not notify about it |
 | `POST /core/tray` | `{"cmd": "hide"}`: the desktop app asks the tray to take its icon away |

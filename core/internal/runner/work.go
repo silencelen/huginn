@@ -199,8 +199,12 @@ func (r *Runner) runWork(ctx context.Context, id string, w appd.WorkItem, conf C
 	}
 	r.mu.Lock()
 	r.active = kill
+	cancelAll := r.cancelAll // a CancelJobs that came before this kill was registered
 	r.mu.Unlock()
 	defer func() { r.mu.Lock(); r.active = nil; r.mu.Unlock() }()
+	if cancelAll {
+		kill()
+	}
 
 	// Startup-liveness watchdog: a child that wedges at startup (a hung
 	// auto-update, broken credentials) emits NOTHING and would hold the job slot

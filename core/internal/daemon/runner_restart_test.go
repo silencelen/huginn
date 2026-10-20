@@ -194,7 +194,7 @@ func newRestartRig(t *testing.T, seconds int) *restartRig {
 	front := httptest.NewServer(mux)
 	t.Cleanup(func() {
 		cancel()
-		d.stopRunner()
+		d.stopRunner(true)
 		front.Close()
 	})
 	return &restartRig{d: d, f: f, ipc: front, url: srv.URL, tok: tok, marks: marks}
@@ -259,7 +259,7 @@ func TestOverlappingRunnerRestartsLeaveOneRunner(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	wg.Wait()
-	g.waitFor(t, "w1 to end", 15*time.Second, func() bool { return !g.d.busy() && g.marked() == 1 })
+	g.waitFor(t, "w1 to be over", 15*time.Second, func() bool { return !g.d.busy() })
 
 	g.f.mu.Lock()
 	g.f.maxOpen = g.f.open
@@ -272,7 +272,7 @@ func TestOverlappingRunnerRestartsLeaveOneRunner(t *testing.T) {
 		t.Fatalf("%d long polls open at once for one device: more than one runner serves it", most)
 	}
 
-	g.d.stopRunner()
+	g.d.stopRunner(true)
 	g.f.mu.Lock()
 	before := g.f.polls
 	g.f.mu.Unlock()

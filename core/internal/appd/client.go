@@ -534,7 +534,7 @@ func (c *Client) dialPinned(pins []string) func(context.Context, string, string)
 		hctx, cancel := context.WithTimeout(ctx, c.hs)
 		defer cancel()
 		// With other addresses to try, a dead one is given up on sooner.
-		d := net.Dialer{Timeout: c.dialT}
+		d := net.Dialer{Timeout: c.dialTimeout()}
 		raw, err := d.DialContext(hctx, network, addr)
 		if err != nil {
 			return nil, c.dialErr(hctx, ctx, addr, c.hs, err)
