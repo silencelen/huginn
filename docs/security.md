@@ -89,6 +89,10 @@ settings file contains no secret. It checks GitHub releases at launch and every 
 verifies each download against the release manifest's SHA-256, and installs an update only when
 you restart it.
 
+Answer and undo links in its notifications (`huginn://…`) act only with the one-time value of the
+notification that offered them, within five minutes. Any other link, from a web page or another
+program, only opens the session.
+
 ### The Android app
 
 A phone has no huginn core, so the Android app pairs directly and holds the token itself, in the

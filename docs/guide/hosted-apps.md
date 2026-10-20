@@ -62,6 +62,10 @@ an app the server itself serves, Huginn checks the app at every address it **mus
   app reports its routes when it starts, and a reported route counts for 30 days);
 - any address in the app's **Also check from**.
 
+When one of those saved addresses stops answering, the Apps page names the device that saved it
+and offers **Forget**, which removes the address for every device. A device that still has it
+saved reports it again the next time it starts, so forget an address once nothing uses it.
+
 Huginn also checks, for information only, the addresses clients have actually arrived on in the
 last 7 days. These show under **Checked from** on the row and never fail it on their own.
 
