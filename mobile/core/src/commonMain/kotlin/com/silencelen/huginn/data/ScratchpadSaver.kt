@@ -52,7 +52,9 @@ import kotlin.coroutines.CoroutineContext
  *  5. **A refusal the daemon will repeat is TERMINAL.** A 413 means this exact
  *     text is too big for the route; retrying it on every keystroke is a loop
  *     against a wall. The text stays HELD and the line says so, and the next edit
- *     — which is how a page gets smaller — clears it and tries again.
+ *     — which is how a page gets smaller — clears it and tries again. A NAME the
+ *     daemon refuses (400) is not held at all: the rename's caller has the
+ *     refusal to show, and a held one would sink every later save with it.
  *  6. **The pending write is cancelled on close, never merely superseded**, and
  *     [scope] must outlive the view: the flush that matters happens as the editor
  *     is torn down, which is the exact moment a scope owned by that editor is
@@ -511,7 +513,14 @@ class ScratchpadSaver(
             if (w.text != null && page.held == null && page.mark <= w.gen) {
                 page.held = Scratchpad(id = w.id, content = w.text, rev = rev)
             }
-            if (w.name != null && page.heldName == null) page.heldName = w.name
+            // ⚠ BUT NOT A NAME THE DAEMON REFUSED. A 400 is its answer about the
+            // name — taken, empty, a quote, too long, Main — and it will give the
+            // same one again. It checks the name before the text and refuses the
+            // whole body, so a refused name held here rode along with every later
+            // save and the page's text could never be saved again. rename()'s
+            // caller is handed the refusal to show; only a write that never got
+            // an answer about its name is held for a retry.
+            if (w.name != null && page.heldName == null && code != 400) page.heldName = w.name
             // A 413 is the route's size cap, and the same text will meet the same
             // cap on every retry. Held, said out loud, and NOT retried until the
             // page changes — see invariant 5.
