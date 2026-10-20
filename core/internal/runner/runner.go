@@ -151,6 +151,9 @@ var (
 	pollBlipPause  = 3 * time.Second
 	flushEvery     = 500 * time.Millisecond
 	startupSilence = 180 * time.Second
+	// endPatience bounds the retries of a run's last POSTs: appd gives a run
+	// up after five minutes without a word, and the next job waits on this one.
+	endPatience = 5 * time.Minute
 )
 
 const pollFailuresBeforeReenrol = 5
