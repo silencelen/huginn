@@ -3068,9 +3068,13 @@ echo "[hardening/8] the host scripts: no token on argv, a proved daemon, clean m
 # (test-llm-output.sh); setup.sh/uninstall.sh and the desktop purge never write
 # through a link in a home (test-home-writes.sh); and the build and release
 # scripts keep their scratch files private and every wait bounded
-# (test-build-gates.sh). Their SKIPs are repeated here, loudly, never counted
-# green.
-for g in test-no-token-argv test-appd-pin test-llm-output test-home-writes test-build-gates; do
+# (test-build-gates.sh). The server's own scripts and both installers are held
+# to the cases that broke them: cc's arguments by position, huginn-ask's quoted
+# unit environment, the tmux backup series, a quoted IdentityFile, PowerShell
+# 5.1's quote stripping and rename through the daemon. Their SKIPs are repeated
+# here, loudly, never counted green.
+for g in test-no-token-argv test-appd-pin test-llm-output test-home-writes test-build-gates \
+         test-cc-args test-ask-unit-env test-tmux-backup test-ssh-identityfile test-ps51-quotes test-rename-route; do
   G_OUT=$(bash "scripts/$g.sh" 2>&1); G_RC=$?
   G_N=$(grep -c '^  ok ' <<<"$G_OUT")
   if [ "$G_RC" -eq 0 ] && [ "$G_N" -gt 0 ]; then
