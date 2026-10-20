@@ -22,6 +22,7 @@
 // Only the STARTUP LOG is asserted — that is where the verdict is, and it is the
 // operator-facing half of the fix.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');

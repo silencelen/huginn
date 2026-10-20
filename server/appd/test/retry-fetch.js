@@ -1,5 +1,9 @@
 'use strict';
 
+// Every route suite requires this file, so it also keeps their daemons from
+// reaching the owner (see no-owner-contact.js).
+require('./no-owner-contact');
+
 // Requiring this makes the process's global fetch() retry a NETWORK-LEVEL failure
 // — a thrown "TypeError: fetch failed" — a few times before giving up. It does NOT
 // retry an HTTP response: any status (including 4xx/5xx) returns unchanged for the

@@ -2,6 +2,7 @@
 // The daemon behind TLS (docs/dev/protocol-tls.md): the bound challenge, the pinned bearer
 // channel, and the plaintext policy — against throwaway daemons on their own
 // ports, data dirs and tmux sockets, like every other routes-* test.
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');

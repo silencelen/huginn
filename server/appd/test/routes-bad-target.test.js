@@ -17,6 +17,7 @@
 // SAFETY: throwaway daemons on kernel-assigned ports, each with a scratch data
 // dir, a scratch ~/.claude, a private tmux socket and a token of its own.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');

@@ -11,6 +11,7 @@
 // in a scratch directory, with every path the daemon reads at load pointed at
 // that directory. It binds no port and exits.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { spawnSync } = require('node:child_process');

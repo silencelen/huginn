@@ -16,6 +16,7 @@
 // dir, a scratch ~/.claude, a private tmux socket, no push key, no API key, and
 // a token of its own. No real claude and no real relay run.
 
+require('./no-owner-contact'); // before any daemon is spawned
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');
