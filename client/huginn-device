@@ -1716,7 +1716,12 @@ async function main() {
         console.error('      | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | openssl enc -base64)');
         console.error('    curl -sS -k --pinnedpubkey "sha256//$PIN" -X DELETE \\');
         console.error(`      -H @<(printf 'Authorization: Bearer %s\\n' "$(cat /etc/huginn-appd/token)") \\`);
-        console.error(termSafe(`      https://127.0.0.1:8787/v1/devices/${conf.id}`));
+        // The id goes into a command a person pastes into a ROOT shell, and it
+        // comes from device.json, a file anyone with this account can edit: it
+        // is printed only in the shape appd mints, never as written.
+        const idForShell = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(conf.id || ''))
+          ? conf.id : '<this machine\'s device id, from huginn devices>';
+        console.error(termSafe(`      https://127.0.0.1:8787/v1/devices/${idForShell}`));
         console.error('  (with HUGINN_APPD_TLS_CERT set on the host, read that certificate instead)');
         console.error('');
       }

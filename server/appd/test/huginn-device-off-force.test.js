@@ -71,3 +71,23 @@ test('off --force prints a pinned-HTTPS retire command, never a plain-http one',
   if (parse.error) return; // no bash on this machine: the text checks above stand
   assert.equal(parse.status, 0, parse.stderr);
 });
+
+test('off --force never pastes a device id that is not in the shape appd mints', async () => {
+  const dev = path.join(tmp, 'device-odd');
+  fs.mkdirSync(dev, { recursive: true });
+  const odd = 'x$(touch /tmp/owned);y';
+  fs.writeFileSync(path.join(dev, 'device.json'), JSON.stringify({
+    id: odd, name: 'box', url: `http://127.0.0.1:${await closedPort()}`, scope: 'work',
+  }));
+  fs.writeFileSync(path.join(dev, 'appd-token'), `${FAKE_TOKEN}\n`, { mode: 0o600 });
+  const env = { ...process.env, HOME: path.join(tmp, 'home2'), HUGINN_DEVICE_DIR: dev };
+  delete env.HUGINN_APPD_TOKEN;
+  delete env.HUGINN_APPD_PLAINTEXT;
+  const r = spawnSync(process.execPath, [RUNNER, 'off', '--force'], { encoding: 'utf8', env, timeout: 60000 });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const url = r.stderr.split('\n').find((l) => /https:\/\/127\.0\.0\.1:8787\/v1\/devices\//.test(l)) || '';
+  assert.ok(url, r.stderr);
+  assert.ok(!url.includes('$('), `the id as written never reaches the pasted command: ${url}`);
+  assert.match(url, /<this machine's device id, from huginn devices>/);
+});
+
