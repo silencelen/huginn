@@ -204,7 +204,8 @@ must keep them.
 - **Claim notifications only when someone is there.** `X-Huginn-Notify: 1` tells the daemon this
   client will show the alert, which suppresses the fallback relay. Send it only while a person is
   present and the client can actually deliver. A parked SSE carries the header it was opened with,
-  so reconnect it when presence changes.
+  so reconnect it whenever the claim changes: presence, the notification setting, or whether the
+  client can still deliver.
 - **A `huginn://` link acts only with this instance's nonce.** The fingerprint (`fp`) is the
   daemon's staleness check, an unkeyed hash of the question, options and dialog body that anyone
   can compute, so it proves nothing about who sent the link. Every toast that carries links gets

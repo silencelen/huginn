@@ -248,6 +248,10 @@ class SetupController(
     // ----------------------------------------------------------- navigation
 
     fun goTo(step: SetupStep) {
+        // Not while a probe runs, like every other way off a step: the rail was
+        // the one control left live, and the probe's answer then landed on
+        // whichever step it had moved to (see [settle]).
+        if (_busy.value) return
         _note.value = null
         _awaitingAnswer.value = false
         put(_state.value.copy(current = step, finished = false))
@@ -353,13 +357,13 @@ class SetupController(
         scope.launch {
             try {
                 when (step) {
-                    SetupStep.ROUTE -> record(probes.route())
-                    SetupStep.TOKEN -> record(probes.token())
-                    SetupStep.CLAUDE -> record(probes.claude())
-                    SetupStep.DEVICE -> record(probes.device())
+                    SetupStep.ROUTE -> record(step, probes.route())
+                    SetupStep.TOKEN -> record(step, probes.token())
+                    SetupStep.CLAUDE -> record(step, probes.claude())
+                    SetupStep.DEVICE -> record(step, probes.device())
                     SetupStep.LOCAL_AI -> when (val o = probes.localAi()) {
-                        is LocalAiOutcome.Serving -> put(SetupFlow.pass(_state.value, o.detail))
-                        is LocalAiOutcome.Refused -> put(SetupFlow.fail(_state.value, o.reason))
+                        is LocalAiOutcome.Serving -> settle(step, StepStatus.Passed(o.detail))
+                        is LocalAiOutcome.Refused -> settle(step, StepStatus.Failed(o.reason))
                         // Neither. The consent card is on this very screen and
                         // pressing it is a human's job — the step stays open
                         // rather than claiming a machine serves when it does not.
@@ -370,42 +374,60 @@ class SetupController(
                         // printed verdict. `StepStatus.Checked` says both halves
                         // truthfully: the machine answered, you have not.
                         is LocalAiOutcome.Offered -> {
-                            _note.value = o.plan
-                            put(SetupFlow.checked(_state.value, o.plan))
+                            if (_state.value.current == step) _note.value = o.plan
+                            settle(step, StepStatus.Checked(o.plan))
                         }
                     }
                     SetupStep.NOTIFY -> probes.postTestNotification().fold(
                         onSuccess = {
-                            _note.value = NOTIFY_ASK
-                            _awaitingAnswer.value = true
+                            // Asked only on the step it belongs to: the yes/no
+                            // answer is recorded on the step the reader is on.
+                            if (_state.value.current == step) {
+                                _note.value = NOTIFY_ASK
+                                _awaitingAnswer.value = true
+                            }
                         },
-                        onFailure = { put(SetupFlow.fail(_state.value, reason(it))) },
+                        onFailure = { settle(step, StepStatus.Failed(reason(it))) },
                     )
                     SetupStep.AUTOSTART -> probes.autostart(true).fold(
                         onSuccess = {
                             settings.setAutostart(true)
-                            put(SetupFlow.pass(_state.value, it))
+                            settle(step, StepStatus.Passed(it))
                         },
-                        onFailure = { put(SetupFlow.fail(_state.value, reason(it))) },
+                        onFailure = { settle(step, StepStatus.Failed(reason(it))) },
                     )
                 }
             } catch (t: Throwable) {
                 // A probe that throws is a step that failed, never a window that
                 // dies: this runs on a supervisor scope beside the UI, and an
                 // unhandled failure here would leave the flow busy forever.
-                put(SetupFlow.fail(_state.value, reason(t)))
+                settle(step, StepStatus.Failed(reason(t)))
             } finally {
                 _busy.value = false
             }
         }
     }
 
-    private fun record(result: Result<String>) = put(
+    private fun record(step: SetupStep, result: Result<String>) = settle(
+        step,
         result.fold(
-            onSuccess = { SetupFlow.pass(_state.value, it) },
-            onFailure = { SetupFlow.fail(_state.value, reason(it)) },
+            onSuccess = { StepStatus.Passed(it) },
+            onFailure = { StepStatus.Failed(reason(it)) },
         ),
     )
+
+    /**
+     * A probe's answer, on the step that was PROBED.
+     *
+     * ⚠ NOT ON `current`, which is where `SetupFlow.pass`/`fail` write. A probe
+     * can take half a minute (the enrol wait, a core that is still starting), and
+     * when the reader had moved meanwhile, the answer landed on that other step:
+     * "Waiting for work" passed Notifications without a test notification ever
+     * being posted, and the token step's pairing passed Autostart with no startup
+     * entry written. `settledByCard` is the writer that names its step.
+     */
+    private fun settle(step: SetupStep, status: StepStatus) =
+        put(SetupFlow.settledByCard(_state.value, step, status))
 
     // ------------------------------------------------------------- plumbing
 

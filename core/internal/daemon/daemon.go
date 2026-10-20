@@ -533,6 +533,11 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			}
 			defer func() {
 				if d.watch.guis.Add(-1) == 0 {
+					// The app is gone (quit, crash, killed), so it shows nothing.
+					// Its last focus report would otherwise go on silencing that
+					// target's alerts until focusTTL ran out; nothing else ever
+					// clears it, since only the app reports focus.
+					d.watch.setFocus("")
 					d.publishGUI()
 				}
 			}()

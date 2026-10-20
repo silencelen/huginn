@@ -56,12 +56,16 @@ import com.silencelen.huginn.data.OkHttpDaemonTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -993,10 +997,21 @@ class AppStore(
         _projectMembers.value = _projectMembers.value + fetched
     }
 
-    /** The rollup for the open project. Adopted only when it has actually moved. */
-    suspend fun refreshProjectDashboard() {
+    /**
+     * The rollup for the open project. Adopted only when it has actually moved,
+     * and only while that project is still the open one.
+     *
+     * ⚠ RE-CHECKED AFTER THE FETCH, as [refreshProjectMembers] does. The rollup
+     * walks every member's transcript and can take seconds; a reader who clicked
+     * another project meanwhile got the old one's totals and member rows drawn
+     * under the new one's name — and a Drop pressed on one of those rows removed
+     * the NEW project's member with that role.
+     */
+    suspend fun refreshProjectDashboard(fetch: suspend (String) -> ProjectDashboard = { client.projectDashboard(it) }) {
         val id = _projectId.value ?: return
-        runCatching { client.projectDashboard(id) }.onSuccess { adoptDashboard(it) }
+        runCatching { fetch(id) }.onSuccess { d ->
+            if (id == _projectId.value && (d.project?.id ?: id) == id) adoptDashboard(d)
+        }
     }
 
     /**
@@ -2014,6 +2029,47 @@ class AppStore(
     }
 
     /**
+     * Kill sessions, each on its own, with its draft and history going with it.
+     *
+     * ⚠ ONE REFUSAL DOES NOT STOP THE REST. This was a plain loop: a session
+     * that ended while the confirm dialog was open answered 404, the loop threw
+     * there, and every session after it kept running while even the ones
+     * already killed kept their drafts. Refusals are NAMED, as in
+     * [archiveSessions]: the daemon's bare sentence did not say which session.
+     */
+    suspend fun killSessions(names: List<String>, kill: suspend (String) -> Unit = { client.killSession(it) }) {
+        val refused = mutableListOf<String>()
+        for (n in names) {
+            runCatching { kill(n) }
+                .onSuccess {
+                    drafts.clear(DraftBook.sessionKey(n))
+                    sentHistory.clear(DraftBook.sessionKey(n))
+                    if (_sessionName.value == n) openSession(null)
+                }
+                .onFailure { refused += "$n: ${it.message}" }
+        }
+        refreshSessions()
+        check(refused.isEmpty()) { "not killed: ${refused.joinToString("; ")}" }
+    }
+
+    /**
+     * Wrap sessions up, each on its own: a session waiting on a question (or a
+     * plain shell) answers 409, and that must not keep the wrap-up from the
+     * rest — the same loop as [killSessions]. A soft end SENDS a message and the
+     * session lives on (a wrap-up question cancels the auto-end), so drafts and
+     * history are deliberately NOT cleared here.
+     */
+    suspend fun softEndSessions(names: List<String>, end: suspend (String) -> Unit = { client.softEndSession(it) }) {
+        val refused = mutableListOf<String>()
+        for (n in names) {
+            notingSoftEnd(n)
+            runCatching { end(n) }.onFailure { refused += "$n: ${it.message}" }
+        }
+        refreshSessions()
+        check(refused.isEmpty()) { "not wrapped up: ${refused.joinToString("; ")}" }
+    }
+
+    /**
      * Bring one back and open it.
      *
      * The name comes from the HOST, never from the row: the old one is taken when
@@ -2415,11 +2471,11 @@ class AppStore(
      * Collected over [Presence.streamKey] rather than `present` itself, which
      * carries that same presence flip AND the resume-from-sleep bump — sockets are
      * black-holed by a suspend and hang until an idle timeout rather than failing.
-     * One counter, because the remedy for both is identical.
+     * One counter, because the remedy for both is identical. The claim's other
+     * two halves re-open it too: see [watchKey].
      */
     private suspend fun watchLoop() {
-        // Also restarted when the run moves onto huginn core (setup paired it).
-        kotlinx.coroutines.flow.combine(presence.streamKey, _viaCore) { k, v -> k to (v != null) }.collectLatest {
+        watchKey().collectLatest {
             var backoffMs = MIN_BACKOFF_MS
             var hash: String? = null
             while (scope.isActive) {
@@ -2469,6 +2525,30 @@ class AppStore(
         }
     }
 
+    /**
+     * What the watch stream is dropped and re-opened on: presence or a resume
+     * ([Presence.streamKey]), the run moving onto huginn core (setup paired it),
+     * and the claim's two halves that are not presence — the Notifications
+     * switch, and whether this machine can show a notification at all.
+     *
+     * ⚠ ALL OF THE CLAIM, NOT ONLY PRESENCE. The `X-Huginn-Notify` header is read
+     * once, when the stream opens, and appd re-reads it from that same request on
+     * every keepalive. Keyed on presence alone, a switch turned off at the desk, a
+     * notifier whose posts started failing or a core tray that took notifications
+     * over left the daemon counting this window as a delivery route, and holding
+     * Telegram back, until presence flipped or the stream rotated half an hour
+     * later. Every "needs you" in between was lost everywhere.
+     *
+     * The notifier's health is read on a timer as well as on each change that is
+     * announced: a post that fails says so to nobody.
+     */
+    internal fun watchKey(recheckMs: Long = CLAIM_RECHECK_MS): Flow<Triple<Long, Boolean, Boolean>> {
+        val ticks = flow { while (true) { emit(Unit); delay(recheckMs) } }
+        val claim = combine(settings.notifyEnabled, coreDevice.coreTray, ticks) { on, _, _ -> on && canDeliver() }
+            .distinctUntilChanged()
+        return combine(presence.streamKey, _viaCore, claim) { k, v, c -> Triple(k, v != null, c) }
+    }
+
     companion object {
 
         /** Appended below the text when "Ask in new chat" could not make one. */
@@ -2492,6 +2572,9 @@ class AppStore(
         const val HEADROOM_EVERY: Int = 6
         const val MIN_BACKOFF_MS: Long = 1_000
         const val MAX_BACKOFF_MS: Long = 30_000
+
+        /** How often [watchKey] re-reads whether this machine can still show a notification. Huginn core's own claim uses the same. */
+        const val CLAIM_RECHECK_MS: Long = 15_000
 
         /** How long the landing restore waits for the first lists before giving up. */
         const val LANDING_WAIT_MS: Long = 15_000

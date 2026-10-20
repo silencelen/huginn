@@ -4,9 +4,12 @@ import com.silencelen.huginn.desktop.DesktopSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -229,10 +232,33 @@ class CoreDevice internal constructor(
         }
     }
 
-    /** Tells the core what this window shows. Best effort: a core that is down simply does not suppress. */
-    fun reportPresence(focusedKey: String?) {
+    /**
+     * Keeps the core told what this window shows (its rules take the focused key
+     * and toast everything else): at once on every change of [focusedKey], and
+     * again every [PRESENCE_EVERY_MS] while it holds, since the core forgets a
+     * report older than 45 s and a window that died must not mute it for good.
+     *
+     * ⚠ ON EVERY CHANGE, NOT ONLY ON THE TIMER. The core does not defer an
+     * alert for the focused key, it CONSUMES it. Reported every 20 s alone, the
+     * key lagged the window by up to that long, and a session that asked
+     * something seconds after the owner switched away was never announced.
+     *
+     * One report at a time, in this coroutine: two in flight can land in either
+     * order, and the older one landing last is the same stale key again.
+     */
+    suspend fun followPresence(focusedKey: Flow<String?>, send: suspend (String?) -> Unit = ::sendPresence) {
+        focusedKey.distinctUntilChanged().collectLatest { key ->
+            while (true) {
+                send(key)
+                delay(PRESENCE_EVERY_MS)
+            }
+        }
+    }
+
+    /** One report. Best effort: a core that is down simply does not suppress. */
+    private suspend fun sendPresence(focusedKey: String?) {
         val c = client ?: return
-        scope.launch { runCatching { c.presence(focusedKey, settings.closeToTrayNow()) } }
+        runCatching { c.presence(focusedKey, settings.closeToTrayNow()) }
     }
 
     /**
@@ -264,6 +290,8 @@ class CoreDevice internal constructor(
 
     companion object {
         const val RECONNECT_MS = 3_000L
+        /** The heartbeat of [followPresence]: well inside the core's 45 s focus TTL. */
+        const val PRESENCE_EVERY_MS = 20_000L
         /** How long a core may be gone before the window is handed to the gate: an update restarts it. */
         const val GATE_GRACE_MS = 20_000L
         const val NOT_RUNNING = "huginn core is not running on this computer — run `huginn core install` to start it at boot"
