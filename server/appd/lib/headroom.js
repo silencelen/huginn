@@ -701,7 +701,11 @@ function decide(input = {}) {
     if (!ladderUp && ladder && ladder.to && !native && ladder.delivery !== 'pending') {
       const reset = lastFableResetAt && lastFableResetAt > (Number(ladder.at) || 0);
       const low = fableEffective !== null && fableEffective < settings.ladderUpBelowPct;
-      if (reset && low && s.state === 'idle' && canLadderUp(ladder.to, settings.ladder)) {
+      // A move back that could not be confirmed waits out a cooldown of its
+      // own before the next try: the global one does not hold moves back up,
+      // and a picker that never opens was otherwise typed at every tick.
+      const retryLater = failedAt > (Number(ladder.at) || 0) && now - failedAt < settings.cooldownMs;
+      if (reset && low && s.state === 'idle' && !retryLater && canLadderUp(ladder.to, settings.ladder)) {
         ladderUp = { type: 'ladder_up', claudeSessionId: s.claudeSessionId, name: s.name, from: ladder.to, to: ladder.from };
       }
     }

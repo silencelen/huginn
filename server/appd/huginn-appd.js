@@ -8936,7 +8936,16 @@ async function applyHeadroomAction(action, ctx) {
         return;
       }
       if (!result.ok) {
-        rec.ladder = { ...(rec.ladder || {}), from, to, at: now, delivery: 'delivery_unconfirmed', sessionOnly: true };
+        // ⚠ A MOVE BACK UP THAT FAILED KEEPS THE RECORD OF THE MOVE DOWN. A
+        // ladder_up's from/to point UP the ladder (decide builds it as `from:
+        // ladder.to, to: ladder.from`), so writing them here turned fable->opus
+        // into opus->fable: the session was never moved back, the clients
+        // announced a move to fable, and its Undo moved it to opus. The queued
+        // settle (resolvePendingLadder) already kept the record; this is the
+        // same rule for a job that ran at once.
+        rec.ladder = action.type === 'ladder_up'
+          ? { ...(rec.ladder || {}), delivery: 'delivery_unconfirmed' }
+          : { ...(rec.ladder || {}), from, to, at: now, delivery: 'delivery_unconfirmed', sessionOnly: true };
         // What lets this session be tried again without taking every move of
         // the week (decide's retry rule); the next read settles the record.
         rec.ladderFailedAt = now;
