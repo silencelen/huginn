@@ -1227,6 +1227,37 @@ function draftHold({ draft = null, keysAgoMs = null, waitedMs = 0,
 }
 const LIVE_KEYS_QUIET_MS = 5_000;
 
+/**
+ * Should a pane SCRIPT (a queue job) wait because the box is not a bare caret?
+ *
+ * ⚠ A JOB TYPES TOO. The draft guard left every job out on the grounds that "a
+ * pane script types no text" — and the one job there is, the ladder's picker
+ * walk, starts by typing `/model` and pressing Enter. Into a box holding the
+ * owner's half-written sentence that is `please check the backup and then/model`
+ * submitted as a prompt: the picker never opens, and their draft is sent for
+ * them, which is the 2026-09-19 harm the guard exists to prevent.
+ *
+ * Stricter than `draftHold`, on purpose: no live-keys condition and no "our own
+ * leftovers" exemption. A message may be joined to what is in the box (decision
+ * 59 says when); `/model` only means anything typed into an EMPTY box, so
+ * anything a person could see in it holds the job — a draft typed in an attached
+ * terminal, a message appd stranded there, Claude Code's own queued messages.
+ * `composerHolds` is the ghost-free read, so the dim suggestion is not text, and
+ * the placeholder hint is not either.
+ *
+ * Bounded like every other hold. An automated job is dropped at the same ten
+ * minutes before this lets go; one a person asked for (Undo) is released, and
+ * applyLadder looks again before typing and refuses rather than type into text.
+ * `composerHolds === null` — no composer at all — never holds, as above.
+ */
+function jobHold({ composerHolds = null, waitedMs = 0, maxMs = DRAFT_HOLD_MAX_MS } = {}) {
+  if (composerHolds === null || composerHolds === undefined) return false;
+  const waited = Number(waitedMs);
+  if (Number.isFinite(waited) && waited >= maxMs) return false;
+  const squashed = squashPane(composerHolds);
+  return !!squashed && !COMPOSER_PLACEHOLDER_RE.test(squashed);
+}
+
 function draftHeldLogLine(name, holds) {
   return `typing: ${name}: holding a send — there is unsent text in the live view `
     + `| composer: ${String(holds || '').replace(/\s+/g, ' ').trim().slice(0, 120)}`;
@@ -1726,7 +1757,7 @@ module.exports = {
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
   composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly, boxIsOurs,
   enterRefusal, enterHeldLogLine,
-  composerHoldsDraft, draftHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
+  composerHoldsDraft, draftHold, jobHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   draftHeldLogLine, draftClearedLogLine, draftOverdueLogLine,

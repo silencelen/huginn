@@ -2974,9 +2974,9 @@ async function pumpQueue(name) {
       // again, side note: …"`. The composer is the person's; a send waits for
       // it, the way it already waits for a dialog.
       //
-      // Text only. A pane SCRIPT types no text, and the Screen tab's own
-      // keystrokes (`submit:false`) ARE the draft — holding those would take the
-      // terminal keyboard away exactly as the modal refusal once did.
+      // Text sends here. The Screen tab's own keystrokes (`submit:false`) ARE the
+      // draft — holding those would take the terminal keyboard away exactly as the
+      // modal refusal once did. A pane SCRIPT has its own, stricter rule below.
       const guarded = textEntry && entry.submit !== false;
       // Read ONCE and reused three times below — the hold, the journal line that
       // says how the hold ended, and the `intoDraft` notice. They were three
@@ -2990,6 +2990,15 @@ async function pumpQueue(name) {
         keysAgoMs: guarded ? liveKeysAgoMs(name) : null,
         waitedMs: now - entry.at,
         keysWindowMs: LIVE_KEYS_WINDOW_MS,
+      });
+      // ⚠ A JOB WAITS FOR A BARE CARET (typing.jobHold). It used to be exempt here
+      // on the premise that a pane script types no text; the ladder's types
+      // `/model` and presses Enter, and into a box holding somebody's words that
+      // submits their draft with `/model` stuck to the end of it. The promise in
+      // enqueueJob — "starts only at a turn boundary with a bare caret" — is kept
+      // here now, not just written down.
+      const holdForBox = !textEntry && typing.jobHold({
+        composerHolds: gate.composerHolds, waitedMs: now - entry.at,
       });
       const d = typing.releaseDecision(humanText
         ? {
@@ -3006,7 +3015,7 @@ async function pumpQueue(name) {
           idle: true,
           state: holdForQuestion ? 'hold' : null,
         }
-        : { ...gate, state: stateSays, draft: holdForDraft });
+        : { ...gate, state: stateSays, draft: holdForDraft || holdForBox });
       // ⚠ LOGGED OFF `d`, NOT OFF THE HOLD. A trust dialog has a caret of its own
       // (`❯ 1. Yes, I trust this folder`), so the draft rule says "true" about a
       // pane whose real answer is `modal` — and modal outranks it. Writing the
@@ -8190,7 +8199,20 @@ async function applyLadder(name, to) {
 
   // Whether a composer is drawn BEFORE `/model` goes in: what lets the look below
   // tell "something with no caret replaced the box" from "this pane has no box".
-  const hadComposer = typing.composerText((await paneLines(name)) || []) !== null;
+  // Captured WITH its escapes, because the same read answers the question under
+  // it, and that one must not count Claude Code's dim suggestion as text (P-14).
+  const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', target]);
+  const before = cap.err ? [] : cap.stdout.replace(/\n$/, '').split('\n');
+  const hadComposer = typing.composerText(before) !== null;
+  // ⚠ ONLY INTO A BARE CARET, looked at once more before the first key. The queue
+  // holds this job while the box has anything in it (typing.jobHold), but a key
+  // can land between that capture and this one, and an Undo a person asked for
+  // reaches here once that hold's ceiling has passed. `/model` typed after
+  // somebody's words submits their sentence for them. Nothing is pressed — not
+  // fail()'s Escape and C-u either: C-u is the key that would wipe their draft.
+  if (typing.jobHold({ composerHolds: typing.composerText(before, { dropGhost: true }) })) {
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: 'there is unsent text in the composer; /model was not typed' };
+  }
   const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/model']);
   if (typed.err) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'could not type /model' };
   await sleep(SUBMIT_BEAT_MS);
