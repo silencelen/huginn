@@ -43,6 +43,21 @@ jobs:
           # No `cache:` on purpose. The daemon has ZERO npm dependencies and
           # therefore no lockfile; setup-node's cache REQUIRES one and fails the
           # step looking for it. There is nothing to restore.
+      # What decides how a new tmux pane starts, in the log of every run. When
+      # ubuntu-latest moved to 26.04 the suite went red on a tmux BUILD change
+      # (3.6 built with systemd returns from `new-session` before the pane's
+      # command has started, wherever a user bus is reachable; see
+      # server/appd/test/until-drawn.js), and no log said which tmux, /bin/sh
+      # or bus the runner had. Informational: it never fails the job.
+      - name: tmux, /bin/sh and the user bus on this runner
+        continue-on-error: true
+        run: |
+          tmux -V
+          ldd "$(command -v tmux)" | grep -o 'libsystemd[^ ]*' || echo 'tmux is not linked to libsystemd'
+          echo "/bin/sh is $(readlink -f /bin/sh)"
+          dpkg-query -W -f '${Package} ${Version}\n' tmux dash coreutils || true
+          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-unset} LANG=${LANG:-unset}"
+          ls -l "/run/user/$(id -u)/bus" || echo 'no user bus'
       # Explicit glob, same as deploy.sh: a bare directory arg is MODULE_NOT_FOUND
       # to node --test, and a glob matching nothing would exit 0 having run zero
       # tests — so the count is asserted too, exactly like the deploy gate.

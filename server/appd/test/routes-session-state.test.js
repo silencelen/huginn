@@ -32,6 +32,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { untilDrawn } = require('./until-drawn');
 
 // PORT ALLOCATION — see the table in routes-lifecycle.test.js; this file owns
 // 10750 + pid%50 -> 10750-10799.
@@ -59,12 +60,16 @@ function sh(cmd, args) {
 }
 
 /** A pane holding the captured question. `cat` keeps the shell from drawing a
- *  prompt underneath, which would read as chrome and make the run history. */
+ *  prompt underneath, which would read as chrome and make the run history.
+ *  ⚠ Returned once the question is ON SCREEN: on tmux 3.6 `new-session`
+ *  returns before the pane's command has even started (until-drawn.js says
+ *  why), and the daemon would read a blank pane. */
 function mkAsking(suffix) {
   const name = `${PFX}-${suffix}`;
   sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '80', '-y', '40',
     `sh -c 'cat ${ASK_PANE}; cat'`]);
   madeSessions.add(name);
+  untilDrawn(TMUX_SOCK, name, /Esc to cancel/);   // the fixture's last row: all of it is up
   return name;
 }
 
