@@ -5745,9 +5745,29 @@ function reconcileInterruptedRuns() {
   }
 }
 
+/**
+ * A chat whose run died on a usage limit and is still waiting for the reset to
+ * re-run it: the same test resumeStalledChats makes before re-running one.
+ */
+function waitingForReset(meta) {
+  const s = meta && meta.stall;
+  return !!(s && s.at && !s.resumedAt && !s.gaveUpAt);
+}
+
 function deliverOrphanedQueues() {
   for (const meta of listChats()) {
     if (!meta.pending || activeRuns.has(meta.id)) continue;
+    // ⚠ NOT A CHAT WAITING FOR A RESET (#39, across a restart). settleRun leaves a
+    // stalled chat's queue on disk ON PURPOSE, to drain when the re-run after the
+    // reset finishes. This runs at every start, and it drained that queue straight
+    // into the window the stall had just proved empty: the queued message died on
+    // the same limit, noteRunStall kept the FIRST stall (as it must), and nothing
+    // put the message back. Accepted with a 202, consumed, never answered, and a
+    // routine deploy during the wait was enough. The re-run's own settle drains it.
+    if (waitingForReset(meta)) {
+      log(`chat ${meta.id}: ${meta.pending} queued message(s) wait for the usage-limit re-run`);
+      continue;
+    }
     const full = loadMeta(meta.id);
     if (!full) continue;
     const next = takePending(full);
