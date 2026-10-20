@@ -12190,7 +12190,8 @@ async function handleRequest(req, res) {
 
     // --- a HOST image the assistant named by path, so a transcript can draw it
     // instead of printing "/home/me/shot.png" and leaving the reader to go and
-    // look. `?path=` is absolute, or relative to the named session's cwd.
+    // look. `?path=` is absolute, `~/`-anchored (this daemon's home — lib/files
+    // expands it), or relative to the named session's cwd.
     //
     // This is the one route where the CLIENT supplies a path, which is why it
     // does not reuse serveArtifact: resolveArtifact's containment is a filename
