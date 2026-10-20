@@ -184,7 +184,9 @@ desktop app, run `huginn setup ssh` once first.
 ## Usage limits
 
 Rounds use your Claude plan like any other work. A round that stops on a usage limit is re-run
-when the limit resets, if auto-resume is on; see [Usage limits](usage-limits.md).
+when the limit resets, if auto-resume is on; see [Usage limits](usage-limits.md). The re-run
+gets the round's whole time budget, and a slot that comes due while it waits is recorded as not
+run.
 
 ## Related
 

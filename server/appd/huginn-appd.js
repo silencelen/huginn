@@ -5218,6 +5218,16 @@ function fireRound(round, { manual = false } = {}) {
   if (round.currentChatId && activeRuns.has(round.currentChatId)) {
     return { error: 'previous run is still going', code: 409 };
   }
+  // ⚠ A RUN HELD OPEN FOR A USAGE-LIMIT RESET IS STILL GOING. settleRun keeps it
+  // as currentChatId and files nothing until the re-run, but it is not in
+  // activeRuns while it waits, so the next slot fired a second run beside it;
+  // after the reset both re-ran at once, the older one no longer currentChatId
+  // and so under no Round cap at all. Only while auto-resume is on: with it off
+  // nothing will re-run the held one, and refusing would stop the Round for good.
+  if (round.currentChatId && waitingForReset(loadMeta(round.currentChatId))
+      && loadHeadroomSettings().autoResume !== false) {
+    return { error: 'previous run is waiting for the usage limit to reset', code: 409 };
+  }
   // Defensive: only reachable by hand-editing the round file — both write
   // paths refuse the local family. The tick records this refusal as an
   // attention run, so the bypass fails closed AND visibly.
@@ -9527,7 +9537,16 @@ function rerunStalledRun(chatId) {
       m.stall.attempts = (Number(m.stall.attempts) || 0) + 1;
     }
     // A Round run that was held open for this is live again.
-    if (m.roundId) m.sealed = false;
+    if (m.roundId) {
+      m.sealed = false;
+      // ⚠ AND ITS CLOCK STARTS AGAIN. roundsTick measures the Round's cap from
+      // roundStartedAt, the ORIGINAL fire, so a reset more than timeoutSec later
+      // (the normal case for a five-hour or weekly window) had the re-run cancelled
+      // by the cap on its first tick, and the wrap-up turn told the model it had
+      // used 2 h 31 min of a 15 min budget. The budget is for the work; the hours
+      // spent waiting for the reset were not work.
+      m.roundStartedAt = ts;
+    }
   });
   appendMsg(chatId, { type: 'system', text: 'resumed after the limit reset', ts });
   const fresh = loadMeta(chatId);
