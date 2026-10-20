@@ -525,3 +525,53 @@ test('a message held for a session replaced in one stroke is not typed into its 
   assert.equal(st.queued, 0, 'nor is it still waiting to');
   assert.match(st.lastError || '', /replaced by a new one/, 'it failed, and the queue says why');
 });
+
+// ---------------------------------------------------- a pending auto-end
+
+test('a soft end whose session is killed at a terminal does not end the next session of that name', async () => {
+  // The wrap-up is running when the owner kills the session at a terminal
+  // instead; its `running` stays behind, since no hook can reach a dead pane.
+  // The next session under the name (`cc` defaults to one) must not be ended
+  // on its first idle.
+  const name = 'soft-kill';
+  mkPane(name);
+  const old = crypto.randomUUID();
+  writeState(name, 'running', { sessionId: old });
+  const r = await api(`/v1/sessions/${name}/soft-end`, { method: 'POST', body: JSON.stringify({ auto: true }) });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  writeState(name, 'running', { sessionId: old });   // the wrap-up turn: the settle timer arms
+  await wait(500);
+
+  sh('tmux', ['kill-session', '-t', `=${name}`]);
+  await wait(1_200);
+  mkPane(name);
+  await settle(name, { sessionId: crypto.randomUUID() });   // its SessionStart idle, held past the gate
+  assert.ok(alive(name), 'the new session is still running');
+  const row = (await api('/v1/sessions')).body.sessions.find((s) => s.name === name);
+  assert.equal(row && row.softEnding, false, 'and nothing is waiting to end it');
+});
+
+test('an archive whose Claude exits before it settles neither archives nor ends the next Claude in that pane', async () => {
+  // The wrap-up settles, and inside the seconds before the end lands the owner
+  // types /exit: SessionEnd removes the state file and the pane drops to its
+  // shell. Starting `claude` again there is a new conversation, and archiving
+  // THAT one, then killing it, is the wrong action twice.
+  const name = 'arch-exit';
+  mkPane(name);
+  const old = crypto.randomUUID();
+  const oldT = writeTranscript(old, 'the wind-down that was asked for');
+  writeState(name, 'running', { sessionId: old, transcript: oldT });
+  const r = await api(`/v1/sessions/${name}/archive`, { method: 'POST' });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  writeState(name, 'running', { sessionId: old, transcript: oldT });   // the settle timer arms
+  await wait(300);
+  writeState(name, 'idle', { sessionId: old, transcript: oldT });      // the wrap-up's Stop
+  await wait(300);
+  fs.rmSync(path.join(stateDir, name));                              // /exit: SessionEnd
+  await wait(1_000);
+
+  const fresh = crypto.randomUUID();
+  await settle(name, { sessionId: fresh, transcript: writeTranscript(fresh, 'a new conversation') });
+  assert.ok(alive(name), 'the new Claude is still running');
+  assert.equal((await archives()).some((a) => a.id === fresh), false, 'and its conversation was not archived');
+});

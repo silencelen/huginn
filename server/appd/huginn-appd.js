@@ -2569,6 +2569,10 @@ function forgetSessionMemory(name) {
   liveKeysAt.delete(name);
   draftHeld.delete(name);
   unmarkedHeld.delete(name);
+  // A pending auto-end, and the archive that may ride on it, were asked of the
+  // previous holder. Kept, the new session's first stable idle ended it.
+  softEnds.delete(name);
+  archiveIntents.delete(name);
 }
 
 function markLaunching(name) {
@@ -3577,10 +3581,18 @@ async function restoreSessionsAfterReboot() {
 /** One pass over the pending soft ends; kills the ones that have settled. */
 async function softEndTick() {
   if (!softEnds.size) return;
+  // Who holds each name now, for stepSoftEnd's "whose wind-down is this": the
+  // Claude session the state file names, and tmux's birth time for the session,
+  // which asking tmux records. Asked BEFORE the loop, so the loop itself runs as
+  // it always has. A session tmux does not have is not acted on — a rename's own
+  // window looks exactly like that — the next holder of the name, or none,
+  // settles it.
+  for (const name of [...softEnds.keys()]) await sessionExists(name);
   const now = Date.now();
   for (const [name, pending] of [...softEnds]) {
     const st = readSessionState(name);
-    const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now);
+    const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now,
+      { sessionId: (st && st.sessionId) || null, born: sessionBorn.get(name) || null });
     if (action === 'kill') {
       // THE ONE HOOK ARCHIVE ADDS TO THIS PATH. A session wound down by
       // POST /archive gets its card written here, in the instant before the
@@ -3605,6 +3617,14 @@ async function softEndTick() {
       softEnds.delete(name);
     } else if (action === 'expire') {
       log(`soft-end: ${name} never started a run, auto-end dropped`);
+      archiveIntents.delete(name);
+      softEnds.delete(name);
+    } else if (action === 'gone') {
+      // Its Claude exited, or the name is somebody else's now. Nothing of the
+      // wind-down is left to end, and what holds the name was never asked to
+      // wind down — so neither a kill nor an archive.
+      log(`soft-end: ${name}: the run it was asked of has ended or been replaced; `
+        + 'auto-end dropped');
       archiveIntents.delete(name);
       softEnds.delete(name);
     } else {
