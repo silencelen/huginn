@@ -849,14 +849,33 @@ function composerText(lines, { dropGhost = false } = {}) {
 }
 
 /**
+ * The characters Claude Code 2.1.302 calls invisible — `k()` in the classifier
+ * its prompt submit runs (read from the binary), less TAB and LF. Some it always
+ * removes, some only out of context (a joiner inside an emoji or an Indic word
+ * stays); either way a pane may not show them.
+ */
+const INVISIBLE_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\u{1107F}\u{13430}-\u{1343F}\u{16FE4}\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E0FFF}]/gu;
+
+/**
  * Comparison spelling for pane text: ANSI stripped and ALL whitespace removed.
  *
  * Whitespace goes because tmux wraps a long line at the pane width with no
  * separator at all, so a 200-character message arrives as three rows split
  * mid-word. Removing whitespace from both sides of the comparison makes the
  * wrap invisible instead of making the match impossible.
+ *
+ * ⚠ AND THE INVISIBLE CHARACTERS GO TOO (INVISIBLE_RE). Claude Code 2.1.30x will
+ * not submit a prompt holding them: it removes them, puts the rest back in the
+ * box, and sends nothing — and its renderer draws some of them not at all. With
+ * them left in, a message carrying one either never "landed" (the recovery left
+ * it in the box, and every retry pasted another copy) or "left the box" the
+ * moment Claude Code cleaned it (a refused message reported submitted, and the
+ * person's retry swallowed as its duplicate). Judged without them on both sides,
+ * the box is read as a person would read it.
  */
-function squashPane(s) { return stripAnsi(String(s || '')).replace(/\s+/g, ''); }
+function squashPane(s) {
+  return stripAnsi(String(s || '')).replace(/\s+/g, '').replace(INVISIBLE_RE, '');
+}
 
 /**
  * What a COLLAPSED paste looks like in the composer — and it is most of them.
@@ -1146,6 +1165,49 @@ function pasteSafe(text) {
     if (next === s) return s;
     s = next;
   }
+}
+
+/**
+ * The spelling of a MESSAGE that Claude Code 2.1.30x will submit as it is: what
+ * pasteSafe leaves, minus what its prompt submit would take out at the Enter.
+ *
+ * ⚠ A PROMPT WITH INVISIBLE CHARACTERS IS NOT SUBMITTED. On Enter, Claude Code
+ * removes them, puts the cleaned text back in the box, says `Removed 1 invisible
+ * character · review and press Enter to send`, and sends nothing — and the
+ * person who pressed Send in the app is not looking at that box. A soft hyphen or
+ * a zero-width joiner copied off a web page was enough to make a message
+ * impossible to send from the app at all.
+ *
+ * So the characters it would remove are removed here first, and the prompt it
+ * receives is the one it would have sent after that second Enter. Only where the
+ * removal is certain, so this never takes out a character Claude Code keeps:
+ *   - line breaks it rewrites (VT, FF, NEL, LS, PS, a lone CR) become the LF it
+ *     would make of them; CRLF becomes LF;
+ *   - ALWAYS_REMOVED_RE, which its classifier removes in every context (the
+ *     tag characters too, except the three flag sequences it keeps);
+ *   - the rest of INVISIBLE_RE — joiners, ZWSP, LRM/RLM, variation selectors,
+ *     CGJ — only on a line that is otherwise plain ASCII. Each of those is kept
+ *     only beside a particular script, an emoji or a combining mark, none of
+ *     which an ASCII line has; anywhere else Claude Code decides, and whatever it
+ *     refuses is reported honestly (squashPane) and goes on the person's retry.
+ *
+ * Messages only. The Screen tab's own typing is a person at the box, who sees
+ * the notice and answers it; it keeps pasteSafe.
+ */
+const LINE_BREAK_RE = /\r\n|[\r\u000B\u000C\u0085\u2028\u2029]/g;
+const ALWAYS_REMOVED_RE = /[\u0000-\u0008\u000E-\u001F\u007F-\u0084\u0086-\u009F\u00AD\u115F\u1160\u202A-\u202E\u2060-\u206F\u3164\uFE03-\uFE0D\uFEFF\uFFA0\uFFF0-\uFFFB\u{16FE4}\u{1D173}-\u{1D17A}]/gu;
+// The subdivision flags (England, Scotland, Wales) are the one use of tag
+// characters it keeps; every other one goes.
+const TAG_RE = /\u{1F3F4}\u{E0067}\u{E0062}(?:\u{E0065}\u{E006E}\u{E0067}|\u{E0073}\u{E0063}\u{E0074}|\u{E0077}\u{E006C}\u{E0073})\u{E007F}|[\u{E0000}-\u{E0FFF}]/gu;
+function sendable(text) {
+  const s = pasteSafe(text)
+    .replace(LINE_BREAK_RE, '\n')
+    .replace(ALWAYS_REMOVED_RE, '')
+    .replace(TAG_RE, (m) => (m.codePointAt(0) === 0x1F3F4 ? m : ''));
+  return s.split('\n').map((line) => {
+    const bare = line.replace(INVISIBLE_RE, '');
+    return /^[\x00-\x7F]*$/.test(bare) ? bare : line;
+  }).join('\n');
 }
 
 /**
@@ -1874,7 +1936,7 @@ module.exports = {
   QUEUE_MAX_WAIT_MS, STARTUP_GRACE_MS,
   PASTE_SETTLE_MS, PASTE_SETTLE_POLL_MS, SUBMIT_CONFIRM_MS, SUBMIT_CONFIRM_POLL_MS,
   composerText, pasteProbe, pasteProbes, pasteLanded, pasteIndistinguishable, composerCleared,
-  composerEmpty, recoveryDecision, stripGhost, pasteSafe, boxHoldsExactly, boxIsOurs,
+  composerEmpty, recoveryDecision, stripGhost, pasteSafe, sendable, boxHoldsExactly, boxIsOurs,
   enterRefusal, enterHeldLogLine,
   composerHoldsDraft, draftHold, jobHold, DRAFT_HOLD_MAX_MS, LIVE_KEYS_WINDOW_MS,
   duplicatePending, DUPLICATE_WINDOW_MS, DUPLICATE_MIN_CHARS, LIVE_KEYS_QUIET_MS,

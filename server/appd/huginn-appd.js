@@ -2292,8 +2292,11 @@ function heldResult(name, text, held, fields) {
 async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false } = {}) {
   const target = `=${name}:`;
   // The spelling that is actually pasted, so the settle and confirm checks below
-  // compare against the bytes the pane received (2026-10-02, see pasteSafe).
-  text = typing.pasteSafe(text);
+  // compare against the bytes the pane received (2026-10-02, see pasteSafe). A
+  // message also loses what Claude Code would refuse to submit with it in
+  // (typing.sendable); the Screen tab's own typing does not — that person is at
+  // the box, and answers Claude Code's notice themselves.
+  text = submit ? typing.sendable(text) : typing.pasteSafe(text);
   // ⚠ A SEND HELD AFTER ITS PASTE IS ALREADY IN THE BOX (`typed`, see pumpQueue).
   // A dialog opened between its paste and its Enter; the box it comes back to is
   // either still holding the message — then the Enter is all that is owed — or it
@@ -3168,8 +3171,11 @@ async function pumpQueue(name) {
       q.delivering = true;
       q.inFlight = entry;   // still visible to the duplicate guard (pendingEntries)
       // Written down BEFORE anything is typed: Claude Code's record of it can land
-      // within milliseconds of the Enter, and it is appd's, not the owner's.
-      if (entry.automated) noteOwnPrompt(name, typeof entry.run === 'function' ? entry.prompt : entry.text);
+      // within milliseconds of the Enter, and it is appd's, not the owner's. In the
+      // spelling that is pasted (typing.sendable), which is the one it records.
+      if (entry.automated) {
+        noteOwnPrompt(name, typeof entry.run === 'function' ? entry.prompt : typing.sendable(entry.text));
+      }
       let r;
       try {
         // A JOB rather than a message: the ladder's `/model` picker script is
@@ -11949,7 +11955,7 @@ async function handleRequest(req, res) {
         // (`submitted === false`) is the very message this press is asking for,
         // and answering it `duplicate:true` stranded it with nothing to say so.
         const recent = wantsEnter && !dup ? lastPasted.get(name) : null;
-        if (recent && recent.submitted !== false && recent.text === typing.pasteSafe(typedKeys) && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
+        if (recent && recent.submitted !== false && recent.text === typing.sendable(typedKeys) && typedKeys.length >= typing.DUPLICATE_MIN_CHARS
             && Date.now() - recent.at <= typing.DUPLICATE_WINDOW_MS) {
           log(`typing: ${name}: the same message was delivered ${Math.round((Date.now() - recent.at) / 1000)}s ago; `
             + 'not sending it a second time');
