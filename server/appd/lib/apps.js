@@ -49,6 +49,8 @@
 // without a daemon.
 
 const nodeFs = require('node:fs');
+const nodeHttps = require('node:https');
+const nodeNet = require('node:net');
 const nodeOs = require('node:os');
 const path = require('node:path');
 
@@ -91,7 +93,8 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
  *
  *   READING — [cleanKind], silent. A row that decoded is a row that renders, so
  *   a record written by a LATER daemon that learned a sixth kind degrades to a
- *   chip with the wrong label, never to a list that will not draw.
+ *   chip with the wrong label, never to a list that will not draw. Only the
+ *   READING degrades: the stored word goes back to disk as it was ([keepStored]).
  *
  * An ABSENT kind is not a mistake; it means `other`, and `{name, url}` stays a
  * legal body.
@@ -184,6 +187,13 @@ const MAX_CLIENT_REMOTES = 16;
  *
  * A reported route lives a month, not a week: it is a fact about a device's
  * settings, which change rarely, where an arrival is a fact about traffic.
+ *
+ * ⚠ THE MONTH RUNS FROM THE CLIENT'S LAST WORD, NOT ITS LAST REPORT. A client
+ * reports once per launch and again only when its routes change, and an
+ * always-on desktop can run for months — so a route measured from the report
+ * alone dropped out of the required set on day 31 while the device was still
+ * using it, with no log line. Every request that carries the reporting
+ * client's `X-Huginn-Client` renews its report ([noteClientAddress]).
  */
 const LOOPBACK_ADDR = '127.0.0.1';
 const REPORTED_ADDR_TTL_SEC = 30 * 24 * 3600;
@@ -1154,19 +1164,24 @@ function fixLines(rec, addresses = [], remotes = {}, fw = FIREWALL) {
   return out;
 }
 
+/** The codes Node and OpenSSL give a TLS failure, as [reachError] passes them through. */
+const TLS_FAILURE = /^(?:EPROTO|ERR_SSL_\w+|ERR_TLS_\w+|\w*CERT\w*|UNABLE_TO_\w+)$/;
+
 /**
  * Whether this failure happened AFTER something took the connection.
  *
  * `timed out` is the probe's deadline: the socket was not refused, so either the
  * app accepted and went quiet or a DROP (not a REJECT) ate the packets. `http
- * 5xx` is the server answering to say it is broken. Neither is a bind. Anything
- * else — refused, no route, a name that does not resolve, an unrecognised errno
- * — is treated as "nothing is listening there", which is the bind story and the
- * safe default for a word this function has not seen before.
+ * 5xx` is the server answering to say it is broken. A TLS failure (a handshake
+ * alert, `https://` on a port that speaks plain http, a certificate) needs a
+ * listener to fail against. None of those is a bind. Anything else — refused,
+ * no route, a name that does not resolve, an unrecognised errno — is treated as
+ * "nothing is listening there", which is the bind story and the safe default
+ * for a word this function has not seen before.
  */
 function reachedButSilent(row) {
   const e = String((row && row.error) || '');
-  return e === 'timed out' || /^http \d/.test(e);
+  return e === 'timed out' || /^http \d/.test(e) || TLS_FAILURE.test(e);
 }
 
 /**
@@ -1343,9 +1358,70 @@ function reachError(e) {
   return code || 'did not answer';
 }
 
+/**
+ * How a probe dials an app when no `fetch` was injected: plain `fetch` for
+ * http://, and for https:// one GET that DOES NOT VERIFY THE CERTIFICATE and
+ * puts `servername` (the STORED host) in SNI.
+ *
+ * ⚠⚠ VERIFICATION IS OFF HERE ON PURPOSE, AND ONLY FOR THE PROBES. A probe asks
+ * whether something answers at an address and reads nothing but the status: it
+ * carries no credential and no cookie, and the body is never read. What it
+ * must not do is fail an app because nothing vouches for its certificate. With
+ * verification on, the self-signed certificate Proxmox, Cockpit or UniFi ships
+ * with — and a valid one for `huginn.<tailnet>.ts.net` once the reachability
+ * probe dials 127.0.0.1 instead of the name — read as "nothing is listening,
+ * fix the bind": every such add was a 422 and every such row was red, while
+ * the app was listening fine. Whether a DEVICE trusts the certificate is for
+ * its own browser to ask. The favicon fetch ([getBounded]) still verifies:
+ * those bytes are kept and served back to every client.
+ *
+ * Resolves `{status, body:null}`, and hangs up at once instead of draining the
+ * body. Rejects in fetch's own shapes, so [reachError] reads both transports
+ * alike: the signal's reason at the deadline, `cause.code` for the rest.
+ */
+function probeFetch(url, init = {}, servername = '') {
+  if (!/^https:/i.test(String(url))) return globalThis.fetch(url, init);
+  return new Promise((resolve, reject) => {
+    const signal = init.signal;
+    const failed = (e) => (signal && signal.aborted ? signal.reason : new TypeError('fetch failed', { cause: e }));
+    let req;
+    try {
+      req = nodeHttps.request(url, {
+        method: init.method || 'GET',
+        headers: init.headers || {},
+        signal,
+        // A one-off agent: a socket that skipped verification is never pooled
+        // where another request could pick it up.
+        agent: false,
+        rejectUnauthorized: false,
+        ...(servername ? { servername } : {}),
+      }, (res) => {
+        res.on('error', () => { /* hung up on purpose */ });
+        resolve({ status: res.statusCode, body: null });
+        res.destroy();
+      });
+    } catch (e) {
+      reject(failed(e));
+      return;
+    }
+    req.on('error', (e) => reject(failed(e)));
+    req.end();
+  });
+}
+
+/**
+ * What a reachability probe puts in SNI: the host the row STORES, because the
+ * probe dials a bare address and a server that picks its certificate by name
+ * has nothing to pick by otherwise. Never an IP literal (RFC 6066).
+ */
+function sniName(rawUrl) {
+  const host = hostnameOf(rawUrl).replace(/^\[|\]$/g, '');
+  return host && !nodeNet.isIP(host) ? host : '';
+}
+
 /** One address, one bounded GET. `{addr, ok}` or `{addr, ok:false, error}`. */
 async function reachOne(rawUrl, addr, opts = {}) {
-  const doFetch = opts.fetch || globalThis.fetch;
+  const doFetch = opts.fetch || ((url, init) => probeFetch(url, init, sniName(rawUrl)));
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   let url;
   try { url = reachUrl(rawUrl, addr); } catch { return { addr, ok: false, error: 'not an address' }; }
@@ -1818,7 +1894,9 @@ function iconDue(meta, rec, nowMs) {
  * as a daemon that will not exit.
  */
 async function probeApp(rec, opts = {}) {
-  const doFetch = opts.fetch || globalThis.fetch;
+  // [probeFetch]: an https:// app is not failed for its certificate. The stored
+  // URL is dialled as it is, so SNI already names its host.
+  const doFetch = opts.fetch || probeFetch;
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   const nowMs = opts.nowMs || (() => Date.now());
   const started = nowMs();
@@ -1941,6 +2019,9 @@ function addrEntry(raw) {
   return { addr, lastSeenAt: Number(raw.lastSeenAt) > 0 ? Math.floor(Number(raw.lastSeenAt)) : 0, remotes };
 }
 
+/** The one id every header-less client files under (see [reportedClientId]). */
+const SHARED_CLIENT_ID = 'a client';
+
 /**
  * The id a report is filed under: `X-Huginn-Client`, printable ASCII only.
  *
@@ -1951,7 +2032,7 @@ function addrEntry(raw) {
  * always send the header.
  */
 function reportedClientId(raw) {
-  return String(raw == null ? '' : raw).replace(/[^\x21-\x7e]/g, '').slice(0, 64) || 'a client';
+  return String(raw == null ? '' : raw).replace(/[^\x21-\x7e]/g, '').slice(0, 64) || SHARED_CLIENT_ID;
 }
 
 /**
@@ -2036,6 +2117,44 @@ function writeJsonObject(file, obj, fs = nodeFs) {
   return obj;
 }
 
+/** What this version makes of one STORED row: every field definite, unknown keys passed through. */
+function rowAsRead(c) {
+  return { ...c, ...buildRecord(c, storedAddedAt(c)) };
+}
+
+/**
+ * A row's sidecar entry (see [readSidecar]) — and, the same two fields cleaned
+ * the same way, what this version makes of one stored entry.
+ */
+function sideRow(v) {
+  return { addedAt: storedAddedAt(v), addresses: cleanAddrs(v.addresses) };
+}
+
+/**
+ * One row as it is WRITTEN: this version's value for every field it holds,
+ * EXCEPT where the stored value already reads here as exactly that — then the
+ * stored value, untouched. `asRead` is what this version made of `stored`.
+ *
+ * ⚠⚠ CLEANED ON THE WAY IN, NEVER ON THE WAY BACK OUT. Reading cleans a row so
+ * that it renders and is never probed where it must not be: a kind this
+ * version does not know reads as `other`, an address its rule refuses reads as
+ * '', a long note reads cut. Writing that reading back — which the address
+ * flush did on the first authorised request after every start, and every save
+ * did for every row it never touched — made it permanent: a later daemon's
+ * kind was `other` for good after a rollback to this one, and a hand-typed
+ * address was blanked with no copy kept. The 2026-10-02 rule that unknown KEYS
+ * survive a rollback holds for values this version cannot read, too. What an
+ * edit changed, or the sidecar supplied, reads differently and IS written.
+ */
+function keepStored(stored, mine, asRead) {
+  if (!isBodyObject(stored)) return mine;
+  const out = { ...stored };
+  for (const [k, v] of Object.entries(mine)) {
+    if (JSON.stringify(asRead[k]) !== JSON.stringify(v)) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * The store's envelope, null when there is no store, and a THROW (see
  * [unreadableError]) when there is one that cannot be read.
@@ -2051,10 +2170,10 @@ function readEnvelope(dir, fs = nodeFs) {
     ...raw,
     schema: Number(raw.schema) || SCHEMA,
     seeded: !!raw.seeded,
-    // Same rule on the way out of the file, which is where an invented
-    // timestamp would become permanent — the next write saves what load read.
-    consoles: Array.isArray(raw.consoles)
-      ? raw.consoles.filter(isBodyObject).map((c) => ({ ...c, ...buildRecord(c, storedAddedAt(c)) })) : [],
+    // Same rule on the way out of the file: no invented timestamp. What is
+    // written back is the stored row wherever this reading did not change it
+    // ([keepStored]), so the cleaning here is never made permanent.
+    consoles: Array.isArray(raw.consoles) ? raw.consoles.filter(isBodyObject).map(rowAsRead) : [],
     // Added in 3.5.0. Absent in every store written before it, which is why
     // this is a default and not a migration.
     clientAddresses: Array.isArray(raw.clientAddresses)
@@ -2088,7 +2207,7 @@ function readSidecar(dir, fs = nodeFs) {
   if (isBodyObject(raw.rows)) {
     for (const [id, v] of Object.entries(raw.rows)) {
       if (!ID_RE.test(id) || !isBodyObject(v)) continue;
-      rows[id] = { addedAt: storedAddedAt(v), addresses: cleanAddrs(v.addresses) };
+      rows[id] = sideRow(v);
     }
   }
   return {
@@ -2097,13 +2216,6 @@ function readSidecar(dir, fs = nodeFs) {
     reporters: Array.isArray(raw.reporters) ? raw.reporters.map(reporterEntry).filter(Boolean) : [],
     rows,
   };
-}
-
-/** The sidecar's `rows`, for a list of stored records. */
-function sidecarRows(consoles) {
-  const rows = {};
-  for (const c of consoles || []) rows[c.id] = { addedAt: storedAddedAt(c), addresses: cleanAddrs(c.addresses) };
-  return rows;
 }
 
 /**
@@ -2129,7 +2241,10 @@ function createStore(opts = {}) {
   // The address the DAEMON binds, handed down rather than discovered here (see
   // [pickHostAddr]). Empty is honest: it is simply not counted as one of ours.
   const hostAddr = typeof opts.hostAddr === 'string' ? opts.hostAddr.trim() : '';
-  const doFetch = opts.fetch || globalThis.fetch;
+  // ⚠ UNDEFINED UNLESS INJECTED, never `globalThis.fetch`: each caller below then
+  // dials the way it must — the probes through [probeFetch], which does not fail
+  // an https:// app for its certificate, the favicon through plain fetch, which does.
+  const doFetch = opts.fetch;
   const nowMs = opts.nowMs || (() => Date.now());
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : PROBE_TIMEOUT_MS;
   const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : PROBE_INTERVAL_MS;
@@ -2186,9 +2301,11 @@ function createStore(opts = {}) {
   }
 
   /**
-   * A month unreported and a client's report is gone; past [MAX_REPORTERS] the
-   * client heard from longest ago goes — a whole client, never `keep` (the one
-   * reporting right now), and never a slice of anybody's routes.
+   * A month without a word from a client — a report, or any request carrying its
+   * id (see [REPORTED_ADDR_TTL_SEC]) — and its report is gone; past
+   * [MAX_REPORTERS] the client heard from longest ago goes — a whole client,
+   * never `keep` (the one reporting right now), and never a slice of anybody's
+   * routes.
    */
   function pruneReported(keep = null) {
     const cutoff = stamp() - REPORTED_ADDR_TTL_SEC;
@@ -2551,16 +2668,48 @@ function createStore(opts = {}) {
 
   /**
    * The sidecar, written whole. `consoles` null keeps the rows already there —
-   * a flush with no store to read rows from must not wipe them.
+   * a flush with no store to read rows from must not wipe them. Each row is
+   * written as it is stored wherever this version did not change it
+   * ([keepStored]).
    */
   function writeSidecar(consoles) {
-    let rows;
-    if (consoles) rows = sidecarRows(consoles);
-    else {
-      const was = readSidecar(dir, fs);
-      rows = was ? was.rows : {};
+    const was = readJsonObject(sidecarPath(dir), fs);
+    const stored = was && isBodyObject(was.rows) ? was.rows : {};
+    let rows = stored;
+    if (consoles) {
+      rows = {};
+      const twins = storedTwins(consoles);
+      consoles.forEach((c, i) => {
+        const mine = sideRow(c);
+        // The sidecar's own copy of the row; for a row it has never held, the
+        // one in consoles.json — either way the stored values, not the reading.
+        const twin = Object.hasOwn(stored, c.id) && isBodyObject(stored[c.id]) ? stored[c.id]
+          : twins[i] ? { addedAt: twins[i].addedAt, addresses: twins[i].addresses } : null;
+        rows[c.id] = twin ? keepStored(twin, mine, sideRow(twin)) : mine;
+      });
     }
     writeJsonObject(sidecarPath(dir), { schema: SCHEMA, reporters: reporterEntries(), rows }, fs);
+  }
+
+  /**
+   * For each row this version holds, the row in consoles.json it was read from
+   * (same id, in file order), or null for a row that is not there yet.
+   */
+  function storedTwins(consoles) {
+    const raw = readJsonObject(storePath(dir), fs);
+    const byId = new Map();
+    for (const c of raw && Array.isArray(raw.consoles) ? raw.consoles : []) {
+      if (!isBodyObject(c)) continue;
+      const id = String(c.id || '');
+      byId.set(id, [...(byId.get(id) || []), c]);
+    }
+    return consoles.map((mine) => (byId.get(mine.id) || []).shift() || null);
+  }
+
+  /** `consoles` as they go to disk: each through [keepStored] against its stored twin. */
+  function rowsToWrite(consoles) {
+    const twins = storedTwins(consoles);
+    return consoles.map((mine, i) => (twins[i] ? keepStored(twins[i], mine, rowAsRead(twins[i])) : mine));
   }
 
   /**
@@ -2585,8 +2734,13 @@ function createStore(opts = {}) {
    *
    * A NEW address is flushed at once, because it changes what an add would
    * refuse. A refreshed stamp waits — see [CLIENT_ADDR_FLUSH_SEC].
+   *
+   * `rawClient` is the request's `X-Huginn-Client`: a client that has reported
+   * its routes and is talking to huginn now still uses them, so its report is
+   * renewed — see the ⚠ on [REPORTED_ADDR_TTL_SEC]. A refreshed stamp, so it
+   * waits for the next flush like the others.
    */
-  function noteClientAddress(raw, rawRemote) {
+  function noteClientAddress(raw, rawRemote, rawClient) {
     const addr = normalizeAddr(raw);
     if (!addr) return false;
     // See the ⚠ on loadAddrs: one file read on the first authorised request of
@@ -2594,6 +2748,13 @@ function createStore(opts = {}) {
     ensureLoaded();
     const fresh = !addrs.has(addr);
     addrs.set(addr, stamp());
+
+    // Only a client that NAMES itself renews a report: every header-less caller
+    // files under one shared id, and one of them talking says nothing about the
+    // routes another one reported.
+    const who = reportedClientId(rawClient);
+    const report = who !== SHARED_CLIENT_ID ? reports.get(who) : null;
+    if (report) report.lastSeenAt = stamp();
 
     // The client. Absent is ordinary — a caller with only one address to hand,
     // and a socket whose peer this process could not read, both land here — and
@@ -2637,7 +2798,11 @@ function createStore(opts = {}) {
       // before the first list must survive a restart (2026-10-02 — it did not).
       writeSidecar(env ? env.consoles : null);
       if (env) {
-        writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
+        // ⚠ The rows as STORED, not as this version reads them ([keepStored]).
+        writeEnvelope(dir, {
+          ...env, schema: SCHEMA, consoles: rowsToWrite(env.consoles),
+          clientAddresses: addrEntries(), reportedAddresses: reportedEntries(),
+        }, fs);
       }
     } catch { /* next time */ }
   }
@@ -2693,7 +2858,12 @@ function createStore(opts = {}) {
     // Sidecar first: if the process dies between the two, the sidecar holds the
     // newer lists and wins on the next read.
     writeSidecar(consoles);
-    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
+    // Only what the add, patch or remove changed is written in this version's
+    // reading; every other row goes back as stored ([keepStored]).
+    return writeEnvelope(dir, {
+      ...env, schema: SCHEMA, consoles: rowsToWrite(consoles),
+      clientAddresses: addrEntries(), reportedAddresses: reportedEntries(),
+    }, fs);
   }
 
   /** The marker the owner touches. The daemon reads it and never writes it. */
@@ -2702,6 +2872,26 @@ function createStore(opts = {}) {
   }
 
   // ------------------------------------------------------------------- icons
+
+  /**
+   * Whether what was learned about `rec` still describes a row: it is still
+   * listed, at the address it had when the asking began.
+   *
+   * ⚠ ASKED AFTER THE AWAIT, BEFORE ANYTHING IS KEPT. A sweep reads the rows once
+   * and then waits on the network, up to the deadline per row. A PATCH that
+   * re-points a row, or a DELETE, lands in that wait and clears what the row
+   * had — and the answer about the OLD address then arrived on top of it: a
+   * healthy new address read as down, with the dead one's fix lines and a
+   * "needs retrofit" in the journal, and a deleted app's favicon was written
+   * back to disk and served for a row that no longer existed. [add] re-reads
+   * after its own await for the same reason.
+   */
+  function stillPointsAt(rec) {
+    let env;
+    try { env = readStore(); } catch { return false; }
+    const cur = env ? findApp(env.consoles, rec.id) : null;
+    return !!cur && cur.url === rec.url;
+  }
 
   /** Fetch and cache this app's favicon, if it is due one. Never throws. */
   async function refreshIcon(rec) {
@@ -2714,6 +2904,9 @@ function createStore(opts = {}) {
     } catch (e) {
       got = { ok: false, why: (e && e.message) || 'failed' };
     }
+    // Removed or re-pointed while the icon was in flight: these bytes belong to
+    // no row now, and writing them would bring the files back. See [stillPointsAt].
+    if (!stillPointsAt(rec)) return false;
     // ⚠ CARRIED ACROSS BOTH BRANCHES. The stamp belongs to the BYTES, not to the
     // fetch: an hourly refresh that brings back the identical picture must not
     // move it, or every client re-downloads every icon every hour for nothing.
@@ -2828,7 +3021,8 @@ function createStore(opts = {}) {
         const rec = recs[i];
         try {
           const { probe, reach } = await observe(rec);
-          record(rec, probe, reach);
+          // `recs` was read before the wait; see [stillPointsAt].
+          if (stillPointsAt(rec)) record(rec, probe, reach);
         } catch { /* the next sweep asks again */ }
       }
     };
@@ -2944,6 +3138,13 @@ function createStore(opts = {}) {
       const rec = findApp(load().consoles, id);
       if (!rec) return null;
       const { probe, reach } = await observe(rec);
+      // Re-pointed or removed while it was being asked: the answer is about an
+      // address the row no longer has, so it is not kept and not shown. See
+      // [stillPointsAt].
+      if (!stillPointsAt(rec)) {
+        const cur = findApp(load().consoles, id);
+        return cur ? rowOf(cur) : null;
+      }
       record(rec, probe, reach);
       return appRow(rec, probe, { ...iconFacts(rec.id), reachable: reach });
     },

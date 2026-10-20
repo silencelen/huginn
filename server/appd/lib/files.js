@@ -27,7 +27,8 @@
 //
 // Order of refusals is deliberate and is asserted in files.test.js:
 //
-//   400 malformed         — no path; relative with no session cwd to hang it on
+//   400 malformed         — no path; relative with no session cwd to hang it on;
+//                           `~/…` with no home to expand it to
 //   403 outside the roots — decided BEFORE the disk is consulted, so this route
 //                           cannot be used to probe for the existence of files
 //                           it would never serve (`/etc/passwd` is 403, not 404)
@@ -40,6 +41,7 @@
 // filesystem.
 
 const nodeFs = require('node:fs');
+const nodeOs = require('node:os');
 const path = require('node:path');
 
 /**
@@ -111,19 +113,49 @@ function imageContentType(p) {
  * else entirely.
  */
 function canonicalRoots(roots, fs = nodeFs) {
-  const out = [];
+  return liveRoots(roots, fs).canon;
+}
+
+/**
+ * Every root that exists, under BOTH its names: `canon`, its realpath, and
+ * `named`, the spelling it was configured by (normalised, not resolved).
+ *
+ * ⚠ THE LEXICAL PASS NEEDS THE CONFIGURED NAME. A request is spelled the way
+ * the daemon hands paths out — an upload's `path` is built from DATA_DIR as
+ * configured, a relative request hangs off the cwd as recorded — and when that
+ * spelling runs through a symlink (DATA_DIR moved to a bigger disk and linked
+ * back) it never starts with the realpath. Testing it against `canon` alone
+ * refused every file in the root by the very name the daemon gave it. Pass 2
+ * still compares realpath to realpath, so the second name widens nothing.
+ * Same drop rule as [canonicalRoots]: a root that does not exist has no names.
+ */
+function liveRoots(roots, fs = nodeFs) {
+  const canon = [];
+  const named = [];
   for (const r of roots || []) {
     if (!r || typeof r !== 'string' || !path.isAbsolute(r)) continue;
     let real;
     try { real = fs.realpathSync(r); } catch { continue; }   // no such root widens nothing
-    if (!out.includes(real)) out.push(real);
+    if (!canon.includes(real)) canon.push(real);
+    const asNamed = path.resolve(r);
+    if (!named.includes(asNamed)) named.push(asNamed);
   }
-  return out;
+  return { canon, named };
 }
 
 /** Is `file` inside `root`, both already canonical? */
 function within(file, root) {
   return file === root || file.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+/** This daemon's home — the one every session it starts shares — or '' when it has none. */
+function homeDir() {
+  try {
+    const h = nodeOs.homedir();
+    return path.isAbsolute(h) ? h : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -133,6 +165,7 @@ function within(file, root) {
  * @param {string} o.requested   the raw ?path= value
  * @param {string[]} o.roots     absolute allowed roots (un-canonicalised; see canonicalRoots)
  * @param {string|null} o.cwd    the session cwd a RELATIVE request hangs off, or null
+ * @param {string} [o.home]      what a leading `~` stands for; this daemon's home when absent
  * @param {number} o.maxBytes
  * @param {object} o.fs
  * @returns {{ok:true, file:string, contentType:string, size:number, mtimeMs:number, etag:string}
@@ -149,12 +182,29 @@ function resolveImage(o = {}) {
   // it, but throwing out of a resolver reads as a 500. Named here instead.
   if (requested.includes('\0')) return { ok: false, status: 400, error: 'path must not contain NUL' };
 
+  // ⚠ `~/…` IS AN ABSOLUTE PATH IN THE ASSISTANT'S OWN WORDS, NOT A RELATIVE ONE.
+  // It is how Claude writes a file in its home, and the clients extract it on
+  // purpose (ImageMentions anchors on `~/`). Read as relative it became
+  // `<cwd>/~/…`, a directory nobody has, so every such mention was a 404. It is
+  // expanded to the home here and then judged by the roots exactly like any
+  // absolute path — the expansion widens nothing. `~user/…` is somebody else's
+  // home and is left alone; with no home to expand to it is refused, never
+  // resolved against the cwd.
+  const tilde = requested === '~' || requested.startsWith('~/');
+  const home = o.home === undefined ? homeDir()
+    : (typeof o.home === 'string' && path.isAbsolute(o.home) ? o.home : '');
+
   // Relative is allowed ONLY against a session cwd — which means only when the
   // caller named a live session. With no cwd there is nothing to resolve
   // against and a relative path would silently mean "the daemon's cwd", which is
   // not a root and never should be.
   let abs;
-  if (path.isAbsolute(requested)) {
+  if (tilde) {
+    if (!home) return { ok: false, status: 400, error: 'path must be absolute' };
+    // join, not resolve: `~//etc/x.png` is `<home>/etc/x.png` to a shell, and
+    // resolve would make it /etc/x.png.
+    abs = path.resolve(path.join(home, requested.slice(1)));
+  } else if (path.isAbsolute(requested)) {
     abs = path.resolve(requested);
   } else if (cwd) {
     abs = path.resolve(cwd, requested);
@@ -162,14 +212,15 @@ function resolveImage(o = {}) {
     return { ok: false, status: 400, error: 'path must be absolute' };
   }
 
-  const canon = canonicalRoots(o.roots, fs);
+  const { canon, named } = liveRoots(o.roots, fs);
   if (!canon.length) return { ok: false, status: 403, error: 'that path is not in an allowed directory' };
 
   // PASS 1 — lexical. path.resolve has already collapsed `..`, so a traversal
   // out of a root fails here, on a string, before the disk is touched. This is
   // also what keeps the route from being an existence oracle: a path that was
-  // never ours is 403 whether or not it exists.
-  if (!canon.some((r) => within(abs, r))) {
+  // never ours is 403 whether or not it exists. A root counts under either of
+  // its names — see [liveRoots].
+  if (![...named, ...canon].some((r) => within(abs, r))) {
     return { ok: false, status: 403, error: 'that path is not in an allowed directory' };
   }
 

@@ -19,7 +19,7 @@ On the **Apps** page, choose **Add app**.
 | Field | What it is |
 |---|---|
 | **Name** | Up to 60 characters. |
-| **Address** | The page's URL, starting with `http://` or `https://`. |
+| **Address** | The page's URL, starting with `http://` or `https://`. The checks do not verify an `https://` page's certificate, so a self-signed one (Proxmox, Cockpit, UniFi) is fine. |
 | Kind | `dashboard`, `tool`, `docs`, `lab` or `other`. A label only. |
 | **Unit (optional)** | The systemd unit that serves the page, such as `trainer.service`. Huginn never starts, stops or reads it; the name only makes the fix lines exact. |
 | **Also check from (optional)** | Extra addresses this app must answer at, besides loopback and your devices' routes. Up to 8 bare hosts, with no port, separated by spaces or commas. |
@@ -59,7 +59,8 @@ an app the server itself serves, Huginn checks the app at every address it **mus
 
 - `127.0.0.1`;
 - every address your devices have pinned as a route to the server (each desktop app and Android
-  app reports its routes when it starts, and a reported route counts for 30 days);
+  app reports its routes when it starts, and a reported route counts for as long as that device
+  keeps talking to the server, and for 30 days after it last did);
 - any address in the app's **Also check from**.
 
 When one of those saved addresses stops answering, the Apps page names the device that saved it
@@ -88,8 +89,9 @@ come in two parts, because there are usually two machines involved.
   row, the lines are `systemctl edit <unit>` (change the bind address in `ExecStart` to
   `0.0.0.0`), `systemctl restart <unit>`, and `ss -ltn` to confirm. Without a unit, a sentence
   names the address the app does answer on.
-- **Timed out**, or an HTTP 5xx: the connection was accepted, so the bind is not the problem
-  and the app itself is not answering. With a unit, the lines are `systemctl status`,
+- **Timed out**, an HTTP 5xx, or a TLS error (such as `https://` on a port that speaks plain
+  `http://`): the connection was accepted, so the bind is not the problem and the app itself is
+  not answering. With a unit, the lines are `systemctl status`,
   `journalctl -u <unit>` and `systemctl restart`.
 
 **In the firewall**, wherever the firewall that filters traffic to the server is: one rule per

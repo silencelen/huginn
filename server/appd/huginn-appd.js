@@ -10434,9 +10434,13 @@ async function handleRequest(req, res) {
   // route answered without a token is `/v1/challenge`, and it returns before
   // this line for exactly the reason this line exists.) In memory, flushed
   // lazily — see noteClientAddress.
+  //
+  // `X-Huginn-Client` rides along because a client that is talking to huginn
+  // still uses the routes it reported at launch: its report is renewed here, or
+  // an always-on desktop would drop out of the required set after a month.
   try {
     appsLib.store(DATA_DIR, { log, hostAddr: SELF_ADDR })
-      .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress);
+      .noteClientAddress(req.socket.localAddress, req.socket.remoteAddress, req.headers['x-huginn-client']);
   } catch { /* not a reason to fail a request */ }
 
   try {
@@ -12216,7 +12220,8 @@ async function handleRequest(req, res) {
 
     // --- a HOST image the assistant named by path, so a transcript can draw it
     // instead of printing "/home/me/shot.png" and leaving the reader to go and
-    // look. `?path=` is absolute, or relative to the named session's cwd.
+    // look. `?path=` is absolute, `~/`-anchored (this daemon's home — lib/files
+    // expands it), or relative to the named session's cwd.
     //
     // This is the one route where the CLIENT supplies a path, which is why it
     // does not reuse serveArtifact: resolveArtifact's containment is a filename
