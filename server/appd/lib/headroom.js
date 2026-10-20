@@ -413,6 +413,28 @@ function canLadderUp(family, ladder = defaults().ladder) {
 }
 
 /**
+ * A ladder record, checked against the family the session reads as NOW.
+ *
+ * `delivery_unconfirmed` is "appd could not prove the switch", not "it moved":
+ * the picker never appeared, a dialog opened before Enter, or no record of the
+ * switch arrived within five seconds. The next read of the transcript is the
+ * proof either way. On the rung it was moving TO, it moved (or, for a failed
+ * move back up, it never left): the record holds. Still on the rung it was
+ * moving FROM, nothing moved (or the move back did land): there is no record.
+ *
+ * ⚠ LEFT STANDING, an unconfirmed move down read as "already on opus" for the
+ * life of the session: it was never tried again however red the week got, and
+ * after the reset it was "moved back" by a job the queue dropped every time,
+ * because the session had never left Fable.
+ */
+function settleLadder(ladder, family) {
+  if (!ladder || !ladder.to || ladder.delivery !== 'delivery_unconfirmed' || !family) return ladder || null;
+  if (family === ladder.to) return { ...ladder, delivery: 'confirmed' };
+  if (family === ladder.from) return null;
+  return ladder;
+}
+
+/**
  * Which sentinels should exist, given the ACTIVE account's windows.
  *
  * Hysteresis, which is why `current` is an argument: arming at `stopPct` and
@@ -530,7 +552,9 @@ function minutes(ms) { return Math.ceil(ms / 60000); }
  *   active      {slug, email, windows|limits}
  *   candidates  [{slug, email, windows|limits, aged}]
  *   sessions    [{claudeSessionId, name, state, model, family, ladder, headsUpAt,
- *                nativeSwitch, humanSetModelAt}]
+ *                nativeSwitch, humanSetModelAt, ladderFailedAt}]
+ *               `ladderFailedAt` is ms of the session's last move attempt
+ *               that could not be confirmed, or absent.
  *   state       {lastSwitchAt, lastLadderAt}
  *   lastFableResetAt  ms of the most recent weekly_fable reset EVENT for the
  *                active account (from detectResets), or 0. Not in the original
@@ -607,6 +631,9 @@ function decide(input = {}) {
   let ladderDown = null;
   let ladderUp = null;
   let offerUp = null;
+  // A session whose last move this Fable week could not be confirmed, held back
+  // in case any other session wants the one move this tick has.
+  let retryDown = null;
   const blocked = [];
   const ladderReady = now - lastLadderAt >= settings.cooldownMs;
   const lastFableResetAt = Number(input.lastFableResetAt) || 0;
@@ -614,8 +641,9 @@ function decide(input = {}) {
   for (const s of sessions || []) {
     if (!s || !s.claudeSessionId) continue;
     const family = s.family || familyOf(s.model);
-    const ladder = s.ladder || null;
+    const ladder = settleLadder(s.ladder || null, family);
     const native = s.nativeSwitch && s.nativeSwitch.seenAt ? s.nativeSwitch : null;
+    const failedAt = Number(s.ladderFailedAt) || 0;
 
     // heads-up: once per Fable window, and never into a session that is already
     // asking the owner something.
@@ -651,6 +679,14 @@ function decide(input = {}) {
         blocked.push(`cooling down for another ${minutes(settings.cooldownMs - (now - lastLadderAt))} min before another model move`);
       } else if (switched) {
         blocked.push('one lever per tick: an account switch is going out this pass, so the ladder waits');
+      } else if (failedAt > lastFableResetAt) {
+        // ⚠ TRIED AGAIN, BUT LAST. One move goes out per cooldown and the
+        // sessions arrive most-recently-active first — and a session appd has
+        // just typed `/model` at is the most recently active. A session whose
+        // picker never opens would otherwise take every move of the week.
+        if (!retryDown || failedAt < retryDown.failedAt) {
+          retryDown = { failedAt, move: { type: 'ladder_down', claudeSessionId: s.claudeSessionId, name: s.name, from: family, to, pct: Math.round(fableEffective) } };
+        }
       } else {
         ladderDown = { type: 'ladder_down', claudeSessionId: s.claudeSessionId, name: s.name, from: family, to, pct: Math.round(fableEffective) };
       }
@@ -681,6 +717,8 @@ function decide(input = {}) {
       }
     }
   }
+
+  if (!ladderDown && retryDown) ladderDown = retryDown.move;
 
   for (const h of headsUp) actions.push(h);
   // At most ONE ladder move per tick, down or up: `lastLadderAt` is global and
@@ -734,7 +772,7 @@ module.exports = {
   FAMILIES, WINDOWS, HUMAN_MODEL_GRACE_MS,
   defaults, validateSettings, migrateAutoswitch,
   windowsOf, classify, worstWindow, detectResets,
-  familyOf, nextDown, canLadderUp,
+  familyOf, nextDown, canLadderUp, settleLadder,
   sentinelPlan, decide, explain,
   // Re-exported so the tick and the routes have one import for "headroom", and
   // so `isLimitStall` sits beside the arbiter that consumes it (design §1).

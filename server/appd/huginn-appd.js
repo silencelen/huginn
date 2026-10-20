@@ -8504,7 +8504,7 @@ function sessionRecord(state, id, name) {
     rec = {
       name, model: null, family: null, ladder: null, headsUpAt: null,
       nativeSwitch: { seenAt: null, to: null }, offeredLadderUpAt: null,
-      humanSetModelAt: null, stall: blankStall(),
+      humanSetModelAt: null, ladderFailedAt: null, stall: blankStall(),
     };
     state.sessions[id] = rec;
   }
@@ -8512,6 +8512,58 @@ function sessionRecord(state, id, name) {
   if (!rec.nativeSwitch) rec.nativeSwitch = { seenAt: null, to: null };
   if (!rec.stall) rec.stall = blankStall();
   return rec;
+}
+
+/**
+ * Fold one fresh read of a session's model (readSessionModel) into its headroom
+ * record: the family it is on, the owner's own `/model`, a ladder move that
+ * could not be confirmed, a native switch, the consent dialog. The tick calls
+ * this for every live session before the arbiter decides anything.
+ */
+function noteSessionModel(rec, read, now, settings) {
+  const wasFamily = rec.family;
+  const seen = headroomLib.familyOf(read.model);
+  const family = seen || rec.family;
+  rec.model = read.model || rec.model;
+  rec.family = family;
+  if (read.humanSetModelAt) rec.humanSetModelAt = read.humanSetModelAt;
+
+  // An unconfirmed ladder move is settled by what the session reads as now —
+  // moved, or never moved — and only by a fresh read: an unreadable transcript
+  // is no evidence either way. Before the native check below, so a move of
+  // appd's that did land is never taken for Claude Code's own.
+  if (seen) rec.ladder = headroomLib.settleLadder(rec.ladder, seen);
+
+  // A NATIVE switch: the family moved away from fable and appd typed nothing.
+  // Recorded, logged, and never fought — the 92% ladder exists precisely so
+  // the consent dialog does not appear on an attended session in the first
+  // place, and once it has, the owner may well prefer to stay where it put
+  // them.
+  //
+  // ⚠ NOT WHILE A HAND-SET MODEL IS STILL WARM. The family is read off the
+  // last assistant record, which still names the OLD model until the session
+  // next replies — so an undo (which moves the pane back to fable and stamps
+  // `humanSetModelAt`) was immediately followed by a tick that read the stale
+  // record as a brand-new native fallback and re-armed the very mark the undo
+  // had just cleared, leaving the session unladderable for good. Same grace
+  // window `decide` already holds ladder_down off for.
+  const handSet = rec.humanSetModelAt
+    && now - Number(rec.humanSetModelAt) < headroomLib.HUMAN_MODEL_GRACE_MS;
+  if (wasFamily === 'fable' && family && family !== 'fable' && !handSet
+    && !(rec.ladder && rec.ladder.to) && !rec.nativeSwitch.seenAt) {
+    rec.nativeSwitch = { seenAt: now, to: family, how: 'native' };
+    log(`headroom: native fallback observed on ${rec.name} -> ${family}`);
+  }
+  if (read.consent) {
+    if (!rec.nativeSwitch.seenAt) {
+      rec.nativeSwitch = { seenAt: now, to: read.consent.to || family, how: 'consent', choice: read.consent.choice };
+    }
+    if (read.consent.persistedAsDefault) {
+      const r = repairDefaultModel(settings.defaultModel);
+      if (r.ok && r.changed) rec.ladder = { ...(rec.ladder || {}), repairedDefault: true };
+      else if (!r.ok) log(`headroom: could not restore the host default model (${r.error})`);
+    }
+  }
 }
 
 /** Whichever cadence the host is actually running at right now. */
@@ -8617,43 +8669,7 @@ async function headroomTickInner() {
     if (!s.claudeSessionId) continue;
     liveIds.add(s.claudeSessionId);
     const rec = sessionRecord(state, s.claudeSessionId, s.name);
-    const read = readSessionModel(s.name);
-    const wasFamily = rec.family;
-    const family = headroomLib.familyOf(read.model) || rec.family;
-    rec.model = read.model || rec.model;
-    rec.family = family;
-    if (read.humanSetModelAt) rec.humanSetModelAt = read.humanSetModelAt;
-
-    // A NATIVE switch: the family moved away from fable and appd typed nothing.
-    // Recorded, logged, and never fought — the 92% ladder exists precisely so
-    // the consent dialog does not appear on an attended session in the first
-    // place, and once it has, the owner may well prefer to stay where it put
-    // them.
-    //
-    // ⚠ NOT WHILE A HAND-SET MODEL IS STILL WARM. The family is read off the
-    // last assistant record, which still names the OLD model until the session
-    // next replies — so an undo (which moves the pane back to fable and stamps
-    // `humanSetModelAt`) was immediately followed by a tick that read the stale
-    // record as a brand-new native fallback and re-armed the very mark the undo
-    // had just cleared, leaving the session unladderable for good. Same grace
-    // window `decide` already holds ladder_down off for.
-    const handSet = rec.humanSetModelAt
-      && now - Number(rec.humanSetModelAt) < headroomLib.HUMAN_MODEL_GRACE_MS;
-    if (wasFamily === 'fable' && family && family !== 'fable' && !handSet
-      && !(rec.ladder && rec.ladder.to) && !rec.nativeSwitch.seenAt) {
-      rec.nativeSwitch = { seenAt: now, to: family, how: 'native' };
-      log(`headroom: native fallback observed on ${s.name} -> ${family}`);
-    }
-    if (read.consent) {
-      if (!rec.nativeSwitch.seenAt) {
-        rec.nativeSwitch = { seenAt: now, to: read.consent.to || family, how: 'consent', choice: read.consent.choice };
-      }
-      if (read.consent.persistedAsDefault) {
-        const r = repairDefaultModel(settings.defaultModel);
-        if (r.ok && r.changed) rec.ladder = { ...(rec.ladder || {}), repairedDefault: true };
-        else if (!r.ok) log(`headroom: could not restore the host default model (${r.error})`);
-      }
-    }
+    noteSessionModel(rec, readSessionModel(s.name), now, settings);
 
     // Stall detection on EVERY tick (design §4). Cheap: one tail read per live
     // session, the same read the ladder's model probe already pays for.
@@ -8671,6 +8687,7 @@ async function headroomTickInner() {
       nativeSwitch: rec.nativeSwitch,
       offeredLadderUpAt: rec.offeredLadderUpAt,
       humanSetModelAt: rec.humanSetModelAt,
+      ladderFailedAt: rec.ladderFailedAt || 0,
     });
   }
   // Prune records for sessions that are neither live nor on the restore
@@ -8920,10 +8937,14 @@ async function applyHeadroomAction(action, ctx) {
       }
       if (!result.ok) {
         rec.ladder = { ...(rec.ladder || {}), from, to, at: now, delivery: 'delivery_unconfirmed', sessionOnly: true };
+        // What lets this session be tried again without taking every move of
+        // the week (decide's retry rule); the next read settles the record.
+        rec.ladderFailedAt = now;
         log(`headroom: ladder ${from} -> ${to} on ${action.name} unconfirmed (${result.reason || result.message || 'no confirmation'})`);
         state.arbiter.lastAction = { type: action.type, at: now, name: action.name, delivery: 'delivery_unconfirmed' };
         return;
       }
+      rec.ladderFailedAt = null;
       if (action.type === 'ladder_up') {
         rec.ladder = null;
         rec.family = to;
@@ -9004,13 +9025,16 @@ function resolvePendingLadder(state, action, v) {
     log(`headroom: the queued ladder for ${name} was dropped (${v.dropped})`);
   } else if (!result.ok) {
     rec.ladder = { ...cur, delivery: 'delivery_unconfirmed' };
+    rec.ladderFailedAt = Date.now();
     log(`headroom: queued ladder ${from} -> ${to} on ${name} unconfirmed (${result.reason || result.message || 'no confirmation'})`);
   } else if (up) {
     rec.ladder = null;
+    rec.ladderFailedAt = null;
     rec.family = to;
     log(`headroom: ${name} moved back to ${to}`);
   } else {
     rec.ladder = { ...cur, delivery: 'confirmed', repairedDefault: false };
+    rec.ladderFailedAt = null;
     rec.family = to;
     log(`headroom: ${name} moved ${from} -> ${to} for this session only`);
     // The notification the synchronous path sends, sent here instead — the owner
