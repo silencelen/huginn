@@ -6042,13 +6042,21 @@ async function refreshTick() {
   refreshBusy = true;
   try {
     const now = Date.now();
-    const activePrint = fingerprint(accounts.readActive());
+    // ⚠ FOLD THE LIVE LOGIN INTO ITS PROFILE FIRST, as the headroom tick does.
+    // The CLI rotates that pair on its own every few hours, and until the stored
+    // copy catches up it holds a SUPERSEDED refresh token — the one thing this
+    // timer must never post (AccountStore.isLive has the whole story). Without
+    // this, the only re-sync ran on the headroom cadence, up to five minutes
+    // apart, and this one-minute timer often landed in that gap.
+    await saveIdentified(null, accounts.readActive()).catch(() => null);
+    const live = accounts.liveIdentity();
     for (const a of accounts.list()) {
       const rec = accounts.readProfile(a.slug);
       if (!rec || !rec.credentials) continue;
-      // Never the live login. Checked here too so the common tick does not even
-      // reach for the lock on the owner's own account.
-      if (activePrint && fingerprint(rec.credentials) === activePrint) continue;
+      // Never the live login, by account as well as by refresh token. Checked
+      // here too so the common tick does not even reach for the lock on the
+      // owner's own account.
+      if (accounts.isLive(rec, live)) continue;
 
       // Once per EXPIRY (refreshTokenWarned says why that is not "once ever"),
       // recorded only once it reached somebody. One that reached nobody is tried

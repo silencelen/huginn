@@ -210,6 +210,37 @@ class AccountStore {
     try { return JSON.parse(fs.readFileSync(this.credentialsPath, 'utf8')); } catch { return null; }
   }
 
+  /**
+   * The login Claude Code is running on, as two independent local reads: the
+   * refresh token in its credentials file, and the account uuid in the identity
+   * block it keeps in ~/.claude.json.
+   */
+  liveIdentity() {
+    const block = this.readOauthAccount();
+    return { print: fingerprint(this.readActive()), uuid: normUuid(block && block.accountUuid) };
+  }
+
+  /**
+   * Is this stored record the login Claude Code is running on?
+   *
+   * ⚠ BY ACCOUNT, NOT ONLY BY REFRESH TOKEN. The CLI rotates the live pair every
+   * few hours and writes the new one straight to its own file; the stored copy
+   * catches up only at the daemon's next re-sync. In that window a refresh-token
+   * comparison called the live login idle, and the refresher POSTED ITS
+   * SUPERSEDED REFRESH TOKEN: `invalid_grant`, a dead mark on the login in use,
+   * and — on a server that reads reuse of a rotated token as theft — the owner
+   * signed out. So a record is also live when it belongs to the account the CLI
+   * says it is signed in as. The two reads are ORed on purpose: a wrong "live"
+   * only postpones a refresh, a wrong "idle" is that sign-out.
+   */
+  isLive(rec, live = this.liveIdentity()) {
+    if (!rec || !rec.credentials) return false;
+    const print = fingerprint(rec.credentials);
+    if (print && print === live.print) return true;
+    const uuid = storedUuid(rec);
+    return !!uuid && uuid === live.uuid;
+  }
+
   _path(slug) { return path.join(this.dir, `${slug}.json`); }
 
   _readFile(file) {

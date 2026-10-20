@@ -15,8 +15,9 @@
 // `invalid_grant` — and its documented response is to write refreshToken:"",
 // accessToken:"", expiresAt:0 over its own file. The owner is signed out
 // mid-session with no visible cause. Hence: the active guard is re-checked
-// INSIDE the lock, immediately before the POST, by refresh-token fingerprint
-// against whatever the credentials file holds at that instant.
+// INSIDE the lock, immediately before the POST, against whatever the
+// credentials file holds at that instant — by refresh token AND by account,
+// because the CLI rotates the live pair on its own (AccountStore.isLive).
 //
 // The request/response shapes below were read out of the shipped CLI binary
 // (2.1.258) by spike `oauth-refresh.md`; they are not documented anywhere else
@@ -365,9 +366,11 @@ async function refreshWithStore(store, slug, deps = {}) {
    *
    * Still the cheap disk-only look, so the common case never takes the lock; it
    * is re-checked inside the lock below, because the owner can switch while we
-   * queue for it.
+   * queue for it. Asked BY ACCOUNT as well as by refresh token: right after the
+   * CLI rotates the live pair, the stored copy still holds the superseded token
+   * and a token comparison alone would post it (see AccountStore.isLive).
    */
-  if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
+  if (store.isLive(rec)) return record('active_skipped');
 
   const r0 = refreshOf(rec);
   if (r0 && r0.deadAt) return record('known_dead_refresh_token');
@@ -390,7 +393,7 @@ async function refreshWithStore(store, slug, deps = {}) {
     if (!rec) return record('no_such_profile');
     o = oauthOf(rec);
     if (!o.refreshToken) return record('no_refresh_token');
-    if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
+    if (store.isLive(rec)) return record('active_skipped');
 
     let resp = await post(buildBody(rec), { signal: lock.signal });
     if (!resp.ok && classifyError(resp.status, resp.text ?? resp.json) === 'invalid_scope') {
