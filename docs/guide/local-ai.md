@@ -220,6 +220,9 @@ server's API key. The server must already list at least one model. A `llama-swap
 refuse requests without its key. Huginn installs only the runner; `huginn local off` never stops
 or deletes a model server it did not install.
 
+A computer that already used an existing model server before 2.6.2 needs `huginn local update`
+once, which records the account the model server runs as.
+
 ## Related
 
 - [Devices](devices.md)
