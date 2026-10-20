@@ -566,6 +566,9 @@ func (m *model) attachTo(name string, solo bool) tea.Cmd {
 		return nil
 	}
 	return tea.Exec(a, func(err error) tea.Msg {
+		if errors.Is(err, errStopped) {
+			return done{text: "stopped reconnecting to " + name, refetch: true}
+		}
 		if err != nil {
 			return done{err: err, refetch: true}
 		}
