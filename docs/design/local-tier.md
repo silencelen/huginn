@@ -153,13 +153,14 @@ consent, fetch pinned, validate, install, enrol. The **manager** (`client/huginn
   same keyless-completions gate a managed install does, it is refused on top of a managed install
   (they would share `local.json` and `api-key`), and `off` takes only the runner down. An adopted
   engine is never stopped, uninstalled or stripped of its key.
-- **`off`:** stop the runner first, then the engine; deregister with the same honesty as
-  `huginn device off`; then **the credentials go with the row**: `local.json`, `api-key` and
-  `device/appd-token` are removed, because a tier that is off has no business keeping a live bearer
-  token on disk. Models are kept by default and deleted only behind an explicit typed confirmation:
-  `--purge-models` for the models and sessions, `--purge` for the whole tier including the runtime,
-  the unit files and the tier directory itself. `--purge` refuses to delete a `HUGINN_LOCAL_DIR`
-  that resolves to a home directory or a filesystem root.
+- **`off`:** stop the runner first, then the engine (as root, behind the one prompt, on system
+  units); a service that did not stop keeps the row, `local.json` and the keys, so `off` can be run
+  again; deregister with the same honesty as `huginn device off`; then **the credentials go with
+  the row**: `local.json`, `api-key` and `device/appd-token` are removed, because a tier that is off
+  has no business keeping a live bearer token on disk. Models are kept by default and deleted only
+  behind an explicit typed confirmation: `--purge-models` for the models and sessions, `--purge` for
+  the whole tier including the runtime, the unit files and the tier directory itself. `--purge`
+  refuses to delete a `HUGINN_LOCAL_DIR` that resolves to a home directory or a filesystem root.
 - **`update`:** the manager and shim update through the client's own update path; runtime and model
   bumps come only through a manifest change in a CLI release.
 - **`status --json`** feeds the desktop.

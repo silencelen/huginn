@@ -1808,10 +1808,31 @@ async function cmdOff(flags) {
   // and the mode off the unit files instead of defaulting to the user scope.
   const conf = stored || probeInstall();
   refuseUnelevated('turning off');
+  // ⚠ SYSTEM UNITS ARE STOPPED AS ROOT, so off takes the ONE prompt that update
+  // and persist take. It never did: unelevated over ssh (no polkit agent) each
+  // `systemctl disable --now` was refused and only counted, and off went on to
+  // deregister and delete the credentials. Both services stayed enabled and
+  // running, the runner logging "no appd token" forever, and a second off said
+  // "not set up" because local.json was gone. With nothing that could ask, off
+  // tries as this account, and the guard below keeps what a running service
+  // needs.
+  if (process.platform === 'linux' && conf.systemUnits && !isRoot()) {
+    const r = elevateOnce(process.argv.slice(2), (tool) =>
+      console.log(`  elevating once with ${tool} — this install runs as system units`));
+    if (r.ok) return;
+    if (r.ran) process.exit(r.status || 1);   // it ran, failed, and said why
+    if (r.declined) {
+      console.error(`refused: could not elevate (${r.tool}: ${elevationDetail(r)}) — nothing was changed. This install runs as system units, so re-run it as root:  sudo huginn local off`);
+      process.exit(1);
+    }
+    console.log('  nothing here could ask for root — trying as this account');
+  }
+  handBackAtExit();
   let failed = 0;
+  let stuck = 0;   // installed services that did not come down: see the guard below
   const step = (name, fn) => {
-    try { fn(); console.log(`  ok      ${name}`); }
-    catch (e) { failed += 1; console.error(`  failed  ${name}: ${e.message}`); }
+    try { fn(); console.log(`  ok      ${name}`); return true; }
+    catch (e) { failed += 1; console.error(`  failed  ${name}: ${e.message}`); return false; }
   };
   // ⚠ ONLY THE SERVICES THIS TIER INSTALLED. In adapter mode the model server
   // belongs to somebody else — an externally installed llama-swap with its own
@@ -1825,17 +1846,30 @@ async function cmdOff(flags) {
       const name = which === 'runner' ? RUNNER_SERVICE : LLM_SERVICE;
       const exe = P('runtime', 'winsw', `${name}.exe`);
       if (fs.existsSync(exe)) {
-        step(`stop ${name}`, () => { const r = spawnSync(exe, ['stop'], { encoding: 'utf8' }); if (r.status !== 0 && !/not.*started|stopped/i.test(r.stderr + r.stdout)) throw new Error(r.stderr || r.stdout); });
-        step(`uninstall ${name}`, () => { const r = spawnSync(exe, ['uninstall'], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr || r.stdout); });
+        const stopped = step(`stop ${name}`, () => { const r = spawnSync(exe, ['stop'], { encoding: 'utf8' }); if (r.status !== 0 && !/not.*started|stopped/i.test(r.stderr + r.stdout)) throw new Error(r.stderr || r.stdout); });
+        const removed = step(`uninstall ${name}`, () => { const r = spawnSync(exe, ['uninstall'], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr || r.stdout); });
+        if (!stopped || !removed) stuck += 1;
       }
     }
   } else {
     for (const name of ours.map((w) => (w === 'runner' ? RUNNER_SERVICE : LLM_SERVICE))) {
-      step(`disable ${name}`, () => {
+      const down = step(`disable ${name}`, () => {
         const r = sysctl(['disable', '--now', name], { user: !conf.systemUnits });
         if (r.status !== 0 && !/does not exist|not loaded/i.test(r.stderr)) throw new Error(r.stderr.trim());
       });
+      if (!down && fs.existsSync(unitFile(name, { system: !!conf.systemUnits }))) stuck += 1;
     }
+  }
+  // ⚠ A SERVICE THAT DID NOT STOP KEEPS WHAT IT RUNS ON. Deregistering and
+  // deleting local.json, api-key and the appd token under a service that is
+  // still enabled leaves it running with no credentials, and no config for a
+  // second off to find. Nothing past this point runs until every service that
+  // is installed is down; one with no unit file was never running from it.
+  if (stuck) {
+    const asRoot = process.platform === 'linux' && conf.systemUnits && !isRoot();
+    console.error(`\nNot off: ${stuck} service(s) did not stop, so nothing else was changed — this machine is still enrolled and keeps its keys. `
+      + (asRoot ? 'This install runs as system units: re-run it as root:  sudo huginn local off' : 'Fix that, then run `huginn local off` again.'));
+    process.exit(1);
   }
   // Deregister — inherits the device-off honesty: a DELETE failure keeps the
   // id and exits nonzero, and this command then does NOT proceed to deletions.
