@@ -124,6 +124,10 @@ type LinuxOptions struct {
 	ForceTray  bool   // write the tray autostart even with no graphical session
 	NoTray     bool
 	Runner     Runner
+	// KeepRunning: the running core is in the middle of a device job, so it
+	// is started if it is down but never restarted (the caller asks it to
+	// restart itself once the job is done).
+	KeepRunning bool
 }
 
 func (o LinuxOptions) UnitPath() string {
@@ -227,6 +231,16 @@ func InstallLinux(o LinuxOptions) (Report, Linger) {
 			return cmdStep(r, "systemctl", "--user", "enable", UnitName)
 		}},
 		{"(re)start " + UnitName, func() (State, string) {
+			if o.KeepRunning {
+				// ⚠ A restart stops the whole unit, so the claude of a job in
+				// progress dies with it, halfway (the unit has the default
+				// KillMode). `start` leaves a running core alone.
+				st, d := cmdStep(r, "systemctl", "--user", "start", UnitName)
+				if st == Done {
+					d = "left running: it is in the middle of a job"
+				}
+				return st, d
+			}
 			st, d := cmdStep(r, "systemctl", "--user", "restart", UnitName)
 			if st == Done && !unitChanged {
 				d = "restarted onto the current binary"
