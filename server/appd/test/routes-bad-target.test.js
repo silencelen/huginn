@@ -56,12 +56,32 @@ function freePort() {
   });
 }
 
+/**
+ * TLS that trusts this file's own daemon and nothing else: the certificate it
+ * minted is the only CA, and since that certificate names no host, the identity
+ * checked in place of `127.0.0.1` is the certificate itself. A port lost to some
+ * other listener between freePort() and the daemon's bind then fails the
+ * handshake, and the token is never written to it.
+ *
+ * Read per call: the file does not exist until the daemon has started, and the
+ * startup loop below retries a throw like any other not-yet.
+ */
+function trustOnly(d) {
+  const pem = fs.readFileSync(path.join(d.tmp, 'data', 'tls', 'cert.pem'));
+  const fp = new crypto.X509Certificate(pem).fingerprint256;
+  return {
+    ca: pem,
+    checkServerIdentity: (_host, peer) => (peer.fingerprint256 === fp ? undefined
+      : new Error(`not this test's daemon (certificate ${peer.fingerprint256})`)),
+  };
+}
+
 /** One authenticated GET on a fresh connection. */
 function get(d, { secure, path: p }) {
   const mod = secure ? https : http;
   return new Promise((resolve, reject) => {
     const r = mod.request({
-      host: '127.0.0.1', port: d.port, path: p, method: 'GET', agent: false, rejectUnauthorized: false,
+      host: '127.0.0.1', port: d.port, path: p, method: 'GET', agent: false, ...(secure ? trustOnly(d) : {}),
       headers: { authorization: `Bearer ${d.token}` },
     }, (res) => {
       let b = '';
@@ -122,7 +142,7 @@ async function startDaemon() {
 function raw(d, { secure, target }) {
   return new Promise((resolve) => {
     const s = secure
-      ? tls.connect({ host: '127.0.0.1', port: d.port, rejectUnauthorized: false })
+      ? tls.connect({ host: '127.0.0.1', port: d.port, ...trustOnly(d) })
       : net.connect({ host: '127.0.0.1', port: d.port });
     let buf = '';
     let settled = false;
@@ -177,7 +197,7 @@ test('a target that does parse is routed exactly as before', async () => {
       const r = await new Promise((resolve, reject) => {
         const mod = secure ? https : http;
         const q = mod.request({
-          host: '127.0.0.1', port: d.port, path: target, method: 'GET', agent: false, rejectUnauthorized: false,
+          host: '127.0.0.1', port: d.port, path: target, method: 'GET', agent: false, ...(secure ? trustOnly(d) : {}),
           headers: { authorization: `Bearer ${d.token}` },
         }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
         q.on('error', reject);
