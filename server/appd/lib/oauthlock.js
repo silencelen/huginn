@@ -164,6 +164,9 @@ function holder(paths, t, onCompromised) {
     release: null,
   };
   let mine = touch(paths.current) ?? Date.now();
+  // The legacy lock's ownership proof, kept the same way: grab() has just made
+  // it, so its mtime right now is ours.
+  let mineLegacy = mtimeOf(paths.legacy) ?? Date.now();
   let timer = null;
 
   const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
@@ -182,7 +185,7 @@ function holder(paths, t, onCompromised) {
       return;
     }
     mine = touch(paths.current) ?? mine;
-    touch(paths.legacy);
+    mineLegacy = touch(paths.legacy) ?? mineLegacy;
   };
 
   timer = setInterval(beat, t.update);
@@ -190,12 +193,23 @@ function holder(paths, t, onCompromised) {
 
   handle.release = () => {
     stop();
-    // Ours are removed even when compromised: the thief re-made the directory,
-    // so what is on disk is theirs, and leaving ours behind would only mean a
-    // stale lock nobody steals for a minute.
-    for (const p of [paths.legacy, paths.current]) {
-      try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* gone already */ }
-    }
+    // ⚠ ONLY WHAT IS STILL OURS. A stolen lock is the thief's from the moment it
+    // re-made the directory, and this used to remove it anyway: the CLI that
+    // stole it (after we went quiet for a minute) then read ENOENT on its next
+    // heartbeat as its OWN lock being compromised and aborted its refresh, and
+    // any third refresher could mkdir straight in while it was mid-rotation —
+    // the interleaving the lock exists to stop. The CLI's own release of a
+    // compromised lock removes nothing, and this now matches it: a directory
+    // goes only while its mtime is still the last one we wrote. Checked per
+    // path, because a thief that has taken the current lock may not have
+    // reached the legacy one yet, and that one is still ours to clear.
+    const ours = (p, last) => {
+      const m = mtimeOf(p);
+      return m !== null && m <= last + 1;
+    };
+    const drop = (p) => { try { fs.rmSync(p, { recursive: true, force: true }); } catch { /* gone already */ } };
+    if (ours(paths.legacy, mineLegacy)) drop(paths.legacy);
+    if (!handle.compromised && ours(paths.current, mine)) drop(paths.current);
     return true;
   };
   handle.beat = beat;                              // exposed for the tests only

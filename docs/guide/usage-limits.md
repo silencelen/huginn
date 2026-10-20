@@ -140,6 +140,8 @@ saved login. When it is on:
 - Huginn switches when the active login's fullest window reaches **Switch at** (default 95 %),
 - only to a login whose fullest window is at least **Only to an account this much freer**
   (default 20 points) below that, preferring one with Fable room left,
+- never to a login that needs a fresh sign-in, or whose token refresh is failing and waiting
+  to retry,
 - and at most once every 30 minutes.
 
 A switch changes the login for new work. A session that is already running keeps the account

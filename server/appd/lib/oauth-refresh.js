@@ -15,8 +15,9 @@
 // `invalid_grant` — and its documented response is to write refreshToken:"",
 // accessToken:"", expiresAt:0 over its own file. The owner is signed out
 // mid-session with no visible cause. Hence: the active guard is re-checked
-// INSIDE the lock, immediately before the POST, by refresh-token fingerprint
-// against whatever the credentials file holds at that instant.
+// INSIDE the lock, immediately before the POST, against whatever the
+// credentials file holds at that instant — by refresh token AND by account,
+// because the CLI rotates the live pair on its own (AccountStore.isLive).
 //
 // The request/response shapes below were read out of the shipped CLI binary
 // (2.1.258) by spike `oauth-refresh.md`; they are not documented anywhere else
@@ -79,6 +80,14 @@ const FRESH_MS = 60 * 60 * 1000;
 
 /** Warn the owner this far ahead of the refresh token's OWN expiry. */
 const WARN_AHEAD_MS = 48 * 60 * 60 * 1000;
+/**
+ * How far an expiry may move and still be the one the owner was warned about.
+ * Each rotation restates the same absolute expiry as "now + whole seconds", so
+ * it wobbles by about one request's latency; signing in again moves it by weeks.
+ */
+const WARN_SLACK_MS = 60 * 60 * 1000;
+/** A warning that reached nobody is tried again after this long, not every tick. */
+const WARN_RETRY_MS = 60 * 60 * 1000;
 
 /**
  * Every status one attempt can end in. Deliberately the CLI's own vocabulary so
@@ -257,12 +266,70 @@ function deadSince(rec) {
   return null;
 }
 
+/** How a refusal to switch to an `unrefreshable` login reads, after its name. */
+function unrefreshableClause(rec) {
+  const at = deadSince(rec);
+  const when = at ? new Date(at).toISOString().slice(0, 10) : 'an unknown date';
+  return `cannot be switched to: its login expired on ${when} — sign in again`;
+}
+
+/**
+ * Why the AUTO-SWITCHER must pass this saved login over on this pass — as the
+ * clause after its name — or null when it may pick it.
+ *
+ * ⚠ DECIDED BEFORE THE PICK, NOT AFTER IT. The switch gate refuses these, and a
+ * refusal used to change nothing for the next tick: `agedLimits` reads a login
+ * nobody has used for weeks as 0% everywhere, so the arbiter picked the same
+ * dead profile every minute, never reached a healthy one, and held the model
+ * ladder ("one lever per tick") while the active account ran into its cap. A
+ * login whose refresh keeps failing was POSTed on each of those ticks too: the
+ * gate refreshes before it switches, and only the refresh timer honours the
+ * back-off. So two states are passed over:
+ *
+ *   * `unrefreshable` — only a sign-in brings it back;
+ *   * `expired` while the refresher has put it off (`nextAt` ahead: a failed
+ *     attempt's floor) — asking now is the retry storm the floor exists to
+ *     stop. The timer tries again at `nextAt`, and a success ends this.
+ *
+ * The owner's own Use button still asks the gate, once per press.
+ */
+function switchRefusal(rec, nowMs = Date.now()) {
+  const f = freshnessOf(rec, nowMs);
+  if (f === 'unrefreshable') return unrefreshableClause(rec);
+  const r = refreshOf(rec);
+  if (f === 'expired' && r && typeof r.nextAt === 'number' && r.nextAt > nowMs) {
+    const when = new Date(r.nextAt).toISOString().slice(0, 16).replace('T', ' ');
+    return `cannot be switched to before ${when} UTC: its last refresh ended in ${r.lastStatus || 'a failure'}`;
+  }
+  return null;
+}
+
 /** True when the refresh token's own expiry is close enough to tell the owner. */
 function refreshTokenWarnDue(rec, nowMs = Date.now()) {
   const o = oauthOf(rec);
   const rt = typeof o.refreshTokenExpiresAt === 'number' ? o.refreshTokenExpiresAt : null;
   if (rt === null) return false;
   return rt > nowMs && rt - nowMs <= WARN_AHEAD_MS;
+}
+
+/**
+ * Has the owner already been told about THIS refresh token's expiry?
+ *
+ * ⚠ SCOPED TO THE EXPIRY, NOT TO THE ACCOUNT. `warnedAt` rides along every time
+ * the record is rewritten — a refresh, a switch, signing in again — and the test
+ * used to be just "is it set", so one warning silenced that login for good: its
+ * next expiry, a month after the owner had signed back in, arrived unannounced
+ * and the login lapsed. A warning is only ever sent inside the WARN_AHEAD_MS
+ * before the expiry it is about, so one sent before the CURRENT expiry's window
+ * opened was about an earlier one.
+ */
+function refreshTokenWarned(rec) {
+  const o = oauthOf(rec);
+  const r = refreshOf(rec);
+  const rt = typeof o.refreshTokenExpiresAt === 'number' ? o.refreshTokenExpiresAt : null;
+  const at = r && typeof r.warnedAt === 'number' ? r.warnedAt : null;
+  if (rt === null || !at) return false;
+  return at >= rt - WARN_AHEAD_MS - WARN_SLACK_MS;
 }
 
 /** Same truncated SHA-256 of the refresh token the store keys profiles by. */
@@ -337,9 +404,11 @@ async function refreshWithStore(store, slug, deps = {}) {
    *
    * Still the cheap disk-only look, so the common case never takes the lock; it
    * is re-checked inside the lock below, because the owner can switch while we
-   * queue for it.
+   * queue for it. Asked BY ACCOUNT as well as by refresh token: right after the
+   * CLI rotates the live pair, the stored copy still holds the superseded token
+   * and a token comparison alone would post it (see AccountStore.isLive).
    */
-  if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
+  if (store.isLive(rec)) return record('active_skipped');
 
   const r0 = refreshOf(rec);
   if (r0 && r0.deadAt) return record('known_dead_refresh_token');
@@ -362,7 +431,7 @@ async function refreshWithStore(store, slug, deps = {}) {
     if (!rec) return record('no_such_profile');
     o = oauthOf(rec);
     if (!o.refreshToken) return record('no_refresh_token');
-    if (printOf(rec.credentials) === printOf(store.readActive())) return record('active_skipped');
+    if (store.isLive(rec)) return record('active_skipped');
 
     let resp = await post(buildBody(rec), { signal: lock.signal });
     if (!resp.ok && classifyError(resp.status, resp.text ?? resp.json) === 'invalid_scope') {
@@ -390,7 +459,16 @@ async function refreshWithStore(store, slug, deps = {}) {
     // good. Routed through save() so the record is filed under its accountUuid —
     // the slug survives, which is the whole point of the identity ladder — and
     // the superseded pair is archived rather than dropped.
-    store.save(rec.email, { claudeAiOauth: fresh }, {
+    //
+    // ⚠ THE WHOLE FILE, NOT JUST THE LOGIN. A profile is a snapshot of Claude
+    // Code's entire credentials file, and that file also holds the OAuth logins
+    // of the owner's MCP servers (`mcpOAuth`), their client registrations and
+    // secrets (`mcpOAuthClientConfig`) and keys this daemon has never heard of.
+    // Writing `{claudeAiOauth}` alone dropped every one of them from the profile,
+    // and the next switch to it installed that over the live file — every OAuth
+    // MCP server signed out, and a client secret typed in once, gone. Only the
+    // key this refresh changed is replaced.
+    store.save(rec.email, { ...rec.credentials, claudeAiOauth: fresh }, {
       accountUuid: rec.accountUuid || null,
       // ⚠ THE SLUG WE ARE REPLACING. With a uuid this is redundant; WITHOUT one
       // the record is keyed by its refresh-token fingerprint, and we have just
@@ -436,8 +514,10 @@ function statusLine(status) {
 
 module.exports = {
   TOKEN_URL, CLIENT_ID, SCOPES, STATUSES,
-  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, NOT_REFRESHABLE_RETRY_MS,
+  SKEW_MS, REFRESH_FLOOR_MS, FRESH_MS, WARN_AHEAD_MS, WARN_SLACK_MS, WARN_RETRY_MS,
+  NOT_REFRESHABLE_RETRY_MS,
   buildBody, applyResponse, classifyError, nextRefreshAt, freshnessOf,
-  deadSince, refreshTokenWarnDue, projectScopes, oauthOf, refreshOf, printOf,
+  deadSince, unrefreshableClause, switchRefusal,
+  refreshTokenWarnDue, refreshTokenWarned, projectScopes, oauthOf, refreshOf, printOf,
   refreshWithStore, statusLine,
 };
