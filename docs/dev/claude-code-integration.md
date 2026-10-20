@@ -300,6 +300,7 @@ What it reads off the screen:
 |---|---|---|
 | Numbered selectors (permission prompts, `AskUserQuestion`, plan approval) | `detectNumberedPrompt` in `lib/pane.js` | Prompt cards, notification actions, `/answer` |
 | The folder-trust dialog (unnumbered) | `detectTrustDialog` | Answered with arrow keys |
+| Any other unnumbered selector (`❯` indented under a column-0 rule, no `N.`) | `detectUnnumberedSelector` | Holds a send as a dialog; not offered as a prompt |
 | The usage-credits consent dialog | `consentRecommended` | A prompt card with a recommended row |
 | The `/model` picker and the `Switch model?` confirmation | `parseModelPicker`, `LADDER_*_RE` in `huginn-appd.js` | The headroom ladder's session-only switch |
 | The composer (`❯` between `─` rules) and a settled paste | `composerDrawn`, `pasteLanded` and others in `lib/typing.js` | The send queue |

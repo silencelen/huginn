@@ -161,6 +161,40 @@ test('a page sent on its own with keys:["Enter"] waits whole behind a dialog: no
   assert.equal(readOr(out), '', 'nothing — no Enter, no page — was typed at the dialog');
 });
 
+// ---- a selector with no numbers ---------------------------------------------
+
+/** Claude Code 2.1.302's EnterPlanMode dialog: a `hideIndexes` selector, no footer. */
+const ENTER_PLAN = [
+  '─'.repeat(80), ' Enter plan mode?', '',
+  '  Claude wants to enter plan mode to explore and design an implementation', '  approach.', '',
+  '  No code changes will be made until you approve the plan.', '',
+  '  ❯ Yes, enter plan mode', '    No, start implementing now',
+].join('\\n');
+
+test('a message and a soft-end wait for a selector drawn with no numbers', async () => {
+  // A background agent keeps the state file at `running`, so only the pane can
+  // say a question is up; every rule here needed a numbered row to see one, and
+  // the message was pasted into the selector and lost.
+  const name = `${PFX}-plan`;
+  const out = path.join(tmp, 'plan.keys');
+  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, '-x', '100', '-y', '30',
+    `sh -c 'printf "${ENTER_PLAN}\\n"; stty raw -echo; cat > ${out}'`]);
+  fs.writeFileSync(path.join(stateDir, name),
+    JSON.stringify({ state: 'running', sessionId: null, transcript: null, cwd: tmp, ts: Math.floor(Date.now() / 1000) }));
+  await until('the dialog on screen', () => /enter plan mode/.test(capture(name)));
+  const r = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: "use the existing parser, don't write a new one", keys: ['Enter'] }),
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.delivered, false, JSON.stringify(r.body));
+  assert.equal(r.body.blockedBy, 'modal');
+  const soft = await api(`/v1/sessions/${name}/soft-end`, { method: 'POST', body: JSON.stringify({ auto: false }) });
+  assert.equal(soft.status, 409, JSON.stringify(soft.body));
+  assert.match(soft.body.error, /a question is on screen/);
+  await wait(800);
+  assert.equal(readOr(out), '', 'nothing was pasted into the selector');
+});
+
 test('with nothing in the way the page goes at once, submitted by its one Enter', async () => {
   // The same misread left the Enter as a live-view keypress into an empty box,
   // and the draft guard then held the page for a draft nobody was typing.

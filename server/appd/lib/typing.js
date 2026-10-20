@@ -10,7 +10,7 @@
 // against Claude Code v2.1.258 on a 200x50 pane.
 
 const { randomBytes } = require('node:crypto');
-const { stripAnsi, detectPrompt, detectTrustDialog } = require('./pane');
+const { stripAnsi, detectPrompt, detectTrustDialog, detectUnnumberedSelector } = require('./pane');
 
 /**
  * The `/keys` text cap, raised from 8,000 to match the chat body cap.
@@ -440,6 +440,13 @@ function dialogWhy(arr, plain, last) {
   // 3 — a cursored row backed by a second option row, in the bottom region.
   if (region.some((l) => SELECTOR_ROW_RE.test(l))
     && region.filter((l) => OPTION_ROW_RE.test(l)).length >= 2) return 'modal';
+  // 4 — a selector drawn with no numbers at all (Claude Code's `hideIndexes`:
+  // EnterPlanMode, the decline-first permission ask). Every net above needs a
+  // numbered row, so a message sent while one was up was pasted into it and
+  // lost. Read by its frame, never its words (pane.js detectUnnumberedSelector).
+  // Not under a shell prompt: that is a dead claude's last frame, and the send
+  // is the shell refusal's to answer, not a hold with no end.
+  if (!shellPromptRow(plain[last]) && detectUnnumberedSelector(arr)) return 'modal';
   return null;
 }
 
@@ -1127,7 +1134,8 @@ function dialogUnderBox(plain, last) {
   const below = plain.slice(box.bottom + 1, last + 1);
   if (!below.length) return false;
   return below.some((l) => SELECTOR_ROW_RE.test(l) || DIALOG_FOOTER_RE.test(l)
-    || (TRUST_ROW_RE.test(l) && /❯/.test(l))) || !!detectPrompt(below);
+    || (TRUST_ROW_RE.test(l) && /❯/.test(l))) || !!detectPrompt(below)
+    || detectUnnumberedSelector(below);
 }
 
 function enterHeldLogLine(name, held, lines) {
