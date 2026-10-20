@@ -14,9 +14,12 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed"
+	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf16"
 )
 
 //go:embed files/huginn.sh.txt
@@ -169,19 +172,23 @@ func wire(file, line string, create bool) (bool, error) {
 	} else if err != nil {
 		return false, err
 	}
-	if bytes.Contains(b, []byte(".huginn/huginn.sh")) || bytes.Contains(b, []byte(`.huginn\huginn.ps1`)) {
+	o, ok := utf16Order(b)
+	if !ok {
+		return false, errUTF32
+	}
+	mended := false
+	if o != nil {
+		b, mended = mend(b, line)
+	}
+	text := decodeText(b, o)
+	if strings.Contains(text, ".huginn/huginn.sh") || strings.Contains(text, `.huginn\huginn.ps1`) {
+		if mended {
+			return true, replaceFile(file, b)
+		}
 		return false, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return false, err
-	}
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
 	sep := ""
-	if len(b) > 0 && b[len(b)-1] != '\n' {
+	if text != "" && !strings.HasSuffix(text, "\n") {
 		sep = "\n"
 	}
 	nl := "\n"
@@ -191,8 +198,98 @@ func wire(file, line string, create bool) (bool, error) {
 			sep = "\r\n"
 		}
 	}
-	_, err = f.WriteString(sep + line + nl)
+	add := encodeText(sep+line+nl, o)
+	if mended {
+		return true, replaceFile(file, append(b, add...))
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	_, err = f.Write(add)
 	return err == nil, err
+}
+
+// ⚠ A startup file is read and written in its own encoding. Windows
+// PowerShell 5.1 writes UTF-16LE with a BOM (its `>`, `>>` and Out-File), and
+// PowerShell reads a whole script in the encoding its BOM names: a line
+// appended as ASCII bytes reads as one line of CJK-looking garbage, which
+// errors in every new window and loads nothing (2.6.x did that).
+
+var errUTF32 = errors.New("it is saved as UTF-32, which huginn does not edit: add the line by hand")
+
+// utf16Order is the byte order a UTF-16 BOM names, or nil: no BOM, or UTF-8's,
+// where the bytes are the text. ok is false for UTF-32, whose little-endian
+// BOM starts like UTF-16LE's.
+func utf16Order(b []byte) (o binary.ByteOrder, ok bool) {
+	switch {
+	case bytes.HasPrefix(b, []byte{0xFF, 0xFE, 0, 0}), bytes.HasPrefix(b, []byte{0, 0, 0xFE, 0xFF}):
+		return nil, false
+	case bytes.HasPrefix(b, []byte{0xFF, 0xFE}):
+		return binary.LittleEndian, true
+	case bytes.HasPrefix(b, []byte{0xFE, 0xFF}):
+		return binary.BigEndian, true
+	}
+	return nil, true
+}
+
+// decodeText is the file's text: after its BOM, decoded, when o is set.
+func decodeText(b []byte, o binary.ByteOrder) string {
+	if o == nil {
+		return string(b)
+	}
+	u := make([]uint16, (len(b)-2)/2)
+	for i := range u {
+		u[i] = o.Uint16(b[2+2*i:])
+	}
+	return string(utf16.Decode(u))
+}
+
+// encodeText is s in the encoding o names, without a BOM.
+func encodeText(s string, o binary.ByteOrder) []byte {
+	if o == nil {
+		return []byte(s)
+	}
+	u := utf16.Encode([]rune(s))
+	b := make([]byte, 2*len(u))
+	for i, c := range u {
+		o.PutUint16(b[2*i:], c)
+	}
+	return b
+}
+
+// mend takes out of a UTF-16 file the line 2.6.x appended to it as ASCII
+// bytes: line+"\r\n", after the "\r\n" it put first when the file did not end
+// in one. ASCII bytes in a row are no UTF-16 text anybody wrote.
+func mend(b []byte, line string) ([]byte, bool) {
+	bad := []byte(line + "\r\n")
+	i := bytes.Index(b, bad)
+	if i < 0 {
+		return b, false
+	}
+	j := i + len(bad)
+	if i >= 4 && string(b[i-2:i]) == "\r\n" {
+		i -= 2
+	}
+	return append(b[:i:i], b[j:]...), true
+}
+
+// replaceFile writes data over file through a temporary file, keeping its mode.
+func replaceFile(file string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(file); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	tmp := file + ".huginn-tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, file)
 }
 
 // Remove takes the client out: ~/.huginn (all of it is the client's: install
@@ -239,8 +336,21 @@ func dropLines(file string, lines []string) (hit, other bool, err error) {
 	} else if err != nil {
 		return false, false, err
 	}
+	// In the file's own encoding, as wire wrote it (see utf16Order).
+	o, ok := utf16Order(b)
+	if !ok {
+		return false, false, nil // UTF-32: wire never writes to one
+	}
+	if o != nil {
+		for _, l := range lines {
+			var m bool
+			if b, m = mend(b, l); m {
+				hit = true
+			}
+		}
+	}
 	var out bytes.Buffer
-	sc := bufio.NewScanner(bytes.NewReader(b))
+	sc := bufio.NewScanner(strings.NewReader(decodeText(b, o)))
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
 	for sc.Scan() {
 		raw := sc.Text()
@@ -271,8 +381,12 @@ func dropLines(file string, lines []string) (hit, other bool, err error) {
 	if fi != nil {
 		mode = fi.Mode().Perm()
 	}
+	data := out.Bytes()
+	if o != nil {
+		data = append(b[:2:2], encodeText(out.String(), o)...) // its BOM, then the text
+	}
 	tmp := file + ".huginn-uninstall"
-	if err := os.WriteFile(tmp, out.Bytes(), mode); err != nil {
+	if err := os.WriteFile(tmp, data, mode); err != nil {
 		os.Remove(tmp)
 		return false, other, err
 	}
