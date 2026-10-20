@@ -29,8 +29,9 @@ written to fit how a round actually runs. The draft is shown beside yours with *
 a one-turn Claude call with no tools.
 
 A new round uses your device's time zone, and keeps it: it fires at the same wall-clock time
-across daylight-saving changes, whatever device you later edit it from. A monthly date that a
-month does not have (the 31st in April) is skipped that month.
+across daylight-saving changes, whatever device you later edit it from. A time the clocks skip
+when they go forward (2:30 AM on that night) runs just after the jump, at 3:30 AM. A monthly
+date that a month does not have (the 31st in April) is skipped that month.
 
 ## Ask or act
 

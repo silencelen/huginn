@@ -75,6 +75,16 @@ function epochForWallClock(tz, y, mo, d, h, mi) {
   const t = naive - offsetMs(tz, first);
   // The two-pass above is right for every wall-clock time that EXISTS. One class
   // does not: the hour a spring-forward deletes.
+  const p = partsIn(tz, t);
+  if (p.y === y && p.mo === mo && p.d === d && p.h === h && p.mi === mi) return t;
+
+  // ⚠ A DELETED TIME RESOLVES FORWARD, WEST OF UTC TOO. Its two candidates are the
+  // instants either side of the gap, and WHICH of `t` and `first` is the later one
+  // flips with the sign of the offset: east of UTC `t` is after the gap, west of it
+  // `t` is before. Taking `t` whenever it was on the right day sent London's 01:30
+  // forward to 02:30 BST but Los Angeles' 02:30 BACK to 01:30 PST, an hour early
+  // and before the 02:00 job a Round at 02:30 exists to check, in every US and
+  // Canadian zone once a year. So the later candidate on the day asked for wins.
   //
   // ⚠ AND WHEN THAT GAP BEGINS AT LOCAL MIDNIGHT, the resolution lands on the
   // PREVIOUS local day — 23:xx — which is a different date, a different weekday
@@ -87,10 +97,9 @@ function epochForWallClock(tz, y, mo, d, h, mi) {
   //
   // So: if the instant does not land on the day that was asked for, take the
   // other candidate — the far side of the transition, which is the first instant
-  // that day actually has. Eastern-offset gaps already resolve forward and keep
-  // their date, which is why Cairo, Chatham, Troll and Lord Howe were correct.
-  if (onDay(tz, t, y, mo, d)) return t;
-  if (onDay(tz, first, y, mo, d)) return first;
+  // that day actually has.
+  const onTheDay = [t, first].filter((c) => onDay(tz, c, y, mo, d));
+  if (onTheDay.length) return Math.max(...onTheDay);
   // Neither side is on the right day, which should not happen for any real zone.
   // Later of the two: a Round that fires late is recoverable, one that fires on
   // the wrong date is a job silently running on a day nobody scheduled.
