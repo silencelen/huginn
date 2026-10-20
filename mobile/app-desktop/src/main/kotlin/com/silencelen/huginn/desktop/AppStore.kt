@@ -993,10 +993,21 @@ class AppStore(
         _projectMembers.value = _projectMembers.value + fetched
     }
 
-    /** The rollup for the open project. Adopted only when it has actually moved. */
-    suspend fun refreshProjectDashboard() {
+    /**
+     * The rollup for the open project. Adopted only when it has actually moved,
+     * and only while that project is still the open one.
+     *
+     * ⚠ RE-CHECKED AFTER THE FETCH, as [refreshProjectMembers] does. The rollup
+     * walks every member's transcript and can take seconds; a reader who clicked
+     * another project meanwhile got the old one's totals and member rows drawn
+     * under the new one's name — and a Drop pressed on one of those rows removed
+     * the NEW project's member with that role.
+     */
+    suspend fun refreshProjectDashboard(fetch: suspend (String) -> ProjectDashboard = { client.projectDashboard(it) }) {
         val id = _projectId.value ?: return
-        runCatching { client.projectDashboard(id) }.onSuccess { adoptDashboard(it) }
+        runCatching { fetch(id) }.onSuccess { d ->
+            if (id == _projectId.value && (d.project?.id ?: id) == id) adoptDashboard(d)
+        }
     }
 
     /**
