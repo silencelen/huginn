@@ -147,6 +147,25 @@ function _Huginn-AppdWhy {
   if ($Tail) { $lines += "        $Tail" }
   _Huginn-Fail ($lines -join "`n")
 }
+# One line of shell for the host, over ssh -T, whatever characters it holds.
+#
+# A DOUBLE QUOTE DOES NOT SURVIVE A NATIVE ARGUMENT ON WINDOWS POWERSHELL 5.1,
+# nor on 7 before 7.3 (and huginn core hands the verbs it does not own to
+# powershell.exe, which is 5.1). An argument with a space in it is passed
+# wrapped in "..." with the double quotes inside left unescaped, and ssh.exe's
+# argument parser eats them: a projects brief `Fix the "Sign in" button` reached
+# the host as `Fix the Sign in button`. So a line that holds one goes base64'd,
+# the way _Huginn-Appd and -p/-y send theirs. A line with none goes as it always
+# did, which keeps ssh's stdin for the command (`--brief -` reads it there).
+function _Huginn-SshLine {
+  param([string]$H, [string]$Line)
+  if ($Line.Contains('"')) {
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Line))
+    ssh -T $H "echo $b64 | base64 -d | bash -s"
+  } else {
+    ssh -T $H $Line
+  }
+}
 # THE ONE COLOUR GUARD, the twin of huginn.sh's _huginn_color: colour only when
 # output is not redirected and NO_COLOR is unset (set to anything at all -
 # no-color.org). Every coloured line in this file goes through _Huginn-Say, which
@@ -1541,7 +1560,8 @@ function huginn {
     $pjArgs = if ($args.Count -gt 1) { @($args[1..($args.Count - 1)]) } else { @() }
     if ($pjArgs.Count) {
       $pjStr = ($pjArgs | ForEach-Object { "'" + ($_ -replace "'", "'\''") + "'" }) -join ' '
-      ssh -T $H "huginn-projects $pjStr"
+      # A brief or a message is prose, double quotes and all: see _Huginn-SshLine.
+      _Huginn-SshLine -H $H -Line "huginn-projects $pjStr"
     } else {
       ssh -T $H huginn-projects
     }
@@ -1911,7 +1931,11 @@ function huginn {
       $dates = switch ($kw) {
         'today'     { 'since=$(date +%Y%m%d); until=$since' }
         'yesterday' { 'since=$(date -d yesterday +%Y%m%d); until=$since' }
-        'week'      { 'since=$(date -d "7 days ago" +%Y%m%d); until=$(date +%Y%m%d)' }
+        # Single quotes inside, never double: the whole line rides ssh as one
+        # native argument, and 5.1 strips the double quotes out of that (see
+        # _Huginn-SshLine), which handed the host `date -d 7 days ago`, so
+        # ccusage got an empty -s.
+        'week'      { 'since=$(date -d ''7 days ago'' +%Y%m%d); until=$(date +%Y%m%d)' }
         'month'     { 'since=$(date +%Y%m01); until=$(date +%Y%m%d)' }
       }
       ssh -tt $H "$dates; ccusage $report -s `$since -u `$until $rest"
