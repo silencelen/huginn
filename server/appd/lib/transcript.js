@@ -550,6 +550,62 @@ function startsAtBoundary(path, start) {
   }
 }
 
+const QUEUE_OP = Buffer.from('queue-operation');
+const SCAN_CHUNK = 4 * 1024 * 1024;
+
+/**
+ * Which of a history page's still-queued messages a record BELOW the page
+ * delivered: the first `remove` of the same text (the queue hands copies over
+ * oldest first), or any `dequeue`, which drains everything waiting.
+ *
+ * Reads forward from `from` only as far as it takes to account for every one of
+ * them, and parses only the lines that are queue records — the rest of a long
+ * session is tool output, and a page should not pay for parsing it.
+ */
+function deliveredBelow(path, from, to, queued) {
+  const waiting = new Map();
+  for (const [content, evs] of queued) if (evs.length) waiting.set(content, evs.slice());
+  const done = new Set();
+  let fd;
+  try { fd = fs.openSync(path, 'r'); } catch { return done; }
+  try {
+    let pos = from;
+    let carry = Buffer.alloc(0);
+    while (pos < to && waiting.size) {
+      const buf = Buffer.alloc(Math.min(SCAN_CHUNK, to - pos));
+      const n = fs.readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break;
+      pos += n;
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
+      for (let at = 0; waiting.size;) {
+        const hit = chunk.indexOf(QUEUE_OP, at);
+        if (hit === -1) break;
+        const lineEnd = chunk.indexOf(0x0a, hit);
+        if (lineEnd === -1) break;                   // still being written: the carry has it
+        const lineStart = chunk.lastIndexOf(0x0a, hit) + 1;
+        at = lineEnd + 1;
+        let d;
+        try { d = JSON.parse(chunk.toString('utf8', lineStart, lineEnd)); } catch { continue; }
+        if (!d || d.type !== 'queue-operation') continue;
+        if (d.operation === 'dequeue') {
+          for (const evs of waiting.values()) for (const ev of evs) done.add(ev);
+          waiting.clear();
+        } else if (d.operation === 'remove') {
+          const content = typeof d.content === 'string' ? d.content : '';
+          const evs = waiting.get(content);
+          if (evs) {
+            done.add(evs.shift());
+            if (!evs.length) waiting.delete(content);
+          }
+        }
+      }
+      const lastNl = chunk.lastIndexOf(0x0a);
+      carry = Buffer.from(lastNl === -1 ? chunk : chunk.subarray(lastNl + 1));
+    }
+  } finally { try { fs.closeSync(fd); } catch { } }
+  return done;
+}
+
 function readTranscript(path, { offset = null, limit = 400, until = null, peerIds = null, _resuming = null } = {}) {
   const st = fs.statSync(path);
   // Where this window ENDS. Normally the end of the file; `until` walks backwards
@@ -1214,6 +1270,22 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         recordAt.set(out.events[k], recordOffset);
       }
     }
+  }
+
+  // ⚠ A HISTORY PAGE DOES NOT DRAW A MESSAGE THAT WAS DELIVERED BELOW IT. A
+  // window that ends at `until` sees a mid-turn enqueue but not the remove or
+  // dequeue that delivered it minutes of tool output later — and kept it
+  // `queued`, floated to the bottom of the page. The page below already drew it:
+  // it was read cold (a tail, or a newer history page; `until` is always where
+  // one of those began), and a cold read draws a delivery whose enqueue it
+  // cannot see as the message itself, at its delivery point. The client
+  // prepends pages without reconciling them, so the view showed it twice, one
+  // copy forever claiming to be waiting. Only a message nothing below delivered
+  // is still waiting, and only that one keeps its badge and its float.
+  // Not in the window-size probes at the top, which only count.
+  if (until != null && _resuming == null && end < st.size && queued.size) {
+    const below = deliveredBelow(path, end, st.size, queued);
+    if (below.size) out.events = out.events.filter((e) => !below.has(e));
   }
 
   // Anything STILL waiting floats to the bottom.
