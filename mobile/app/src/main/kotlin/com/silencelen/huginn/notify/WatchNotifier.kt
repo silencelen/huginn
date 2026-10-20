@@ -3,6 +3,7 @@ package com.silencelen.huginn.notify
 import android.content.Context
 import androidx.core.app.NotificationManagerCompat
 import com.silencelen.huginn.data.HuginnClient
+import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.widget.FleetWidget
@@ -213,8 +214,7 @@ object WatchNotifier {
                 "$name needs you",
                 prompt?.question?.takeIf { it.isNotBlank() } ?: "Waiting for your answer",
                 name,
-                prompt?.options?.map { SessionWatchWorker.Companion.AnswerOption(it.number, it.label) }
-                    ?: emptyList(),
+                answerButtonsFor(prompt),
                 prompt?.fingerprint,
             )
             posted++
@@ -270,3 +270,18 @@ object WatchNotifier {
         FleetWidget.update(context)
     }
 }
+
+/**
+ * The answer buttons a "needs you" notification may carry for [prompt].
+ *
+ * ⚠ NONE FOR A MULTI-SELECT QUESTION. A button is one tap and a checkbox dialog
+ * wants a SET of answers: the host refuses a single option there with 409 ("this
+ * question takes several answers"), so every one of these buttons ended as "Not
+ * answered". Without buttons the notification still carries the question and a
+ * tap opens the session, where the dialog is answered whole. The desktop's toasts
+ * and the host's own push have always left them off; this was the one path that
+ * read the prompt for itself and did not.
+ */
+internal fun answerButtonsFor(prompt: PanePrompt?): List<SessionWatchWorker.Companion.AnswerOption> =
+    if (prompt == null || prompt.multiSelect) emptyList()
+    else prompt.options.map { SessionWatchWorker.Companion.AnswerOption(it.number, it.label) }
