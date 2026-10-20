@@ -1015,7 +1015,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         draftSaveJob?.cancel()
         draftSaveJob = viewModelScope.launch {
             delay(400)
-            settings.setDrafts(_drafts.value)
+            writeDrafts()
         }
     }
 
@@ -1029,8 +1029,45 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * restore.
      */
     private fun restoreDraft(key: String, text: String) {
-        val cur = _drafts.value[key].orEmpty()
-        setDraft(key, if (cur.isBlank()) text else cur + "\n" + text)
+        setDraft(key, foldBack(_drafts.value[key].orEmpty(), text))
+    }
+
+    /**
+     * Messages that have left their box but that the host has not taken yet.
+     * ⚠ KEPT IN THE STORED DRAFTS until it does, so nothing typed is lost to an
+     * app closed out mid-send: see [UnsettledSends].
+     */
+    private val unsettled = UnsettledSends()
+
+    /**
+     * Every write of the drafts goes through here: the boxes as they are, with
+     * every unsettled message folded in. One at a time, each reading the state
+     * as it is when it runs, so the last write is always the latest state.
+     */
+    private val draftWrites = Mutex()
+
+    private suspend fun writeDrafts() = draftWrites.withLock {
+        settings.setDrafts(unsettled.persisted(_drafts.value))
+    }
+
+    /**
+     * The drafts, written NOW and on a scope this model's end does not cancel:
+     * what a send writes when its message leaves the box, is composed or
+     * settles. The tap that empties the box is often the last thing before
+     * the app is closed out.
+     */
+    private val draftKeeper = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
+
+    private fun keepDrafts() {
+        draftKeeper.launch { runCatching { writeDrafts() } }
+    }
+
+    /** The host took the message, or a refusal has put it back in the box. */
+    private fun settleSend(ticket: Long) {
+        unsettled.settle(ticket)
+        keepDrafts()
     }
 
     /** Takes a held shade reply into the drafts; registered once they are loaded. */
@@ -3808,13 +3845,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun sendText(name: String, text: String, thenEnter: Boolean) {
         // ⚠ THE BOX EMPTIES NOW, NOT AFTER THE UPLOADS. Waiting with the text
         // still in it let a second tap send the same words again. See [SendPresses].
+        // ⚠ AND THE STORED DRAFTS KEEP IT until the host takes it, written before
+        // anything waits: see [UnsettledSends].
         val key = sessionDraftKey(name)
-        presses.press(viewModelScope, key, clearDraft = { clearDraft(key) }) {
-            sendTextNow(name, text, thenEnter)
+        val ticket = unsettled.open(key, text)
+        presses.press(viewModelScope, key, clearDraft = { clearDraft(key); keepDrafts() }) {
+            sendTextNow(name, text, thenEnter, ticket)
         }
     }
 
-    private fun sendTextNow(name: String, text: String, thenEnter: Boolean) {
+    private fun sendTextNow(name: String, text: String, thenEnter: Boolean, ticket: Long) {
         // The staged attachments ride this message, same contract as a chat send:
         // consumed here (and only if staged for THIS session) so they cannot ride
         // twice or cross surfaces. Claude in the pane reads the paths like any file.
@@ -3828,7 +3868,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // because one upload of five failed costs the typed message too.
         AttachBatch.failureLine(taken.failed, taken.markers.size + taken.failed.size)
             ?.let { _toast.value = it }
-        if (text.isBlank()) return
+        if (text.isBlank()) { settleSend(ticket); return }
+        // Kept as composed from here on, markers and all, as a refusal restores it.
+        unsettled.update(ticket, text)
+        keepDrafts()
         // The attached page, taken here so it rides ONE message. The daemon
         // composes the reference itself — the pane gets a path, not the page.
         val padKey = ScratchpadRules.sessionRefKey(name)
@@ -3849,6 +3892,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 // turn boundary. Seeded from the send's own answer rather than
                 // waited for from the first poll: two seconds of a composer that
                 // emptied with no explanation is the whole complaint.
+                settleSend(ticket)
                 noteSend(name, result)
             }.onFailure {
                 _toast.value = errText(it)
@@ -3857,6 +3901,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 // nowhere but a toast. Appended, never clobbered — newer typing
                 // outranks the restore, same as the chat path.
                 restoreDraft(sessionDraftKey(name), text)
+                settleSend(ticket)
                 if (padId != null && padRefFor(padKey) == null) setPadRef(padKey, padId)
             }
         }
@@ -4458,11 +4503,16 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // ⚠ THE BOX EMPTIES NOW, NOT AFTER THE UPLOADS. Waiting with the text
         // still in it let a second tap send the same words again, as a queued
         // second turn once the first had started. See [SendPresses].
+        // ⚠ AND THE STORED DRAFTS KEEP IT until the host takes it, written before
+        // anything waits: see [UnsettledSends].
         val key = chatDraftKey(id)
-        presses.press(viewModelScope, key, clearDraft = { clearDraft(key) }) { sendNow(id, text) }
+        val ticket = unsettled.open(key, text)
+        presses.press(viewModelScope, key, clearDraft = { clearDraft(key); keepDrafts() }) {
+            sendNow(id, text, ticket)
+        }
     }
 
-    private fun sendNow(id: String, text: String) {
+    private fun sendNow(id: String, text: String, ticket: Long) {
         // The staged attachments ride this message — but only if they were staged
         // for THIS chat. Consumed here, whichever path the send takes (stream or
         // queue), so they cannot ride two messages. The join is :core's, shared
@@ -4471,7 +4521,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         @Suppress("NAME_SHADOWING") val text = composeMessage(text, taken.markers)
         AttachBatch.failureLine(taken.failed, taken.markers.size + taken.failed.size)
             ?.let { _toast.value = it }
-        if (text.isBlank()) return
+        if (text.isBlank()) { settleSend(ticket); return }
+        // Kept as composed from here on, markers and all, as a refusal restores it.
+        unsettled.update(ticket, text)
+        keepDrafts()
         // The attached page. Named, never pasted: the daemon composes the frame so
         // a queued message is a snapshot of what the page said when Send was
         // pressed rather than what it says when the queue drains.
@@ -4488,12 +4541,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 // when the queue accepts, for the same reason.
                 runCatching { client.queueMessage(id, text, scratchpadId = padId) }
                     .onSuccess {
+                        settleSend(ticket)
                         setPadRef(padKey, null)
                         loadChatTranscript(id); refreshChats()
                     }
                     .onFailure {
                         _toast.value = errText(it)
                         restoreDraft(chatDraftKey(id), text)
+                        settleSend(ticket)
                     }
             }
             return
@@ -4513,6 +4568,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             client.sendMessage(id, text, scratchpadId = padId),
             sentText = text,
             sentPadId = padId,
+            ticket = ticket,
         )
     }
 
@@ -4581,14 +4637,22 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         flow: kotlinx.coroutines.flow.Flow<ChatEvent>,
         sentText: String? = null,
         sentPadId: String? = null,
+        ticket: Long? = null,
     ) {
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
             // A Failure as the VERY FIRST event is an HTTP refusal — the daemon
             // said no before any run existed — and gets its own honest handling.
             var sawStream = false
+            // The message this stream carries, while the host has not taken it.
+            var keeping = ticket
             flow.collect { ev ->
                 if (ev !is ChatEvent.Failure) sawStream = true
+                // Anything but a refusal coming back means the host took the
+                // message: from here the run holds it, not the stored drafts. A
+                // stream cut off before any word came back leaves it kept, since
+                // whether it arrived is not known. See [UnsettledSends].
+                if (sawStream) keeping?.let { settleSend(it); keeping = null }
                 when (ev) {
                     is ChatEvent.Started -> Unit
                     is ChatEvent.Delta -> {
@@ -4629,6 +4693,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                             // emptied at the press and may hold newer typing.
                             _sending.value = false
                             sentText?.let { restoreDraft(chatDraftKey(id), it) }
+                            keeping?.let { settleSend(it); keeping = null }
                             sentPadId?.let { setPadRef(ScratchpadRules.chatRefKey(id), it) }
                         }
                     }
