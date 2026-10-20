@@ -472,7 +472,7 @@ function slugify(name, cap = 16) {
  * Unique against every taken slug INCLUDING prefix-with-dash ambiguity, so
  * `local-<llmSlug>-` prefixes always parse unambiguously: if "box" exists,
  * "box-2" would make `local-box-2-chat` unparseable, so collisions get a hash
- * suffix instead of a counter.
+ * instead of a counter (after the base, or before it where after would clash).
  */
 function mintLlmSlug(name, uuid, taken) {
   const hex = String(uuid).replace(/-/g, '');
