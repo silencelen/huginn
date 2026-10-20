@@ -93,7 +93,8 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
  *
  *   READING — [cleanKind], silent. A row that decoded is a row that renders, so
  *   a record written by a LATER daemon that learned a sixth kind degrades to a
- *   chip with the wrong label, never to a list that will not draw.
+ *   chip with the wrong label, never to a list that will not draw. Only the
+ *   READING degrades: the stored word goes back to disk as it was ([keepStored]).
  *
  * An ABSENT kind is not a mistake; it means `other`, and `{name, url}` stays a
  * legal body.
@@ -2116,6 +2117,44 @@ function writeJsonObject(file, obj, fs = nodeFs) {
   return obj;
 }
 
+/** What this version makes of one STORED row: every field definite, unknown keys passed through. */
+function rowAsRead(c) {
+  return { ...c, ...buildRecord(c, storedAddedAt(c)) };
+}
+
+/**
+ * A row's sidecar entry (see [readSidecar]) — and, the same two fields cleaned
+ * the same way, what this version makes of one stored entry.
+ */
+function sideRow(v) {
+  return { addedAt: storedAddedAt(v), addresses: cleanAddrs(v.addresses) };
+}
+
+/**
+ * One row as it is WRITTEN: this version's value for every field it holds,
+ * EXCEPT where the stored value already reads here as exactly that — then the
+ * stored value, untouched. `asRead` is what this version made of `stored`.
+ *
+ * ⚠⚠ CLEANED ON THE WAY IN, NEVER ON THE WAY BACK OUT. Reading cleans a row so
+ * that it renders and is never probed where it must not be: a kind this
+ * version does not know reads as `other`, an address its rule refuses reads as
+ * '', a long note reads cut. Writing that reading back — which the address
+ * flush did on the first authorised request after every start, and every save
+ * did for every row it never touched — made it permanent: a later daemon's
+ * kind was `other` for good after a rollback to this one, and a hand-typed
+ * address was blanked with no copy kept. The 2026-10-02 rule that unknown KEYS
+ * survive a rollback holds for values this version cannot read, too. What an
+ * edit changed, or the sidecar supplied, reads differently and IS written.
+ */
+function keepStored(stored, mine, asRead) {
+  if (!isBodyObject(stored)) return mine;
+  const out = { ...stored };
+  for (const [k, v] of Object.entries(mine)) {
+    if (JSON.stringify(asRead[k]) !== JSON.stringify(v)) out[k] = v;
+  }
+  return out;
+}
+
 /**
  * The store's envelope, null when there is no store, and a THROW (see
  * [unreadableError]) when there is one that cannot be read.
@@ -2131,10 +2170,10 @@ function readEnvelope(dir, fs = nodeFs) {
     ...raw,
     schema: Number(raw.schema) || SCHEMA,
     seeded: !!raw.seeded,
-    // Same rule on the way out of the file, which is where an invented
-    // timestamp would become permanent — the next write saves what load read.
-    consoles: Array.isArray(raw.consoles)
-      ? raw.consoles.filter(isBodyObject).map((c) => ({ ...c, ...buildRecord(c, storedAddedAt(c)) })) : [],
+    // Same rule on the way out of the file: no invented timestamp. What is
+    // written back is the stored row wherever this reading did not change it
+    // ([keepStored]), so the cleaning here is never made permanent.
+    consoles: Array.isArray(raw.consoles) ? raw.consoles.filter(isBodyObject).map(rowAsRead) : [],
     // Added in 3.5.0. Absent in every store written before it, which is why
     // this is a default and not a migration.
     clientAddresses: Array.isArray(raw.clientAddresses)
@@ -2168,7 +2207,7 @@ function readSidecar(dir, fs = nodeFs) {
   if (isBodyObject(raw.rows)) {
     for (const [id, v] of Object.entries(raw.rows)) {
       if (!ID_RE.test(id) || !isBodyObject(v)) continue;
-      rows[id] = { addedAt: storedAddedAt(v), addresses: cleanAddrs(v.addresses) };
+      rows[id] = sideRow(v);
     }
   }
   return {
@@ -2177,13 +2216,6 @@ function readSidecar(dir, fs = nodeFs) {
     reporters: Array.isArray(raw.reporters) ? raw.reporters.map(reporterEntry).filter(Boolean) : [],
     rows,
   };
-}
-
-/** The sidecar's `rows`, for a list of stored records. */
-function sidecarRows(consoles) {
-  const rows = {};
-  for (const c of consoles || []) rows[c.id] = { addedAt: storedAddedAt(c), addresses: cleanAddrs(c.addresses) };
-  return rows;
 }
 
 /**
@@ -2636,16 +2668,48 @@ function createStore(opts = {}) {
 
   /**
    * The sidecar, written whole. `consoles` null keeps the rows already there —
-   * a flush with no store to read rows from must not wipe them.
+   * a flush with no store to read rows from must not wipe them. Each row is
+   * written as it is stored wherever this version did not change it
+   * ([keepStored]).
    */
   function writeSidecar(consoles) {
-    let rows;
-    if (consoles) rows = sidecarRows(consoles);
-    else {
-      const was = readSidecar(dir, fs);
-      rows = was ? was.rows : {};
+    const was = readJsonObject(sidecarPath(dir), fs);
+    const stored = was && isBodyObject(was.rows) ? was.rows : {};
+    let rows = stored;
+    if (consoles) {
+      rows = {};
+      const twins = storedTwins(consoles);
+      consoles.forEach((c, i) => {
+        const mine = sideRow(c);
+        // The sidecar's own copy of the row; for a row it has never held, the
+        // one in consoles.json — either way the stored values, not the reading.
+        const twin = Object.hasOwn(stored, c.id) && isBodyObject(stored[c.id]) ? stored[c.id]
+          : twins[i] ? { addedAt: twins[i].addedAt, addresses: twins[i].addresses } : null;
+        rows[c.id] = twin ? keepStored(twin, mine, sideRow(twin)) : mine;
+      });
     }
     writeJsonObject(sidecarPath(dir), { schema: SCHEMA, reporters: reporterEntries(), rows }, fs);
+  }
+
+  /**
+   * For each row this version holds, the row in consoles.json it was read from
+   * (same id, in file order), or null for a row that is not there yet.
+   */
+  function storedTwins(consoles) {
+    const raw = readJsonObject(storePath(dir), fs);
+    const byId = new Map();
+    for (const c of raw && Array.isArray(raw.consoles) ? raw.consoles : []) {
+      if (!isBodyObject(c)) continue;
+      const id = String(c.id || '');
+      byId.set(id, [...(byId.get(id) || []), c]);
+    }
+    return consoles.map((mine) => (byId.get(mine.id) || []).shift() || null);
+  }
+
+  /** `consoles` as they go to disk: each through [keepStored] against its stored twin. */
+  function rowsToWrite(consoles) {
+    const twins = storedTwins(consoles);
+    return consoles.map((mine, i) => (twins[i] ? keepStored(twins[i], mine, rowAsRead(twins[i])) : mine));
   }
 
   /**
@@ -2734,7 +2798,11 @@ function createStore(opts = {}) {
       // before the first list must survive a restart (2026-10-02 — it did not).
       writeSidecar(env ? env.consoles : null);
       if (env) {
-        writeEnvelope(dir, { ...env, schema: SCHEMA, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
+        // ⚠ The rows as STORED, not as this version reads them ([keepStored]).
+        writeEnvelope(dir, {
+          ...env, schema: SCHEMA, consoles: rowsToWrite(env.consoles),
+          clientAddresses: addrEntries(), reportedAddresses: reportedEntries(),
+        }, fs);
       }
     } catch { /* next time */ }
   }
@@ -2790,7 +2858,12 @@ function createStore(opts = {}) {
     // Sidecar first: if the process dies between the two, the sidecar holds the
     // newer lists and wins on the next read.
     writeSidecar(consoles);
-    return writeEnvelope(dir, { ...env, schema: SCHEMA, consoles, clientAddresses: addrEntries(), reportedAddresses: reportedEntries() }, fs);
+    // Only what the add, patch or remove changed is written in this version's
+    // reading; every other row goes back as stored ([keepStored]).
+    return writeEnvelope(dir, {
+      ...env, schema: SCHEMA, consoles: rowsToWrite(consoles),
+      clientAddresses: addrEntries(), reportedAddresses: reportedEntries(),
+    }, fs);
   }
 
   /** The marker the owner touches. The daemon reads it and never writes it. */
