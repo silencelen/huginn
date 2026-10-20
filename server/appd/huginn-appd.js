@@ -523,6 +523,8 @@ function tmuxArgs(args) {
   return TMUX_SOCKET ? ['-u', '-L', TMUX_SOCKET, ...args] : ['-u', ...args];
 }
 
+// ⚠ NEVER A SHELL, here or in runStdin(): their argv carries request input,
+// safe only while no shell reads it. A shell gets a call of its own (runRelayShim).
 function run(cmd, args, opts = {}) {
   if (cmd === 'tmux') args = tmuxArgs(args);
   return new Promise((resolve) => {
@@ -7207,6 +7209,30 @@ const RELAY_SHIM = 'huginn_relay_text=$(cat; printf .); '
   + 'set -- --message "${huginn_relay_text%.}" --source huginn-app; unset huginn_relay_text; . "$0"';
 
 /**
+ * `bash -c RELAY_SHIM <relay>`, with the text on stdin.
+ *
+ * ⚠ ITS OWN execFile, NOT runStdin(): the few lines of stdin plumbing repeated
+ * here are the point. This starts a SHELL, and every element of its argv is
+ * fixed in this function — the constant shim and the configured relay path.
+ * run() and runStdin() are the opposite case: their argv is built from requests
+ * (a session name in a tmux target, a model id), which is safe because execFile
+ * hands each element over as one argument that no shell reads. Send a `bash -c`
+ * through runStdin() and it becomes a shell for some of its callers, and whether
+ * request text can reach a script is then a question about every caller instead
+ * of about this one function.
+ */
+function runRelayShim(relay, text) {
+  return new Promise((resolve) => {
+    const child = execFile('bash', ['-c', RELAY_SHIM, relay], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* EPIPE: the exit code is the verdict */ });
+      child.stdin.end(text);
+    }
+  });
+}
+
+/**
  * Sends through the homelab's existing Telegram path rather than a new one: it is
  * outbound-only, it logs every send, and the owner already has it. House rule
  * from that setup — statements only, never a question, because nothing consumes
@@ -7216,7 +7242,7 @@ async function deliverTelegram(text) {
   if (!fs.existsSync(TELEGRAM_SCRIPT)) return false;
   // `./` before a bare name: `.` would look one up on PATH, where `bash <name>` opened it here.
   const relay = TELEGRAM_SCRIPT.includes('/') ? TELEGRAM_SCRIPT : `./${TELEGRAM_SCRIPT}`;
-  const r = await runStdin('bash', ['-c', RELAY_SHIM, relay], text, { timeout: 30_000 });
+  const r = await runRelayShim(relay, text);
   if (r.err) { log('alerts: telegram send failed', (r.stderr || '').trim().slice(0, 120)); return false; }
   return true;
 }
