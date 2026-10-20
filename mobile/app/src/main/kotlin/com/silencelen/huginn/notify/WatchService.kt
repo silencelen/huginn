@@ -259,8 +259,18 @@ class WatchService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
         } else {
+            // ⚠ NONE, NEVER A TYPE THE MANIFEST DOES NOT DECLARE. Android 10-13
+            // throw from startForeground when the type passed is not a subset of
+            // the service's android:foregroundServiceType, and the manifest
+            // declares specialUse alone. This branch passed dataSync, so turning
+            // on "Watch continuously" killed the app on those versions, and since
+            // the setting is saved before the service starts, every launch, boot
+            // and update started it into the same crash until the app's data was
+            // cleared. specialUse does not exist below 34 and nothing there needs
+            // a type, so the service runs untyped: what ServiceCompat passes for
+            // specialUse on those versions too. WatchServiceTypeTest holds it.
             @Suppress("DEPRECATION")
-            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
         }
 
     private fun update(n: android.app.Notification) {
