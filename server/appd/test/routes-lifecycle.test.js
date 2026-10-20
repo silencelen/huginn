@@ -50,7 +50,7 @@ const crypto = require('node:crypto');
 //   routes-archive     11250 + pid%50   -> 11250-11299
 //     (11000-11249 are spoken for by work in flight on sibling branches)
 //   routes-files-image  11300 + pid%50   -> 11300-11349
-//   routes-session-names 11400 + pid%25  -> 11400-11424
+//   routes-session-names 11700 + pid%25  -> 11700-11724
 //   routes-tmux-health  11420 + pid%20   -> 11420-11439
 //   routes-pane-lease   11450 + pid%50   -> 11450-11499
 //   routes-apps-icons   11500 + pid%25   -> 11500-11524

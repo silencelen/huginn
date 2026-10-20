@@ -65,9 +65,10 @@ grep -E '^# (pass|fail)' /tmp/appd-tests.tap; echo "floor: $APPD_MIN"
   `node .../huginn-appd.js` from your checkout may still hold a port in a test's range. It
   refuses the new run's token, and every test in the colliding file fails with
   `401 unauthorized`. Find it with `pgrep -a node` and stop it yourself.
-- **Adding a route test file:** take the next free port block and add it to the
-  `PORT ALLOCATION` table at the top of the route test files, in every file that carries the
-  table.
+- **Adding a route test file:** take a free port block, or a port the kernel assigns (port 0)
+  when the file needs no fixed one. `server/appd/test/port-blocks.test.js` reads every
+  `base + pid % width` block from the code and fails on an overlap; the `PORT ALLOCATION`
+  comments at the top of the route test files are a guide, not the check.
 - **A fixture pane has not drawn anything when `new-session` returns.** tmux 3.6 built with
   systemd, which is what Ubuntu 26.04 and so CI run, starts a new pane's command only once
   systemd has given the pane a scope of its own, and wherever a user bus is reachable that is
