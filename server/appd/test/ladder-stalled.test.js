@@ -13,8 +13,12 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const h = require('../lib/headroom');
 const resume = require('../lib/resume');
+const { lift } = require('./ladder-lift');
 
 const NOW = 1_789_500_000_000;
 const MIN = 60_000;
@@ -72,6 +76,46 @@ test('a laddered session stalled on another limit is not moved back up under its
   });
   assert.deepEqual(moves(h.decide(input(sess('x', { family: 'opus', ladder, stall: stall('session') })))), []);
   assert.deepEqual(moves(h.decide(input(sess('x', { family: 'opus', ladder })))), ['ladder_up:x'], 'the control');
+});
+
+test('a move queued behind a turn that then ends in the 429 types nothing after it', async () => {
+  // At 92%+ of the Fable week a move is usually queued behind a running turn —
+  // and that turn may end in the limit itself. The 429 is a turn boundary, so
+  // the job runs the moment it lands, before any tick has seen the stall.
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), `ladder-stall-${process.pid}-`)), 'b.jsonl');
+  const line = (r) => `${JSON.stringify(r)}\n`;
+  fs.writeFileSync(file, line({ type: 'user', message: { content: 'refactor the backup job' }, timestamp: new Date().toISOString() })
+    + line({ type: 'assistant', message: { model: 'claude-fable-5-1', content: [{ type: 'text', text: 'working on it' }] }, timestamp: new Date().toISOString() }));
+
+  const queue = [];
+  const typed = [];
+  const L = lift(['applyHeadroomAction', 'resolvePendingLadder', 'tailRecords', 'transcriptTail'], {
+    fs, Buffer, Date, JSON, headroomLib: h, resumeLib: resume,
+    transcriptPath: () => file,
+    applyLadder: async (name, to) => { typed.push(to); return { ok: true, delivery: 'confirmed', to }; },
+    enqueueJob: async (name, run, opts) => { queue.push({ run, opts }); return { result: null }; },
+    log: () => { }, deliverPush: async () => ({ sent: true }), deliverTelegram: async () => null,
+    saveHeadroomState: () => { }, GLYPH: { info: 'i' },
+  }, { helpers: ['ladderUnlessStalled'] });
+  const rec = { name: 'b', family: 'fable', ladder: null, nativeSwitch: { seenAt: null, to: null } };
+  const state = { sessions: { 'sid-b': rec }, arbiter: { lastLadderAt: 0 } };
+  await L.applyHeadroomAction(
+    { type: 'ladder_down', claudeSessionId: 'sid-b', name: 'b', from: 'fable', to: 'opus', pct: 99 },
+    { state, settings, now: NOW });
+  assert.equal(rec.ladder.delivery, 'pending', 'queued behind the running turn');
+
+  // The turn ends in the Fable week's 429.
+  fs.appendFileSync(file, line({
+    type: 'assistant', isApiErrorMessage: true, apiErrorStatus: 429, timestamp: new Date().toISOString(),
+    message: { model: '<synthetic>', content: [{ type: 'text', text: "You're out of usage credits. Run /usage-credits to keep using Fable 5.1 or /model to switch models." }] },
+  }));
+  const job = queue.shift();
+  job.opts.onSettle({ result: await job.run() });
+
+  assert.deepEqual(typed, [], 'no /model after the 429');
+  assert.equal(rec.ladder.delivery, 'delivery_unconfirmed', 'the move did not happen');
+  const records = fs.readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.deepEqual(resume.recordsAfterStall(records), [], 'the 429 is still the last word, as auto-resume needs');
 });
 
 test('why it matters: what a move leaves after the 429 reads as a person to the resume pass', () => {

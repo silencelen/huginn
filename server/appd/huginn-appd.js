@@ -8938,7 +8938,7 @@ async function applyHeadroomAction(action, ctx) {
       if (!rec) return;
       const from = action.from;
       const to = action.to;
-      const r = await enqueueJob(action.name, () => applyLadder(action.name, to), {
+      const r = await enqueueJob(action.name, () => ladderUnlessStalled(action.name, to), {
         automated: true, origin: 'headroom', kind: 'model', family: from,
         onSettle: (v) => resolvePendingLadder(state, action, v),
       });
@@ -9041,6 +9041,25 @@ async function applyHeadroomAction(action, ctx) {
     default:
       log(`headroom: unknown action ${action.type}`);
   }
+}
+
+/**
+ * The ladder's job, unless the session stalled on a usage limit while the job
+ * waited for its turn to end.
+ *
+ * ⚠ decide() keeps moves off the sessions it KNOWS are stalled, but a move is
+ * usually queued behind a running turn, and at 92% of the Fable week and up that
+ * turn may well end in the 429. The 429 is a turn boundary, so the job ran the
+ * moment it landed — before any tick had noted the stall — and typed `/model`
+ * after it, which auto-resume reads as a person answering: the session was
+ * never continued. Nothing is typed; the move is tried again once it is resumed.
+ */
+async function ladderUnlessStalled(name, to) {
+  const records = tailRecords(transcriptPath(name));
+  if (records.length && resumeLib.stallOf(records, {})) {
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: 'the session stalled on a usage limit first; nothing was typed' };
+  }
+  return applyLadder(name, to);
 }
 
 /**
