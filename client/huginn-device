@@ -1175,6 +1175,7 @@ function runWork(id, work, conf) {
     let cancelled = false;
     let done = false;
     let deliveryDead = false;   // a 401 / no token: stop delivering, keep the child
+    let flushing = null;        // the batch on the wire, as a promise: finish() waits for it
     let startupTimer = null;
     let flush = null;
 
@@ -1225,15 +1226,17 @@ function runWork(id, work, conf) {
       cancel: () => { if (!cancelled && !done) { cancelled = true; try { child.kill(); } catch { /* gone */ } } },
     };
 
-    let flushing = false;
     let blips = 0;
     let backoffUntil = 0;
-    flush = setInterval(async () => {
+    flush = setInterval(() => {
       if (done || flushing) return;
       if (deliveryDead) { pending = []; return; }
       if (!pending.length || Date.now() < backoffUntil) return;
-      flushing = true;
       const batch = pending; pending = [];
+      flushing = deliver(batch).finally(() => { flushing = null; });
+    }, 500);
+
+    async function deliver(batch) {
       try {
         for (const chunk of batchLines(batch)) {
           const ack = await api('POST', `/v1/devices/${id}/work/${work.id}/events`,
@@ -1265,10 +1268,8 @@ function runWork(id, work, conf) {
           backoffUntil = Date.now() + retryDelayMs(blips);
           log(`batch failed (retrying in ${Math.round(retryDelayMs(blips) / 1000)}s): ${e.message}`);
         }
-      } finally {
-        flushing = false;
       }
-    }, 500);
+    }
 
     readline.createInterface({ input: child.stdout })
       .on('line', (line) => { sawOutput = true; if (line.trim()) pending.push(line); });
@@ -1306,6 +1307,13 @@ function runWork(id, work, conf) {
       clearTimeout(startupTimer);
       activeRun = null;
       clearInterval(flush);
+      // ⚠ THE BATCH ALREADY ON THE WIRE GOES FIRST. A tick may be posting the
+      // run's last lines (the final answer, the result) when the engine exits,
+      // and every request has a connection of its own, so a terminal frame sent
+      // now can land before it: the daemon then settles the run as "ended
+      // without a result" and answers that batch 404. And a blip there puts
+      // its lines back into `pending`, which nothing but this tail reads now.
+      if (flushing) await flushing;
       const tail = deliveryDead ? [] : pending; pending = [];
       // ⚠ THE TAIL FIRST, THEN THE ENDING ALONE. These used to go in one POST,
       // so an oversized tail took the terminal frame down with it — and its retry
