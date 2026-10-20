@@ -162,7 +162,13 @@ daemon's proof is over the real fingerprint, so relaying it does not help.
    token starts a new, empty pin set.
 8. **Refuse a daemon older than 3.11.** Such a daemon answers `https://` with plain HTTP, or answers
    the challenge without `tls`. Tell the user, word for word: *"the daemon is older than 3.11 and has
-   no TLS; update it"*. Do not downgrade.
+   no TLS; update it"*. Do not downgrade. **But only where TLS is not already known to be there.**
+   When the client holds a pin for this token, the daemon has proved itself over TLS before, so the
+   same answers come from something else: report them with the interception sentence of rule 5,
+   never the old-daemon one, which would send the reader to update a current daemon on the word of
+   whoever answered. On a loopback address with no pin, either sentence may lead, but the client
+   adds that on this machine the answer may also be another program holding the port. Any hint
+   follows the sentence; the sentence itself stays word for word.
 
 ### Implementation notes
 

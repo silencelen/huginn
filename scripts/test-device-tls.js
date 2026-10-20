@@ -374,6 +374,32 @@ test('F13: a TLS squatter on a loopback http:// is the interception case, and ge
   assert.deepEqual(dev.pinsFor(readConf(), TOKEN), []);
 });
 
+// Where this token's daemon has proved itself over TLS before, an answer with no
+// TLS cannot be "a daemon older than 3.11": the pin says it was not. Telling the
+// reader to update a current daemon, on the word of whoever took the port, is
+// the wrong advice; it is the interception sentence instead.
+test('a plain-HTTP answer where this token has a pin is the interception case, not an old daemon', async () => {
+  const sq = await squatter();
+  writeConf({ url: `https://127.0.0.1:${sq.port}`, id: 'dev1', scope: 'work' });
+  dev.addPin(TOKEN, 'a'.repeat(64));
+  await assert.rejects(dev.api('GET', '/v1/ping'), (e) => e.tlsIntercepted === true && !e.tlsOldDaemon
+    && /did not answer TLS, and the daemon pinned for this token does/.test(e.message)
+    && !/older than 3\.11/.test(e.message), 'named an interception');
+  assert.deepEqual(sq.seen, [], 'not one request reached it');
+});
+
+test('a re-proof that gets no TLS proof, for a token that has a pin, is the interception case', async () => {
+  const c = mintCert('legacy-after-pin');
+  const fake = await fakeDaemon(c, (n) => ({ proof: hmac(TOKEN, n), version: '3.10.3' }));
+  writeConf({ url: `https://127.0.0.1:${fake.port}` });
+  dev.addPin(TOKEN, 'b'.repeat(64));
+  await assert.rejects(dev.api('GET', '/v1/ping'), (e) => e.tlsIntercepted === true
+    && /without TLS proof, and the daemon pinned for this token does/.test(e.message)
+    && !/older than 3\.11/.test(e.message), 'named an interception');
+  assert.ok(fake.seen.length >= 1 && fake.seen.every((r) => r.auth === null), 'only the tokenless probe reached it');
+  assert.deepEqual(dev.pinsFor(readConf(), TOKEN), ['b'.repeat(64)], 'nothing new was pinned');
+});
+
 test('F13 end to end: `serve` pointed at a loopback squatter sends no token and runs none of its work', { skip: process.platform === 'win32' }, async () => {
   const sq = await squatter();
   const d = fs.mkdtempSync(path.join(tmp, 'serve-'));

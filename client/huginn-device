@@ -844,7 +844,14 @@ const CHALLENGE_DEADLINE_MS = 20000;
  * ⚠ AND THE LEGACY `proof` IS IGNORED (rule 2): it proves the daemon, not this
  * channel, and a relay would forward it untouched.
  */
-async function proveDaemon(origin, tok, { deadlineMs = CHALLENGE_DEADLINE_MS, maxBytes = CHALLENGE_MAX_BYTES } = {}) {
+async function proveDaemon(origin, tok, { deadlineMs = CHALLENGE_DEADLINE_MS, maxBytes = CHALLENGE_MAX_BYTES, pinned = false } = {}) {
+  // ⚠ pinned: this token's daemon has proved itself over TLS before, so an answer
+  // with no TLS, or no `tls` proof, is somebody else (an interception), never "a
+  // daemon older than 3.11" (that sentence would send the reader to update a
+  // daemon that is already current, on the word of whoever took the port).
+  const noTls = (why) => (pinned
+    ? tlsError(`${origin}: ${INTERCEPTED} (${why}, and the daemon pinned for this token does)`, 'tlsIntercepted')
+    : tlsError(`${OLD_DAEMON} (${why}${noTlsHint(origin)})`, 'tlsOldDaemon'));
   const nonce = crypto.randomBytes(32).toString('hex');
   let seen = null;
   const agent = new JudgedAgent((fp) => { seen = fp; return fp ? null : new Error('no certificate'); });
@@ -855,16 +862,14 @@ async function proveDaemon(origin, tok, { deadlineMs = CHALLENGE_DEADLINE_MS, ma
   } catch (e) {
     // A pre-3.11 daemon's port speaks only HTTP: our ClientHello gets a plain
     // "400 Bad Request" back, which OpenSSL reports as a protocol error.
-    if (/^ERR_SSL_|^EPROTO$/.test(String(e.code || ''))) {
-      throw tlsError(`${OLD_DAEMON} (${origin} did not answer TLS${noTlsHint(origin)})`, 'tlsOldDaemon');
-    }
+    if (/^ERR_SSL_|^EPROTO$/.test(String(e.code || ''))) throw noTls(`${origin} did not answer TLS`);
     throw e;
   }
   if (r.status !== 200) throw new Error(`challenge at ${origin} answered ${r.status} ${termSafe(r.body.slice(0, 200))}`);
   let body;
   try { body = JSON.parse(r.body); } catch { throw new Error(`challenge at ${origin} did not answer JSON`); }
   const t = body && body.tls;
-  if (!t || typeof t !== 'object') throw tlsError(`${OLD_DAEMON}${noTlsHint(origin)}`, 'tlsOldDaemon');
+  if (!t || typeof t !== 'object') throw noTls(`${origin} answered the challenge without TLS proof`);
   if (!seen || !proofMatches(t.proof, boundProof(tok, nonce, seen))) {
     throw tlsError(`${origin}: ${INTERCEPTED}`, 'tlsIntercepted');
   }
@@ -889,8 +894,13 @@ async function pinnedRequest(u, tok, opts) {
   try {
     return await go(pins);
   } catch (e) {
+    // A plain-HTTP answer where the pinned daemon has always spoken TLS: not an
+    // old daemon (the pin proves it was not), so name it for what it is.
+    if (/^ERR_SSL_WRONG_VERSION_NUMBER$|^EPROTO$/.test(String(e.code || '')) && /wrong version number/i.test(String(e.message))) {
+      throw tlsError(`${u.origin}: ${INTERCEPTED} (${u.origin} did not answer TLS, and the daemon pinned for this token does)`, 'tlsIntercepted');
+    }
     if (!e.pinMismatch) throw e;
-    const fp = await proveDaemon(u.origin, tok);
+    const fp = await proveDaemon(u.origin, tok, { pinned: true });
     log(`daemon at ${u.origin} presented a new certificate and proved it (sha256 ${fp}); pinned`);
     pins = addPin(tok, fp);
     try { return await go(pins); } catch (e2) {
