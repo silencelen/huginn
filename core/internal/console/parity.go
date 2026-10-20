@@ -232,6 +232,15 @@ func (m *model) chatsView() string {
 
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
+// named is a title as a confirmation names it: quoted, on one line. A
+// destructive prompt names its target (docs/design/console.md §6).
+func named(title string) string {
+	if title = oneLine(title); title == "" {
+		return "(untitled)"
+	}
+	return `"` + title + `"`
+}
+
 // listRows draws n rows with the cursor kept visible.
 func (m *model) listRows(b *strings.Builder, s screen, n int, row func(int) string) {
 	t := m.t
@@ -304,7 +313,7 @@ func (m *model) chatsKey(s string) tea.Cmd {
 	case "x":
 		if c, ok := sel(); ok {
 			id := c.ID
-			return m.ask("delete this chat and its transcript? type delete:", "", "delete", func(string) tea.Cmd {
+			return m.ask("delete the chat "+named(c.Title)+" and its transcript? type delete:", "", "delete", func(string) tea.Cmd {
 				return m.act(func(ctx context.Context) (string, error) {
 					return "deleted", m.b.do(ctx, http.MethodDelete, "/appd/v1/chats/"+esc(id), nil, nil)
 				})
@@ -795,7 +804,7 @@ func (m *model) archiveKey(s string) tea.Cmd {
 			return revived{name: r.Name}
 		}
 	case "x":
-		return m.ask("forget this archived conversation? type forget:", "", "forget", func(string) tea.Cmd {
+		return m.ask("forget the archived conversation "+named(a.Title)+"? type forget:", "", "forget", func(string) tea.Cmd {
 			return m.act(func(ctx context.Context) (string, error) {
 				return "forgotten", m.b.do(ctx, http.MethodDelete, "/appd/v1/archive/"+esc(a.ID), nil, nil)
 			})
