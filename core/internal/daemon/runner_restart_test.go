@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,8 @@ type devFake struct {
 	maxOpen int
 	enrols  int
 	deleted bool
+	beats   []string      // the scope each beat carried
+	hold    time.Duration // how long an idle poll is held; 0 is 300 ms
 }
 
 func (f *devFake) handler() http.Handler {
@@ -58,7 +61,14 @@ func (f *devFake) handler() http.Handler {
 		w.WriteHeader(201)
 		json.NewEncoder(w).Encode(map[string]any{"id": "dev1", "name": e["name"], "scope": e["scope"]})
 	})
-	mux.HandleFunc("POST /v1/devices/dev1/beat", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{"ok":true}`) })
+	mux.HandleFunc("POST /v1/devices/dev1/beat", func(w http.ResponseWriter, r *http.Request) {
+		var b struct{ Scope string }
+		json.NewDecoder(r.Body).Decode(&b)
+		f.mu.Lock()
+		f.beats = append(f.beats, b.Scope)
+		f.mu.Unlock()
+		io.WriteString(w, `{"ok":true}`)
+	})
 	mux.HandleFunc("DELETE /v1/devices/dev1", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.deleted = true
@@ -101,9 +111,10 @@ func (f *devFake) poll(w http.ResponseWriter, r *http.Request) {
 	}
 	f.open++
 	f.maxOpen = max(f.maxOpen, f.open)
+	hold := cmp.Or(f.hold, 300*time.Millisecond)
 	f.mu.Unlock()
 	defer func() { f.mu.Lock(); f.open--; f.mu.Unlock() }()
-	idle := time.After(300 * time.Millisecond)
+	idle := time.After(hold)
 	for {
 		f.mu.Lock()
 		if len(f.queue) > 0 && !f.deleted {
