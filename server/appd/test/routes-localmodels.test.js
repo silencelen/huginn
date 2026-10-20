@@ -139,8 +139,8 @@ test('two same-named serving machines get distinct, prefix-unambiguous slugs', a
   const a = await enrolLlm({ name: 'twin' });
   const b = await enrolLlm({ name: 'twin' });
   assert.notEqual(a.llmSlug, b.llmSlug);
-  assert.ok(!b.llmSlug.startsWith(`${a.llmSlug}-`) || a.llmSlug.length < b.llmSlug.length,
-    'prefix-with-dash ambiguity is avoided, so composite ids always parse');
+  assert.ok(!b.llmSlug.startsWith(`${a.llmSlug}-`) && !a.llmSlug.startsWith(`${b.llmSlug}-`),
+    `prefix-with-dash ambiguity is avoided, so composite ids always parse (${a.llmSlug}, ${b.llmSlug})`);
 });
 
 test('registration hygiene: caps, bad slugs dropped, catalogs only at generate', async () => {

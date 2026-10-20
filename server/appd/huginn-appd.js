@@ -595,14 +595,24 @@ const isLocalFamily = (id) => typeof id === 'string' && id.startsWith('local-');
 
 function resolveLocalModel(rawId) {
   const modelId = String(rawId || '').trim().toLowerCase();
-  for (const [devId, d] of Object.entries(deviceState.devices || {})) {
-    if (d.scope !== 'generate' || !d.llmSlug) continue;
-    const prefix = `local-${d.llmSlug}-`;
-    if (!modelId.startsWith(prefix)) continue;
-    const slug = modelId.slice(prefix.length);
+  // ⚠ EVERY ROW WHOSE PREFIX MATCHES, LONGEST FIRST — not the first row walked.
+  // Slugs minted before mintLlmSlug checked its own output can dash-prefix each
+  // other ("gpubox-llm" and "gpubox-llm-2dad" for a re-enrolled machine), and
+  // rows are walked in enrolment order, so the OLDER row's shorter prefix matched
+  // first: every model on the newer machine answered 400 "does not serve" while
+  // the picker listed it as available. The row that serves the rest of the id wins.
+  const hits = Object.entries(deviceState.devices || {})
+    .filter(([, d]) => d.scope === 'generate' && d.llmSlug && modelId.startsWith(`local-${d.llmSlug}-`))
+    .sort(([, a], [, b]) => b.llmSlug.length - a.llmSlug.length);
+  for (const [devId, d] of hits) {
+    const slug = modelId.slice(`local-${d.llmSlug}-`.length);
     if ((d.models || []).some((x) => x.slug === slug)) {
       return { deviceId: devId, device: d, slug, id: modelId };
     }
+  }
+  if (hits.length) {
+    const [, d] = hits[0];
+    const slug = modelId.slice(`local-${d.llmSlug}-`.length);
     return { error: `${devicesLib.machineDisplayName(deviceState, d)} does not serve "${slug}" — it advertises: ${(d.models || []).map((x) => x.slug).join(', ') || '(nothing)'}` };
   }
   return { error: 'no enrolled machine serves this model — its machine may have been unenrolled' };
