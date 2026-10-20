@@ -256,7 +256,14 @@ class MainActivity : FragmentActivity() {
         }
         // Tapping a "needs you" notification opens straight into that session, and a
         // finished-chat notification into that chat, at the answer it announced.
-        readTarget(intent)
+        //
+        // ⚠ ONLY ON A FRESH LAUNCH. An activity restored from saved state was
+        // handed this intent already, by the instance it replaces, and the
+        // stripping in readTarget only ever changed that process's copy: after
+        // the system kills the app in the background, getIntent() is the
+        // ORIGINAL launch intent again, extras and all, and reading it here
+        // re-navigated to a notification dealt with long before.
+        if (savedInstanceState == null) readTarget(intent)
         setContent {
             HuginnTheme {
                 if (locked.value) {
@@ -1312,6 +1319,15 @@ fun HuginnApp(
         }
         val chatDetail: @Composable (String) -> Unit = { id ->
             val stillHere = rememberStillHere()
+            // ⚠ LOADED ON ENTRY, not only by the tap that navigated here. `dest`
+            // is saveable, so a screen can come back without any tap: restored
+            // after the system killed the process in the background (a new view
+            // model that has opened nothing), or rebuilt by a fold or a rotate
+            // (the teardown below detaches the chat on the way out). Either way
+            // nothing loaded it, and it drew the spinner forever, labelled with
+            // the default mode and model and with a running answer never
+            // reattached. A no-op when the tap already opened it.
+            LaunchedEffect(id) { vm.ensureChatOpen(id) }
             DisposableEffect(id) {
                 onDispose {
                     vm.detachStream(id); vm.clearSuggestions()

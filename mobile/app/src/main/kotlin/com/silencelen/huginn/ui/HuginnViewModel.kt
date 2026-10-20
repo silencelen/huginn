@@ -155,6 +155,19 @@ internal fun detachWanted(disposingChat: String?, openNow: String?): Boolean =
     disposingChat == null || disposingChat == openNow
 
 /**
+ * Whether a chat screen arriving on [screenChat] still has to load it.
+ *
+ * The other half of [detachWanted]. Every tap that navigates to a chat opens it
+ * first, so a screen reached that way finds it already open; one that arrives
+ * any other way does not. A screen restored after the system killed the
+ * process meets a NEW view model that has opened nothing, and a fold or rotate
+ * detaches the chat on the way out and rebuilds onto it. Both drew the spinner
+ * forever, under the default mode and model, with a running answer never
+ * reattached.
+ */
+internal fun chatOpenWanted(screenChat: String, openNow: String?): Boolean = screenChat != openNow
+
+/**
  * Whether a history page that has just arrived still belongs on the screen.
  *
  * Pure and top-level beside [reattachPlan] and [applyAutoSwitch], because the
@@ -4278,6 +4291,14 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             loadChatTranscript(id)
             attachIfRunning(id, meta)
         }
+    }
+
+    /**
+     * Opens [id] unless this view model already addresses it: what a chat screen
+     * calls on entry, so it loads however it was reached. See [chatOpenWanted].
+     */
+    fun ensureChatOpen(id: String) {
+        if (chatOpenWanted(id, openChatId)) openChat(id)
     }
 
     /** Follows an in-flight run, seeding the bubble with what it has already said. */
