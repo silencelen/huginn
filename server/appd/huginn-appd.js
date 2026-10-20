@@ -868,6 +868,8 @@ function clearSessionState(name) {
   permhook.clearRequests(STATE_DIR, name);
   modelswitch.clearSwitch(STATE_DIR, name);
   sessionBorn.delete(name);
+  // And what this daemon remembers about the previous holder in memory.
+  forgetSessionMemory(name);
 }
 
 /**
@@ -1145,13 +1147,16 @@ function removeArchive(id) {
  * from the list is worse than one that cannot open it"). A REVIVED row is out for
  * the same reason: the session it names is back, and it is the archive list that
  * marks it as running, not this one that hides it.
+ *
+ * Each id maps to its `endedAt`, which is what listSessions needs to tell the
+ * archived run's own leftovers from a conversation that has come back since.
  */
-const archivedIds = new Set();
+const archivedIds = new Map();   // claude session id -> endedAt (epoch seconds)
 
 function refreshArchivedIds() {
   archivedIds.clear();
   for (const rec of listArchives()) {
-    if (rec.endedAt && !rec.revivedAt) archivedIds.add(rec.id);
+    if (rec.endedAt && !rec.revivedAt) archivedIds.set(rec.id, rec.endedAt);
   }
 }
 
@@ -1250,11 +1255,20 @@ function restoreArchivedTranscript(id, cwd) {
  *
  * The ID has to match either way: a tmux name is reused within hours here, and a
  * stranger holding the old name is not this archive coming back.
+ *
+ * ⚠ AND THEN ANY NAME. Revive is not the only way back: the row's own resume
+ * command, or Claude Code's /resume list, runs the conversation in whatever
+ * session it was typed into, under the same id. The revive route's own guard
+ * already looks under every name; a row that looked under two said "not
+ * running" and offered a Revive that guard then refused.
  */
 function archiveLiveName(rec, liveIds) {
   if (!liveIds) return null;
   for (const name of [rec.revivedAs, rec.tmuxName]) {
     if (name && liveIds.get(name) === rec.id) return name;
+  }
+  for (const [name, id] of liveIds) {
+    if (id === rec.id) return name;
   }
   return null;
 }
@@ -1458,13 +1472,23 @@ async function listSessions({ preview = false } = {}) {
   // forgotten it — and it exists for the window where that is not yet true: a
   // crash between the row being written and the kill landing. Matched on the
   // CLAUDE SESSION ID, never the name, so a reused name cannot hide a live
-  // stranger; and only finished, un-revived archives are in that set, so this can
-  // never hide a session that is genuinely still yours to use (see archivedIds).
-  const hidden = archivedIds.size
-    ? rows.filter((r) => r.claudeSessionId && archivedIds.has(r.claudeSessionId)).map((r) => r.name)
-    : [];
+  // stranger; and only finished, un-revived archives are in that set (see
+  // archivedIds).
+  //
+  // ⚠ AND ONLY WHAT THE ARCHIVED RUN ITSELF LEFT: state stamped before the
+  // archive ended. A plain `--resume` keeps the session id, so the row's own
+  // "copy resume" command pasted into any session, or the conversation picked
+  // from Claude Code's /resume list, reports the archived id again — and hiding
+  // that took a session somebody was using off every list and out of every alert
+  // (alertTick reads this list), while the archive row offered Revive for it.
+  // Anything the conversation says after the end means it is running again.
+  const archivedRun = (r) => {
+    const endedAt = r.claudeSessionId ? archivedIds.get(r.claudeSessionId) : undefined;
+    return endedAt != null && r.stateSince != null && r.stateSince < endedAt;
+  };
+  const hidden = archivedIds.size ? rows.filter(archivedRun).map((r) => r.name) : [];
   if (hidden.length) {
-    rows = rows.filter((r) => !(r.claudeSessionId && archivedIds.has(r.claudeSessionId)));
+    rows = rows.filter((r) => !archivedRun(r));
     log(`sessions: ${hidden.join(', ')} still in tmux but archived; listed under /v1/archive instead`);
   }
 
@@ -2549,6 +2573,34 @@ function noteIntoDraft(name, waitedMs, composer) {
 function clearIntoDraft(name) { intoDraftAt.delete(name); }
 function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
 
+/**
+ * What this daemon remembers IN MEMORY under a session's name — the typing
+ * path's memory, the messages still queued, a pending auto-end — dropped when the
+ * name changes hands (clearSessionState).
+ *
+ * ⚠ THE FILES ARE NOT ALL A NAME CARRIES. These are facts about the session that
+ * HAD the name, exactly like its state file, and the typing maps were only ever
+ * pruned by age. So a session deleted and made again under its old name inherited
+ * the old one's duplicate memory: the same message sent to the new session inside
+ * half a minute was answered `duplicate:true` and never typed, and its into-draft
+ * notice and live-keys stamp came along too. The rename route moves all of it
+ * instead.
+ */
+function forgetSessionMemory(name) {
+  // Messages still queued for the previous holder are failed, never handed on:
+  // the next session under the name is a different conversation.
+  failQueued(name, SEND_SESSION_ENDED);
+  lastPasted.delete(name);
+  intoDraftAt.delete(name);
+  liveKeysAt.delete(name);
+  draftHeld.delete(name);
+  unmarkedHeld.delete(name);
+  // A pending auto-end, and the archive that may ride on it, were asked of the
+  // previous holder. Kept, the new session's first stable idle ended it.
+  softEnds.delete(name);
+  archiveIntents.delete(name);
+}
+
 function markLaunching(name) {
   const now = Date.now();
   for (const [k, t] of launchingAt) {
@@ -2875,6 +2927,61 @@ function armQueueTimer(name) {
   if (q.timer.unref) q.timer.unref();
 }
 
+/** How long a rename waits for a pump pass that is already typing to finish. */
+const QUEUE_HOLD_WAIT_MS = 15_000;
+
+/**
+ * Keep the pump off a session's queue for a moment (a rename's window), after
+ * letting a pass that is already running finish.
+ *
+ * `pumping` is the queue's own lock: pumpQueue returns at once while it is set,
+ * so holding it is the whole mechanism, and releaseQueue re-arms the poll under
+ * whatever name the queue lives at by then. Null when there is no queue; false
+ * when a running pass did not finish inside the wait, which the caller refuses
+ * rather than racing it.
+ */
+async function holdQueue(name, waitMs = QUEUE_HOLD_WAIT_MS) {
+  const q = sendQueues.get(name);
+  if (!q) return null;
+  const until = Date.now() + waitMs;
+  while (q.pumping) {
+    if (Date.now() >= until) return false;
+    await sleep(25);
+  }
+  q.pumping = true;
+  return q;
+}
+
+function releaseQueue(q) {
+  if (!q) return;
+  q.pumping = false;
+  for (const [name, held] of sendQueues) {
+    if (held === q) { armQueueTimer(name); return; }
+  }
+}
+
+const SEND_SESSION_ENDED = 'the session it was sent to has ended, so it was not delivered';
+const SEND_SESSION_REPLACED = 'the session it was sent to was replaced by a new one under the same name, '
+  + 'so it was not delivered';
+
+/** A send whose session is gone: an error, as every failed delivery is, and never a paste elsewhere. */
+function failSend(name, entry, why) {
+  log(`typing: ${name}: delivery failed: ${why}`);
+  entry.settle({ delivered: false, submitted: null, result: { ok: false, code: 410, message: why } });
+}
+
+/**
+ * Let go of a session's queue because its session is gone, failing whatever is
+ * still in it. A pass already delivering keeps its own entry and settles it.
+ */
+function failQueued(name, why) {
+  const q = sendQueues.get(name);
+  if (!q) return;
+  if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+  sendQueues.delete(name);
+  for (const entry of q.entries.splice(0)) failSend(name, entry, why);
+}
+
 /**
  * Release everything at the head of the queue whose gates are open, drop what
  * has gone stale, and re-arm the poll if anything is left waiting.
@@ -2890,6 +2997,29 @@ async function pumpQueue(name) {
   try {
     while (q.entries.length) {
       const entry = q.entries[0];
+      // ⚠ ADDRESSED TO A SESSION, NOT TO A NAME. A session killed at a terminal
+      // leaves a state file no hook can update, and its `attention` held a
+      // person's reply for ten minutes against a pane that no longer existed —
+      // until a new session under the same name (`cc` defaults to one) painted
+      // its composer, and the reply was typed into a conversation it was never
+      // written for, with Enter. So each pass asks tmux whether the session is
+      // there and whether it is still the one this entry was queued for (tmux's
+      // birth time, which a rename keeps). Gone or replaced, the send is an
+      // error. Null is tmux not answering, which says nothing (#14).
+      const here = await sessionExists(name);
+      if (here === false) {
+        // Its own queue only: one let go of at a hand-over while tmux answered
+        // has been failed already, and another under the name is not this pass's.
+        if (sendQueues.get(name) === q) failQueued(name, SEND_SESSION_ENDED);
+        break;
+      }
+      if (here && entry.born == null) entry.born = sessionBorn.get(name) || null;
+      if (here && entry.born && sessionBorn.get(name) !== entry.born) {
+        q.entries.shift();
+        q.lastError = SEND_SESSION_REPLACED;
+        failSend(name, entry, SEND_SESSION_REPLACED);
+        continue;
+      }
       // What the LAST pass decided about this queue's head, read before the
       // gate is re-read: a non-null value means this queue was HELD, and that
       // is what makes the entries behind the head queued prompts rather than
@@ -3135,7 +3265,11 @@ async function pumpQueue(name) {
     q.blockedBy = null;
   } finally {
     q.pumping = false;
-    if (q.entries.length) armQueueTimer(name);
+    // ⚠ ONLY WHILE THIS IS STILL THE NAME'S QUEUE. One let go of because its
+    // session ended (failQueued) must not be re-armed, and deleting the name's
+    // row after it would take the queue of a session made under the name since.
+    if (sendQueues.get(name) !== q) { /* let go of: nothing to arm or reap */ }
+    else if (q.entries.length) armQueueTimer(name);
     // ⚠ AND A QUEUE WHOSE SESSION IS GONE. `lastError` kept the map entry alive
     // so `GET /typing` could still report the failure — but nothing ever removed
     // it afterwards, so a long-lived daemon accumulated one row per session that
@@ -3143,7 +3277,7 @@ async function pumpQueue(name) {
     // ⚠ `=== false`, NOT falsy. A tmux that did not answer says nothing about
     // whether this session is gone, and dropping the queue on it would throw
     // away a message that is merely waiting for a busy host (#14).
-    else if (!q.lastError || (await sessionExists(name)) === false) {
+    else if ((!q.lastError || (await sessionExists(name)) === false) && sendQueues.get(name) === q) {
       sendQueues.delete(name);
       unmarkedHeld.delete(name);
       draftHeld.delete(name);
@@ -3184,6 +3318,10 @@ function enqueueSend(name, text, opts = {}) {
     submit: opts.submit !== false,
     transcript: file,
     transcriptAt: at,
+    // Which session this was sent to: tmux's birth time for the session holding
+    // the name now. The pump fails the entry if the name comes to belong to
+    // another one (see pumpQueue). Unknown here, it is taken on the first pass.
+    born: sessionBorn.get(name) || null,
     settle: () => { },
   };
   const done = new Promise((resolve) => {
@@ -3442,11 +3580,16 @@ async function restoreSessionsAfterReboot() {
   log(`session restore: tmux server is gone (reboot?); ${plan.length} recorded session(s) to bring back`);
   await ensureTmuxServer();
 
+  // Which of them are project sessions, and as what: a project session comes
+  // back launched as it was (projectRestoreCommand). An archived project claims
+  // nothing, the same rule the session list uses.
+  const membership = projectsLib.membershipIndex(listProjects());
   let restored = 0, fresh = 0;
   for (const entry of plan) {
     const cwd = entry.cwd || WORKDIR;
     const hasTranscript = !!(entry.claudeSessionId && findTranscriptFile(entry.claudeSessionId));
-    const { canResume, command } = sessreg.resumeCommand(entry, hasTranscript);
+    const { canResume, command } = projectRestoreCommand(membership.get(entry.name), entry, hasTranscript)
+      || sessreg.resumeCommand(entry, hasTranscript);
     const r = await run('tmux', ['new-session', '-d', '-s', entry.name, '-c', cwd, command]);
     if (r.err) {
       log(`session restore: ${entry.name} could not be recreated: ${(r.stderr || r.err.message || '').trim().slice(0, 120)}`);
@@ -3474,10 +3617,18 @@ async function restoreSessionsAfterReboot() {
 /** One pass over the pending soft ends; kills the ones that have settled. */
 async function softEndTick() {
   if (!softEnds.size) return;
+  // Who holds each name now, for stepSoftEnd's "whose wind-down is this": the
+  // Claude session the state file names, and tmux's birth time for the session,
+  // which asking tmux records. Asked BEFORE the loop, so the loop itself runs as
+  // it always has. A session tmux does not have is not acted on — a rename's own
+  // window looks exactly like that — the next holder of the name, or none,
+  // settles it.
+  for (const name of [...softEnds.keys()]) await sessionExists(name);
   const now = Date.now();
   for (const [name, pending] of [...softEnds]) {
     const st = readSessionState(name);
-    const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now);
+    const { pending: next, action } = stepSoftEnd(pending, st ? st.state : null, now,
+      { sessionId: (st && st.sessionId) || null, born: sessionBorn.get(name) || null });
     if (action === 'kill') {
       // THE ONE HOOK ARCHIVE ADDS TO THIS PATH. A session wound down by
       // POST /archive gets its card written here, in the instant before the
@@ -3502,6 +3653,14 @@ async function softEndTick() {
       softEnds.delete(name);
     } else if (action === 'expire') {
       log(`soft-end: ${name} never started a run, auto-end dropped`);
+      archiveIntents.delete(name);
+      softEnds.delete(name);
+    } else if (action === 'gone') {
+      // Its Claude exited, or the name is somebody else's now. Nothing of the
+      // wind-down is left to end, and what holds the name was never asked to
+      // wind down — so neither a kill nor an archive.
+      log(`soft-end: ${name}: the run it was asked of has ended or been replaced; `
+        + 'auto-end dropped');
       archiveIntents.delete(name);
       softEnds.delete(name);
     } else {
@@ -6450,13 +6609,66 @@ function cwdIsTrusted(dir) {
  * vocabulary is about `--allowedTools` for headless chats and has no meaning as
  * a `--permission-mode` for an interactive pane, and inventing a mapping would
  * mean guessing a flag value on the owner's behalf.
+ *
+ * `resume` is a reboot restore's conversation id, uuid-checked by the caller
+ * (projectRestoreCommand), the same check session-registry makes.
  */
-function claudeLaunchCommand({ claudeName, persona, model, effort }) {
-  const parts = ['claude', '--name', claudeName];
+function claudeLaunchCommand({ claudeName, persona, model, effort, resume = null }) {
+  const parts = ['claude'];
+  if (resume) parts.push('--resume', resume);
+  parts.push('--name', claudeName);
   if (model) parts.push('--model', model);
   if (effort) parts.push('--effort', effort);
   parts.push('--append-system-prompt-file', persona);
   return `${parts.join(' ')}; exec "$SHELL" -l`;
+}
+
+/**
+ * The command a reboot restore runs for a PROJECT session, or null to leave it to
+ * the plain resume.
+ *
+ * ⚠ THE PERSONA EXISTS ONLY IN A RUN THAT IS GIVEN THE FILE. The plain
+ * `claude --resume <id>` a restore runs for any session kept it only while
+ * Claude Code's recorded prompt did: gone at the first compaction after the
+ * restore, and at once for a conversation with no recording. The lead then had
+ * no manifest contract or tag (so detectManifest never adopted a proposal) and
+ * every member lost the peer-safety paragraph, while the dashboard showed the
+ * cluster alive. So a project session comes back launched as it was, plus the
+ * resume, with the persona rewritten from the project as it stands.
+ *
+ * Only the sessions appd launched with a persona: the lead, and members spawned
+ * from a manifest, which are the only ones recorded with a first prompt. An
+ * adopted member was started by somebody else and comes back as it was.
+ *
+ * `--model` only on a fresh start: a resumed conversation keeps the model it was
+ * on, which may be one the ladder moved it to, and the manifest's would undo it.
+ * `--effort` is not carried by a resume, so it is passed every time.
+ */
+function projectRestoreCommand(hit, entry, hasTranscript) {
+  if (!hit) return null;
+  const { project, member } = hit;
+  const lead = member.role === projectsLib.LEAD_ROLE;
+  if (!lead && !member.firstPrompt) return null;
+  let persona;
+  try {
+    persona = writePersona(project.id, member.role,
+      lead ? projectsLib.leadPersona(project) : projectsLib.memberPersona(project, member));
+  } catch (e) {
+    log(`session restore: ${entry.name}: the persona could not be written (${e.message}); resuming without it`);
+    return null;
+  }
+  const id = entry.claudeSessionId;
+  const canResume = !!id && sessreg.UUID_RE.test(id) && !!hasTranscript;
+  return {
+    canResume,
+    command: claudeLaunchCommand({
+      claudeName: member.claudeName,
+      persona,
+      model: canResume ? null : member.model,
+      effort: member.effort,
+      resume: canResume ? id : null,
+    }),
+  };
 }
 
 /**
@@ -6471,8 +6683,19 @@ function claudeLaunchCommand({ claudeName, persona, model, effort }) {
  */
 async function launchProjectSession(tmuxName, cwd, command) {
   await ensureTmuxServer();
+  // ⚠ ONLY A NAME NOBODY HOLDS. The clear below deletes the state file, the
+  // question sidecars and the permission hand-offs filed under this name, and
+  // tmux refusing the duplicate comes AFTER it — so a member whose name was
+  // already live (a session a previous project left behind, `web` + `api-lead`
+  // meeting `web-api`'s lead) wiped a running session's "needs you" and then
+  // failed anyway. The create route asks first for the same reason; the wording
+  // is tmux's own, so the spawn report reads the same either way.
+  const taken = await sessionExists(tmuxName);
+  if (taken !== false) {
+    return { error: taken ? `duplicate session: ${tmuxName}` : 'tmux is not answering right now' };
+  }
   // Whatever the last holder of this name left behind goes before the new
-  // session can be observed — the create route's own first move.
+  // session can be observed.
   clearSessionState(tmuxName);
   const r = await run('tmux', ['new-session', '-d', '-s', tmuxName, '-c', cwd, command]);
   if (r.err) {
@@ -11781,8 +12004,23 @@ async function handleRequest(req, res) {
             + 'then rename it');
         }
       }
+      // ⚠ NOT IN THE MIDDLE OF A DELIVERY, AND NO PUMP PASS UNTIL THE QUEUE HAS
+      // MOVED. A pass reads the session's name once and uses it across every
+      // await, and the queue only moves below, after tmux has renamed the session
+      // and said what it called it. A pass already typing a message, or one that
+      // started in between, pasted at the old name, was told "could not reach
+      // the pane buffer", and settled that message and every one behind it as
+      // failed. So a running pass finishes first, and the queue's lock is held
+      // until the queue has moved (released on every way out below).
+      const heldQueue = await holdQueue(from);
+      if (heldQueue === false) {
+        return sendErr(res, 409, 'a message is being typed into this session right now; rename it again in a moment');
+      }
       const r = await run('tmux', ['rename-session', '-t', `=${from}`, to]);
-      if (r.err) return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      if (r.err) {
+        releaseQueue(heldQueue);
+        return sendErr(res, 404, `tmux: ${r.stderr.trim() || 'no such session'}`);
+      }
       // ⚠ THE READBACK THAT RENAMED A BYSTANDER'S STATE. This asked tmux about
       // `-t '=<to>'` WITHOUT the trailing colon, and tmux resolves a colon-less
       // target by applying the same '.'-to-'_' rewrite it applies to a name — so
@@ -11798,6 +12036,7 @@ async function handleRequest(req, res) {
       // the live list, and returns null rather than guessing.
       const actual = await tmuxNameReadback(to);
       if (!actual) {
+        releaseQueue(heldQueue);
         return sendErr(res, 500, 'tmux renamed the session but will not say what it is called now');
       }
       // The state file is keyed by name; move it so state/transcript survive.
@@ -11825,6 +12064,14 @@ async function handleRequest(req, res) {
       if (actual !== from) {
         if (leases.has(from)) { leases.set(actual, leases.get(from)); leases.delete(from); }
         if (softEnds.has(from)) { softEnds.set(actual, softEnds.get(from)); softEnds.delete(from); }
+        // ⚠ AND THE ARCHIVE INTENT BESIDE IT, which is the half that says what the
+        // settle does. Left on the old name, a graceful archive renamed mid wrap-up
+        // was killed with no card and no transcript copy, and the stray intent then
+        // archived the next session to be soft-ended under the old name.
+        if (archiveIntents.has(from)) {
+          archiveIntents.set(actual, archiveIntents.get(from));
+          archiveIntents.delete(from);
+        }
         // ⚠ AND THE TWO THE RENAME USED TO DROP ON THE FLOOR. Both belong to a
         // session that was created SECONDS ago, which is exactly when a client
         // renames one — the app's create sheet names the session after the fact.
@@ -11839,6 +12086,14 @@ async function handleRequest(req, res) {
         //                 `GET /typing` under the new name says nothing is queued.
         if (launchingAt.has(from)) { launchingAt.set(actual, launchingAt.get(from)); launchingAt.delete(from); }
         if (unmarkedHeld.delete(from)) unmarkedHeld.add(actual);
+        // And what the typing path remembers about it (forgetSessionMemory): the
+        // last paste, which the duplicate rule and the draft guard read, travels
+        // with the session it was typed into. Left on the old name, the next
+        // session made under it was told a message it never got was "already sent".
+        if (lastPasted.has(from)) { lastPasted.set(actual, lastPasted.get(from)); lastPasted.delete(from); }
+        if (intoDraftAt.has(from)) { intoDraftAt.set(actual, intoDraftAt.get(from)); intoDraftAt.delete(from); }
+        if (liveKeysAt.has(from)) { liveKeysAt.set(actual, liveKeysAt.get(from)); liveKeysAt.delete(from); }
+        if (draftHeld.delete(from)) draftHeld.add(actual);
         const q = sendQueues.get(from);
         if (q) {
           // ⚠ AND ITS TIMER, WHICH IS CLOSED OVER THE OLD NAME. Left running it
@@ -11854,6 +12109,7 @@ async function handleRequest(req, res) {
       // The restore registry is keyed by name too; move it or the live session goes
       // unrecorded under the new name and the old name gets pruned as "ended".
       registryRename(from, actual);
+      releaseQueue(heldQueue);
       return sendJson(res, 200, { ok: true, name: actual });
     }
 

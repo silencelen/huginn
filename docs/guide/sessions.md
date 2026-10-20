@@ -132,7 +132,8 @@ behaviour off.
 
 Restarting or updating the daemon (`huginn-appd`) does not touch running sessions: tmux runs as its
 own service on the server. After the server itself reboots, the daemon recreates the sessions that
-were running and resumes each conversation with `claude --resume`.
+were running and resumes each conversation with `claude --resume`. A project's sessions come back
+with their project name and instructions, as they were first started.
 
 ## Terminal tab titles
 
@@ -181,6 +182,8 @@ default, the session then ends by itself once Claude Code settles.
 - If a question is waiting in the session, `huginn end` refuses: answer it first.
 - If Claude Code asks a question while it wraps up, auto-end is cancelled and the session stays
   open for you.
+- If Claude Code exits before it settles, or the session is ended another way, auto-end stands
+  down. A new session you start under the same name is never ended by it.
 - `--force` sends the message even when the server has no record of Claude Code running in the
   session (for example a session that is at its shell prompt).
 
@@ -204,7 +207,8 @@ last thing said, a copy of the transcript, and the exact `claude --resume` comma
 `huginn revive` recreates the session in its directory and resumes the conversation, restoring the
 transcript from the archive if Claude Code has since removed its own copy. If nothing resumable is
 left, you get a fresh Claude Code in the right directory, and the command says so. Attach with
-`huginn <name>` afterwards.
+`huginn <name>` afterwards. A conversation you bring back yourself, with its resume command or
+Claude Code's `/resume`, is listed as a session again and its archive entry shows where it runs.
 
 ### Hard end: `huginn kill`
 

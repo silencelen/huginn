@@ -152,7 +152,7 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/sessions` | Sessions and their states. `?preview=1` adds titles and activity previews. |
 | POST | `/v1/sessions` | `{name}`: create a session running Claude Code. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
-| POST | `/v1/sessions/<name>/rename` | `{name}`: rename it. |
+| POST | `/v1/sessions/<name>/rename` | `{name}`: rename it. Queued messages move with it; `409` if one is still being typed after 15 seconds. |
 | GET | `/v1/sessions/<name>/screen` | The terminal screen. `?cols=&rows=` report your size; `?live=1` also resizes the pane for you (one client at a time holds this lease); `?history=` adds scrollback; `?hash=&wait=` long-polls. |
 | DELETE | `/v1/sessions/<name>/size` | Release your screen-size lease. |
 | GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. A `system` event with a `body` is a headline over a longer text: `fold: "peer"` is a message from another session or a subagent's report, `fold: "compact"` is the summary written after a compaction. |

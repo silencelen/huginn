@@ -682,15 +682,18 @@ test('an archived session is gone from /v1/sessions, even while tmux still has i
   const before = await api('/v1/sessions');
   assert.ok(before.body.sessions.some((s) => s.name === name), 'listed while it is a session');
 
+  // The leftover, staged: the row is finished but tmux still has a session
+  // showing that conversation's last state, stamped BEFORE the archive ended.
+  // (A conversation that says anything after the end has been resumed, and is a
+  // session again; session-name-reuse.test.js holds that half.)
+  const twin = mkSession('hidden-twin');
+  await wait(1_100);   // whole seconds: the state must postdate the session's own birth…
+  writeState(twin, 'idle', { sessionId: id, transcript: writeTranscript(id) });
+  await wait(1_100);   // …and predate the archive's end
   await api(`/v1/sessions/${name}/archive`, { method: 'POST', body: JSON.stringify({ mode: 'now' }) });
-  // The crash window, staged: the row is finished but a session of that name and
-  // that conversation is somehow live again.
-  sh('tmux', ['new-session', '-d', '-s', name, '-c', tmp, 'cat >/dev/null']);
-  madeSessions.add(name);
-  writeState(name, 'idle', { sessionId: id, transcript: writeTranscript(id) });
 
   const after_ = await api('/v1/sessions');
-  assert.equal(false, after_.body.sessions.some((s) => s.name === name),
+  assert.equal(false, after_.body.sessions.some((s) => s.name === twin),
     'an archived conversation is not a session any more');
   assert.equal(true, (await archives()).find((a) => a.id === id).live,
     'and it is not hidden — the archive list says it is running');
