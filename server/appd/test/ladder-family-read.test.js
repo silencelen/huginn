@@ -50,7 +50,7 @@ function reader(files) {
   return lift(['readSessionModel'], {
     fs, path, Buffer, readTranscript, headroomLib, paneLib, Date, JSON,
     readSessionState: (name) => (files[name] ? { sessionId: `sid-${name}`, transcript: files[name] } : null),
-  }, { helpers: ['sessionOnlyModel', 'localCommandOutput', 'LADDER_FEEDBACK_RE', 'transcriptTail'] }).readSessionModel;
+  }, { helpers: ['lastModelRecord', 'localCommandOutput', 'LADDER_FEEDBACK_RE', 'transcriptTail'] }).readSessionModel;
 }
 
 /** The tick's own line: the family read, or the record's when the read has none. */

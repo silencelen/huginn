@@ -7994,8 +7994,11 @@ function readSessionModel(name) {
   } catch { /* unreadable transcript is not fatal for a tick */ }
   // The same window readTranscript starts from, so a switch it could have seen
   // is never one this misses.
-  const switched = sessionOnlyModel(transcriptTail(st.transcript, null, 256 * 1024));
-  if (switched) out.model = switched;
+  const last = lastModelRecord(transcriptTail(st.transcript, null, 256 * 1024));
+  if (last && last.switched) out.model = last.model;
+  // When the record that names the model now was written, or null: what tells a
+  // session that is back on Fable from a read that is merely stale.
+  out.modelAt = last ? last.at : null;
   const tail = transcriptTail(st.transcript, null, 32 * 1024);
   if (tail && tail.text.includes('model_consent_fallback')) {
     for (const line of tail.text.split('\n')) {
@@ -8007,6 +8010,7 @@ function readSessionModel(name) {
             choice: rec.choice ?? null,
             to: rec.toModel ?? rec.to_model ?? rec.model ?? null,
             persistedAsDefault: rec.persisted_as_default === true || rec.persistedAsDefault === true,
+            at: Date.parse(rec.timestamp) || null,
           };
         }
       } catch { /* a truncated first line in the tail */ }
@@ -8016,8 +8020,9 @@ function readSessionModel(name) {
 }
 
 /**
- * The model a session-only switch put this session on, when that switch is the
- * newest record in the tail that names a model at all — or null.
+ * The newest record in the tail that names the session's model — a reply, the
+ * picker's session-only switch, a typed `/model <name>` — as
+ * `{model, at, switched}`, or null.
  *
  * ⚠ readTranscript takes the model from the last ASSISTANT record (and from a
  * typed `/model <name>`), and the picker's `s` writes neither. Claude Code
@@ -8030,35 +8035,40 @@ function readSessionModel(name) {
  * once the week reset its move back up was dropped as "the family already
  * changed" on every tick until it replied.
  */
-function sessionOnlyModel(tail) {
+function lastModelRecord(tail) {
   if (!tail || !tail.text) return null;
-  let model = null;
+  let last = null;
   for (const line of tail.text.split('\n')) {
     const reply = /"type"\s*:\s*"assistant"/.test(line);
     if (!reply && !line.includes('local-command-stdout') && !line.includes('command-name')) continue;
     let rec;
     try { rec = JSON.parse(line); } catch { continue; }      // the partial first line
     if (!rec || typeof rec !== 'object') continue;
+    const at = Date.parse(rec.timestamp) || null;
     if (rec.type === 'assistant') {
       // A reply names its model; `<synthetic>` (an API error the CLI wrote)
       // names none and changes nothing.
-      if (headroomLib.familyOf(rec.message && rec.message.model)) model = null;
+      const m = rec.message && rec.message.model;
+      if (headroomLib.familyOf(m)) last = { model: m, at, switched: false };
       continue;
     }
+    // A row that names no family (`Default`, `/model default`) says nothing this
+    // can use — and that it is unknown is newer than whatever came before.
     const said = localCommandOutput(rec);
-    const m = said && LADDER_FEEDBACK_RE.exec(said);
-    if (m) {
-      const label = m[1].replace(/`/g, '').trim();
-      // A row that names no family (`Default`) says nothing this can use.
-      model = headroomLib.familyOf(label) ? label : null;
+    const sw = said && LADDER_FEEDBACK_RE.exec(said);
+    if (sw) {
+      const label = sw[1].replace(/`/g, '').trim();
+      last = headroomLib.familyOf(label) ? { model: label, at, switched: true } : null;
       continue;
     }
-    // A typed `/model <name>` is newer still; readTranscript reads that one.
     const c = rec.type === 'user' && rec.message && typeof rec.message.content === 'string'
       ? rec.message.content : '';
-    if (/<command-name>\s*\/model\s*<\/command-name>/.test(c) && /<command-args>\s*\S/.test(c)) model = null;
+    if (!/<command-name>\s*\/model\s*<\/command-name>/.test(c)) continue;
+    const arg = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(c);
+    if (!arg || !arg[1]) continue;                          // the bare picker: names nothing yet
+    last = headroomLib.familyOf(arg[1]) ? { model: arg[1], at, switched: false } : null;
   }
-  return model;
+  return last;
 }
 
 /**
@@ -8534,6 +8544,23 @@ function noteSessionModel(rec, read, now, settings) {
   // appd's that did land is never taken for Claude Code's own.
   if (seen) rec.ladder = headroomLib.settleLadder(rec.ladder, seen);
 
+  // ⚠ A NATIVE MARK ENDS WHEN THE SESSION IS BACK ON FABLE, by any path. Only
+  // the Undo button used to clear it, so a session the owner put back with
+  // `/model` in the terminal (or one restarted on its default) kept it for good:
+  // decide refuses to move a marked session at all ("appd never fights a native
+  // switch"), so the next red week ran it straight into the consent dialog the
+  // 92% move exists to prevent, with a `why` naming a switch long undone. The
+  // evidence has to be NEWER than the mark: right after a consent switch the
+  // transcript still ends on the last Fable reply, and a `/model` the owner
+  // opened and cancelled names no model at all.
+  const mark = rec.nativeSwitch;
+  if (mark.seenAt && seen === 'fable' && Number(read.modelAt) > Number(mark.seenAt)) {
+    rec.nativeSwitch = { seenAt: null, to: null, clearedAt: now };
+    // The offer back belonged to that switch; a later one gets its own.
+    rec.offeredLadderUpAt = null;
+    log(`headroom: ${rec.name} is back on fable; the switch to ${mark.to || 'another model'} no longer holds the ladder off`);
+  }
+
   // A NATIVE switch: the family moved away from fable and appd typed nothing.
   // Recorded, logged, and never fought — the 92% ladder exists precisely so
   // the consent dialog does not appear on an attended session in the first
@@ -8555,7 +8582,11 @@ function noteSessionModel(rec, read, now, settings) {
     log(`headroom: native fallback observed on ${rec.name} -> ${family}`);
   }
   if (read.consent) {
-    if (!rec.nativeSwitch.seenAt) {
+    // Only a consent record newer than the last clear: the one that made a mark
+    // already cleared sits in the tail for many ticks yet, and re-arming from it
+    // undid the clear on the very next pass.
+    const clearedAt = Number(rec.nativeSwitch.clearedAt) || 0;
+    if (!rec.nativeSwitch.seenAt && (!clearedAt || Number(read.consent.at) > clearedAt)) {
       rec.nativeSwitch = { seenAt: now, to: read.consent.to || family, how: 'consent', choice: read.consent.choice };
     }
     if (read.consent.persistedAsDefault) {
@@ -11455,7 +11486,10 @@ async function handleRequest(req, res) {
         // Fable would mean this session could never be moved down again however
         // red the week got. `humanSetModelAt` is what holds the arbiter off for
         // the next ten minutes instead.
-        if (native) r2.nativeSwitch = { seenAt: null, to: null };
+        if (native) {
+          r2.nativeSwitch = { seenAt: null, to: null, clearedAt: Date.now() };
+          r2.offeredLadderUpAt = null;
+        }
         r2.family = back;
         st2.arbiter.lastLadderAt = Date.now();
         st2.arbiter.lastAction = { type: 'ladder_up', at: Date.now(), name, to: back, by: 'undo' };
