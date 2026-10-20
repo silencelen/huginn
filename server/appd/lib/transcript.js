@@ -1012,6 +1012,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             }
           }
         } else if (d.operation === 'dequeue') {
+          sawDequeue = true;
           // THE QUEUE DRAINED, into a Claude that had gone idle: everything
           // still waiting was delivered HERE, in the order it was sent.
           //
@@ -1034,7 +1035,6 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           // iterating it delivers all the copies of one message before the first
           // copy of another. Position in the events list is the order they were
           // typed, which is the order the queue hands them over.
-          sawDequeue = true;
           waiting.sort((a, b) => a.at - b.at);
           queued.clear();
           for (const w of waiting) {
