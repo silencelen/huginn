@@ -392,3 +392,47 @@ test('a session renamed while its archive is pending is archived when it settles
   assert.equal(row.note, 'keep me', 'with the note the archive was asked for with');
   assert.equal(alive(to), false, 'and the session was ended');
 });
+
+// ---------------------------------------------------- the duplicate memory
+
+test('a session deleted and made again under its name does not inherit "already sent"', async () => {
+  // The 3.5.1 rule answers `duplicate:true` for the same message delivered to
+  // the same session seconds ago — the app re-sending a composer that emptied.
+  // A NEW session under the old name has never been sent anything, and the
+  // ordinary "start over" move is exactly: end it, make it again, send again.
+  const name = await createSession('dup-reuse');
+  const text = 'please re-run the migration on the staging box';
+  const first = await send(name, text);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.ok(await untilTrue(() => readOr(outFor(name)) === `${text}\n`), 'precondition: the first copy went in');
+
+  const del = await api(`/v1/sessions/${name}`, { method: 'DELETE' });
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  await createSession(name);
+  const again = await send(name, text);
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.notEqual(again.body.duplicate, true, 'the new session was never sent this message');
+  assert.ok(await untilTrue(() => readOr(outFor(name)) === `${text}\n${text}\n`),
+    'and it reaches the new session');
+});
+
+test('a session renamed away leaves no "already sent" behind under its old name', async () => {
+  // The same memory has to travel WITH a rename: the session that was sent the
+  // message is now called something else, and the next session made under the
+  // old name is a stranger to it.
+  const name = await createSession('dup-ren');
+  const text = 'tag the release once the build is green';
+  await send(name, text);
+  assert.ok(await untilTrue(() => readOr(outFor(name)) === `${text}\n`), 'precondition: the first copy went in');
+
+  const to = 'dup-ren-old';
+  madeSessions.add(to);
+  const rn = await api(`/v1/sessions/${name}/rename`, { method: 'POST', body: JSON.stringify({ name: to }) });
+  assert.equal(rn.status, 200, JSON.stringify(rn.body));
+  await createSession(name);
+  const again = await send(name, text);
+  assert.equal(again.status, 200, JSON.stringify(again.body));
+  assert.notEqual(again.body.duplicate, true, 'the new session was never sent this message');
+  assert.ok(await untilTrue(() => readOr(outFor(name)) === `${text}\n${text}\n`),
+    'and it reaches the new session');
+});

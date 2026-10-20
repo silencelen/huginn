@@ -866,6 +866,8 @@ function clearSessionState(name) {
   permhook.clearRequests(STATE_DIR, name);
   modelswitch.clearSwitch(STATE_DIR, name);
   sessionBorn.delete(name);
+  // And what this daemon remembers about the previous holder in memory.
+  forgetSessionMemory(name);
 }
 
 /**
@@ -2546,6 +2548,25 @@ function noteIntoDraft(name, waitedMs, composer) {
 /** The next ordinary delivery is the answer to "is it still true?" — it is not. */
 function clearIntoDraft(name) { intoDraftAt.delete(name); }
 function intoDraftFor(name) { return intoDraftAt.get(name) || null; }
+
+/**
+ * What the typing path remembers IN MEMORY under a session's name, dropped when
+ * the name changes hands (clearSessionState).
+ *
+ * ⚠ THE FILES ARE NOT ALL A NAME CARRIES. These maps are facts about the session
+ * that HAD the name, exactly like its state file, and they were only ever pruned
+ * by age. So a session deleted and made again under its old name inherited the
+ * old one's duplicate memory: the same message sent to the new session inside
+ * half a minute was answered `duplicate:true` and never typed, and its into-draft
+ * notice and live-keys stamp came along too. The rename route moves them instead.
+ */
+function forgetSessionMemory(name) {
+  lastPasted.delete(name);
+  intoDraftAt.delete(name);
+  liveKeysAt.delete(name);
+  draftHeld.delete(name);
+  unmarkedHeld.delete(name);
+}
 
 function markLaunching(name) {
   const now = Date.now();
@@ -11625,6 +11646,14 @@ async function handleRequest(req, res) {
         //                 `GET /typing` under the new name says nothing is queued.
         if (launchingAt.has(from)) { launchingAt.set(actual, launchingAt.get(from)); launchingAt.delete(from); }
         if (unmarkedHeld.delete(from)) unmarkedHeld.add(actual);
+        // And what the typing path remembers about it (forgetSessionMemory): the
+        // last paste, which the duplicate rule and the draft guard read, travels
+        // with the session it was typed into. Left on the old name, the next
+        // session made under it was told a message it never got was "already sent".
+        if (lastPasted.has(from)) { lastPasted.set(actual, lastPasted.get(from)); lastPasted.delete(from); }
+        if (intoDraftAt.has(from)) { intoDraftAt.set(actual, intoDraftAt.get(from)); intoDraftAt.delete(from); }
+        if (liveKeysAt.has(from)) { liveKeysAt.set(actual, liveKeysAt.get(from)); liveKeysAt.delete(from); }
+        if (draftHeld.delete(from)) draftHeld.add(actual);
         const q = sendQueues.get(from);
         if (q) {
           // ⚠ AND ITS TIMER, WHICH IS CLOSED OVER THE OLD NAME. Left running it
