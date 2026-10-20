@@ -624,7 +624,9 @@ test('lockTree takes ownership and wipes EVERY explicit ACE before granting', ()
   assert.ok(grant, 'no grant step');
   assert.match(grant, /\*S-1-5-18:\(OI\)\(CI\)F/);
   assert.match(grant, /\*S-1-5-32-544:\(OI\)\(CI\)F/);
-  assert.match(grant, new RegExp('\\*' + me.replace(/-/g, '\\-') + ':\\(OI\\)\\(CI\\)RX'));
+  // The installer's own grant, matched as plain text: spliced into a RegExp the
+  // SID would need every metacharacter escaped, and this check needs no pattern.
+  assert.ok(grant.includes(`*${me}:(OI)(CI)RX`), `no read-and-execute grant for the installer: ${grant}`);
   assert.match(grant, /\/t\b/, 'the grant must recurse (/t) to fix adopted children');
   // 4. device\ opens to the installer so huginn core can reseed the token.
   //    (path.join uses the HOST separator; icacls only ever runs on Windows,
