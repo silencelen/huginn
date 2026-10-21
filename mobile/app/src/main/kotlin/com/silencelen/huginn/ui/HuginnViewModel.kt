@@ -282,8 +282,8 @@ internal fun headroomPatch(s: com.silencelen.huginn.data.HeadroomSettings): kotl
 /**
  * THE SECOND CURSOR PAIR, and everything that has to move with it.
  *
- * There is no such thing as one cursor for two files. `transcriptOffset` and
- * `historyStart` on the view model are byte positions in the SESSION's own
+ * There is no such thing as one cursor for two files. The offset and
+ * `historyStart` in [SessionLoads] are byte positions in the SESSION's own
  * `.jsonl`; these are byte positions in one agent's. Reusing the first pair for
  * both would tail an agent from an offset measured in the parent — meaningless
  * there and, on a long session, past the end of the file.
@@ -293,6 +293,31 @@ internal fun headroomPatch(s: com.silencelen.huginn.data.HeadroomSettings): kotl
  * Application. Pure Kotlin: the state machine is testable, and `delay` and the
  * HTTP call around it are not the part worth testing.
  */
+/**
+ * The view model's client: every request it makes waits until [ready] says the
+ * settings have been read, then reads the address and token they hold.
+ *
+ * A function of its own, and `internal`, so the GATE is what a test builds: the
+ * view model cannot be built without an Application, and this is the one place
+ * the wiring that keeps a cold or restored open from failing can be held to. See
+ * `HuginnClient`'s `settingsLoaded` for what it holds back and what still fails.
+ */
+internal fun gatedClient(
+    baseUrl: () -> String,
+    token: () -> String,
+    clientId: () -> String,
+    ready: StateFlow<Boolean>,
+    transport: com.silencelen.huginn.data.DaemonTransport = com.silencelen.huginn.data.huginnTransport(),
+    pins: com.silencelen.huginn.data.PinBook = com.silencelen.huginn.data.PinBook.process,
+): HuginnClient = HuginnClient(
+    baseUrlProvider = baseUrl,
+    tokenProvider = token,
+    clientIdProvider = clientId,
+    transport = transport,
+    pins = pins,
+    settingsLoaded = { if (!ready.value) ready.first { it } },
+)
+
 /**
  * The stream strip's agent list.
  *
@@ -487,6 +512,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      *
      * A gate rather than another one-off await (the share path already grew one)
      * so the rule holds for every caller, including ones added later.
+     *
+     * ⚠⚠ AND THE CLIENT HOLDS IT NOW, not each caller ([gatedClient]). The
+     * per-caller awaits below never reached the session and chat loaders, which
+     * a notification tap or a restore after a process kill starts on the first
+     * frame: they asked with no token ("Rejected by huginn: check the token in
+     * Settings") or no address ("No route yet"), for seconds, on a session that
+     * was fine. Every request now waits here, whoever makes it. [awaitReady] is
+     * still what VIEW-MODEL state read off the store waits on: the route book
+     * before a route is resolved or edited.
      */
     private val ready = MutableStateFlow(false)
 
@@ -496,14 +530,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private var clientIdNow = ""
 
-    private val client = HuginnClient(
-        baseUrlProvider = { baseUrlNow },
-        tokenProvider = { tokenNow },
+    private val client = gatedClient(
+        baseUrl = { baseUrlNow },
+        token = { tokenNow },
         // ⚠ THE LEASE IS KEYED ON THIS. One pane-size lease per session now, and
         // the daemon decides "is this the holder asking?" by the install id on the
         // request. With none, this phone and every other anonymous client are the
         // same client as far as the lease is concerned, and the flap comes back.
-        clientIdProvider = { clientIdNow },
+        clientId = { clientIdNow },
+        ready = ready,
     )
 
     /**
@@ -1239,6 +1274,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun resolveRoute(silent: Boolean = false, force: Boolean = false) {
         viewModelScope.launch {
+            // The BOOK is view-model state read off the store, which the client's
+            // gate does not cover: resolved before it has loaded, an empty book
+            // answers "No routes yet" about a phone with eight of them.
+            awaitReady()
             _resolvingRoute.value = true
             val outcome = RouteResolver.resolveProving(
                 book = _routeBook.value,
@@ -1379,6 +1418,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** [editRoutes], awaited — for a caller that must act on the SETTLED book. */
     private suspend fun editRoutesNow(edit: (RouteBook) -> RouteBook): Boolean =
         routeEdits.withLock {
+            // ⚠ AN EDIT OF THE BOOK BEFORE IT HAS LOADED WOULD BE SAVED OVER IT:
+            // the edit applies to whatever `_routeBook` holds, which is empty
+            // until the store answers, and applyBook persists the result.
+            awaitReady()
             val next = runCatching { edit(_routeBook.value) }
                 .onFailure { _routeNote.value = it.message ?: RouteGuard.REFUSED }
                 .getOrNull() ?: return@withLock false
@@ -3410,14 +3453,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private val _transcript = MutableStateFlow<TranscriptPage?>(null)
-    val transcript: StateFlow<TranscriptPage?> = _transcript.asStateFlow()
+    /** The open session's history and the strip's agents. See [SessionLoads]. */
+    private val sessionLoads = SessionLoads(
+        scope = viewModelScope,
+        client = client,
+        errText = ::errText,
+        toast = { _toast.value = it },
+        maxEvents = MAX_EVENTS,
+    )
 
-    private val _transcriptError = MutableStateFlow<String?>(null)
-    val transcriptError: StateFlow<String?> = _transcriptError.asStateFlow()
+    val transcript: StateFlow<TranscriptPage?> = sessionLoads.history
+
+    val transcriptError: StateFlow<String?> = sessionLoads.historyError
 
     private var screenJob: Job? = null
-    private var transcriptJob: Job? = null
 
 
     /** Geometry the phone can actually display, reported so tmux can match it. */
@@ -3570,8 +3619,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun stopScreenPolling() {
         screenJob?.cancel()
         screenJob = null
-        transcriptJob?.cancel()
-        transcriptJob = null
         currentSession = null
         forceResize = false
         // Live typing belongs to the visit, not to the app. A stale `true` here
@@ -3583,119 +3630,29 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         wantCols = null
         wantRows = null
         _screen.value = null
-        _transcript.value = null
-        _transcriptError.value = null
-        // The history handles belong to the session being left. Kept, they made
-        // the NEXT session's first "load earlier" ask for a byte offset into a
-        // file it never wrote — and a spinner left true here can never be
-        // cleared, since only the in-flight request clears it and that request
-        // is now for somebody else.
-        historyStart = null
-        _loadingHistory.value = false
+        // The history and its handles belong to the session being left.
+        sessionLoads.stopHistory()
         // Hand the pane size back so an attached laptop re-fits immediately
         // instead of waiting out the server-side lease — but ONLY if this phone
         // took it. Closing a session it merely read must put nothing on the wire.
         releaseLease()
     }
 
-    /**
-     * The byte the OLDEST page on screen begins at, and the handle for reading
-     * further back. Null until a page lands; 0 once the whole conversation is in
-     * view.
-     */
-    private var historyStart: Long? = null
-
-    private val _loadingHistory = MutableStateFlow(false)
-    val loadingHistory: StateFlow<Boolean> = _loadingHistory.asStateFlow()
+    val loadingHistory: StateFlow<Boolean> = sessionLoads.loadingEarlier
 
     /** True while there is still conversation above what is on screen. */
-    val hasEarlier: StateFlow<Boolean> = _transcript
+    val hasEarlier: StateFlow<Boolean> = sessionLoads.history
         .map { (it?.windowStart ?: 0L) > 0L }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    /**
-     * Reads the page before the oldest one on screen and puts it in front.
-     *
-     * A cold open only gets the tail, and on a long session that is a sliver of
-     * it — 51 events out of 3452 on a real transcript here. Pages abut, because
-     * a windowStart is a record boundary, so this neither repeats nor skips.
-     */
-    fun loadEarlierTranscript(name: String) {
-        val until = historyStart ?: _transcript.value?.windowStart ?: return
-        if (until <= 0L || _loadingHistory.value) return
-        _loadingHistory.value = true
-        viewModelScope.launch {
-            val page = runCatching { client.sessionTranscript(name, until = until) }
-                .onFailure { if (stillReading(name)) _toast.value = errText(it) }
-                .getOrNull()
-            // ⚠ THE ANSWER IS ONLY FOR THE SESSION THAT ASKED. This launch is
-            // tracked by no field and the view model outlives the screen, so a
-            // page that arrives after the reader has opened another session used
-            // to be welded on top of THAT session's transcript — another
-            // conversation, permanently, with no restart guard to undo it
-            // (prependTranscriptPage keeps the current page's claudeSessionId).
-            // The request can be in flight for tens of seconds: the daemon reads
-            // backwards with a doubling window and this call has no timeout.
-            if (page != null && stillReading(name)) {
-                historyStart = page.windowStart
-                _transcript.value = prependTranscriptPage(_transcript.value, page)
-            }
-            if (stillReading(name)) _loadingHistory.value = false
-        }
-    }
+    /** Reads the page before the oldest one on screen and puts it in front. See [SessionLoads.loadEarlier]. */
+    fun loadEarlierTranscript(name: String) = sessionLoads.loadEarlier(name)
 
-    /** Whether [name] is still the session on screen — see [loadEarlierTranscript]. */
+    /** Whether [name] is still the session on screen — see [loadEarlierAgent]. */
     private fun stillReading(name: String): Boolean = pageStillWanted(name, currentSession)
 
-    /** Tails the session's Claude transcript: the structured conversation view. */
-    fun startTranscriptPolling(name: String) {
-        transcriptJob?.cancel()
-        _transcript.value = null
-        _transcriptError.value = null
-        historyStart = null
-        transcriptJob = viewModelScope.launch {
-            var offset: Long? = null
-            while (isActive) {
-                val r = runCatching { client.sessionTranscript(name, offset) }
-                r.onSuccess { page ->
-                    _transcriptError.value = null
-                    // The tmux name now belongs to a different Claude session, so
-                    // both handles into the old transcript are void: the offset is
-                    // a byte position in a file this session never wrote, and the
-                    // history handle points into its history. Start over; the next
-                    // poll reads the new session's tail from scratch.
-                    if (isTranscriptRestart(_transcript.value, page)) {
-                        offset = null
-                        historyStart = null
-                    } else {
-                        offset = page.nextOffset
-                        // The first page decides where history begins; every tail
-                        // read after it is BELOW that and must not move the handle.
-                        if (historyStart == null) historyStart = page.windowStart
-                    }
-                    // :core's merge, not a copy of it. This was hand-rolled here
-                    // and had quietly fallen behind the shared one in ways the
-                    // screen could see: it dropped `state`, `modelDisplay`,
-                    // `mode` and `claudeSessionId` on every tail read that did not
-                    // happen to contain those records — so the model control fell
-                    // back to a placeholder and the Send/Stop flag, which is
-                    // derived from `state`, reverted seconds after the screen
-                    // opened. It also never learned to clear the `queued` badge
-                    // when the daemon reported a delivery, so a message that had
-                    // landed went on claiming to be waiting.
-                    _transcript.value = mergeTranscriptPage(_transcript.value, page, MAX_EVENTS)
-                }.onFailure { e ->
-                    if (_transcript.value == null) {
-                        _transcriptError.value = when {
-                            e is HuginnClient.HuginnException && e.code == 409 -> e.message
-                            else -> errText(e)
-                        }
-                    }
-                }
-                delay(2500)
-            }
-        }
-    }
+    /** Tails the session's Claude transcript: the structured conversation view. See [SessionLoads]. */
+    fun startTranscriptPolling(name: String) = sessionLoads.startHistory(name)
 
     // --------------------------------------------------------- agent streams
 
@@ -3714,7 +3671,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val selectedStream: StateFlow<String?> = _selectedStream.asStateFlow()
 
     /**
-     * The PICKED agent's transcript, kept entirely apart from [_transcript].
+     * The PICKED agent's transcript, kept entirely apart from [transcript].
      *
      * A separate page rather than a filter on the main one, and that is the whole
      * design: the two describe different files, so the parent's byte offsets say
@@ -3733,15 +3690,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val streamsSupported: StateFlow<Boolean> = _streamsSupported.asStateFlow()
 
     /** Every agent this session has spawned, for the picker strip. */
-    private val _streamAgents = MutableStateFlow<List<com.silencelen.huginn.data.AgentRun>>(emptyList())
-    val streamAgents: StateFlow<List<com.silencelen.huginn.data.AgentRun>> = _streamAgents.asStateFlow()
+    val streamAgents: StateFlow<List<com.silencelen.huginn.data.AgentRun>> = sessionLoads.agents
 
     /** Whether the strip's `…` pill is unfolded. @see AgentStream.expanded */
     private val _streamsExpanded = MutableStateFlow(false)
     val streamsExpanded: StateFlow<Boolean> = _streamsExpanded.asStateFlow()
 
     private var agentStreamJob: Job? = null
-    private var agentListJob: Job? = null
 
     private fun publishStream() {
         _selectedStream.value = stream.selected
@@ -3785,24 +3740,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * The agents themselves, for the strip.
      *
-     * See [fetchStreamAgents] for why this is the DEFAULT listing rather than
-     * `all = true`.
+     * See [fetchStreamAgents] for why this is `all = true`.
      */
-    fun startStreamAgentsPolling(name: String) {
-        agentListJob?.cancel()
-        agentListJob = viewModelScope.launch {
-            awaitReady()
-            while (isActive) {
-                runCatching { fetchStreamAgents(client, name) }
-                    .onSuccess { _streamAgents.value = it }
-                delay(AGENTS_POLL_MS)
-            }
-        }
-    }
+    fun startStreamAgentsPolling(name: String) = sessionLoads.startAgents(name)
 
     /** The strip, from what has landed, what is picked, and whether the pill is open. */
     fun streamItems(nowSec: Long): List<StreamPicker.Item> =
-        stream.items(_streamAgents.value, nowSec)
+        stream.items(sessionLoads.agents.value, nowSec)
 
     fun toggleStreamsExpanded() {
         stream.toggleExpanded()
@@ -3812,9 +3756,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** Leaving the session: every stream handle goes with it. */
     fun stopStreamPolling() {
         agentStreamJob?.cancel(); agentStreamJob = null
-        agentListJob?.cancel(); agentListJob = null
+        sessionLoads.stopAgents()
         stream.reset()
-        _streamAgents.value = emptyList()
         publishStream()
     }
 
