@@ -93,11 +93,11 @@ const TASK_CHUNK = 65536;
 const TASK_MAX = 1024 * 1024;
 
 /**
- * The task an agent was given: its first user record, read from the file HEAD.
- * readTranscript tails the file, which for the task would mean reading megabytes
- * to find the first line.
+ * The task line and whether it is FINAL: nothing appended to the file later can
+ * change it, because the first record's newline has landed (or the cap has been
+ * read — the first megabyte of an append-only file is what it is).
  */
-function agentTask(file, fsImpl = fs) {
+function readTaskHead(file, fsImpl = fs) {
   let fd = null;
   try {
     fd = fsImpl.openSync(file, 'r');
@@ -112,18 +112,30 @@ function agentTask(file, fsImpl = fs) {
       if (at >= 0 && at < n) { nl = head.length - n + at; break; }
       if (head.length >= TASK_MAX) break;
     }
-    const firstLine = nl >= 0 ? head.toString('utf8', 0, nl) : head.toString('utf8');
-    const rec = JSON.parse(firstLine);
-    const c = rec && rec.message && rec.message.content;
-    const text = typeof c === 'string'
-      ? c
-      : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => b.text).join(' ') : '';
-    // Prompts often open with a boilerplate CONTEXT block; the first line is
-    // still the best available one-line label.
-    return text.replace(/\s+/g, ' ').trim().slice(0, 160) || null;
-  } catch { return null; } finally {
+    const final = nl >= 0 || head.length >= TASK_MAX;
+    try {
+      const firstLine = nl >= 0 ? head.toString('utf8', 0, nl) : head.toString('utf8');
+      const rec = JSON.parse(firstLine);
+      const c = rec && rec.message && rec.message.content;
+      const text = typeof c === 'string'
+        ? c
+        : Array.isArray(c) ? c.filter((b) => b.type === 'text').map((b) => b.text).join(' ') : '';
+      // Prompts often open with a boilerplate CONTEXT block; the first line is
+      // still the best available one-line label.
+      return { task: text.replace(/\s+/g, ' ').trim().slice(0, 160) || null, final };
+    } catch { return { task: null, final }; }
+  } catch { return { task: null, final: false }; } finally {
     if (fd !== null) { try { fsImpl.closeSync(fd); } catch { } }
   }
+}
+
+/**
+ * The task an agent was given: its first user record, read from the file HEAD.
+ * readTranscript tails the file, which for the task would mean reading megabytes
+ * to find the first line.
+ */
+function agentTask(file, fsImpl = fs) {
+  return readTaskHead(file, fsImpl).task;
 }
 
 /**
@@ -165,26 +177,38 @@ function journalSummaries(journalFile, fsImpl = fs) {
  * failure from a success, needs the whole parent transcript walked.
  */
 function journalIndex(journalFile, fsImpl = fs) {
-  const out = { summaries: new Map(), settled: new Set(), failed: new Set(), started: new Set() };
+  const out = emptyJournalIndex();
   let text = '';
   try { text = fsImpl.readFileSync(journalFile, 'utf8'); } catch { return out; }
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const d = JSON.parse(line);
-      if (!d || !d.agentId) continue;
-      if (d.type === 'started') { out.started.add(d.agentId); continue; }
-      if (d.type === 'failed') { out.failed.add(d.agentId); continue; }
-      if (d.type !== 'result') continue;
-      out.settled.add(d.agentId);
-      const r = d.result;
-      const summary = typeof r === 'string' ? r
-        : r && typeof r.summary === 'string' ? r.summary
-          : null;
-      if (summary) out.summaries.set(d.agentId, summary.replace(/\s+/g, ' ').trim().slice(0, 160));
-    } catch { /* half-written line */ }
-  }
+  for (const line of text.split('\n')) applyJournalLine(out, line);
   return out;
+}
+
+function emptyJournalIndex() {
+  return { summaries: new Map(), settled: new Set(), failed: new Set(), started: new Set() };
+}
+
+/** One journal line's contribution to a journalIndex. */
+function applyJournalLine(out, line) {
+  if (!line.trim()) return;
+  let d;
+  try { d = JSON.parse(line); } catch { return; /* half-written line */ }
+  applyJournalRecord(out, d);
+}
+
+function applyJournalRecord(out, d) {
+  try {
+    if (!d || !d.agentId) return;
+    if (d.type === 'started') { out.started.add(d.agentId); return; }
+    if (d.type === 'failed') { out.failed.add(d.agentId); return; }
+    if (d.type !== 'result') return;
+    out.settled.add(d.agentId);
+    const r = d.result;
+    const summary = typeof r === 'string' ? r
+      : r && typeof r.summary === 'string' ? r.summary
+        : null;
+    if (summary) out.summaries.set(d.agentId, summary.replace(/\s+/g, ' ').trim().slice(0, 160));
+  } catch { /* a shape nothing above expected */ }
 }
 
 /**
@@ -239,6 +263,164 @@ function agentMeta(file, fsImpl = fs) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------- what a file already said
+//
+// A listing used to derive every row from scratch on every call: the head read
+// for the task, a tail parse for the last line, the sibling meta, and the whole
+// run journal once per run. The stream picker asks for ALL of a session's
+// agents each time a session is opened, and a finished agent never changes
+// again, so nearly all of that work was the same answer read twice — 190 MB of
+// reading per `?all=1` on a session with 167 agents (2026-10-20), with the
+// daemon's one thread held for the whole of it.
+//
+// So each answer is remembered against the version of the file it came from:
+// inode, size and mtime, the key `lastWorkAt` (lib/transcript.js) uses for the
+// same reason. An unchanged file costs one stat. A grown one re-reads only what
+// can have moved: the tail. The task is the FIRST record, and an append-only
+// file never rewrites that once its newline has landed.
+
+/** Files remembered. Each entry is two short strings and a few numbers. */
+const FACTS_MAX = 4096;
+/** Journals remembered: one per workflow run, each a few hundred ids. */
+const JOURNALS_MAX = 256;
+
+/** agent transcript path -> {ino, size, mtimeMs, task, taskFinal, lastLine} */
+const facts = new Map();
+/** `.meta.json` path -> {ino, size, mtimeMs, value} */
+const metas = new Map();
+/** journal path -> {ino, size, mtimeMs, at, index, view} */
+const journals = new Map();
+
+function remember(map, key, value, max) {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) map.delete(map.keys().next().value);
+}
+
+function sameVersion(hit, st) {
+  return !!hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs;
+}
+
+/**
+ * The remembered facts for this version of an agent file, filling in what is
+ * missing. `st` is the caller's own stat of the file — every caller has one
+ * already, for the mtime and the size it reports.
+ *
+ * `lastLine` is computed only when asked for (`/graph` never shows it), and is
+ * `undefined` on an entry that has not been asked yet. `read` says whether this
+ * call touched the file at all, which is what a caller that yields keys on.
+ */
+function factsFor(file, st, fsImpl = fs, { lastLine = false } = {}) {
+  let e = facts.get(file);
+  let read = false;
+  if (!sameVersion(e, st)) {
+    const keep = !!e && e.taskFinal && e.ino === st.ino && st.size >= e.size;
+    const head = keep ? { task: e.task, final: true } : readTaskHead(file, fsImpl);
+    read = !keep;
+    e = {
+      ino: st.ino, size: st.size, mtimeMs: st.mtimeMs,
+      task: head.task, taskFinal: head.final, lastLine: undefined,
+    };
+  }
+  if (lastLine && e.lastLine === undefined) {
+    e.lastLine = agentLastLine(file);
+    read = true;
+  }
+  remember(facts, file, e, FACTS_MAX);
+  return { facts: e, read };
+}
+
+/** agentTask, remembered per file version. */
+function agentTaskCached(file, st, fsImpl = fs) {
+  return factsFor(file, st, fsImpl).facts.task;
+}
+
+/**
+ * agentMeta, remembered against the meta file's own stat. A meta lands on its
+ * own schedule, a moment after the transcript starts, so a missing one is asked
+ * for again on every call — which costs one failed stat.
+ */
+function agentMetaCached(file, fsImpl = fs) {
+  const metaFile = file.replace(/\.jsonl$/, '.meta.json');
+  let st;
+  try { st = fsImpl.statSync(metaFile); } catch { metas.delete(metaFile); return null; }
+  const hit = metas.get(metaFile);
+  if (sameVersion(hit, st)) { remember(metas, metaFile, hit, FACTS_MAX); return hit.value; }
+  const value = agentMeta(file, fsImpl);
+  remember(metas, metaFile, { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, value }, FACTS_MAX);
+  return value;
+}
+
+/**
+ * journalIndex, remembered per file version and read INCREMENTALLY: a journal
+ * is appended to as a run's agents start and settle, so a grown one is parsed
+ * from where its last complete line ended. Smaller, rewritten in place (same
+ * size, new mtime) or another inode is a different file, and is read whole.
+ *
+ * The answer is the one journalIndex gives for the same bytes, including its
+ * one subtlety: a final line with no newline yet still counts when it parses.
+ * That line is applied to a COPY, because it is not finished and the next read
+ * starts again from its first byte.
+ *
+ * ⚠ The index is SHARED between callers: read it, never write to it.
+ */
+function journalIndexCached(journalFile, fsImpl = fs) {
+  let st;
+  try { st = fsImpl.statSync(journalFile); } catch { journals.delete(journalFile); return emptyJournalIndex(); }
+  let e = journals.get(journalFile);
+  if (sameVersion(e, st)) { remember(journals, journalFile, e, JOURNALS_MAX); return e.view; }
+  if (!e || e.ino !== st.ino || st.size <= e.size) {
+    e = { ino: st.ino, size: 0, mtimeMs: 0, at: 0, index: emptyJournalIndex(), view: null };
+  }
+  let buf = Buffer.alloc(0);
+  if (st.size > e.at) {
+    let fd = null;
+    try {
+      fd = fsImpl.openSync(journalFile, 'r');
+      const want = Buffer.alloc(st.size - e.at);
+      const n = fsImpl.readSync(fd, want, 0, want.length, e.at);
+      buf = want.subarray(0, Math.max(0, n || 0));
+    } catch {
+      journals.delete(journalFile);
+      return emptyJournalIndex();
+    } finally {
+      if (fd !== null) { try { fsImpl.closeSync(fd); } catch { } }
+    }
+  }
+  const lastNl = buf.lastIndexOf(0x0a);
+  if (lastNl >= 0) {
+    for (const line of buf.toString('utf8', 0, lastNl).split('\n')) applyJournalLine(e.index, line);
+    e.at += lastNl + 1;
+  }
+  e.view = e.index;
+  const rest = buf.toString('utf8', lastNl + 1);
+  if (rest.trim()) {
+    let d = null;
+    try { d = JSON.parse(rest); } catch { /* still being written */ }
+    if (d && d.agentId) {
+      const view = {
+        summaries: new Map(e.index.summaries),
+        settled: new Set(e.index.settled),
+        failed: new Set(e.index.failed),
+        started: new Set(e.index.started),
+      };
+      applyJournalRecord(view, d);
+      e.view = view;
+    }
+  }
+  e.size = st.size;
+  e.mtimeMs = st.mtimeMs;
+  remember(journals, journalFile, e, JOURNALS_MAX);
+  return e.view;
+}
+
+/** Forgets every remembered file. For tests. */
+function resetAgentCaches() {
+  facts.clear();
+  metas.clear();
+  journals.clear();
+}
+
 /**
  * A status a STREAM PICKER can trust, from the meta file and the mtime alone.
  *
@@ -281,12 +463,16 @@ function agentStatus({ fresh, meta, workflow, journal, id }) {
 function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
   const files = listAgentFiles(dir, fsImpl);
   const out = [];
+  // The caller's stat of each kept file, which is the version its remembered
+  // facts are checked against. Beside the rows rather than on them: a row is
+  // what goes on the wire.
+  const stats = new Map();
   for (const f of files) {
     let st;
     try { st = fsImpl.statSync(f.file); } catch { continue; }
     const updatedAt = Math.floor(st.mtimeMs / 1000);
     if (!opts.all && nowSec - updatedAt > RECENT_S) continue;
-    out.push({
+    const row = {
       id: path.basename(f.file).replace(/^agent-|\.jsonl$/g, ''),
       workflow: f.workflow,
       updatedAt,
@@ -294,26 +480,30 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
       bytes: st.size,
       active: nowSec - updatedAt <= ACTIVE_S,
       file: f.file,
-    });
+    };
+    stats.set(row, st);
+    out.push(row);
   }
   out.sort((a, b) => b.updatedAt - a.updatedAt);
   const kept = out.slice(0, max);
-  // Journal summaries, one read per workflow run represented in the kept rows.
+  // Journal summaries, one per workflow run represented in the kept rows.
   // The journal sits beside the agent's OWN file rather than under an assumed
   // root — a run may have come from either workflow location (see workflowDirs).
-  const journals = new Map();
+  const runs = new Map();
   for (const a of kept) {
-    if (!a.workflow || journals.has(a.workflow)) continue;
-    journals.set(a.workflow,
-      journalIndex(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
+    if (!a.workflow || runs.has(a.workflow)) continue;
+    runs.set(a.workflow,
+      journalIndexCached(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
   }
-  // The transcript reads are the expensive part; only the kept rows pay them.
+  // The transcript reads are the expensive part; only the kept rows pay them,
+  // and only for a file that changed since it was last read.
   for (const a of kept) {
-    a.task = agentTask(a.file, fsImpl);
-    a.lastLine = agentLastLine(a.file);
-    const j = a.workflow ? journals.get(a.workflow) : null;
+    const { facts: known } = factsFor(a.file, stats.get(a), fsImpl, { lastLine: true });
+    a.task = known.task;
+    a.lastLine = known.lastLine;
+    const j = a.workflow ? runs.get(a.workflow) : null;
     a.summary = (j && j.summaries.get(a.id)) || null;
-    const meta = agentMeta(a.file, fsImpl);
+    const meta = agentMetaCached(a.file, fsImpl);
     // `workflowId` alongside `workflow`: the same fact under the name the rest
     // of the wire already uses for it (`/graph` agents[], sessiongraph:731).
     // `workflow` stays because clients on 2.88.0 read that one.
@@ -337,5 +527,6 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
 module.exports = {
   agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine, agentMeta,
   journalSummaries, journalSettled, journalIndex, agentStatus, listAgents,
+  agentTaskCached, agentMetaCached, journalIndexCached, resetAgentCaches,
   ACTIVE_S, RECENT_S,
 };
