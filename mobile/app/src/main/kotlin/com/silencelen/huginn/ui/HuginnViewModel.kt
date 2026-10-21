@@ -230,10 +230,18 @@ internal suspend fun applyAutoSwitch(
  * failure, with the address scrubbed; it was written for exactly this and was
  * wired into one settings page only. Sentence-cased here because a banner is a
  * sentence, not a clause.
+ *
+ * ⚠ TWO 401s, AND ONLY ONE OF THEM IS HUGINN'S. With no token the client refuses
+ * to send anything and raises its own 401 ([HuginnClient.NO_TOKEN]); "Rejected
+ * by huginn" said the daemon had turned down a token nobody had sent it, and sent
+ * the reader to check one that was not there.
  */
 internal fun errorTextFor(e: Throwable): String = when (e) {
-    is HuginnClient.HuginnException ->
-        if (e.code == 401) "Rejected by huginn: check the token in Settings" else e.message
+    is HuginnClient.HuginnException -> when {
+        e.code == 401 && e.message == HuginnClient.NO_TOKEN -> "No token set — add it in Settings"
+        e.code == 401 -> "Rejected by huginn: check the token in Settings"
+        else -> e.message
+    }
     else -> {
         val raw = e.message ?: e::class.java.simpleName
         DeliveryCopy.trouble(raw)

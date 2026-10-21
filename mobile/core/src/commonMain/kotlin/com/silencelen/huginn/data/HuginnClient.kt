@@ -197,6 +197,13 @@ class HuginnClient(
         /** What a call says when nothing is pinned yet. A first run, not a fault. */
         const val NO_ROUTE: String = "No route yet — add the address huginn answers on in Settings"
 
+        /**
+         * The message of the 401 THIS CLIENT makes up when it has no token to
+         * send: nothing left the device, so nothing was rejected. Named so a shell
+         * can tell it from a 401 the daemon sent ("unauthorized").
+         */
+        const val NO_TOKEN: String = "no token set"
+
         /** What a call says when the address answered and the answer was not huginn's. */
         const val NOT_HUGINN: String = "that address answered, but not like huginn does"
 
@@ -459,7 +466,7 @@ class HuginnClient(
      */
     private suspend fun ensurePinned(origin: String) {
         val token = bearer()
-        if (token.isEmpty()) throw HuginnException(401, "no token set")
+        if (token.isEmpty()) throw HuginnException(401, NO_TOKEN)
         pins.load()
         if (pins.pinsFor(token).isNotEmpty()) return
         pins.proving.withLock {
