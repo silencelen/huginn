@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.Screen
 import kotlinx.coroutines.launch
@@ -83,6 +84,8 @@ fun SessionScreen(
     onLive: (LiveInput.Op) -> Unit,
     /** Live typing turned on or off — see TerminalScreen; the lease rides on it. */
     onLiveMode: (Boolean) -> Unit = {},
+    /** The Screen tab came on screen or went away: the pane poll's pace (PanePace). */
+    onScreenTab: (Boolean) -> Unit = {},
     agents: com.silencelen.huginn.data.AgentsInfo?,
     onAgentsOpen: () -> Unit,
     onAgentsClose: () -> Unit,
@@ -300,6 +303,12 @@ fun SessionScreen(
                 onPadRef = onPadRef,
             )
             } else {
+                // On this tab the pane poll follows every frame; behind it, a second
+                // per frame (PanePace). Lifecycle-gated like the Overview's report.
+                LifecycleStartEffect(name) {
+                    onScreenTab(true)
+                    onStopOrDispose { onScreenTab(false) }
+                }
                 TerminalScreen(
                     session = name,
                     screen = screen,

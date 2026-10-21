@@ -3582,6 +3582,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private var currentSession: String? = null
 
+    /**
+     * Whether the Screen TAB is on screen. Sets the pane poll's pace after each
+     * new frame ([PanePace]), not whether it runs: the question bar and the
+     * header read the pane from the other tabs too.
+     */
+    private val screenOnTab = MutableStateFlow(false)
+
+    /** The Screen tab came on screen ([shown]) or went away. */
+    fun screenTabShown(shown: Boolean) {
+        screenOnTab.value = shown
+    }
+
     private fun restartScreenPolling() {
         val name = currentSession ?: return
         startScreenPolling(name)
@@ -3633,6 +3645,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     } else {
                         _screen.value = s
                         known = s.hash
+                        // Behind the Screen tab, a second per frame (PanePace).
+                        PanePace.afterNewFrame(screenOnTab)
                     }
                 }.onFailure { e ->
                     if (e is HuginnClient.HuginnException && e.code == 404) {

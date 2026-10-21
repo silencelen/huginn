@@ -1686,6 +1686,7 @@ fun HuginnApp(
                 // Live typing is what entitles this phone to reshape the owner's
                 // tmux window; leaving it hands the window straight back.
                 onLiveMode = { vm.setLiveView(it) },
+                onScreenTab = { vm.screenTabShown(it) },
                 agents = agents,
                 onAgentsOpen = { vm.startAgentsPolling(name) },
                 onAgentsClose = { vm.stopAgentsPolling() },
