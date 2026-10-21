@@ -501,10 +501,15 @@ function agentMetaCached(file, fsImpl = fs) {
  * ⚠ The index is SHARED between callers: read it, never write to it.
  */
 function journalIndexCached(journalFile, fsImpl = fs) {
+  return journalIndexFor(journalFile, fsImpl).index;
+}
+
+/** journalIndexCached, saying whether it had to read the file. */
+function journalIndexFor(journalFile, fsImpl = fs) {
   let st;
-  try { st = fsImpl.statSync(journalFile); } catch { journals.delete(journalFile); return emptyJournalIndex(); }
+  try { st = fsImpl.statSync(journalFile); } catch { journals.delete(journalFile); return { index: emptyJournalIndex(), read: false }; }
   let e = journals.get(journalFile);
-  if (sameVersion(e, st)) { remember(journals, journalFile, e, JOURNALS_MAX); return e.view; }
+  if (sameVersion(e, st)) { remember(journals, journalFile, e, JOURNALS_MAX); return { index: e.view, read: false }; }
   if (!e || e.ino !== st.ino || st.size <= e.size) {
     e = { ino: st.ino, size: 0, mtimeMs: 0, at: 0, index: emptyJournalIndex(), view: null };
   }
@@ -518,7 +523,7 @@ function journalIndexCached(journalFile, fsImpl = fs) {
       buf = want.subarray(0, Math.max(0, n || 0));
     } catch {
       journals.delete(journalFile);
-      return emptyJournalIndex();
+      return { index: emptyJournalIndex(), read: true };
     } finally {
       if (fd !== null) { try { fsImpl.closeSync(fd); } catch { } }
     }
@@ -547,7 +552,7 @@ function journalIndexCached(journalFile, fsImpl = fs) {
   e.size = st.size;
   e.mtimeMs = st.mtimeMs;
   remember(journals, journalFile, e, JOURNALS_MAX);
-  return e.view;
+  return { index: e.view, read: true };
 }
 
 /** Forgets every remembered file. For tests. */
@@ -597,6 +602,49 @@ function agentStatus({ fresh, meta, workflow, journal, id }) {
  *                  lastLine, summary, active, updatedAt, startedAt, bytes}>}
  */
 function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
+  const steps = listAgentsSteps(dir, nowSec, fsImpl, max, opts);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
+
+/**
+ * listAgents without holding the event loop.
+ *
+ * The route used to call listAgents synchronously, and appd has one thread: a
+ * cold `?all=1` on a session with a couple of hundred agents held every other
+ * request — the session list, the screen polls, the transcript — until it was
+ * done (a phone's cold open measured /screen and /v1/sessions completing in the
+ * same instant as /agents, 3.5 s in). The answer is the same rows; the work is
+ * the same work, cut where it can be cut: the loop gets a turn after every
+ * file this call had to read, so the cost of one turn is one agent's head and
+ * short tail, never a whole session's. A listing that reads nothing (every
+ * file remembered) never yields at all.
+ *
+ * `opts.yieldFn` replaces the pause, for tests that count them.
+ */
+async function listAgentsAsync(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
+  const pause = opts.yieldFn || nextTurn;
+  const steps = listAgentsSteps(dir, nowSec, fsImpl, max, opts);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+    await pause();
+  }
+}
+
+/** One turn of the event loop for everything else that is waiting. */
+function nextTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * The listing as steps: it yields after each read it had to make, and returns
+ * the rows. Both drivers above run exactly this, so the sync and the async
+ * listing cannot drift apart.
+ */
+function* listAgentsSteps(dir, nowSec, fsImpl, max, opts) {
   const files = listAgentFiles(dir, fsImpl);
   const out = [];
   // The caller's stat of each kept file, which is the version its remembered
@@ -628,13 +676,15 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
   const runs = new Map();
   for (const a of kept) {
     if (!a.workflow || runs.has(a.workflow)) continue;
-    runs.set(a.workflow,
-      journalIndexCached(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl));
+    const j = journalIndexFor(path.join(path.dirname(a.file), 'journal.jsonl'), fsImpl);
+    runs.set(a.workflow, j.index);
+    if (j.read) yield;
   }
   // The transcript reads are the expensive part; only the kept rows pay them,
   // and only for a file that changed since it was last read.
   for (const a of kept) {
-    const { facts: known } = factsFor(a.file, stats.get(a), fsImpl, { lastLine: true });
+    const { facts: known, read } = factsFor(a.file, stats.get(a), fsImpl, { lastLine: true });
+    if (read) yield;
     a.task = known.task;
     a.lastLine = known.lastLine;
     const j = a.workflow ? runs.get(a.workflow) : null;
@@ -662,7 +712,7 @@ function listAgents(dir, nowSec, fsImpl = fs, max = 24, opts = {}) {
 
 module.exports = {
   agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine, agentMeta,
-  journalSummaries, journalSettled, journalIndex, agentStatus, listAgents,
-  agentTaskCached, agentMetaCached, journalIndexCached, resetAgentCaches,
+  journalSummaries, journalSettled, journalIndex, agentStatus, listAgents, listAgentsAsync,
+  agentTaskCached, agentMetaCached, journalIndexCached, resetAgentCaches, nextTurn,
   ACTIVE_S, RECENT_S,
 };

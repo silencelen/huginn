@@ -54,7 +54,7 @@ const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
 const appsLib = require('./lib/apps');           // next to devices on purpose: it is the registry devices is NOT (lib/apps.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
-const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
+const { agentsDirFor, listAgentsAsync, listAgentFiles } = require('./lib/agents');
 const { sessionGraph, sessionOverview, agentBytesOf, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
 // Projects: the name grammars, the manifest contract and its parser, the
 // membership join across three registries, and the dashboard rollup. Pure, so
@@ -12354,8 +12354,10 @@ async function handleRequest(req, res) {
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
       const all = u.searchParams.get('all') === '1';
+      // Awaited, and it yields between files: a cold listing of a big fan-out
+      // used to hold every other request on this daemon until it was done.
       const agents = dir
-        ? listAgents(dir, Math.floor(Date.now() / 1000), fs, all ? 200 : 24, { all })
+        ? await listAgentsAsync(dir, Math.floor(Date.now() / 1000), fs, all ? 200 : 24, { all })
         : [];
       return sendJson(res, 200, {
         agents,
