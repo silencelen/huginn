@@ -96,6 +96,9 @@ type fetched struct {
 	lists    lists
 	appdErr  error
 	gen      int
+	// live: a watch change's reload (fetchLive), which leaves core and st as
+	// they were.
+	live bool
 }
 
 type changed struct{}
@@ -121,10 +124,15 @@ type model struct {
 
 	data    fetched
 	loaded  bool
-	fetchAt time.Time
+	fetchAt time.Time // the last FULL load (fetch); the tick reloads after a minute
 	gen     int
 	live    bool
 	events  chan tea.Msg
+
+	// One watch reload at a time: a change while one is on its way is owed
+	// one more after it, never one each (fetchLive).
+	liveBusy, liveOwed bool
+	fullGen            int // the gen of the newest full load (fetch)
 
 	cur map[screen]int // cursor per screen, kept across refetches
 
@@ -204,6 +212,7 @@ func (m *model) next() tea.Cmd {
 func (m *model) fetch() tea.Cmd {
 	m.gen++
 	gen := m.gen
+	m.fullGen = gen
 	b := m.b
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -224,6 +233,50 @@ func (m *model) fetch() tea.Cmd {
 		}
 		run := func(fn func()) { wg.Add(1); go func() { defer wg.Done(); fn() }() }
 		run(func() { var err error; f.st, err = b.appdStatus(ctx); setErr(err) })
+		run(func() { var err error; f.sessions, err = b.sessions(ctx); setErr(err) })
+		run(func() { var err error; f.devices, err = b.devices(ctx); setErr(err) })
+		run(func() { var err error; f.hr, err = b.headroom(ctx); setErr(err) })
+		run(func() { f.lists.chats, _ = b.chats(ctx) })
+		run(func() { f.lists.projects, _ = b.projects(ctx) })
+		run(func() { f.lists.rounds, _ = b.rounds(ctx) })
+		run(func() { f.lists.archive, _ = b.archive(ctx) })
+		wg.Wait()
+		return f
+	}
+}
+
+// fetchLive is what a watch change reloads: the lists the change can have
+// moved (sessions and chats are its digest; projects, rounds, the archive,
+// devices and usage move with them), not huginn core's status or appd's
+// /v1/status.
+//
+// ⚠ A WATCH CHANGE IS NOT A REASON TO ASK FOR EVERYTHING. Every change used to
+// run fetch: nine requests, among them /v1/status, which runs df and tmux on
+// the host every time and was the slowest call the console made. A
+// busy host changes every few seconds, so an open console asked for it a few
+// times a minute, all day; what it shows from it (host, load, uptime, disk,
+// the usage summary) is reloaded by the minute tick, by r and after an action.
+// And while one reload is on its way, more changes are owed ONE reload after
+// it, not one each (liveBusy, liveOwed).
+func (m *model) fetchLive() tea.Cmd {
+	m.gen++
+	gen := m.gen
+	b := m.b
+	m.liveBusy = true
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		f := fetched{gen: gen, live: true}
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		setErr := func(err error) {
+			mu.Lock()
+			if err != nil && f.appdErr == nil {
+				f.appdErr = err
+			}
+			mu.Unlock()
+		}
+		run := func(fn func()) { wg.Add(1); go func() { defer wg.Done(); fn() }() }
 		run(func() { var err error; f.sessions, err = b.sessions(ctx); setErr(err) })
 		run(func() { var err error; f.devices, err = b.devices(ctx); setErr(err) })
 		run(func() { var err error; f.hr, err = b.headroom(ctx); setErr(err) })
@@ -277,22 +330,47 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		return m, nil
 	case fetched:
-		if msg.gen < m.gen && m.loaded {
-			return m, nil
+		switch {
+		case msg.gen == m.gen || !m.loaded:
+			// ⚠ A cursor stays on its ROW, not its index: a refetch reorders the
+			// lists (chats and the archive newest first, sessions by state), and an
+			// index kept across one put x (delete, forget) on another row.
+			was := m.selectedKeys()
+			if msg.live {
+				// The core's status and appd's are the last full load's.
+				msg.core, msg.coreErr, msg.st = m.data.core, m.data.coreErr, m.data.st
+				m.data, m.loaded = msg, true
+			} else {
+				m.data, m.loaded, m.fetchAt = msg, true, time.Now()
+			}
+			m.reselect(was)
+			if msg.coreErr == nil && msg.appdErr == nil {
+				m.live = true
+			}
+		case !msg.live && msg.gen >= m.fullGen:
+			// The newest full load, overtaken only by watch reloads: their lists
+			// are newer, its statuses are still the newest there are.
+			m.data.core, m.data.coreErr, m.data.st, m.fetchAt = msg.core, msg.coreErr, msg.st, time.Now()
 		}
-		// ⚠ A cursor stays on its ROW, not its index: a refetch reorders the
-		// lists (chats and the archive newest first, sessions by state), and an
-		// index kept across one put x (delete, forget) on another row.
-		was := m.selectedKeys()
-		m.data, m.loaded, m.fetchAt = msg, true, time.Now()
-		m.reselect(was)
-		if msg.coreErr == nil && msg.appdErr == nil {
-			m.live = true
+		if msg.live {
+			m.liveBusy = false
+		}
+		if m.liveOwed && !m.liveBusy && m.loaded {
+			m.liveOwed = false
+			return m, m.fetchLive()
 		}
 		return m, nil
 	case changed:
 		m.live = true
-		return m, tea.Batch(m.fetch(), m.next())
+		switch {
+		case m.loaded && m.data.coreErr != nil:
+			// The core answers again (the change came through it): everything.
+			return m, tea.Batch(m.fetch(), m.next())
+		case m.liveBusy || !m.loaded:
+			m.liveOwed = true // once the reload on its way (or the first load) lands
+			return m, m.next()
+		}
+		return m, tea.Batch(m.fetchLive(), m.next())
 	case linkState:
 		m.live = msg.live
 		return m, m.next()
