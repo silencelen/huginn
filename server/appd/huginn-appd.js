@@ -32,7 +32,7 @@ const {
   extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
-const { readTranscript, liveActivity, unwrapPasted, lastWorkAt } = require('./lib/transcript');
+const { readTranscript, liveActivity, unwrapPasted, lastWorkAt, transcriptHead } = require('./lib/transcript');
 const tlsLib = require('./lib/tls');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
@@ -1363,8 +1363,18 @@ async function backgroundWork(name, panePid) {
   const st = readSessionState(name);
   const dir = st ? taskDirFor(st.transcript, st.sessionId, process.getuid()) : null;
   if (!dir || !panePid) return { shells: [], agents: 0 };
-  return scanTasks(dir, await psSnapshot(), panePid, Math.floor(Date.now() / 1000),
-    fs, knownBackgroundIds(st));
+  // ⚠ THE PROCESS TABLE AND THE TRANSCRIPT ONLY WHEN A SHELL COULD BE RUNNING.
+  // Both answer questions about a shell's `.output` file: who holds it open,
+  // and whether the transcript launched it in the background. Asked first and
+  // unconditionally, they cost a `ps` spawn and — whenever the transcript had
+  // grown — a tail read and parse, per session on every list poll and every
+  // transcript poll, for a session with no tasks directory at all or only
+  // agents in it, where scanTasks never looks at either.
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return { shells: [], agents: 0 }; }
+  const shells = entries.some((e) => e.name.endsWith('.output') && !e.isSymbolicLink());
+  return scanTasks(dir, shells ? await psSnapshot() : new Map(), panePid, Math.floor(Date.now() / 1000),
+    fs, shells ? knownBackgroundIds(st) : null);
 }
 
 async function listSessions({ preview = false } = {}) {
@@ -1518,18 +1528,23 @@ async function listSessions({ preview = false } = {}) {
     // better label than the tmux name); the preview lines come from the pane,
     // because the spinner/progress state a user wants at a glance is drawn by the
     // TUI and never lands in the transcript.
+    const panes = await capturePanes(rows.map((r) => r.name));
     await Promise.all(rows.map(async (r) => {
       const st = readSessionState(r.name);
       if (st && st.transcript) {
         try {
-          const t = readTranscript(st.transcript, { limit: 1 });
+          // Cached on the file's size and mtime: an idle session costs a stat.
+          const t = transcriptHead(st.transcript);
           if (t.title) r.title = t.title;
           if (t.permissionMode) r.permissionMode = t.permissionMode;
         } catch { /* transcript unreadable: not fatal for a list */ }
       }
-      const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${r.name}:`]);
-      if (!cap.err) {
-        const paneLines = cap.stdout.replace(/\n$/, '').split('\n');
+      let paneLines = panes.get(r.name) || null;
+      if (!paneLines) {
+        const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${r.name}:`]);
+        if (!cap.err) paneLines = cap.stdout.replace(/\n$/, '').split('\n');
+      }
+      if (paneLines) {
         r.preview = previewLines(paneLines, 2);
         const st = parseStatusLine(paneLines);
         r.liveModel = st.model;
@@ -1544,6 +1559,42 @@ async function listSessions({ preview = false } = {}) {
 
   rows.sort((a, b) => b.activityAt - a.activityAt);
   return rows;
+}
+
+/**
+ * The plain text of every named pane from ONE tmux process: `capture-pane` per
+ * session, each followed by a marker line made fresh for the call, so no pane
+ * can be showing it. Name -> lines, split exactly as one capture's were.
+ *
+ * ⚠ THE PREVIEW LIST SPAWNED ONE TMUX PER SESSION. Every client polls it, so a
+ * dozen sessions meant a dozen processes per poll per client, and Node pays for
+ * each spawn on the event loop, with every other request waiting.
+ *
+ * A name missing from the map was not captured: tmux abandons the rest of a
+ * command list at its first error (a session that ended after it was listed),
+ * so the caller reads those one at a time, which is what it always did.
+ */
+async function capturePanes(names, per = 16) {
+  const out = new Map();
+  for (let i = 0; i < names.length; i += per) {
+    const part = names.slice(i, i + per);
+    const mark = `huginn-pane-end-${crypto.randomBytes(8).toString('hex')}`;
+    const args = [];
+    for (const n of part) {
+      if (args.length) args.push(';');
+      args.push('capture-pane', '-p', '-t', `=${n}:`, ';', 'display-message', '-p', '-t', `=${n}:`, mark);
+    }
+    const r = await run('tmux', args);
+    const lines = String(r.stdout || '').split('\n');
+    for (let j = 0, k = 0, from = 0; j < lines.length && k < part.length; j++) {
+      if (lines[j] !== mark) continue;
+      const pane = lines.slice(from, j);
+      out.set(part[k], pane.length ? pane : ['']);
+      k += 1;
+      from = j + 1;
+    }
+  }
+  return out;
 }
 
 /**
@@ -1705,7 +1756,7 @@ function tmuxSaysAbsent(stderr) { return TMUX_ABSENT_RE.test(String(stderr || ''
  * Null is not a third kind of no. Callers that gate a route turn it into a 503
  * (`requireSession`); callers doing housekeeping treat it as "leave it alone".
  */
-async function sessionExists(name) {
+async function sessionExists(name, seen = null) {
   // display-message, not has-session: the same single call answers "does it
   // exist" and "when was it created", and every state read downstream needs the
   // second answer to know whether the state belongs to THIS session.
@@ -1722,13 +1773,18 @@ async function sessionExists(name) {
   //
   // So the returned NAME is the answer: tmux echoing back the session it actually
   // resolved is the only proof the target hit something, and it costs no extra call.
+  //
+  // `seen`, when given, is handed the pane's pid from the same call: the
+  // transcript route needs it for every poll, and asking for it separately was
+  // a second tmux process per request.
   const { err, stdout, stderr } = await run('tmux',
-    ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}']);
+    ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}\t#{pane_pid}']);
   // A failure tmux did not explain is a failure to observe, not an absence.
   if (err && !tmuxSaysAbsent(stderr)) return null;
-  const [found, created] = (err ? '' : (stdout || '')).trim().split('\t');
+  const [found, created, panePid] = (err ? '' : (stdout || '')).trim().split('\t');
   if (found !== name) { sessionBorn.delete(name); return false; }
   rememberBorn(name, created);
+  if (seen) seen.panePid = Number(panePid) || null;
   return true;
 }
 
@@ -1736,8 +1792,8 @@ async function sessionExists(name) {
  * The session-gated route preamble: 404 when it is really gone, 503 when tmux
  * would not say. Returns false once it has answered, so the caller returns.
  */
-async function requireSession(res, name) {
-  const found = await sessionExists(name);
+async function requireSession(res, name, seen = null) {
+  const found = await sessionExists(name, seen);
   if (found === true) return true;
   if (found === false) { sendErr(res, 404, 'no such session'); return false; }
   sendErr(res, 503, 'tmux is not answering right now');
@@ -1837,7 +1893,7 @@ function forgetAnsweredIfGone(name, prompt) {
 
 /**
  * A pane read came back empty. Say whether the session is GONE or tmux merely
- * did not answer — `captureScreen`/`peekHash` cannot tell the difference, and
+ * did not answer — `captureScreen`/`peekPane` cannot tell the difference, and
  * the screen poll's 404 is the one answer a client acts on irreversibly (both
  * clients eject the viewer with "Session <name> ended").
  */
@@ -3940,21 +3996,55 @@ async function sweepStrandedSizes(reason) {
 }
 
 /**
- * The cheapest possible "did anything change?": ONE tmux process producing both
- * the cursor position and the pane, chained with `;` so the parked long poll
- * does not spawn three processes a tick. The hash must be computed exactly as
- * captureScreen computes it or every poll would look like a change.
+ * What captureScreen reads tmux for: the pane's geometry and cursor, and its
+ * content, `-S -<histWant>` lines of scrollback included.
  */
-async function peekHash(name) {
-  const r = await run('tmux', [
-    'display-message', '-p', '-t', `=${name}:`, '#{cursor_x},#{cursor_y}',
-    ';', 'capture-pane', '-p', '-e', '-t', `=${name}:`,
-  ]);
+const SCREEN_FMT = '#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}\t#{session_attached}\t'
+  + '#{alternate_on}\t#{history_size}\t#{window-size}';
+
+/**
+ * The pane's geometry and its content from ONE tmux process: `display-message`
+ * and `capture-pane` chained with `;`, so both describe the same instant and a
+ * screen costs one spawn instead of two. `{ dim, all }` — the SCREEN_FMT line and
+ * the captured lines — or null when tmux could not read the pane.
+ */
+async function capturePane(name, histWant = 0) {
+  const capArgs = ['capture-pane', '-p', '-e', '-t', `=${name}:`];
+  if (histWant > 0) capArgs.splice(2, 0, '-S', `-${histWant}`);
+  const r = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, SCREEN_FMT, ';', ...capArgs]);
   if (r.err) return null;
   const out = r.stdout.replace(/\n$/, '').split('\n');
-  const [cx = '0', cy = '0'] = (out[0] || '0,0').split(',');
-  const lines = out.slice(1);
-  return { hash: screenHash(lines.join('\n') + `|${cx},${cy}`) };
+  return { dim: out[0] || '', all: out.slice(1) };
+}
+
+/** captureScreen's hash of a capture: the visible lines and the cursor. */
+function captureHash(cap, histWant = 0) {
+  const [, h, cx, cy] = cap.dim.trim().split('\t');
+  const height = Number(h);
+  const lines = histWant > 0 && cap.all.length > height ? cap.all.slice(-height) : cap.all;
+  return screenHash(lines.join('\n') + `|${cx},${cy}`);
+}
+
+/**
+ * The cheapest possible "did anything change?", for the parked long poll: ONE
+ * tmux process a tick. Without scrollback it is the whole capture captureScreen
+ * would make, handed back as `cap` so that a change needs no second read; with
+ * scrollback it reads only the screen (`cap` is null), since a tick that changes
+ * nothing should not carry two thousand lines of history.
+ */
+async function peekPane(name, histWant = 0) {
+  if (histWant > 0) {
+    const r = await run('tmux', [
+      'display-message', '-p', '-t', `=${name}:`, '#{cursor_x},#{cursor_y}',
+      ';', 'capture-pane', '-p', '-e', '-t', `=${name}:`,
+    ]);
+    if (r.err) return null;
+    const out = r.stdout.replace(/\n$/, '').split('\n');
+    const [cx = '0', cy = '0'] = (out[0] || '0,0').split(',');
+    return { hash: screenHash(out.slice(1).join('\n') + `|${cx},${cy}`), cap: null };
+  }
+  const cap = await capturePane(name);
+  return cap ? { hash: captureHash(cap), cap } : null;
 }
 
 // A prompt sidecar the hook wrote (exact AskUserQuestion/ExitPlanMode input),
@@ -4146,12 +4236,13 @@ function promptFor(name, lines) {
  */
 async function captureScreen(name, {
   cols = null, rows = null, history = 0, force = false, live = false, clientId = '',
-} = {}) {
-  const fmt = '#{pane_width}\t#{pane_height}\t#{cursor_x}\t#{cursor_y}\t#{session_attached}\t' +
-    '#{alternate_on}\t#{history_size}\t#{window-size}';
-  let dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
-  if (dim.err) return null;
-  let attached = Number(dim.stdout.trim().split('\t')[4]);
+} = {}, pre = null) {
+  const histWant = Math.max(0, Math.min(2000, Math.floor(history)));
+  // `pre`: a capture already made of this pane with these options (the long
+  // poll's own tick), so a change it saw is not read a second time.
+  let cap = pre || await capturePane(name, histWant);
+  if (!cap) return null;
+  let attached = Number(cap.dim.trim().split('\t')[4]);
 
   // Refuse to shrink a window somebody is actually looking at unless told to.
   let resizeBlocked = false;
@@ -4167,7 +4258,7 @@ async function captureScreen(name, {
     // and the banner the user had just dealt with came straight back.
     const wantW = Math.max(20, Math.min(300, Math.floor(cols)));
     const wantH = Math.max(10, Math.min(200, Math.floor(rows)));
-    const [paneW, paneH] = dim.stdout.split('\t').map(Number);
+    const [paneW, paneH] = cap.dim.split('\t').map(Number);
     if (paneW === wantW && paneH === wantH) {
       // Already fits. Renew a lease we hold so the sweeper does not hand the
       // window back mid-view; if we hold none, the size is somebody else's doing
@@ -4180,21 +4271,15 @@ async function captureScreen(name, {
       // renewal of an identical lease issues no tmux command and cannot have
       // moved the pane.
       const held = leases.get(name);
-      if (!held || held.cols !== Number(dim.stdout.split('\t')[0]) ) {
-        dim = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, fmt]);
-        if (dim.err) return null;
+      if (!held || held.cols !== Number(cap.dim.split('\t')[0]) ) {
+        cap = await capturePane(name, histWant);
+        if (!cap) return null;
       }
     }
   }
 
-  const [w, h, cx, cy, att, altOn, hist, wsize] = dim.stdout.trim().split('\t');
-  const capArgs = ['capture-pane', '-p', '-e', '-t', `=${name}:`];
-  const histWant = Math.max(0, Math.min(2000, Math.floor(history)));
-  if (histWant > 0) capArgs.splice(2, 0, '-S', `-${histWant}`);
-  const cap = await run('tmux', capArgs);
-  if (cap.err) return null;
-
-  const all = cap.stdout.replace(/\n$/, '').split('\n');
+  const [w, h, cx, cy, att, altOn, hist, wsize] = cap.dim.trim().split('\t');
+  const all = cap.all;
   const height = Number(h);
   // With history, everything before the last `height` lines is scrollback.
   const scrollback = histWant > 0 && all.length > height ? all.slice(0, all.length - height) : [];
@@ -4502,7 +4587,9 @@ function listChats() {
         const f = findTranscriptFile(m.claudeSessionId);
         if (f) {
           try {
-            const t = readTranscript(f, { limit: 1 });
+            // Cached on the file's size and mtime: a chat that is not running
+            // costs a stat, not a tail read, on every poll of this list.
+            const t = transcriptHead(f);
             if (t.title) m.title = t.title;
           } catch { /* fall back to the stored title */ }
         }
@@ -7541,25 +7628,50 @@ async function computeUsage() {
 
 // ---------------------------------------------------------------- status
 
+// ⚠ STALE BEATS SLOW, for both probes below. They were refreshed INSIDE the
+// status request that found them expired — `claude --version` once an hour, an
+// ssh round trip to the memory node once a minute — and those half-second to
+// one-second answers were the route's p90; two polls arriving together each
+// started a probe of their own. Now an expired answer is served at once while
+// ONE refresh runs behind it, which every poll in the meantime shares, and the
+// next poll has the new answer. Only a daemon with no answer yet, or (for the
+// memory node) one too old to stand in, waits for the probe as before.
+
+const CLAUDE_VERSION_TTL_MS = 60 * 60 * 1000;
 let cachedClaudeVersion = null;
+let claudeVersionAt = 0;
+let claudeVersionAsk = null;
 async function claudeVersion() {
-  if (cachedClaudeVersion) return cachedClaudeVersion;
-  const { stdout } = await run('claude', ['--version']);
-  cachedClaudeVersion = stdout.trim().split('\n')[0] || 'unknown';
-  setTimeout(() => { cachedClaudeVersion = null; }, 60 * 60 * 1000).unref();
-  return cachedClaudeVersion;
+  if (cachedClaudeVersion && Date.now() - claudeVersionAt < CLAUDE_VERSION_TTL_MS) return cachedClaudeVersion;
+  if (!claudeVersionAsk) {
+    claudeVersionAsk = run('claude', ['--version']).then(({ stdout }) => {
+      cachedClaudeVersion = stdout.trim().split('\n')[0] || 'unknown';
+      claudeVersionAt = Date.now();
+      return cachedClaudeVersion;
+    }).finally(() => { claudeVersionAsk = null; });
+  }
+  return cachedClaudeVersion || claudeVersionAsk;
 }
 
+/** How long a memory-node answer is fresh, and how long it may stand in while a fresh one is asked for. */
+const MP_FRESH_MS = 60_000;
+const MP_STAND_IN_MS = 30 * 60 * 1000;
 let mpCache = { at: 0, value: 'unknown' };
+let mpAsk = null;
 async function mempalaceState() {
   if (!MEMPALACE_HOST || !MEMPALACE_MARKER) return 'unconfigured';
-  if (Date.now() - mpCache.at < 60_000) return mpCache.value;
-  const { err, stdout } = await run('ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
-      `if [ -e ${MEMPALACE_MARKER} ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi`],
-    { timeout: 6_000 });
-  mpCache = { at: Date.now(), value: err ? 'unreachable' : stdout.trim() || 'unknown' };
-  return mpCache.value;
+  const age = Date.now() - mpCache.at;
+  if (age < MP_FRESH_MS) return mpCache.value;
+  if (!mpAsk) {
+    mpAsk = run('ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
+        `if [ -e ${MEMPALACE_MARKER} ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi`],
+      { timeout: 6_000 }).then(({ err, stdout }) => {
+      mpCache = { at: Date.now(), value: err ? 'unreachable' : stdout.trim() || 'unknown' };
+      return mpCache.value;
+    }).finally(() => { mpAsk = null; });
+  }
+  return mpCache.at && age < MP_STAND_IN_MS ? mpCache.value : mpAsk;
 }
 
 // ------------------------------------------------- host-owned quick actions
@@ -12009,13 +12121,17 @@ async function handleRequest(req, res) {
       // effective echo latency is the fast tick; a session nobody is touching
       // decays to the slow one after a few seconds. 700ms flat was the largest
       // single cause of live typing feeling laggy.
+      //
+      // And a tick that sees a change IS the capture: the screen is built from
+      // it (captureScreen's `pre`) instead of being read again, which cost two
+      // more tmux processes per answered poll.
       let tick = 0;
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
         await sleep(tick++ < 24 ? 130 : 450);
-        const peek = await peekHash(name);
+        const peek = await peekPane(name, Math.max(0, Math.min(2000, Math.floor(opts.history))));
         if (peek === null) return paneReadFailed(res, name);
         if (peek.hash !== known) {
-          scr = await captureScreen(name, opts);
+          scr = await captureScreen(name, opts, peek.cap);
           if (!scr) return paneReadFailed(res, name);
           break;
         }
@@ -12057,7 +12173,8 @@ async function handleRequest(req, res) {
     // the primary way the app shows a session; the pane is for interaction.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/transcript$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      const seen = { panePid: null };
+      if (!(await requireSession(res, name, seen))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -12091,8 +12208,7 @@ async function handleRequest(req, res) {
         // Background shells and agents, so a session blocked on a long build does
         // not read as stalled from the conversation.
         ...await (async () => {
-          const pid = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{pane_pid}']);
-          const bg = await backgroundWork(name, pid.err ? null : Number(pid.stdout.trim()) || null);
+          const bg = await backgroundWork(name, seen.panePid);
           return { tasks: bg.shells, bgAgents: bg.agents };
         })(),
       });

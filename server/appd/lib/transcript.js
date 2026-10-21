@@ -20,6 +20,161 @@ const TAIL_BYTES = 256 * 1024;
 // to distinguish "a screenful of conversation" from "half a base64 blob".
 const MIN_TAIL_EVENTS = 12;
 
+/**
+ * The record types readTranscript has a case for. Every other type falls
+ * through to `default: continue` and draws nothing.
+ */
+const HANDLED_TYPES = new Set(['queue-operation', 'ai-title', 'permission-mode', 'mode', 'user', 'assistant', 'system']);
+const TYPE_FIRST = Buffer.from('{"type":"');
+
+/**
+ * The type a record names in its FIRST key, read off the raw bytes of
+ * buf[a, b) without decoding or parsing the line; null when the line does not
+ * open with `{"type":"<name>"` or the name carries an escape.
+ *
+ * ⚠ WHY THE BYTES AND NOT JSON.parse. Claude Code 2.1.300 writes every API
+ * request it sends into the transcript: `api-request` records of 100 KB to over
+ * a megabyte each, beside `api-request-blob` and `api-request-shape`. In real
+ * transcripts written by 2.1.300 and 2.1.302 they are 25 to 86% of the bytes,
+ * and one history page of 400 events had to read a 64 MB window to find them.
+ * Every one of those records was decoded and JSON.parsed so that the switch
+ * below could send it to `default: continue`. All of them write `type` first, so
+ * the first bytes of the line say what the record is.
+ *
+ * Exact for a line JSON.stringify wrote: the first key of an object it writes is
+ * the key `JSON.parse` reports, because a stringified object never repeats one.
+ */
+function leadingType(buf, a, b) {
+  const at = a + TYPE_FIRST.length;
+  if (b - at < 2 || buf[a] !== 0x7b || buf.compare(TYPE_FIRST, 0, TYPE_FIRST.length, a, at) !== 0) return null;
+  const name = buf.subarray(at, Math.min(b, at + 65));
+  const q = name.indexOf(0x22);
+  if (q === -1) return null;
+  if (name.subarray(0, q).indexOf(0x5c) !== -1) return null;   // an escape: let JSON.parse read it
+  return name.toString('latin1', 0, q);
+}
+
+/** A record readTranscript would parse only to drop: see [leadingType]. */
+function ignoredRecord(buf, a, b) {
+  const t = leadingType(buf, a, b);
+  return t !== null && !HANDLED_TYPES.has(t);
+}
+
+/** Parse failed: the record is skipped exactly as a `JSON.parse` throw skipped it. */
+const UNPARSEABLE = Symbol('unparseable');
+/**
+ * How many bytes of records one read keeps parsed between the window sizes it
+ * tries. Past it a record is parsed again on every size, which is what all of
+ * them used to be; the cap bounds what a pathological history page can hold in
+ * memory at once.
+ */
+const PARSED_KEEP_BYTES = 24 * 1024 * 1024;
+
+/**
+ * The bytes of one transcript that one read is working through, ending at
+ * `end` and grown DOWNWARDS as a cold open tries larger windows.
+ *
+ * ⚠ THE COST THIS REMOVES. A cold open probes window sizes 256 KB, 512 KB, 1 MB
+ * … until one holds enough events, and every probe re-read and re-parsed its
+ * whole window from scratch, then the winning size was read and parsed AGAIN to
+ * build the answer: about three times the final window, read and parsed, for one
+ * page. Here each probe reads only the bytes the previous one did not have, and
+ * each record is parsed once however many sizes include it.
+ */
+function openWindow(path, st, end) {
+  // `cap` holds the bytes [lo, end) at its END: cap[i] is byte `capLo + i`.
+  // `nls`: where every newline in [lo, end) is, ascending, found once per byte.
+  return { path, st, end, lo: end, cap: Buffer.alloc(0), capLo: end, nls: [], parsed: new Map(), keptBytes: 0 };
+}
+
+/**
+ * The non-empty lines of the file's bytes [s, e) — both inside win — as
+ * [from, to) offsets from `s`: exactly the pieces `split('\n')` leaves once the
+ * empty ones are dropped, the first and the last included whole or not.
+ */
+function windowLines(win, s, e) {
+  const nls = win.nls;
+  let i = 0;
+  for (let hi = nls.length; i < hi;) {
+    const mid = (i + hi) >> 1;
+    if (nls[mid] < s) i = mid + 1; else hi = mid;
+  }
+  const out = [];
+  let a = s;
+  for (; i < nls.length && nls[i] < e; i++) {
+    if (nls[i] > a) out.push([a - s, nls[i] - s]);
+    a = nls[i] + 1;
+  }
+  if (e > a) out.push([a - s, e - s]);
+  return out;
+}
+
+/**
+ * How much further down a window reserves room when it has to grow, as a
+ * multiple of what it needs now. Reserved, not touched: the pages of a buffer
+ * nobody has written cost nothing, and growing in place is what saves copying
+ * (and first-touching) every byte already read at every doubling.
+ */
+const WINDOW_RESERVE = 16;
+
+/** win's bytes [start, end), reading only what it does not hold yet. */
+function windowBytes(win, start, end) {
+  if (start < win.lo) {
+    if (start < win.capLo) {
+      // Out of room: a bigger buffer, the bytes held so far copied to its end.
+      const want = Math.min(win.end, Math.max(win.end - start, (win.end - win.lo) * WINDOW_RESERVE));
+      const next = Buffer.allocUnsafe(want);
+      const nextLo = win.end - want;
+      win.cap.copy(next, win.lo - nextLo, win.lo - win.capLo);
+      win.cap = next;
+      win.capLo = nextLo;
+    }
+    readFully(win.path, win.cap, start - win.capLo, win.lo - start, start);
+    const found = [];
+    for (let i = start - win.capLo, stop = win.lo - win.capLo; ;) {
+      const j = win.cap.indexOf(0x0a, i);
+      if (j === -1 || j >= stop) break;
+      found.push(win.capLo + j);
+      i = j + 1;
+    }
+    win.nls = win.nls.length ? found.concat(win.nls) : found;
+    win.lo = start;
+  }
+  return win.cap.subarray(start - win.capLo, end - win.capLo);
+}
+
+/**
+ * Reads `len` bytes at `pos` into buf at `at`. A file that has shrunk under the
+ * read leaves ZEROS behind, never what the reused memory held before: the old
+ * zero-filled buffer did the same, and it is the bytes after a short read that
+ * would otherwise reach a client.
+ */
+function readFully(path, buf, at, len, pos) {
+  const fd = fs.openSync(path, 'r');
+  try {
+    let got = 0;
+    while (got < len) {
+      const n = fs.readSync(fd, buf, at + got, len - got, pos + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    if (got < len) buf.fill(0, at + got, at + len);
+  } finally { fs.closeSync(fd); }
+}
+
+/** The record in buf[a, b), which starts at byte `abs` of the file, parsed at most once per read. */
+function parseRecord(win, abs, buf, a, b) {
+  const hit = win.parsed.get(abs);
+  if (hit && hit.len === b - a) return hit.d;
+  let d;
+  try { d = JSON.parse(buf.toString('utf8', a, b)); } catch { d = UNPARSEABLE; }
+  if (win.keptBytes + (b - a) <= PARSED_KEEP_BYTES) {
+    win.parsed.set(abs, { len: b - a, d });
+    win.keptBytes += b - a;
+  }
+  return d;
+}
+
 /** Trims a tool input down to the one field a human would want to see. */
 function digestToolInput(input, limit = 400) {
   if (input == null) return '';
@@ -633,10 +788,18 @@ function drainAbove(path, start) {
   const first = from > 0 ? buf.indexOf(0x0a) + 1 : 0;
   if (from > 0 && first === 0) return null;
   let drain = null;
-  for (const line of buf.toString('utf8', first).split('\n')) {
-    if (!line) continue;
+  for (let a = first; a < buf.length;) {
+    let b = buf.indexOf(0x0a, a);
+    if (b === -1) b = buf.length;
+    const at = a;
+    a = b + 1;
+    if (b === at) continue;
+    // Only a dequeue and an assistant record decide anything here: a record that
+    // names any other type first is skipped unread (see [leadingType]).
+    const t = leadingType(buf, at, b);
+    if (t !== null && t !== 'queue-operation' && t !== 'assistant') continue;
     let d;
-    try { d = JSON.parse(line); } catch { continue; }
+    try { d = JSON.parse(buf.toString('utf8', at, b)); } catch { continue; }
     const tsMs = d.timestamp ? Date.parse(d.timestamp) || null : null;
     if (d.type === 'queue-operation' && d.operation === 'dequeue') drain = { tsMs };
     else if (drain && d.type === 'assistant'
@@ -645,8 +808,10 @@ function drainAbove(path, start) {
   return drain;
 }
 
-function readTranscript(path, { offset = null, limit = 400, until = null, peerIds = null, _resuming = null } = {}) {
-  const st = fs.statSync(path);
+function readTranscript(path, { offset = null, limit = 400, until = null, peerIds = null, _resuming = null, _win = null } = {}) {
+  // A window-size probe (below) reads the file as the open that asked for it saw
+  // it: one stat, one end, and the bytes already read.
+  const st = _win ? _win.st : fs.statSync(path);
   // Where this window ENDS. Normally the end of the file; `until` walks backwards
   // into history instead, and is how a reader gets the part of a conversation the
   // tail cut off. Pass the PREVIOUS window's `windowStart` and the two abut
@@ -664,6 +829,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
   const resuming = _resuming != null
     ? _resuming
     : (offset != null && offset >= 0 && offset <= st.size);
+  const win = _win || openWindow(path, st, end);
   if (start == null || start < 0 || start > st.size) {
     // Tail by EVENTS, not by a fixed byte count. A transcript row that Read an
     // image carries the whole image as base64 — megabytes per photo — so a
@@ -673,12 +839,12 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
     // only — which read, from the phone, as sending a photo having DELETED the
     // conversation above it. The window doubles until it holds a useful number
     // of events or spans the whole file.
-    let win = TAIL_BYTES;
+    let size = TAIL_BYTES;
     for (;;) {
-      start = Math.max(0, end - win);
+      start = Math.max(0, end - size);
       truncated = start > 0;
       if (start === 0) break;
-      const probe = readTranscript(path, { offset: start, limit, until, peerIds, _resuming: false });
+      const probe = readTranscript(path, { offset: start, limit, until, peerIds, _resuming: false, _win: win });
       // A TAIL only has to be worth showing — MIN_TAIL_EVENTS distinguishes "a
       // screenful of conversation" from "half a base64 blob", and reading more
       // than that costs a phone bytes it did not ask for. A HISTORY page is the
@@ -686,42 +852,42 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
       // would make walking back through a long session a hundred round trips.
       const want = until == null ? Math.min(limit, MIN_TAIL_EVENTS) : limit;
       if (probe.events.length >= want) break;
-      win *= 2;
+      size *= 2;
     }
   }
 
-  let buf = Buffer.alloc(0);
-  if (end > start) {
-    const fd = fs.openSync(path, 'r');
-    try {
-      const len = end - start;
-      buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, start);
-    } finally { fs.closeSync(fd); }
-  }
+  const buf = end > start ? windowBytes(win, start, end) : Buffer.alloc(0);
 
+  // The records are found and measured on the RAW BYTES, and only the ones that
+  // are read get decoded. A newline is one byte in UTF-8 and never part of a
+  // multi-byte character, so these are the cuts `text.split('\n')` made.
   let consumed = buf.length;
-  let text = buf.toString('utf8');
+  let usable = buf.length;
   // A concurrent writer can leave a partial final line; leave it for next time.
   // Only at the LIVE end of the file — a window that stops at `until` ends on a
   // record boundary we chose, so there is nothing half-written down there.
-  const lastNl = until != null ? text.length - 1 : text.lastIndexOf('\n');
-  if (lastNl === -1) {
-    if (offset != null) return emptyResult(start, truncated);
-  } else if (lastNl !== text.length - 1) {
-    // In BYTES, off the buffer — never `Buffer.byteLength` of the decoded text.
-    // A tail window is a byte count and lands where it lands, including inside a
-    // multi-byte character, and `toString('utf8')` turns each stray continuation
-    // byte into U+FFFD: three bytes where the file has one. Measuring the
-    // decoded string therefore overshot by two bytes per stray byte, `nextOffset`
-    // landed INSIDE the next record, and that record's line failed JSON.parse and
-    // vanished from the live view until a cold reload — always the newest record,
-    // which is the one the reader opened the session to watch. Same byte-wise
-    // pattern `copyTranscriptForArchive` already uses.
-    consumed = buf.lastIndexOf(0x0a) + 1;
-    text = text.slice(0, lastNl + 1);
+  if (until != null) {
+    if (buf.length === 0 && offset != null) return emptyResult(start, truncated);
+  } else {
+    const lastNl = buf.lastIndexOf(0x0a);
+    if (lastNl === -1) {
+      if (offset != null) return emptyResult(start, truncated);
+    } else if (lastNl !== buf.length - 1) {
+      // In BYTES, off the buffer — never `Buffer.byteLength` of the decoded text.
+      // A tail window is a byte count and lands where it lands, including inside a
+      // multi-byte character, and `toString('utf8')` turns each stray continuation
+      // byte into U+FFFD: three bytes where the file has one. Measuring the
+      // decoded string therefore overshot by two bytes per stray byte, `nextOffset`
+      // landed INSIDE the next record, and that record's line failed JSON.parse and
+      // vanished from the live view until a cold reload — always the newest record,
+      // which is the one the reader opened the session to watch. Same byte-wise
+      // pattern `copyTranscriptForArchive` already uses.
+      consumed = lastNl + 1;
+      usable = consumed;
+    }
   }
-  let lines = text.split('\n').filter((l) => l.length > 0);
+  // [from, to) of each non-empty line, as offsets into buf.
+  let lines = end > start ? windowLines(win, start, start + usable) : [];
   // Where the records below actually START, which is not `start` when the window
   // opened mid-record. This is what a reader pages backwards with: hand it back
   // as `until` and the next window ends exactly where this one begins.
@@ -884,25 +1050,36 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
    */
   const notifySeen = [];
   let lineOffset = windowStart;
+  // The lines [ignoredRecord] sent past unparsed, and the last PARSED line that
+  // set each of the three fields every record sets before its switch — the
+  // skipped ones after it are read once the loop is done. See below.
+  const skipped = [];
+  const setAt = { ts: -1, git: -1, cwd: -1 };
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const [a, b] = lines[li];
     const eventsBefore = out.events.length;
     const recordOffset = lineOffset;
-    lineOffset += Buffer.byteLength(line, 'utf8') + 1;
+    // The DECODED length, as it always was: a line a window cut mid-character
+    // opens with stray continuation bytes, and each decodes to three. Whole lines
+    // are valid UTF-8 and decode to exactly their bytes.
+    lineOffset += (buf[a] >= 0x80 && buf[a] < 0xc0
+      ? Buffer.byteLength(buf.toString('utf8', a, b), 'utf8') : b - a) + 1;
     // `finally` because almost every branch below ends in `continue`; this has to
     // run whichever way the record leaves.
     try {
-    let d;
-    try { d = JSON.parse(line); } catch { continue; }
+    if (ignoredRecord(buf, a, b)) { skipped.push(li); continue; }
+    const d = parseRecord(win, start + a, buf, a, b);
+    if (d === UNPARSEABLE) continue;
     const ts = d.timestamp ? Math.floor(Date.parse(d.timestamp) / 1000) || null : null;
     // The same instant in MILLISECONDS, for the one question a second's
     // resolution cannot answer: whether an assistant record written after a
     // dequeue belongs to the turn the dequeue started or is a late flush of the
     // one before it. Real transcripts carry both, 150 ms apart, in that order.
     const tsMs = d.timestamp ? Date.parse(d.timestamp) || null : null;
-    if (ts) out.lastActivityTs = ts;
-    if (d.gitBranch) out.gitBranch = d.gitBranch;
-    if (d.cwd) out.cwd = d.cwd;
+    if (ts) { out.lastActivityTs = ts; setAt.ts = li; }
+    if (d.gitBranch) { out.gitBranch = d.gitBranch; setAt.git = li; }
+    if (d.cwd) { out.cwd = d.cwd; setAt.cwd = li; }
     const sidechain = d.isSidechain === true;
 
     switch (d.type) {
@@ -1346,6 +1523,35 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
     }
   }
 
+  // ⚠ WHAT A SKIPPED RECORD STILL SAYS. A record [ignoredRecord] sent past draws
+  // nothing, but before the switch EVERY record sets the window's last activity,
+  // git branch and cwd when it carries them, and an `api-request` carries a
+  // timestamp. The last record to set a field is the one the page reports, so a
+  // skipped record matters only when it comes after every parsed record that set
+  // it: those are read now, newest first, and that is ordinarily the one or two
+  // at the end of a live tail. Not in the window-size probes, which only count.
+  if (skipped.length && _resuming == null) {
+    let tsOpen = true;
+    let gitOpen = true;
+    let cwdOpen = true;
+    for (let k = skipped.length - 1; k >= 0; k--) {
+      const li = skipped[k];
+      tsOpen = tsOpen && li > setAt.ts;
+      gitOpen = gitOpen && li > setAt.git;
+      cwdOpen = cwdOpen && li > setAt.cwd;
+      if (!tsOpen && !gitOpen && !cwdOpen) break;
+      const [a, b] = lines[li];
+      const d = parseRecord(win, start + a, buf, a, b);
+      if (d === UNPARSEABLE) continue;
+      if (tsOpen) {
+        const ts = d.timestamp ? Math.floor(Date.parse(d.timestamp) / 1000) || null : null;
+        if (ts) { out.lastActivityTs = ts; tsOpen = false; }
+      }
+      if (gitOpen && d.gitBranch) { out.gitBranch = d.gitBranch; gitOpen = false; }
+      if (cwdOpen && d.cwd) { out.cwd = d.cwd; cwdOpen = false; }
+    }
+  }
+
   // ⚠ A HISTORY PAGE DOES NOT DRAW A MESSAGE THAT WAS DELIVERED BELOW IT. A
   // window that ends at `until` sees a mid-turn enqueue but not the remove or
   // dequeue that delivered it minutes of tool output later — and kept it
@@ -1447,6 +1653,7 @@ function liveActivity(events, nowSec) {
  * a changed one costs one tail read, parsed from the end until the first hit.
  */
 const WORK_RECORD_TYPES = new Set(['user', 'assistant', 'system']);
+const TIMESTAMP_KEY = Buffer.from('"timestamp"');
 const lastWorkCache = new Map();
 
 function lastWorkAt(file) {
@@ -1474,22 +1681,55 @@ function lastWorkInTail(file, size, want) {
     fd = fs.openSync(file, 'r');
     fs.readSync(fd, buf, 0, len, size - len);
   } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
-  const lines = buf.toString('utf8').split('\n');
-  // Started mid-file: the first line is the end of a record, not a record.
-  const first = size > len ? 1 : 0;
-  for (let i = lines.length - 1; i >= first; i--) {
-    const l = lines[i];
-    if (!l || l.charCodeAt(0) !== 123 /* { */ || !l.includes('"timestamp"')) continue;
-    let d;
-    try { d = JSON.parse(l); } catch { continue; }
-    if (!d || !WORK_RECORD_TYPES.has(d.type) || typeof d.timestamp !== 'string') continue;
-    const ms = Date.parse(d.timestamp);
-    if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+  // Line by line from the end, on the raw bytes: only a line that can answer is
+  // decoded, and a record that names another type first (the `api-request`
+  // records Claude Code now writes between turns, up to MBs each) is passed over
+  // unread — see [leadingType].
+  for (let b = buf.length; ;) {
+    const nl = b > 0 ? buf.lastIndexOf(0x0a, b - 1) : -1;
+    const a = nl + 1;
+    // Started mid-file: the first line is the end of a record, not a record.
+    if (a === 0 && size > len) return null;
+    if (b > a && buf[a] === 0x7b /* { */ && buf.subarray(a, b).indexOf(TIMESTAMP_KEY) !== -1) {
+      const t = leadingType(buf, a, b);
+      if (t === null || WORK_RECORD_TYPES.has(t)) {
+        let d;
+        try { d = JSON.parse(buf.toString('utf8', a, b)); } catch { d = null; }
+        if (d && WORK_RECORD_TYPES.has(d.type) && typeof d.timestamp === 'string') {
+          const ms = Date.parse(d.timestamp);
+          if (Number.isFinite(ms)) return Math.floor(ms / 1000);
+        }
+      }
+    }
+    if (nl === -1) return null;
+    b = nl;
   }
-  return null;
+}
+
+/**
+ * What a LIST row takes from a transcript: Claude Code's own title and the
+ * permission mode, exactly as `readTranscript(file, { limit: 1 })` reports them.
+ *
+ * ⚠ CACHED ON SIZE AND MTIME, like lastWorkAt. The session list and the chat
+ * list are polled by every client every few seconds, and both read this for
+ * every row on every poll — a tail read and parse per session or chat, of a
+ * file that had not changed since the last poll. A row whose transcript has not
+ * moved now costs one stat.
+ */
+const headCache = new Map();
+
+function transcriptHead(file) {
+  const st = fs.statSync(file);
+  const hit = headCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.head;
+  const t = readTranscript(file, { limit: 1 });
+  const head = { title: t.title, permissionMode: t.permissionMode };
+  if (headCache.size > 500) headCache.clear();
+  headCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, head });
+  return head;
 }
 
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
-  peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt,
+  peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt, transcriptHead,
 };
