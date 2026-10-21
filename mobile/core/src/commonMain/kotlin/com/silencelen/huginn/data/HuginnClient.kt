@@ -148,6 +148,25 @@ class HuginnClient(
      * the base url and token providers follow the same answer.
      */
     private val useCore: () -> Boolean = { false },
+    /**
+     * Suspends until the providers above are worth reading: the base url, the
+     * route it comes from and the token have been loaded from storage.
+     *
+     * ⚠ AWAITED HERE, ONCE, BEFORE EVERY REQUEST AND EVERY PROBE (see [http] and
+     * [probeDaemon]), so no caller can go round it. The phone loads its settings
+     * asynchronously and its screens start calling the moment they compose: a
+     * session or chat opened from a notification, or restored after Android
+     * killed the process, asked before the token or the address had been read,
+     * failed on the spot ("no token set" or [NO_ROUTE]) and drew "Rejected by
+     * huginn" or "No route yet" for seconds over a session that was fine. A call
+     * made early now waits for the settings and then goes out with them; a token
+     * or an address that is still missing once they have loaded fails exactly as
+     * it always has.
+     *
+     * The default does not wait: a client built from values already read (the
+     * desktop, the phone's receivers and workers) has nothing to wait for.
+     */
+    private val settingsLoaded: suspend () -> Unit = {},
 ) {
     class HuginnException(val code: Int, override val message: String) : Exception(message)
 
@@ -177,6 +196,13 @@ class HuginnClient(
     companion object {
         /** What a call says when nothing is pinned yet. A first run, not a fault. */
         const val NO_ROUTE: String = "No route yet — add the address huginn answers on in Settings"
+
+        /**
+         * The message of the 401 THIS CLIENT makes up when it has no token to
+         * send: nothing left the device, so nothing was rejected. Named so a shell
+         * can tell it from a 401 the daemon sent ("unauthorized").
+         */
+        const val NO_TOKEN: String = "no token set"
 
         /** What a call says when the address answered and the answer was not huginn's. */
         const val NOT_HUGINN: String = "that address answered, but not like huginn does"
@@ -334,8 +360,16 @@ class HuginnClient(
      * [applyTier] and the connection pool is shared instead of split four ways.
      * `expectSuccess = false` because this client reads the server's own error
      * text out of a non-2xx body rather than letting the plugin throw over it.
+     *
+     * ⚠ A FUNCTION THAT SUSPENDS, NOT A PROPERTY: it is the one door every request
+     * goes through, and it waits for [settingsLoaded] before handing out a client.
+     * Every request builds its url and bearer AFTER this returns, so none of them
+     * can read a provider before the settings behind it have loaded.
      */
-    private val http: HttpClient get() = if (viaCoreNow()) viaCore else direct
+    private suspend fun http(): HttpClient {
+        settingsLoaded()
+        return if (viaCoreNow()) viaCore else direct
+    }
 
     /** Whether a request made now goes through huginn core (the desktop's [coreTransport]). */
     private fun viaCoreNow(): Boolean = coreTransport != null && useCore()
@@ -432,7 +466,7 @@ class HuginnClient(
      */
     private suspend fun ensurePinned(origin: String) {
         val token = bearer()
-        if (token.isEmpty()) throw HuginnException(401, "no token set")
+        if (token.isEmpty()) throw HuginnException(401, NO_TOKEN)
         pins.load()
         if (pins.pinsFor(token).isNotEmpty()) return
         pins.proving.withLock {
@@ -636,7 +670,7 @@ class HuginnClient(
         tier: Tier = Tier.NORMAL,
         body: Any? = null,
     ): String {
-        val resp = http.request { build(path, method, tier, body) }
+        val resp = http().request { build(path, method, tier, body) }
         val text = resp.bodyAsText()
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         return text
@@ -692,6 +726,11 @@ class HuginnClient(
      * the bearer would disclose it to exactly the stranger this is detecting.
      */
     suspend fun probeDaemon(candidate: String): DaemonProbe {
+        // The other door to the network, behind the same gate as [http]: the
+        // proof below is computed under the token, and with the settings not yet
+        // read there is no token to prove with — every route would come back
+        // "unproved", and route resolution would act on that.
+        settingsLoaded()
         val address = AppdRoutes.normalize(candidate)
         if (address.isBlank()) return DaemonProbe(proven = false, version = null, address = "")
         val root = withScheme(address)
@@ -922,7 +961,7 @@ class HuginnClient(
      * status still throws like any request.
      */
     private suspend fun answerCall(session: String, body: JsonObject): AnswerResult {
-        val resp = http.request { build("/v1/sessions/${seg(session)}/answer", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/sessions/${seg(session)}/answer", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.isSuccess() || resp.status.value == 409) {
             runCatching { decode<AnswerResult>(text) }.getOrNull()?.let { return it }
@@ -966,7 +1005,7 @@ class HuginnClient(
     fun watchStream(knownHash: String?): Flow<WatchEvent> = flow {
         val path = "/v1/watch?stream=1" + if (knownHash != null) "&hash=$knownHash" else ""
         try {
-            http.prepareRequest { build(path, HttpMethod.Get, Tier.WATCH, null) }.execute { resp ->
+            http().prepareRequest { build(path, HttpMethod.Get, Tier.WATCH, null) }.execute { resp ->
                 if (!resp.status.isSuccess()) {
                     emit(WatchEvent.Failure(errorFrom(resp.status.value, resp.bodyAsText()).message))
                     return@execute
@@ -1407,7 +1446,7 @@ class HuginnClient(
      * fall back to the "photo attached" placeholder.
      */
     suspend fun uploadBytes(name: String): ByteArray {
-        val resp = http.request { build("/v1/uploads/" + name.encodeURLParameter(), HttpMethod.Get, Tier.NORMAL, null) }
+        val resp = http().request { build("/v1/uploads/" + name.encodeURLParameter(), HttpMethod.Get, Tier.NORMAL, null) }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
         return resp.bodyAsBytes()
     }
@@ -1433,7 +1472,7 @@ class HuginnClient(
     suspend fun imageBytes(path: String, session: String? = null): ByteArray {
         val q = StringBuilder("/v1/files/image?path=").append(path.encodeURLParameter())
         session?.takeIf { it.isNotBlank() }?.let { q.append("&session=").append(it.encodeURLParameter()) }
-        val resp = http.request { build(q.toString(), HttpMethod.Get, Tier.NORMAL, null) }
+        val resp = http().request { build(q.toString(), HttpMethod.Get, Tier.NORMAL, null) }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
         return resp.bodyAsBytes()
     }
@@ -1853,7 +1892,7 @@ class HuginnClient(
             name?.let { put("name", JsonPrimitive(it)) }
             content?.let { put("content", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/scratchpads/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/scratchpads/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return ScratchpadSave(decode(text), conflict = true)
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -1972,7 +2011,7 @@ class HuginnClient(
      */
     private fun sse(path: String, method: HttpMethod, body: JsonObject?): Flow<ChatEvent> = flow {
         try {
-            http.prepareRequest { build(path, method, Tier.STREAM, body) }.execute { resp ->
+            http().prepareRequest { build(path, method, Tier.STREAM, body) }.execute { resp ->
                 if (!resp.status.isSuccess()) {
                     emit(ChatEvent.Failure(errorFrom(resp.status.value, resp.bodyAsText()).message))
                     return@execute
@@ -2061,7 +2100,7 @@ class HuginnClient(
 
     /** A GET whose 404 is an answer: null, not an exception. */
     private suspend fun probeGet(path: String): String? {
-        val resp = http.request { build(path, HttpMethod.Get, Tier.NORMAL, null) }
+        val resp = http().request { build(path, HttpMethod.Get, Tier.NORMAL, null) }
         val text = resp.bodyAsText()
         if (resp.status.value == 404) return null
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -2121,7 +2160,7 @@ class HuginnClient(
             put("brief", JsonPrimitive(brief))
             cwd?.takeIf { it.isNotBlank() }?.let { put("cwd", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/projects", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/projects", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             // ⚠ THREE REFUSALS SHARE THIS STATUS. `reason` is the discriminator —
@@ -2168,7 +2207,7 @@ class HuginnClient(
             // rather than as a fence.
             manifest?.let { put("manifest", json.encodeToJsonElement(ProjectManifest.serializer(), it)) }
         }
-        val resp = http.request { build("/v1/projects/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/projects/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val current = runCatching { decode<Project>(text) }.getOrNull()?.takeIf { it.id.isNotBlank() }
@@ -2200,7 +2239,7 @@ class HuginnClient(
             put("approve", JsonPrimitive(true))
             put("manifestRev", JsonPrimitive(manifestRev))
         }
-        val resp = http.request { build("/v1/projects/${seg(id)}/spawn", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/projects/${seg(id)}/spawn", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val why = runCatching { decode<ApiError>(text).error }.getOrNull()
@@ -2250,7 +2289,7 @@ class HuginnClient(
             // client that sends a blank is asserting something it does not mean.
             name?.takeIf { it.isNotBlank() }?.let { put("name", JsonPrimitive(it)) }
         }
-        val resp = http.request { build("/v1/projects/${seg(id)}/members", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/projects/${seg(id)}/members", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -2271,7 +2310,7 @@ class HuginnClient(
      * this project does not have.
      */
     suspend fun dropMember(id: String, role: String): MemberOutcome {
-        val resp = http.request { build("/v1/projects/${seg(id)}/members/${seg(role)}", HttpMethod.Delete, Tier.NORMAL, null) }
+        val resp = http().request { build("/v1/projects/${seg(id)}/members/${seg(role)}", HttpMethod.Delete, Tier.NORMAL, null) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
@@ -2410,7 +2449,7 @@ class HuginnClient(
             unit?.let { put("unit", JsonPrimitive(it)) }
             addresses?.let { put("addresses", JsonArray(it.map { a -> JsonPrimitive(a) })) }
         }
-        val resp = http.request { build("/v1/apps", HttpMethod.Post, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/apps", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 422) {
             val r = runCatching { decode<AppRefusal>(text) }.getOrNull()
@@ -2462,7 +2501,7 @@ class HuginnClient(
             unit?.let { put("unit", JsonPrimitive(it)) }
             addresses?.let { put("addresses", JsonArray(it.map { a -> JsonPrimitive(a) })) }
         }
-        val resp = http.request { build("/v1/apps/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/apps/${seg(id)}", HttpMethod.Patch, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             // The body is `{error, app}`: the refusal AND the current row. The row
@@ -2496,7 +2535,7 @@ class HuginnClient(
             put("addrs", JsonArray(hosts.map { JsonPrimitive(it) }))
             deviceName?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", JsonPrimitive(it.take(40))) }
         }
-        val resp = http.request { build("/v1/apps/routes", HttpMethod.Put, Tier.NORMAL, body) }
+        val resp = http().request { build("/v1/apps/routes", HttpMethod.Put, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         return when {
             resp.status.value == 404 -> RouteReportAnswer(supported = false)
@@ -2558,7 +2597,7 @@ class HuginnClient(
      * remembered miss and the initial-letter tile.
      */
     suspend fun appIconBytes(id: String): ByteArray {
-        val resp = http.request { build("/v1/apps/${seg(id)}/icon", HttpMethod.Get, Tier.NORMAL, null) }
+        val resp = http().request { build("/v1/apps/${seg(id)}/icon", HttpMethod.Get, Tier.NORMAL, null) }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
         return resp.bodyAsBytes()
     }
