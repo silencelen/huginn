@@ -812,6 +812,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private var modelsAt = 0L
 
+    /**
+     * One `GET /v1/models` at a time. A chat opened on a cold start asked for the
+     * menu twice at once — `init` and the chat's own open both found it empty —
+     * and the second copy rode in front of nothing but cost the daemon the same.
+     */
+    private val modelsInFlight = com.silencelen.huginn.data.InFlight<List<ModelChoice>>(viewModelScope)
+
     fun refreshModels() {
         // Local rows carry a time-dependent `available` the daemon computes per
         // request and deliberately never caches; one fetch per PROCESS froze
@@ -821,7 +828,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (_models.value.isNotEmpty() && System.currentTimeMillis() - modelsAt < 60_000) return
         viewModelScope.launch {
             awaitReady()
-            runCatching { client.models() }.onSuccess {
+            runCatching { modelsInFlight.get { client.models() } }.onSuccess {
                 _models.value = it
                 modelsAt = System.currentTimeMillis()
             }
@@ -1985,7 +1992,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         resolveRoute(silent = true)
                     }
                 }
-            runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
+            runCatching { fetchSessions() }.onSuccess { landSessions(it) }
             runCatching { client.chats() }.onSuccess { _chats.value = it }
             // Silent on failure like the two above: a daemon too old to know about
             // Rounds 404s here, and that must leave the rest of the screen working
@@ -2016,6 +2023,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private var sessionsPollJob: Job? = null
 
+    /**
+     * One `GET /v1/sessions` on the wire at a time, shared by everything that asks
+     * for the list ([InFlight][com.silencelen.huginn.data.InFlight]). Coming back
+     * from a session ran the screen's refresh and the list's poll starting up,
+     * and a cold start the app-wide refresh and the poll: two copies of the
+     * daemon's second-dearest read at once, with whatever was opened next queued
+     * behind both. Each caller still lands the rows and reports a failure its own
+     * way.
+     */
+    private val sessionsInFlight = com.silencelen.huginn.data.InFlight<List<Session>>(viewModelScope)
+
+    private suspend fun fetchSessions(): List<Session> =
+        sessionsInFlight.get { client.sessions(preview = true) }
+
     /** Keeps the sessions list live while it is on screen. */
     fun startSessionsPolling() {
         sessionsPollJob?.cancel()
@@ -2026,7 +2047,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             var tick = 0
             while (isActive) {
-                runCatching { client.sessions(preview = true) }.onSuccess { landSessions(it) }
+                runCatching { fetchSessions() }.onSuccess { landSessions(it) }
                 // ⚠ THE TWO LISTS MOVE TOGETHER AND MUST BE REFRESHED TOGETHER. A
                 // graceful archive leaves the session on screen for as long as its
                 // turn runs and then moves it — so a Sessions poll that did not
@@ -2084,7 +2105,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshSessions() {
         viewModelScope.launch {
             awaitReady()
-            runCatching { client.sessions(preview = true) }
+            runCatching { fetchSessions() }
                 .onSuccess { landSessions(it) }
                 .onFailure { _toast.value = errText(it) }
         }
