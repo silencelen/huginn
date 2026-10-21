@@ -233,21 +233,157 @@ function journalSettled(journalFile, fsImpl = fs) {
   return out;
 }
 
-/** What the agent is doing right now, from its transcript tail. */
-function agentLastLine(file) {
-  try {
-    const t = readTranscript(file, { limit: 6 });
-    for (let i = t.events.length - 1; i >= 0; i--) {
-      const e = t.events[i];
-      if (e.kind === 'tool') {
-        return `${e.name || 'tool'}${e.detail ? ` ${e.detail}` : ''}`.slice(0, 120);
-      }
-      if ((e.kind === 'assistant' || e.kind === 'thinking') && e.text) {
-        const line = e.text.trim().split('\n').find((l) => l.trim());
-        if (line) return (e.kind === 'thinking' ? '…' : '') + line.trim().slice(0, 120);
-      }
+// ------------------------------------------------------------- the last line
+//
+// "What it is doing now" is the newest tool call or line of prose among the last
+// six events readTranscript draws from the file's tail. That read starts 256 KB
+// from the end and doubles until the window holds six events, parsing all of
+// it — and since mid-October an agent file is mostly REQUEST RECORDS: Claude
+// Code writes the whole API request before every call, 40-130 KB a line, 85-90%
+// of an agent file's bytes (measured on this host's agent folders, 2026-10-20).
+// Six events now sit past two or three of them, so a row cost a 512 KB read
+// parsed twice, and a long-running agent's several megabytes.
+//
+// The same answer is found from a SHORT window, and is provably the same one:
+//
+//   * every event it can return (a tool call, prose, thinking) comes from an
+//     assistant record alone, never from what surrounds it;
+//   * what a wider window adds is context — a tool_result paired with the call
+//     above it, a skill body folded into the card that loaded it — and context
+//     only ever REMOVES events, never adds one after the line found;
+//   * so a line found in the last few records of a window inside the old one is
+//     the old answer too: nothing the old window adds can come after it.
+//
+// When the short window finds nothing — every recent event is a result or a
+// message — the old read runs instead, unchanged. The one shape this argument
+// does not cover is a queued message that never got delivered (it floats to the
+// bottom of the old window); agent transcripts carry no queue records at all
+// (none of the 1,856 on this host on 2026-10-20 does).
+
+/** readTranscript's own first tail window: the old read never starts closer. */
+const OLD_TAIL = 256 * 1024;
+/** What one backward read of the tail takes. */
+const TAIL_STEP = 16 * 1024;
+/**
+ * Lines that can draw an event, asked about in turn: the newest two (a finished
+ * agent's last call and its result), the newest four (a running agent's last
+ * turn, from its thinking to the result it is waiting behind), a wider handful,
+ * and then the old read.
+ */
+const TAIL_TRIES = [2, 4, 16];
+
+/**
+ * `{"type":"api-request` — a request record, by its first bytes: the CLI writes
+ * `type` as its first key. Such a line can only ever be a request record (it
+ * draws no event), so the tail scan steps over it without decoding it.
+ */
+const REQUEST_HEAD = Buffer.from('{"type":"api-request');
+
+function isRequestLine(buf, start, end) {
+  return end - start >= REQUEST_HEAD.length
+    && buf.compare(REQUEST_HEAD, 0, REQUEST_HEAD.length, start, start + REQUEST_HEAD.length) === 0;
+}
+
+/**
+ * Walks a file's tail backwards, a line at a time, collecting the lines that can
+ * draw an event (anything but a request record), newest first. Reads in growing
+ * blocks and never further back than OLD_TAIL, so every window it hands out lies
+ * inside the old read's.
+ *
+ * `window(want)` is {start, until, lines, whole} for the newest `want` such
+ * lines: `start` is the oldest one's first byte, `until` the byte after the
+ * newest one's newline. Past `until` there is only request records and the line
+ * a writer is still on, and neither draws an event. `whole` says the window
+ * holds EVERY such line in the file — the file fits in OLD_TAIL, so the old read
+ * was this window plus lines that draw nothing, and its answer is this window's,
+ * null included. Null when there is no such line to hand out.
+ */
+function tailScanner(file, size, fsImpl = fs) {
+  const fd = fsImpl.openSync(file, 'r');
+  let lo = size;                // the first byte `buf` holds
+  let buf = Buffer.alloc(0);
+  let nl = -1;                  // the newline ending the next line to look at
+  let done = false;
+  let atStart = false;          // the line starting at byte 0 has been looked at
+  const found = [];             // [start, newline] per line, newest first
+  const grow = () => {
+    if (lo === 0) return false;
+    const from = size - Math.min(size, OLD_TAIL, Math.max(TAIL_STEP, (size - lo) * 2));
+    if (from >= lo) return false;                       // as far back as it may look
+    const more = Buffer.alloc(lo - from);
+    if (fsImpl.readSync(fd, more, 0, more.length, from) !== more.length) return false;   // shrank
+    buf = buf.length ? Buffer.concat([more, buf]) : more;
+    lo = from;
+    return true;
+  };
+  const step = () => {
+    if (done) return false;
+    while (nl < 0) {                                    // the file's last newline
+      const at = buf.length ? buf.lastIndexOf(0x0a) : -1;
+      if (at >= 0) nl = lo + at;
+      else if (!grow()) { done = true; return false; }
     }
-  } catch { }
+    let start;
+    for (;;) {
+      const from = nl - 1 - lo;
+      const at = from >= 0 ? buf.lastIndexOf(0x0a, from) : -1;
+      if (at >= 0) { start = lo + at + 1; break; }
+      if (lo === 0) { start = 0; break; }
+      if (!grow()) { done = true; return false; }       // begins before what we hold
+    }
+    if (nl > start && !isRequestLine(buf, start - lo, nl - lo)) found.push([start, nl]);
+    if (start === 0) { done = true; atStart = true; } else nl = start - 1;
+    return true;
+  };
+  return {
+    window(want) {
+      while (found.length < want && step());
+      if (!found.length) return null;
+      const lines = Math.min(want, found.length);
+      return { start: found[lines - 1][0], until: found[0][1] + 1, lines, whole: atStart && found.length <= want };
+    },
+    close() { try { fsImpl.closeSync(fd); } catch { } },
+  };
+}
+
+/** The newest tool call or line of prose among `events`, as the sheet shows it. */
+function lastLineOf(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === 'tool') {
+      return `${e.name || 'tool'}${e.detail ? ` ${e.detail}` : ''}`.slice(0, 120);
+    }
+    if ((e.kind === 'assistant' || e.kind === 'thinking') && e.text) {
+      const line = e.text.trim().split('\n').find((l) => l.trim());
+      if (line) return (e.kind === 'thinking' ? '…' : '') + line.trim().slice(0, 120);
+    }
+  }
+  return null;
+}
+
+/**
+ * What the agent is doing right now, from its transcript tail: the answer
+ * `readTranscript(file, {limit: 6})` gives, from as little of the tail as holds
+ * it (see the section head). `size` is the caller's stat, when it has one.
+ */
+function agentLastLine(file, fsImpl = fs, size = null) {
+  let scan = null;
+  try {
+    scan = tailScanner(file, size == null ? fsImpl.statSync(file).size : size, fsImpl);
+    for (const want of TAIL_TRIES) {
+      const w = scan.window(want);
+      if (!w) break;
+      // The window-size probe readTranscript itself runs on a cold open: an
+      // explicit window, read as part of a cold open rather than a resumption.
+      const t = readTranscript(file, { offset: w.start, until: w.until, limit: 6, _resuming: false });
+      const line = lastLineOf(t.events);
+      if (line !== null || w.whole) return line;
+      if (w.lines < want) break;                       // as far back as it may look
+    }
+    return lastLineOf(readTranscript(file, { limit: 6 }).events);
+  } catch { } finally {
+    if (scan) scan.close();
+  }
   return null;
 }
 
@@ -323,7 +459,7 @@ function factsFor(file, st, fsImpl = fs, { lastLine = false } = {}) {
     };
   }
   if (lastLine && e.lastLine === undefined) {
-    e.lastLine = agentLastLine(file);
+    e.lastLine = agentLastLine(file, fsImpl, st.size);
     read = true;
   }
   remember(facts, file, e, FACTS_MAX);
