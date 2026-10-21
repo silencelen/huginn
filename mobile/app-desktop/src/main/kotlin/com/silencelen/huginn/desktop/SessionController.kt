@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.silencelen.huginn.ui.OverviewCadence
 
 /** Which face of one session is on screen. All stay alive; only one is selected. */
@@ -94,6 +95,8 @@ class SessionController(
      */
     private val meta: SessionMetaSaver,
     appScope: CoroutineScope,
+    /** The strip's poll while it can move ([agentListLoop]); a test shortens it. */
+    private val agentsPollMs: Long = AGENTS_POLL_MS,
 ) {
 
     /**
@@ -722,10 +725,36 @@ class SessionController(
             historyAnswered.first { it }
             while (currentCoroutineContext().isActive) {
                 pollAgentListOnce()
-                delay(AGENTS_POLL_MS)
+                if (stripCanMove()) {
+                    delay(agentsPollMs)
+                } else {
+                    // ⚠ AN IDLE STRIP IS NOT POLLED EVERY TEN SECONDS. Nothing on it
+                    // is live and nothing is working, so the next poll would answer
+                    // the same rows - and `agents?all=1` is the most expensive read a
+                    // session has (it reads the tail of every agent the session ever
+                    // ran; 2.9 s, in one synchronous pass, for ~160 of them). The
+                    // history's own poll says when the session works again, which is
+                    // when agents start; a slow poll catches anything else.
+                    withTimeoutOrNull(AGENTS_IDLE_POLL_MS) { _page.first { it.working() } }
+                }
             }
         }
     }
+
+    /**
+     * Whether the strip can change before the next poll: an agent on it is live,
+     * or the session is working (or has background agents), which is when agents
+     * start. The clock is the one the view uses for the same chips.
+     */
+    private fun stripCanMove(): Boolean {
+        val page = _page.value
+        if (page.working()) return true
+        val nowSec = page?.lastActivityTs?.takeIf { it > 0 } ?: 0L
+        return StreamPicker.items(_agents.value, nowSec).any { it.running }
+    }
+
+    private fun TranscriptPage?.working(): Boolean =
+        this != null && (state == "running" || running || bgAgents > 0 || (activity?.subagents ?: 0) > 0)
 
     /** One pass of [agentListLoop]; the loop above is delay and presence only. */
     internal suspend fun pollAgentListOnce() {
@@ -1234,6 +1263,9 @@ class SessionController(
          * lifts the recency filter so the answer grows rather than churning.
          */
         const val AGENTS_POLL_MS: Long = 10_000
+
+        /** The idle strip's poll: nothing on it live, the session not working. */
+        const val AGENTS_IDLE_POLL_MS: Long = 60_000
 
         /**
          * The one expected reason the strip is disabled — the daemon is older than
