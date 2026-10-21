@@ -144,6 +144,13 @@ function plaintextPolicy(env) {
  */
 function createSniffingListener(net, httpServer, tlsServer, { idleMs = 10_000 } = {}) {
   const listener = net.createServer((socket) => {
+    // ⚠ NAGLE OFF, AS NODE'S OWN HTTP SERVERS DO. http/https servers that
+    // listen() themselves turn it off on every socket they accept (their noDelay
+    // option, default true); these two never listen, and a plain net server
+    // leaves it on. A TLS 1.3 handshake's second write then waited for the
+    // client's delayed ACK, ~40 ms per new connection on Linux, and a response
+    // written in pieces could wait the same way.
+    socket.setNoDelay(true);
     const onTimeout = () => socket.destroy();
     const onError = () => socket.destroy();
     socket.setTimeout(idleMs, onTimeout);
