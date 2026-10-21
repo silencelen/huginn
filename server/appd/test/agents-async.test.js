@@ -11,7 +11,7 @@
 //
 // Fixtures are SYNTHETIC agent folders written into a temp dir.
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -19,11 +19,17 @@ const path = require('node:path');
 
 const agents = require('../lib/agents');
 
+// Every temp dir this file makes, removed when it is done: some of these
+// fixtures are megabytes, and the suite runs on every deploy.
+const scratchDirs = [];
+const scratch = (dir) => { scratchDirs.push(dir); return dir; };
+after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
+
 const NOW = 1_800_000_000;
 const L = (o) => `${JSON.stringify(o)}\n`;
 
 function stage(count) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-async-'));
+  const root = scratch(fs.mkdtempSync(path.join(os.tmpdir(), 'agents-async-')));
   const dir = path.join(root, 'subagents');
   const run = path.join(dir, 'workflows', 'wf_async-run');
   fs.mkdirSync(run, { recursive: true });

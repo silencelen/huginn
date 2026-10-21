@@ -12,7 +12,7 @@
 //
 // Fixtures are SYNTHETIC transcripts written into a temp dir.
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,6 +20,12 @@ const path = require('node:path');
 
 const graph = require('../lib/sessiongraph');
 const projects = require('../lib/projects');
+
+// Every temp dir this file makes, removed when it is done: some of these
+// fixtures are megabytes, and the suite runs on every deploy.
+const scratchDirs = [];
+const scratch = (dir) => { scratchDirs.push(dir); return dir; };
+after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 const clock0 = 1_756_000_000;
 const NOW = (clock0 + 5000) * 1000;
@@ -37,7 +43,7 @@ const result = (id, at, content = 'ok') => ({
 
 /** A parent of several walk steps, a direct agent and a two-member run. */
 function session(name, { turns = 60 } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'graph-async-'));
+  const dir = scratch(fs.mkdtempSync(path.join(os.tmpdir(), 'graph-async-')));
   const sid = name;
   const file = path.join(dir, `${sid}.jsonl`);
   const lines = [user('start', 0)];

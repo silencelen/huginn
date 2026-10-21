@@ -10,13 +10,19 @@
 //
 // Fixtures are SYNTHETIC agent folders written into a temp dir.
 
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const agents = require('../lib/agents');
+
+// Every temp dir this file makes, removed when it is done: some of these
+// fixtures are megabytes, and the suite runs on every deploy.
+const scratchDirs = [];
+const scratch = (dir) => { scratchDirs.push(dir); return dir; };
+after(() => { for (const d of scratchDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 const NOW = 1_800_000_000;
 const T = (s) => new Date((NOW + s) * 1000).toISOString();
@@ -57,7 +63,7 @@ function writeAgent(dir, id, { label, records, meta = { agentType: 'general-purp
 
 /** Six direct agents and a two-member workflow run, all settled an hour ago. */
 function stage() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-cache-'));
+  const root = scratch(fs.mkdtempSync(path.join(os.tmpdir(), 'agents-cache-')));
   const dir = path.join(root, 'subagents');
   for (let i = 0; i < 6; i++) {
     writeAgent(dir, `a00000${i}`, {
@@ -182,7 +188,7 @@ test('a journal that grows is read from where it stopped, and a rewrite is read 
 });
 
 test('the remembered journal answers exactly what a full read does', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-cache-'));
+  const dir = scratch(fs.mkdtempSync(path.join(os.tmpdir(), 'journal-cache-')));
   const f = path.join(dir, 'journal.jsonl');
   const lines = [
     L({ type: 'started', agentId: 'x1' }),
