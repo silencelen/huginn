@@ -44,7 +44,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  listAgentFiles, journalIndexCached, agentTaskCached, agentMetaCached, isRequestLine, ACTIVE_S,
+  listAgentFiles, journalIndexCached, agentTaskCached, agentMetaCached, isRequestLine, nextTurn, ACTIVE_S,
 } = require('./agents');
 const { priceTokens, bucketKey } = require('./pricing');
 const { unwrapPasted } = require('./transcript');
@@ -686,12 +686,28 @@ function consume(s, d) {
  * own resume point and a poll costs only what was appended.
  */
 function agentStats(cache, file, fileStat) {
+  const st = agentEntry(cache, file, fileStat);
+  // Only NOW is an unchanged file free (see agentEntry for what runs first).
+  if (st.parsedBytes < fileStat.size) {
+    st.parsedBytes = walkLines(file, st.parsedBytes, fileStat.size, agentLine(st), st);
+  }
+  return st;
+}
+
+/**
+ * One agent file's running summary, created on first sight, with its meta and
+ * task brought up to date — the part of agentStats that happens whether or not
+ * there is anything new to walk. A SMALLER file than was walked is a different
+ * file, and starts again.
+ */
+function agentEntry(cache, file, fileStat) {
   const size = fileStat.size;
   const hit = cache.get(file);
   const st = hit && hit.parsedBytes <= size ? hit : {
     parsedBytes: 0, seen: new Set(), tokens: zeroTokens(), byModel: new Map(), toolCalls: 0,
     firstTs: null, lastTs: null, meta: null, task: null,
   };
+  if (st !== hit) cache.set(file, st);
   // The meta file and the task line live outside the append window — one is a
   // sibling, the other is the file's HEAD — so they are read beside the walk and
   // kept. Retried while empty rather than cached as empty: an agent directory is
@@ -713,12 +729,15 @@ function agentStats(cache, file, fileStat) {
   // poll, and a meta that never lands re-tried its read the same way.
   if (!st.meta || !Object.keys(st.meta).length) st.meta = agentMetaCached(file) || {};
   if (!st.task) st.task = agentTaskCached(file, fileStat);
-  // Only NOW is an unchanged file free. Cheap by construction: what runs above
-  // is a stat or two for agents still missing a meta or a label, and nothing at
-  // all for the ones that have both — which is all of them, a moment after they
-  // start.
-  if (hit && hit.parsedBytes === size) return hit;
-  st.parsedBytes = walkLines(file, st.parsedBytes, size, (d) => {
+  // Cheap by construction: what runs above is a stat or two for agents still
+  // missing a meta or a label, and nothing at all for the ones that have both —
+  // which is all of them, a moment after they start.
+  return st;
+}
+
+/** What one agent record adds to its file's summary `st`. */
+function agentLine(st) {
+  return (d) => {
     const ts = tsOf(d);
     if (ts) { if (!st.firstTs) st.firstTs = ts; st.lastTs = ts; }
     if (d.type !== 'assistant') return;
@@ -734,9 +753,7 @@ function agentStats(cache, file, fileStat) {
     }
     const c = d.message && d.message.content;
     if (Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_use') st.toolCalls++;
-  }, st);
-  cache.set(file, st);
-  return st;
+  };
 }
 
 /**
@@ -960,19 +977,109 @@ function touch(key, value) {
 function sessionGraph(file, sessionId, { now = Date.now() } = {}) {
   let st;
   try { st = fs.statSync(file); } catch { return null; }
-  const nowSec = Math.floor(now / 1000);
   const key = sessionId || file;
-  let entry = cache.get(key);
-  if (!entry || entry.file !== file || entry.state.parsedBytes > st.size) {
-    entry = { file, state: newState(sessionId || null), agentCache: new Map() };
+  const entry = entryFor(key, file, sessionId, st.size);
+  return finishGraph(entry, key, file, sessionId, st.size, Math.floor(now / 1000));
+}
+
+/** The cached walk for this session, or a fresh one when the cache cannot be it. */
+function entryFor(key, file, sessionId, size) {
+  const entry = cache.get(key);
+  if (!entry || entry.file !== file || entry.state.parsedBytes > size) {
+    return { file, state: newState(sessionId || null), agentCache: new Map() };
   }
-  if (entry.state.parsedBytes < st.size) {
-    entry.state.parsedBytes = walkLines(file, entry.state.parsedBytes, st.size,
+  return entry;
+}
+
+function agentsDirOf(file, sessionId) {
+  return sessionId ? path.join(path.dirname(file), sessionId, 'subagents') : null;
+}
+
+/** Walks whatever is left of the parent and its agents, then builds the wire. */
+function finishGraph(entry, key, file, sessionId, size, nowSec) {
+  if (entry.state.parsedBytes < size) {
+    entry.state.parsedBytes = walkLines(file, entry.state.parsedBytes, size,
       (d) => consume(entry.state, d), entry.state);
   }
   touch(key, entry);
-  const dir = sessionId ? path.join(path.dirname(file), sessionId, 'subagents') : null;
-  return buildWire(entry.state, dir, entry.agentCache, nowSec, st.size);
+  return buildWire(entry.state, agentsDirOf(file, sessionId), entry.agentCache, nowSec, size);
+}
+
+// ------------------------------------------------------------ without blocking
+//
+// A cold walk is the whole of a session: on the heaviest one measured, a 600
+// MB parent and 840 MB of agents, about four seconds even with the request
+// records stepped over — and appd has one thread, so a /graph, an /overview or
+// a project dashboard that met a cold session (after a restart, or after the
+// LRU let it go) held every other request for that long. The async walk is the
+// SAME walk cut into bounded steps with a turn of the event loop between them.
+// The cursors stay the source of truth: every step starts where the cursor IS,
+// and moves it in the same synchronous stretch that parsed the bytes, so a
+// second caller — sync or async — that walks the same file in between only
+// shortens the remaining work, never doubles it.
+
+/** What one step may parse before the loop gets its turn. */
+const STEP = 2 * 1024 * 1024;
+
+/**
+ * Advances `target` (anything with a `parsedBytes` cursor and a clock) to
+ * `size`, a STEP at a time. A line longer than a step widens the step until it
+ * completes; an unfinished line at the end is left for the next call, as the
+ * sync walk leaves it. Pauses only after a step that parsed something.
+ */
+async function advance(target, file, size, onLine, pause) {
+  while (target.parsedBytes < size) {
+    const from = target.parsedBytes;
+    let to = Math.min(size, from + STEP);
+    let at = walkLines(file, from, to, onLine, target);
+    while (at === from && to < size) {
+      to = Math.min(size, from + (to - from) * 2);
+      at = walkLines(file, from, to, onLine, target);
+    }
+    if (at <= from) return;
+    target.parsedBytes = at;
+    await pause();
+  }
+}
+
+/**
+ * sessionGraph without holding the event loop: the same answer, with the walk
+ * done in steps that pause between them. A graph with nothing new to walk never
+ * pauses. `opts.pause` replaces the pause, for tests that count them.
+ */
+async function sessionGraphAsync(file, sessionId, { now = Date.now(), pause = nextTurn } = {}, again = 0) {
+  let st;
+  try { st = fs.statSync(file); } catch { return null; }
+  const key = sessionId || file;
+  const entry = entryFor(key, file, sessionId, st.size);
+  // In the cache before the first pause, so a second caller shares this walk.
+  touch(key, entry);
+  await advance(entry.state, file, st.size, (d) => consume(entry.state, d), pause);
+  const dir = agentsDirOf(file, sessionId);
+  if (dir) {
+    for (const f of listAgentFiles(dir)) {
+      let ast;
+      try { ast = fs.statSync(f.file); } catch { continue; }
+      const stats = agentEntry(entry.agentCache, f.file, ast);
+      await advance(stats, f.file, ast.size, agentLine(stats), pause);
+    }
+  }
+  // What landed during the pauses is the sync pass's to finish, and is only
+  // that. A file that SHRANK meanwhile is another session: start again.
+  try { st = fs.statSync(file); } catch { return null; }
+  if (entry.state.parsedBytes > st.size) {
+    if (again < 2) return sessionGraphAsync(file, sessionId, { now, pause }, again + 1);
+    return sessionGraph(file, sessionId, { now });
+  }
+  return finishGraph(entry, key, file, sessionId, st.size, Math.floor(now / 1000));
+}
+
+/** sessionOverview, walked the way sessionGraphAsync walks. */
+async function sessionOverviewAsync(file, sessionId, opts) {
+  const g = await sessionGraphAsync(file, sessionId, opts);
+  if (!g) return null;
+  const { nodes, agents, workflows, ...rest } = g;
+  return rest;
 }
 
 /** Totals and rate without the map — what the overview card needs, and no more. */
@@ -1003,7 +1110,7 @@ function agentBytesOf(file, sessionId) {
 function resetCache() { cache.clear(); }
 
 module.exports = {
-  sessionGraph, sessionOverview, agentBytesOf, resetCache,
+  sessionGraph, sessionOverview, sessionGraphAsync, sessionOverviewAsync, agentBytesOf, resetCache,
   walkLines, usageOnce, turnNodes, newState, consume, buildWire, clip,
   CACHE_MAX, LABEL_MAX,
 };

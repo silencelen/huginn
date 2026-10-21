@@ -803,7 +803,27 @@ function aggregateDashboard(rows) {
  * asserted with a spy — "twelve members, three polls, twelve walks" is the
  * assertion, and it is not one a live daemon can be asked for.
  */
-function rollupMembers(members, { cache, sizeOf, overview, agentBytesOf = () => 0, now = Date.now() }) {
+function rollupMembers(members, opts) {
+  const steps = rollupSteps(members, opts);
+  let r = steps.next();
+  while (!r.done) r = steps.next(opts.overview(...r.value));
+  return r.value;
+}
+
+/**
+ * rollupMembers with an `overview` that returns a promise — the daemon's, which
+ * walks a cold member without holding the event loop (sessionOverviewAsync).
+ * The same rule, by construction: both drivers run rollupSteps, which yields
+ * the [transcript, sessionId] of each member it has to ask about.
+ */
+async function rollupMembersAsync(members, opts) {
+  const steps = rollupSteps(members, opts);
+  let r = steps.next();
+  while (!r.done) r = steps.next(await opts.overview(...r.value));
+  return r.value;
+}
+
+function* rollupSteps(members, { cache, sizeOf, agentBytesOf = () => 0, now = Date.now() }) {
   const nowSec = Math.floor(now / 1000);
   const rows = [];
   for (const m of members || []) {
@@ -823,7 +843,7 @@ function rollupMembers(members, { cache, sizeOf, overview, agentBytesOf = () => 
       rows.push({ ...m, overview: overviewAt(hit.overview, nowSec) });
       continue;
     }
-    const o = overview(m.transcript, m.sessionId);
+    const o = yield [m.transcript, m.sessionId];
     cache.set(m.sessionId, { size, agentBytes, file: m.transcript, overview: o });
     rows.push({ ...m, overview: o });
   }
@@ -980,6 +1000,6 @@ module.exports = {
   leadPersona, memberPersona,
   briefFrame, firstPromptFrame, spawnedFrame, peerMessageFrame,
   memberList, membershipIndex, sessionProjectTag, joinMembers, reconcilePlan,
-  aggregateDashboard, rollupMembers, dashboardMemberRow,
+  aggregateDashboard, rollupMembers, rollupMembersAsync, dashboardMemberRow,
   memberRow, projectRow, publicProject, sortProjects,
 };
