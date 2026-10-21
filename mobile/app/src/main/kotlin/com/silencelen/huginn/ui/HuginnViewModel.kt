@@ -4305,18 +4305,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         _chatGone.value = false
         // The model menu must reflect which machines serve RIGHT NOW.
         refreshModels()
-        viewModelScope.launch {
-            val meta = runCatching { client.chat(id) }.getOrNull()
-            _chatMode.value = meta?.mode ?: "ask"
-            _chatModel.value = meta?.model
-            _chatStarted.value = (meta?.turns ?: 0) > 0 || meta?.claudeSessionId != null
-            _chatEffort.value = meta?.effort
-            _chatTitle.value = meta?.title
-            _chatSealed.value = meta?.closed == true
+        // The meta and the history TOGETHER, shown meta first: see openChatReads.
+        chatPollJob?.cancel()
+        chatPollJob = viewModelScope.openChatReads(
+            client = client,
+            id = id,
+            applyMeta = { meta ->
+                _chatMode.value = meta?.mode ?: "ask"
+                _chatModel.value = meta?.model
+                _chatStarted.value = (meta?.turns ?: 0) > 0 || meta?.claudeSessionId != null
+                _chatEffort.value = meta?.effort
+                _chatTitle.value = meta?.title
+                _chatSealed.value = meta?.closed == true
+                attachIfRunning(id, meta)
+            },
             // A chat that has never run has no transcript yet; that is not an error.
-            loadChatTranscript(id)
-            attachIfRunning(id, meta)
-        }
+            applyPage = { landChatPage(it) },
+        )
     }
 
     /**
@@ -4337,33 +4342,35 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadChatTranscript(id: String) {
         chatPollJob?.cancel()
-        chatPollJob = viewModelScope.launch {
-            runCatching { client.chatTranscript(id) }
-                .onSuccess { _chatPage.value = it; _chatError.value = null }
-                .onFailure { e ->
-                    // A cancellation is this job being replaced or the screen
-                    // going away, not a chat that would not load. Drawn as one,
-                    // it opened a perfectly good chat under "Could not load this
-                    // conversation / StandaloneCoroutine was cancelled".
-                    if (e is CancellationException) return@onFailure
-                    // 409 is the only failure that means the daemon has nothing to
-                    // GIVE. Anything else is a failure to read history that exists,
-                    // and must not be drawn as its absence.
-                    //
-                    // ⚠ AND 409 IS TWO FACTS. The route answers it both for
-                    // "chat has not run yet" and for "transcript not found for this
-                    // chat" — the second being Claude Code having swept its own
-                    // JSONL, which is what a 53-day-old chat hits. Whether this is
-                    // an absence or a loss is decided by whether the chat ever ran.
-                    val refused = e is HuginnClient.HuginnException && e.code == 409
-                    if (_chatPage.value == null) {
-                        if (refused) {
-                            _chatPage.value = TranscriptPage()
-                            _chatGone.value = chatMessagesGone(_chatStarted.value, true)
-                        } else _chatError.value = errText(e)
-                    }
+        chatPollJob = viewModelScope.launch { landChatPage(runCatching { client.chatTranscript(id) }) }
+    }
+
+    /** A history read's outcome, onto the open chat: the page, or what its absence means. */
+    private fun landChatPage(read: Result<TranscriptPage>) {
+        read.onSuccess { _chatPage.value = it; _chatError.value = null }
+            .onFailure { e ->
+                // A cancellation is this job being replaced or the screen
+                // going away, not a chat that would not load. Drawn as one,
+                // it opened a perfectly good chat under "Could not load this
+                // conversation / StandaloneCoroutine was cancelled".
+                if (e is CancellationException) return@onFailure
+                // 409 is the only failure that means the daemon has nothing to
+                // GIVE. Anything else is a failure to read history that exists,
+                // and must not be drawn as its absence.
+                //
+                // ⚠ AND 409 IS TWO FACTS. The route answers it both for
+                // "chat has not run yet" and for "transcript not found for this
+                // chat" — the second being Claude Code having swept its own
+                // JSONL, which is what a 53-day-old chat hits. Whether this is
+                // an absence or a loss is decided by whether the chat ever ran.
+                val refused = e is HuginnClient.HuginnException && e.code == 409
+                if (_chatPage.value == null) {
+                    if (refused) {
+                        _chatPage.value = TranscriptPage()
+                        _chatGone.value = chatMessagesGone(_chatStarted.value, true)
+                    } else _chatError.value = errText(e)
                 }
-        }
+            }
     }
 
     /** Retries the transcript load after a failure the user can see. */
