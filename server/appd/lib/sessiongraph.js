@@ -43,7 +43,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { listAgentFiles, journalSummaries, journalSettled, agentTask, ACTIVE_S } = require('./agents');
+const {
+  listAgentFiles, journalIndexCached, agentTaskCached, agentMetaCached, ACTIVE_S,
+} = require('./agents');
 const { priceTokens, bucketKey } = require('./pricing');
 const { unwrapPasted } = require('./transcript');
 
@@ -615,7 +617,8 @@ function consume(s, d) {
  * and it being the most expensive thing the daemon does, so each file keeps its
  * own resume point and a poll costs only what was appended.
  */
-function agentStats(cache, file, size) {
+function agentStats(cache, file, fileStat) {
+  const size = fileStat.size;
   const hit = cache.get(file);
   const st = hit && hit.parsedBytes <= size ? hit : {
     parsedBytes: 0, seen: new Set(), tokens: zeroTokens(), byModel: new Map(), toolCalls: 0,
@@ -635,12 +638,17 @@ function agentStats(cache, file, size) {
   // could only ever run on a poll that also found new bytes, which for a
   // finished agent is never: it kept the null forever, and the branch was drawn
   // with no name and no parent for the rest of the session.
-  if (!st.meta || !Object.keys(st.meta).length) st.meta = readAgentMeta(file);
-  if (!st.task) st.task = agentTask(file);
+  //
+  // Both are REMEMBERED per file version (lib/agents.js), so a retry is a stat,
+  // not a read: an agent whose head yields no label (a first record with no
+  // text, a garbled line) used to re-read up to a megabyte of head on every
+  // poll, and a meta that never lands re-tried its read the same way.
+  if (!st.meta || !Object.keys(st.meta).length) st.meta = agentMetaCached(file) || {};
+  if (!st.task) st.task = agentTaskCached(file, fileStat);
   // Only NOW is an unchanged file free. Cheap by construction: what runs above
-  // is one small sibling read (and one HEAD read) for agents still missing them,
-  // and nothing at all for the ones that have both — which is all of them, a
-  // moment after they start.
+  // is a stat or two for agents still missing a meta or a label, and nothing at
+  // all for the ones that have both — which is all of them, a moment after they
+  // start.
   if (hit && hit.parsedBytes === size) return hit;
   st.parsedBytes = walkLines(file, st.parsedBytes, size, (d) => {
     const ts = tsOf(d);
@@ -663,12 +671,6 @@ function agentStats(cache, file, size) {
   return st;
 }
 
-function readAgentMeta(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')) || {};
-  } catch { return {}; }
-}
-
 /**
  * Every agent this session spawned, joined to the spine.
  *
@@ -688,26 +690,27 @@ function collectAgents(dir, state, nodes, agentCache, nowSec) {
   const runs = new Map();
   const agentModelMaps = [];
   let agentBytes = 0;
-  const summaries = new Map();
-  const settled = new Map();
+  // Each run's journal, read once per call through the remembered index —
+  // it used to be read twice per call (summaries, then settled), and it reaches
+  // a megabyte on a real fan-out.
+  const journals = new Map();
   for (const f of files) {
     let st;
     try { st = fs.statSync(f.file); } catch { continue; }
     agentBytes += st.size;
     const id = path.basename(f.file).replace(/^agent-|\.jsonl$/g, '');
-    const stats = agentStats(agentCache, f.file, st.size);
+    const stats = agentStats(agentCache, f.file, st);
     agentModelMaps.push(stats.byModel);
     const meta = stats.meta || {};
     const mtime = Math.floor(st.mtimeMs / 1000);
     const spawn = meta.toolUseId ? state.spawns.get(meta.toolUseId) : null;
     const merge = meta.toolUseId ? state.merges.get(meta.toolUseId) : null;
     const wf = f.workflow ? state.workflows.get(f.workflow) : null;
-    if (f.workflow && !summaries.has(f.workflow)) {
-      const journal = path.join(path.dirname(f.file), 'journal.jsonl');
-      summaries.set(f.workflow, journalSummaries(journal));
-      settled.set(f.workflow, journalSettled(journal));
+    if (f.workflow && !journals.has(f.workflow)) {
+      journals.set(f.workflow, journalIndexCached(path.join(path.dirname(f.file), 'journal.jsonl')));
     }
-    const summary = f.workflow ? (summaries.get(f.workflow) || new Map()).get(id) || null : null;
+    const journal = f.workflow ? journals.get(f.workflow) : null;
+    const summary = journal ? journal.summaries.get(id) || null : null;
     // An agent leaves no completion marker in its OWN file (see lib/agents.js),
     // so finishing is something a third party has to say. A direct agent's
     // epitaph is the parent's tool_result; a workflow member's is a `result`
@@ -715,7 +718,7 @@ function collectAgents(dir, state, nodes, agentCache, nowSec) {
     // tool returns the moment the run is launched. Neither, and still growing,
     // is running. Neither, and cold, is an agent that stopped without being
     // collected — which is worth a different word from "done".
-    const done = merge || (f.workflow && (settled.get(f.workflow) || new Set()).has(id));
+    const done = merge || (journal && journal.settled.has(id));
     const status = merge && merge.isError ? 'failed'
       : done ? 'done'
         : nowSec - mtime <= ACTIVE_S ? 'running'
