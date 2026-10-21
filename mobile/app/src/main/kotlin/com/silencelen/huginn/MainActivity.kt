@@ -1581,6 +1581,9 @@ fun HuginnApp(
             // would keep running — and keep renewing the server-side pane-size
             // lease, pinning an attached laptop at phone geometry indefinitely.
             LifecycleStartEffect(name) {
+                // The history first: what the reader opened the session for.
+                // The strip and, behind another tab, the map wait for its first
+                // answer (SessionLoads).
                 vm.startTranscriptPolling(name)
                 vm.startScreenPolling(name)
                 // The strip's own list. Lifecycle-gated like everything else

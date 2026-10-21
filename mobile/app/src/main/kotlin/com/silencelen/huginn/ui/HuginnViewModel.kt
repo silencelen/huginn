@@ -2206,6 +2206,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // collectLatest: a change of tab cancels the wait in progress, so
             // arriving on Overview is a refresh NOW, not at the end of 30 s.
             overviewOnTab.collectLatest { onTab ->
+                // Behind another tab the map is optional and the HISTORY goes
+                // first: the header and the map are a whole-transcript walk on the
+                // host, and they used to be answered ahead of it (SessionLoads).
+                // On its own tab the map IS what is on screen, so it does not wait.
+                if (!onTab) sessionLoads.awaitHistory(name)
                 var first = true
                 while (isActive) {
                     // The generation is captured BEFORE each fetch: what comes back
@@ -3453,7 +3458,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** The open session's history and the strip's agents. See [SessionLoads]. */
+    /**
+     * The open session's history and the strip's agents, and the rule that the
+     * history goes out first. See [SessionLoads].
+     */
     private val sessionLoads = SessionLoads(
         scope = viewModelScope,
         client = client,
@@ -3738,9 +3746,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The agents themselves, for the strip.
+     * The agents themselves, for the strip, once the history has answered.
      *
-     * See [fetchStreamAgents] for why this is `all = true`.
+     * See [fetchStreamAgents] for why this is `all = true`, and [SessionLoads]
+     * for why it waits.
      */
     fun startStreamAgentsPolling(name: String) = sessionLoads.startAgents(name)
 

@@ -3,6 +3,7 @@ package com.silencelen.huginn.ui
 import com.silencelen.huginn.data.AgentRun
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.TranscriptPage
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -14,15 +15,25 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * What opening a session loads besides its pane: its history, tailed and walked
- * back, and the stream strip's agents.
+ * What opening a session loads besides its pane, and THE ORDER IT LOADS IT IN:
+ * the history first.
+ *
+ * ⚠ THE HISTORY IS WHAT THE READER OPENED THE SESSION FOR, and it used to queue
+ * behind the strip. Opening a session put the transcript, the stream strip's
+ * `agents?all=1` and the overview map on the wire together. The daemon answers
+ * one request at a time, and `agents?all=1` on a session that had run ~160
+ * subagents took ~3 s with nothing else answered meanwhile: on the owner's phone
+ * the history appeared at ~5 s, after the strip. So the optional loads now wait
+ * for the history's FIRST ANSWER (a page, or a failure, so a session with no
+ * transcript does not hold them): [startAgents] does, and the view model's
+ * overview poll asks [awaitHistory] before its first fetch unless the Overview
+ * tab is what is on screen. Once everything has loaded the screen is the same as
+ * it was; only the order changed.
  *
  * Out of the view model for the reason [AgentStream] is: `HuginnViewModel` is an
  * `AndroidViewModel`, nothing here may touch an Application on this host, and
- * the open is the part with the failures in it — a notification tap or a restore
- * after a process kill starts these loops on the first frame, before the
- * settings have loaded (see `gatedClient`). One instance for the view model's
- * life, reused session after session, like the polls it replaced.
+ * the open is the part with the failures in it. One instance for the view
+ * model's life, reused session after session, like the polls it replaced.
  *
  * @param errText the reader's sentence for a failure ([errorTextFor]).
  * @param toast where a failed "load earlier" is said.
@@ -67,6 +78,12 @@ internal class SessionLoads(
     private var tailJob: Job? = null
     private var agentsJob: Job? = null
 
+    /**
+     * Completed by the open session's first answer. Starts completed, so nothing
+     * waits on a session that is not loading here.
+     */
+    private var firstAnswer: CompletableDeferred<Unit> = CompletableDeferred(Unit)
+
     /** Tails the session's Claude transcript: the structured conversation view. */
     fun startHistory(name: String) {
         tailJob?.cancel()
@@ -74,48 +91,67 @@ internal class SessionLoads(
         _historyError.value = null
         historyStart = null
         openFor = name
+        // Whatever waited on the previous open is released, never stranded.
+        firstAnswer.complete(Unit)
+        val answered = CompletableDeferred<Unit>()
+        firstAnswer = answered
         tailJob = scope.launch {
             var offset: Long? = null
-            while (isActive) {
-                val r = runCatching { client.sessionTranscript(name, offset) }
-                // ⚠ A CANCELLATION IS THIS POLL ENDING, NOT A HISTORY THAT
-                // WOULD NOT LOAD. Caught by runCatching, it reached the branch
-                // below and could draw the cancellation as an error on the
-                // NEXT session's empty screen. The chat's loader learned this
-                // first (loadChatTranscript).
-                if (r.isFailure) ensureActive()
-                r.onSuccess { page ->
-                    _historyError.value = null
-                    // The tmux name now belongs to a different Claude session, so
-                    // both handles into the old transcript are void: the offset is
-                    // a byte position in a file this session never wrote, and the
-                    // history handle points into its history. Start over; the next
-                    // poll reads the new session's tail from scratch.
-                    if (isTranscriptRestart(_history.value, page)) {
-                        offset = null
-                        historyStart = null
-                    } else {
-                        offset = page.nextOffset
-                        // The first page decides where history begins; every tail
-                        // read after it is BELOW that and must not move the handle.
-                        if (historyStart == null) historyStart = page.windowStart
-                    }
-                    // :core's merge, not a copy of it: a hand-rolled one here once
-                    // dropped `state`, `modelDisplay`, `mode` and `claudeSessionId`
-                    // on every tail read that did not carry them, and never cleared
-                    // a delivered message's `queued` badge.
-                    _history.value = mergeTranscriptPage(_history.value, page, maxEvents)
-                }.onFailure { e ->
-                    if (_history.value == null) {
-                        _historyError.value = when {
-                            e is HuginnClient.HuginnException && e.code == 409 -> e.message
-                            else -> errText(e)
+            try {
+                while (isActive) {
+                    val r = runCatching { client.sessionTranscript(name, offset) }
+                    // ⚠ A CANCELLATION IS THIS POLL ENDING, NOT A HISTORY THAT
+                    // WOULD NOT LOAD. Caught by runCatching, it reached the branch
+                    // below and could draw the cancellation as an error on the
+                    // NEXT session's empty screen. The chat's loader learned this
+                    // first (loadChatTranscript).
+                    if (r.isFailure) ensureActive()
+                    r.onSuccess { page ->
+                        _historyError.value = null
+                        // The tmux name now belongs to a different Claude session, so
+                        // both handles into the old transcript are void: the offset is
+                        // a byte position in a file this session never wrote, and the
+                        // history handle points into its history. Start over; the next
+                        // poll reads the new session's tail from scratch.
+                        if (isTranscriptRestart(_history.value, page)) {
+                            offset = null
+                            historyStart = null
+                        } else {
+                            offset = page.nextOffset
+                            // The first page decides where history begins; every tail
+                            // read after it is BELOW that and must not move the handle.
+                            if (historyStart == null) historyStart = page.windowStart
+                        }
+                        // :core's merge, not a copy of it: a hand-rolled one here once
+                        // dropped `state`, `modelDisplay`, `mode` and `claudeSessionId`
+                        // on every tail read that did not carry them, and never cleared
+                        // a delivered message's `queued` badge.
+                        _history.value = mergeTranscriptPage(_history.value, page, maxEvents)
+                    }.onFailure { e ->
+                        if (_history.value == null) {
+                            _historyError.value = when {
+                                e is HuginnClient.HuginnException && e.code == 409 -> e.message
+                                else -> errText(e)
+                            }
                         }
                     }
+                    answered.complete(Unit)
+                    delay(tailMs)
                 }
-                delay(tailMs)
+            } finally {
+                // Ended before it answered: what was waiting goes ahead.
+                answered.complete(Unit)
             }
         }
+    }
+
+    /**
+     * Waits until [name]'s history has had its first answer, when [name]'s history
+     * is what is loading here. Returns at once for anything else, so a caller can
+     * never be held by a session that is not open.
+     */
+    suspend fun awaitHistory(name: String) {
+        if (openFor == name) firstAnswer.await()
     }
 
     /**
@@ -128,6 +164,7 @@ internal class SessionLoads(
         tailJob?.cancel()
         tailJob = null
         openFor = null
+        firstAnswer.complete(Unit)
         _history.value = null
         _historyError.value = null
         historyStart = null
@@ -169,7 +206,7 @@ internal class SessionLoads(
     private fun stillReading(name: String): Boolean = pageStillWanted(name, openFor)
 
     /**
-     * The agents themselves, for the strip.
+     * The agents themselves, for the strip — after the history has answered.
      *
      * Lifecycle-gated by its caller like every poll on the session screen:
      * `?all=1` lifts the daemon's recency filter, so this is the one agents call
@@ -178,6 +215,7 @@ internal class SessionLoads(
     fun startAgents(name: String) {
         agentsJob?.cancel()
         agentsJob = scope.launch {
+            awaitHistory(name)
             while (isActive) {
                 runCatching { fetchStreamAgents(client, name) }
                     .onSuccess { _agents.value = it }
