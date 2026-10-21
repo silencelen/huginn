@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import com.silencelen.huginn.ui.OverviewCadence
@@ -206,6 +207,19 @@ class SessionController(
      */
     private val _neverRan = MutableStateFlow(false)
     val neverRan: StateFlow<Boolean> = _neverRan.asStateFlow()
+
+    /**
+     * Whether the history's first read has answered: a page or a failure.
+     *
+     * ⚠ THE HISTORY GOES FIRST. Opening a session started the strip's
+     * `agents?all=1` and the map beside the transcript read, and a daemon that
+     * answers `agents?all=1` in one synchronous pass (2.9 s for a session that
+     * had run ~160 subagents) answered the history only after it: the reader
+     * looked at an empty conversation for the length of a list nobody had asked
+     * to see yet. The strip ([agentListLoop]) and the map ([overviewSupervisor])
+     * wait for this; the pane, which carries the question, does not.
+     */
+    private val historyAnswered = MutableStateFlow(false)
 
     private val _overview = MutableStateFlow<SessionOverview?>(null)
     val overview: StateFlow<SessionOverview?> = _overview.asStateFlow()
@@ -430,6 +444,8 @@ class SessionController(
                     meta.open(name, SessionMeta())
                     metaOwed = true
                 }
+                // After the history's first answer, like the strip: see [historyAnswered].
+                historyAnswered.first { it }
                 var first = true
                 while (scope.isActive) {
                     // The generation is captured BEFORE each fetch: what comes
@@ -570,7 +586,8 @@ class SessionController(
      */
     internal suspend fun pollMainOnce(): Boolean {
         var ok = false
-        runCatching { client.sessionTranscript(name, transcriptOffset) }
+        val read = runCatching { client.sessionTranscript(name, transcriptOffset) }
+        read
             .onSuccess { page ->
                 ok = true
                 // Same tmux name, different Claude session: both handles
@@ -600,6 +617,8 @@ class SessionController(
                     _transcriptError.value = e.message ?: "could not read the transcript"
                 }
             }
+        // A read cut short (the window was hidden) has answered nothing.
+        if (read.exceptionOrNull() !is kotlinx.coroutines.CancellationException) historyAnswered.value = true
         return ok
     }
 
@@ -700,6 +719,7 @@ class SessionController(
     private suspend fun agentListLoop() {
         presence.visible.collectLatest { visible ->
             if (!visible) return@collectLatest
+            historyAnswered.first { it }
             while (currentCoroutineContext().isActive) {
                 pollAgentListOnce()
                 delay(AGENTS_POLL_MS)
