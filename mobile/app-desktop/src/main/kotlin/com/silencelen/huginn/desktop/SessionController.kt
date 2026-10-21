@@ -42,8 +42,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.silencelen.huginn.ui.OverviewCadence
 
 /** Which face of one session is on screen. All stay alive; only one is selected. */
@@ -93,6 +95,8 @@ class SessionController(
      */
     private val meta: SessionMetaSaver,
     appScope: CoroutineScope,
+    /** The strip's poll while it can move ([agentListLoop]); a test shortens it. */
+    private val agentsPollMs: Long = AGENTS_POLL_MS,
 ) {
 
     /**
@@ -206,6 +210,19 @@ class SessionController(
      */
     private val _neverRan = MutableStateFlow(false)
     val neverRan: StateFlow<Boolean> = _neverRan.asStateFlow()
+
+    /**
+     * Whether the history's first read has answered: a page or a failure.
+     *
+     * ⚠ THE HISTORY GOES FIRST. Opening a session started the strip's
+     * `agents?all=1` and the map beside the transcript read, and a daemon that
+     * answers `agents?all=1` in one synchronous pass (2.9 s for a session that
+     * had run ~160 subagents) answered the history only after it: the reader
+     * looked at an empty conversation for the length of a list nobody had asked
+     * to see yet. The strip ([agentListLoop]) and the map ([overviewSupervisor])
+     * wait for this; the pane, which carries the question, does not.
+     */
+    private val historyAnswered = MutableStateFlow(false)
 
     private val _overview = MutableStateFlow<SessionOverview?>(null)
     val overview: StateFlow<SessionOverview?> = _overview.asStateFlow()
@@ -430,6 +447,8 @@ class SessionController(
                     meta.open(name, SessionMeta())
                     metaOwed = true
                 }
+                // After the history's first answer, like the strip: see [historyAnswered].
+                historyAnswered.first { it }
                 var first = true
                 while (scope.isActive) {
                     // The generation is captured BEFORE each fetch: what comes
@@ -570,7 +589,8 @@ class SessionController(
      */
     internal suspend fun pollMainOnce(): Boolean {
         var ok = false
-        runCatching { client.sessionTranscript(name, transcriptOffset) }
+        val read = runCatching { client.sessionTranscript(name, transcriptOffset) }
+        read
             .onSuccess { page ->
                 ok = true
                 // Same tmux name, different Claude session: both handles
@@ -600,6 +620,8 @@ class SessionController(
                     _transcriptError.value = e.message ?: "could not read the transcript"
                 }
             }
+        // A read cut short (the window was hidden) has answered nothing.
+        if (read.exceptionOrNull() !is kotlinx.coroutines.CancellationException) historyAnswered.value = true
         return ok
     }
 
@@ -700,12 +722,39 @@ class SessionController(
     private suspend fun agentListLoop() {
         presence.visible.collectLatest { visible ->
             if (!visible) return@collectLatest
+            historyAnswered.first { it }
             while (currentCoroutineContext().isActive) {
                 pollAgentListOnce()
-                delay(AGENTS_POLL_MS)
+                if (stripCanMove()) {
+                    delay(agentsPollMs)
+                } else {
+                    // ⚠ AN IDLE STRIP IS NOT POLLED EVERY TEN SECONDS. Nothing on it
+                    // is live and nothing is working, so the next poll would answer
+                    // the same rows - and `agents?all=1` is the most expensive read a
+                    // session has (it reads the tail of every agent the session ever
+                    // ran; 2.9 s, in one synchronous pass, for ~160 of them). The
+                    // history's own poll says when the session works again, which is
+                    // when agents start; a slow poll catches anything else.
+                    withTimeoutOrNull(AGENTS_IDLE_POLL_MS) { _page.first { it.working() } }
+                }
             }
         }
     }
+
+    /**
+     * Whether the strip can change before the next poll: an agent on it is live,
+     * or the session is working (or has background agents), which is when agents
+     * start. The clock is the one the view uses for the same chips.
+     */
+    private fun stripCanMove(): Boolean {
+        val page = _page.value
+        if (page.working()) return true
+        val nowSec = page?.lastActivityTs?.takeIf { it > 0 } ?: 0L
+        return StreamPicker.items(_agents.value, nowSec).any { it.running }
+    }
+
+    private fun TranscriptPage?.working(): Boolean =
+        this != null && (state == "running" || running || bgAgents > 0 || (activity?.subagents ?: 0) > 0)
 
     /** One pass of [agentListLoop]; the loop above is delay and presence only. */
     internal suspend fun pollAgentListOnce() {
@@ -755,7 +804,7 @@ class SessionController(
             // Not visible: no poll at all. The poll is what renews the lease, so
             // this line and the release above are the same safety property twice.
             if (!key.visible) return@collectLatest
-            screenLoop(report, live = want != null)
+            screenLoop(report, live = want != null, drawn = key.grid)
         }
     }
 
@@ -764,8 +813,19 @@ class SessionController(
      * @param live   whether this poll also CLAIMS the tmux window at that size.
      *   The two are separate on purpose: the pane is captured as it is, so a
      *   client can say how big it is without reshaping anybody's terminal.
+     * @param drawn  the Screen tab is showing the pane. Behind it (Conversation,
+     *   Overview) the poll is there for the question, the header and the work
+     *   strip, and waits [SCREEN_BEHIND_MS] after each new frame before asking
+     *   for the next one.
+     *
+     * ⚠ A BUSY PANE CHANGES ON EVERY TICK. The long poll answers as soon as the
+     * hash differs, and Claude Code's spinner and timer redraw several times a
+     * second, so a working session's poll came back every ~280 ms and asked
+     * again at once: 3.6 captures a second for as long as the conversation was
+     * open, nobody looking at the pane. An idle pane still parks for the whole
+     * window, and the Screen tab still follows every frame.
      */
-    private suspend fun screenLoop(report: PaneLease.Want?, live: Boolean = false) {
+    private suspend fun screenLoop(report: PaneLease.Want?, live: Boolean = false, drawn: Boolean = true) {
         var known: String? = _screen.value?.hash
         var failures = 0
         while (currentCoroutineContext().isActive) {
@@ -806,6 +866,7 @@ class SessionController(
                     known = s.hash
                     _screen.value = s
                     onFrame(s)
+                    if (!drawn) delay(SCREEN_BEHIND_MS)
                 }
             }.onFailure { e ->
                 if ((e as? HuginnClient.HuginnException)?.code == 404) {
@@ -1169,6 +1230,13 @@ class SessionController(
         /** Long-poll window. The daemon caps `wait` at 30s; this leaves it room. */
         const val SCREEN_WAIT_MS: Int = 25_000
 
+        /**
+         * How long the pane poll waits after a new frame while the Screen tab is
+         * not showing (see screenLoop). A second: the work strip's timer moves in
+         * seconds, and a question lands on the card within one.
+         */
+        const val SCREEN_BEHIND_MS: Long = 1_000
+
         /** A drag changes geometry every frame; a tmux resize per frame is absurd. */
         const val GEOMETRY_DEBOUNCE_MS: Long = 250
 
@@ -1195,6 +1263,9 @@ class SessionController(
          * lifts the recency filter so the answer grows rather than churning.
          */
         const val AGENTS_POLL_MS: Long = 10_000
+
+        /** The idle strip's poll: nothing on it live, the session not working. */
+        const val AGENTS_IDLE_POLL_MS: Long = 60_000
 
         /**
          * The one expected reason the strip is disabled — the daemon is older than

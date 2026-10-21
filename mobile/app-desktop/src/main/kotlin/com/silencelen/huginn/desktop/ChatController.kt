@@ -8,6 +8,7 @@ import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.SuggestionCue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -129,10 +130,23 @@ class ChatController(
     fun busy(): Boolean =
         _running.value || _partial.value.isNotEmpty() || _activity.value != null || _pendingSend.value != null
 
+    /**
+     * Settles once the chat's record ([refresh]) has answered at open.
+     *
+     * ⚠ THE HISTORY DOES NOT WAIT FOR IT. Opening a chat read its record (which
+     * also carries the chat's whole message digest, unread here) and only then
+     * its transcript: two round trips one after the other before the
+     * conversation could draw. The transcript read now goes at once, and only
+     * what needs the record waits for it: telling a gone conversation from one
+     * that never ran, and the suggestion cue's "is a run going".
+     */
+    private val recordRead = CompletableDeferred<Unit>()
+
     fun start() {
         scope.launch {
-            refresh()
             loadTranscript()
+            refresh()
+            recordRead.complete(Unit)
             attachIfRunning()
         }
         scope.launch {
@@ -175,17 +189,20 @@ class ChatController(
     fun loadTranscript() {
         loadJob?.cancel()
         loadJob = scope.launch {
-            runCatching { client.chatTranscript(chatId) }
-                .onSuccess {
-                    _page.value = it
-                    _error.value = null
-                    _messagesGone.value = false
-                    val pending = _pendingSend.value
-                    if (pending != null && it.events.any { e -> e.kind == "user" && e.text?.trim() == pending }) {
-                        _pendingSend.value = null
-                    }
-                    cue.onTurnBoundary(it.nextOffset, busy())
+            val read = runCatching { client.chatTranscript(chatId) }
+            read.onSuccess {
+                _page.value = it
+                _error.value = null
+                _messagesGone.value = false
+                val pending = _pendingSend.value
+                if (pending != null && it.events.any { e -> e.kind == "user" && e.text?.trim() == pending }) {
+                    _pendingSend.value = null
                 }
+            }
+            // The rest reads the chat's record: see [recordRead].
+            recordRead.await()
+            read
+                .onSuccess { cue.onTurnBoundary(it.nextOffset, busy()) }
                 .onFailure { e ->
                     val refused = e is HuginnClient.HuginnException && e.code == 409
                     if (_page.value == null) {

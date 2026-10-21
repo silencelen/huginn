@@ -359,6 +359,11 @@ type chatState struct {
 	cancel  context.CancelFunc // stops the follow below
 	gen     int                // the follow whose events are shown; 0: none
 	scroll  int                // lines up from the bottom
+
+	// hist is the history's lines as chatView draws them, wrapped at histW.
+	// nil: not built since the chat was loaded, sent to, or opened.
+	hist  []string
+	histW int
 }
 
 // startFollow stops whatever follows the open chat and numbers the follow
@@ -390,6 +395,7 @@ func (m *model) send(text string) tea.Cmd {
 	m.chat.live.Reset()
 	m.chat.busy = true
 	m.chat.d.Messages = append(m.chat.d.Messages, chatMsg{Type: "user", Text: text})
+	m.chat.hist = nil
 	m.chat.scroll = 0
 	ctx, gen := m.startFollow()
 	events := m.events
@@ -456,6 +462,25 @@ func (m *model) onChatEvent(e chatEvent) tea.Cmd {
 	return nil
 }
 
+// wrapText lays s out at width (a seam: the tests count the calls).
+var wrapText = func(width int, s string) string { return lipgloss.NewStyle().Width(width).Render(s) }
+
+// wrapInto appends s to lines, wrapped to w with indent, in style.
+func wrapInto(lines []string, w int, style lipgloss.Style, indent, s string) []string {
+	for _, l := range strings.Split(wrapText(w-len(indent), s), "\n") {
+		lines = append(lines, indent+style.Render(strings.TrimRight(l, " ")))
+	}
+	return lines
+}
+
+// chatView draws the open chat.
+//
+// ⚠ THE HISTORY IS WRAPPED ONCE, NOT ONCE PER FRAME. Every streamed token is a
+// frame, and the history used to be laid out again for each one: 30 ms a frame
+// for a 500-message chat and 94 ms for 2000, which then drew about ten tokens a
+// second, whatever the link. Its lines are kept
+// (chatState.hist) until the chat is loaded again, a message is sent or the
+// width changes; a frame lays out only the answer that is streaming.
 func (m *model) chatView() string {
 	t := m.t
 	c := &m.chat
@@ -466,32 +491,10 @@ func (m *model) chatView() string {
 	if c.err != nil {
 		return "\n   " + t.err.Render(clean(c.err.Error()))
 	}
-	var lines []string
-	wrap := func(style lipgloss.Style, indent, s string) {
-		for _, l := range strings.Split(lipgloss.NewStyle().Width(w-len(indent)).Render(s), "\n") {
-			lines = append(lines, indent+style.Render(strings.TrimRight(l, " ")))
-		}
+	if c.hist == nil || c.histW != w {
+		c.hist, c.histW = m.historyLines(w), w
 	}
-	for _, msg := range c.d.Messages {
-		switch msg.Type {
-		case "user":
-			lines = append(lines, "", "  "+t.key.Render("you"))
-			wrap(t.text, "  ", msg.Text)
-		case "assistant":
-			lines = append(lines, "", "  "+t.heading.Render("huginn"))
-			wrap(t.text, "  ", msg.Text)
-		case "tool":
-			lines = append(lines, "  "+t.glyph(stInfo)+" "+t.dim.Render(truncate(msg.Name+"  "+oneLine(msg.Input), w-4)))
-		case "result":
-			st, word := stOK, "done"
-			if msg.Ok != nil && !*msg.Ok {
-				st, word = stError, "stopped: "+msg.ErrorText
-			}
-			lines = append(lines, "  "+t.glyph(st)+" "+t.dim.Render(fmt.Sprintf("%s · %d turns · $%.2f", word, msg.Turns, msg.CostUsd)))
-		case "error":
-			lines = append(lines, "  "+t.glyph(stError)+" "+t.err.Render(msg.Text))
-		}
-	}
+	lines := append([]string(nil), c.hist...)
 	live := c.live.String()
 	if live == "" && c.busy {
 		live = c.d.PartialText
@@ -499,7 +502,7 @@ func (m *model) chatView() string {
 	if c.busy || live != "" {
 		lines = append(lines, "", "  "+t.heading.Render("huginn")+" "+t.glyph(stWorking))
 		if live != "" {
-			wrap(t.text, "  ", live)
+			lines = wrapInto(lines, w, t.text, "  ", live)
 		}
 		if c.tool != "" {
 			lines = append(lines, "  "+t.glyph(stInfo)+" "+t.dim.Render(c.tool+"…"))
@@ -525,6 +528,33 @@ func (m *model) chatView() string {
 		head = "\n  " + t.title.Render("chat") + "  " + t.dim.Render(c.d.Mode)
 	}
 	return head + "\n" + strings.Join(lines[start:end], "\n")
+}
+
+// historyLines is the chat's messages as chatView draws them, at width w.
+func (m *model) historyLines(w int) []string {
+	t := m.t
+	lines := []string{}
+	for _, msg := range m.chat.d.Messages {
+		switch msg.Type {
+		case "user":
+			lines = append(lines, "", "  "+t.key.Render("you"))
+			lines = wrapInto(lines, w, t.text, "  ", msg.Text)
+		case "assistant":
+			lines = append(lines, "", "  "+t.heading.Render("huginn"))
+			lines = wrapInto(lines, w, t.text, "  ", msg.Text)
+		case "tool":
+			lines = append(lines, "  "+t.glyph(stInfo)+" "+t.dim.Render(truncate(msg.Name+"  "+oneLine(msg.Input), w-4)))
+		case "result":
+			st, word := stOK, "done"
+			if msg.Ok != nil && !*msg.Ok {
+				st, word = stError, "stopped: "+msg.ErrorText
+			}
+			lines = append(lines, "  "+t.glyph(st)+" "+t.dim.Render(fmt.Sprintf("%s · %d turns · $%.2f", word, msg.Turns, msg.CostUsd)))
+		case "error":
+			lines = append(lines, "  "+t.glyph(stError)+" "+t.err.Render(msg.Text))
+		}
+	}
+	return lines
 }
 
 func (m *model) chatKey(s string) tea.Cmd {

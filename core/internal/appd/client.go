@@ -475,6 +475,18 @@ func (c *Client) probe(ctx context.Context, tok string, pinned bool) (string, er
 	return seen, nil
 }
 
+// idlePerHost is how many idle connections to the daemon are kept for reuse.
+//
+// ⚠ SIZED FOR A BURST, NOT FOR ONE CALLER. The core carries the console's eight
+// parallel list loads and the desktop's polls, beside the long-lived watch
+// stream, screen long poll and device poll. It used to keep 4: every connection
+// above that was closed the moment it went idle and dialled again by the next
+// burst, a full TLS handshake each (no resumption, see dialPinned), which is
+// ~45 ms against appd on loopback and two round trips more over a mesh link.
+// appd closes a connection idle for ~6 s itself, so a bigger pool holds nothing
+// for long.
+const idlePerHost = 16
+
 // pinnedTransport is the transport for exactly this (token, pin set).
 //
 // ⚠ NO KEEP-ALIVE REUSE ACROSS A PIN CHANGE. A pooled connection was judged
@@ -506,7 +518,7 @@ func (c *Client) pinnedTransport(tok string, pins []string) *http.Transport {
 			return nil, errors.New("the pinned transport does not dial plain connections")
 		},
 		ForceAttemptHTTP2:   false,
-		MaxIdleConnsPerHost: 4,
+		MaxIdleConnsPerHost: idlePerHost,
 		IdleConnTimeout:     30 * time.Second,
 	}
 	c.pinnedKey = key
@@ -584,7 +596,7 @@ func (c *Client) plainTransport() *http.Transport {
 			DialTLSContext: func(context.Context, string, string) (net.Conn, error) {
 				return nil, errors.New("the loopback transport never dials TLS unpinned")
 			},
-			MaxIdleConnsPerHost: 4,
+			MaxIdleConnsPerHost: idlePerHost,
 			IdleConnTimeout:     30 * time.Second,
 		}
 	}

@@ -33,9 +33,11 @@ import (
 // a logind or system bus that cannot be asked is a probe that failed, not a
 // headless box.
 type lockReader struct {
-	mu   sync.Mutex
-	at   time.Time
-	last runner.Lock
+	mu         sync.Mutex // guards at, last and refreshing; never held across a probe
+	at         time.Time
+	last       runner.Lock
+	refreshing bool       // a background probe (peek) is on its way
+	probeMu    sync.Mutex // one probe at a time
 	// seams for tests
 	probe        func(context.Context) lock.Result
 	canGraphical func(context.Context) (bool, bool) // (graphical, known)
@@ -47,14 +49,59 @@ func newLockReader() *lockReader {
 
 const lockCache = 5 * time.Second
 
+// read is the fence's answer: a reading at most lockCache old, probing (and
+// waiting for the probe) when the one in hand is older.
 func (l *lockReader) read(ctx context.Context) runner.Lock {
+	if lk, ok := l.fresh(); ok {
+		return lk
+	}
+	l.probeMu.Lock()
+	defer l.probeMu.Unlock()
+	if lk, ok := l.fresh(); ok {
+		return lk // probed while this one waited its turn
+	}
+	lk := l.decide(ctx)
+	l.mu.Lock()
+	l.last, l.at = lk, time.Now()
+	l.mu.Unlock()
+	return lk
+}
+
+func (l *lockReader) fresh() (runner.Lock, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !l.at.IsZero() && time.Since(l.at) < lockCache {
-		return l.last
+	return l.last, !l.at.IsZero() && time.Since(l.at) < lockCache
+}
+
+// peek is the newest reading WITHOUT WAITING FOR A PROBE, for the notify claim.
+//
+// ⚠ THE CLAIM RIDES EVERY REQUEST THE CORE SENDS, the desktop's through /appd
+// included (watcher.headers). Read through read(), the request that found the
+// reading 5 s old ran the probe itself - PowerShell on Windows, a new system bus
+// connection on Linux - with the lock held, so it and every request beside it
+// waited for the probe, every 5 s. A reading that is too old is answered as it
+// is, and one probe goes on in the background; only the very first ask, with
+// no reading at all, waits for one. The act fence keeps read().
+func (l *lockReader) peek() runner.Lock {
+	l.mu.Lock()
+	if l.at.IsZero() {
+		l.mu.Unlock()
+		return l.read(context.Background())
 	}
-	l.last, l.at = l.decide(ctx), time.Now()
-	return l.last
+	lk := l.last
+	if time.Since(l.at) >= lockCache && !l.refreshing {
+		l.refreshing = true
+		go func() {
+			defer func() {
+				l.mu.Lock()
+				l.refreshing = false
+				l.mu.Unlock()
+			}()
+			l.read(context.Background()) // bounded by lock.Timeout
+		}()
+	}
+	l.mu.Unlock()
+	return lk
 }
 
 func (l *lockReader) decide(ctx context.Context) runner.Lock {

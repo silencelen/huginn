@@ -59,11 +59,27 @@ func (w *watcher) setFocus(key string) {
 // claim is the X-Huginn-Notify answer (D14): this core will show notifications
 // only while a tray role is attached AND the session is unlocked — somebody is
 // at the machine to see them. Otherwise appd keeps its Telegram fallback.
+//
+// From the newest lock reading, never waiting for a probe (lockReader.peek):
+// it is asked on every request, and on IPC calls the desktop waits for.
 func (w *watcher) claim() bool {
 	if w.senders.Load() == 0 {
 		return false
 	}
-	lk := w.d.lock.read(context.Background())
+	lk := w.d.lock.peek()
+	return lk.Known && !lk.Locked
+}
+
+// claimFresh is claim from a reading at most lockCache old, probing when it
+// has to: for run's own goroutine, which waits for nobody, so a lock is noticed
+// at the next 15 s check rather than one check after the probe it started.
+// The probe is not tied to the stream: one cut short would be kept as a
+// reading that cannot be read, which the fence takes for a locked screen.
+func (w *watcher) claimFresh() bool {
+	if w.senders.Load() == 0 {
+		return false
+	}
+	lk := w.d.lock.read(context.Background()) // bounded by lock.Timeout
 	return lk.Known && !lk.Locked
 }
 
@@ -84,7 +100,7 @@ func (w *watcher) headers() map[string]string {
 func (w *watcher) run(ctx context.Context, api *appd.Client) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		claimed := w.claim()
+		claimed := w.claimFresh()
 		sctx, cancel := context.WithCancel(ctx)
 		go func() { // re-open when the claim flips
 			t := time.NewTicker(15 * time.Second)
@@ -94,7 +110,7 @@ func (w *watcher) run(ctx context.Context, api *appd.Client) {
 				case <-sctx.Done():
 					return
 				case <-t.C:
-					if w.claim() != claimed {
+					if w.claimFresh() != claimed {
 						cancel()
 						return
 					}
