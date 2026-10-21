@@ -775,7 +775,7 @@ class SessionController(
             // Not visible: no poll at all. The poll is what renews the lease, so
             // this line and the release above are the same safety property twice.
             if (!key.visible) return@collectLatest
-            screenLoop(report, live = want != null)
+            screenLoop(report, live = want != null, drawn = key.grid)
         }
     }
 
@@ -784,8 +784,19 @@ class SessionController(
      * @param live   whether this poll also CLAIMS the tmux window at that size.
      *   The two are separate on purpose: the pane is captured as it is, so a
      *   client can say how big it is without reshaping anybody's terminal.
+     * @param drawn  the Screen tab is showing the pane. Behind it (Conversation,
+     *   Overview) the poll is there for the question, the header and the work
+     *   strip, and waits [SCREEN_BEHIND_MS] after each new frame before asking
+     *   for the next one.
+     *
+     * ⚠ A BUSY PANE CHANGES ON EVERY TICK. The long poll answers as soon as the
+     * hash differs, and Claude Code's spinner and timer redraw several times a
+     * second, so a working session's poll came back every ~280 ms and asked
+     * again at once: 3.6 captures a second for as long as the conversation was
+     * open, nobody looking at the pane. An idle pane still parks for the whole
+     * window, and the Screen tab still follows every frame.
      */
-    private suspend fun screenLoop(report: PaneLease.Want?, live: Boolean = false) {
+    private suspend fun screenLoop(report: PaneLease.Want?, live: Boolean = false, drawn: Boolean = true) {
         var known: String? = _screen.value?.hash
         var failures = 0
         while (currentCoroutineContext().isActive) {
@@ -826,6 +837,7 @@ class SessionController(
                     known = s.hash
                     _screen.value = s
                     onFrame(s)
+                    if (!drawn) delay(SCREEN_BEHIND_MS)
                 }
             }.onFailure { e ->
                 if ((e as? HuginnClient.HuginnException)?.code == 404) {
@@ -1188,6 +1200,13 @@ class SessionController(
     companion object {
         /** Long-poll window. The daemon caps `wait` at 30s; this leaves it room. */
         const val SCREEN_WAIT_MS: Int = 25_000
+
+        /**
+         * How long the pane poll waits after a new frame while the Screen tab is
+         * not showing (see screenLoop). A second: the work strip's timer moves in
+         * seconds, and a question lands on the card within one.
+         */
+        const val SCREEN_BEHIND_MS: Long = 1_000
 
         /** A drag changes geometry every frame; a tmux resize per frame is absurd. */
         const val GEOMETRY_DEBOUNCE_MS: Long = 250
