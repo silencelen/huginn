@@ -7624,25 +7624,50 @@ async function computeUsage() {
 
 // ---------------------------------------------------------------- status
 
+// ⚠ STALE BEATS SLOW, for both probes below. They were refreshed INSIDE the
+// status request that found them expired — `claude --version` once an hour, an
+// ssh round trip to the memory node once a minute — and those half-second to
+// one-second answers were the route's p90; two polls arriving together each
+// started a probe of their own. Now an expired answer is served at once while
+// ONE refresh runs behind it, which every poll in the meantime shares, and the
+// next poll has the new answer. Only a daemon with no answer yet, or (for the
+// memory node) one too old to stand in, waits for the probe as before.
+
+const CLAUDE_VERSION_TTL_MS = 60 * 60 * 1000;
 let cachedClaudeVersion = null;
+let claudeVersionAt = 0;
+let claudeVersionAsk = null;
 async function claudeVersion() {
-  if (cachedClaudeVersion) return cachedClaudeVersion;
-  const { stdout } = await run('claude', ['--version']);
-  cachedClaudeVersion = stdout.trim().split('\n')[0] || 'unknown';
-  setTimeout(() => { cachedClaudeVersion = null; }, 60 * 60 * 1000).unref();
-  return cachedClaudeVersion;
+  if (cachedClaudeVersion && Date.now() - claudeVersionAt < CLAUDE_VERSION_TTL_MS) return cachedClaudeVersion;
+  if (!claudeVersionAsk) {
+    claudeVersionAsk = run('claude', ['--version']).then(({ stdout }) => {
+      cachedClaudeVersion = stdout.trim().split('\n')[0] || 'unknown';
+      claudeVersionAt = Date.now();
+      return cachedClaudeVersion;
+    }).finally(() => { claudeVersionAsk = null; });
+  }
+  return cachedClaudeVersion || claudeVersionAsk;
 }
 
+/** How long a memory-node answer is fresh, and how long it may stand in while a fresh one is asked for. */
+const MP_FRESH_MS = 60_000;
+const MP_STAND_IN_MS = 30 * 60 * 1000;
 let mpCache = { at: 0, value: 'unknown' };
+let mpAsk = null;
 async function mempalaceState() {
   if (!MEMPALACE_HOST || !MEMPALACE_MARKER) return 'unconfigured';
-  if (Date.now() - mpCache.at < 60_000) return mpCache.value;
-  const { err, stdout } = await run('ssh',
-    ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
-      `if [ -e ${MEMPALACE_MARKER} ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi`],
-    { timeout: 6_000 });
-  mpCache = { at: Date.now(), value: err ? 'unreachable' : stdout.trim() || 'unknown' };
-  return mpCache.value;
+  const age = Date.now() - mpCache.at;
+  if (age < MP_FRESH_MS) return mpCache.value;
+  if (!mpAsk) {
+    mpAsk = run('ssh',
+      ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', MEMPALACE_HOST,
+        `if [ -e ${MEMPALACE_MARKER} ]; then echo rebuilding; elif systemctl is-active --quiet mempalace-daemon; then echo ok; else echo daemon-down; fi`],
+      { timeout: 6_000 }).then(({ err, stdout }) => {
+      mpCache = { at: Date.now(), value: err ? 'unreachable' : stdout.trim() || 'unknown' };
+      return mpCache.value;
+    }).finally(() => { mpAsk = null; });
+  }
+  return mpCache.at && age < MP_STAND_IN_MS ? mpCache.value : mpAsk;
 }
 
 // ------------------------------------------------- host-owned quick actions
