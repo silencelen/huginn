@@ -44,7 +44,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  listAgentFiles, journalIndexCached, agentTaskCached, agentMetaCached, ACTIVE_S,
+  listAgentFiles, journalIndexCached, agentTaskCached, agentMetaCached, isRequestLine, ACTIVE_S,
 } = require('./agents');
 const { priceTokens, bucketKey } = require('./pricing');
 const { unwrapPasted } = require('./transcript');
@@ -196,34 +196,102 @@ function mergeByModel(...maps) {
  * UTF-8 character boundary are different things, and slicing a chunk into a
  * string first turns a multi-byte character straddling the seam into two
  * replacement characters inside a JSON string.
+ *
+ * ⚠ WITH A `clock`, REQUEST RECORDS ARE NOT DECODED. Since mid-October the CLI
+ * writes the whole API request into the transcript before every call — 40-150
+ * KB a line, 63-70% of a long session's bytes and 85-90% of an agent's
+ * (measured on this host, 2026-10-20). Neither consumer does anything with one
+ * but move its clock (`firstTs`/`lastTs`, from the record's timestamp), so a
+ * line that BEGINS `{"type":"api-request` — the CLI writes `type` first — is
+ * stepped over by its bytes, and its timestamp is read back only if it turns
+ * out to matter: when nothing after it in this walk moves the clock (it is the
+ * last word), or when the clock has no first reading yet. That is exactly when
+ * the old per-line walk let it change anything, so `clock` ends as it would have
+ * and `onLine` sees every other record, in order, as before. `clock` is the
+ * object the consumer keeps those two fields on. Without one, the walk is the
+ * old one, line for line.
  */
-function walkLines(file, from, to, onLine) {
+function walkLines(file, from, to, onLine, clock = null) {
   if (to <= from) return from;
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return from; }
   let pos = from;
   let carry = Buffer.alloc(0);
+  // Request lines met since the last record that moved the clock, as file
+  // ranges: whether their timestamps matter is known only later.
+  let pending = [];
   try {
     while (pos < to) {
       const want = Math.min(CHUNK, to - pos);
-      const buf = Buffer.alloc(want);
+      const buf = Buffer.allocUnsafe(want);
       const n = fs.readSync(fd, buf, 0, want, pos);
       if (n <= 0) break;
+      const base = pos - carry.length;               // where chunk[0] sits in the file
       pos += n;
       const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n);
       const lastNl = chunk.lastIndexOf(0x0a);
       if (lastNl === -1) { carry = chunk; continue; }
-      const text = chunk.toString('utf8', 0, lastNl + 1);
-      carry = Buffer.from(chunk.subarray(lastNl + 1));
-      for (const line of text.split('\n')) {
-        if (!line) continue;
-        let d;
-        try { d = JSON.parse(line); } catch { continue; }
-        onLine(d);
+      if (!clock) {
+        const text = chunk.toString('utf8', 0, lastNl + 1);
+        for (const line of text.split('\n')) {
+          if (!line) continue;
+          let d;
+          try { d = JSON.parse(line); } catch { continue; }
+          onLine(d);
+        }
+      } else {
+        for (let at = 0; at <= lastNl;) {
+          const end = chunk.indexOf(0x0a, at);
+          if (end > at) {
+            if (isRequestLine(chunk, at, end)) pending.push([base + at, base + end]);
+            else {
+              let d;
+              let ok = true;
+              try { d = JSON.parse(chunk.toString('utf8', at, end)); } catch { ok = false; }
+              if (ok) {
+                if (pending.length && tsOf(d)) { settleFirst(fd, pending, clock); pending = []; }
+                onLine(d);
+              }
+            }
+          }
+          at = end + 1;
+        }
       }
+      carry = Buffer.from(chunk.subarray(lastNl + 1));
     }
+    if (pending.length) settleLast(fd, pending, clock);
   } finally { try { fs.closeSync(fd); } catch { } }
   return pos - carry.length;
+}
+
+/** What a stepped-over request line would have done to the clock: its timestamp. */
+function requestTs(fd, [start, end]) {
+  const buf = Buffer.allocUnsafe(end - start);
+  let d;
+  try { d = JSON.parse(buf.toString('utf8', 0, fs.readSync(fd, buf, 0, buf.length, start))); } catch { return null; }
+  return tsOf(d);
+}
+
+/**
+ * A record that moves the clock is next. The request lines before it matter
+ * only if the clock has no first reading: then the earliest of them with a
+ * timestamp is that reading. Its `lastTs` is about to be overwritten either way.
+ */
+function settleFirst(fd, pending, clock) {
+  if (clock.firstTs) return;
+  for (const r of pending) {
+    const ts = requestTs(fd, r);
+    if (ts) { clock.firstTs = ts; clock.lastTs = ts; return; }
+  }
+}
+
+/** The walk ended on request lines: the newest of them with a timestamp is the last word. */
+function settleLast(fd, pending, clock) {
+  settleFirst(fd, pending, clock);
+  for (let i = pending.length - 1; i >= 0; i--) {
+    const ts = requestTs(fd, pending[i]);
+    if (ts) { clock.lastTs = ts; return; }
+  }
 }
 
 // ------------------------------------------------------------------ usage
@@ -666,7 +734,7 @@ function agentStats(cache, file, fileStat) {
     }
     const c = d.message && d.message.content;
     if (Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_use') st.toolCalls++;
-  });
+  }, st);
   cache.set(file, st);
   return st;
 }
@@ -900,7 +968,7 @@ function sessionGraph(file, sessionId, { now = Date.now() } = {}) {
   }
   if (entry.state.parsedBytes < st.size) {
     entry.state.parsedBytes = walkLines(file, entry.state.parsedBytes, st.size,
-      (d) => consume(entry.state, d));
+      (d) => consume(entry.state, d), entry.state);
   }
   touch(key, entry);
   const dir = sessionId ? path.join(path.dirname(file), sessionId, 'subagents') : null;

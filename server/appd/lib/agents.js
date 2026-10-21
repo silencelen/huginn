@@ -713,6 +713,6 @@ function* listAgentsSteps(dir, nowSec, fsImpl, max, opts) {
 module.exports = {
   agentsDirFor, workflowDirs, listAgentFiles, agentTask, agentLastLine, agentMeta,
   journalSummaries, journalSettled, journalIndex, agentStatus, listAgents, listAgentsAsync,
-  agentTaskCached, agentMetaCached, journalIndexCached, resetAgentCaches, nextTurn,
+  agentTaskCached, agentMetaCached, journalIndexCached, resetAgentCaches, nextTurn, isRequestLine,
   ACTIVE_S, RECENT_S,
 };
