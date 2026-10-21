@@ -397,6 +397,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat.loading, m.chat.err = false, msg.err
 		if msg.err == nil && msg.d.ID == m.chat.id {
 			m.chat.d = msg.d
+			m.chat.hist = nil
 			m.chat.live.Reset()
 			if msg.d.Running && !m.chat.busy {
 				m.chat.busy = true
