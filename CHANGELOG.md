@@ -8,6 +8,17 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.4] - 2026-10-21
+
+### Fixed
+- Requests through huginn core no longer wait every few seconds for its screen-lock check: they
+  use the last reading while one check runs behind them.
+- huginn core keeps enough idle connections to the server for a burst of requests, instead of
+  opening new ones.
+- The console reloads only its lists when something changes; the server's status refreshes once a
+  minute, on `r` and after an action.
+- The console lays out a chat's history once, not again for every streamed token.
+
 ## [2.6.3] - 2026-10-20
 
 ### Changed

@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.6.4
+
+Carries core 2.6.4.
+
+### Fixed
+- Opening a session shows its history first; the agent strip and the map follow it.
+- Opening a chat reads its conversation and its details together.
+- Away from the Screen tab, a busy session's pane is read at most once a second instead of several
+  times a second, so the work line and a question card can take up to a second to update.
+- An idle session's agent strip refreshes when the session starts working again, or once a minute.
+
 ## 2.6.3
 
 Carries core 2.6.3.

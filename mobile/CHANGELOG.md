@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## 3.12.4 — 2026-10-21
+
+### Fixed
+- A session or chat opened from a notification, or restored after the app was closed in the
+  background, waits for the app's settings instead of showing "Rejected by huginn" or "No route
+  yet" for its first seconds.
+- Opening a session loads its history first, then its other panels.
+- A chat's details and history load together.
+- Two screens asking for the same list at the same time share one request.
+- A phone with no token says "No token set — add it in Settings" instead of "Rejected by huginn".
+
 ## 3.12.3 — 2026-10-20
 
 ### Fixed

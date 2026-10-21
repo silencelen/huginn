@@ -9,6 +9,23 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.5 — 2026-10-21
+
+### Fixed
+- Opening a session no longer stalls every other request while the daemon lists the session's
+  subagents: each subagent's transcript is read once and reused until it changes, and the session
+  map and overview are built without blocking.
+- History pages, the history poll and the session and chat lists skip, unread, the large request
+  record that Claude Code 2.1.300 and later write before each API call, and a history page reads
+  each part of a transcript once.
+- The session and chat lists reuse each transcript's title and mode until the file changes.
+- A screen read, a history poll and the session list start one tmux process each instead of
+  several, and a session's background work is looked up only when it has some.
+- `/v1/status` answers at once with its last memory node and Claude Code version checks while one
+  refresh runs behind it.
+- New connections no longer wait on Nagle's algorithm: with some TLS clients each one took about
+  40 ms longer.
+
 ## 3.13.4 — 2026-10-20
 
 ### Changed
