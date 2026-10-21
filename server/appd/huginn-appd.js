@@ -1361,8 +1361,18 @@ async function backgroundWork(name, panePid) {
   const st = readSessionState(name);
   const dir = st ? taskDirFor(st.transcript, st.sessionId, process.getuid()) : null;
   if (!dir || !panePid) return { shells: [], agents: 0 };
-  return scanTasks(dir, await psSnapshot(), panePid, Math.floor(Date.now() / 1000),
-    fs, knownBackgroundIds(st));
+  // ⚠ THE PROCESS TABLE AND THE TRANSCRIPT ONLY WHEN A SHELL COULD BE RUNNING.
+  // Both answer questions about a shell's `.output` file: who holds it open,
+  // and whether the transcript launched it in the background. Asked first and
+  // unconditionally, they cost a `ps` spawn and — whenever the transcript had
+  // grown — a tail read and parse, per session on every list poll and every
+  // transcript poll, for a session with no tasks directory at all or only
+  // agents in it, where scanTasks never looks at either.
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return { shells: [], agents: 0 }; }
+  const shells = entries.some((e) => e.name.endsWith('.output') && !e.isSymbolicLink());
+  return scanTasks(dir, shells ? await psSnapshot() : new Map(), panePid, Math.floor(Date.now() / 1000),
+    fs, shells ? knownBackgroundIds(st) : null);
 }
 
 async function listSessions({ preview = false } = {}) {
