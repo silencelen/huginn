@@ -20,7 +20,10 @@ trap cleanup EXIT
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
 TOK=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 mkdir -p "$T/appd/data" "$T/appd/state" "$T/appd/claude"; printf '%s\n' "$TOK" > "$T/appd/token"; chmod 600 "$T/appd/token"
+# The push key is not HUGINN_APPD_-prefixed, so the unset list above misses it,
+# and unset it falls back to the live key on a huginn host. Point it at nothing.
 env $(env | grep -o '^HUGINN_APPD_[A-Z_]*' | sed 's/^/-u /') \
+  HUGINN_FCM_KEY=/nonexistent/huginn-test-fcm-service-account.json \
   HUGINN_APPD_PORT=$PORT HUGINN_APPD_BIND=127.0.0.1 HUGINN_APPD_DATA="$T/appd/data" \
   HUGINN_APPD_TOKEN_FILE="$T/appd/token" HUGINN_APPD_STATE_DIR="$T/appd/state" \
   HUGINN_APPD_CLAUDE_DIR="$T/appd/claude" HUGINN_APPD_TMUX_SOCKET="huginn-core-e2e-$$" HUGINN_APPD_WORKDIR="$T" \

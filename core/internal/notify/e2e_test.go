@@ -78,11 +78,14 @@ func TestWatchStreamFromRealAppd(t *testing.T) {
 
 	env := []string{}
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "HUGINN_APPD_") {
+		if !strings.HasPrefix(kv, "HUGINN_APPD_") && !strings.HasPrefix(kv, "HUGINN_FCM_KEY=") {
 			env = append(env, kv)
 		}
 	}
+	// The push key is not HUGINN_APPD_-prefixed, and unset it falls back to the
+	// live key on a huginn host: point it at nothing, like the Node suites do.
 	env = append(env,
+		"HUGINN_FCM_KEY=/nonexistent/huginn-test-fcm-service-account.json",
 		fmt.Sprintf("HUGINN_APPD_PORT=%d", port),
 		"HUGINN_APPD_BIND=127.0.0.1",
 		"HUGINN_APPD_DATA="+data,
