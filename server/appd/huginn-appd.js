@@ -54,8 +54,10 @@ const archiveLib = require('./lib/archive');
 const devicesLib = require('./lib/devices');
 const appsLib = require('./lib/apps');           // next to devices on purpose: it is the registry devices is NOT (lib/apps.js)
 const { taskDirFor, parsePs, scanTasks, extractBgIds } = require('./lib/tasks');
-const { agentsDirFor, listAgents, listAgentFiles } = require('./lib/agents');
-const { sessionGraph, sessionOverview, agentBytesOf, CACHE_MAX: GRAPH_CACHE_MAX } = require('./lib/sessiongraph');
+const { agentsDirFor, listAgentsAsync, listAgentFiles } = require('./lib/agents');
+const {
+  sessionGraphAsync, sessionOverviewAsync, agentBytesOf, CACHE_MAX: GRAPH_CACHE_MAX,
+} = require('./lib/sessiongraph');
 // Projects: the name grammars, the manifest contract and its parser, the
 // membership join across three registries, and the dashboard rollup. Pure, so
 // "never join a member by the native row's `tmux` field" and "the LAST tagged
@@ -7283,11 +7285,13 @@ async function projectDashboard(project) {
     const file = (st && st.transcript) || (r.sessionId ? findTranscriptFile(r.sessionId) : null);
     return { ...r, transcript: file };
   });
-  const rows = projectsLib.rollupMembers(withFiles, {
+  // Awaited member by member: a member whose walk went cold (a restart, the
+  // graph LRU) is walked in steps that let the rest of the daemon run.
+  const rows = await projectsLib.rollupMembersAsync(withFiles, {
     cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
     sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
     agentBytesOf,
-    overview: (f, id) => { try { return sessionOverview(f, id); } catch { return null; } },
+    overview: async (f, id) => { try { return await sessionOverviewAsync(f, id); } catch { return null; } },
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
   return {
@@ -12119,7 +12123,9 @@ async function handleRequest(req, res) {
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
       }
-      const o = sessionOverview(st.transcript, st.sessionId);
+      // Awaited: a cold session is a walk of its whole transcript and every
+      // agent file, done in steps so the rest of the daemon keeps answering.
+      const o = await sessionOverviewAsync(st.transcript, st.sessionId);
       if (!o) return sendErr(res, 409, noTranscriptMessage(st.transcript));
       rememberTranscript(st.transcript);
       return sendJson(res, 200, {
@@ -12141,7 +12147,7 @@ async function handleRequest(req, res) {
       // parent writes nothing at all while six agents run, so a parent-size
       // cursor reports "unchanged" for as long as the fan-out lasts — which is
       // exactly the stretch the map is worth watching.
-      const g = sessionGraph(st.transcript, st.sessionId);
+      const g = await sessionGraphAsync(st.transcript, st.sessionId);
       if (!g) return sendErr(res, 409, noTranscriptMessage(st.transcript));
       rememberTranscript(st.transcript);
       // ⚠ has() BEFORE Number(), because `Number(null)` is 0 and an EMPTY
@@ -12354,8 +12360,10 @@ async function handleRequest(req, res) {
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
       const all = u.searchParams.get('all') === '1';
+      // Awaited, and it yields between files: a cold listing of a big fan-out
+      // used to hold every other request on this daemon until it was done.
       const agents = dir
-        ? listAgents(dir, Math.floor(Date.now() / 1000), fs, all ? 200 : 24, { all })
+        ? await listAgentsAsync(dir, Math.floor(Date.now() / 1000), fs, all ? 200 : 24, { all })
         : [];
       return sendJson(res, 200, {
         agents,
