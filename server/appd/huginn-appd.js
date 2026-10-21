@@ -32,7 +32,7 @@ const {
   extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
-const { readTranscript, liveActivity, unwrapPasted, lastWorkAt } = require('./lib/transcript');
+const { readTranscript, liveActivity, unwrapPasted, lastWorkAt, transcriptHead } = require('./lib/transcript');
 const tlsLib = require('./lib/tls');
 const { summarizeUsage } = require('./lib/usage');
 const { normalizePlan } = require('./lib/plan');
@@ -1520,7 +1520,8 @@ async function listSessions({ preview = false } = {}) {
       const st = readSessionState(r.name);
       if (st && st.transcript) {
         try {
-          const t = readTranscript(st.transcript, { limit: 1 });
+          // Cached on the file's size and mtime: an idle session costs a stat.
+          const t = transcriptHead(st.transcript);
           if (t.title) r.title = t.title;
           if (t.permissionMode) r.permissionMode = t.permissionMode;
         } catch { /* transcript unreadable: not fatal for a list */ }
@@ -4500,7 +4501,9 @@ function listChats() {
         const f = findTranscriptFile(m.claudeSessionId);
         if (f) {
           try {
-            const t = readTranscript(f, { limit: 1 });
+            // Cached on the file's size and mtime: a chat that is not running
+            // costs a stat, not a tail read, on every poll of this list.
+            const t = transcriptHead(f);
             if (t.title) m.title = t.title;
           } catch { /* fall back to the stored title */ }
         }

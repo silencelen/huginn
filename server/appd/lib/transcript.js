@@ -1706,7 +1706,30 @@ function lastWorkInTail(file, size, want) {
   }
 }
 
+/**
+ * What a LIST row takes from a transcript: Claude Code's own title and the
+ * permission mode, exactly as `readTranscript(file, { limit: 1 })` reports them.
+ *
+ * ⚠ CACHED ON SIZE AND MTIME, like lastWorkAt. The session list and the chat
+ * list are polled by every client every few seconds, and both read this for
+ * every row on every poll — a tail read and parse per session or chat, of a
+ * file that had not changed since the last poll. A row whose transcript has not
+ * moved now costs one stat.
+ */
+const headCache = new Map();
+
+function transcriptHead(file) {
+  const st = fs.statSync(file);
+  const hit = headCache.get(file);
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.head;
+  const t = readTranscript(file, { limit: 1 });
+  const head = { title: t.title, permissionMode: t.permissionMode };
+  if (headCache.size > 500) headCache.clear();
+  headCache.set(file, { size: st.size, mtimeMs: st.mtimeMs, head });
+  return head;
+}
+
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
-  peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt,
+  peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt, transcriptHead,
 };
