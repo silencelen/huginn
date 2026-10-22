@@ -166,8 +166,14 @@ before(async () => {
   }
 });
 
-after(() => {
-  if (daemon) daemon.kill('SIGTERM');
+after(async () => {
+  // Waited for: a daemon on its way out still writes its last state, and
+  // removing the folder under it failed with ENOTEMPTY on a loaded box.
+  if (daemon && daemon.exitCode === null && daemon.signalCode === null) {
+    const gone = new Promise((r) => daemon.once('exit', r));
+    daemon.kill('SIGTERM');
+    await Promise.race([gone, new Promise((r) => setTimeout(r, 10_000))]);
+  }
   if (tmp) fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
