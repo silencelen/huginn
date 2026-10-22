@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.6 — 2026-10-22
+
+### Fixed
+- A working session's tool calls no longer each cost the daemon a full alert check. The state
+  watcher still checks at once when a session's state changes, and otherwise at most every 3
+  seconds.
+
 ## 3.13.5 — 2026-10-21
 
 ### Fixed
