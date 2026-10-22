@@ -47,6 +47,7 @@ const sessreg = require('./lib/session-registry');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
+const stateWatch = require('./lib/statewatch');
 const clientsLib = require('./lib/clients');
 const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
@@ -7821,6 +7822,8 @@ async function statusPayload() {
 // Telegram, which is already how this homelab reaches its owner.
 const ALERT_STATE = path.join(DATA_DIR, 'alerts.json');
 const ALERT_POLL_MS = 10_000;
+// How long a same-state rewrite from the watcher waits for a tick (lib/statewatch).
+const STATE_WATCH_QUIET_MS = 3_000;
 // Optional out-of-band delivery script (anything accepting --message/--source).
 // Empty on a generic host — the fallback channel simply reports 'none'.
 const TELEGRAM_SCRIPT = process.env.HUGINN_APPD_TELEGRAM_SCRIPT || '';
@@ -10965,11 +10968,18 @@ let alertTimer = null;
 // alert state — the classic way a "sent" marker gets lost and an alert fires
 // twice.
 let alertBusy = false;
+// What the last completed alert tick observed, name -> state word (its
+// observation's `sessions`), and when the last tick began: what the state watcher
+// compares a burst against (lib/statewatch). Null until a tick completes, so a
+// daemon with alerts off watches exactly as it always did.
+let lastAlertStates = null;
+let lastAlertTickAt = 0;
 async function alertTick() {
   const st = loadAlertState();
   if (!st.enabled) return;
   if (alertBusy) return;
   alertBusy = true;
+  lastAlertTickAt = Date.now();
   try {
     await alertTickInner(st);
   } finally {
@@ -11129,6 +11139,9 @@ async function alertTickInner(st) {
     }
   }
   st.prev = observation;
+  // After the rollback above, so a session whose alert reached nobody still
+  // reads as changed to the state watcher and is re-decided at its next write.
+  lastAlertStates = Object.assign(Object.create(null), observation.sessions);
   // Stamped alongside it, because "was this chat created since we last looked?"
   // cannot be answered by the observation itself — it records what existed, not
   // when the looking happened.
@@ -11177,6 +11190,9 @@ async function alertTickInner(st) {
 let stateWatcher = null;
 let stateWatchRetry = null;
 let watchDebounce = null;
+// The files named by the events since the debounce started; null in the set
+// when the watcher could not say which file it was.
+const watchNames = new Set();
 function startStateWatch() {
   if (stateWatcher) return;
   try {
@@ -11186,15 +11202,31 @@ function startStateWatch() {
     // was off for the entire uptime — degraded to the 10s poll with nothing
     // saying so. Creating it costs nothing and is idempotent.
     fs.mkdirSync(STATE_DIR, { recursive: true });
-    stateWatcher = fs.watch(STATE_DIR, () => {
+    stateWatcher = fs.watch(STATE_DIR, (_event, filename) => {
+      watchNames.add(filename ? String(filename) : null);
       // Debounced: a single state change is several filesystem events (write,
       // rename, attribute), and each should not spawn its own tick.
       if (watchDebounce) return;
       watchDebounce = setTimeout(() => {
         watchDebounce = null;
-        alertTick().catch((e) => log('alerts: watch tick failed', e.message));
-        // Same state change drives auto-end, so a settled session is killed
-        // within the debounce window rather than on the 10s floor tick.
+        const names = [...watchNames];
+        watchNames.clear();
+        // Only a burst that changes what an alert turns on ticks the alerts at
+        // once; the hook's rewrite on every tool call mostly does not
+        // (lib/statewatch).
+        if (stateWatch.verdict({
+          names,
+          stateOf: (name) => (readSessionState(name) || {}).state ?? null,
+          seen: lastAlertStates,
+          isSession: (name) => NAME_RE.test(name),
+          now: Date.now(),
+          lastTickAt: lastAlertTickAt,
+          quietMs: STATE_WATCH_QUIET_MS,
+        }) === 'tick') alertTick().catch((e) => log('alerts: watch tick failed', e.message));
+        // Every burst drives auto-end, so a settled session is killed within the
+        // debounce window rather than on the 10s floor tick. NOT gated: a settle
+        // needs two idle readings 3 s apart, and the second is often a rewrite
+        // of the same word. It returns at once when no wind-down is pending.
         softEndTick().catch((e) => log('soft-end: watch tick failed', e.message));
       }, 120);
       watchDebounce.unref();
