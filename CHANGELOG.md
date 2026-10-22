@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.5] - 2026-10-22
+
+### Fixed
+- A Claude Code session sent to the background keeps reporting its state. The state hook finds
+  its tmux session through its session id, so the apps no longer show it working for days, and
+  its questions and finishes alert again.
+
 ## [2.6.4] - 2026-10-21
 
 ### Fixed
