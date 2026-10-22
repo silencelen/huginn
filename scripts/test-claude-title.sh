@@ -14,16 +14,14 @@
 # top-level claude never carries. (The hook's OWN environment is useless for this:
 # a top-level claude hands its hooks CLAUDECODE=1 too.)
 #
-# Needs a tmux pane ($TMUX_PANE): the hook resolves the session name through tmux.
-# Without one it SKIPS LOUDLY. Writes only under a private temp dir, never /run.
-# The one visible side effect is the tab title of the pane it runs in.
+# Cases 1-10 need a tmux pane ($TMUX_PANE): the hook resolves the session name
+# through tmux, and without one they SKIP LOUDLY. The background-job cases (B1-B6)
+# need no pane, which is their point, and always run. Writes only under a private
+# temp dir, never /run. The one visible side effect is the tab title of the pane it
+# runs in.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOK="${HUGINN_CLAUDE_TITLE:-$HERE/server/bin/huginn-claude-title}"
-if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
-  echo "SKIP test-claude-title: not inside a tmux pane (the hook resolves the session name via tmux)"
-  exit 0
-fi
 command -v jq >/dev/null 2>&1 || { echo "SKIP test-claude-title: jq missing"; exit 0; }
 [ -x "$HOOK" ] || { echo "FAIL test-claude-title: $HOOK is not executable"; exit 1; }
 
@@ -32,12 +30,75 @@ trap 'rm -rf "$TMP"' EXIT
 # A bash whose comm is `claude`, like the real binary's: comm is the basename of
 # the path exec'd, so a symlink is enough and no claude is started.
 ln -s /bin/bash "$TMP/claude"
-SESS="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}')"
-[ -n "$SESS" ] || { echo "FAIL test-claude-title: tmux gave no session name"; exit 1; }
 PAYLOAD='{"session_id":"11111111-2222-test","transcript_path":"/nonexistent/t.jsonl","cwd":"/tmp"}'
 
 pass=0; fail=0
 check() { if "$@"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "  FAIL: $*"; fi; }
+
+# B1-B6. A Claude Code BACKGROUND JOB (CLAUDE_CODE_SESSION_KIND=bg) runs under a
+#    bg-pty-host with no pane anywhere above it, so the ancestor walk finds
+#    nothing. It finds its tmux session through the state file that names its
+#    session id instead. Run detached (a double fork), so that even inside a pane
+#    no ancestor holds $TMUX/$TMUX_PANE, as for the real thing.
+# $1 = state dir, $2 = event, $3 = payload, then env assignments for the job.
+bg_hook() {
+  local dir="$1" ev="$2" pl="$3"; shift 3
+  local done="$TMP/done.$RANDOM$RANDOM"
+  ( env -u TMUX -u TMUX_PANE -u CLAUDECODE -u CLAUDE_CODE_SESSION_KIND -u CLAUDE_JOB_DIR "$@" \
+      HUGINN_CLAUDE_STATE_DIR="$dir" PAYLOAD="$pl" HOOK="$HOOK" EV="$ev" DONE="$done" \
+      "$TMP/claude" -c 'printf "%s" "$PAYLOAD" | "$HOOK" "$EV"; : > "$DONE"' & )
+  for _ in $(seq 200); do [ -e "$done" ] && return 0; sleep 0.05; done
+  echo "  (bg_hook: the hook did not finish)"; return 1
+}
+seed() { mkdir -p "$1"; printf '%s\n' "$3" > "$1/$2"; }   # $1 dir, $2 session, $3 json
+BGP='{"session_id":"bbbbbbbb-bg-test","transcript_path":"/nonexistent/bg.jsonl","cwd":"/tmp"}'
+OLD='{"state":"running","sessionId":"bbbbbbbb-bg-test","transcript":"/nonexistent/bg.jsonl","cwd":"/tmp","ts":1}'
+OTHER_JSON='{"state":"idle","sessionId":"cccccccc-other","transcript":null,"cwd":"/tmp","ts":1}'
+JOB=(CLAUDE_CODE_SESSION_KIND=bg CLAUDE_JOB_DIR=/nonexistent/jobs/job123/)
+
+# B1. The one file naming its session id is the job's: the state moves on, the id
+#     stays, the job is recorded; another session's file is not touched.
+seed "$TMP/b1" bgsess "$OLD"; seed "$TMP/b1" other "$OTHER_JSON"
+bg_hook "$TMP/b1" Stop "$BGP" "${JOB[@]}"
+check test "$(jq -r .state "$TMP/b1/bgsess" 2>/dev/null)" = idle
+check test "$(jq -r .sessionId "$TMP/b1/bgsess" 2>/dev/null)" = bbbbbbbb-bg-test
+check test "$(jq -r .job "$TMP/b1/bgsess" 2>/dev/null)" = job123
+check test "$(cat "$TMP/b1/other")" = "$OTHER_JSON"
+
+# B2. No file names it: nothing is written, nothing is created.
+seed "$TMP/b2" other "$OTHER_JSON"
+bg_hook "$TMP/b2" Stop "$BGP" "${JOB[@]}"
+check test "$(ls -A "$TMP/b2")" = other
+check test "$(cat "$TMP/b2/other")" = "$OTHER_JSON"
+
+# B3. Two files name it: not the hook's to choose, so neither moves.
+seed "$TMP/b3" one "$OLD"; seed "$TMP/b3" two "$OLD"
+bg_hook "$TMP/b3" Stop "$BGP" "${JOB[@]}"
+check test "$(jq -r .state "$TMP/b3/one" 2>/dev/null)" = running
+check test "$(jq -r .state "$TMP/b3/two" 2>/dev/null)" = running
+
+# B4. Not a background job (a headless `claude -p`): ignored, as before.
+seed "$TMP/b4" bgsess "$OLD"
+bg_hook "$TMP/b4" Stop "$BGP" CLAUDE_JOB_DIR=/nonexistent/jobs/job123
+check test "$(jq -r .state "$TMP/b4/bgsess" 2>/dev/null)" = running
+
+# B5. A fork changed the session id; the job recorded in B1 still finds the file.
+bg_hook "$TMP/b1" PreToolUse '{"session_id":"dddddddd-forked","transcript_path":"/nonexistent/f.jsonl","cwd":"/tmp","tool_name":"Bash"}' "${JOB[@]}"
+check test "$(jq -r .sessionId "$TMP/b1/bgsess" 2>/dev/null)" = dddddddd-forked
+check test "$(jq -r .state "$TMP/b1/bgsess" 2>/dev/null)" = running
+
+# B6. A question from a background job leaves its sidecar, so it can alert.
+bg_hook "$TMP/b1" PreToolUse '{"session_id":"dddddddd-forked","transcript_path":"/nonexistent/f.jsonl","cwd":"/tmp","tool_name":"AskUserQuestion","tool_input":{"questions":[]}}' "${JOB[@]}"
+check test -f "$TMP/b1/.ask/bgsess"
+
+if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
+  echo "SKIP test-claude-title cases 1-10: not inside a tmux pane (the hook resolves the session name via tmux)"
+  echo "test-claude-title: $pass passed, $fail failed"
+  [ "$fail" -eq 0 ]
+  exit
+fi
+SESS="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}')"
+[ -n "$SESS" ] || { echo "FAIL test-claude-title: tmux gave no session name"; exit 1; }
 # $1 = state dir, then env assignments / -u flags for the fake claude.
 run_hook() {
   local dir="$1"; shift

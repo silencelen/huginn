@@ -65,11 +65,24 @@ _ancestor_tmux() {
   done
   return 1
 }
+# ⚠ A CLAUDE CODE BACKGROUND JOB HAS NO PANE TO FIND. A session sent to the
+# background (CLAUDE_CODE_SESSION_KIND=bg) runs on under a bg-pty-host that no
+# pane's shell is an ancestor of, so the walk above rightly finds nothing, and
+# every hook exited here: the session's state file kept what it said the moment
+# the session left its pane, the apps showed it working for days, and no question
+# or finish of its could alert. Its session id still names it, in the state file
+# written before it left (see _bg_session). Anything else without a pane (a
+# headless `claude -p`, a cron run) still exits here.
+bg_job=; bg_job_id=
 if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
-  _ancestor_tmux || exit 0
+  if ! _ancestor_tmux; then
+    [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ] || exit 0
+    bg_job=1
+    bg_job_id="${CLAUDE_JOB_DIR%/}"; bg_job_id="${bg_job_id##*/}"
+  fi
 fi
 # Interactive tmux session only — headless runs have no $TMUX/$TMUX_PANE.
-[ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ] || exit 0
+[ -n "$bg_job" ] || { [ -n "${TMUX:-}" ] && [ -n "${TMUX_PANE:-}" ]; } || exit 0
 
 # --- nested claude guard -----------------------------------------------------
 # A claude started by a Bash tool INSIDE a tmux Claude session (`claude -p` for a
@@ -165,11 +178,39 @@ case "$event" in
   *) exit 0 ;;
 esac
 
-# One tmux call for both the pane tty and the session name.
-info="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}|#{session_name}' 2>/dev/null)" || exit 0
-tty="${info%%|*}"
-sess="${info#*|}"
-[ -n "$sess" ] || sess="claude"
+# The tmux session a background job belongs to: the ONE state file that names this
+# job's Claude session id, or else the job itself (a file written from here carries
+# `job`, and a later fork changes the session id but not the job). None, or more
+# than one: not ours to choose, so nothing is written.
+_bg_session() {
+  local dir="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}" sid job f found='' n=0
+  command -v jq >/dev/null 2>&1 || return 1
+  sid="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
+  job="$bg_job_id"
+  [ -n "$sid$job" ] || return 1
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in *.tmp) continue ;; esac
+    if jq -e --arg sid "$sid" --arg job "$job" \
+        'type == "object" and (($sid != "" and .sessionId == $sid) or ($job != "" and .job == $job))' \
+        "$f" >/dev/null 2>&1; then
+      found="${f##*/}"; n=$((n + 1))
+    fi
+  done
+  [ "$n" -eq 1 ] || return 1
+  printf '%s' "$found"
+}
+if [ -n "$bg_job" ]; then
+  # No pane, so no tab title either: only the files below.
+  tty=
+  sess="$(_bg_session)" || exit 0
+else
+  # One tmux call for both the pane tty and the session name.
+  info="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}|#{session_name}' 2>/dev/null)" || exit 0
+  tty="${info%%|*}"
+  sess="${info#*|}"
+  [ -n "$sess" ] || sess="claude"
+fi
 
 # --- a compaction puts back the state it interrupted ------------------------
 # An idle compaction ("Compacted while idle, before the prompt cache expired")
@@ -235,8 +276,10 @@ if [ -n "$st" ]; then
   # same moment) dropped an automated send ten minutes later. appd reads the unit
   # off the magnitude, so a file this hook wrote before the change still works.
   if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
-    printf '%s' "$payload" | jq -c --arg st "$st" \
-      '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:(now*1000|floor)}' \
+    # `job` only from a background job: what finds its file again after a fork.
+    printf '%s' "$payload" | jq -c --arg st "$st" --arg job "$bg_job_id" \
+      '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:(now*1000|floor)}
+       + (if $job != "" then {job:$job} else {} end)' \
       > "$STATE_DIR/$sess.tmp" 2>/dev/null \
       && mv -fT "$STATE_DIR/$sess.tmp" "$STATE_DIR/$sess" 2>/dev/null \
       || printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
