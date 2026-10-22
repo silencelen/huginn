@@ -1,5 +1,12 @@
 # Huginn changelog
 
+## 3.12.5 — 2026-10-21
+
+### Fixed
+- While a busy session is open on the Conversation or Overview tab, its screen is read about once a
+  second instead of about four times a second, so the question bar and the live model there can
+  take up to a second to update. The Screen tab still updates with every change.
+
 ## 3.12.4 — 2026-10-21
 
 ### Fixed
