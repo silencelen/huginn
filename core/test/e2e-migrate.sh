@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(cd "$HERE/../.." && pwd)"
 T="$(mktemp -d)"; FAILS=0
 ok()  { echo "PASS  $*"; }
 bad() { echo "FAIL  $*"; FAILS=$((FAILS+1)); }
-cleanup() { kill "${CORE:-}" "${APPD:-}" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-mig-$$" kill-server 2>/dev/null; rm -rf "$T"; }
+cleanup() { kill "${CORE:-}" "${APPD:-}" 2>/dev/null; wait 2>/dev/null; tmux -L "huginn-core-mig-$$" kill-server 2>/dev/null; rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/huginn-core-mig-$$"; rm -rf "$T"; }
 trap cleanup EXIT
 (cd "$REPO/core" && go build -o "$T/huginn" ./cmd/huginn) || exit 99
 
