@@ -66,19 +66,22 @@ _ancestor_tmux() {
   return 1
 }
 # ⚠ A CLAUDE CODE BACKGROUND JOB HAS NO PANE TO FIND. A session sent to the
-# background (CLAUDE_CODE_SESSION_KIND=bg) runs on under a bg-pty-host that no
-# pane's shell is an ancestor of, so the walk above rightly finds nothing, and
+# background runs on under a bg-pty-host that no pane's shell is an ancestor of,
+# so the walk above rightly finds nothing, and
 # every hook exited here: the session's state file kept what it said the moment
 # the session left its pane, the apps showed it working for days, and no question
 # or finish of its could alert. Its session id still names it, in the state file
-# written before it left (see _bg_session). Anything else without a pane (a
-# headless `claude -p`, a cron run) still exits here.
+# written before it left (see _bg_session). A job's hooks are handed
+# CLAUDE_JOB_DIR; its process also carries CLAUDE_CODE_SESSION_KIND=bg, which
+# Claude Code does NOT hand on to hooks (2.1.30x), so either one marks a job.
+# Anything else without a pane (a headless `claude -p`, a cron run) still exits
+# here.
 bg_job=; bg_job_id=
 if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
   if ! _ancestor_tmux; then
-    [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ] || exit 0
+    [ -n "${CLAUDE_JOB_DIR:-}" ] || [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ] || exit 0
     bg_job=1
-    bg_job_id="${CLAUDE_JOB_DIR%/}"; bg_job_id="${bg_job_id##*/}"
+    bg_job_id="${CLAUDE_JOB_DIR:-}"; bg_job_id="${bg_job_id%/}"; bg_job_id="${bg_job_id##*/}"
   fi
 fi
 # Interactive tmux session only — headless runs have no $TMUX/$TMUX_PANE.

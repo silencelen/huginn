@@ -35,7 +35,7 @@ PAYLOAD='{"session_id":"11111111-2222-test","transcript_path":"/nonexistent/t.js
 pass=0; fail=0
 check() { if "$@"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "  FAIL: $*"; fi; }
 
-# B1-B6. A Claude Code BACKGROUND JOB (CLAUDE_CODE_SESSION_KIND=bg) runs under a
+# B1-B7. A Claude Code BACKGROUND JOB (its hooks get CLAUDE_JOB_DIR) runs under a
 #    bg-pty-host with no pane anywhere above it, so the ancestor walk finds
 #    nothing. It finds its tmux session through the state file that names its
 #    session id instead. Run detached (a double fork), so that even inside a pane
@@ -54,7 +54,9 @@ seed() { mkdir -p "$1"; printf '%s\n' "$3" > "$1/$2"; }   # $1 dir, $2 session, 
 BGP='{"session_id":"bbbbbbbb-bg-test","transcript_path":"/nonexistent/bg.jsonl","cwd":"/tmp"}'
 OLD='{"state":"running","sessionId":"bbbbbbbb-bg-test","transcript":"/nonexistent/bg.jsonl","cwd":"/tmp","ts":1}'
 OTHER_JSON='{"state":"idle","sessionId":"cccccccc-other","transcript":null,"cwd":"/tmp","ts":1}'
-JOB=(CLAUDE_CODE_SESSION_KIND=bg CLAUDE_JOB_DIR=/nonexistent/jobs/job123/)
+# What a real job's hooks are handed: CLAUDE_JOB_DIR, and NOT
+# CLAUDE_CODE_SESSION_KIND (that one stays on the claude process).
+JOB=(CLAUDE_JOB_DIR=/nonexistent/jobs/job123/)
 
 # B1. The one file naming its session id is the job's: the state moves on, the id
 #     stays, the job is recorded; another session's file is not touched.
@@ -79,7 +81,7 @@ check test "$(jq -r .state "$TMP/b3/two" 2>/dev/null)" = running
 
 # B4. Not a background job (a headless `claude -p`): ignored, as before.
 seed "$TMP/b4" bgsess "$OLD"
-bg_hook "$TMP/b4" Stop "$BGP" CLAUDE_JOB_DIR=/nonexistent/jobs/job123
+bg_hook "$TMP/b4" Stop "$BGP"
 check test "$(jq -r .state "$TMP/b4/bgsess" 2>/dev/null)" = running
 
 # B5. A fork changed the session id; the job recorded in B1 still finds the file.
@@ -90,6 +92,11 @@ check test "$(jq -r .state "$TMP/b1/bgsess" 2>/dev/null)" = running
 # B6. A question from a background job leaves its sidecar, so it can alert.
 bg_hook "$TMP/b1" PreToolUse '{"session_id":"dddddddd-forked","transcript_path":"/nonexistent/f.jsonl","cwd":"/tmp","tool_name":"AskUserQuestion","tool_input":{"questions":[]}}' "${JOB[@]}"
 check test -f "$TMP/b1/.ask/bgsess"
+
+# B7. The process-side mark alone is a job too (should a version hand it on).
+seed "$TMP/b7" bgsess "$OLD"
+bg_hook "$TMP/b7" Stop "$BGP" CLAUDE_CODE_SESSION_KIND=bg
+check test "$(jq -r .state "$TMP/b7/bgsess" 2>/dev/null)" = idle
 
 if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
   echo "SKIP test-claude-title cases 1-10: not inside a tmux pane (the hook resolves the session name via tmux)"
