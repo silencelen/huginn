@@ -16,3 +16,7 @@ process.env.HUGINN_APPD_TELEGRAM_SCRIPT = '';
 process.env.HUGINN_FCM_KEY = '/nonexistent/huginn-test-fcm-service-account.json';
 // And no other host: appd would ssh to a configured MemPalace host to check it.
 process.env.HUGINN_APPD_MEMPALACE_HOST = '';
+
+// Not about the owner, but every daemon suite loads this file: its scratch tmux
+// servers and their socket files go when the process does (tmux-cleanup.js).
+require('./tmux-cleanup');

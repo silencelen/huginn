@@ -15,6 +15,7 @@
 // panes run `printf; sleep` or `cat >/dev/null`, so nothing typed executes, and
 // no daemon is started, so no port is taken.
 
+require('./tmux-cleanup'); // its scratch tmux server and socket go with the process
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');

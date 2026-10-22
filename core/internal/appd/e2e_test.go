@@ -76,6 +76,7 @@ func newRealAppd(t *testing.T) *realAppd {
 	t.Cleanup(func() {
 		a.stop()
 		_ = exec.Command("tmux", "-L", a.tmuxSoc, "kill-server").Run()
+		_ = os.Remove(tmuxSocketPath(a.tmuxSoc))
 	})
 	return a
 }
@@ -444,4 +445,14 @@ func TestE2ERealAppd(t *testing.T) {
 			t.Fatalf("get after delete: want 404/permanent, got %v", err)
 		}
 	})
+}
+
+// tmuxSocketPath is where tmux keeps this user's socket for `-L name`.
+// kill-server leaves that file behind, one more per run, so cleanup removes it.
+func tmuxSocketPath(name string) string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), name)
 }

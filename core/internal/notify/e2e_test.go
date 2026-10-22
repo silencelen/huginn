@@ -67,7 +67,10 @@ func TestWatchStreamFromRealAppd(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	sock := fmt.Sprintf("huginn-notify-%d", os.Getpid())
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	t.Cleanup(func() {
+		_ = exec.Command("tmux", "-L", sock, "kill-server").Run()
+		_ = os.Remove(tmuxSocketPath(sock))
+	})
 
 	// The session exists BEFORE appd's first listing, with no state file: the
 	// seed frame must carry it with a null state.
@@ -223,4 +226,14 @@ func TestWatchStreamFromRealAppd(t *testing.T) {
 	if len(d) != 1 || d[0].Kind != Withdraw || d[0].Key != "sess:"+name {
 		t.Fatalf("kill frame %s gave %+v", raw, d)
 	}
+}
+
+// tmuxSocketPath is where tmux keeps this user's socket for `-L name`.
+// kill-server leaves that file behind, one more per run, so cleanup removes it.
+func tmuxSocketPath(name string) string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), name)
 }

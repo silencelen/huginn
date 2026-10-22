@@ -1,6 +1,7 @@
 'use strict';
 // hooks/huginn-permission-hook, run for real against a private tmux pane: the
 // guards that keep it from ever holding a headless run, and the hand-off.
+require('./tmux-cleanup'); // its scratch tmux server and socket go with the process
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn, execFileSync } = require('node:child_process');
