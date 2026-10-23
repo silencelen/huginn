@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## 2.6.5
+## 2.6.6
 
 Carries core 2.6.6.
 
