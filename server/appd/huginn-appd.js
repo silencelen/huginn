@@ -1407,19 +1407,21 @@ let tmuxListHeld = null;     // { gen, at, r }: the last answer
 let tmuxListFlight = null;   // { gen, p }: the call in flight
 
 /**
- * `tmux list-sessions -F TMUX_LIST_FMT` as {err, stdout, stderr}, ONE call shared
- * by everything that asks within a second.
+ * `tmux list-sessions -F TMUX_LIST_FMT` as {err, stdout, stderr}: unless [fresh],
+ * ONE call shared by every caller within TMUX_LIST_TTL_MS.
  *
- * ⚠ EVERY LISTING AND EVERY EXISTENCE CHECK STARTED ITS OWN TMUX. The session
- * list, each watch stream's 3 s digest, the alert and soft-end ticks, and the
- * preamble of every per-session route (sessionExists) each ran tmux, and a
- * spawn costs this event loop ~9 ms plus ~10-15 ms of CPU in the child. With a
- * desktop and a phone open on an idle host that was a tmux process or two a
- * second for facts that change a few times a day. Now one answer serves every
- * caller for TMUX_LIST_TTL_MS, concurrent callers share the call in flight, and
- * a change this daemon makes to the session set (run() sees new-, kill-,
- * rename-session, start- and kill-server) is never answered across. A session
- * started or ended outside the daemon shows within the second.
+ * ⚠ EVERY LISTING AND EVERY EXISTENCE CHECK STARTED ITS OWN TMUX. Each watch
+ * stream's 3 s digest, the alert ticks and the existence check of every history,
+ * agents and map poll ran tmux, and a spawn costs this event loop ~7-9 ms plus
+ * ~10-15 ms of CPU in the child, for facts that change a few times a day.
+ *
+ * SHARING IS OPT-IN (`listSessions({ shared: true })`, `sessionExists(name, seen,
+ * { fresh: false })`): the re-looks of watch streams and parked watch polls, the
+ * alert tick, soft-end's per-session check and the read-only GET polls. Every
+ * other caller is fresh, as before. Concurrent shared callers share the call in
+ * flight, and a change this daemon makes to the session set (run() sees new-,
+ * kill-, rename-session, start- and kill-server) is never answered across. A
+ * session started or ended outside the daemon shows within TMUX_LIST_TTL_MS.
  */
 async function tmuxListSessions({ fresh = false } = {}) {
   const gen = tmuxSetGen;
