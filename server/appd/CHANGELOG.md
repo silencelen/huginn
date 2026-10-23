@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.8 — 2026-10-22
+
+### Fixed
+- A screen left open on a quiet session costs the daemon far less. While a screen read waits for a
+  change, it checks the pane every 1.5 s once the pane has been quiet for 10 seconds, as fast as
+  before just after a change, and input sent through huginn or a change in the session's state
+  wakes it at once. Output that appears on a long-quiet pane without either can take up to 1.5
+  seconds to show.
+
 ## 3.13.7 — 2026-10-22
 
 ### Fixed
