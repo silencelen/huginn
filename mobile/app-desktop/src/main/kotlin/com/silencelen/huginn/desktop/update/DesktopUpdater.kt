@@ -252,7 +252,17 @@ class DesktopUpdater(
             _state.value = UpdateState.Error("the downloaded installer is gone")
             return false
         }
-        if (!portable) return launcher(ready.file)
+        if (!portable) {
+            // ⚠ HASHED AGAIN HERE, not only at download. The comment above always
+            // said so, but this branch checked only that a file was there: an
+            // installer swapped in the cache after it was verified ran as the
+            // update, with the elevation an installer asks for.
+            if (!Sha256.matches(ready.file, ready.sha256)) {
+                _state.value = UpdateState.Error("the downloaded installer no longer matches its sha256 — not installed")
+                return false
+            }
+            return launcher(ready.file)
+        }
         return installPortable(ready)
     }
 
