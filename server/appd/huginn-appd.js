@@ -1062,9 +1062,17 @@ async function sweepStateDir(why = 'daily') {
 // One ps snapshot serves every caller inside its window; the sessions list and
 // several transcript polls land inside the same second, and each fresh ps is a
 // process spawn.
+//
+// ⚠ FIVE SECONDS, NOT 1.5. Every client polls the history of an open session
+// every few seconds and the session list every five, and each read whose
+// session has a background shell asks this; at 1.5 s nearly every poll missed,
+// so a host with two such sessions open ran `ps` over the whole process table
+// two or three times every five seconds. What it answers, whether a background
+// shell is still running, can trail by a few seconds without anybody noticing.
+const PS_SNAPSHOT_TTL_MS = 5000;
 let psCache = { at: 0, procs: new Map() };
 async function psSnapshot() {
-  if (Date.now() - psCache.at < 1500) return psCache.procs;
+  if (Date.now() - psCache.at < PS_SNAPSHOT_TTL_MS) return psCache.procs;
   const r = await run('ps', ['-eo', 'pid,ppid,etimes,args', '--no-headers']);
   if (!r.err) psCache = { at: Date.now(), procs: parsePs(r.stdout) };
   return psCache.procs;
