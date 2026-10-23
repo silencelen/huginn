@@ -9,6 +9,14 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.9 — 2026-10-22
+
+### Fixed
+- A session running a background shell costs the daemon less while the apps are open. Whether its
+  shells are still running is read from one process listing, which now serves for five seconds, and
+  the session list reads it once for all of its rows instead of once per row. A shell that has just
+  finished can show as running for up to five seconds longer.
+
 ## 3.13.8 — 2026-10-22
 
 ### Fixed
