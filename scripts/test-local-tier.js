@@ -946,6 +946,43 @@ test('userIds: an `id` that fails is no account, not root', () => {
   assert.deepEqual(local.userIds('owner'), { uid: 1000, gid: 1001 });
 });
 
+test('the hand-back never takes the root, a system folder or a whole home', () => {
+  // Checked on the path as written, before it is looked up: these hold on any box.
+  for (const d of ['/', '/etc', '/home', '/root', '/usr', '/var', '/tmp', '/home/someone', '/home/someone/']) {
+    assert.equal(local.handBackDirOk(d), false, d);
+  }
+  assert.equal(local.handBackDirOk(''), false);
+});
+
+test('the hand-back takes only a folder that holds huginn-local\'s own local.json', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'handback-ok-'));
+  try {
+    assert.equal(local.handBackDirOk(d), false, 'no local.json: not huginn-local\'s folder');
+    fs.mkdirSync(path.join(d, 'local.json'));
+    assert.equal(local.handBackDirOk(d), false, 'a directory called local.json is not the config');
+    fs.rmdirSync(path.join(d, 'local.json'));
+    fs.writeFileSync(path.join(d, 'local.json'), '{}');
+    assert.equal(local.handBackDirOk(d), true);
+    const link = `${d}-link-to-etc`;
+    fs.symlinkSync('/etc', link);
+    try {
+      assert.equal(local.handBackDirOk(link), false, 'a link to a system folder is that folder');
+    } finally { fs.rmSync(link, { force: true }); }
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
+test('as root, a folder that is not huginn-local\'s is left as it is', {
+  skip: !(LINUX && typeof process.getuid === 'function' && process.getuid() === 0) && 'Linux, as root',
+}, () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'handback-foreign-'));
+  fs.writeFileSync(path.join(d, 'someone-elses'), 'root file');
+  shim({ id: () => ({ stdout: '65534\n' }) });
+  try {
+    assert.equal(local.handBackOwnership(d, 'nobody'), false);
+    assert.equal(fs.statSync(path.join(d, 'someone-elses')).uid, 0, 'nothing in it changed hands');
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
+});
+
 test('the hand-back changes the tree, never what a link in it names', {
   skip: !(LINUX && typeof process.getuid === 'function' && process.getuid() === 0) && 'Linux, as root',
 }, () => {

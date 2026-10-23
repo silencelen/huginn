@@ -503,6 +503,29 @@ function markElevatedRun() {
   try { fs.writeFileSync(mark, '', { flag: 'wx' }); } catch { /* the parent then has only the status */ }
 }
 
+// The filesystem root and the top-level directories a system is made of.
+const SYSTEM_DIRS = new Set(['/', '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib32', '/lib64',
+  '/media', '/mnt', '/opt', '/proc', '/root', '/run', '/sbin', '/snap', '/srv', '/sys', '/tmp', '/usr', '/var']);
+
+/**
+ * Whether [dir] is a folder handBackOwnership may give away: huginn-local's own.
+ *
+ * ⚠ THE HAND-BACK RUNS AS ROOT OVER WHATEVER IT IS GIVEN. Its folder comes from
+ * HUGINN_LOCAL_DIR or a plan step, and nothing checked it: pointed at "/",
+ * "/home" or "/etc" it would have handed the account every file below. So the
+ * folder must not be the root, a top-level system directory or a whole home
+ * directory, as written or once links are resolved, and it must hold
+ * huginn-local's own local.json as a plain file.
+ */
+function handBackDirOk(dir) {
+  const banned = (p) => SYSTEM_DIRS.has(p) || /^\/home\/[^/]+$/.test(p);
+  if (!dir || banned(path.resolve(dir))) return false;
+  let real;
+  try { real = fs.realpathSync(dir); } catch { return false; }
+  if (banned(real)) return false;
+  try { return fs.lstatSync(path.join(real, 'local.json')).isFile(); } catch { return false; }
+}
+
 /**
  * An elevated `on` writes every file as root into a directory the SERVICE then
  * reads as the person who owns the machine — `api-key` at 0600 included, which
@@ -511,6 +534,7 @@ function markElevatedRun() {
  */
 function handBackOwnership(dir = localDir(), user = serviceUser()) {
   if (!isRoot() || user === 'root') return false;
+  if (!handBackDirOk(dir)) return false;
   const { uid, gid } = userIds(user);
   if (uid == null || gid == null) return false;
   // ⚠ lchown, never chown: this runs as root over a tree the account owns, and
@@ -2435,7 +2459,7 @@ if (require.main === module) {
     // Where the engine identity check is used here (it lives in the shim).
     engineKit, serviceUid, health, identifyAdapter,
     // The elevated hand-back (an update run with sudo writes as root).
-    userIds, handBackOwnership, ELEVATED_MARK,
+    userIds, handBackOwnership, handBackDirOk, ELEVATED_MARK,
     // The Windows service install, driven on any OS with a stand-in WinSW.
     installServiceWindows,
   };
