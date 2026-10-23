@@ -48,6 +48,7 @@ const { pushPending, takePending, clearPending, drainPending, queuedEvents } = r
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
 const stateWatch = require('./lib/statewatch');
+const screenWait = require('./lib/screenwait');
 const clientsLib = require('./lib/clients');
 const roundsLib = require('./lib/rounds');
 const scratchpadsLib = require('./lib/scratchpads');
@@ -535,16 +536,72 @@ function changesTmuxSet(cmd, args) {
   return cmd === 'tmux' && args.some((a) => TMUX_SET_CHANGERS.has(a));
 }
 
+// Per pane, for the screen long poll (lib/screenwait): when a read last saw it
+// change or input last went into it, the hash that read saw, and the polls
+// parked on it.
+const paneChangedAt = new Map();   // name -> ms
+const paneLastHash = new Map();    // name -> hash
+const paneWaiters = new Map();     // name -> Set<wake fn>
+
+/** Record what a read of [name] saw; a different hash is a change. */
+function notePaneHash(name, hash) {
+  if (paneLastHash.get(name) === hash) return;
+  paneLastHash.set(name, hash);
+  paneChangedAt.set(name, Date.now());
+}
+
+/** The pane just took input (or its session changed state): wake its polls now. */
+function wakePane(name) {
+  paneChangedAt.set(name, Date.now());
+  const set = paneWaiters.get(name);
+  if (!set) return;
+  paneWaiters.delete(name);
+  for (const wake of set) wake();
+}
+
+/** Wait [ms], or until wakePane(name), whichever is first. */
+function sleepOrWake(name, ms) {
+  return new Promise((resolve) => {
+    let set = paneWaiters.get(name);
+    if (!set) { set = new Set(); paneWaiters.set(name, set); }
+    const done = () => {
+      clearTimeout(timer);
+      set.delete(done);
+      if (!set.size && paneWaiters.get(name) === set) paneWaiters.delete(name);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    set.add(done);
+  });
+}
+
+// The tmux subcommands that put input into a pane. run() and runStdin() wake
+// the target's parked screen polls when one completes (wakePane), so a
+// keystroke's echo never waits on a quiet pane's slow peek.
+const TMUX_INPUT_CMDS = new Set(['send-keys', 'paste-buffer', 'send-prefix']);
+function inputTargets(cmd, args) {
+  if (cmd !== 'tmux' || !args.some((a) => TMUX_INPUT_CMDS.has(a))) return null;
+  const names = [];
+  for (let i = 0; i < args.length - 1; i++) {
+    if (args[i] !== '-t') continue;
+    const m = /^=([^:]+)/.exec(String(args[i + 1]));
+    if (m) names.push(m[1]);
+  }
+  return names.length ? names : null;
+}
+
 // ⚠ NEVER A SHELL, here or in runStdin(): their argv carries request input,
 // safe only while no shell reads it. A shell gets a call of its own (runRelayShim).
 function run(cmd, args, opts = {}) {
   const changes = changesTmuxSet(cmd, args);
+  const typedInto = inputTargets(cmd, args);
   if (cmd === 'tmux') args = tmuxArgs(args);
   if (changes) tmuxSetGen += 1;
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => {
         if (changes) tmuxSetGen += 1;
+        if (typedInto) for (const n of typedInto) wakePane(n);
         resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' });
       });
   });
@@ -564,12 +621,14 @@ function run(cmd, args, opts = {}) {
  */
 function runStdin(cmd, args, input, opts = {}) {
   const changes = changesTmuxSet(cmd, args);
+  const typedInto = inputTargets(cmd, args);
   if (cmd === 'tmux') args = tmuxArgs(args);
   if (changes) tmuxSetGen += 1;
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
       (err, stdout, stderr) => {
         if (changes) tmuxSetGen += 1;
+        if (typedInto) for (const n of typedInto) wakePane(n);
         resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' });
       });
     if (child.stdin) {
@@ -11289,6 +11348,9 @@ function startStateWatch() {
         watchDebounce = null;
         const names = [...watchNames];
         watchNames.clear();
+        // A session that changed state is about to redraw: its parked screen
+        // polls look now (lib/screenwait).
+        for (const n of names) if (n && NAME_RE.test(n)) wakePane(n);
         // Only a burst that changes what an alert turns on ticks the alerts at
         // once; the hook's rewrite on every tool call mostly does not
         // (lib/statewatch).
@@ -12229,6 +12291,7 @@ async function handleRequest(req, res) {
       const deadline = Date.now() + waitMs;
       let scr = await captureScreen(name, opts);
       if (!scr) return paneReadFailed(res, name);
+      notePaneHash(name, scr.hash);
       // While parked, poll with ONE cheap capture-pane rather than a full
       // captureScreen: the geometry cannot change without the content changing,
       // and re-running the resize/geometry calls on every tick cost three tmux
@@ -12242,11 +12305,17 @@ async function handleRequest(req, res) {
       // And a tick that sees a change IS the capture: the screen is built from
       // it (captureScreen's `pre`) instead of being read again, which cost two
       // more tmux processes per answered poll.
-      let tick = 0;
+      //
+      // Paced by how long the PANE has been quiet (lib/screenwait), not by this
+      // request's tick count: 130 ms just after a change, 1.5 s once it has been
+      // quiet for 10 s. Input through the daemon and a state change wake it at once.
       while (known && scr.hash === known && Date.now() < deadline && !req.destroyed) {
-        await sleep(tick++ < 24 ? 130 : 450);
+        const quietFor = Date.now() - (paneChangedAt.get(name) ?? 0);
+        await sleepOrWake(name, Math.max(0, Math.min(screenWait.peekInterval(quietFor), deadline - Date.now())));
+        if (Date.now() >= deadline || req.destroyed) break;
         const peek = await peekPane(name, Math.max(0, Math.min(2000, Math.floor(opts.history))));
         if (peek === null) return paneReadFailed(res, name);
+        notePaneHash(name, peek.hash);
         if (peek.hash !== known) {
           scr = await captureScreen(name, opts, peek.cap);
           if (!scr) return paneReadFailed(res, name);
