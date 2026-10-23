@@ -1069,13 +1069,23 @@ async function sweepStateDir(why = 'daily') {
 // so a host with two such sessions open ran `ps` over the whole process table
 // two or three times every five seconds. What it answers, whether a background
 // shell is still running, can trail by a few seconds without anybody noticing.
+//
+// ⚠ ASKS THAT ARRIVE WHILE A ps RUNS WAIT FOR IT. The session list asks for
+// every row at once (Promise.all), and the cache is only written when ps
+// returns, so an expired cache used to start one ps per row with a background
+// shell.
 const PS_SNAPSHOT_TTL_MS = 5000;
 let psCache = { at: 0, procs: new Map() };
+let psInFlight = null;
 async function psSnapshot() {
   if (Date.now() - psCache.at < PS_SNAPSHOT_TTL_MS) return psCache.procs;
-  const r = await run('ps', ['-eo', 'pid,ppid,etimes,args', '--no-headers']);
-  if (!r.err) psCache = { at: Date.now(), procs: parsePs(r.stdout) };
-  return psCache.procs;
+  if (!psInFlight) {
+    psInFlight = run('ps', ['-eo', 'pid,ppid,etimes,args', '--no-headers']).then((r) => {
+      if (!r.err) psCache = { at: Date.now(), procs: parsePs(r.stdout) };
+      return psCache.procs;
+    }).finally(() => { psInFlight = null; });
+  }
+  return psInFlight;
 }
 
 /**
