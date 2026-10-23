@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.7 — 2026-10-22
+
+### Fixed
+- With the apps open on an idle host, the daemon starts far fewer tmux processes. The apps'
+  live-update streams, the alert checks and the read-only polls (history, agents, map) share one
+  session listing for up to 3 seconds instead of each asking tmux. The session list, and anything
+  that changes or sends to a session, still asks tmux directly; a session started in a terminal is
+  found by the next request.
+
 ## 3.13.6 — 2026-10-22
 
 ### Fixed
