@@ -210,7 +210,9 @@ test('a long poll that sees the change answers from the read that saw it', async
   }
 });
 
-test('a transcript poll is one tmux process', async () => {
+test('a transcript poll starts no tmux process of its own', async () => {
+  // Its existence check (and the pane's pid) come from the shared session
+  // listing: at most that one listing, and nothing aimed at the session.
   const size = fs.statSync(transcriptFile).size;
   clearLog();
   const { status, body } = await api(`/v1/sessions/${A}/transcript?offset=${size}`);
@@ -218,6 +220,26 @@ test('a transcript poll is one tmux process', async () => {
   assert.deepStrictEqual(body.events, []);
   assert.deepStrictEqual(body.tasks, []);
   assert.equal(body.bgAgents, 0);
-  const mine = aimedAt(A);
-  assert.equal(mine.length, 1, `${mine.length} calls:\n${mine.map((c) => c.join(' ')).join('\n')}`);
+  const all = calls();
+  assert.equal(aimedAt(A).length, 0, `calls aimed at the session:\n${aimedAt(A).map((c) => c.join(' ')).join('\n')}`);
+  assert.ok(all.length <= 1 && all.every((c) => c.includes('list-sessions')),
+    `${all.length} calls:\n${all.map((c) => c.join(' ')).join('\n')}`);
+});
+
+test('history polls share one session listing', async () => {
+  // Five history polls and then the session list, back to back. The polls take
+  // their existence check from the shared listing (at most one list-sessions
+  // between them, none if a listing from the last few seconds is still good);
+  // the list route always asks tmux itself. So one or two in all, never one
+  // existence check per poll.
+  const size = fs.statSync(transcriptFile).size;
+  clearLog();
+  for (let i = 0; i < 5; i++) {
+    assert.equal((await api(`/v1/sessions/${A}/transcript?offset=${size}`)).status, 200);
+  }
+  assert.equal((await api('/v1/sessions')).status, 200);
+  const lists = calls().filter((c) => c.includes('list-sessions'));
+  const checks = calls().filter((c) => c.includes('display-message') && c.includes(`=${A}:`));
+  assert.equal(checks.length, 0, `${checks.length} existence checks of their own`);
+  assert.ok(lists.length >= 1 && lists.length <= 2, `${lists.length} listings for six requests in about a second`);
 });

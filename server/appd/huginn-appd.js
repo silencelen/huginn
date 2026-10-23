@@ -526,13 +526,27 @@ function tmuxArgs(args) {
   return TMUX_SOCKET ? ['-u', '-L', TMUX_SOCKET, ...args] : ['-u', ...args];
 }
 
+// The tmux subcommands that change which sessions exist. run() and runStdin()
+// bump tmuxSetGen before and after one, so the shared listing (tmuxListSessions)
+// never answers across a change this daemon made.
+const TMUX_SET_CHANGERS = new Set(['new-session', 'kill-session', 'rename-session', 'kill-server', 'start-server']);
+let tmuxSetGen = 0;
+function changesTmuxSet(cmd, args) {
+  return cmd === 'tmux' && args.some((a) => TMUX_SET_CHANGERS.has(a));
+}
+
 // ⚠ NEVER A SHELL, here or in runStdin(): their argv carries request input,
 // safe only while no shell reads it. A shell gets a call of its own (runRelayShim).
 function run(cmd, args, opts = {}) {
+  const changes = changesTmuxSet(cmd, args);
   if (cmd === 'tmux') args = tmuxArgs(args);
+  if (changes) tmuxSetGen += 1;
   return new Promise((resolve) => {
     execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
-      (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
+      (err, stdout, stderr) => {
+        if (changes) tmuxSetGen += 1;
+        resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' });
+      });
   });
 }
 
@@ -549,10 +563,15 @@ function run(cmd, args, opts = {}) {
  * the daemon down rather than failing the send.
  */
 function runStdin(cmd, args, input, opts = {}) {
+  const changes = changesTmuxSet(cmd, args);
   if (cmd === 'tmux') args = tmuxArgs(args);
+  if (changes) tmuxSetGen += 1;
   return new Promise((resolve) => {
     const child = execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 * 1024 * 1024, ...opts },
-      (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' }));
+      (err, stdout, stderr) => {
+        if (changes) tmuxSetGen += 1;
+        resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' });
+      });
     if (child.stdin) {
       child.stdin.on('error', () => { /* EPIPE: the exit code below is the verdict */ });
       child.stdin.end(input);
@@ -1378,13 +1397,49 @@ async function backgroundWork(name, panePid) {
     fs, shells ? knownBackgroundIds(st) : null);
 }
 
-async function listSessions({ preview = false } = {}) {
-  // window_activity, NOT session_activity: the latter does not move when a pane
-  // produces output, so it read ~8 hours stale on sessions that had been busy
-  // continuously and the list ordered by it was effectively frozen.
-  const fmt = '#{session_name}\t#{session_created}\t#{session_attached}\t#{window_activity}\t' +
-    '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}\t#{pane_pid}';
-  const { err, stdout, stderr } = await run('tmux', ['list-sessions', '-F', fmt]);
+// window_activity, NOT session_activity: the latter does not move when a pane
+// produces output, so it read ~8 hours stale on sessions that had been busy
+// continuously and the list ordered by it was effectively frozen.
+const TMUX_LIST_FMT = '#{session_name}\t#{session_created}\t#{session_attached}\t#{window_activity}\t' +
+  '#{session_windows}\t#{window_width}\t#{window_height}\t#{window-size}\t#{session_activity}\t#{pane_pid}';
+const TMUX_LIST_TTL_MS = 3000;
+let tmuxListHeld = null;     // { gen, at, r }: the last answer
+let tmuxListFlight = null;   // { gen, p }: the call in flight
+
+/**
+ * `tmux list-sessions -F TMUX_LIST_FMT` as {err, stdout, stderr}, ONE call shared
+ * by everything that asks within a second.
+ *
+ * ⚠ EVERY LISTING AND EVERY EXISTENCE CHECK STARTED ITS OWN TMUX. The session
+ * list, each watch stream's 3 s digest, the alert and soft-end ticks, and the
+ * preamble of every per-session route (sessionExists) each ran tmux, and a
+ * spawn costs this event loop ~9 ms plus ~10-15 ms of CPU in the child. With a
+ * desktop and a phone open on an idle host that was a tmux process or two a
+ * second for facts that change a few times a day. Now one answer serves every
+ * caller for TMUX_LIST_TTL_MS, concurrent callers share the call in flight, and
+ * a change this daemon makes to the session set (run() sees new-, kill-,
+ * rename-session, start- and kill-server) is never answered across. A session
+ * started or ended outside the daemon shows within the second.
+ */
+async function tmuxListSessions({ fresh = false } = {}) {
+  const gen = tmuxSetGen;
+  if (!fresh && tmuxListHeld && tmuxListHeld.gen === gen && Date.now() - tmuxListHeld.at < TMUX_LIST_TTL_MS) {
+    return tmuxListHeld.r;
+  }
+  if (!fresh && tmuxListFlight && tmuxListFlight.gen === gen) return tmuxListFlight.p;
+  const p = run('tmux', ['list-sessions', '-F', TMUX_LIST_FMT]).then((r) => {
+    if (tmuxSetGen === gen) tmuxListHeld = { gen, at: Date.now(), r };
+    if (tmuxListFlight && tmuxListFlight.p === p) tmuxListFlight = null;
+    return r;
+  });
+  tmuxListFlight = { gen, p };
+  return p;
+}
+
+async function listSessions({ preview = false, shared = false } = {}) {
+  // Fresh unless the caller can live with an answer up to TMUX_LIST_TTL_MS old:
+  // the list routes are a live view; the watch digests and the ticks share.
+  const { err, stdout, stderr } = await tmuxListSessions({ fresh: !shared });
   if (err) {
     // Two very different things used to look identical here. tmux exiting
     // because there is genuinely no server is an OBSERVATION: there are no
@@ -1757,7 +1812,26 @@ function tmuxSaysAbsent(stderr) { return TMUX_ABSENT_RE.test(String(stderr || ''
  * Null is not a third kind of no. Callers that gate a route turn it into a 503
  * (`requireSession`); callers doing housekeeping treat it as "leave it alone".
  */
-async function sessionExists(name, seen = null) {
+async function sessionExists(name, seen = null, { fresh = true } = {}) {
+  // ⚠ FRESH UNLESS ASKED OTHERWISE. A route that acts on the answer (a send, an
+  // answer, an archive, serving files from the session's folder) must not trust
+  // a listing a session has since left, and tmux not answering must still read
+  // as a 503. Only the read-only polls and the frequent background loops pass
+  // `fresh: false`, and even then only a FIND comes from the shared listing
+  // (tmuxListSessions): a miss, or a listing that failed, falls through to the
+  // check below, so a session started a moment ago in a terminal is never a 404.
+  if (!fresh) {
+    const { err, stdout } = await tmuxListSessions();
+    if (!err) {
+      for (const line of String(stdout || '').split('\n')) {
+        const f = line.split('\t');
+        if (f[0] !== name) continue;
+        rememberBorn(name, f[1]);
+        if (seen) seen.panePid = Number(f[9]) || null;
+        return true;
+      }
+    }
+  }
   // display-message, not has-session: the same single call answers "does it
   // exist" and "when was it created", and every state read downstream needs the
   // second answer to know whether the state belongs to THIS session.
@@ -1793,8 +1867,8 @@ async function sessionExists(name, seen = null) {
  * The session-gated route preamble: 404 when it is really gone, 503 when tmux
  * would not say. Returns false once it has answered, so the caller returns.
  */
-async function requireSession(res, name, seen = null) {
-  const found = await sessionExists(name, seen);
+async function requireSession(res, name, seen = null, { shared = false } = {}) {
+  const found = await sessionExists(name, seen, { fresh: !shared });
   if (found === true) return true;
   if (found === false) { sendErr(res, 404, 'no such session'); return false; }
   sendErr(res, 503, 'tmux is not answering right now');
@@ -1899,7 +1973,8 @@ function forgetAnsweredIfGone(name, prompt) {
  * clients eject the viewer with "Session <name> ended").
  */
 async function paneReadFailed(res, name) {
-  const found = await sessionExists(name);
+  // Fresh: a shared answer from before the session ended would call it alive.
+  const found = await sessionExists(name, null, { fresh: true });
   if (found === false) return sendErr(res, 404, 'no such session');
   return sendErr(res, 503, 'tmux is not answering right now');
 }
@@ -3921,7 +3996,7 @@ async function softEndTick() {
   // it always has. A session tmux does not have is not acted on — a rename's own
   // window looks exactly like that — the next holder of the name, or none,
   // settles it.
-  for (const name of [...softEnds.keys()]) await sessionExists(name);
+  for (const name of [...softEnds.keys()]) await sessionExists(name, null, { fresh: false });
   const now = Date.now();
   for (const [name, pending] of [...softEnds]) {
     const st = readSessionState(name);
@@ -7112,7 +7187,8 @@ async function launchProjectSession(tmuxName, cwd, command) {
   // meeting `web-api`'s lead) wiped a running session's "needs you" and then
   // failed anyway. The create route asks first for the same reason; the wording
   // is tmux's own, so the spawn report reads the same either way.
-  const taken = await sessionExists(tmuxName);
+  // Fresh: a name check before creating must not trust a shared answer.
+  const taken = await sessionExists(tmuxName, null, { fresh: true });
   if (taken !== false) {
     return { error: taken ? `duplicate session: ${tmuxName}` : 'tmux is not answering right now' };
   }
@@ -10989,7 +11065,7 @@ async function alertTick() {
 
 async function alertTickInner(st) {
   const now = Date.now();
-  const sessions = await listSessions();
+  const sessions = await listSessions({ shared: true });
   // Unknown, not empty. Diffing against a snapshot we failed to take is how a
   // tmux blip turns into mass spurious resolutions; the next tick is 10s away.
   if (sessions === null) { log('alerts: skipping tick, session list unavailable'); return; }
@@ -11647,8 +11723,12 @@ async function handleRequest(req, res) {
         const KEEPALIVE_MS = 25_000;
         let nextKeepalive = Date.now() + KEEPALIVE_MS;
 
+        // The first look asks tmux; every 3 s pass after it shares the listing
+        // (tmuxListSessions), so an open stream costs no tmux of its own.
+        let firstLook = true;
         while (!req.destroyed && !res.writableEnded) {
-          const sess = await listSessions();
+          const sess = await listSessions({ shared: !firstLook });
+          firstLook = false;
           const d = digest(sess ?? [], chatStates(), headroomFacts());
           // A failed observation must not be published as a change: the phone
           // would see every session disappear and act on it.
@@ -11710,11 +11790,13 @@ async function handleRequest(req, res) {
       const deadline = Date.now() + waitMs;
       // Cheap inputs on purpose: no previews, no transcripts. This runs in a loop
       // for as long as a phone is watching.
+      // The look itself asks tmux, so tmux not answering is a 503 and never an
+      // older answer; only the re-looks of a parked poll share the listing.
       let sess = await listSessions();
       let d = digest(sess ?? [], chatStates(), headroomFacts());
       while (known && (sess === null || d.hash === known) && Date.now() < deadline && !req.destroyed) {
         await sleep(3000);
-        sess = await listSessions();
+        sess = await listSessions({ shared: true });
         d = digest(sess ?? [], chatStates(), headroomFacts());
       }
       if (req.destroyed) return;
@@ -12075,7 +12157,8 @@ async function handleRequest(req, res) {
       const bad = nameProblem(body.name);
       if (bad) return sendErr(res, 400, bad);
       const name = canonName(body.name);
-      if (await sessionExists(name)) return sendErr(res, 409, `session '${name}' already exists`);
+      // Fresh: a name check before creating must not trust a shared answer.
+      if (await sessionExists(name, null, { fresh: true })) return sendErr(res, 409, `session '${name}' already exists`);
       // Whatever the last holder of this name left behind goes now, before the new
       // session can be observed. The born-time guard would reject it anyway, but
       // deleting it here closes the window rather than papering over it.
@@ -12206,7 +12289,7 @@ async function handleRequest(req, res) {
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/transcript$/)) && req.method === 'GET') {
       const name = m[1];
       const seen = { panePid: null };
-      if (!(await requireSession(res, name, seen))) return;
+      if (!(await requireSession(res, name, seen, { shared: true }))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -12249,7 +12332,7 @@ async function handleRequest(req, res) {
     // --- suggested next messages, generated when a turn has just ended
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/suggestions$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       const st = readSessionState(name);
       if (!st || st.state === 'running' || !st.transcript) {
         return sendJson(res, 200, { suggestions: [], reason: 'running' });
@@ -12266,7 +12349,7 @@ async function handleRequest(req, res) {
     // a parked phone for — it is a page somebody opens on purpose.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/overview$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -12286,7 +12369,7 @@ async function handleRequest(req, res) {
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/graph$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       const st = readSessionState(name);
       if (!st || !st.sessionId || !st.transcript) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -12504,7 +12587,7 @@ async function handleRequest(req, res) {
     // worse answer to that question.
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agents$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       const st = readSessionState(name);
       const dir = st ? agentsDirFor(st.transcript, st.sessionId) : null;
       const all = u.searchParams.get('all') === '1';
@@ -12552,7 +12635,7 @@ async function handleRequest(req, res) {
       const idm = raw ? /^(?:agent-)?([0-9a-f]{6,32})$/.exec(raw) : null;
       if (!idm) return sendErr(res, 400, 'invalid agent id');
       const agentId = `agent-${idm[1]}`;
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       const st = readSessionState(name);
       if (!st || !st.transcript || !st.sessionId) {
         return sendErr(res, 409, 'no transcript recorded for this session yet — the Claude hook fires on the first prompt');
@@ -12586,7 +12669,7 @@ async function handleRequest(req, res) {
       const badName = nameProblem(body.name);
       if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
-      if (to !== from && await sessionExists(to)) return sendErr(res, 409, `session '${to}' already exists`);
+      if (to !== from && await sessionExists(to, null, { fresh: true })) return sendErr(res, 409, `session '${to}' already exists`);
       // ⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN (3.5.2). The project record
       // stores members by tmux name, its `claudeName` was minted from the slug
       // and the role when `claude --name` launched it, and the native peer
@@ -12984,7 +13067,7 @@ async function handleRequest(req, res) {
      */
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/typing$/)) && req.method === 'GET') {
       const name = m[1];
-      if (!(await requireSession(res, name))) return;
+      if (!(await requireSession(res, name, null, { shared: true }))) return;
       return sendJson(res, 200,
         typing.typingSnapshot(sendQueues.get(name), Date.now(), intoDraftFor(name)));
     }
