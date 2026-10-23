@@ -1,5 +1,13 @@
 # Huginn Desktop changelog
 
+## 2.6.5
+
+Carries core 2.6.6.
+
+### Security
+- On Windows, the downloaded installer is checked against its published hash again right before it
+  starts, not only when it was downloaded.
+
 ## 2.6.4
 
 Carries core 2.6.4.

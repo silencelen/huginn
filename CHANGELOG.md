@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.6] - 2026-10-22
+
+### Security
+- `huginn local`, run as root, hands ownership back only to its own folder: never the filesystem
+  root, a top-level system folder or a whole home folder, and only a folder that holds its own
+  `local.json`.
+
 ## [2.6.5] - 2026-10-22
 
 ### Fixed
