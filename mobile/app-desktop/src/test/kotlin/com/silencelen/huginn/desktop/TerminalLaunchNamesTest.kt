@@ -139,9 +139,12 @@ class TerminalLaunchNamesTest {
             assertTrue("not installed" in said, "$os said: $said")
             assertFalse(spawned, "$os")
         }
+        // With the CLI there, it spawns. The terminal is a fake machine's: which
+        // one Linux opens is TerminalPickTest's business, not this test's.
         var got: List<String>? = null
-        assertNull(TerminalLaunch.open("main", TerminalLaunch.Os.LINUX, homeWithCli()) { got = it })
-        assertEquals("x-terminal-emulator", got!![0])
+        val debian: (String) -> String? = { if (it == "x-terminal-emulator") "/usr/bin/x-terminal-emulator" else null }
+        assertNull(TerminalLaunch.open("main", TerminalLaunch.Os.LINUX, homeWithCli(), env = { null }, which = debian) { got = it })
+        assertEquals("/usr/bin/x-terminal-emulator", got!![0])
     }
 
     @Test

@@ -122,6 +122,133 @@ object TerminalLaunch {
         return "if type _huginn_attach_named >/dev/null 2>&1; then huginn attach '$name'; else $fallback; fi"
     }
 
+    /**
+     * What the Linux window runs, after whatever terminal [pickLinuxTerminal] chose.
+     *
+     * ⚠ THE CLI IS SOURCED HERE, NOT LEFT TO THE LOGIN SHELL (desktop breaker,
+     * 2026-10-02). `bash -lc` reads only the FIRST of ~/.bash_profile,
+     * ~/.bash_login, ~/.profile — install.sh wires ~/.profile and ~/.bashrc — so
+     * a user's own ~/.bash_profile hides the first, and Debian's .bashrc returns
+     * early for a non-interactive shell before reaching the second: the window
+     * said "huginn: command not found". The Windows script dot-sources its file
+     * for the same reason; harmless when a startup file already did.
+     */
+    fun linuxCommand(name: String): List<String> = listOf(
+        "bash", "-lc",
+        "[ -f ~/.huginn/huginn.sh ] && . ~/.huginn/huginn.sh; ${posixLine(name)}; exec bash",
+    )
+
+    /**
+     * One terminal, and how it is told "run this command": [run] goes between the
+     * terminal and the command. The words are each terminal's own — the same ones
+     * its desktop entry gives `xdg-terminal-exec` as `X-TerminalArgExec`.
+     */
+    class Terminal(val name: String, val run: List<String>)
+
+    /**
+     * ⚠ `x-terminal-emulator` IS DEBIAN'S, NOT LINUX'S (owner report, 2026-10-23:
+     * "open in terminal is not working on linux/ arch"). It is a Debian
+     * alternatives link and this was the only thing ever tried, so on Arch, Fedora
+     * or anything else that is not Debian the spawn threw "No such file or
+     * directory" — and the failure went to stderr, which nobody launching from a
+     * menu ever sees. Now it is one candidate of many: after the person's own
+     * choice ($TERMINAL, then `xdg-terminal-exec`, which is how Omarchy and
+     * current GNOME launch a terminal), the Debian default, then the terminals
+     * people actually install, then the ones a desktop ships, then the old ones.
+     *
+     * ⚠ THE "RUN THIS" WORD DIFFERS, AND THE WRONG ONE IS SILENT. gnome-terminal
+     * takes `--` (`-e` is deprecated and takes ONE string), xfce4-terminal and
+     * mate-terminal take `-x` for the same reason, kitty and foot read the
+     * command as plain trailing arguments (`--` keeps their option parser off
+     * bash's `-lc`), and wezterm needs its `start` subcommand.
+     */
+    val LINUX_TERMINALS: List<Terminal> = listOf(
+        // A launcher, not a terminal: it takes the command as is and runs the one
+        // the person chose in xdg-terminals.list. `-e` is optional there and
+        // accepted, so nothing goes between.
+        Terminal("xdg-terminal-exec", emptyList()),
+        Terminal("x-terminal-emulator", listOf("-e")),
+        Terminal("ghostty", listOf("-e")),
+        Terminal("alacritty", listOf("-e")),
+        Terminal("kitty", listOf("--")),
+        Terminal("foot", listOf("--")),
+        Terminal("wezterm", listOf("start", "--")),
+        Terminal("konsole", listOf("-e")),
+        Terminal("gnome-terminal", listOf("--")),
+        Terminal("ptyxis", listOf("--")),
+        Terminal("kgx", listOf("--")),
+        Terminal("xfce4-terminal", listOf("-x")),
+        Terminal("mate-terminal", listOf("-x")),
+        Terminal("terminator", listOf("-x")),
+        Terminal("qterminal", listOf("-e")),
+        Terminal("urxvt", listOf("-e")),
+        Terminal("st", listOf("-e")),
+        Terminal("xterm", listOf("-e")),
+    )
+
+    /** What [pickLinuxTerminal] decided. */
+    sealed interface TerminalPick {
+        /** [launcher] is the argv up to the command: where the terminal is, then its "run this" words. */
+        class Found(val launcher: List<String>) : TerminalPick
+
+        /** Nothing answered. [tried] names every candidate, in the order it was looked for. */
+        class NotFound(val tried: List<String>) : TerminalPick
+    }
+
+    /**
+     * The terminal a Linux window opens in, decided without touching the machine:
+     * [env] reads the environment and [which] says where a program is (null when
+     * it is not there), so the whole order is testable with a fake PATH.
+     *
+     * $TERMINAL comes first because it is the one place a person SAYS which
+     * terminal is theirs. Its first word is the program and the rest are its own
+     * arguments (the convention every launcher that reads it follows); a terminal
+     * this file knows gets its own "run this" word, any other gets `-e`, which is
+     * xterm's and the default every launcher assumes.
+     */
+    fun pickLinuxTerminal(env: (String) -> String?, which: (String) -> String?): TerminalPick {
+        val tried = mutableListOf<String>()
+        val chosen = env("TERMINAL")?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }.orEmpty()
+        if (chosen.isNotEmpty()) {
+            tried += "\$TERMINAL (${chosen.joinToString(" ")})"
+            which(chosen[0])?.let { path ->
+                val run = LINUX_TERMINALS.firstOrNull { it.name == File(chosen[0]).name }?.run ?: listOf("-e")
+                return TerminalPick.Found(listOf(path) + chosen.drop(1) + run)
+            }
+        }
+        for (t in LINUX_TERMINALS) {
+            tried += t.name
+            which(t.name)?.let { return TerminalPick.Found(listOf(it) + t.run) }
+        }
+        return TerminalPick.NotFound(tried)
+    }
+
+    /**
+     * Where [name] is: on PATH, or in the directories a desktop launcher's PATH
+     * tends to leave out. An app started from a menu, a tray or a service gets the
+     * session's PATH or less (systemd's user default has no ~/.local/bin), not the
+     * one an interactive shell builds. The answer is an absolute path, so the
+     * spawn itself never depends on PATH either. A [name] with a `/` in it is
+     * already a path and is only checked.
+     */
+    fun onPath(
+        name: String,
+        env: (String) -> String?,
+        runnable: (File) -> Boolean = { it.isFile && it.canExecute() },
+    ): String? {
+        if ('/' in name) return File(name).takeIf(runnable)?.path
+        val home = env("HOME")?.takeIf { it.isNotBlank() }
+        val dirs = env("PATH").orEmpty().split(':').filter { it.isNotBlank() } +
+            listOfNotNull(home?.let { "$it/.local/bin" }) +
+            listOf("/usr/local/bin", "/usr/bin", "/bin", "/snap/bin")
+        return dirs.distinct().map { File(it, name) }.firstOrNull(runnable)?.path
+    }
+
+    /** The sentence for a Linux machine where nothing in [pickLinuxTerminal]'s list answered. */
+    fun noTerminal(tried: List<String>): String =
+        "no terminal was found to open it in (tried ${tried.joinToString(", ")}); " +
+            "set \$TERMINAL or install one of those"
+
     fun encoded(script: String): String = Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_16LE))
 
     fun decoded(encoded: String): String = String(Base64.getDecoder().decode(encoded), Charsets.UTF_16LE)
@@ -129,8 +256,14 @@ object TerminalLaunch {
     /** An AppleScript string literal's escaping. */
     private fun appleQuoted(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    /** The argv to spawn, or null when the CLI cannot open the name (see [problem]). */
-    fun argv(name: String, os: Os = this.os): List<String>? {
+    /**
+     * The argv to spawn, or null when the CLI cannot open the name (see [problem]).
+     *
+     * On Linux [terminal] is the launcher [pickLinuxTerminal] found — the
+     * terminal and its "run this" words — and the window's command follows it.
+     * Windows and macOS each have the one terminal and ignore it.
+     */
+    fun argv(name: String, os: Os = this.os, terminal: List<String> = emptyList()): List<String>? {
         if (problem(name) != null) return null
         return when (os) {
             Os.WINDOWS -> listOf(
@@ -142,18 +275,7 @@ object TerminalLaunch {
                 "-e", "tell application \"Terminal\" to do script \"${appleQuoted(posixLine(name))}\"",
                 "-e", "tell application \"Terminal\" to activate",
             )
-            // ⚠ THE CLI IS SOURCED HERE, NOT LEFT TO THE LOGIN SHELL (desktop
-            // breaker, 2026-10-02). `bash -lc` reads only the FIRST of
-            // ~/.bash_profile, ~/.bash_login, ~/.profile — install.sh wires
-            // ~/.profile and ~/.bashrc — so a user's own ~/.bash_profile hides
-            // the first, and Debian's .bashrc returns early for a
-            // non-interactive shell before reaching the second: the window said
-            // "huginn: command not found". The Windows script dot-sources its
-            // file for the same reason; harmless when a startup file already did.
-            Os.LINUX -> listOf(
-                "x-terminal-emulator", "-e", "bash", "-lc",
-                "[ -f ~/.huginn/huginn.sh ] && . ~/.huginn/huginn.sh; ${posixLine(name)}; exec bash",
-            )
+            Os.LINUX -> terminal + linuxCommand(name)
         }
     }
 
@@ -185,17 +307,54 @@ object TerminalLaunch {
      * opened a window saying "'huginn' is not recognized" and this returned
      * null — no clipboard, no log. The one failure that CAN be seen from here is
      * checked first: the file every install path puts the CLI in.
+     *
+     * [env] and [which] are the machine as Linux's terminal choice sees it
+     * ([pickLinuxTerminal]); a test hands in its own.
      */
     fun open(
         name: String,
         os: Os = this.os,
         home: File = File(System.getProperty("user.home") ?: "."),
-        start: (List<String>) -> Unit = { ProcessBuilder(it).redirectErrorStream(true).start() },
+        env: (String) -> String? = System::getenv,
+        which: (String) -> String? = { onPath(it, env) },
+        start: (List<String>) -> Unit = { spawn(it, os) },
     ): String? {
         problem(name)?.let { return "'$name' cannot be opened through the huginn CLI: $it; not opening it" }
-        val argv = argv(name, os) ?: return "'$name' cannot be opened through the huginn CLI; not opening it"
         val cli = cliFile(os, home)
         if (!cli.isFile) return "the huginn CLI is not installed here (no ${cli.path}); install it, then run: ${shellLine(name)}"
+        val terminal = if (os != Os.LINUX) emptyList() else when (val pick = pickLinuxTerminal(env, which)) {
+            is TerminalPick.Found -> pick.launcher
+            is TerminalPick.NotFound -> return noTerminal(pick.tried)
+        }
+        val argv = argv(name, os, terminal) ?: return "'$name' cannot be opened through the huginn CLI; not opening it"
         return try { start(argv); null } catch (e: Exception) { "could not open a terminal: ${e.message}" }
     }
+
+    /**
+     * ⚠ ON LINUX THE TERMINAL'S OWN OUTPUT GOES NOWHERE. Left on the default pipe
+     * that nothing reads, a terminal that logs to stderr (GTK warnings, debug
+     * lines) fills it and blocks on its next write, and once this app quits the
+     * pipe has no reader at all: a terminal that does not ignore SIGPIPE is then
+     * killed by its next write, taking the person's session with it. The window's
+     * shell has the terminal's own pty; only the emulator's chatter is discarded.
+     * Windows and macOS are spawned exactly as before.
+     */
+    private fun spawn(argv: List<String>, os: Os) {
+        val pb = ProcessBuilder(argv)
+        if (os == Os.LINUX) {
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD)
+        } else {
+            pb.redirectErrorStream(true)
+        }
+        pb.start()
+    }
+
+    /**
+     * What the reader is told when [open] could not open [name]. What they can do
+     * comes first — the line to type is on the clipboard (the caller puts it
+     * there) — because the status line shows one line and cuts the rest; the
+     * reason follows, whole in its tooltip.
+     */
+    fun failureNote(name: String, why: String): String =
+        "Copied ${shellLine(name)} to the clipboard instead of opening a terminal: $why"
 }

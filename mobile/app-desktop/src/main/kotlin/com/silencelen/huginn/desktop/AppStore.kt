@@ -2232,6 +2232,14 @@ class AppStore(
      */
     fun noteError(t: Throwable) = note(Faults.ACTION, t)
 
+    /**
+     * An action that failed on THIS machine, in its own words — opening a
+     * terminal, say. Not through [note]: that counts the failure against the
+     * active route, and a missing terminal is no reason to go looking for
+     * another address.
+     */
+    fun noteAction(message: String) = faults.fail(Faults.ACTION, message)
+
     // ------------------------------------------------------------- lifecycle
 
     /**

@@ -334,6 +334,7 @@ fun SessionView(store: AppStore, name: String) {
                         .onFailure { store.noteError(it) }
                 }
             },
+            onTerminalFailed = { store.noteAction(it) },
         )
         val paneClipboard = LocalClipboardManager.current
         val paneCopy: (String) -> Unit = remember(paneClipboard) {
@@ -543,6 +544,8 @@ private fun SessionHeader(
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
     onAutoResume: (Boolean) -> Unit,
+    /** "Open in terminal" did not open: one sentence for the status line. */
+    onTerminalFailed: (String) -> Unit = {},
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val tight = maxWidth < HEADER_TIGHT
@@ -599,6 +602,10 @@ private fun SessionHeader(
                                 TerminalLaunch.open(name)?.let { why ->
                                     System.err.println("huginn: $why")
                                     clipboard.setText(AnnotatedString(TerminalLaunch.shellLine(name)))
+                                    // ⚠ SAID ON SCREEN, NOT ONLY ON STDERR. An app
+                                    // started from a menu has no terminal to print to,
+                                    // so a failed open was a click that did nothing.
+                                    onTerminalFailed(TerminalLaunch.failureNote(name, why))
                                 }
                             })
                             offer.copy != null -> listOf(HuginnMenuItem(offer.label) {

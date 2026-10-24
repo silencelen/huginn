@@ -53,8 +53,21 @@ class TerminalLaunchTest {
         assertEquals("osascript", mac[0])
         assertTrue(mac.any { "huginn 'main'" in it })
         val linux = TerminalLaunch.argv("main", TerminalLaunch.Os.LINUX)!!
-        assertEquals("x-terminal-emulator", linux[0])
         assertTrue("then huginn attach 'main'; else huginn 'main'; fi; exec bash" in linux.last(), linux.last())
+    }
+
+    /**
+     * ⚠ NO LAUNCHER IS BAKED INTO THE LINUX ARGV (owner report, 2026-10-23). It
+     * began with Debian's `x-terminal-emulator`, which Arch does not have, so the
+     * window never opened there. Which terminal carries the command is decided
+     * when the window opens (`TerminalPickTest`); the command itself starts at
+     * bash whatever carries it.
+     */
+    @Test
+    fun `the linux command is bash, with no terminal baked in front of it`() {
+        val linux = TerminalLaunch.argv("main", TerminalLaunch.Os.LINUX)!!
+        assertEquals(listOf("bash", "-lc"), linux.take(2), "$linux")
+        assertTrue(linux.none { it == "x-terminal-emulator" }, "a Debian-only launcher is hard-coded: $linux")
     }
 
     @Test
@@ -66,9 +79,11 @@ class TerminalLaunchTest {
             assertTrue(why != null && "not opening" in why, bad)
             assertTrue(!spawned, bad)
         }
+        // A good name with the CLI present does open. (Linux's terminal choice
+        // reads the machine, so its half of this is in TerminalPickTest.)
         var got: List<String>? = null
-        assertNull(TerminalLaunch.open("dashboard-app-core", TerminalLaunch.Os.LINUX, homeWithCli()) { got = it })
-        assertEquals("x-terminal-emulator", got!![0])
+        assertNull(TerminalLaunch.open("dashboard-app-core", TerminalLaunch.Os.WINDOWS, homeWithCli()) { got = it })
+        assertEquals("powershell.exe", got!![0])
     }
 
     @Test
