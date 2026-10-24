@@ -900,7 +900,7 @@ object SettingsCatalog {
             SettingsItem(
                 id = "appearance.terminal",
                 title = "Terminal",
-                summary = "Which terminal opens a session when you ask for one from a row or the palette.",
+                summary = "Which terminal opens a session when you ask for one from a row, the palette or the session's name.",
                 keywords = listOf(
                     "terminal", "powershell", "pwsh", "windows terminal", "wt", "shell", "console",
                     "open in terminal", "kitty", "alacritty", "gnome-terminal", "konsole", "xterm",

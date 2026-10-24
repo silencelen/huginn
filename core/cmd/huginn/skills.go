@@ -175,8 +175,12 @@ func skillsOffer(u *ui.Out, e skills.Env, compact bool) int {
 		for _, err := range r.Errors {
 			u.Line(ui.Warn, "skills", err)
 		}
-		if len(r.Done) > 0 || !compact {
-			u.Line(ui.OK, "skills", strings.Join(skills.Names(), ", ")+" for Claude Code in "+skillsLinkDir(e))
+		// Name what was refreshed, not every skill: one of the names can be the
+		// person's own skill, which Refresh leaves alone.
+		if len(r.Done) > 0 {
+			u.Line(ui.OK, "skills", strings.Join(r.Done, ", ")+" for Claude Code in "+skillsLinkDir(e))
+		} else if !compact {
+			u.Line(ui.OK, "skills", "Claude Code skills current in "+skillsLinkDir(e))
 		}
 		if !r.OK() {
 			return 1

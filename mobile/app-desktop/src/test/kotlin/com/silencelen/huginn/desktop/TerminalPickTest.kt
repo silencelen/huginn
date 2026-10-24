@@ -286,10 +286,31 @@ class TerminalPickTest {
     }
 
     @Test
+    fun `a Windows Terminal tab runs PowerShell 7 only when PATH itself has it`() {
+        // pwsh installed without "Add to PATH" (or from the zip): the app finds it
+        // through PowerShell 7's install directory, but wt resolves the tab's bare
+        // `pwsh.exe` through PATH alone and would open the tab onto an error.
+        val onPathOnly = windows(WT, POWERSHELL)
+        val pick = TerminalLaunch.pickWindowsTerminal("", windows(WT, PWSH, POWERSHELL), onPathOnly)
+        assertEquals(TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL, pick.terminal)
+        assertEquals(TerminalLaunch.WindowsTerminal.POWERSHELL, pick.shell, "a shell wt cannot find is not asked for")
+        assertEquals(TerminalLaunch.WindowsTerminal.PWSH, TerminalLaunch.pickWindowsTerminal("", windows(WT, PWSH, POWERSHELL), windows(PWSH)).shell)
+        // open() walks PATH alone for the tab's shell: with an empty environment nothing is on it.
+        val home = homeWithCli().also { File(it, ".huginn/huginn.ps1").writeText("# stub\n") }
+        var got: List<String>? = null
+        assertNull(TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL)) { got = it })
+        assertTrue(got!!.last().contains("-ArgumentList '-w','0','nt','powershell.exe','-NoExit'"), got!!.last())
+        // PowerShell 7 chosen outright is started from where it was found, PATH or not.
+        assertNull(TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL), choice = "pwsh") { got = it })
+        assertTrue(got!!.last().startsWith("Start-Process 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -ArgumentList '-NoExit'"), got!!.last())
+    }
+
+    @Test
     fun `windows opens the chosen terminal through the outer shell, with the tab's shell by name`() {
         val home = homeWithCli().also { File(it, ".huginn/huginn.ps1").writeText("# stub\n") }
         var got: List<String>? = null
-        val why = TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL)) { got = it }
+        // pwsh on PATH itself here, so the tab may run it.
+        val why = TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL), onPath = windows(PWSH)) { got = it }
         assertNull(why)
         val argv = got!!
         assertEquals(listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-Command"), argv.take(4), "the outer shell is the one every machine has")

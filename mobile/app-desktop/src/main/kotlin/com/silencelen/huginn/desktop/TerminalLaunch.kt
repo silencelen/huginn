@@ -98,12 +98,22 @@ object TerminalLaunch {
      * Windows PowerShell is the floor: it is on every Windows install, and a PATH
      * walk from an app started by a shortcut can still miss it, so it is returned
      * by name rather than reported absent.
+     *
+     * A Windows Terminal tab is told its shell by bare name, and `wt` resolves that
+     * name through the PATH it inherits, not through the install directories
+     * [which] also looks in. So the tab runs PowerShell 7 only when [onPath] (PATH
+     * alone) finds it; a pwsh that only the fallback directories know would open
+     * the tab onto `error 0x80070002`.
      */
-    fun pickWindowsTerminal(choice: String, which: (String) -> String?): WindowsPick {
+    fun pickWindowsTerminal(
+        choice: String,
+        which: (String) -> String?,
+        onPath: (String) -> String? = which,
+    ): WindowsPick {
         val chosen = WindowsTerminal.entries.firstOrNull { it.id == choice }
         val order = (listOfNotNull(chosen) + WindowsTerminal.entries).distinct()
         val shell = when {
-            which(WindowsTerminal.PWSH.exe) != null -> WindowsTerminal.PWSH
+            onPath(WindowsTerminal.PWSH.exe) != null -> WindowsTerminal.PWSH
             else -> WindowsTerminal.POWERSHELL
         }
         for (t in order) {
@@ -361,20 +371,23 @@ object TerminalLaunch {
      * that a shortcut-started app's PATH tends to lack — the Store alias
      * directory `wt.exe` is published through, PowerShell 7's install directory,
      * and Windows PowerShell's. A [name] with a separator in it is a path and is
-     * only checked. Nothing here runs anything.
+     * only checked. [pathOnly] walks PATH alone: what a program this app starts
+     * (Windows Terminal resolving its tab's shell) will itself be able to find.
+     * Nothing here runs anything.
      */
     fun onPathWindows(
         name: String,
         env: (String) -> String?,
         runnable: (File) -> Boolean = { it.isFile },
+        pathOnly: Boolean = false,
     ): String? {
         if ('\\' in name || '/' in name) return File(name).takeIf(runnable)?.path
-        val dirs = env("PATH").orEmpty().split(';').filter { it.isNotBlank() } +
-            listOfNotNull(
-                env("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { "$it\\Microsoft\\WindowsApps" },
-                env("ProgramFiles")?.takeIf { it.isNotBlank() }?.let { "$it\\PowerShell\\7" },
-                env("SystemRoot")?.takeIf { it.isNotBlank() }?.let { "$it\\System32\\WindowsPowerShell\\v1.0" },
-            )
+        val fallbacks = if (pathOnly) emptyList() else listOfNotNull(
+            env("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { "$it\\Microsoft\\WindowsApps" },
+            env("ProgramFiles")?.takeIf { it.isNotBlank() }?.let { "$it\\PowerShell\\7" },
+            env("SystemRoot")?.takeIf { it.isNotBlank() }?.let { "$it\\System32\\WindowsPowerShell\\v1.0" },
+        )
+        val dirs = env("PATH").orEmpty().split(';').filter { it.isNotBlank() } + fallbacks
         return dirs.distinct().map { File(it, name) }.firstOrNull(runnable)?.path
     }
 
@@ -487,6 +500,7 @@ object TerminalLaunch {
         env: (String) -> String? = System::getenv,
         which: (String) -> String? = whichFor(os, env),
         choice: String = preferred(),
+        onPath: (String) -> String? = if (os == Os.WINDOWS) ({ onPathWindows(it, env, pathOnly = true) }) else which,
         start: (List<String>) -> Unit = { spawn(it, os) },
     ): String? {
         problem(name)?.let { return "'$name' cannot be opened through the huginn CLI: $it; not opening it" }
@@ -496,7 +510,7 @@ object TerminalLaunch {
             is TerminalPick.Found -> pick.launcher
             is TerminalPick.NotFound -> return noTerminal(pick.tried)
         }
-        val windows = if (os == Os.WINDOWS) pickWindowsTerminal(choice, which) else null
+        val windows = if (os == Os.WINDOWS) pickWindowsTerminal(choice, which, onPath) else null
         val argv = argv(name, os, terminal, windows) ?: return "'$name' cannot be opened through the huginn CLI; not opening it"
         return try { start(argv); null } catch (e: Exception) { "could not open a terminal: ${e.message}" }
     }
