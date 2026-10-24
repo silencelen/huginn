@@ -188,3 +188,34 @@ test('every live dialog capture carries a body digest', () => {
     assert.match(String(p && p.bodyDigest), /^[0-9a-f]{12}$/, f);
   }
 });
+
+// ---- Claude Code 2.1.306 captures (2026-10-23) ----------------------------------
+
+test('2.1.306: the Bash permission dialog, the plan approval with its feedback row, a three-question ask with previews', () => {
+  const fx = (f) => fs.readFileSync(path.join(__dirname, 'fixtures', 'prompts', f), 'utf8').split('\n');
+  const bash = detectPrompt(fx('bash-permission-80.txt'));
+  assert.ok(bash, 'the Bash dialog is a prompt');
+  assert.equal(bash.options.length, 4);
+  assert.equal(bash.options[0].label, 'Yes');
+  assert.equal(bash.options[3].label, 'No');
+  assert.match(bash.options[1].label, /^Yes, and always allow access to /);
+  assert.match(bash.options[2].label, /switch to auto mode/);
+  assert.equal(bash.multiSelect, false);
+  assert.ok(bash.bodyDigest, 'the command is part of the dialog\'s identity');
+
+  const plan = detectPrompt(fx('plan-approval-v3-80.txt'));
+  assert.ok(plan);
+  assert.deepEqual(plan.options.map((o) => o.label), ['Yes, and use auto mode', 'Yes, manually approve edits', 'Tell Claude what to change']);
+  assert.equal(plan.options[0].selected, true);
+  const typed = detectPrompt(fx('plan-approval-feedback-typed-80.txt'));
+  assert.ok(typed, 'the dialog with words typed into row 3 is still a prompt');
+  assert.equal(typed.options[2].selected, true);
+
+  const ask = detectPrompt(fx('ask-3q-preview-80.txt'));
+  assert.ok(ask, 'the preview layout is a prompt');
+  assert.equal(ask.options.length, 2, 'the TUI\'s "Chat about this" row is unnumbered on this build');
+  assert.match(ask.options[0].label, /^PostgreSQL/);
+  assert.match(ask.options[1].label, /^SQLite/);
+  assert.equal(ask.question, 'Which database should the service use?');
+  assert.deepEqual(ask.headers.map((h) => [h.label, h.checked]), [['Database', false], ['Monitors', false], ['Name', false]]);
+});

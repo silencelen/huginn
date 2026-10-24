@@ -1,0 +1,11 @@
+{
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Read",
+  "tool_use_id": "toolu_01RuRriZhsbGdj6dXG7BPC1h",
+  "tool_input": {
+    "file_path": "/nonexistent/zzz-missing.txt"
+  },
+  "error": "File does not exist.",
+  "is_interrupt": false,
+  "duration_ms": 1
+}

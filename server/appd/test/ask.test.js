@@ -81,3 +81,38 @@ test('parsePlanSidecar carries the plan text the runtime actually ships', () => 
   assert.ok(plan);
   assert.ok(typeof plan.plan === 'string' && plan.plan.length > 0, 'ExitPlanMode input DOES carry plan text on 2.1.227');
 });
+
+// ---- the 2.1.306 schema: previews, and the gated text / number kinds -----------
+
+test('parseAskSidecar keeps option previews and marks every question with its kind', () => {
+  const s = sidecarFor('ask-3q-preview.input.json');
+  assert.ok(s);
+  assert.equal(s.questions.length, 3);
+  assert.deepEqual(s.questions.map((q) => q.kind), ['choice', 'choice', 'choice'], 'no kind given means choice');
+  assert.equal(s.questions[0].options[0].preview, 'CREATE TABLE users (id serial);');
+  assert.equal(s.questions[0].options[1].preview, 'CREATE TABLE users (id integer);');
+  assert.equal(s.questions[1].multiSelect, true);
+  assert.equal(s.questions[1].options[0].preview, undefined, 'no preview, no field');
+});
+
+test('parseAskSidecar accepts text and number questions (no options) beside choice ones', () => {
+  const input = { questions: [
+    { question: 'Which colour?', header: 'Colour', options: [{ label: 'Red' }, { label: 'Blue' }], multiSelect: false },
+    { question: 'What should it be called?', header: 'Name', kind: 'text', placeholder: 'e.g. ledger-api', description: 'Lowercase, hyphens.' },
+    { question: 'How many replicas?', header: 'Replicas', kind: 'number', min: 1, max: 9, step: 1, default: 3, unit: 'pods' },
+  ] };
+  const s = parseAskSidecar({ v: 1, tool: 'AskUserQuestion', sessionId: 's', ts: 1786400000, input });
+  assert.ok(s, 'a text question without options is not a malformed sidecar');
+  assert.deepEqual(s.questions.map((q) => q.kind), ['choice', 'text', 'number']);
+  assert.equal(s.questions[1].placeholder, 'e.g. ledger-api');
+  assert.equal(s.questions[1].description, 'Lowercase, hyphens.');
+  assert.deepEqual(s.questions[1].options, []);
+  assert.equal(s.questions[1].multiSelect, false);
+  assert.deepEqual([s.questions[2].min, s.questions[2].max, s.questions[2].step, s.questions[2].default, s.questions[2].unit], [1, 9, 1, 3, 'pods']);
+  // A choice question still needs its two options; an unknown kind reads as choice.
+  assert.equal(parseAskSidecar({ v: 1, input: { questions: [{ question: 'Q?', kind: 'slider', options: [{ label: 'A' }] }] } }), null);
+  // The degraded card over a text question draws the question and no buttons.
+  const card = degradedAskCard(s, 'fp');
+  assert.equal(card.question, 'Which colour?');
+  assert.equal(card.questionCount, 3);
+});

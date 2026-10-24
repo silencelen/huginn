@@ -69,6 +69,9 @@ const projectsLib = require('./lib/projects');
 const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/suggest');
 const { createApiLane } = require('./lib/apilane');
 const permhook = require('./lib/permhook');
+// The request registry: every parked PermissionRequest (lib/questions.js), the
+// list behind GET/POST /v1/sessions/:name/questions and the notification buttons.
+const questionsLib = require('./lib/questions');
 const modelswitch = require('./lib/modelswitch');
 const statuslineLib = require('./lib/statusline');
 const contextusage = require('./lib/contextusage');
@@ -4332,10 +4335,12 @@ async function peekPane(name, histWant = 0) {
     if (r.err) return null;
     const out = r.stdout.replace(/\n$/, '').split('\n');
     const [cx = '0', cy = '0'] = (out[0] || '0,0').split(',');
-    return { hash: screenHash(out.slice(1).join('\n') + `|${cx},${cy}`), cap: null };
+    return { hash: screenHash(out.slice(1).join('\n') + `|${cx},${cy}`), cap: null, lines: out.slice(1) };
   }
   const cap = await capturePane(name);
-  return cap ? { hash: captureHash(cap), cap } : null;
+  // `lines` ride along for the registry's idle check, so the long poll's peek
+  // folds the questions in exactly as captureScreen does.
+  return cap ? { hash: captureHash(cap), cap, lines: cap.all } : null;
 }
 
 // A prompt sidecar the hook wrote (exact AskUserQuestion/ExitPlanMode input),
@@ -4426,8 +4431,29 @@ function askPendingSince(name, sessionId) {
  */
 function withPendingQuestion(name, st) {
   if (!st || st.state !== 'running') return st;
-  const since = askPendingSince(name, st.sessionId);
+  const since = askPendingSince(name, st.sessionId) || permPendingSince(name, st.sessionId);
   return since ? { ...st, state: 'attention', stateSince: since, stateSinceMs: since * 1000 } : st;
+}
+
+/**
+ * When a parked PERMISSION prompt (a Bash, Edit, MCP dialog — anything but the
+ * sidecar-backed AskUserQuestion / ExitPlanMode) has been waiting on its hook —
+ * its ts in seconds, or null. The same fact the sidecars give the main thread's
+ * questions, for the dialogs that have no sidecar: a background agent's
+ * PreToolUse rewrites the flat state file to `running` while a permission
+ * dialog waits, exactly as it does under an AskUserQuestion.
+ */
+function permPendingSince(name, sessionId) {
+  let reqs;
+  try { reqs = permhook.liveRequests(STATE_DIR, name); } catch { return null; }
+  let since = null;
+  for (const r of reqs) {
+    if (r.tool === 'AskUserQuestion' || r.tool === 'ExitPlanMode') continue;
+    if (sessionId && r.sessionId && r.sessionId !== sessionId) continue;
+    const s = Math.floor(Number(r.ts) / 1000);
+    if (s && (!since || s < since)) since = s;
+  }
+  return since;
 }
 
 // The pane module by name, for the two helpers the import block at the top does
@@ -4514,6 +4540,53 @@ function promptFor(name, lines) {
 }
 
 /**
+ * Is the pane showing Claude Code's composer with NO dialog on it? True, false,
+ * or null when there is no pane to read. The registry uses it to leave out a
+ * permission request that was answered at the keyboard with "No": that
+ * interrupts the turn and fires no hook event at all, so the parked hook is the
+ * only trace, and it lingers until its own deadline (lib/questions.js).
+ */
+function paneIdleFor(lines) {
+  if (!Array.isArray(lines) || !lines.length) return null;
+  try { return !!typing.composerDrawn(lines) && !detectPrompt(lines); } catch { return null; }
+}
+
+/**
+ * The request registry for one session (lib/questions.js): every parked
+ * PermissionRequest whose hook is alive, confirmed by the AskUserQuestion
+ * sidecar where there is one, plus the pending plan approval. `lines` is the
+ * pane when the caller has it (the idle check above); null reads the files alone.
+ */
+function questionsFor(name, lines = null) {
+  const st = readSessionState(name);
+  const sid = st && st.sessionId;
+  let reqs = [];
+  try {
+    reqs = permhook.liveRequests(STATE_DIR, name)
+      .filter((r) => !sid || !r.sessionId || r.sessionId === sid);
+  } catch { reqs = []; }
+  const askRaw = readSidecar('ask', name);
+  const askTs = askRaw && Number(askRaw.ts);
+  const askOk = askRaw && askTs && (Date.now() - askTs * 1000) < SIDECAR_TTL_MS
+    && (!sid || !askRaw.sessionId || askRaw.sessionId === sid)
+    && askRaw.input && typeof askRaw.input === 'object';
+  const planRaw = readSidecar('plan', name);
+  const planOk = planRaw && (!sid || !planRaw.sessionId || planRaw.sessionId === sid);
+  return questionsLib.buildQuestions({
+    requests: reqs,
+    askInput: askOk ? askRaw.input : null,
+    plan: planOk ? parsePlanSidecar(planRaw) : null,
+    paneIdle: paneIdleFor(lines),
+  });
+}
+
+/** The screen hash with the registry folded in, so a parked long poll wakes when a question arrives or leaves. */
+function hashWithQuestions(hash, questions) {
+  const d = questionsLib.digest(questions);
+  return d ? `${hash}-${d}` : hash;
+}
+
+/**
  * @param name    session
  * @param opts.cols/rows  the viewer's geometry. Only reshapes tmux when
  *   `opts.live` is set; otherwise it is the viewer describing itself, not
@@ -4575,6 +4648,10 @@ async function captureScreen(name, {
   // With history, everything before the last `height` lines is scrollback.
   const scrollback = histWant > 0 && all.length > height ? all.slice(0, all.length - height) : [];
   const lines = histWant > 0 && all.length > height ? all.slice(-height) : all;
+  // What the session is asking, as requests (lib/questions.js). Read once here
+  // for the list the apps get AND for the hash, so a question arriving or
+  // leaving wakes the long poll even when the pane itself has not repainted.
+  const questions = questionsFor(name, lines);
 
   return {
     width: Number(w), height,
@@ -4592,7 +4669,7 @@ async function captureScreen(name, {
     resizeBlocked,
     lines,
     scrollback,
-    hash: screenHash(lines.join('\n') + `|${cx},${cy}`),
+    hash: hashWithQuestions(screenHash(lines.join('\n') + `|${cx},${cy}`), questions),
     // The fingerprint travels WITH the prompt so the app never computes it itself.
     // One implementation of "which question is this" means an answer offered on a
     // lock screen and the check that validates it can never disagree about the
@@ -4603,7 +4680,12 @@ async function captureScreen(name, {
       const pf = promptFor(name, lines);
       // A look without the answered question on it ends that answer's memo.
       forgetAnsweredIfGone(name, pf.prompt);
-      return { prompt: pf.prompt, ask: pf.ask, planPending: pf.planPending };
+      return {
+        prompt: pf.prompt, ask: pf.ask, planPending: pf.planPending,
+        // The registry's view of the same moment (GET /questions serves the same
+        // list): a bound entry is what the apps draw the compact card from.
+        questions: questions.map(questionsLib.publicQuestion),
+      };
     })(),
     // The moment-to-moment status ("Gallivanting… · 3m 15s") exists only here:
     // the transcript is silent until whole blocks complete, which left the
@@ -9394,7 +9476,18 @@ async function tryHookAnswer(name, prompt, lines, choice) {
     // A question the main thread raised and has not cleared makes this tap an
     // answer to THAT question, never a Bash approval (lib/permhook matchesPrompt).
     const askPending = !!askPendingSince(name, sid);
-    const req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines), { askPending });
+    let req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines), { askPending });
+    // Any other tool's dialog (Edit, Write, an MCP tool) has no captured shape to
+    // match by content, so it binds only by UNIQUENESS: the registry lists
+    // exactly one live permission request, it is the only live request at all,
+    // and the pane shows a permission dialog rather than a question. One request
+    // and one dialog can only be each other.
+    if (!req && !askPending && !paneLib.drawsAskRows(prompt)) {
+      const labels = prompt.options.map((o) => o.label);
+      const live = questionsFor(name, lines).filter((q) => q.kind === 'permission');
+      if (reqs.length === 1 && live.length === 1 && live[0].id === reqs[0].id
+          && labels[0] === 'Yes' && labels.includes('No')) req = reqs[0];
+    }
     if (!req) return null;
     const decision = permhook.decisionFor(req, prompt, choice);
     if (!decision) return null;
@@ -9405,6 +9498,170 @@ async function tryHookAnswer(name, prompt, lines, choice) {
     log(`answer: ${name} hook path failed (${e.message}) — falling back to keys`);
     return null;
   }
+}
+
+/**
+ * Type one option digit at a dialog — the keystroke half shared by /answer and
+ * the registry's fallback. A second look first (`movedOnFrom`): the fingerprint
+ * was checked against a capture taken before a hook attempt, which can wait
+ * seconds, and the key goes to whatever is on screen NOW. Then the digit, which
+ * answers its row by itself; an Enter follows only when the look after it shows
+ * the digit merely FOCUSED the row (an input row — see watchAnswer). With
+ * `text`, the focused row is an input: the text goes in before the Enter (the
+ * plan dialog's "Tell Claude what to change"); a row already focused takes the
+ * text without the digit, which would otherwise be typed into it.
+ */
+async function typeDigit(name, live, option, { text = null } = {}) {
+  const target = `=${name}:`;
+  const fresh = await questionNow(name);
+  const moved = movedOnFrom(fresh, live);
+  if (moved) return { ok: false, status: 409, body: moved };
+  const tmuxErr = (r) => ({ ok: false, status: 500, body: { error: `tmux: ${r.stderr.trim()}` } });
+  let took;
+  if (text && caretRow(fresh) === option) {
+    took = 'focused';
+  } else {
+    const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', String(option)]);
+    if (typed.err) return tmuxErr(typed);
+    took = await watchAnswer(name, live, { option, caretWas: caretRow(fresh) });
+  }
+  if (took === 'focused') {
+    if (text) {
+      const t = await run('tmux', ['send-keys', '-t', target, '-l', '--', text]);
+      if (t.err) return tmuxErr(t);
+      await sleep(150);
+    }
+    const enter = await run('tmux', ['send-keys', '-t', target, 'Enter']);
+    if (enter.err) return tmuxErr(enter);
+    await settleAnswer(name, live);
+  } else if (took === 'still') {
+    if (text) return { ok: false, status: 409, body: { ok: false, reason: 'changed', error: 'the feedback row did not take focus' } };
+    rememberAnswered(name, live);   // the pane has not caught up: the memo covers that
+  }
+  return { ok: true, took };
+}
+
+/** The pane's prompt (promptFor) and lines, read straight, or null. */
+async function freshPrompt(name) {
+  const lines = await paneLines(name);
+  return lines ? { prompt: promptFor(name, lines).prompt, lines } : null;
+}
+
+/**
+ * Answer a registry question (lib/questions.js). The hook first — the decision
+ * it prints resolves the tool call whether or not its dialog is the one drawn —
+ * then the keys when the hook did not claim it and the dialog on screen is
+ * demonstrably this request's. Returns { status, body } for the route.
+ */
+async function answerQuestion(name, q, body, screen) {
+  const lines = screen ? screen.lines : null;
+  const d = questionsLib.decisionFor(q, body);
+  if (!d.ok) return { status: d.status || 400, body: { ok: false, error: d.error } };
+  if (q.kind === 'plan') return answerPlanQuestion(name, q, d.plan);
+  let req = null;
+  try { req = permhook.liveRequests(STATE_DIR, name).find((r) => r.id === q.hookId) || null; } catch { req = null; }
+  if (req) {
+    const ok = await permhook.deliver(STATE_DIR, name, req, d.decision);
+    if (ok) {
+      log(`questions: ${name} <- ${q.kind} ${q.toolName} ${d.decision.behavior} via hook`);
+      return { status: 200, body: { ok: true, via: 'hook' } };
+    }
+    log(`questions: ${name} hook for ${q.toolName} did not take the decision — trying the keys`);
+  }
+  return keysFallback(name, q, d.decision, lines);
+}
+
+/**
+ * The keystroke fallback for a registry answer: only when the dialog on screen
+ * is this request's beyond doubt (an AskUserQuestion by its whole text and
+ * option list, a Bash prompt by its exact command, any other tool by being the
+ * one live request under a permission dialog), and only for what a digit can
+ * say — one label, Yes, No. Everything else is `unbound`: the person is told the
+ * hook did not take it and the Screen tab is where it can still be answered.
+ */
+async function keysFallback(name, q, decision, lines) {
+  const unbound = (error) => ({ status: 409, body: { ok: false, reason: 'unbound', error } });
+  const fp = await freshPrompt(name);
+  const prompt = fp && fp.prompt;
+  if (!prompt) return unbound('the hook did not take the answer and no dialog is on screen');
+  let row = null;
+  if (q.kind === 'ask') {
+    const specs = Array.isArray(q.input.questions) ? q.input.questions : [];
+    const answers = decision.updatedInput && decision.updatedInput.answers;
+    if (specs.length !== 1 || !answers) return unbound('a question with several parts is answered through the hook only');
+    const want = answers[specs[0].question];
+    if (typeof want !== 'string') return unbound('a multi-select answer is delivered through the hook only');
+    if (!permhook.matchesPrompt({ tool: 'AskUserQuestion', input: q.input }, prompt, '')) {
+      return unbound('the dialog on screen is not this question');
+    }
+    row = prompt.options.find((o) => !o.extra && o.label === want) || null;
+    if (!row) return unbound('a typed answer is delivered through the hook only');
+  } else {
+    if (paneLib.drawsAskRows(prompt)) return unbound('a question is on screen, not this permission prompt');
+    const labels = prompt.options.map((o) => o.label);
+    if (labels[0] !== 'Yes' || !labels.includes('No')) return unbound('the dialog on screen is not a permission prompt');
+    if (decision.behavior === 'allow' && decision.updatedPermissions) {
+      return unbound('a standing permission is granted through the hook only');
+    }
+    let same = false;
+    if (q.toolName === 'Bash') {
+      same = permhook.matchesPrompt({ tool: 'Bash', input: q.input }, prompt, permhook.dialogRegion(fp.lines));
+    } else {
+      const live = questionsFor(name, lines).filter((x) => x.kind === 'permission');
+      same = live.length === 1 && live[0].id === q.id;
+    }
+    if (!same) return unbound('the dialog on screen could not be tied to this request');
+    row = prompt.options.find((o) => o.label === (decision.behavior === 'allow' ? 'Yes' : 'No')) || null;
+    if (!row) return unbound('the dialog offers no plain Yes / No row');
+  }
+  const r = await typeDigit(name, prompt.fingerprint, row.number);
+  if (!r.ok) return { status: r.status, body: r.body };
+  log(`questions: ${name} <- ${q.kind} ${q.toolName} via keys (${row.label.slice(0, 60)})`);
+  return { status: 200, body: { ok: true, via: 'keys' } };
+}
+
+/**
+ * A plan approval. Approval is KEYSTROKES: the dialog's own "Yes, …" row (the
+ * one that keeps the mode unless `auto` was asked for), because Claude Code
+ * 2.1.306 accepts and ignores a hook `allow` for ExitPlanMode. Feedback goes
+ * through the hook when one is waiting — a `deny` with the message IS honoured
+ * there (measured: the plan comes back revised with the message as its reason)
+ * — and otherwise into the dialog's "Tell Claude what to change" row, which
+ * takes typed text and sends it on Enter.
+ */
+async function answerPlanQuestion(name, q, plan) {
+  const unbound = (error) => ({ status: 409, body: { ok: false, reason: 'unbound', error } });
+  if (plan.feedback && q.hookId) {
+    let req = null;
+    try { req = permhook.liveRequests(STATE_DIR, name).find((r) => r.id === q.hookId) || null; } catch { req = null; }
+    if (req) {
+      const ok = await permhook.deliver(STATE_DIR, name, req,
+        { behavior: 'deny', message: plan.feedback, interrupt: false });
+      if (ok) {
+        log(`questions: ${name} <- plan feedback via hook`);
+        return { status: 200, body: { ok: true, via: 'hook' } };
+      }
+    }
+  }
+  const fp = await freshPrompt(name);
+  const prompt = fp && fp.prompt;
+  if (!questionsLib.isPlanPrompt(prompt)) {
+    return unbound('the plan dialog is not on screen — approve it on the Screen tab');
+  }
+  if (plan.approve) {
+    const row = questionsLib.planApproveRow(prompt, plan.approve);
+    if (!row) return unbound('the dialog offers no approval row');
+    const r = await typeDigit(name, prompt.fingerprint, row.number);
+    if (!r.ok) return { status: r.status, body: r.body };
+    log(`questions: ${name} <- plan approved via keys (${row.label.slice(0, 60)})`);
+    return { status: 200, body: { ok: true, via: 'keys' } };
+  }
+  const row = questionsLib.planFeedbackRow(prompt);
+  if (!row) return unbound('the dialog offers no feedback row');
+  const r = await typeDigit(name, prompt.fingerprint, row.number, { text: plan.feedback });
+  if (!r.ok) return { status: r.status, body: r.body };
+  log(`questions: ${name} <- plan feedback via keys`);
+  return { status: 200, body: { ok: true, via: 'keys' } };
 }
 
 /**
@@ -11436,6 +11693,22 @@ async function alertTickInner(st) {
   for (const a of alerts) {
     if (a.kind !== 'session_attention') continue;
     const screen = await captureScreen(a.subject);
+    // THE REGISTRY FIRST (lib/questions.js). One bound request means the buttons
+    // can be its exact labels — width-stable, never the TUI's own "Type
+    // something." row — and its fingerprint is what /answer resolves through the
+    // request's hook. A multi-question or multi-select ask gets no buttons: one
+    // tap cannot answer it. Several live requests fall through to the pane, which
+    // shows one of them.
+    const bound = questionsFor(a.subject, screen ? screen.lines : null).filter((q) => q.kind !== 'plan');
+    if (bound.length === 1) {
+      const q = bound[0];
+      a.question = questionsLib.describe(q);
+      a.options = questionsLib.notificationButtons(q);
+      a.fingerprint = q.fingerprint;
+      if (a.question) a.text = a.question;
+      log(`alerts: enriched ${a.subject} from the registry (${q.kind} ${q.toolName}) opts=${a.options.length}`);
+      continue;
+    }
     // promptFor, not a second detectPrompt call: the notification's labels and
     // fingerprint must be the FUSED ones, or a lock-screen answer would carry a
     // fingerprint the /answer route (also fused) rejects as changed.
@@ -11443,8 +11716,10 @@ async function alertTickInner(st) {
     if (!prompt) continue;                 // waiting on something unparsed; keep the plain text
     a.question = prompt.question || '';
     // A notification button is one tap; a multi-select answer is a SET. Buttons
-    // are only offered when one tap can honestly answer.
-    a.options = prompt.multiSelect ? [] : prompt.options.map((o) => ({ number: o.number, label: o.label }));
+    // are only offered when one tap can honestly answer, and never for the TUI's
+    // own rows ("Type something.", "Chat about this"), which a tap cannot finish.
+    a.options = prompt.multiSelect ? []
+      : prompt.options.filter((o) => !o.extra).map((o) => ({ number: o.number, label: o.label }));
     a.fingerprint = prompt.fingerprint;
     if (a.question) a.text = a.question;
     log(`alerts: enriched ${a.subject} q=${JSON.stringify((a.question||'').slice(0,40))} opts=${(a.options||[]).length}`);
@@ -12659,8 +12934,11 @@ async function handleRequest(req, res) {
         if (Date.now() >= deadline || req.destroyed) break;
         const peek = await peekPane(name, Math.max(0, Math.min(2000, Math.floor(opts.history))));
         if (peek === null) return paneReadFailed(res, name);
-        notePaneHash(name, peek.hash);
-        if (peek.hash !== known) {
+        // The registry folded in, as captureScreen folds it into `scr.hash`: a
+        // question that arrives or leaves without a repaint ends the poll too.
+        const peekHash = hashWithQuestions(peek.hash, questionsFor(name, peek.lines));
+        notePaneHash(name, peekHash);
+        if (peekHash !== known) {
           scr = await captureScreen(name, opts, peek.cap);
           if (!scr) return paneReadFailed(res, name);
           break;
@@ -13649,6 +13927,28 @@ async function handleRequest(req, res) {
           });
         }
         const screen = await captureScreen(name);
+        // THE REGISTRY FIRST. A notification built from a bound request carries
+        // that request's fingerprint, not the pane's, and its button numbers are
+        // the registry's (lib/questions.notificationButtons); the answer goes
+        // through the request's own hook. Two live requests with one fingerprint
+        // (parallel subagents asking the same thing) fall through to the pane,
+        // which answers whichever dialog is on screen, as the keyboard would.
+        if (typeof body.fingerprint === 'string' && body.fingerprint && !isMulti) {
+          const hits = questionsFor(name, screen ? screen.lines : null)
+            .filter((q) => q.kind !== 'plan' && q.fingerprint === body.fingerprint);
+          if (hits.length === 1) {
+            const q = hits[0];
+            const choice = questionsLib.buttonAnswer(q, option);
+            if (!choice) {
+              return sendJson(res, 409, {
+                ok: false, reason: 'changed', error: `option ${option} is not offered any more`,
+              });
+            }
+            const r = await answerQuestion(name, q, choice, screen);
+            const label = (questionsLib.notificationButtons(q).find((b) => b.number === option) || {}).label;
+            return sendJson(res, r.status, r.status === 200 ? { ...r.body, option, label } : r.body);
+          }
+        }
         const pf = screen ? promptFor(name, screen.lines) : { prompt: null, ask: null };
         const prompt = pf.prompt;
         if (!prompt) {
@@ -13780,28 +14080,54 @@ async function handleRequest(req, res) {
           log(`answer: ${name} <- ${option} via hook (${chosen.label.slice(0, 60)})`);
           return sendJson(res, 200, { ok: true, option, label: chosen.label, via: 'hook' });
         }
-        // ⚠ AND LOOK AGAIN BEFORE THE DIGIT (answerMovedOn). The fingerprint above
-        // was checked against a capture taken before the hook attempt, which can
-        // wait seconds; the keystroke goes to whatever is on screen now. The
-        // same look says where the caret is, which watchAnswer needs.
-        const fresh = await questionNow(name);
-        const moved = movedOnFrom(fresh, live);
-        if (moved) return sendJson(res, 409, moved);
-
-        // The digit alone answers its row; an Enter follows only when the look
-        // after it shows the digit merely focused the row (see watchAnswer).
-        const typed = await run('tmux', ['send-keys', '-t', `=${name}:`, '-l', '--', String(option)]);
-        if (typed.err) return sendErr(res, 500, `tmux: ${typed.stderr.trim()}`);
-        const took = await watchAnswer(name, live, { option, caretWas: caretRow(fresh) });
-        if (took === 'focused') {
-          const enter = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Enter']);
-          if (enter.err) return sendErr(res, 500, `tmux: ${enter.stderr.trim()}`);
-          await settleAnswer(name, live);
-        } else if (took === 'still') {
-          rememberAnswered(name, live);   // the pane has not caught up: the memo covers that
-        }
+        // The second look before the digit, the digit, and the Enter only when
+        // the digit merely focused its row: typeDigit, shared with the registry's
+        // keystroke fallback so the two paths cannot drift.
+        const r = await typeDigit(name, live, option);
+        if (!r.ok) return sendJson(res, r.status, r.body);
         log(`answer: ${name} <- ${option} (${chosen.label.slice(0, 60)})`);
         return sendJson(res, 200, { ok: true, option, label: chosen.label });
+      });
+    }
+
+    // --- the request registry: what the session is asking, and answering it by request
+    //
+    // GET lists every question whose hook is waiting (plus a pending plan), POST
+    // answers ONE by id through that hook — AskUserQuestion with every answer at
+    // once (strings, arrays for a multi-select), a permission with allow / deny,
+    // a plan with approve (keys) or feedback. The fingerprint identifies the
+    // request's exact input, so an answer meant for one tool call can never
+    // reach a different one; 409 says gone / changed / unbound, never retried.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/questions$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await requireSession(res, name))) return;
+      const lines = await paneLines(name);
+      return sendJson(res, 200, { questions: questionsFor(name, lines).map(questionsLib.publicQuestion) });
+    }
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/questions\/([A-Za-z0-9_.-]{1,80})$/)) && req.method === 'POST') {
+      const name = m[1];
+      const id = m[2];
+      if (!(await requireSession(res, name))) return;
+      const body = await readJsonBody(req);
+      if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
+        return sendErr(res, 400, 'fingerprint required');
+      }
+      // ⚠ UNDER THE SAME PER-SESSION LOCK AS /answer (#11): the keystroke
+      // fallback types into the pane the other route types into.
+      return withAnswerLock(name, async () => {
+        const screen = await captureScreen(name);
+        const q = questionsFor(name, screen ? screen.lines : null).find((x) => x.id === id);
+        if (!q) {
+          return sendJson(res, 409, { ok: false, reason: 'gone', error: 'that question is no longer waiting' });
+        }
+        if (q.fingerprint !== body.fingerprint) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed', error: 'the question changed since it was offered',
+            question: questionsLib.publicQuestion(q),
+          });
+        }
+        const r = await answerQuestion(name, q, body, screen);
+        return sendJson(res, r.status, r.body);
       });
     }
 

@@ -1,0 +1,55 @@
+{
+  "questions": [
+    {
+      "question": "Which database should the service use?",
+      "header": "Database",
+      "options": [
+        {
+          "label": "PostgreSQL",
+          "description": "Relational, battle tested.",
+          "preview": "CREATE TABLE users (id serial);"
+        },
+        {
+          "label": "SQLite",
+          "description": "Zero ops, single file.",
+          "preview": "CREATE TABLE users (id integer);"
+        }
+      ],
+      "multiSelect": false
+    },
+    {
+      "question": "Which monitors should we enable?",
+      "header": "Monitors",
+      "options": [
+        {
+          "label": "Prometheus",
+          "description": "Metrics."
+        },
+        {
+          "label": "Loki",
+          "description": "Logs."
+        },
+        {
+          "label": "Kuma",
+          "description": "Uptime."
+        }
+      ],
+      "multiSelect": true
+    },
+    {
+      "question": "What should the service be called?",
+      "header": "Name",
+      "options": [
+        {
+          "label": "ledger-api",
+          "description": "Suggested name from the example."
+        },
+        {
+          "label": "orders-service",
+          "description": "Alternative suggested name."
+        }
+      ],
+      "multiSelect": false
+    }
+  ]
+}

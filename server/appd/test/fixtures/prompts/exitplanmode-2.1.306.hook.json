@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "ExitPlanMode",
+  "tool_input": {
+    "plan": "1. Create a file named plan2.txt in the working directory containing the text `hi`.\n2. Confirm the file exists with the expected contents.\n",
+    "planFilePath": "/home/alex/.claude/plans/unified-jingling-finch.md"
+  },
+  "permission_mode": "plan"
+}

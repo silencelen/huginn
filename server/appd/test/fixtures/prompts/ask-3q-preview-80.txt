@@ -1,0 +1,30 @@
+
+[38;5;246m[48;5;237m❯ [38;5;231mCall the AskUserQuestion tool exactly once with THREE questions in one call, [39m
+  [38;5;231mthen stop; use no other tool. Question 1: question = "Which database should [39m
+  [38;5;231mthe service use?", header = "Database", kind = "choice", multiSelect = false,[39m
+  [38;5;231moptions: label "PostgreSQL" description "Relational, battle tested." preview[39m
+  [38;5;231m"CREATE TABLE users (id serial);", label "SQLite" description "Zero ops, [39m
+  [38;5;231msingle file." preview "CREATE TABLE users (id integer);". Question 2: [39m
+  [38;5;231mquestion = "Which monitors should we enable?", header = "Monitors", kind = [39m
+  [38;5;231m"choice", multiSelect = true, options: label "Prometheus" description [39m
+  [38;5;231m"Metrics.", label "Loki" description "Logs.", label "Kuma" description [39m
+  [38;5;231m"Uptime.". Question 3: question = "What should the service be called?", [39m
+  [38;5;231mheader = "Name", kind = "text", placeholder = "e.g. ledger-api".[39m
+
+[38;5;246m[49m────────────────────────────────────────────────────────────────────────────────
+←[39m [38;5;16m[48;5;153m ☐ Database [39m[49m ☐ Monitors  ☐ Name  ✔ Submit  →
+
+[1m[38;5;231mWhich database should the service use?[0m
+
+[38;5;153m❯[38;5;246m 1.[1m[38;5;153m PostgreSQL[0m                   [38;5;246m┌──────────────────────────────────────────┐[39m
+ [38;5;246m 2.[39m SQLite                       [38;5;246m│ [39mCREATE TABLE users (id serial);[38;5;246m          │[39m
+                                  [38;5;246m└──────────────────────────────────────────┘[39m
+
+                                  [38;5;153mNotes:[39m [3m[38;5;246mpress[0m [3m[38;5;246mn[0m [3m[38;5;246mto[0m [3m[38;5;246madd[0m [3m[38;5;246mnotes[0m
+
+[38;5;246m────────────────────────────────────────────────────────────────────────────────
+[39m  Chat about this
+
+[38;5;246mEnter[39m [38;5;246mto[39m [38;5;246mselect[39m [38;5;246m·[39m [38;5;246m↑/↓[39m [38;5;246mto[39m [38;5;246mnavigate[39m [38;5;246m·[39m [38;5;246mn[39m [38;5;246mto[39m [38;5;246madd[39m [38;5;246mnotes[39m [38;5;246m·[39m [38;5;246mTab[39m [38;5;246mto[39m [38;5;246mswitch[39m [38;5;246mquestions[39m [38;5;246m·[39m
+[38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel[39m
+

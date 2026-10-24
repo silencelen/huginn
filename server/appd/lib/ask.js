@@ -16,11 +16,22 @@ function clip(s, n) { return String(s == null ? '' : s).slice(0, n); }
 /** Collapse internal whitespace so a wrapped label compares to an unwrapped one. */
 function collapse(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
 
+/** The question kinds Claude Code 2.1.306 knows (`kind` is optional; absent means `choice`). */
+const QUESTION_KINDS = new Set(['choice', 'text', 'number']);
+
 /**
  * Validate + clip a parsed ask sidecar ({v,tool,sessionId,ts,input}). Returns
- * { tool, sessionId, ts, questions:[{question, header?, multiSelect, options:[{label, description?}]}] }
+ * { tool, sessionId, ts, questions:[{question, header?, kind, multiSelect, options:[{label, description?, preview?}], …}] }
  * or null. Mirrors parseAsk's defensiveness in transcript.js: anything malformed
  * degrades to the pane-only path rather than throwing.
+ *
+ * Shapes beyond the plain choice list, all in the 2.1.306 binary's schema: an
+ * option may carry a `preview` (shown beside the focused option; the TUI's
+ * `previewFormat` is text or html), and a question may be `kind: "text"` (a
+ * free-text box, `placeholder`, no options) or `kind: "number"` (`min`, `max`,
+ * `step`, `default`, `unit`). The two kinds are gated behind an SDK option and
+ * were not reachable from the interactive CLI when this was written; they parse
+ * here so a sidecar carrying one is a card rather than a dropped question.
  */
 function parseAskSidecar(obj) {
   if (!obj || typeof obj !== 'object' || obj.v !== 1) return null;
@@ -29,16 +40,26 @@ function parseAskSidecar(obj) {
   const questions = [];
   for (const q of input.questions.slice(0, 4)) {
     if (!q || typeof q.question !== 'string' || !q.question.trim()) return null;
-    if (!Array.isArray(q.options) || q.options.length < 2) return null;
+    const kind = typeof q.kind === 'string' && QUESTION_KINDS.has(q.kind) ? q.kind : 'choice';
     const options = [];
-    for (const o of q.options.slice(0, 8)) {
-      if (!o || typeof o.label !== 'string' || !o.label.trim()) return null;
-      const opt = { label: clip(o.label, 200) };
-      if (typeof o.description === 'string' && o.description.trim()) opt.description = clip(o.description, 500);
-      options.push(opt);
+    if (kind === 'choice') {
+      if (!Array.isArray(q.options) || q.options.length < 2) return null;
+      for (const o of q.options.slice(0, 8)) {
+        if (!o || typeof o.label !== 'string' || !o.label.trim()) return null;
+        const opt = { label: clip(o.label, 200) };
+        if (typeof o.description === 'string' && o.description.trim()) opt.description = clip(o.description, 500);
+        if (typeof o.preview === 'string' && o.preview.trim()) opt.preview = clip(o.preview, 4000);
+        options.push(opt);
+      }
     }
-    const qq = { question: clip(q.question, 1000), multiSelect: !!q.multiSelect, options };
+    const qq = { question: clip(q.question, 1000), kind, multiSelect: kind === 'choice' && !!q.multiSelect, options };
     if (typeof q.header === 'string' && q.header.trim()) qq.header = clip(q.header, 24);
+    if (typeof q.description === 'string' && q.description.trim()) qq.description = clip(q.description, 500);
+    if (kind === 'text' && typeof q.placeholder === 'string' && q.placeholder.trim()) qq.placeholder = clip(q.placeholder, 200);
+    if (kind === 'number') {
+      for (const k of ['min', 'max', 'step', 'default']) if (Number.isFinite(q[k])) qq[k] = q[k];
+      if (typeof q.unit === 'string' && q.unit.trim()) qq.unit = clip(q.unit, 24);
+    }
     questions.push(qq);
   }
   if (!questions.length) return null;

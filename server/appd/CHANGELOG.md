@@ -9,6 +9,36 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- A request registry: every Claude Code tool prompt is parked by the permission hook and listed at
+  `GET /v1/sessions/:name/questions` (and as `questions` on `/screen`) with its exact input, the
+  CLI's own permission suggestions, which agent asked, and a fingerprint of the request.
+- `POST /v1/sessions/:name/questions/:id` answers one request through Claude Code's hook: an
+  AskUserQuestion whole (strings, arrays for a multi-select, free text, annotations), a permission
+  with allow / always allow (the prompt's own suggestions only) / deny with a message, a plan with
+  approval by its dialog's keys or feedback through the hook (`deny` + message, honoured by
+  Claude Code 2.1.306). `409 gone | changed | unbound`; `via: hook | keys`.
+- The permission hook parks every tool, records `permission_suggestions`, `agent_id`,
+  `agent_type`, `mcp_server` and the mode, and binds a session hosted in a background PTY or a
+  `claude --bg` job the way the title hook does.
+- The title hook drops a parked request on the tool's `PostToolUse`, `PostToolUseFailure` or
+  `PermissionDenied`, the main thread's on a new prompt or `Stop`, an agent's on `SubagentStop`;
+  the two new events are in `claude-hooks.json` (re-run the server installer to merge them).
+
+### Changed
+- Notification buttons come from the registry when it holds one bound request (exact labels,
+  never the TUI's own rows); `/answer` with a registry fingerprint resolves through the hook.
+- `/answer`'s hook path binds any tool's dialog when it is the one live request, not only Bash.
+- `/screen`'s hash moves when a question arrives or leaves, so a parked poll wakes for it.
+- The ask sidecar parser accepts option previews and the `text` / `number` question kinds.
+
+### Fixed
+- A multi-question AskUserQuestion is answerable from the apps.
+- A question whose dialog the pane could not read is still answerable through its hook.
+- Option labels containing `, ` travel as array elements, never joined.
+
 ## 3.14.1 — 2026-10-25
 
 ### Fixed

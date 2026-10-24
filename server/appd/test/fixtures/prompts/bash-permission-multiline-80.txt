@@ -1,0 +1,30 @@
+[38;5;231m●[39m Updated plan:
+  1. Create [38;5;153mplan-e2e.txt[39m in the working directory with the content [38;5;153mhi[39m.
+  2. Check that the file exists and contains [38;5;153mhi[39m.
+  3. Print the file with [38;5;153mcat plan-e2e.txt[39m.
+
+[38;5;73m●[39m Exited plan mode
+
+[38;5;246m●[39m [1mBash[0m(printf 'hi\n' > plan-e2e.txt && test -f plan-e2e.txt && grep -qx 'hi'
+      plan-e2e.txt && echo "check: plan-e2e.txt exists and contains hi" && cat
+      plan-e2e.txt)
+[38;5;246m  ⎿  Waiting…[39m
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────
+[39m [1m[38;5;153mBash command[0m
+ [1mTip: auto mode handles these prompts for you — choose "switch to auto mode" [0m
+ [1mbelow[0m
+ [38;5;246mCreate[39m [38;5;246mplan-e2e.txt[39m [38;5;246mwith[39m [38;5;246mhi,[39m [38;5;246mverify[39m [38;5;246mit,[39m [38;5;246mand[39m [38;5;246mprint[39m [38;5;246mit[39m
+[38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+[39m [2m│[0m printf 'hi\n' > plan-e2e.txt && test -f plan-e2e.txt && grep -qx 'hi'
+ [2m│[0m plan-e2e.txt && echo "check: plan-e2e.txt exists and contains hi" && cat
+ [2m│[0m plan-e2e.txt
+[38;5;239m╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+[39m Do you want to proceed?
+ [38;5;153m❯[39m [38;5;246m1.[39m [38;5;153mYes[39m
+   [38;5;246m2.[39m Yes, and always allow access to [1m/tmp/huginn-q/proj[0m from this project
+   [38;5;246m3.[39m Yes, and switch to auto mode[38;5;246m ·[39m [38;5;246mauto[39m [38;5;246mmode[39m [38;5;246mhandles[39m [38;5;246mthese[39m [38;5;246mprompts[39m [38;5;246mfor[39m [38;5;246myou[39m
+   [38;5;246m4.[39m No
+
+ [38;5;246mEsc[39m [38;5;246mto[39m [38;5;246mcancel[39m [38;5;246m·[39m [38;5;246mTab[39m [38;5;246mto[39m [38;5;246mamend[39m
+

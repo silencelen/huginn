@@ -1,0 +1,23 @@
+{
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "touch probe.txt",
+    "description": "Create empty file probe.txt"
+  },
+  "permission_mode": "default",
+  "permission_suggestions": [
+    {
+      "type": "addDirectories",
+      "directories": [
+        "/home/alex/project"
+      ],
+      "destination": "session"
+    },
+    {
+      "type": "setMode",
+      "mode": "acceptEdits",
+      "destination": "session"
+    }
+  ]
+}
