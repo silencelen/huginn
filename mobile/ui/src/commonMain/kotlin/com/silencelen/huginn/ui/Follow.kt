@@ -3,6 +3,7 @@ package com.silencelen.huginn.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -34,8 +37,13 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -62,6 +70,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    leaving.
  *  * **An input that goes nowhere is not leaving.** Ending still at the tail
  *    re-arms at once — a tap that does not move, or a wheel tick at the bottom.
+ *  * **Following holds through a re-measure, not only through new content.**
+ *    See [relaid].
  */
 object Follow {
 
@@ -96,6 +106,43 @@ object Follow {
      */
     fun arrived(s: State, grew: Boolean): State =
         if (!s.following && grew) s.copy(unseen = true) else s
+
+    /**
+     * The list as measured, with where it is scrolled to taken out: the
+     * viewport, and how tall each row on screen came out, by its key.
+     */
+    data class Shape(val width: Int, val height: Int, val rows: Map<Any, Int>)
+
+    /**
+     * The list was measured again: whether to put the reader back on the newest.
+     *
+     * ⚠ THE BUG (owner, 2026-10-23): "when a user opens a conversation they chat
+     * correctly starts from the bottom (newest at bottom), but then the status
+     * and chat suggestion bars load in causing the user to have to scroll a bit
+     * down to lock it in to the bottom." The jump to the newest ran when content
+     * changed and at no other time. A strip that arrives under the list a moment
+     * later (the work strip, the suggestions, a composer growing a line) takes
+     * its height out of the viewport, the list keeps its top where it was, and
+     * the newest rows end up underneath — while nothing has scrolled and the
+     * latch still says following.
+     *
+     * So a re-measure scrolls too, while [State.following] and only when there
+     * is further to go. And only for a change NO SCROLL CAN MAKE: a scroll
+     * changes which rows are on screen, never the viewport and never how tall a
+     * row is, so a scroll in progress is never itself mistaken for a re-measure.
+     *
+     * A row that changes height counts only while [settling] — content arrived,
+     * or the conversation opened, a moment ago, so this is that content still
+     * laying out (an image decoding, a block measured late). Any later change
+     * in a row is somebody opening or closing a card, and putting them at the
+     * bottom of what they just opened is not following, it is losing their
+     * place. The viewport counts at any time: the bars come when they come.
+     */
+    fun relaid(s: State, before: Shape, after: Shape, canScrollFurther: Boolean, settling: Boolean): Boolean {
+        if (!s.following || !canScrollFurther) return false
+        if (before.width != after.width || before.height != after.height) return true
+        return settling && before.rows.any { (key, height) -> after.rows[key].let { it != null && it != height } }
+    }
 }
 
 /**
@@ -114,6 +161,11 @@ object Follow {
  *   break, which is correct on the phone and silently wrong anywhere there is a
  *   mouse: a wheel emits no [DragInteraction], so the reader scrolls up to read
  *   something, the next token yanks them back to the tail, and it never stops.
+ * @param scrollbar the interaction source of a scrollbar over the list, when
+ *   there is one. Dragging its thumb moves the list without a single event the
+ *   list sees, so without this a reader who scrolled up by the thumb was still
+ *   "following" — and the next token, or a strip arriving under the list, put
+ *   them back at the tail. Its drags count exactly as the list's own do.
  * @return true when new content arrived while the reader had scrolled away.
  */
 @Composable
@@ -123,13 +175,18 @@ fun FollowNewest(
     revision: Any?,
     key: Any?,
     scrolls: State<Int> = remember { mutableStateOf(0) },
+    scrollbar: InteractionSource? = null,
 ): Boolean {
     var opened by remember(key) { mutableStateOf(false) }
     var state by remember(key) { mutableStateOf(Follow.State()) }
     var lastCount by remember(key) { mutableStateOf(0) }
+    // Content arrived (or the conversation opened) within SETTLE_MS: a row that
+    // changes height now is that content still laying out. See Follow.relaid.
+    var settling by remember(key) { mutableStateOf(true) }
+    val count by rememberUpdatedState(itemCount)
 
-    LaunchedEffect(key, listState) {
-        listState.interactionSource.interactions.collect { i ->
+    LaunchedEffect(key, listState, scrollbar) {
+        listOfNotNull(listState.interactionSource, scrollbar).map { it.interactions }.merge().collect { i ->
             when (i) {
                 is DragInteraction.Start -> state = Follow.tookControl(state)
                 is DragInteraction.Stop, is DragInteraction.Cancel ->
@@ -171,22 +228,62 @@ fun FollowNewest(
         }
     }
 
+    // ⚠ THE BARS THAT ARRIVE AFTER THE JUMP (owner, 2026-10-23). Every measure,
+    // compared with the one before, through Follow.relaid — which is where the
+    // reasons live. `collect`, not `collectLatest`: the scroll below re-measures
+    // the list, and a collector that cancelled itself on its own re-measure would
+    // stop halfway down.
+    LaunchedEffect(key, listState) {
+        var before: Follow.Shape? = null
+        snapshotFlow { listState.layoutInfo.shape() }.collect { after ->
+            val prev = before
+            before = after
+            if (prev == null || !opened) return@collect
+            if (!Follow.relaid(state, prev, after, listState.canScrollForward, settling)) return@collect
+            // ⚠ OUT OF THE LAYOUT PASS FIRST. A LazyColumn sends its snapshot
+            // notifications while it places its children, so this can resume
+            // inside the very pass that measured `after` — and a scroll from there
+            // is a re-entrant measure, which Compose refuses with an exception.
+            // The next frame is outside it; whatever moved meanwhile is re-asked.
+            withFrameNanos { }
+            if (!state.following || !listState.canScrollForward) return@collect
+            try {
+                listState.scrollToNewest(count, animate = false)
+            } catch (e: CancellationException) {
+                // A scroll that started meanwhile (the reader's, or the arrival
+                // effect's) took the list: that is not this collector ending.
+                currentCoroutineContext().ensureActive()
+            }
+        }
+    }
+
     LaunchedEffect(key, itemCount, revision) {
         if (itemCount <= 0) return@LaunchedEffect
-        if (!opened) {
-            listState.scrollToNewest(itemCount, animate = false)
-            opened = true
-            lastCount = itemCount
-            return@LaunchedEffect
+        settling = true
+        try {
+            if (!opened) {
+                listState.scrollToNewest(itemCount, animate = false)
+                opened = true
+                lastCount = itemCount
+            } else {
+                val grew = itemCount > lastCount
+                lastCount = itemCount
+                state = Follow.arrived(state, grew)
+                if (state.following) {
+                    // Animate a genuinely new row; jump for a growing one, where an
+                    // animation restarted on every token would never finish.
+                    listState.scrollToNewest(itemCount, animate = grew)
+                }
+            }
+        } catch (e: CancellationException) {
+            // Another scroll took the list (the reader's, or the re-measure
+            // collector's); this arrival still has its settling time to run out.
+            currentCoroutineContext().ensureActive()
         }
-        val grew = itemCount > lastCount
-        lastCount = itemCount
-        state = Follow.arrived(state, grew)
-        if (state.following) {
-            // Animate a genuinely new row; jump for a growing one, where an
-            // animation restarted on every token would never finish.
-            listState.scrollToNewest(itemCount, animate = grew)
-        }
+        // Restarted by the next arrival, which is what keeps a live answer
+        // settling for as long as it is still arriving.
+        delay(SETTLE_MS)
+        settling = false
     }
 
     return state.unseen
@@ -194,6 +291,17 @@ fun FollowNewest(
 
 /** How long a wheel tick is given to actually start scrolling before it counts as one that moved nothing. */
 private const val SCROLL_START_MS: Long = 120
+
+/**
+ * How long after content arrives a row changing height is still that content
+ * laying out (an image decoding, a block measured late) rather than the reader
+ * opening or closing a card. See [Follow.relaid].
+ */
+private const val SETTLE_MS: Long = 1_500
+
+/** This measure's [Follow.Shape]: the viewport, and each row on screen by key. */
+private fun LazyListLayoutInfo.shape(): Follow.Shape =
+    Follow.Shape(viewportSize.width, viewportSize.height, visibleItemsInfo.associate { it.key to it.size })
 
 /**
  * Counts real scroll input — a wheel detent, a trackpad glide — on the list it
@@ -240,6 +348,11 @@ private fun LazyListState.isAtTail(slackPx: Int = 48): Boolean {
  * than the viewport; the trailing [scrollBy] walks the remainder and is clamped
  * by the list, so it cannot overshoot.
  *
+ * ⚠ THE REMAINDER IS ASKED OF THE LIST, NOT OF [isAtTail]. Its 48 px of slack is
+ * right for judging whether a READER is at the bottom and wrong for landing
+ * there: a last row up to 48 px taller than the viewport counted as "at the
+ * tail" and kept its last lines below the fold.
+ *
  * Public because the pill needs the SAME landing: a bare `animateScrollToItem`
  * there leaves the reader at the top of a long answer and — worse — `isAtTail`
  * stays false, so the latch never re-arms and the pill sticks on screen while the
@@ -249,7 +362,7 @@ suspend fun LazyListState.scrollToNewest(itemCount: Int, animate: Boolean) {
     if (itemCount <= 0) return
     val last = itemCount - 1
     if (animate) animateScrollToItem(last) else scrollToItem(last)
-    if (!isAtTail()) scrollBy(1_000_000f)
+    if (canScrollForward) scrollBy(1_000_000f)
 }
 
 /**

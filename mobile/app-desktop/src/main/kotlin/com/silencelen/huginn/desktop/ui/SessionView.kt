@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -949,7 +950,10 @@ private fun ConversationTab(
     // would land the reader mid-way down a transcript they have never seen.
     val followKey = controller.name + (stream?.let { ":$it" } ?: "")
     val scrolls = remember(followKey) { mutableStateOf(0) }
-    val unseen = FollowNewest(listState, itemCount, revision, key = followKey, scrolls = scrolls)
+    // The scrollbar's thumb moves the list without the list seeing an event, so
+    // the latch is handed its drags too (shared with PaneScrollbar below).
+    val thumb = remember(followKey) { MutableInteractionSource() }
+    val unseen = FollowNewest(listState, itemCount, revision, key = followKey, scrolls = scrolls, scrollbar = thumb)
 
     // A refresh that started failing after a page landed is a banner, not a
     // replacement: the transcript already on screen is still the best thing known.
@@ -1024,8 +1028,9 @@ private fun ConversationTab(
             }
             // Over the transcript, beside the SelectionContainer rather than
             // inside it. Same `listState` the follower drives, so the wheel, the
-            // keyboard and every scrollToNewest keep working exactly as they did.
-            PaneScrollbar(listState)
+            // keyboard and every scrollToNewest keep working exactly as they did;
+            // the follower is told when the thumb moves it (`thumb`).
+            PaneScrollbar(listState, thumb)
         }
         // Scrolling back to read something older must not look like the app has
         // stopped following: without this the reader cannot tell "nothing new" from

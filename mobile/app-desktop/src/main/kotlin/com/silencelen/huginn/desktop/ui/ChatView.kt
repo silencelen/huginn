@@ -32,6 +32,7 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -256,6 +257,9 @@ fun ChatView(
     // back through a live conversation is impossible: every token yanks the view
     // to the tail again.
     val scrolls = remember(chatId) { mutableStateOf(0) }
+    // And so is the scrollbar's thumb, which moves the list without the list
+    // seeing an event: shared with PaneScrollbar below.
+    val thumb = remember(chatId) { MutableInteractionSource() }
     // partial.length is what makes a live answer follow: the item count does not
     // change while tokens arrive into the same block.
     val hasUnseen = FollowNewest(
@@ -264,6 +268,7 @@ fun ChatView(
         revision = tailRevision(page?.nextOffset, events.size, partial.length, activity, pendingSend),
         key = chatId,
         scrolls = scrolls,
+        scrollbar = thumb,
     )
 
     // Suggestions are asked for by the CONTROLLER, at the turn boundary it can
@@ -417,8 +422,9 @@ fun ChatView(
             // bar is there whichever branch drew (and hides itself when the
             // content fits, which is every loading and empty state). It reads the
             // SAME `listState` the follow-the-tail effects drive, so nothing about
-            // scrolling changes — this is a second hand on one wheel.
-            PaneScrollbar(listState)
+            // scrolling changes — this is a second hand on one wheel, and the
+            // follow latch is told when it moves (`thumb`).
+            PaneScrollbar(listState, thumb)
         }
 
         if (hasUnseen) {

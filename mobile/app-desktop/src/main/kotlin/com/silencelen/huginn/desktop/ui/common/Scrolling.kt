@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.ui.common
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -20,6 +21,7 @@ import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -49,13 +51,24 @@ fun BoxScope.PaneScrollbar(state: ScrollState) {
     )
 }
 
-/** The same bar, over a lazy list. */
+/**
+ * The same bar, over a lazy list.
+ *
+ * @param interactionSource where the thumb's drags are reported. A transcript
+ *   hands its follow latch the same one (`FollowNewest(scrollbar = …)`): the
+ *   list itself sees nothing when the thumb moves it, and a reader who dragged
+ *   the thumb up to read was otherwise still "following".
+ */
 @Composable
-fun BoxScope.PaneScrollbar(state: LazyListState) {
+fun BoxScope.PaneScrollbar(
+    state: LazyListState,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+) {
     VerticalScrollbar(
         adapter = rememberScrollbarAdapter(state),
         style = deskScrollbar(),
         modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+        interactionSource = interactionSource,
     )
 }
 

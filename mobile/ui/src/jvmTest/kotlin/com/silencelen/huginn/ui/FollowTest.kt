@@ -110,4 +110,73 @@ class FollowTest {
             "a scroll that ends short of the tail is not a decision to follow again",
         )
     }
+
+    // ---------------------------------------- BUG 5: the re-measure (2026-10-23)
+
+    /** The newest two rows on screen, at the bottom of an 800 x 600 viewport. */
+    private val opened = Follow.Shape(width = 800, height = 600, rows = mapOf("r38" to 120, "r39" to 200))
+
+    /**
+     * BUG 5, the owner's words: "the status and chat suggestion bars load in
+     * causing the user to have to scroll a bit down to lock it in to the
+     * bottom". The strips arrive under the list after the jump to the newest and
+     * take their height out of the viewport; nothing scrolled, so nothing used to
+     * follow.
+     */
+    @Test
+    fun barsArrivingUnderTheListKeepItOnTheNewest() {
+        val withBars = opened.copy(height = 510)
+        assertTrue(Follow.relaid(Follow.State(), opened, withBars, canScrollFurther = true, settling = false))
+        // And whenever they arrive — suggestions come seconds after the turn.
+        assertTrue(Follow.relaid(Follow.State(), withBars, opened, canScrollFurther = true, settling = false))
+    }
+
+    /** The other half of the same rule: a reader who scrolled up is left exactly where they went. */
+    @Test
+    fun aReaderWhoScrolledAwayIsNeverPulledBackByARemeasure() {
+        val away = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        assertFalse(Follow.relaid(away, opened, opened.copy(height = 510), canScrollFurther = true, settling = true))
+        assertFalse(
+            Follow.relaid(away, opened, opened.copy(rows = mapOf("r38" to 120, "r39" to 400)), canScrollFurther = true, settling = true),
+        )
+    }
+
+    /**
+     * A scroll changes WHICH rows are on screen and never how tall one is, nor
+     * the viewport — so a scroll in flight, by any hand, is never taken for a
+     * strip arriving, and a reader mid-drag is not dragged back to the bottom.
+     */
+    @Test
+    fun aScrollIsNotARemeasure() {
+        val scrolledUp = Follow.Shape(800, 600, mapOf("r30" to 90, "r31" to 140, "r38" to 120))
+        assertFalse(Follow.relaid(Follow.State(), opened, scrolledUp, canScrollFurther = true, settling = true))
+    }
+
+    /** Late layout: the newest row measures taller a moment after it arrived (an image decoding). */
+    @Test
+    fun aRowStillLayingOutKeepsTheNewestInView() {
+        val decoded = opened.copy(rows = mapOf("r38" to 120, "r39" to 480))
+        assertTrue(Follow.relaid(Follow.State(), opened, decoded, canScrollFurther = true, settling = true))
+    }
+
+    /**
+     * Long after it arrived, a row changing height is somebody opening a card,
+     * and the bottom of the card they just opened is not where they want to be.
+     */
+    @Test
+    fun aCardOpenedLaterIsNotFollowedToItsBottom() {
+        val expanded = opened.copy(rows = mapOf("r38" to 120, "r39" to 900))
+        assertFalse(Follow.relaid(Follow.State(), opened, expanded, canScrollFurther = true, settling = false))
+    }
+
+    /** A narrower window re-wraps every row: the viewport changed, so the newest stays in view. */
+    @Test
+    fun aNarrowerWindowKeepsTheNewestInView() {
+        assertTrue(Follow.relaid(Follow.State(), opened, opened.copy(width = 500), canScrollFurther = true, settling = false))
+    }
+
+    @Test
+    fun alreadyAtTheEndThereIsNothingToDo() {
+        assertFalse(Follow.relaid(Follow.State(), opened, opened.copy(height = 700), canScrollFurther = false, settling = true))
+    }
 }
