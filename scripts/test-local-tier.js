@@ -791,6 +791,49 @@ test('writeTokenSecure creates 0600 under a wide umask and replaces an existing 
   }
 });
 
+// ------------------------------------------- the engine key off the argv
+//
+// An adapted engine's key must not have to ride on the command line, where
+// every local account can read it from the process list and sudo/pkexec log it.
+// It can come from a file, and the elevated re-run is handed a file path, never
+// the value.
+
+test('resolveAdapterKey reads a key file, and --adapter-key still works', () => {
+  const d = fs.mkdtempSync(path.join(tmp, 'akey-'));
+  const kf = path.join(d, 'k');
+  fs.writeFileSync(kf, '  file-secret\n');
+  assert.equal(local.resolveAdapterKey({ 'adapter-key-file': kf }), 'file-secret', 'read and trimmed');
+  // The file wins when both are given; the bare flag still works on its own.
+  assert.equal(local.resolveAdapterKey({ 'adapter-key-file': kf, 'adapter-key': 'x' }), 'file-secret');
+  assert.equal(local.resolveAdapterKey({ 'adapter-key': 'flag-secret' }), 'flag-secret');
+  assert.equal(local.resolveAdapterKey({}), null, 'none given');
+});
+
+test('the elevated re-run gets a FILE for the engine key, never the value', () => {
+  // A key given on argv would otherwise be re-passed verbatim to sudo/pkexec.
+  for (const argv of [
+    ['on', '--adapter', 'llama-swap', '--adapter-key', 'top-secret', '--system'],
+    ['on', '--adapter', 'llama-swap', '--adapter-key=top-secret', '--system'],
+  ]) {
+    const { argv: out, cleanup } = local.keyOffElevatedArgv(argv);
+    try {
+      assert.ok(!out.includes('--adapter-key'), `the value flag is gone: ${out.join(' ')}`);
+      assert.ok(!out.some((a) => a.includes('top-secret')), `the secret is not on argv: ${out.join(' ')}`);
+      const i = out.indexOf('--adapter-key-file');
+      assert.ok(i >= 0, 'a key FILE is passed instead');
+      const file = out[i + 1];
+      assert.equal(fs.readFileSync(file, 'utf8'), 'top-secret', 'and the staged file holds the key');
+      if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600, 'owner-only');
+      cleanup();
+      assert.ok(!fs.existsSync(file), 'cleanup shreds the stage');
+    } finally { cleanup(); }
+  }
+  // Nothing to stage: argv passes straight through, cleanup is a no-op.
+  const plain = local.keyOffElevatedArgv(['on', '--adapter-url', 'http://127.0.0.1:1', '--system']);
+  assert.deepEqual(plain.argv, ['on', '--adapter-url', 'http://127.0.0.1:1', '--system']);
+  plain.cleanup();
+});
+
 // ------------------------------------------------------- engine identity
 //
 // The manager hands the engine a key in its health check (`on`, `update`,

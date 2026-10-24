@@ -215,10 +215,12 @@ huginn local on --adapter ollama
 | `lmstudio` | `http://127.0.0.1:1234` |
 | `llama-swap` | `http://127.0.0.1:8748` |
 
-`--adapter-url URL` gives another address, which must be on loopback, and `--adapter-key KEY` the
-server's API key. The server must already list at least one model. A `llama-swap` server must
-refuse requests without its key. Huginn installs only the runner; `huginn local off` never stops
-or deletes a model server it did not install.
+`--adapter-url URL` gives another address, which must be on loopback. The server's API key goes in
+with `--adapter-key-file PATH` (a file holding the key); `--adapter-key KEY` still works but is
+discouraged, because a key on the command line is visible to other accounts on the machine. The
+server must already list at least one model. A `llama-swap` server must refuse requests without its
+key. Huginn installs only the runner; `huginn local off` never stops or deletes a model server it
+did not install.
 
 A computer that already used an existing model server before 2.6.2 needs `huginn local update`
 once, which records the account the model server runs as.

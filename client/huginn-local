@@ -238,6 +238,58 @@ function parseFlags(argv, known) {
   return { flags };
 }
 
+/**
+ * The adapted engine's API key, from the least-exposing source given.
+ * `--adapter-key-file PATH` (read and trimmed) is preferred; `--adapter-key K`
+ * still works but is no longer recommended, because a key on argv is readable
+ * by every local account through the process list and is logged by sudo/pkexec
+ * (security review). null when neither is given.
+ */
+function resolveAdapterKey(flags) {
+  if (flags['adapter-key-file']) {
+    try { return fs.readFileSync(flags['adapter-key-file'], 'utf8').trim() || null; }
+    catch (e) { console.error(`refused: could not read --adapter-key-file ${flags['adapter-key-file']}: ${e.message}`); process.exit(2); }
+  }
+  return flags['adapter-key'] || null;
+}
+
+/** Write a secret to an owner-only (0600) file in a fresh private temp dir. */
+function stageSecret(val) {
+  const d = fs.mkdtempSync(path.join(os.homedir() || os.tmpdir(), '.huginn-local-key-'));
+  const file = path.join(d, 'adapter-key');
+  const fd = fs.openSync(file, 'wx', 0o600);
+  try { fs.writeSync(fd, String(val)); } finally { fs.closeSync(fd); }
+  return { file, cleanup: () => { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* a temp dir */ } } };
+}
+
+/**
+ * Keep a given engine key off the ELEVATED re-run's argv — which sudo and
+ * pkexec log and every local account can read from the process list. When the
+ * re-run carries `--adapter-key <value>`, the value is staged in an owner-only
+ * file and the re-run is handed `--adapter-key-file <path>` in its place;
+ * `--adapter-key-file` (already a path, not a secret) passes straight through.
+ * Returns { argv, cleanup } — cleanup shreds the stage once the re-run is done.
+ */
+function keyOffElevatedArgv(argv) {
+  const out = [];
+  let staged = null;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--adapter-key') {
+      const val = argv[++i];
+      if (val === undefined) { out.push(a); break; }
+      staged = stageSecret(val);
+      out.push('--adapter-key-file', staged.file);
+    } else if (a.startsWith('--adapter-key=')) {
+      staged = stageSecret(a.slice('--adapter-key='.length));
+      out.push('--adapter-key-file', staged.file);
+    } else {
+      out.push(a);
+    }
+  }
+  return { argv: out, cleanup: () => { if (staged) staged.cleanup(); } };
+}
+
 // ------------------------------------------------- running other programs
 
 /**
@@ -1632,8 +1684,17 @@ function narrowClass(det, cls) {
  */
 function resolveSystemInstall(flags, argv = process.argv.slice(2)) {
   if (process.platform !== 'linux' || !flags.system || isRoot()) return 'direct';
-  const r = elevateOnce(argv, (tool) =>
-    console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`));
+  // The elevated re-run gets a FILE path for any engine key, never the value:
+  // sudo/pkexec log their argv, and the value would otherwise be in that log
+  // and in the process list for the life of the run (security review).
+  const safe = keyOffElevatedArgv(argv);
+  let r;
+  try {
+    r = elevateOnce(safe.argv, (tool) =>
+      console.log(`  elevating once with ${tool} — the services install into /etc/systemd/system`));
+  } finally {
+    safe.cleanup();
+  }
   if (r.ok) return 'done';
   // It ran as root and failed, and said why: a user-unit install now would go
   // in over what it wrote, beside system units it may have enabled.
@@ -1706,7 +1767,7 @@ async function cmdOn(flags) {
     // own yaml and its own extra models — and every later verb has to know
     // that before it stops or deletes anything.
     conf.adopted = true;
-    conf.adapter = { kind, url, key: flags['adapter-key'] || null };
+    conf.adapter = { kind, url, key: resolveAdapterKey(flags) };
     // ⚠ WHO SERVES IT, RECORDED BEFORE ANYTHING IS SENT. The shim holds every
     // later connection to this account and sends nothing to any other (see
     // engineKit); a loopback port by itself says nothing about who holds it.
@@ -2542,7 +2603,7 @@ function usage() {
   console.log(`huginn-local ${VERSION} — serve local AI models to Huginn from this machine.
 
   huginn local on     [--class G8|G16|C|A] [--gpu-uuid U] [--name N] [--yes] [--system]
-                      [--adapter llama-swap|ollama|lmstudio [--adapter-url URL] [--adapter-key K]]
+                      [--adapter llama-swap|ollama|lmstudio [--adapter-url URL] [--adapter-key-file PATH]]
                       --system installs SYSTEM services behind ONE elevation prompt, so
                       this machine serves while you are logged out; without it (or when
                       the prompt is declined) the user units are kept alive by linger
@@ -2564,7 +2625,7 @@ async function main() {
   markElevatedRun();
   const cmd = process.argv[2];
   const rest = process.argv.slice(3);
-  const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'purge-models', 'purge', 'which'];
+  const known = ['class', 'gpu-uuid', 'name', 'url', 'yes', 'system', 'json', 'adapter', 'adapter-url', 'adapter-key', 'adapter-key-file', 'purge-models', 'purge', 'which'];
   const parsed = parseFlags(rest, known);
   if (parsed.error) { console.error(`huginn-local ${cmd || ''}: ${parsed.error}`); process.exit(2); }
   const flags = parsed.flags;
@@ -2605,6 +2666,8 @@ if (require.main === module) {
     verifyLockDecision, seedTokenFromStage, writeTokenSecure,
     // The pre-existing-tree trust decisions, pure for Linux tests.
     adoptReason, treeReadTrusted, parsePathInfo, parseScQuery,
+    // The engine key kept off argv: the resolver and the elevated-argv transform.
+    resolveAdapterKey, keyOffElevatedArgv,
     // Where the engine identity check is used here (it lives in the shim).
     engineKit, serviceUid, health, identifyAdapter,
     // The elevated hand-back (an update run with sudo writes as root).
