@@ -130,6 +130,54 @@ for _ in 1 2 3; do
 done
 check test -z "$(ls -A "$TMP/b9" | grep '\.tmp$')"
 
+# P1-P6. PARKED PERMISSION REQUESTS (.perm/<sess>/<id>.json, written by
+#    huginn-permission-hook) are dropped by the events that end them. Run as a
+#    background job so no pane is needed; the session is found by its id.
+perm_seed() {   # $1 dir, $2 id, $3 tool, $4 input json, $5 ts, $6 agentId json (null or "x")
+  mkdir -p "$1/.perm/bgsess"
+  printf '{"v":1,"id":"%s","pid":1,"sessionId":"bbbbbbbb-bg-test","tool":"%s","input":%s,"ts":%s,"agentId":%s}' \
+    "$2" "$3" "$4" "$5" "$6" > "$1/.perm/bgsess/$2.json"
+}
+perm_ls() { ls "$1/.perm/bgsess" 2>/dev/null | sed 's/\.json$//' | sort | tr '\n' ' ' | sed 's/ $//'; }
+# P1. PostToolUse for a tool with that exact input drops the OLDEST such request
+#     only; a different input and a different tool stay.
+seed "$TMP/p1" bgsess "$OLD"
+perm_seed "$TMP/p1" 100-1 Bash '{"command":"touch x"}' 100 null
+perm_seed "$TMP/p1" 200-1 Bash '{"command":"touch x"}' 200 null
+perm_seed "$TMP/p1" 300-1 Bash '{"command":"touch y"}' 300 null
+perm_seed "$TMP/p1" 400-1 Edit '{"file_path":"/x"}' 400 null
+bg_hook "$TMP/p1" PostToolUse '{"session_id":"bbbbbbbb-bg-test","tool_name":"Bash","tool_input":{"command":"touch x"},"tool_use_id":"t1","tool_response":{}}' "${JOB[@]}"
+check test "$(perm_ls "$TMP/p1")" = "200-1 300-1 400-1"
+# P2. Key order is not identity: the payload's input serialised differently still matches.
+seed "$TMP/p2" bgsess "$OLD"
+perm_seed "$TMP/p2" 100-1 Edit '{"file_path":"/x","old_string":"a","new_string":"b"}' 100 null
+bg_hook "$TMP/p2" PostToolUseFailure '{"session_id":"bbbbbbbb-bg-test","tool_name":"Edit","tool_input":{"new_string":"b","old_string":"a","file_path":"/x"},"tool_use_id":"t2","error":"boom"}' "${JOB[@]}"
+check test -z "$(perm_ls "$TMP/p2")"
+# P3. PermissionDenied (auto mode refused it) ends the request too.
+seed "$TMP/p3" bgsess "$OLD"
+perm_seed "$TMP/p3" 100-1 Bash '{"command":"rm -rf /"}' 100 null
+bg_hook "$TMP/p3" PermissionDenied '{"session_id":"bbbbbbbb-bg-test","tool_name":"Bash","tool_input":{"command":"rm -rf /"},"tool_use_id":"t3","reason":"[Irreversible]"}' "${JOB[@]}"
+check test -z "$(perm_ls "$TMP/p3")"
+# P4. A new prompt ends the MAIN THREAD's requests; a subagent's survive the turn.
+seed "$TMP/p4" bgsess "$OLD"
+perm_seed "$TMP/p4" 100-1 Bash '{"command":"touch x"}' 100 null
+perm_seed "$TMP/p4" 200-1 Bash '{"command":"touch y"}' 200 '"agent-7"'
+bg_hook "$TMP/p4" UserPromptSubmit '{"session_id":"bbbbbbbb-bg-test","prompt":"next"}' "${JOB[@]}"
+check test "$(perm_ls "$TMP/p4")" = "200-1"
+bg_hook "$TMP/p4" Stop '{"session_id":"bbbbbbbb-bg-test"}' "${JOB[@]}"
+check test "$(perm_ls "$TMP/p4")" = "200-1"
+# P5. SubagentStop ends that agent's requests and no other's.
+perm_seed "$TMP/p4" 300-1 Bash '{"command":"touch z"}' 300 '"agent-8"'
+bg_hook "$TMP/p4" SubagentStop '{"session_id":"bbbbbbbb-bg-test","agent_id":"agent-7"}' "${JOB[@]}"
+check test "$(perm_ls "$TMP/p4")" = "300-1"
+# P6. SessionEnd takes the directory; a request whose session file is somebody else's is untouched.
+seed "$TMP/p6" bgsess "$OLD"; seed "$TMP/p6" other "$OTHER_JSON"
+perm_seed "$TMP/p6" 100-1 Bash '{"command":"touch x"}' 100 null
+mkdir -p "$TMP/p6/.perm/other"; printf '{"v":1,"id":"900-1","tool":"Bash","input":{},"ts":900}' > "$TMP/p6/.perm/other/900-1.json"
+bg_hook "$TMP/p6" SessionEnd '{"session_id":"bbbbbbbb-bg-test"}' "${JOB[@]}"
+check test ! -e "$TMP/p6/.perm/bgsess"
+check test -f "$TMP/p6/.perm/other/900-1.json"
+
 if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
   echo "SKIP test-claude-title cases 1-10: not inside a tmux pane (the hook resolves the session name via tmux)"
   echo "test-claude-title: $pass passed, $fail failed"

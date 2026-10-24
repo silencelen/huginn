@@ -165,7 +165,9 @@ fi
 
 icon=; st=
 case "$event" in
-  UserPromptSubmit|PreToolUse|PostToolUse|SubagentStop|PreCompact|PostCompact) icon="$ICON_RUN"; st=running ;;
+  # PostToolUseFailure (the tool threw) and PermissionDenied (auto mode refused
+  # it) end a tool call like PostToolUse does; the turn goes on.
+  UserPromptSubmit|PreToolUse|PostToolUse|PostToolUseFailure|PermissionDenied|SubagentStop|PreCompact|PostCompact) icon="$ICON_RUN"; st=running ;;
   Stop|SessionStart)                                    icon="$ICON_IDLE"; st=idle ;;
   Notification)
     # permission/input request -> needs you; post-turn idle nudge -> waiting; else attention.
@@ -380,13 +382,68 @@ if command -v jq >/dev/null 2>&1; then
         AskUserQuestion) _write_sidecar "$ASK_DIR" AskUserQuestion ;;
         ExitPlanMode)    _write_sidecar "$PLAN_DIR" ExitPlanMode ;;
       esac ;;
-    PostToolUse)
+    PostToolUse|PostToolUseFailure|PermissionDenied)
       tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
       case "$tool_name" in
         AskUserQuestion) rm -f "$ASK_DIR/$sess" "$ASK_DIR/$sess.tmp" 2>/dev/null ;;
         ExitPlanMode)    rm -f "$PLAN_DIR/$sess" "$PLAN_DIR/$sess.tmp" 2>/dev/null ;;
       esac ;;
     UserPromptSubmit|Stop|SessionEnd) _clear_sidecars ;;
+  esac
+
+  # --- parked permission requests: drop what can no longer be answered --------
+  #
+  # huginn-permission-hook parks EVERY tool prompt as $STATE_DIR/.perm/<sess>/<id>.json
+  # and waits on it; the daemon's request registry (lib/questions.js) lists the
+  # file as a live question for as long as it exists. Answering the dialog at the
+  # keyboard does not stop that hook, so the file would otherwise claim a
+  # question for the hook's whole deadline. This is the other half of the
+  # registry's liveness: the tool's own PostToolUse (it ran), PostToolUseFailure
+  # (it ran and threw) or PermissionDenied (auto mode refused it) drops the
+  # OLDEST request for that tool with that exact input — one, because parallel
+  # subagents can park identical requests and each event ends one of them. A new
+  # prompt or a Stop ends the main thread's requests (a subagent's, which carry
+  # `agentId`, can outlive the turn in the background); a SubagentStop ends that
+  # agent's; SessionEnd takes the directory. The waiting hook notices its file is
+  # gone and exits on its own. Nothing here is a decision: the dialog, if it is
+  # still up, is answered exactly as before.
+  PERM_DIR="$STATE_DIR/.perm/$sess"
+  _drop_perm_tool() {   # $1 = tool, $2 = tool_input JSON ('' = any): the oldest match
+    local f best='' best_ts=0 ts
+    [ -d "$PERM_DIR" ] || return 0
+    for f in "$PERM_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      if [ -n "$2" ]; then
+        jq -e --arg t "$1" --argjson inp "$2" '.tool == $t and .input == $inp' "$f" >/dev/null 2>&1 || continue
+      else
+        jq -e --arg t "$1" '.tool == $t' "$f" >/dev/null 2>&1 || continue
+      fi
+      ts="$(jq -r '.ts // 0' "$f" 2>/dev/null)"
+      case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
+      if [ -z "$best" ] || [ "$ts" -lt "$best_ts" ]; then best="$f"; best_ts="$ts"; fi
+    done
+    [ -n "$best" ] && rm -f "$best" 2>/dev/null
+    return 0
+  }
+  _drop_perm_agent() {  # $1 = agent id ('' = the main thread): every request of that agent
+    local f
+    [ -d "$PERM_DIR" ] || return 0
+    for f in "$PERM_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      jq -e --arg a "$1" '(.agentId // "") == $a' "$f" >/dev/null 2>&1 && rm -f "$f" 2>/dev/null
+    done
+    return 0
+  }
+  case "$event" in
+    PostToolUse|PostToolUseFailure|PermissionDenied)
+      tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // empty' 2>/dev/null)"
+      tool_input="$(printf '%s' "$payload" | jq -c '.tool_input // empty' 2>/dev/null)"
+      [ -n "$tool_name" ] && _drop_perm_tool "$tool_name" "$tool_input" ;;
+    UserPromptSubmit|Stop) _drop_perm_agent '' ;;
+    SubagentStop)
+      agent_id="$(printf '%s' "$payload" | jq -r '.agent_id // empty' 2>/dev/null)"
+      [ -n "$agent_id" ] && _drop_perm_agent "$agent_id" ;;
+    SessionEnd) rm -rf "$PERM_DIR" 2>/dev/null ;;
   esac
 fi
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Huginn hooks. Merge this into ~/.claude/settings.json's \"hooks\" object (setup.sh does this for you). Drives huginn-claude-title, which shows Claude's state in the tab title, writes the per-session state file huginn-appd reads, and writes the AskUserQuestion/ExitPlanMode prompt sidecars huginn-appd fuses with its pane scrape. PostToolUse is the primary sidecar clear, so keep it. All async so they never add latency to a turn; they no-op outside tmux.",
+  "_comment": "Huginn hooks. Merge this into ~/.claude/settings.json's \"hooks\" object (setup.sh does this for you). Drives huginn-claude-title, which shows Claude's state in the tab title, writes the per-session state file huginn-appd reads, writes the AskUserQuestion/ExitPlanMode prompt sidecars huginn-appd fuses with its pane scrape, and drops the parked permission requests (.perm) that huginn-permission-hook leaves behind when a prompt was answered at the keyboard. PostToolUse is the primary sidecar clear, so keep it; PostToolUseFailure and PermissionDenied end a request the same way. All async so they never add latency to a turn; they no-op outside tmux.",
   "UserPromptSubmit": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title UserPromptSubmit", "async": true, "timeout": 10 } ] }
   ],
@@ -8,6 +8,12 @@
   ],
   "PostToolUse": [
     { "matcher": ".*", "hooks": [ { "type": "command", "command": "huginn-claude-title PostToolUse", "async": true, "timeout": 10 } ] }
+  ],
+  "PostToolUseFailure": [
+    { "matcher": ".*", "hooks": [ { "type": "command", "command": "huginn-claude-title PostToolUseFailure", "async": true, "timeout": 10 } ] }
+  ],
+  "PermissionDenied": [
+    { "matcher": ".*", "hooks": [ { "type": "command", "command": "huginn-claude-title PermissionDenied", "async": true, "timeout": 10 } ] }
   ],
   "Notification": [
     { "hooks": [ { "type": "command", "command": "huginn-claude-title Notification", "async": true, "timeout": 10 } ] }
