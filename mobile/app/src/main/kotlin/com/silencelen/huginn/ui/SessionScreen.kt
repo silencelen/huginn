@@ -95,6 +95,9 @@ fun SessionScreen(
     onForceResize: () -> Unit,
     onInterrupt: () -> Unit,
     onCopy: (String) -> Unit,
+    /** The card behind the context meter and the fast chip (appd 3.14.0); each absent on an older daemon. */
+    contextSource: ContextSource? = null,
+    onFast: (Boolean) -> Unit = {},
     hasEarlier: Boolean = false,
     loadingHistory: Boolean = false,
     onLoadEarlier: () -> Unit = {},
@@ -222,7 +225,20 @@ fun SessionScreen(
             // Slash commands go in as a submitted line, exactly as typed by hand.
             onCommand = { onSendText(it, true) },
             onCycleMode = { onSendKeys(listOf("BTab")) },
+            sessionName = name,
             contextPercent = screen?.contextPercent,
+            // The status line's readings (appd 3.14.0) for the card behind the
+            // meter; each null on an older daemon, where the percent is all there is.
+            contextFacts = ContextCardFacts(
+                usage = screen?.context,
+                contextPercent = screen?.contextPercent,
+                model = screen?.model ?: screen?.liveModel ?: transcript?.modelDisplay,
+                effort = screen?.effort ?: transcript?.effort,
+                fast = screen?.fast,
+            ),
+            contextSource = contextSource,
+            fast = screen?.fast,
+            onFast = onFast,
             compacting = screen?.compacting ?: false,
             // What the limit has already done to this session, and what it will
             // do when the window resets. Both read as facts about THIS session
@@ -446,7 +462,7 @@ private fun SessionConversation(
     // strip above the list, and the suggestions and question bar below it, come
     // and go after the jump to the newest, and only the shared one keeps the
     // newest message in view when they do. See ChatScreen.
-    val hasUnseen = FollowNewest(
+    val follow = FollowNewest(
         listState = listState,
         itemCount = rows.size + headerItems,
         revision = tailRevision(shown?.nextOffset, events.size, events.lastOrNull()?.text?.length),
@@ -454,6 +470,9 @@ private fun SessionConversation(
         // conversation arriving, and following the old one's tail position into
         // it would land wherever the byte counts happened to line up.
         key = if (onAgent) "$name/$selectedStream" else name,
+        // The window's start moves only when "Load earlier" lands a page above
+        // the reader: that growth is history, not news (Follow.arrived, bug 6).
+        prepends = shown?.windowStart,
     )
 
     val stripHasEarlier = if (onAgent) (shown?.windowStart ?: 0L) > 0L else hasEarlier
@@ -645,11 +664,13 @@ private fun SessionConversation(
               }
               }
               }
+              // The shared pill, floating over the list's bottom edge (`:ui`
+              // Follow.kt): "Back to bottom" while scrolled up, "New messages"
+              // once something landed below. Same scrollToNewest as the latch.
+              BackToBottomPill(follow.away, follow.unseen) {
+                  scope.launch { listState.scrollToNewest(rows.size + headerItems, animate = true) }
+              }
             }
-        }
-
-        if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.scrollToNewest(rows.size + headerItems, animate = true) } }
         }
 
         // Suggested next messages, at the turn boundary only. A live prompt's

@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.ui.theme.Severity
@@ -40,15 +42,24 @@ private const val CONTEXT_HIGH = 80
 /**
  * A thin context-usage bar with its percentage, for a session/chat header or
  * detail row. Renders nothing when [percent] is null.
+ *
+ * @param onClick opens the context card (the table behind the figure). The
+ *   meter is the only mark of it, so the whole meter is the target rather than
+ *   an added icon; null leaves it a reading.
  */
 @Composable
-fun ContextMeter(percent: Int?, modifier: Modifier = Modifier) {
+fun ContextMeter(percent: Int?, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     if (percent == null) return
     val p = percent.coerceIn(0, 100)
     val high = p >= CONTEXT_HIGH
     // The severity ramp (theme/StateColors.kt): 80 % is a warning, not a failure.
     val fill = severityColor(if (high) Severity.WARNING else Severity.NORMAL)
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+    val target = if (onClick == null) modifier else modifier
+        .clip(RoundedCornerShape(6.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 4.dp, vertical = 2.dp)
+        .testTag("context.meter")
+    Row(target, verticalAlignment = Alignment.CenterVertically) {
         Box(
             Modifier
                 .width(44.dp)
@@ -80,10 +91,14 @@ fun ContextMeter(percent: Int?, modifier: Modifier = Modifier) {
  * per-row bar would be noise. Renders nothing when [percent] is null.
  */
 @Composable
-fun ContextBadge(percent: Int?, modifier: Modifier = Modifier) {
+fun ContextBadge(percent: Int?, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
     if (percent == null) return
     val p = percent.coerceIn(0, 100)
     val high = p >= CONTEXT_HIGH
+    val target = if (onClick == null) modifier else modifier
+        .clip(RoundedCornerShape(6.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 4.dp, vertical = 2.dp)
     Text(
         "ctx $p%",
         style = MaterialTheme.typography.labelSmall,
@@ -95,7 +110,7 @@ fun ContextBadge(percent: Int?, modifier: Modifier = Modifier) {
         // only gets what the name before it left over.
         maxLines = 1,
         softWrap = false,
-        modifier = modifier,
+        modifier = target,
     )
 }
 

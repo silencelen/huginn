@@ -44,6 +44,10 @@ Everything below was taken from the live daemon on **huginn**, **appd 3.5.1**
 | `agents-all.json` | `GET /v1/sessions/<n>/agents?all=1` | 2026-09-15, re-verified against 3.5.1 on 2026-09-19 | No drift. |
 | `projects.json`, `project-detail.json`, `project-dashboard.json`, `spawn-result.json` | `/v1/projects*` | generated from `lib/projects.js` · 2026-09-18 | The daemon modules' OWN output, not a capture — a rename on the daemon changes these files. |
 | `apps.json`, `app-422.json`, `consoles.json` | `/v1/apps*`, `/v1/consoles*` | generated from `lib/apps.js` · 2026-09-18 | Same. `/v1/consoles*` is an alias for one release. |
+| `session-statusline.json` | `GET /v1/sessions?preview=1` | **CONTRACT-DERIVED, NOT captured** · 2026-10-23 | The appd 3.14.0 `context` / `model` / `effort` / `fast` / `limits` / `cost` blocks written by hand from the lane contract while the daemon was being built in parallel; the figures inside are a real Claude Code 2.1.306 status-line record. Row 2 is a plain shell: every block null, `fast.available` false with Claude Code's reason. ⚠ Re-capture against appd 3.14.0 and diff the key set. |
+| `screen-statusline.json` | `GET /v1/sessions/<n>/screen` | **CONTRACT-DERIVED, NOT captured** · 2026-10-23 | The same six blocks on a screen; `fast.on` true. Never GET this route from a working session (see `screen.json`). |
+| `session-context.json` | `GET /v1/sessions/<n>/context` | **CONTRACT-DERIVED, NOT captured** · 2026-10-23 | The `/context` table as the contract shapes it; the eight rows and their figures are the real 2.1.306 table (`fixtures/context-local-command.jsonl` in the lane folder). `asOf` is milliseconds. |
+| `settings-claude.json` | `GET /v1/settings/claude` | **CONTRACT-DERIVED, NOT captured** · 2026-10-23 | Three booleans; `fastModePerSession` true is what the install sets. |
 
 ## Units, because there is no field-name tell
 

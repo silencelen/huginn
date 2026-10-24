@@ -42,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ChatFast
+import com.silencelen.huginn.data.FastMode
 import com.silencelen.huginn.data.ModelChoice
 import androidx.compose.foundation.layout.height
 
@@ -61,9 +63,20 @@ fun SessionControls(
     effort: String?,
     permissionMode: String?,
     models: List<ModelChoice>,
+    /** The session the strip belongs to: the card's state is kept per session. */
+    sessionName: String = "",
     onCommand: (String) -> Unit,
     onCycleMode: () -> Unit,
     contextPercent: Int? = null,
+    /**
+     * The status line's readings and the card's two calls (appd 3.14.0). With a
+     * source the meter opens the card as a sheet; without one it stays a reading.
+     */
+    contextFacts: ContextCardFacts = ContextCardFacts(contextPercent = contextPercent),
+    contextSource: ContextSource? = null,
+    /** Fast mode as the status line reports it; null hides the chip (older daemon). */
+    fast: FastMode? = null,
+    onFast: (Boolean) -> Unit = {},
     compacting: Boolean = false,
     /** This session's headroom row (appd 3.0); null hides both marks. */
     sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
@@ -123,9 +136,24 @@ fun SessionControls(
                     labelColor = MaterialTheme.colorScheme.onSurface,
                 ),
             )
+            // Fast mode, beside the pickers it belongs with: a per-session fact
+            // the status line reports (appd 3.14.0). Absent on an older daemon;
+            // disabled with Claude Code's own reason beside it when unavailable.
+            if (fast != null) FastChip(fast, onToggle = onFast, showReason = true)
             // The "context used" meter, after the three controls it is read
             // beside; it renders nothing when the pane has not reported a figure.
-            ContextMeter(contextPercent)
+            // Tapping it opens the card — the table behind the figure — as a sheet.
+            if (contextSource != null) {
+                ContextMeterCard(
+                    name = sessionName,
+                    source = contextSource,
+                    facts = contextFacts,
+                    nowMs = nowMs,
+                    presentation = ContextCardPresentation.SHEET,
+                )
+            } else {
+                ContextMeter(contextPercent)
+            }
             // Last in the row, because it is the one control here that is about
             // TOMORROW rather than about the turn in front of you. Hidden against
             // a daemon with no headroom subsystem — a toggle whose host cannot
@@ -156,6 +184,11 @@ fun ChatOptionsBar(
     onMode: (String) -> Unit,
     /** Present only on a LOCAL chat: hand this conversation to Claude, as a draft. */
     onEscalate: (() -> Unit)? = null,
+    /** The chat's fast-mode choice: null is the host default (appd 3.14.0). */
+    fast: Boolean? = null,
+    /** The daemon serves `/v1/settings/claude`, so a PATCH with `fast` will be honoured. */
+    fastSupported: Boolean = false,
+    onFast: (ChatFast) -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow) {
         EdgeFadeRow(
@@ -182,6 +215,16 @@ fun ChatOptionsBar(
                     options = ModelLabels.effortOptions() + ("" to "Host default"),
                     enabled = enabled,
                     onPick = onEffort,
+                )
+            }
+            // Fast mode, tri-state like the model and effort: the host default, on,
+            // or off. Only against a daemon that stores it, never for a local model.
+            if (fastSupported && !localNow) {
+                PickerChip(
+                    label = ChatFastLabels.label(fast),
+                    options = ChatFastLabels.options(),
+                    enabled = enabled,
+                    onPick = { onFast(ChatFastLabels.choice(it)) },
                 )
             }
             if (!localNow) {

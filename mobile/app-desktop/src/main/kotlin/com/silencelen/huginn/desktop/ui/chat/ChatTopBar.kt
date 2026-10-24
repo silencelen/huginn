@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ChatFast
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.desktop.ui.StateDot
@@ -68,6 +69,9 @@ fun ChatTopBar(
     onMode: (String) -> Unit,
     onRename: (String) -> Unit,
     onDelete: () -> Unit,
+    fast: Boolean? = null,
+    fastSupported: Boolean = false,
+    onFast: (ChatFast) -> Unit = {},
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
@@ -99,6 +103,9 @@ fun ChatTopBar(
             onModel = onModel,
             onEffort = onEffort,
             onMode = onMode,
+            fast = fast,
+            fastSupported = fastSupported,
+            onFast = onFast,
         )
         // Between the options and the overflow, because it is a control for the
         // WINDOW rather than for the chat: what is on screen beside this

@@ -2025,6 +2025,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // detection wants. A 404 at either turns every way in off.
             landProjects()
             landApps()
+            // The Claude-settings probe rides the same once-per-connection refresh
+            // (appd 3.14.0); a 404 turns the one row and the chats' fast option off.
+            landClaudeSettings()
             _loading.value = false
         }
     }
@@ -3429,6 +3432,61 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * "/compact" into the pane. 409s when a question is waiting or the pane has no
      * recorded Claude state (a plain shell would run "/compact" as a command).
      */
+    // ---- the context card and fast mode (appd 3.14.0)
+
+    /** The card's two calls, handed to `:ui`'s ContextMeterCard so it holds no client of its own. */
+    suspend fun sessionContext(name: String): com.silencelen.huginn.data.SessionContext = client.sessionContext(name)
+    suspend fun refreshSessionContext(name: String): com.silencelen.huginn.data.Queued = client.refreshSessionContext(name)
+
+    /**
+     * Fast mode for one session: queued like /compact, typed by the daemon at
+     * the next turn boundary. A 409 is the daemon saying why it cannot, and
+     * that sentence is the toast.
+     */
+    fun setSessionFast(name: String, on: Boolean) {
+        viewModelScope.launch {
+            runCatching { client.setSessionFast(name, on) }
+                .onSuccess { q ->
+                    _toast.value = if (q.queued) "Fast mode ${if (on) "on" else "off"} for $name after this turn"
+                    else com.silencelen.huginn.ui.ContextFormat.refreshNote(false, q.reason)
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * The sessions account's Claude Code settings the daemon exposes (appd
+     * 3.14.0), and whether this daemon has the route at all — the same probe
+     * shape as scratchpads and projects: null until it answers, false on a 404.
+     * The Settings row and the chats' fast option exist only on true.
+     */
+    private val _claudeSettings = MutableStateFlow<com.silencelen.huginn.data.ClaudeSettings?>(null)
+    val claudeSettings: StateFlow<com.silencelen.huginn.data.ClaudeSettings?> = _claudeSettings.asStateFlow()
+    private val _claudeSettingsAvailable = MutableStateFlow<Boolean?>(null)
+    val claudeSettingsAvailable: StateFlow<Boolean?> = _claudeSettingsAvailable.asStateFlow()
+
+    private suspend fun landClaudeSettings() {
+        runCatching { client.claudeSettings() }
+            .onSuccess { s ->
+                if (s == null) {
+                    _claudeSettingsAvailable.value = false
+                } else {
+                    _claudeSettingsAvailable.value = true
+                    _claudeSettings.value = s
+                }
+            }
+            .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _claudeSettingsAvailable.value = false }
+    }
+
+    /** Writes the default for new sessions; the value shown is the daemon's answer, never a local flip. */
+    fun setFastModeDefault(on: Boolean) {
+        viewModelScope.launch {
+            runCatching { client.setClaudeSettings(fastModeDefault = on) }
+                .onSuccess { _claudeSettings.value = it }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
     fun compactSession(name: String) {
         viewModelScope.launch {
             runCatching { client.compactSession(name) }
@@ -4267,6 +4325,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chatEffort = MutableStateFlow<String?>(null)
     val chatEffort: StateFlow<String?> = _chatEffort.asStateFlow()
 
+    /** The open chat's fast-mode choice: null is the host default (appd 3.14.0). */
+    private val _chatFast = MutableStateFlow<Boolean?>(null)
+    val chatFast: StateFlow<Boolean?> = _chatFast.asStateFlow()
+
     private val _chatTitle = MutableStateFlow<String?>(null)
     val chatTitle: StateFlow<String?> = _chatTitle.asStateFlow()
 
@@ -4329,6 +4391,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 _chatModel.value = meta?.model
                 _chatStarted.value = (meta?.turns ?: 0) > 0 || meta?.claudeSessionId != null
                 _chatEffort.value = meta?.effort
+                _chatFast.value = meta?.fast
                 _chatTitle.value = meta?.title
                 _chatSealed.value = meta?.closed == true
                 attachIfRunning(id, meta)
@@ -4394,13 +4457,20 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         loadChatTranscript(id)
     }
 
-    fun setChatOptions(id: String, model: String? = null, effort: String? = null, mode: String? = null) {
+    fun setChatOptions(
+        id: String,
+        model: String? = null,
+        effort: String? = null,
+        mode: String? = null,
+        fast: com.silencelen.huginn.data.ChatFast? = null,
+    ) {
         viewModelScope.launch {
-            runCatching { client.updateChat(id, model = model, effort = effort, mode = mode) }
+            runCatching { client.updateChat(id, model = model, effort = effort, mode = mode, fast = fast) }
                 .onSuccess {
                     _chatMode.value = it.mode
                     _chatModel.value = it.model
                     _chatEffort.value = it.effort
+                    _chatFast.value = it.fast
                     refreshChats()
                 }
                 .onFailure { _toast.value = errText(it) }

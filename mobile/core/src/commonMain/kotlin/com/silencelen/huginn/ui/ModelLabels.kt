@@ -214,3 +214,33 @@ object ModelLabels {
             .toList()
     }
 }
+
+/**
+ * The chat's fast-mode picker, in words both shells use — the same reason
+ * [ModelLabels] exists: the labels are the half that must never disagree. The
+ * value strings are the picker's own; [choice] maps them back to [ChatFast].
+ */
+object ChatFastLabels {
+    const val DEFAULT_VALUE: String = ""
+    const val ON_VALUE: String = "on"
+    const val OFF_VALUE: String = "off"
+
+    /** The chip reads as its current value, like the model and effort chips. */
+    fun label(fast: Boolean?): String = when (fast) {
+        null -> "Default speed"
+        true -> "Fast"
+        false -> "Normal speed"
+    }
+
+    fun options(): List<Pair<String, String>> = listOf(
+        ON_VALUE to "Fast — Claude Code's fast mode for this chat's runs",
+        OFF_VALUE to "Normal speed",
+        DEFAULT_VALUE to "Host default",
+    )
+
+    fun choice(value: String): com.silencelen.huginn.data.ChatFast = when (value) {
+        ON_VALUE -> com.silencelen.huginn.data.ChatFast.ON
+        OFF_VALUE -> com.silencelen.huginn.data.ChatFast.OFF
+        else -> com.silencelen.huginn.data.ChatFast.DEFAULT
+    }
+}

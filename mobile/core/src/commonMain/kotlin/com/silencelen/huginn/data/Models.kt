@@ -183,6 +183,20 @@ data class Session(
      */
     val pendingSends: Int = 0,
     val project: SessionProject? = null,
+    /**
+     * What the session's own status line reports (appd 3.14.0): the context
+     * window in tokens, the model's display name, the effort level, fast mode,
+     * the account's rate-limit windows and the run's cost. Each is null on an
+     * older daemon, or on a pane that has written no status-line record yet;
+     * [contextPercent] keeps being served beside [context] for older clients and
+     * is the fallback when [context] is null.
+     */
+    val context: ContextUsage? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val fast: FastMode? = null,
+    val limits: SessionLimits? = null,
+    val cost: SessionCost? = null,
 )
 
 @Serializable
@@ -464,7 +478,162 @@ data class Screen(
     val contextPercent: Int? = null,
     /** The session is compacting its context right now. */
     val compacting: Boolean = false,
+    /** The status-line record's readings, as on [Session]; null before appd 3.14.0. */
+    val context: ContextUsage? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val fast: FastMode? = null,
+    val limits: SessionLimits? = null,
+    val cost: SessionCost? = null,
 )
+
+// ---------------------------------------------------- the status-line record
+
+/**
+ * The context window as the session's status line reports it (appd 3.14.0,
+ * verified against Claude Code 2.1.306): [used] and [window] in tokens, the
+ * whole percentage, and whether the conversation has grown past the 200k
+ * boundary. Replaces `contextPercent`, which stays on the wire for older
+ * clients and is the fallback for older daemons.
+ */
+@Serializable
+data class ContextUsage(
+    val used: Long = 0,
+    val window: Long = 0,
+    val percent: Int = 0,
+    val exceeds200k: Boolean = false,
+)
+
+/**
+ * Fast mode, per session. [available] false carries Claude Code's own
+ * [reason] (its wording, not ours); a client draws the control disabled with
+ * that sentence rather than inventing one.
+ */
+@Serializable
+data class FastMode(
+    val on: Boolean = false,
+    val available: Boolean = true,
+    val reason: String? = null,
+)
+
+/**
+ * One rate-limit window from the status line. [resetsAt] is epoch SECONDS on
+ * the wire (the status line's `resets_at`, passed through by the daemon —
+ * confirmed with the server lane, 2026-10-24), unlike every other instant a
+ * reader sees on this wire, which is an ISO string. It is carried as the raw
+ * JSON and read through [resetsAtEpochMs], so a daemon that one day normalises
+ * it either way cannot fail the whole session list's decode over a field no
+ * row draws.
+ */
+@Serializable
+data class LimitWindow(
+    val usedPercent: Double? = null,
+    val resetsAt: kotlinx.serialization.json.JsonElement? = null,
+) {
+    /** When the window resets, in epoch milliseconds, whichever way the daemon spelled it. */
+    fun resetsAtEpochMs(): Long? {
+        val p = resetsAt as? kotlinx.serialization.json.JsonPrimitive ?: return null
+        if (p.isString) return com.silencelen.huginn.ui.PlanFormat.parseIsoToEpochMs(p.content)
+        val n = p.content.toDoubleOrNull() ?: return null
+        // Seconds until the year 33658; anything that large is already millis.
+        return if (n < 1e12) (n * 1000).toLong() else n.toLong()
+    }
+}
+
+@Serializable
+data class SessionLimits(
+    val fiveHour: LimitWindow? = null,
+    val sevenDay: LimitWindow? = null,
+    val spend: LimitWindow? = null,
+)
+
+/** The run's cost and shape, from the status line's `cost` block. */
+@Serializable
+data class SessionCost(
+    val usd: Double = 0.0,
+    val durationMs: Long = 0,
+    val apiMs: Long = 0,
+    val linesAdded: Int = 0,
+    val linesRemoved: Int = 0,
+)
+
+/**
+ * One row of Claude Code's `/context` table, parsed by the daemon from the
+ * transcript's `local_command` record. [id] is Claude Code's own
+ * (`system_prompt`, `system_tools`, `mcp_tools`, `messages`, `free_space`,
+ * `autocompact_buffer`, …); [kind] is `used` | `free` | `buffer` | `deferred`,
+ * which is what a bar colours by.
+ */
+@Serializable
+data class ContextCategory(
+    val id: String,
+    val name: String,
+    val tokens: Long = 0,
+    val kind: String = "used",
+)
+
+/**
+ * `GET /v1/sessions/:name/context` → `breakdown`. [asOf] is the record's
+ * time in epoch MILLISECONDS; the table is as old as the last `/context` the
+ * session ran, which is what the card's "as of" line and its Refresh are for.
+ */
+@Serializable
+data class ContextBreakdown(
+    val asOf: Long = 0,
+    val categories: List<ContextCategory> = emptyList(),
+    val totalTokens: Long = 0,
+    val maxTokens: Long = 0,
+    val autocompactSource: String? = null,
+)
+
+/** `GET /v1/sessions/:name/context`: the live reading, the model, and the last table if any. */
+@Serializable
+data class SessionContext(
+    val context: ContextUsage? = null,
+    val model: String? = null,
+    val breakdown: ContextBreakdown? = null,
+)
+
+/**
+ * The answer to a request the daemon types through the send queue at the next
+ * turn boundary (`/context` refresh, `/fast on|off`): 202 `queued`, or a 409
+ * carrying why it could not be queued — `busy`, `shell` or `dialog`. The 409 is
+ * an ANSWER here, not a throw: the reason is the whole message.
+ */
+@Serializable
+data class Queued(
+    val queued: Boolean = false,
+    val reason: String? = null,
+)
+
+/**
+ * `GET|PATCH /v1/settings/claude`: the sessions account's Claude Code settings
+ * the daemon lets a client change. Only [fastModeDefault] is writable; the other
+ * two are what the install set and are read back so a client can say so.
+ */
+@Serializable
+data class ClaudeSettings(
+    val fastModeDefault: Boolean = false,
+    val fastModePerSession: Boolean = false,
+    val feedbackOff: Boolean = false,
+)
+
+/**
+ * A chat's fast-mode choice, tri-state: the host default, on, or off. On the
+ * wire it is `fast: null | true | false` (`PATCH /v1/chats/:id`), and the daemon
+ * passes a non-null value to the run as `--settings '{"fastMode":…}'`.
+ */
+enum class ChatFast(val wire: Boolean?) {
+    DEFAULT(null), ON(true), OFF(false);
+
+    companion object {
+        fun of(value: Boolean?): ChatFast = when (value) {
+            null -> DEFAULT
+            true -> ON
+            false -> OFF
+        }
+    }
+}
 
 /**
  * One normalized transcript event. The same shape serves a tmux session and a
@@ -781,6 +950,8 @@ data class Chat(
     @SerialName("sealed") val closed: Boolean = false,
     val endedAt: Long? = null,
     val roundId: String? = null,
+    /** Fast mode for this chat's runs: null = the host default (appd 3.14.0). */
+    val fast: Boolean? = null,
 )
 
 @Serializable
@@ -829,6 +1000,8 @@ data class ChatDetail(
      * double-counted.
      */
     val seq: Long? = null,
+    /** Fast mode for this chat's runs: null = the host default (appd 3.14.0). */
+    val fast: Boolean? = null,
 )
 
 @Serializable

@@ -36,8 +36,8 @@ class SettingsScopeTest {
     fun theSharedThingsAreKeptOnHuginn() {
         for (id in listOf(
             "host.saved-logins", "host.sign-in", "host.sign-out", "chats.quick-actions", "chats.soft-end",
-            "chats.apps", "chats.projects", "notify.host-alerts", "notify.host-alerts-mode", "devices.fleet",
-            "about.host-version",
+            "chats.apps", "chats.projects", "chats.fast-default", "notify.host-alerts", "notify.host-alerts-mode",
+            "devices.fleet", "about.host-version",
         )) {
             assertEquals(SettingScope.SERVER, item(id).scope, id)
         }

@@ -105,7 +105,7 @@ import com.silencelen.huginn.ui.exitRecallIfDiverged
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.MarkdownText
-import com.silencelen.huginn.ui.NewestPill
+import com.silencelen.huginn.ui.BackToBottomPill
 import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.Suggest
 import com.silencelen.huginn.ui.SuggestionChips
@@ -242,6 +242,9 @@ fun ChatView(
     // composer. Null wording is the 3.0.x probe: the menu narrows to Quote.
     val status by (store?.status ?: remember { MutableStateFlow<Status?>(null) }).collectAsState()
     val quickActions = status?.quickActions
+    // Whether this daemon stores a chat's fast-mode choice (appd 3.14.0): the
+    // same probe the Settings row reads, so the option exists exactly where it works.
+    val fastSupported by (store?.claudeSettingsAvailable ?: remember { MutableStateFlow<Boolean?>(null) }).collectAsState()
     val selectionVerbs = rememberSelectionVerbs(store, draftKey, detail?.mode, quickActions)
 
     val events = page?.events ?: emptyList()
@@ -262,7 +265,7 @@ fun ChatView(
     val thumb = remember(chatId) { MutableInteractionSource() }
     // partial.length is what makes a live answer follow: the item count does not
     // change while tokens arrive into the same block.
-    val hasUnseen = FollowNewest(
+    val follow = FollowNewest(
         listState = listState,
         itemCount = itemCount,
         revision = tailRevision(page?.nextOffset, events.size, partial.length, activity, pendingSend),
@@ -321,6 +324,9 @@ fun ChatView(
             onModel = { controller.setOptions(model = it) },
             onEffort = { controller.setOptions(effort = it) },
             onMode = { controller.setOptions(mode = it) },
+            fast = detail?.fast,
+            fastSupported = fastSupported == true,
+            onFast = { controller.setOptions(fast = it) },
             onRename = { controller.rename(it) },
             onDelete = { controller.delete() },
             padPanelOpen = padPanel,
@@ -425,10 +431,12 @@ fun ChatView(
             // scrolling changes — this is a second hand on one wheel, and the
             // follow latch is told when it moves (`thumb`).
             PaneScrollbar(listState, thumb)
-        }
-
-        if (hasUnseen) {
-            NewestPill { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
+            // Floating over the list's bottom edge, not a row under it: a row took
+            // its height out of the viewport as it appeared. "Back to bottom" while
+            // scrolled up, "New messages" once something landed below.
+            BackToBottomPill(follow.away, follow.unseen) {
+                scope.launch { listState.scrollToNewest(itemCount, animate = true) }
+            }
         }
 
         // A suggestion FILLS the composer; it does not send. It yields to typing,

@@ -113,6 +113,8 @@ fun SettingsPhoneScreen(
     val fontScale by vm.fontScale.collectAsStateWithLifecycle()
     val updateState by vm.updateState.collectAsStateWithLifecycle()
     val padsAvailable by vm.scratchpadsAvailable.collectAsStateWithLifecycle()
+    val claudeSettings by vm.claudeSettings.collectAsStateWithLifecycle()
+    val claudeSettingsAvailable by vm.claudeSettingsAvailable.collectAsStateWithLifecycle()
 
     // Machines, and only the ones the sentence is TRUE of: "can run work" is the
     // claude capability, which a serve-only machine does not have.
@@ -133,6 +135,8 @@ fun SettingsPhoneScreen(
         // The two doors' own conditions: ChatsPage draws each only with its route.
         projectsAvailable = onOpenProjects != null,
         appsAvailable = onOpenApps != null,
+        // The row's own condition: the route answered, and the value landed.
+        claudeSettings = if (claudeSettingsAvailable == true) claudeSettings else null,
         alerts = alerts,
         notifyEnabled = notifyEnabled,
         watchEnabled = watchEnabled,
@@ -248,6 +252,8 @@ fun SettingsPhoneScreen(
                         projectCount = projectCount,
                         onOpenApps = onOpenApps,
                         appCount = appCount,
+                        claudeSettings = facts.claudeSettings,
+                        onFastModeDefault = { vm.setFastModeDefault(it) },
                     )
 
                     "notify" -> NotifyPage(

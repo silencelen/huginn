@@ -104,11 +104,102 @@ class FollowTest {
     /** Coming to rest anywhere else leaves them where they put themselves. */
     @Test
     fun settlingAwayFromTheTailChangesNothing() {
-        val away = Follow.State(following = false, unseen = true)
+        val away = Follow.State(following = false, unseen = true, atTail = false)
         assertTrue(
             Follow.settled(away, atTail = false) == away,
             "a scroll that ends short of the tail is not a decision to follow again",
         )
+    }
+
+    // ------------------------------------------- the pill's two readings (2026-10-23)
+
+    /**
+     * "Back to bottom": the reader took the list AND the bottom left the screen.
+     * Both halves, because the latch alone flips at the first wheel tick, before
+     * anything has moved — a reader wheeling down at the very bottom would see
+     * the pill flash on every tick.
+     */
+    @Test
+    fun awayIsTheReaderGoneAndTheTailOutOfView() {
+        var s = Follow.tookControl(Follow.State())
+        assertFalse(s.away, "took the list, but nothing has moved yet: not away")
+        s = Follow.settled(s, atTail = false)
+        assertTrue(s.away, "came to rest with the bottom out of view: away")
+        assertFalse(s.unseen, "and nothing new has arrived, so the pill reads Back to bottom")
+    }
+
+    @Test
+    fun reachingTheTailClearsAway() {
+        val away = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        val back = Follow.settled(away, atTail = true)
+        assertFalse(back.away)
+        assertTrue(back.following)
+    }
+
+    /**
+     * A following reader is off the tail for a frame whenever rows land below
+     * them — and is about to be scrolled to them. The geometry alone would flash
+     * the pill there; the latch half of [Follow.State.away] is what stops it.
+     */
+    @Test
+    fun aFollowingReaderIsNeverAwayWhileRowsLandBelowThem() {
+        var s = Follow.arrived(Follow.State(), grew = true)
+        s = Follow.settled(s, atTail = false) // the new rows measured below the fold
+        assertFalse(s.away, "following: the scroll to them is a frame away")
+        assertTrue(s.following)
+    }
+
+    @Test
+    fun unseenOnlyWhileAway() {
+        val away = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        assertTrue(Follow.arrived(away, grew = true).unseen)
+        assertFalse(Follow.arrived(Follow.State(), grew = true).unseen, "following: nothing is unseen")
+    }
+
+    // ------------------------------------- BUG 6: earlier pages are not news (2026-10-23)
+
+    /**
+     * ⚠ THE BUG: "Load earlier messages" raised the item count, the count read as
+     * new content, and a reader at the top of the transcript got a "New
+     * messages" pill for pages that landed ABOVE them.
+     */
+    @Test
+    fun anEarlierPageLandingAboveAReaderIsNotUnseen() {
+        val reading = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        val s = Follow.arrived(reading, grew = true, prepended = true)
+        assertFalse(s.unseen, "history above the reader is not new messages below them")
+        assertFalse(s.following, "and they are still reading, exactly as before")
+        assertFalse(Follow.scrollsOnArrival(s, prepended = true), "nothing moves")
+    }
+
+    /**
+     * The other half: on a short transcript that still fitted the screen the
+     * reader is FOLLOWING when they ask for history. The page lands above them
+     * and the list keeps them at its end, so they are still at the tail: nothing
+     * scrolls, nothing is announced, and the next real message still comes to
+     * them rather than raising a pill.
+     */
+    @Test
+    fun anEarlierPageWhileFollowingNeitherScrollsNorUnlatches() {
+        val s = Follow.arrived(Follow.State(), grew = true, prepended = true)
+        assertTrue(s.following, "still at the tail: the list kept them at its end")
+        assertFalse(s.unseen)
+        assertFalse(s.away)
+        assertFalse(Follow.scrollsOnArrival(s, prepended = true), "history above is not a reason to scroll")
+        // The next genuinely new row is followed, as it was before the page landed.
+        val next = Follow.arrived(s, grew = true)
+        assertFalse(next.unseen)
+        assertTrue(Follow.scrollsOnArrival(next, prepended = false))
+    }
+
+    /** And without the prepend flag, the same growth is what it always was. */
+    @Test
+    fun aGrowthThatIsNotAPrependStillCounts() {
+        val reading = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        assertTrue(Follow.arrived(reading, grew = true, prepended = false).unseen)
+        assertFalse(Follow.scrollsOnArrival(reading, prepended = false), "away: announced, not jumped to")
+        assertTrue(Follow.arrived(Follow.State(), grew = true, prepended = false).following)
+        assertTrue(Follow.scrollsOnArrival(Follow.State(), prepended = false), "following: scrolled to")
     }
 
     // ---------------------------------------- BUG 5: the re-measure (2026-10-23)

@@ -134,7 +134,14 @@ import com.silencelen.huginn.ui.StreamPickerRow
 import com.silencelen.huginn.ui.statusHeadroomOf
 import com.silencelen.huginn.ui.OverviewDensity
 import com.silencelen.huginn.ui.SessionOverviewView
+import com.silencelen.huginn.data.FastMode
+import com.silencelen.huginn.ui.ContextCardFacts
+import com.silencelen.huginn.ui.ContextCardPresentation
+import com.silencelen.huginn.ui.ContextFormat
 import com.silencelen.huginn.ui.ContextMeter
+import com.silencelen.huginn.ui.ContextMeterCard
+import com.silencelen.huginn.ui.ContextSource
+import com.silencelen.huginn.ui.FastChip
 import com.silencelen.huginn.ui.QuestionLinkBar
 import com.silencelen.huginn.ui.HistoryWalk
 import com.silencelen.huginn.ui.exitRecallIfDiverged
@@ -145,7 +152,7 @@ import com.silencelen.huginn.ui.EdgeFadeRow
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.ModelLabels
-import com.silencelen.huginn.ui.NewestPill
+import com.silencelen.huginn.ui.BackToBottomPill
 import com.silencelen.huginn.ui.onScrollInput
 import com.silencelen.huginn.ui.PromptGate
 import com.silencelen.huginn.ui.PromptPlacement
@@ -310,6 +317,35 @@ fun SessionView(store: AppStore, name: String) {
             // Live pane first (it moves every poll); the list row is the fallback
             // for the instant before the first screen arrives.
             contextPercent = screen?.contextPercent ?: row?.contextPercent,
+            // The status line's readings (appd 3.14.0), for the card behind the
+            // meter; each null on an older daemon, where the percent above is all
+            // there is.
+            contextFacts = ContextCardFacts(
+                usage = screen?.context ?: row?.context,
+                contextPercent = screen?.contextPercent ?: row?.contextPercent,
+                model = screen?.model ?: row?.model ?: screen?.liveModel ?: page?.modelDisplay,
+                effort = screen?.effort ?: row?.effort ?: page?.effort,
+                fast = screen?.fast ?: row?.fast,
+            ),
+            contextSource = remember(name) {
+                ContextSource(
+                    load = { store.client.sessionContext(name) },
+                    refresh = { store.client.refreshSessionContext(name) },
+                )
+            },
+            fast = screen?.fast ?: row?.fast,
+            // Queued, like /compact: the daemon types /fast at the next turn
+            // boundary, and a 409 says why it cannot — which is the message.
+            onFast = { on ->
+                viewScope.launch {
+                    runCatching { store.client.setSessionFast(name, on) }
+                        .onSuccess { q ->
+                            if (q.queued) store.noteAction("fast mode ${if (on) "on" else "off"} · after this turn")
+                            else store.noteAction(ContextFormat.refreshNote(false, q.reason))
+                        }
+                        .onFailure { store.noteError(it) }
+                }
+            },
             compacting = screen?.compacting ?: row?.compacting ?: false,
             leased = controller.leasedHere && screen?.sizeLeased == true,
             cols = screen?.width,
@@ -530,6 +566,12 @@ private fun SessionHeader(
     state: String?,
     branch: String?,
     contextPercent: Int?,
+    /** What the card behind the meter shows, and how it reads the breakdown. */
+    contextFacts: ContextCardFacts = ContextCardFacts(contextPercent = contextPercent),
+    contextSource: ContextSource? = null,
+    /** Fast mode as the status line reports it; null hides the chip (older daemon). */
+    fast: FastMode? = null,
+    onFast: (Boolean) -> Unit = {},
     compacting: Boolean,
     leased: Boolean,
     cols: Int?,
@@ -628,9 +670,21 @@ private fun SessionHeader(
             if (compacting) CompactingChip(Modifier.padding(end = 10.dp))
             // "Context window used" — the readout Claude auto-compacts against; sits
             // with the other status marks, only when the host reported a percentage.
-            if (contextPercent != null) {
+            // Clicking it opens the card: the table behind the figure (appd 3.14.0).
+            if (contextPercent != null || contextFacts.usage != null) {
                 Tip("Context window used") {
-                    ContextMeter(contextPercent, Modifier.padding(end = 10.dp))
+                    if (contextSource != null) {
+                        ContextMeterCard(
+                            name = name,
+                            source = contextSource,
+                            facts = contextFacts,
+                            nowMs = nowMs,
+                            presentation = ContextCardPresentation.POPUP,
+                            modifier = Modifier.padding(end = 10.dp),
+                        )
+                    } else {
+                        ContextMeter(contextPercent, Modifier.padding(end = 10.dp))
+                    }
                 }
             }
             // Geometry only matters while WE are holding the window to our shape —
@@ -651,6 +705,17 @@ private fun SessionHeader(
             if (headroom != null && !cramped) {
                 Tip("Whether huginn types this session's resume phrase when the window resets") {
                     AutoResumeChip(headroom.autoResume, onAutoResume)
+                }
+            }
+            // Fast mode, beside the pickers it belongs with: a per-session fact
+            // the status line reports (appd 3.14.0). Absent on an older daemon;
+            // disabled with Claude Code's own reason when it says unavailable.
+            if (fast != null && !cramped) {
+                Tip(
+                    if (!fast.available) fast.reason ?: "Fast mode is not available for this session"
+                    else "Fast mode for this session · typed as /fast at the next turn",
+                ) {
+                    FastChip(fast, onToggle = onFast, modifier = Modifier.padding(start = 6.dp))
                 }
             }
             // Permission mode has no slash command that sets it; Shift+Tab cycles it,
@@ -953,7 +1018,13 @@ private fun ConversationTab(
     // The scrollbar's thumb moves the list without the list seeing an event, so
     // the latch is handed its drags too (shared with PaneScrollbar below).
     val thumb = remember(followKey) { MutableInteractionSource() }
-    val unseen = FollowNewest(listState, itemCount, revision, key = followKey, scrolls = scrolls, scrollbar = thumb)
+    // `prepends` is the window's start, which moves only when "Load earlier"
+    // lands a page above the reader — a growth that comes with it is history,
+    // not news (Follow.arrived, bug 6).
+    val follow = FollowNewest(
+        listState, itemCount, revision, key = followKey, scrolls = scrolls, scrollbar = thumb,
+        prepends = current.windowStart,
+    )
 
     // A refresh that started failing after a page landed is a banner, not a
     // replacement: the transcript already on screen is still the best thing known.
@@ -1031,13 +1102,14 @@ private fun ConversationTab(
             // keyboard and every scrollToNewest keep working exactly as they did;
             // the follower is told when the thumb moves it (`thumb`).
             PaneScrollbar(listState, thumb)
-        }
-        // Scrolling back to read something older must not look like the app has
-        // stopped following: without this the reader cannot tell "nothing new" from
-        // "not following". The pill lands with the SAME scroll the follower uses,
-        // or the latch never re-arms and the pill sticks.
-        if (unseen) {
-            NewestPill { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
+            // Scrolling back to read something older must not look like the app has
+            // stopped following: without this the reader cannot tell "nothing new"
+            // from "not following". Floating over the list rather than a row under
+            // it, and landing with the SAME scroll the follower uses, or the latch
+            // never re-arms and the pill sticks.
+            BackToBottomPill(follow.away, follow.unseen) {
+                scope.launch { listState.scrollToNewest(itemCount, animate = true) }
+            }
         }
     }
 }

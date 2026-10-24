@@ -415,6 +415,8 @@ fun ColumnScope.ChatsPage(store: AppStore, mark: String?) {
     val appsAvailable by store.appsAvailable.collectAsState()
     val projects by store.projects.collectAsState()
     val apps by store.apps.collectAsState()
+    val claudeSettings by store.claudeSettings.collectAsState()
+    val claudeSettingsAvailable by store.claudeSettingsAvailable.collectAsState()
 
     // All of it is kept on huginn: the wording, the phrase, the pages it hosts.
     ScopeOf("chats.quick-actions", store)
@@ -487,6 +489,23 @@ fun ColumnScope.ChatsPage(store: AppStore, mark: String?) {
             highlighted = SettingsRowStyle.isHighlighted("chats.apps", mark),
             modifier = revealMark("chats.apps").padding(top = 10.dp),
             trailingText = if (apps.apps.isEmpty()) "none" else "${apps.apps.size}",
+        )
+    }
+
+    // The one Claude Code setting the daemon writes for the sessions account
+    // (appd 3.14.0). Drawn only where the route answers — the same fact the
+    // catalog gates the row on — and written straight through: the value shown
+    // is the daemon's answer, never a local flip.
+    if (claudeSettingsAvailable == true) {
+        val fastDefault = claudeSettings?.fastModeDefault == true
+        SettingsToggleRow(
+            id = "chats.fast-default",
+            title = "Fast mode by default for new sessions",
+            checked = fastDefault,
+            onCheckedChange = { on -> scope.launch { store.setFastModeDefault(on) } },
+            summary = "Whether a session starts in Claude Code's fast mode. A session can still turn it on or off for itself.",
+            highlighted = SettingsRowStyle.isHighlighted("chats.fast-default", mark),
+            modifier = revealMark("chats.fast-default").padding(top = 10.dp),
         )
     }
 }

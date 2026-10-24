@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.ui.chatMessagesGone
 import com.silencelen.huginn.data.ChatDetail
+import com.silencelen.huginn.data.ChatFast
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
@@ -316,9 +317,9 @@ class ChatController(
      * An empty string clears the field back to the host's default, which is why
      * these are `String?` (absent) rather than blank meaning absent.
      */
-    fun setOptions(model: String? = null, effort: String? = null, mode: String? = null) {
+    fun setOptions(model: String? = null, effort: String? = null, mode: String? = null, fast: ChatFast? = null) {
         scope.launch {
-            runCatching { client.updateChat(chatId, model = model, effort = effort, mode = mode) }
+            runCatching { client.updateChat(chatId, model = model, effort = effort, mode = mode, fast = fast) }
                 .onSuccess { _detail.value = it }
                 .onFailure { _notice.value = it.message ?: "could not change that" }
         }

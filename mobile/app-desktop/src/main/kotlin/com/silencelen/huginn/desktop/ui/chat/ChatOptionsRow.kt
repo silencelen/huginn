@@ -23,7 +23,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.ChatFast
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.ui.ChatFastLabels
 import com.silencelen.huginn.ui.ModelLabels
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
@@ -57,6 +59,11 @@ fun ChatOptionsRow(
     onModel: (String) -> Unit,
     onEffort: (String) -> Unit,
     onMode: (String) -> Unit,
+    /** The chat's fast-mode choice: null is the host default (appd 3.14.0). */
+    fast: Boolean? = null,
+    /** The daemon serves `/v1/settings/claude`, so a PATCH with `fast` will be honoured. */
+    fastSupported: Boolean = false,
+    onFast: (ChatFast) -> Unit = {},
 ) {
     val localNow = ModelLabels.isLocal(model, models)
     Row(
@@ -83,6 +90,17 @@ fun ChatOptionsRow(
                 options = ModelLabels.effortOptions() + (CLEAR to "Host default"),
                 enabled = enabled,
                 onPick = onEffort,
+            )
+        }
+        // Fast mode, tri-state like the model and effort: the host default, on, or
+        // off. Only against a daemon that stores it, and never for a local model,
+        // which has no fast mode to be in.
+        if (fastSupported && !localNow) {
+            OptionPickerChip(
+                label = ChatFastLabels.label(fast),
+                options = ChatFastLabels.options(),
+                enabled = enabled,
+                onPick = { onFast(ChatFastLabels.choice(it)) },
             )
         }
         if (localNow) {

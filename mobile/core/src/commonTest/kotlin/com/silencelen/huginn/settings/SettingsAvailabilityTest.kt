@@ -2,6 +2,7 @@ package com.silencelen.huginn.settings
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -25,7 +26,7 @@ class SettingsAvailabilityTest {
         savedAccounts = 3, diagnostics = true, selfUpdate = true, keepAwake = true,
         accountSwitchOn = true, deviceOn = true, workScope = true, coreInstalled = true,
         apps = true, projects = true, signedIn = true, alertsRelayOn = true,
-        deviceNotify = true, pushKnown = true, appLockOn = true, terminalChoice = true,
+        deviceNotify = true, pushKnown = true, appLockOn = true, terminalChoice = true, claudeSettings = true,
     )
 
     /**
@@ -104,8 +105,9 @@ class SettingsAvailabilityTest {
     @Test
     fun quickActionsNeedTheDaemonsTemplates() {
         // A daemon from before the templates is from before Apps and Projects
-        // too, which now answer to their own routes rather than to this shelf.
-        val old = all.copy(quickActions = false, apps = false, projects = false)
+        // too, which now answer to their own routes rather than to this shelf —
+        // and from before the Claude-settings route (appd 3.14.0).
+        val old = all.copy(quickActions = false, apps = false, projects = false, claudeSettings = false)
         assertTrue(SettingsCatalog.itemsOf("chats", old, Surface.DESKTOP).isEmpty())
         assertTrue("chats" !in SettingsCatalog.visibleCategories(old, Surface.DESKTOP).map { it.id })
     }
@@ -295,6 +297,22 @@ class SettingsAvailabilityTest {
         val dead = SettingsProbe(deviceNotify = true, pushKnown = true)
         val ids = shown("notify", dead, Surface.PHONE)
         assertTrue(ids.containsAll(listOf("notify.device-watch", "notify.background", "notify.permission", "notify.delivery")), "$ids")
+    }
+
+    /**
+     * The one row that writes the sessions account's Claude Code settings exists
+     * only where the daemon serves the route (appd 3.14.0): on an older host the
+     * row is gone, not greyed, and the drawer keeps its other rows.
+     */
+    @Test
+    fun fastModeDefaultNeedsTheClaudeSettingsRoute() {
+        val without = all.copy(claudeSettings = false)
+        assertFalse("chats.fast-default" in shown("chats", without, Surface.PHONE))
+        assertFalse("chats.fast-default" in shown("chats", without, Surface.DESKTOP))
+        assertTrue("chats.quick-actions" in shown("chats", without, Surface.PHONE), "the drawer itself stays")
+        assertTrue("chats.fast-default" in shown("chats", all, Surface.PHONE))
+        assertTrue("chats.fast-default" in shown("chats", all, Surface.DESKTOP))
+        assertEquals("chats.fast-default", shown("chats", all, Surface.DESKTOP).last(), "added at the end of its category")
     }
 
     /**

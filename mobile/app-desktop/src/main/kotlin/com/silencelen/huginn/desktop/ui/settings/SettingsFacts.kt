@@ -63,6 +63,8 @@ data class SettingsFacts(
     val projectsAvailable: Boolean = false,
     /** This OS has more than one terminal to open a session in (`TerminalLaunch.offersChoice`). */
     val terminalChoice: Boolean = false,
+    /** The host serves `/v1/settings/claude` (appd 3.14.0) — `AppStore.claudeSettingsAvailable`. */
+    val claudeSettingsAvailable: Boolean = false,
 )
 
 /**
@@ -116,6 +118,7 @@ fun desktopProbe(f: SettingsFacts): SettingsProbe {
         projects = f.projectsAvailable,
         // The Appearance page draws the Terminal row under the same fact.
         terminalChoice = f.terminalChoice,
+        claudeSettings = f.claudeSettingsAvailable,
     )
 }
 

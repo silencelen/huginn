@@ -1,13 +1,20 @@
 package com.silencelen.huginn.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.InteractionSource
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,13 +37,16 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -78,8 +88,21 @@ object Follow {
     /**
      * @param following locked on: every content change scrolls to the newest.
      * @param unseen something new arrived while the reader was away — the pill.
+     * @param atTail the list as last measured: is the end of the content on
+     *   screen? Recorded by [settled] on every change, so [away] can be read
+     *   without asking the list again.
      */
-    data class State(val following: Boolean = true, val unseen: Boolean = false)
+    data class State(val following: Boolean = true, val unseen: Boolean = false, val atTail: Boolean = true) {
+        /**
+         * Scrolled off the tail: the reader left AND the bottom is out of view —
+         * the "Back to bottom" pill. Both halves on purpose. The latch alone
+         * flips off at the first wheel tick, before the list has moved, so a
+         * reader wheeling down AT the bottom would see the pill flash on every
+         * tick; the geometry alone goes off-tail for a frame whenever rows land
+         * below a following reader, who is about to be scrolled to them.
+         */
+        val away: Boolean get() = !following && !atTail
+    }
 
     /**
      * The reader took the list: a finger on it, or a wheel/trackpad tick.
@@ -95,7 +118,7 @@ object Follow {
      * really left, so following re-arms and the pill goes with it.
      */
     fun settled(s: State, atTail: Boolean): State =
-        if (atTail) State(following = true, unseen = false) else s
+        if (atTail) State(following = true, unseen = false, atTail = true) else s.copy(atTail = false)
 
     /**
      * Content changed: while following this stays following and the caller
@@ -103,9 +126,31 @@ object Follow {
      *
      * @param grew a genuinely new ROW, as against text growing into the one that
      *   is already at the bottom — a stream of tokens is not "new messages".
+     * @param prepended the rows that arrived landed at the TOP: an earlier page
+     *   of history the reader asked for. That is neither news below the fold nor
+     *   a reason to move: the state is left exactly as it was, and
+     *   [scrollsOnArrival] says no. ⚠ BUG 6 (2026-10-23): "Load earlier
+     *   messages" raised the count, the count read as new content, and a reader
+     *   at the top got a "New messages" pill for pages above them.
+     *
+     *   Following is NOT ended by a prepend. The only reader who is following
+     *   when history lands is one whose whole transcript fitted the screen, and
+     *   the list keeps them at its end (it fills the viewport from the bottom
+     *   when the content overflows) — so they are still at the tail, and the
+     *   next real message should still come to them rather than raise a pill.
      */
-    fun arrived(s: State, grew: Boolean): State =
-        if (!s.following && grew) s.copy(unseen = true) else s
+    fun arrived(s: State, grew: Boolean, prepended: Boolean = false): State = when {
+        prepended -> s
+        !s.following && grew -> s.copy(unseen = true)
+        else -> s
+    }
+
+    /**
+     * Whether the caller scrolls to the newest after [arrived]: while following,
+     * and never for a prepend — the rows that landed are above the reader, and
+     * the bottom of the list is not where they asked to go.
+     */
+    fun scrollsOnArrival(s: State, prepended: Boolean): Boolean = s.following && !prepended
 
     /**
      * The list as measured, with where it is scrolled to taken out: the
@@ -167,7 +212,12 @@ object Follow {
  *   list sees, so without this a reader who scrolled up by the thumb was still
  *   "following" — and the next token, or a strip arriving under the list, put
  *   them back at the tail. Its drags count exactly as the list's own do.
- * @return true when new content arrived while the reader had scrolled away.
+ * @param prepends changes when rows were added at the TOP — the page's
+ *   `windowStart`, which only moves when an earlier page lands. A growth that
+ *   arrives with a change here is history, not news: see [Follow.arrived]'s
+ *   `prepended`. Leave it null for a list that never pages backwards.
+ * @return the latch's state: [Follow.State.away] and [Follow.State.unseen] are
+ *   what the pill reads.
  */
 @Composable
 fun FollowNewest(
@@ -177,10 +227,12 @@ fun FollowNewest(
     key: Any?,
     scrolls: State<Int> = remember { mutableStateOf(0) },
     scrollbar: InteractionSource? = null,
-): Boolean {
+    prepends: Any? = null,
+): Follow.State {
     var opened by remember(key) { mutableStateOf(false) }
     var state by remember(key) { mutableStateOf(Follow.State()) }
     var lastCount by remember(key) { mutableStateOf(0) }
+    var lastPrepends by remember(key) { mutableStateOf(prepends) }
     // Content arrived (or the conversation opened) within SETTLE_MS: a row that
     // changes height now is that content still laying out. See Follow.relaid.
     var settling by remember(key) { mutableStateOf(true) }
@@ -258,7 +310,11 @@ fun FollowNewest(
         }
     }
 
-    LaunchedEffect(key, itemCount, revision) {
+    // `prepends` is a key too, so a change there is consumed by THIS run and can
+    // never be left over to misread the next real arrival as history.
+    LaunchedEffect(key, itemCount, revision, prepends) {
+        val prepended = prepends != lastPrepends
+        lastPrepends = prepends
         if (itemCount <= 0) return@LaunchedEffect
         settling = true
         try {
@@ -269,8 +325,8 @@ fun FollowNewest(
             } else {
                 val grew = itemCount > lastCount
                 lastCount = itemCount
-                state = Follow.arrived(state, grew)
-                if (state.following) {
+                state = Follow.arrived(state, grew, prepended)
+                if (Follow.scrollsOnArrival(state, prepended)) {
                     // Animate a genuinely new row; jump for a growing one, where an
                     // animation restarted on every token would never finish.
                     listState.scrollToNewest(itemCount, animate = grew)
@@ -287,7 +343,7 @@ fun FollowNewest(
         settling = false
     }
 
-    return state.unseen
+    return state
 }
 
 /** How long a wheel tick is given to actually start scrolling before it counts as one that moved nothing. */
@@ -367,26 +423,48 @@ suspend fun LazyListState.scrollToNewest(itemCount: Int, animate: Boolean) {
 }
 
 /**
- * Shown when new content arrived while the reader was scrolled up. Without it,
- * deliberately scrolling back to read something older looks like the app has
- * stopped following — the reader cannot tell "nothing new" from "not following".
+ * The way back to the newest, floating over the bottom of the list — one pill
+ * for both apps, chats and sessions.
+ *
+ * It reads "Back to bottom" while the reader is [away] (scrolled off the tail)
+ * and "New messages" once something arrived below them ([unseen]), and shows
+ * nothing while they are following. Without the first the reader cannot tell
+ * "nothing new" from "not following"; without the second a deliberate scroll
+ * up to re-read looked like the app had stopped.
+ *
+ * FLOATING, in a [BoxScope] over the list, not a row in the column under it: a
+ * row took its height out of the viewport when it appeared, which moved the
+ * very rows the reader was looking at. Lands with [scrollToNewest] — the same
+ * landing the follower uses, or the latch never re-arms and the pill sticks.
+ *
+ * A routine pill, not the one filled button on the screen (that is Send):
+ * tier 4 with a hairline, the house arrow, label type.
  */
 @Composable
-fun NewestPill(onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
+fun BoxScope.BackToBottomPill(
+    away: Boolean,
+    unseen: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    AnimatedVisibility(
+        visible = away || unseen,
+        modifier = modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        // BRAND.md section 6: arrivals cubic-bezier(0.2, 0, 0, 1), departures
+        // ease-in, both inside the 150–400 ms band, no overshoot.
+        enter = fadeIn(tween(PILL_IN_MS, easing = ARRIVE)) + slideInVertically(tween(PILL_IN_MS, easing = ARRIVE)) { it / 2 },
+        exit = fadeOut(tween(PILL_OUT_MS, easing = DEPART)) + slideOutVertically(tween(PILL_OUT_MS, easing = DEPART)) { it / 2 },
     ) {
         Surface(
-            // A routine pill, not the one filled button on the screen (that is Send).
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             contentColor = MaterialTheme.colorScheme.onSurface,
             shape = CircleShape,
-            modifier = Modifier.clip(CircleShape).clickable(onClick = onClick),
+            border = BorderStroke(1.dp, LocalHuginnColors.current.outlineHairline),
+            modifier = Modifier.clip(CircleShape).clickable(onClick = onClick).testTag(BACK_TO_BOTTOM_TAG),
         ) {
             Row(
                 Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
                     Icons.Filled.ArrowDownward,
@@ -396,7 +474,7 @@ fun NewestPill(onClick: () -> Unit) {
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "New messages",
+                    if (unseen) NEW_MESSAGES else BACK_TO_BOTTOM,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -405,3 +483,13 @@ fun NewestPill(onClick: () -> Unit) {
         }
     }
 }
+
+/** The pill's testTag and its two readings, for the shells' tests. */
+const val BACK_TO_BOTTOM_TAG: String = "backToBottom"
+const val BACK_TO_BOTTOM: String = "Back to bottom"
+const val NEW_MESSAGES: String = "New messages"
+
+private const val PILL_IN_MS = 200
+private const val PILL_OUT_MS = 150
+private val ARRIVE = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+private val DEPART = CubicBezierEasing(0.4f, 0f, 1f, 1f)
