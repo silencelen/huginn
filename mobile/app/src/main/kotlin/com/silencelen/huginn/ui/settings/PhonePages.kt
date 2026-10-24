@@ -30,6 +30,9 @@ import com.silencelen.huginn.notify.DeliveryCopy
 import com.silencelen.huginn.ui.HeadroomSettingsSection
 import com.silencelen.huginn.ui.HuginnViewModel
 import com.silencelen.huginn.ui.agoWordsMs
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.Surface as SettingsSurface
+import com.silencelen.huginn.settings.scopeOn
 import kotlin.math.roundToInt
 
 /**
@@ -42,20 +45,27 @@ import kotlin.math.roundToInt
  * there was nowhere for a new setting to be crowded OUT of.
  *
  * ⚠ NO INLINE `titleMedium` HEADERS. The nine the old screen drew are deleted;
- * the drawer's own title is the heading, and [SettingsGroup] is a small label
- * for the two named groups inside *Notifications* — "From huginn" and "From this
- * phone" — which are the only place a second level was ever earning its keep.
+ * the drawer's own title is the heading. The one small label a page has says
+ * where the rows under it are KEPT ([ScopeOf]).
  */
 
-/** The one small caption a page is allowed. Never a heading. */
+/**
+ * Where the rows that follow are kept — on huginn for every app, or on this
+ * phone alone — as the muted caption under which every phone page groups them.
+ *
+ * ⚠ IT NAMES A ROW, NOT A SCOPE (2026-10-23, the desktop's rule brought here).
+ * The words are the catalog's ([SettingScope.heading] on the phone) for the
+ * catalog's answer about [firstId], so a page cannot file a row under a scope
+ * the catalog does not give it, and the two clients use the same words. It
+ * replaced the captions this file used to write by hand: "From huginn" and
+ * "From this phone" on Notifications, "Connection" and "Claude logins" on Host
+ * & sign-in, which drew the same line in the same place. `PhoneScopeHeadingsTest`
+ * walks the pages and checks every row against the caption above it.
+ */
 @Composable
-fun SettingsGroup(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(top = 14.dp, bottom = 2.dp, start = 8.dp),
-    )
+fun ScopeOf(firstId: String) {
+    val item = SettingsCatalog.item(firstId) ?: return
+    SettingsScopeLabel(item.scopeOn(SettingsSurface.PHONE), SettingsSurface.PHONE)
 }
 
 /** The muted meta line. The same weight as the summaries, so it reads as one. */
@@ -91,6 +101,8 @@ fun UsagePage(
     onOpenStatus: () -> Unit,
     highlight: String?,
 ) {
+    // Every rule here is kept on huginn: one caption for all of it.
+    ScopeOf("usage.plan")
     SettingsNavRow(
         id = "usage.plan",
         title = "Plan usage",
@@ -147,6 +159,8 @@ fun ChatsPage(
     onOpenApps: (() -> Unit)? = null,
     appCount: Int = 0,
 ) {
+    // The wording, the phrase and the pages huginn hosts: all kept on huginn.
+    ScopeOf("chats.soft-end")
     if (quickActions != null) {
         // NO SUMMARY. The editor immediately below carries the one blurb
         // (QUICK_ACTIONS_BLURB in `:ui`, shared with the desktop); a paraphrase of
@@ -231,11 +245,13 @@ internal fun hostAlertsSummary(al: Alerts): String {
  * Two mechanisms, named as two groups, because they were two switches one word
  * apart with nothing saying they were different things.
  *
- * "From huginn" is the host reaching you — by push, and over its alert relay
+ * Under "On huginn" is the host reaching you — by push, and over its alert relay
  * when one is set up — with this app closed, which is most of the time, so it is
- * listed first. "From this phone" is
- * this client's own notifications, which need Android's permission, an exemption
- * from Doze, and either a push or a background check to carry them.
+ * listed first; it is set on huginn, so every app sees the same switch. Under
+ * "This phone" is this client's own notifications, which need Android's
+ * permission, an exemption from Doze, and either a push or a background check to
+ * carry them. The two captions were "From huginn" and "From this phone" until
+ * every page said where its settings are kept ([ScopeOf]); the split is the same.
  */
 @Composable
 fun NotifyPage(
@@ -258,7 +274,7 @@ fun NotifyPage(
     highlight: String?,
 ) {
     alerts?.let { al ->
-        SettingsGroup("From huginn")
+        ScopeOf("notify.host-alerts")
         SettingsToggleRow(
             id = "notify.host-alerts",
             title = "Message me when a session needs me",
@@ -292,7 +308,7 @@ fun NotifyPage(
         }
     }
 
-    SettingsGroup("From this phone")
+    ScopeOf("notify.device-watch")
     SettingsToggleRow(
         id = "notify.device-watch",
         title = "Tell me when a session needs me",
@@ -463,6 +479,7 @@ internal fun witnessWords(atMs: Long, nowMs: Long): String =
  */
 @Composable
 fun DevicesPage(deviceCount: Int, servingCount: Int, onOpenFleet: () -> Unit, highlight: String?) {
+    ScopeOf("devices.fleet")
     SettingsNavRow(
         id = "devices.fleet",
         title = "Machines",
@@ -495,6 +512,7 @@ fun PrivacyPage(
     onLockNow: () -> Unit,
     highlight: String?,
 ) {
+    ScopeOf("privacy.app-lock")
     SettingsToggleRow(
         id = "privacy.app-lock",
         title = "Lock the app",
@@ -546,6 +564,7 @@ fun PrivacyPage(
 @Composable
 fun AppearancePage(fontScale: Float, onFontScale: (Float) -> Unit, highlight: String?) {
     var live by remember(fontScale) { mutableFloatStateOf(fontScale) }
+    ScopeOf("appearance.terminal-text-size")
     SettingsReadOnlyRow(
         id = "appearance.terminal-text-size",
         title = "Terminal text size",
@@ -580,6 +599,9 @@ fun AppearancePage(fontScale: Float, onFontScale: (Float) -> Unit, highlight: St
 
 @Composable
 fun AboutPage(appVersion: String, appdVersion: String?, repo: String, highlight: String?) {
+    // This phone's three facts, then the one about huginn: grouped by where each
+    // comes from, as every other page is.
+    ScopeOf("about.version")
     SettingsReadOnlyRow(
         id = "about.version",
         title = "Version",
@@ -589,13 +611,6 @@ fun AboutPage(appVersion: String, appdVersion: String?, repo: String, highlight:
         // number reads as the other's to anyone who has not internalised that.
         summary = "This app.",
         highlighted = SettingsRowStyle.isHighlighted("about.version", highlight),
-    )
-    SettingsReadOnlyRow(
-        id = "about.host-version",
-        title = "Host version",
-        value = appdVersion?.takeIf { it.isNotBlank() } ?: "not answering",
-        summary = "The huginn daemon this app is talking to. It versions separately from the app.",
-        highlighted = SettingsRowStyle.isHighlighted("about.host-version", highlight),
     )
     SettingsReadOnlyRow(
         id = "about.repo",
@@ -611,5 +626,13 @@ fun AboutPage(appVersion: String, appdVersion: String?, repo: String, highlight:
             "headless turns in huginn's working directory; sessions are the real tmux sessions, " +
             "so one you open here is the same one your laptop attaches to.",
         highlighted = SettingsRowStyle.isHighlighted("about.what-this-is", highlight),
+    )
+    ScopeOf("about.host-version")
+    SettingsReadOnlyRow(
+        id = "about.host-version",
+        title = "Host version",
+        value = appdVersion?.takeIf { it.isNotBlank() } ?: "not answering",
+        summary = "The huginn daemon this app is talking to. It versions separately from the app.",
+        highlighted = SettingsRowStyle.isHighlighted("about.host-version", highlight),
     )
 }

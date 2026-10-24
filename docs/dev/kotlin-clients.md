@@ -240,10 +240,12 @@ the arrival mark come from the catalog; the pages are written by hand in each sh
   same fact the page reads. Otherwise search offers the row onto a page that hides it.
 - **Every item says where it is kept** (`SettingScope`, no default): `SERVER` on huginn, so every
   app sees it; `CORE` by huginn core on this computer, desktop only; `DEVICE` by this app on this
-  device. The desktop pages head each run of rows with `ScopeOf(id)`, which reads it.
+  device. Both apps' pages head each run of rows with `ScopeOf(id)`, which reads it, in the
+  catalog's words ("This app" on the desktop, "This phone" on the phone).
 - `SettingsPagesTest` in `:app-desktop` types every row's title into the real search, opens the
-  hit, and checks that the page draws the row under the right heading. `SettingsPhoneTest` holds
-  the phone's conditions; its pages cannot be rendered on the JVM.
+  hit, and checks that the page draws the row under the right heading. The phone's pages cannot be
+  rendered on the JVM, so `PhoneScopeHeadingsTest` reads their source in order for the same check,
+  and `SettingsPhoneTest` holds their conditions.
 
 ## Compose rules
 

@@ -39,6 +39,7 @@ fun UpdatesPage(
     onCopyDiagnostics: () -> Unit,
     highlight: String?,
 ) {
+    ScopeOf("updates.check")
     val updateHighlighted = SettingsRowStyle.isHighlighted("updates.check", highlight)
     when (state) {
         is AppUpdateState.Idle -> SettingsActionRow(

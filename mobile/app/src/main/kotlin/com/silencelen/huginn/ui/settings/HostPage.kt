@@ -67,7 +67,9 @@ fun HostPage(
     var reveal by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
 
-    SettingsGroup("Connection")
+    // This phone's own way in: its routes, its token. (Captioned "Connection"
+    // until every page said where its settings are kept — see ScopeOf.)
+    ScopeOf("host.route")
 
     SettingsRouteListRow(
         book = routeBook,
@@ -126,7 +128,9 @@ fun HostPage(
         highlighted = SettingsRowStyle.isHighlighted("host.connect", highlight),
     )
 
-    SettingsGroup("Claude logins")
+    // The logins are huginn's, shared by every app: the editor's own first line
+    // still names them. (Captioned "Claude logins" until the same change.)
+    ScopeOf("host.saved-logins")
     // The whole accounts product in one call: the list, the freshness, Use,
     // Refresh, Forget, the three-step add-login and every refusal the daemon
     // answers with. Nothing of it is duplicated here.

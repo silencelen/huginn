@@ -101,11 +101,13 @@ fun SettingsStateDot(color: Color) {
  * Where the rows under it are kept: on huginn for every app, by huginn core on
  * this computer, or by this app alone ([SettingScope]).
  *
- * THE PHONE'S OWN GROUP LABEL, not a new mark: its Notifications page already
- * splits "From huginn" from "From this phone" with exactly this muted line, and
- * the scope is the same question asked of every page. A word above a run of
- * rows rather than a badge on each one — the page reads as two or three groups
- * instead of every row repeating where it lives. No colour, no rule, no bar.
+ * THE PHONE'S OWN GROUP LABEL, not a new mark: its Notifications page split
+ * "From huginn" from "From this phone" with exactly this muted line, and the
+ * scope is the same question asked of every page — so both clients now draw
+ * this one, on every page, and those captions are its words. A word above a run
+ * of rows rather than a badge on each one — the page reads as two or three
+ * groups instead of every row repeating where it lives. No colour, no rule, no
+ * bar.
  *
  * The words are [heading]'s, from `:core`, and the testTag is [scopeTag], which
  * is how a page test checks every row sits under its own scope.
