@@ -112,11 +112,50 @@ fi
 [ "$(stat -c %a "$H/.tmux.conf" 2>/dev/null)" = 644 ] && [ "$(stat -c %a "$H/.claude/settings.json" 2>/dev/null)" = 644 ] \
   && ok "both written 0644, as a plain copy under umask 022 always was" \
   || bad "modes: .tmux.conf $(stat -c %a "$H/.tmux.conf" 2>/dev/null), settings.json $(stat -c %a "$H/.claude/settings.json" 2>/dev/null)"
+# The status line and the settings Huginn relies on (server/claude-settings.jq).
+S="$H/.claude/settings.json"
+[ "$(jq -r '.statusLine.command' "$S")" = /usr/local/bin/huginn-statusline ] && [ "$(jq -r '.statusLine.type' "$S")" = command ] \
+  && ok "a fresh home gets Huginn's status line, with nothing chained after it" \
+  || bad "the status line on a fresh home: $(jq -c .statusLine "$S")"
+[ "$(jq -c '[.feedbackSurveyRate, .feedbackDrafts, .env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY, .fastModePerSessionOptIn]' "$S")" = '[0,"off","1",true]' ] \
+  && ok "and the fast-mode and feedback defaults" \
+  || bad "the defaults on a fresh home: $(jq -c . "$S")"
 cp "$H/.claude/settings.json" "$T/first.json"
 OUT="$(run_block setup-block.sh "$H")"; RC=$?
 cmp -s "$T/first.json" "$H/.claude/settings.json" && [ ! -e "$H/.tmux.conf.pre-huginn" ] \
   && ok "a second run changes nothing and backs nothing up" \
   || bad "the second run (exit $RC) changed something: $OUT"
+# A status line and settings of the owner's own: chained, kept, and not chained twice.
+H2="$T/homes/own-status"; mkdir -p "$H2/.claude"
+printf '%s\n' '{"statusLine":{"type":"command","command":"bash ~/.claude/mine.sh --short","padding":1},"feedbackSurveyRate":1,"env":{"MCP_TIMEOUT":"5"}}' > "$H2/.claude/settings.json"
+OUT="$(run_block setup-block.sh "$H2")"; RC=$?
+S2="$H2/.claude/settings.json"
+[ "$(jq -r '.statusLine.command' "$S2")" = "/usr/local/bin/huginn-statusline -- 'bash ~/.claude/mine.sh --short'" ] \
+  && [ "$(jq -r '.statusLine.padding' "$S2")" = 1 ] \
+  && ok "an existing status line is kept, chained after Huginn's, and its padding stays" \
+  || bad "chaining (exit $RC): $(jq -c .statusLine "$S2") / $OUT"
+[ "$(jq -c '[.feedbackSurveyRate, .feedbackDrafts, .env]' "$S2")" = '[1,"off",{"MCP_TIMEOUT":"5","CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":"1"}]' ] \
+  && ok "a value the owner set is kept; the absent ones are added beside it" \
+  || bad "defaults beside the owner's: $(jq -c . "$S2")"
+cp "$S2" "$T/chained.json"
+OUT="$(run_block setup-block.sh "$H2")"; RC=$?
+cmp -s "$T/chained.json" "$S2" && ok "a re-run does not chain Huginn's status line to itself" \
+  || bad "the re-run changed the chained status line (exit $RC): $(jq -c .statusLine "$S2")"
+OUT="$(run_block uninstall-block.sh "$H2")"; RC=$?
+[ "$(jq -r '.statusLine.command' "$S2")" = 'bash ~/.claude/mine.sh --short' ] && [ "$(jq -r '.statusLine.padding' "$S2")" = 1 ] \
+  && [ "$(jq -c '[.feedbackSurveyRate, .feedbackDrafts, .fastModePerSessionOptIn]' "$S2")" = '[1,"off",true]' ] \
+  && ok "uninstall puts the previous status line back and leaves the fast-mode and feedback keys" \
+  || bad "uninstall and the status line (exit $RC): $(jq -c . "$S2") / $OUT"
+H3="$T/homes/keep-feedback"; mkdir -p "$H3"
+OUT="$(HUGINN_KEEP_CLAUDE_FEEDBACK=1 run_block setup-block.sh "$H3")"; RC=$?
+[ "$(jq -c '[has("feedbackSurveyRate"), has("feedbackDrafts"), has("env"), .fastModePerSessionOptIn]' "$H3/.claude/settings.json")" = '[false,false,false,true]' ] \
+  && ok "HUGINN_KEEP_CLAUDE_FEEDBACK=1 leaves the feedback keys out and still sets the fast-mode one" \
+  || bad "keep-feedback (exit $RC): $(jq -c . "$H3/.claude/settings.json") / $OUT"
+OUT="$(run_block uninstall-block.sh "$H")"; RC=$?
+[ "$(jq -c 'has("statusLine")' "$H/.claude/settings.json")" = false ] \
+  && ok "uninstall removes a status line that had nothing before it" \
+  || bad "uninstall on a fresh home (exit $RC): $(jq -c .statusLine "$H/.claude/settings.json")"
+OUT="$(run_block setup-block.sh "$H")"; RC=$?
 LEFT="$(cd "$H" && find . -name '*.huginn-*' -o -name '*.huginn.tmp' | head -3)"
 [ -z "$LEFT" ] && ok "no temp file is left behind" || bad "left behind: $LEFT"
 # Somebody's own config and hooks: kept alongside, and kept in place.

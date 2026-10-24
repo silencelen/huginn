@@ -15,11 +15,11 @@ the commands on this page as root on the server.
 | `/etc/systemd/system/huginn-appd.service` | The daemon's systemd unit. | Replaced |
 | `/etc/systemd/system/huginn-appd.service.d/hardening.conf` | The daemon's sandbox (kernel protections). | Replaced |
 | `/etc/systemd/system/huginn-appd.service.d/site.conf` | **Your settings.** Written once at install. | Never touched |
-| `/usr/local/bin/` | Host tools: `cc`, `huginn-status`, `huginn-rounds`, `huginn-devices`, `huginn-headroom`, `huginn-archive`, `huginn-projects`, `huginn-claude-title`, `huginn-llm`, `huginn-ask`. | Replaced, except copies edited here and newer than the release (`HUGINN_FORCE=1` replaces those too) |
+| `/usr/local/bin/` | Host tools: `cc`, `huginn-status`, `huginn-rounds`, `huginn-devices`, `huginn-headroom`, `huginn-archive`, `huginn-projects`, `huginn-claude-title`, `huginn-statusline`, `huginn-llm`, `huginn-ask`. | Replaced, except copies edited here and newer than the release (`HUGINN_FORCE=1` replaces those too) |
 | `/usr/local/lib/huginn/` | The state table the host tools share. | Replaced |
 | `/root/.tmux.conf` | tmux configuration. A different existing file is saved first: as `/root/.tmux.conf.pre-huginn`, or as the first free `.pre-huginn.1`, `.2`, ... once that exists. No backup is overwritten. | Replaced |
-| `/root/.claude/settings.json` | Claude Code settings. The installer merges Huginn's hooks into `hooks` and leaves everything else alone. | Hooks re-merged |
-| `/run/huginn-claude-state/` | Per-session state written by the hooks (memory only, cleared at boot). | |
+| `/root/.claude/settings.json` | Claude Code settings. The installer merges Huginn's hooks into `hooks`, sets `statusLine` to Huginn's status line (chaining the one that was there) and adds a few settings where they are absent; see [Claude Code settings](#claude-code-settings-the-installer-writes). Everything else is left alone. | Hooks and status line re-merged |
+| `/run/huginn-claude-state/` | Per-session state written by the hooks, and each session's status-line record under `.status/` (memory only, cleared at boot). | |
 | `/etc/huginn/persona.md` | Optional text appended to the system prompt of chats, rounds and `huginn -p`/`-y`. Read on every run; no restart needed. | Yours |
 
 Inside `/var/lib/huginn-appd/`:
@@ -36,6 +36,26 @@ Inside `/var/lib/huginn-appd/`:
 
 Back up `/var/lib/huginn-appd` and `/etc/huginn-appd` together, and protect the backup: it holds
 the token and every saved login.
+
+## Claude Code settings the installer writes
+
+`server/setup.sh` edits the sessions account's `~/.claude/settings.json` (root's by default) with
+`jq`, parsing it first and leaving a file it cannot parse exactly as it was. Besides the `hooks`
+entries, it writes:
+
+| Key | Value | Why |
+|---|---|---|
+| `statusLine` | `{"type": "command", "command": "/usr/local/bin/huginn-statusline"}` | Claude Code runs `huginn-statusline` on every redraw with its status JSON. The script records it under `/run/huginn-claude-state/.status/<session>` for the daemon (the live context window, model, effort, fast mode, limits and cost on every session) and prints the status line. A status line that was configured before Huginn's is kept as the argument after `--` (`huginn-statusline -- '<your command>'`), run with the same JSON, and its output is what you see; with none, the line is `<model> · ctx N%`. `padding` is kept. Running setup again leaves a command that is already Huginn's alone. |
+| `fastModePerSessionOptIn` | `true` | `/fast` in one session, from the keyboard or from an app, changes that session only. |
+| `feedbackSurveyRate`, `feedbackDrafts`, `env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` | `0`, `"off"`, `"1"` | No feedback prompts in a session nobody is watching; in the apps they read as a question. |
+
+The last four are written only where the key is absent: a value you set yourself is never changed,
+and nothing is removed. `HUGINN_KEEP_CLAUDE_FEEDBACK=1` at install time skips the three feedback
+keys. The daemon's own update path (`server/appd/install.sh`, through
+`install-hooks.js --claude-defaults`) writes the same four, so a daemon-only update agrees with a
+full install. `uninstall.sh` removes Huginn's status line and puts the previous one back, and leaves
+the four settings in place. `fastMode` itself (fast mode for every new session and chat) is yours;
+the apps set it through `PATCH /v1/settings/claude`.
 
 ## Change a setting
 

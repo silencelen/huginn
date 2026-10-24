@@ -5,13 +5,16 @@
 #   sudo bash /usr/local/src/huginn/server/uninstall.sh --purge    remove those too
 #
 # Removes the huginn-appd service, its files and drop-ins, the Claude Code hooks
-# setup.sh added, the host tools in /usr/local/bin and the tmux server service
-# when no session is running. It leaves alone: Claude Code, Node.js, tmux and the
-# other packages, root's tmux config (the one before Huginn is in
-# ~/.tmux.conf.pre-huginn), and your sessions' files. --purge also deletes
-# /var/lib/huginn-appd (chats, uploads, settings, certificate) and
+# and status line setup.sh added (the status line that was configured before
+# Huginn's is put back), the host tools in /usr/local/bin and the tmux server
+# service when no session is running. It leaves alone: Claude Code, Node.js,
+# tmux and the other packages, root's tmux config (the one before Huginn is in
+# ~/.tmux.conf.pre-huginn), the fast-mode and feedback settings the installer
+# added to ~/.claude/settings.json, and your sessions' files. --purge also
+# deletes /var/lib/huginn-appd (chats, uploads, settings, certificate) and
 # /etc/huginn-appd (the access token), which disconnects every paired client.
 set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 PURGE=""
 case "${1:-}" in
   --purge) PURGE=1 ;;
@@ -121,6 +124,19 @@ if { [ -e "$SETTINGS" ] || [ -L "$SETTINGS" ]; } \
       say "could not rewrite $SETTINGS - take the huginn-claude-title hooks out of it by hand"
     fi
   fi
+  # The status line: Huginn's command out, the one it chained (if any) back in.
+  # The fast-mode and feedback keys setup.sh added stay: they are plain Claude
+  # Code settings an operator may well want kept, and nothing else of Huginn's
+  # depends on them. server/claude-settings.jq is the program for both directions.
+  if [ -f "$SETTINGS" ] && [ -r "$HERE/claude-settings.jq" ] && command -v jq >/dev/null 2>&1; then
+    if NEW="$(as_home_owner cat -- "$SETTINGS" | jq -f "$HERE/claude-settings.jq" \
+          --arg mode uninstall --arg bin /usr/local/bin/huginn-statusline --arg keep_feedback '')" \
+       && printf '%s\n' "$NEW" | home_replace "$SETTINGS"; then
+      say "removed Huginn's status line from $SETTINGS (the one before it, if any, is back; the fast-mode and feedback keys stay)"
+    else
+      say "could not rewrite $SETTINGS - take the huginn-statusline status line out of it by hand"
+    fi
+  fi
 fi
 # END huginn-home-writes
 
@@ -138,7 +154,7 @@ if systemctl is-active --quiet huginn-tmux.service; then
 fi
 
 for t in cc huginn-status huginn-rounds huginn-devices huginn-headroom huginn-archive \
-         huginn-projects huginn-claude-title huginn-llm huginn-ask; do
+         huginn-projects huginn-claude-title huginn-statusline huginn-llm huginn-ask; do
   rm -f "/usr/local/bin/$t"
 done
 rm -rf /usr/local/lib/huginn

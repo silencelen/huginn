@@ -77,6 +77,11 @@ Claude Code tells Huginn what it is doing through hooks in `~/.claude/settings.j
   prompt through Claude Code's own hook instead of keystrokes; the model-switch hook
   (`PostModelSwitch`) records each model switch so the model ladder can confirm a move. Each
   of them always exits 0: it can delay, never block.
+- **`huginn-statusline`** (set as `statusLine` by `setup.sh`) is not a hook but lives in the
+  same file: Claude Code runs it on every redraw of its status line, and it records the status
+  JSON as `/run/huginn-claude-state/.status/<session>` — the live context window, model,
+  effort, fast mode, limits and cost the daemon serves on every session — then prints the
+  status line that was configured before it, or `<model> · ctx N%`.
 
 Which events, which flags and which files Huginn depends on are listed in
 [Claude Code integration](claude-code-integration.md).
@@ -92,6 +97,7 @@ Which events, which flags and which files Huginn depends on are listed in
 | `huginn-status` | One-glance health summary |
 | `huginn-rounds`, `huginn-devices`, `huginn-headroom`, `huginn-archive`, `huginn-projects`, `huginn-llm` | Read the daemon's API on the server and print a report, so the rendering exists once and the token never leaves the server |
 | `huginn-claude-title` | The title and state hook above |
+| `huginn-statusline` | Claude Code's status line above |
 
 The state marks and words these tools print come from `server/lib/state-table.json` through
 generated readers (`server/lib/state-table.{sh,py,js}`).

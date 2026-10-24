@@ -10,6 +10,10 @@
 #   HUGINN_WORKDIR=/path   where sessions and chats start (default: root's home)
 #   HUGINN_NO_DAEMON=1     terminal-only server: skip huginn-appd
 #   HUGINN_FORCE=1         overwrite host tools that were edited in place
+#   HUGINN_KEEP_CLAUDE_FEEDBACK=1
+#                          leave Claude Code's feedback prompts on (they are
+#                          turned off in settings.json otherwise; see
+#                          server/claude-settings.jq)
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
@@ -91,6 +95,10 @@ install_script "$HERE/bin/huginn-archive"      /usr/local/bin/huginn-archive
 # bash+python of its siblings because it POSTs JSON built out of argv.
 install_script "$HERE/bin/huginn-projects"     /usr/local/bin/huginn-projects
 install_script "$HERE/bin/huginn-claude-title" /usr/local/bin/huginn-claude-title
+# Claude Code's status line (settings.json `statusLine`, merged below): records
+# each session's status JSON for huginn-appd and prints the status line that was
+# configured before it, or a plain `<model> · ctx N%`.
+install_script "$HERE/bin/huginn-statusline"   /usr/local/bin/huginn-statusline
 install_script "$HERE/bin/huginn-llm"          /usr/local/bin/huginn-llm
 install_script "$HERE/bin/huginn-ask"          /usr/local/bin/huginn-ask
 # The state table every renderer above reads its marks, words and colour slots
@@ -258,10 +266,24 @@ if command -v jq >/dev/null 2>&1; then
       else
         echo "[huginn] $SETTINGS did not merge (is it JSON?) - left as it was; merge server/claude-hooks.json by hand." >&2
       fi
+      # The status line and the few Claude Code settings Huginn relies on
+      # (server/claude-settings.jq says which, and why). A status line that was
+      # configured before Huginn's is kept, chained after `--`, and a re-run
+      # finds Huginn's own command and leaves it alone; every default is written
+      # only where the key is absent. HUGINN_KEEP_CLAUDE_FEEDBACK=1 skips the
+      # three feedback keys. Same rule as the hooks: a file jq cannot read is
+      # left exactly as it was.
+      if MERGED="$(as_home_owner cat -- "$SETTINGS" | jq -f "$HERE/claude-settings.jq" \
+            --arg mode install --arg bin /usr/local/bin/huginn-statusline \
+            --arg keep_feedback "${HUGINN_KEEP_CLAUDE_FEEDBACK:-}")"; then
+        printf '%s\n' "$MERGED" | home_replace "$SETTINGS"
+      else
+        echo "[huginn] $SETTINGS did not take the status line (is it JSON?) - left as it was; see docs/reference/server-config.md for the keys." >&2
+      fi
     fi
   fi
 else
-  echo "[huginn] jq not found - skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
+  echo "[huginn] jq not found - skipping terminal-title hooks and the status line (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
 fi
 # END huginn-home-writes
 

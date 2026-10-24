@@ -8,6 +8,21 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `huginn-statusline`: Claude Code's status line on the server. It records each session's status
+  JSON under `/run/huginn-claude-state/.status/` for the daemon and prints the status line that was
+  configured before it (kept as the argument after `--`), or `<model> · ctx N%`.
+- `server/setup.sh` installs it as `statusLine` in the sessions account's `settings.json`, keeping
+  an existing status line and its padding, and adds `fastModePerSessionOptIn` and the three keys
+  that turn Claude Code's feedback prompts off where they are absent (`HUGINN_KEEP_CLAUDE_FEEDBACK=1`
+  skips the feedback keys). A re-run never chains the status line to itself.
+
+### Changed
+- `uninstall.sh` puts the previous status line back and leaves the fast-mode and feedback settings
+  in place.
+
 ## [2.6.7] - 2026-10-23
 
 ### Security
