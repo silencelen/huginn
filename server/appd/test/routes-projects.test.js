@@ -220,6 +220,10 @@ before(async () => {
     + 'esac\n'
     + `exec ${process.execPath} ${fake}\n`, { mode: 0o755 });
   process.env.PATH = `${binDir}:${process.env.PATH}`;
+  // Where a directory name's tmux format writes if tmux ever runs it (the
+  // member-directory test). Set before anything starts the tmux server, whose
+  // environment is fixed when it starts.
+  process.env.HUGINN_TEST_FMT_MARK = path.join(tmp, 'format-ran');
 
   daemonLog = path.join(tmp, 'daemon.log');
   const logFd = fs.openSync(daemonLog, 'a');
@@ -822,6 +826,57 @@ test('A SPAWN THAT PARTLY FAILS CREATES THE REST AND SAYS WHICH ONE DID NOT', as
   const after_ = await getProject(half.id);
   assert.deepEqual(['one', 'two'], after_.members.map((m) => m.role));
   assert.equal('active', after_.status);
+});
+
+test('A MEMBER DIRECTORY IS A DIRECTORY INSIDE THE PROJECT, NEVER A TMUX FORMAT', async () => {
+  // ⚠ tmux reads `new-session -c` as a format, and `#(…)` in a format runs a
+  // command. A lead steered into proposing such a directory gets a member that
+  // starts IN that directory, with nothing run. And the parser's containment
+  // is only text: a link inside the project must not lead the member out of
+  // it, and a directory that is not there must not land it in the home dir.
+  const r = await api('/v1/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Dirs', kind: 'infra', brief: 'members in odd directories', cwd }),
+  });
+  assert.equal(201, r.status, JSON.stringify(r.body));
+  const dirs = r.body;
+  madeSessions.add(dirs.lead.name);
+
+  const odd = path.join(cwd, 'm#(touch $HUGINN_TEST_FMT_MARK)x');
+  fs.mkdirSync(odd);
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-outside-'));
+  const link = path.join(cwd, 'leads-out');
+  fs.symlinkSync(outside, link);
+  const id = crypto.randomUUID();
+  writeState(dirs.lead.name, 'idle', {
+    sessionId: id,
+    transcript: writeLeadTranscript(id, manifestBlock(tagOf(dirs.id), [
+      { role: 'odd', firstPrompt: 'first', cwd: odd },
+      { role: 'link', firstPrompt: 'second', cwd: link },
+      { role: 'gone', firstPrompt: 'third', cwd: path.join(cwd, 'not-there') },
+    ], 'one odd name, one link out of the project, one missing directory')),
+  });
+  await projectUntil(dirs.id, (b) => b.status === 'proposed');
+
+  const s = await api(`/v1/projects/${dirs.id}/spawn`, {
+    method: 'POST', body: JSON.stringify({ approve: true, manifestRev: 1 }),
+  });
+  for (const m of (s.body && s.body.spawned) || []) madeSessions.add(m.name);
+  fs.rmSync(outside, { recursive: true, force: true });
+  assert.equal(200, s.status, JSON.stringify(s.body));
+  await wait(500); // a format job runs asynchronously; give one the time it would need
+  assert.equal(false, fs.existsSync(process.env.HUGINN_TEST_FMT_MARK), 'the directory name ran a command');
+  assert.deepEqual(['odd'], s.body.spawned.map((x) => x.role), JSON.stringify(s.body.failed));
+  const why = Object.fromEntries(s.body.failed.map((f) => [f.role, f.reason]));
+  assert.match(why.link || '', /outside the project/);
+  assert.match(why.gone || '', /not a directory/);
+
+  const member = s.body.spawned[0].name;
+  assert.equal(odd, sh('tmux', ['display-message', '-p', '-t', `=${member}:`, '#{pane_current_path}']).trim(),
+    'the member starts in the directory as named');
+  // Gone again, so the tests below count only their own projects (its sessions
+  // are in madeSessions, which after() ends).
+  assert.equal(200, (await api(`/v1/projects/${dirs.id}`, { method: 'DELETE', body: JSON.stringify({}) })).status);
 });
 
 // ------------------------------------------------------- editing and ending

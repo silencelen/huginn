@@ -527,6 +527,21 @@ function tmuxArgs(args) {
   return TMUX_SOCKET ? ['-u', '-L', TMUX_SOCKET, ...args] : ['-u', ...args];
 }
 
+/**
+ * A directory as tmux's `new-session -c` must be handed it.
+ *
+ * ⚠ TMUX EXPANDS `-c` AS A FORMAT, AND A FORMAT CAN RUN A COMMAND. A directory
+ * named `/srv/app/#(anything)` ran `anything` as this daemon's user the moment
+ * the session was created (tmux 3.6b), before Claude Code and its permission
+ * prompts existed. Every directory handed to `-c` comes from somewhere a model
+ * can reach: a project lead's proposal, the cwd a session recorded, an archive
+ * card. `##` is how a format spells a literal `#`, so doubling every `#` makes
+ * tmux start the session in exactly the directory named, and nothing else.
+ */
+function tmuxDir(dir) {
+  return String(dir).replace(/#/g, '##');
+}
+
 // The tmux subcommands that change which sessions exist. run() and runStdin()
 // bump tmuxSetGen before and after one, so the shared listing (tmuxListSessions)
 // never answers across a change this daemon made.
@@ -4042,7 +4057,7 @@ async function restoreSessionsAfterReboot() {
     const hasTranscript = !!(entry.claudeSessionId && findTranscriptFile(entry.claudeSessionId));
     const { canResume, command } = projectRestoreCommand(membership.get(entry.name), entry, hasTranscript)
       || sessreg.resumeCommand(entry, hasTranscript);
-    const r = await run('tmux', ['new-session', '-d', '-s', entry.name, '-c', cwd, command]);
+    const r = await run('tmux', ['new-session', '-d', '-s', entry.name, '-c', tmuxDir(cwd), command]);
     if (r.err) {
       log(`session restore: ${entry.name} could not be recreated: ${(r.stderr || r.err.message || '').trim().slice(0, 120)}`);
       continue;
@@ -7274,7 +7289,7 @@ async function launchProjectSession(tmuxName, cwd, command) {
   // Whatever the last holder of this name left behind goes before the new
   // session can be observed.
   clearSessionState(tmuxName);
-  const r = await run('tmux', ['new-session', '-d', '-s', tmuxName, '-c', cwd, command]);
+  const r = await run('tmux', ['new-session', '-d', '-s', tmuxName, '-c', tmuxDir(cwd), command]);
   if (r.err) {
     return { error: (r.stderr || r.err.message || '').trim().slice(0, 160) || 'tmux refused the session' };
   }
@@ -7286,6 +7301,27 @@ async function launchProjectSession(tmuxName, cwd, command) {
   registryAdd(created, { cwd });
   markLaunching(created);
   return { name: created };
+}
+
+/**
+ * Why a member cannot start in [dir], or null: it must be a directory that, with
+ * every link resolved, is the project's directory or lies inside it.
+ *
+ * ⚠ THE PARSER'S CHECK IS ONLY TEXT (projectsLib.containedIn). A link inside the
+ * project still led wherever it pointed, and a directory that was not there let
+ * tmux start the member in the home directory without a word, which is also
+ * where a member whose directory had been deleted since the proposal landed.
+ */
+function memberDirProblem(dir, root) {
+  let realRoot;
+  try { realRoot = fs.realpathSync(root); } catch { return `the project directory ${root} is not on this host`; }
+  let real;
+  try { real = fs.realpathSync(dir); } catch { return `${dir} is not a directory on this host`; }
+  try { if (!fs.statSync(real).isDirectory()) return `${dir} is not a directory on this host`; } catch {
+    return `${dir} is not a directory on this host`;
+  }
+  if (real !== realRoot && !real.startsWith(`${realRoot}/`)) return `${dir} leads outside the project directory`;
+  return null;
 }
 
 /**
@@ -7308,6 +7344,12 @@ async function spawnProject(project) {
     const tmuxName = projectsLib.tmuxNameFor(project.slug, s.role);
     const claudeName = projectsLib.claudeNameFor(project.slug, s.role);
     const cwd = s.cwd || project.cwd;
+    const dirProblem = memberDirProblem(cwd, project.cwd);
+    if (dirProblem) {
+      failed.push({ role: s.role, reason: dirProblem });
+      log(`project ${project.slug}: ${s.role} could not be created: ${dirProblem}`);
+      continue;
+    }
     const member = {
       role: s.role,
       name: tmuxName,
@@ -12078,7 +12120,7 @@ async function handleRequest(req, res) {
       if (!existed) {
         await ensureTmuxServer();
         const r = await run('tmux',
-          ['new-session', '-d', '-s', name, '-c', WORKDIR, 'claude auth login; echo; echo "[done] press enter"; read _']);
+          ['new-session', '-d', '-s', name, '-c', tmuxDir(WORKDIR), 'claude auth login; echo; echo "[done] press enter"; read _']);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim() || r.err.message}`);
       }
       // Wait briefly for the URL to appear and hand it back: the pane hard-wraps
@@ -12255,7 +12297,7 @@ async function handleRequest(req, res) {
       // rewrote and answers empty at exit 0; the `|| name` fallback then echoed
       // the phantom back in the 201 (#103/#106).
       const { err, stderr, stdout } = await run('tmux',
-        ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', WORKDIR, 'claude; exec "$SHELL" -l']);
+        ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', tmuxDir(WORKDIR), 'claude; exec "$SHELL" -l']);
       if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
       const created = await tmuxNameReadback(name, stdout);
       if (!created) {
@@ -14279,7 +14321,7 @@ async function handleRequest(req, res) {
       // empty at exit 0 for exactly that case, so `|| want` persisted a phantom
       // as `revivedAs` and every route on the reported name 404'd (#103).
       const r = await run('tmux',
-        ['new-session', '-d', '-P', '-F', '#S', '-s', want, '-c', cwd, command]);
+        ['new-session', '-d', '-P', '-F', '#S', '-s', want, '-c', tmuxDir(cwd), command]);
       if (r.err) return sendErr(res, 500, `tmux: ${(r.stderr || r.err.message || '').trim() || 'could not recreate the session'}`);
       const created = await tmuxNameReadback(want, r.stdout);
       if (!created) {

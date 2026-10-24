@@ -309,9 +309,10 @@ function manifestBlocks(text) {
 /**
  * A path that is absolute, has no `..` in it, and lies inside `root`.
  *
- * Lexical, because this module does no I/O: the daemon checks that the directory
- * EXISTS at spawn time, where a missing one becomes one member's failure instead
- * of a refused proposal. Containment is the security half and it belongs here,
+ * Lexical, because this module does no I/O: the daemon checks at spawn time that
+ * the directory EXISTS and, with links resolved, is still inside the project
+ * (memberDirProblem), where a bad one becomes one member's failure instead of a
+ * refused proposal. Containment is the security half and it belongs here,
  * because a member cwd travels to `tmux new-session -c` and "anywhere on the
  * disk" is not something a manifest gets to choose.
  */
