@@ -31,15 +31,18 @@ fi
 # BEGIN huginn-home-writes - the hooks this takes back out of HUGINN_HOME, under
 # server/setup.sh's rule and with its helpers, which scripts/test-home-writes.sh
 # holds identical to setup.sh's: every read and write there runs as the home's
-# owner, so a link that account planted cannot turn this root-run script into a
-# root write, and a path that is a symlink or belongs to anybody else is left
-# alone, with why. For root's own home, the normal case, nothing changes.
+# owner, away from root's terminal and environment, so a link that account
+# planted cannot turn this root-run script into a root write, and a path that
+# is a symlink, a FIFO or a device, or belongs to anybody else is left alone,
+# with why. For root's own home, the normal case, nothing changes.
 HOME_UID="$(stat -L -c %u -- "$TARGET_HOME" 2>/dev/null)" || HOME_UID=
 HOME_USER="$(getent passwd "$HOME_UID" | cut -d: -f1)" || HOME_USER=
 HOME_AS=""
 HOME_AS_WHY=""
 if [ "$HOME_UID" = "$(id -u)" ]; then HOME_AS=self
 elif [ -z "$HOME_USER" ]; then HOME_AS_WHY="the home belongs to uid $HOME_UID, which has no account here to write as"
+elif ! setsid --fork --wait true </dev/null >/dev/null 2>&1; then
+  HOME_AS_WHY="the home belongs to $HOME_USER, and there is no setsid here (util-linux, with --fork --wait) to write as $HOME_USER away from this terminal"
 elif command -v runuser >/dev/null 2>&1; then HOME_AS=runuser
 elif command -v setpriv >/dev/null 2>&1; then HOME_AS=setpriv
 else HOME_AS_WHY="the home belongs to $HOME_USER, and there is neither runuser nor setpriv here to write as $HOME_USER"
@@ -48,11 +51,25 @@ HOME_REFUSED=
 
 as_home_owner() {   # "$@", as the account that owns TARGET_HOME
   case "$HOME_AS" in
-    self)    "$@" ;;
-    runuser) runuser -u "$HOME_USER" -- "$@" ;;
-    setpriv) setpriv --reuid="$HOME_UID" --regid="$(id -g "$HOME_USER")" --init-groups -- "$@" ;;
+    self)    "$@"; return ;;
+    runuser) set -- runuser -u "$HOME_USER" -- "$@" ;;
+    setpriv) set -- setpriv --reuid="$HOME_UID" --regid="$(id -g "$HOME_USER")" --init-groups -- "$@" ;;
     *)       return 1 ;;
   esac
+  # ⚠ WHAT RUNS AS THE ACCOUNT IS THE ACCOUNT'S, SO IT GETS NOTHING OF ROOT'S.
+  # That account can trace its own processes, so a command run as it holds
+  # nothing the account does not: root's terminal would take keystrokes pushed
+  # into it (TIOCSTI) and hand over what the operator types next, and root's
+  # environment is readable in /proc. So the command runs in a session of its
+  # own with no controlling terminal (setsid; --fork leaves root's half in the
+  # foreground, where Ctrl-C still stops setup), with PATH and HOME for an
+  # environment, a terminal on stdin swapped for /dev/null (a caller that feeds
+  # it input redirects a file or a pipe), and its stdout and stderr reaching
+  # root's only through the two cats below, whose pipes are all it holds.
+  ( set -o pipefail
+    [ ! -t 0 ] || exec </dev/null
+    { env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME="$TARGET_HOME" \
+        setsid --fork --wait "$@" 2>&1 >&3 3>&- | cat >&2 3>&-; } 3>&1 | cat )
 }
 
 home_path_ok() {    # 0 when $1, a path in TARGET_HOME, may be written; else why not
@@ -61,6 +78,8 @@ home_path_ok() {    # 0 when $1, a path in TARGET_HOME, may be written; else why
     why="$HOME_AS_WHY"
   elif [ -L "$1" ]; then
     why="it is a symlink, and nothing in HUGINN_HOME is written through one"
+  elif [ -e "$1" ] && [ ! -f "$1" ] && [ ! -d "$1" ]; then
+    why="it is neither a file nor a directory (a FIFO, a socket or a device), and nothing in HUGINN_HOME is read or written through one"
   elif [ -e "$1" ] && [ "$(stat -c %u -- "$1")" != "$HOME_UID" ]; then
     why="it belongs to uid $(stat -c %u -- "$1"), not to ${HOME_USER:-uid $HOME_UID}, the home's owner - chown it, then re-run"
   else

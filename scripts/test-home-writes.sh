@@ -9,8 +9,10 @@
 # .claude/settings.json.huginn-new turned the root-run step into a root write
 # wherever the link pointed; a settings.json linked to a root-only JSON file came
 # back out as a world-readable copy inside the home. The scripts now do those
-# reads and writes AS the home's owner and refuse links and other accounts'
-# files. This holds them there, and holds root's own home to what it always got.
+# reads and writes AS the home's owner and refuse links, FIFOs, devices and
+# other accounts' files. And since that account can take over any process of
+# its own, what runs as it holds none of root's terminal or environment. This
+# holds them there, and holds root's own home to what it always got.
 #
 # The desktop .deb's postrm (built by mobile/scripts/release-desktop.sh) is the
 # same class with every account at once: on purge it walks each home as root and
@@ -19,7 +21,7 @@
 # homes owned by scratch uids.
 #
 # It runs ONLY the marked `huginn-home-writes` block of each script, sourced in a
-# subshell against scratch homes under one mktemp -d, never the scripts
+# bash of its own against scratch homes under one mktemp -d, never the scripts
 # themselves: nothing here touches /root/.claude, /etc, /usr or /opt. The
 # cross-account cases need root (a home that belongs to `nobody`) and SKIP
 # loudly without it.
@@ -83,17 +85,16 @@ for b in setup-block.sh uninstall-block.sh; do
 done
 [ "$FAIL" = 0 ] || { echo "home-writes gates: FAIL" >&2; exit 1; }
 
-run_block() {   # $1 = block, $2 = scratch home -> the block's output, as root runs it
+run_block() {   # $1 = block, $2 = scratch home[, $3 = seconds] -> the block's output, as root runs it
   case "$2" in "$T"/*) ;; *) echo "refusing a home outside the scratch dir: $2" >&2; return 99 ;; esac
-  ( set -euo pipefail
+  # In a bash of its own under timeout: a block that blocks (opening a FIFO
+  # planted in the home, say) fails its check with 124 instead of hanging here.
+  timeout "${3:-60}" bash -c '
+    set -euo pipefail
     umask 022
     say() { echo "[huginn] $*"; }
-    # shellcheck disable=SC2034  # both are read by the sourced block
-    HERE="$TREE/server"
-    # shellcheck disable=SC2034
-    HUGINN_HOME="$2"
-    # shellcheck source=/dev/null
-    . "$T/$1" ) 2>&1
+    HERE="$1/server" HUGINN_HOME="$2"
+    . "$3"' bash "$TREE" "$2" "$T/$1" 2>&1
 }
 command -v jq >/dev/null 2>&1 || { skip "every check (no jq here; both scripts skip the hook merge without it)"; exit 0; }
 hooks_of() { jq -r '[.hooks[]?[]?.hooks[]?.command] | sort | .[]' "$1" 2>/dev/null; }
@@ -142,7 +143,7 @@ OUT="$(run_block setup-block.sh "$H")"; RC=$?
   && ok "a settings.json jq cannot read is left exactly as it was, and said so" \
   || bad "an unreadable settings.json (exit $RC): $(cat "$S") / $OUT"
 
-echo "[3/6] links planted in the home are refused, not followed"
+echo "[3/6] links and FIFOs planted in the home are refused, not followed"
 H="$T/homes/linked"; V="$T/victims"; mkdir -p "$H/.claude" "$V"; chmod 0755 "$V"
 for f in tmux new add settings; do printf 'VICTIM %s\n' "$f" > "$V/$f"; done
 printf 'set -g mouse off  # mine\n' > "$H/.tmux.conf"
@@ -175,6 +176,30 @@ cmp -s "$T/un-settings.before" "$V/un-settings" && [ "$(cat "$V/un-new")" = 'VIC
   && grep -q "NOT writing $H/.claude/settings.json" <<<"$OUT" \
   && ok "uninstall.sh follows neither link, and says so" \
   || bad "uninstall.sh wrote through a link in the home (exit $RC): $OUT"
+# A FIFO opens only when somebody opens its other end, so a read or write of
+# one blocks the step that makes it, for as long as whoever planted it likes.
+H="$T/homes/fifo"; mkdir -p "$H/.claude"
+mkfifo "$H/.tmux.conf" "$H/.claude/settings.json"
+OUT="$(run_block setup-block.sh "$H" 15)"; RC=$?
+[ "$RC" = 0 ] && [ -p "$H/.tmux.conf" ] && [ -p "$H/.claude/settings.json" ] \
+  && grep -q "NOT writing $H/.tmux.conf: it is neither a file nor a directory" <<<"$OUT" \
+  && grep -q "NOT writing $H/.claude/settings.json: it is neither a file nor a directory" <<<"$OUT" \
+  && ok "setup.sh opens no FIFO planted at .tmux.conf or settings.json, and names each" \
+  || bad "setup.sh and the FIFOs in the home (exit $RC; 124 is blocked on one): $OUT"
+H="$T/homes/fifo-bak"; mkdir -p "$H"
+printf 'set -g mouse off  # mine\n' > "$H/.tmux.conf"
+mkfifo "$H/.tmux.conf.pre-huginn"
+OUT="$(run_block setup-block.sh "$H" 15)"; RC=$?
+[ "$RC" = 0 ] && grep -q 'mouse off  # mine' "$H/.tmux.conf" && [ -p "$H/.tmux.conf.pre-huginn" ] \
+  && grep -q "NOT writing $H/.tmux.conf.pre-huginn" <<<"$OUT" \
+  && ok "a FIFO at a backup name ends the search for one, unopened, and the config stays" \
+  || bad "setup.sh and a FIFO at .tmux.conf.pre-huginn (exit $RC; 124 is blocked on it): $OUT"
+H="$T/homes/fifo-un"; mkdir -p "$H/.claude"
+mkfifo "$H/.claude/settings.json"
+OUT="$(run_block uninstall-block.sh "$H" 15)"; RC=$?
+[ "$RC" = 0 ] && [ -p "$H/.claude/settings.json" ] && grep -q "NOT writing $H/.claude/settings.json" <<<"$OUT" \
+  && ok "uninstall.sh opens no FIFO planted at settings.json either, and says so" \
+  || bad "uninstall.sh and a FIFO at settings.json (exit $RC; 124 is blocked on it): $OUT"
 
 echo "[4/6] a home that belongs to another account"
 NOBODY="$(getent passwd nobody | cut -d: -f1)"
@@ -218,6 +243,49 @@ else
   cmp -s "$T/leftover.json" "$H/.claude/settings.json" && grep -q "NOT writing $H/.claude/settings.json: it belongs to uid 0" <<<"$OUT" \
     && ok "a root-owned file in the account's home is refused, with the chown that fixes it" \
     || bad "a root-owned settings.json in $NOBODY's home (exit $RC): $OUT"
+
+  H="$(newhome attack-fifo)"
+  as_nobody mkfifo "$H/.tmux.conf"
+  OUT="$(run_block setup-block.sh "$H" 15)"; RC=$?
+  [ "$RC" = 0 ] && [ -p "$H/.tmux.conf" ] && grep -q "NOT writing $H/.tmux.conf: it is neither a file nor a directory" <<<"$OUT" \
+    && ok "a FIFO the account planted at .tmux.conf is refused, never opened as the account" \
+    || bad "setup.sh and $NOBODY's FIFO at .tmux.conf (exit $RC; 124 is blocked on it): $OUT"
+
+  # The account can trace any process of its own, so what setup runs as it
+  # must hold nothing of root's: not root's terminal (as its controlling
+  # terminal or on stdin, stdout or stderr), not root's environment. Each way
+  # of dropping to the account is probed from a terminal, as an operator's sudo
+  # session runs setup, with script(1) for the terminal.
+  if ! command -v script >/dev/null 2>&1; then
+    skip "the terminal probe (no util-linux script here)"
+  else
+    H="$(newhome probe)"
+    cat > "$T/probe.sh" <<'PROBE'
+set -euo pipefail
+say() { echo "[huginn] $*"; }
+HERE="$1/server" HUGINN_HOME="$2"
+export HUGINN_PROBE_MARK="root-env"
+. "$3" >/dev/null 2>&1
+for HOME_AS in runuser setpriv; do
+  command -v "$HOME_AS" >/dev/null 2>&1 || continue
+  as_home_owner sh -c '
+    read -r s < /proc/self/stat; set -- $s
+    printf "%s tty_nr=%s" "$0" "$7"
+    for fd in 0 1 2; do [ ! -t "$fd" ] || printf " fd%s-is-a-terminal" "$fd"; done
+    ! ( : < /dev/tty ) 2>/dev/null || printf " opens-/dev/tty"
+    ! env | grep -q "^HUGINN_PROBE_MARK=" || printf " has-root-env"
+    echo' "$HOME_AS"
+done
+PROBE
+    OUT="$(timeout 60 script -qec "bash $(printf '%q ' "$T/probe.sh" "$TREE" "$H" "$T/setup-block.sh")" /dev/null </dev/null 2>&1 | tr -d '\r')"
+    for way in runuser setpriv; do
+      if ! command -v "$way" >/dev/null 2>&1; then skip "the terminal probe through $way (not here)"; continue; fi
+      LINE="$(grep "^$way tty_nr=" <<<"$OUT" | head -1)"
+      [ "$LINE" = "$way tty_nr=0" ] \
+        && ok "as $NOBODY through $way: no controlling terminal, no terminal on fds 0-2, none of root's environment" \
+        || bad "as $NOBODY through $way, run from root's terminal: ${LINE:-no report} / $OUT"
+    done
+  fi
 
   H="$(newhome uninstall)"
   as_nobody mkdir "$H/.claude"

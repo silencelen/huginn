@@ -115,8 +115,11 @@ done
 # So now:
 #   - every read and write of a path in the home runs AS THE HOME'S OWNER
 #     (runuser, else setpriv), and the kernel holds it to that account's rights;
-#   - a path that is a symlink, or that anybody else owns, is refused rather
-#     than followed, with what to do about it, and the rest of setup carries on;
+#     it runs with none of root's terminal or environment (as_home_owner says
+#     why), since that account can take over any process of its own;
+#   - a path that is a symlink, a FIFO or a device, or that anybody else owns,
+#     is refused rather than followed, with what to do about it, and the rest
+#     of setup carries on;
 #   - the merged settings land through a mktemp file beside the target and a
 #     rename, so there is no name chosen in advance to plant anything at.
 # For root's own home, the normal case, the owner is root and what is written is
@@ -129,6 +132,8 @@ HOME_AS=""
 HOME_AS_WHY=""
 if [ "$HOME_UID" = "$(id -u)" ]; then HOME_AS=self
 elif [ -z "$HOME_USER" ]; then HOME_AS_WHY="the home belongs to uid $HOME_UID, which has no account here to write as"
+elif ! setsid --fork --wait true </dev/null >/dev/null 2>&1; then
+  HOME_AS_WHY="the home belongs to $HOME_USER, and there is no setsid here (util-linux, with --fork --wait) to write as $HOME_USER away from this terminal"
 elif command -v runuser >/dev/null 2>&1; then HOME_AS=runuser
 elif command -v setpriv >/dev/null 2>&1; then HOME_AS=setpriv
 else HOME_AS_WHY="the home belongs to $HOME_USER, and there is neither runuser nor setpriv here to write as $HOME_USER"
@@ -137,11 +142,25 @@ HOME_REFUSED=
 
 as_home_owner() {   # "$@", as the account that owns TARGET_HOME
   case "$HOME_AS" in
-    self)    "$@" ;;
-    runuser) runuser -u "$HOME_USER" -- "$@" ;;
-    setpriv) setpriv --reuid="$HOME_UID" --regid="$(id -g "$HOME_USER")" --init-groups -- "$@" ;;
+    self)    "$@"; return ;;
+    runuser) set -- runuser -u "$HOME_USER" -- "$@" ;;
+    setpriv) set -- setpriv --reuid="$HOME_UID" --regid="$(id -g "$HOME_USER")" --init-groups -- "$@" ;;
     *)       return 1 ;;
   esac
+  # ⚠ WHAT RUNS AS THE ACCOUNT IS THE ACCOUNT'S, SO IT GETS NOTHING OF ROOT'S.
+  # That account can trace its own processes, so a command run as it holds
+  # nothing the account does not: root's terminal would take keystrokes pushed
+  # into it (TIOCSTI) and hand over what the operator types next, and root's
+  # environment is readable in /proc. So the command runs in a session of its
+  # own with no controlling terminal (setsid; --fork leaves root's half in the
+  # foreground, where Ctrl-C still stops setup), with PATH and HOME for an
+  # environment, a terminal on stdin swapped for /dev/null (a caller that feeds
+  # it input redirects a file or a pipe), and its stdout and stderr reaching
+  # root's only through the two cats below, whose pipes are all it holds.
+  ( set -o pipefail
+    [ ! -t 0 ] || exec </dev/null
+    { env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME="$TARGET_HOME" \
+        setsid --fork --wait "$@" 2>&1 >&3 3>&- | cat >&2 3>&-; } 3>&1 | cat )
 }
 
 home_path_ok() {    # 0 when $1, a path in TARGET_HOME, may be written; else why not
@@ -150,6 +169,8 @@ home_path_ok() {    # 0 when $1, a path in TARGET_HOME, may be written; else why
     why="$HOME_AS_WHY"
   elif [ -L "$1" ]; then
     why="it is a symlink, and nothing in HUGINN_HOME is written through one"
+  elif [ -e "$1" ] && [ ! -f "$1" ] && [ ! -d "$1" ]; then
+    why="it is neither a file nor a directory (a FIFO, a socket or a device), and nothing in HUGINN_HOME is read or written through one"
   elif [ -e "$1" ] && [ "$(stat -c %u -- "$1")" != "$HOME_UID" ]; then
     why="it belongs to uid $(stat -c %u -- "$1"), not to ${HOME_USER:-uid $HOME_UID}, the home's owner - chown it, then re-run"
   else
@@ -185,14 +206,15 @@ home_replace() {    # stdin -> $1, as the owner: a mktemp file beside it, its mo
 # file. So .pre-huginn is written once and keeps what was there before Huginn;
 # a later copy goes to the first free .pre-huginn.N, and a config that is
 # already one of those backups is not saved twice. A name in that series that
-# is a link, or not the home owner's, ends the search and is refused below,
-# exactly as .pre-huginn itself always was.
+# is a link, a FIFO or a device, or not the home owner's, ends the search and
+# is refused below, exactly as .pre-huginn itself always was: none is opened.
 TMUXRC="$TARGET_HOME/.tmux.conf"
 if home_path_ok "$TMUXRC"; then
   TMUXRC_WRITE=1
   if [ -e "$TMUXRC" ] && ! as_home_owner cmp -s - "$TMUXRC" < "$HERE/tmux.conf"; then
     TMUXRC_BAK="$TMUXRC.pre-huginn"; TMUXRC_N=0
     while [ -e "$TMUXRC_BAK" ] && [ ! -L "$TMUXRC_BAK" ] \
+          && { [ -f "$TMUXRC_BAK" ] || [ -d "$TMUXRC_BAK" ]; } \
           && [ "$(stat -c %u -- "$TMUXRC_BAK")" = "$HOME_UID" ] \
           && ! as_home_owner cmp -s -- "$TMUXRC" "$TMUXRC_BAK"; do
       TMUXRC_N=$((TMUXRC_N + 1)); TMUXRC_BAK="$TMUXRC.pre-huginn.$TMUXRC_N"
