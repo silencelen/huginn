@@ -40,6 +40,14 @@ if [[ "$V" != *-* ]]; then
   grep -qx "HUGINN_VERSION='$V'" internal/clientkit/files/huginn.sh.txt \
     || { echo "REFUSING: the CLI this core carries is not $V (client/huginn.sh HUGINN_VERSION)" >&2; exit 1; }
 fi
+# The core carries the Claude Code skills too (internal/skills): same rule.
+for s in huginn huginn-doctor; do
+  diff -rq "$HERE/../skills/$s" "$HERE/internal/skills/files/$s" >/dev/null || {
+    echo "REFUSING: core/internal/skills/files/$s differs from skills/$s." >&2
+    echo "  rm -r core/internal/skills/files/$s && cp -r skills/$s core/internal/skills/files/   and commit it" >&2
+    exit 1
+  }
+done
 for t in "${TARGETS[@]}"; do
   read -r key goos goarch file <<< "$t"
   CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/$file" ./cmd/huginn

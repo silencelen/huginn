@@ -26,6 +26,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/ipc"
 	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/service"
+	"github.com/silencelen/huginn/core/internal/skills"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/tray"
 	"github.com/silencelen/huginn/core/internal/ui"
@@ -211,6 +212,21 @@ func selfInstall() (string, bool) {
 	if err != nil {
 		fmt.Println("  could not install the huginn CLI: " + err.Error())
 	}
+	// And the Claude Code skills it carries: laid under the install root, and
+	// refreshed where Huginn already put them (never added here: that is the
+	// installer's question, or `huginn skills install`).
+	if se, err := skills.DefaultEnv(); err == nil {
+		if _, err := skills.Lay(se); err != nil {
+			fmt.Println("  could not lay the Claude Code skills down: " + err.Error())
+		}
+		rep := skills.Refresh(se)
+		if len(rep.Done) > 0 {
+			fmt.Println("  refreshed the Claude Code skills in " + tilde(se.Home, se.LinkDir()) + ": " + strings.Join(rep.Done, ", "))
+		}
+		for _, e := range rep.Errors {
+			fmt.Println("  Claude Code skills: " + e)
+		}
+	}
 	return r.Binary, true
 }
 
@@ -389,6 +405,15 @@ func coreInstall(args []string) int {
 	default:
 		u.Line(ui.Fail, "service", "huginn core install is not supported on "+runtime.GOOS)
 		return 1
+	}
+	// The Claude Code skills: refreshed where they are, asked about where
+	// they are not (skillsOffer). Not in the elevated Windows step (--report):
+	// its window cannot ask, so the PowerShell client runs `skills offer`
+	// unelevated once it has drawn the records.
+	if rc == 0 && *report == "" {
+		if se, err := skills.DefaultEnv(); err == nil {
+			skillsOffer(u, se, compact)
+		}
 	}
 	if !compact {
 		u.Took("done")

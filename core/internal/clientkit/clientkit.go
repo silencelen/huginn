@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"unicode/utf16"
 )
@@ -391,4 +392,23 @@ func dropLines(file string, lines []string) (hit, other bool, err error) {
 		return false, other, err
 	}
 	return true, other, os.Rename(tmp, file)
+}
+
+// versionRE reads the client's version constant: HUGINN_VERSION='x.y.z' in
+// huginn.sh, $script:HUGINN_VERSION = 'x.y.z' in huginn.ps1.
+var versionRE = regexp.MustCompile(`(?m)^\$?(?:script:)?HUGINN_VERSION\s*=\s*'([^']+)'`)
+
+// ScriptVersion is the version a shell client's text declares, or "".
+func ScriptVersion(b []byte) string {
+	m := versionRE.FindSubmatch(b)
+	if m == nil {
+		return ""
+	}
+	return string(m[1])
+}
+
+// Version is the version of the client this core carries for goos: what the
+// installed script must say to match (`huginn doctor` compares them).
+func Version(goos string) string {
+	return ScriptVersion(Env{GOOS: goos}.content())
 }

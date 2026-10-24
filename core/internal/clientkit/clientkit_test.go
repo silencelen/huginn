@@ -137,3 +137,22 @@ func TestSatellites(t *testing.T) {
 		t.Fatal("huginn-llm-shim created on a machine that never had it")
 	}
 }
+
+// The version the carried client declares is read the same way from both
+// scripts, and it is the one client/huginn.sh carries (core/build.sh holds a
+// release to the same constant).
+func TestScriptVersion(t *testing.T) {
+	if got := ScriptVersion([]byte("# x\nHUGINN_VERSION='2.6.7'\n")); got != "2.6.7" {
+		t.Fatalf("sh: %q", got)
+	}
+	if got := ScriptVersion([]byte("# x\r\n$script:HUGINN_VERSION = '2.6.7'\r\n")); got != "2.6.7" {
+		t.Fatalf("ps1: %q", got)
+	}
+	if got := ScriptVersion([]byte("nothing")); got != "" {
+		t.Fatalf("absent: %q", got)
+	}
+	sh, ps := Version("linux"), Version("windows")
+	if sh == "" || sh != ps {
+		t.Fatalf("the carried clients disagree or declare nothing: sh %q ps1 %q", sh, ps)
+	}
+}

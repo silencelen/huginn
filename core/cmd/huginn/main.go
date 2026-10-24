@@ -37,6 +37,10 @@ func main() {
 		os.Exit(uninstall(os.Args[2:]))
 	case "setup":
 		os.Exit(setup(os.Args[2:]))
+	case "doctor":
+		os.Exit(doctorCmd(os.Args[2:]))
+	case "skills":
+		os.Exit(skillsCmd(os.Args[2:]))
 	default:
 		if code, ok := forwardToClient(os.Args[1:]); ok {
 			os.Exit(code)
@@ -52,6 +56,8 @@ func usage() {
        huginn device on [--scope look|work|own] [--root DIR] [--name N] [--act-while-locked] | off | status
        huginn console                     the interactive console (plain "huginn" in a terminal opens it)
        huginn setup ssh [--host H] [--user U]   SSH to the huginn host, for attaching and the session verbs
+       huginn doctor [--json]             a health report of this machine's huginn; exit 1 when a check fails
+       huginn skills [status|install|remove]   the Huginn skills for Claude Code, in ~/.claude/skills
        huginn uninstall [--all] [--yes]   the whole stack: desktop, local AI, device, core, CLI
 Every other verb (sessions, attach, projects, usage, update) is the shell client's:
 install it with the one-liner in the README, and the core hands those verbs to it.`)
