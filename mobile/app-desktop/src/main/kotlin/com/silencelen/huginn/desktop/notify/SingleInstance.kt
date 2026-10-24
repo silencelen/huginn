@@ -14,6 +14,8 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * One running client, and a way for a second launch to hand it a `huginn://` URL.
@@ -51,13 +53,54 @@ import java.util.concurrent.atomic.AtomicBoolean
  * So each connection is read on its own short-lived thread, a few at a time,
  * at most [SECRET_MAX_BYTES] and [URL_MAX_BYTES] long, and all of it inside
  * [DEADLINE_MS] — see [readLine].
+ *
+ * ⚠ AND THE LISTENER PROVES ITSELF BEFORE A LAUNCH SAYS ANYTHING. A record
+ * outlives a crash, and any account on the machine can bind the port a dead
+ * instance's record names. A launch used to send the secret and its link to
+ * whatever answered there and take a bare `ok` as delivery, so a squatter on
+ * that port took every launch: the link, the secret with it, and the app
+ * itself, which exited believing it had handed over — until someone deleted
+ * the record by hand. Now a launch opens with a fresh random nonce ([PROVE])
+ * and the listener must answer with an HMAC of it under the secret ([proof])
+ * before the launch sends the secret or the link. A wrong answer, or none in
+ * time, means the record is stale: the launch overwrites it and starts as the
+ * one instance ([Handoff.UNPROVEN]).
+ *
+ * An app from before this check cannot answer. It reads the nonce line as a
+ * wrong secret and hangs up at once, so a new launch beside an old running app
+ * starts a second instance: two windows until the old one is quit, never a
+ * launch that hangs or exits without starting. The old app also deletes the
+ * record on its way out, so one more launch after that starts fresh beside the
+ * new one; once every running app answers, it is one instance again. Older
+ * launches, and the installer's and updater's quit request, still open with
+ * the secret itself, which the listener checks exactly as before.
  */
 class SingleInstance private constructor(
     /** Null when no loopback socket could be bound; the guard then degrades to nothing. */
     private val server: ServerSocket?,
     private val secret: String,
     private val portFile: File,
+    /** What became of this launch's attempt to hand over before it took the slot. */
+    val handoff: Handoff = Handoff.NOBODY,
 ) {
+
+    /** What a launch's hand-off came to. */
+    enum class Handoff {
+        /** A listener proved itself and took the link: this launch exits. */
+        DELIVERED,
+
+        /** No record, or nothing listening on the port it names. */
+        NOBODY,
+
+        /**
+         * Something answered on the recorded port and did not prove it holds the
+         * secret — an app from before the proof, or another account's listener on
+         * a dead instance's port — or proved it and then never took the link.
+         * Nothing past the question reaches a listener that has not proved
+         * itself; this launch took over.
+         */
+        UNPROVEN,
+    }
 
     private val stopped = AtomicBoolean(false)
 
@@ -113,9 +156,19 @@ class SingleInstance private constructor(
         s.soTimeout = READ_TIMEOUT_MS
         val deadline = System.nanoTime() + DEADLINE_MS * 1_000_000L
         val input = BufferedInputStream(s.getInputStream(), 256)
-        // The secret first, and nothing past [SECRET_MAX_BYTES] of it: until it
-        // matches, this is anyone on the machine.
-        val presented = readLine(input, SECRET_MAX_BYTES, deadline) ?: return
+        // The secret first — after the launch's [PROVE] question, when it asks
+        // one — and nothing past [SECRET_MAX_BYTES] of it: until it matches,
+        // this is anyone on the machine.
+        var presented = readLine(input, SECRET_MAX_BYTES, deadline) ?: return
+        if (presented.startsWith(PROVE)) {
+            // A launch asking this listener to show it holds the secret before it
+            // sends its own. The answer reveals nothing but an HMAC of the nonce,
+            // so it goes to anyone who asks; the secret is still what lets them in.
+            val nonce = presented.removePrefix(PROVE)
+            if (!wellFormedNonce(nonce)) return
+            s.getOutputStream().apply { write("${proof(secret, nonce)}\n".toByteArray(Charsets.UTF_8)); flush() }
+            presented = readLine(input, SECRET_MAX_BYTES, deadline) ?: return
+        }
         if (!MessageDigest.isEqual(presented.toByteArray(Charsets.UTF_8), secret.toByteArray(Charsets.UTF_8))) return
         // Past the secret it is this user's own launch. A URL line that is too
         // long or too slow is answered as a blank one (bring the window up) rather
@@ -173,6 +226,43 @@ class SingleInstance private constructor(
         private const val REPLY_MAX_BYTES: Int = 16
 
         /**
+         * Opens a launch's first line: "prove you hold the secret", the nonce after
+         * it. A secret never contains a space ([ALPHABET]), so no listener takes
+         * this for one, and an old one hangs up on it as a wrong secret.
+         */
+        internal const val PROVE: String = "prove "
+
+        /** A launch's nonce: 16 random bytes as lowercase hex. */
+        private const val NONCE_BYTES: Int = 16
+
+        /**
+         * The listener's answer: HMAC-SHA256 as lowercase hex, and a forwarder
+         * reads no more than this of it.
+         */
+        private const val PROOF_MAX_BYTES: Int = 64
+
+        /** Binds the HMAC to this one question, so it is never an answer to another. */
+        private const val PROOF_LABEL: String = "huginn single instance\n"
+
+        /**
+         * What a listener answers to [PROVE] + [nonce]: HMAC-SHA256 under [secret]
+         * of the nonce, as lowercase hex. Only a holder of the secret can compute
+         * it, and a fresh nonce per launch means an answer seen once is no answer
+         * to the next launch.
+         */
+        internal fun proof(secret: String, nonce: String): String {
+            val mac = Mac.getInstance("HmacSHA256")
+            mac.init(SecretKeySpec(secret.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+            return mac.doFinal((PROOF_LABEL + nonce).toByteArray(Charsets.UTF_8)).toHex()
+        }
+
+        /** What a listener accepts as a nonce: lowercase hex, 16 to 48 characters. */
+        private fun wellFormedNonce(nonce: String): Boolean =
+            nonce.length in 16..48 && nonce.all { it in '0'..'9' || it in 'a'..'f' }
+
+        private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+
+        /**
          * One `\n`-terminated line of at most [maxBytes] bytes, or null when the
          * line is longer than that, ends before its newline, or is not finished by
          * [deadlineNanos] (a [System.nanoTime] instant). A trailing `\r` is dropped.
@@ -217,10 +307,12 @@ class SingleInstance private constructor(
          */
         fun claimOrForward(configDir: File, url: String?): SingleInstance? {
             val portFile = File(configDir, "instance.lock")
-            if (forward(portFile, url)) return null
+            val handoff = forward(portFile, url)
+            if (handoff == Handoff.DELIVERED) return null
 
             // Either nothing was listening or the record was stale (a crash, a
-            // kill -9). Take over; the file is rewritten below either way.
+            // kill -9, a port another account took over). Take over; the file is
+            // rewritten below either way.
             val server = runCatching {
                 ServerSocket().apply {
                     reuseAddress = true
@@ -233,7 +325,7 @@ class SingleInstance private constructor(
                 // Running WITHOUT the guard beats refusing to start: what degrades
                 // is protocol activation, and it degrades to opening a second
                 // window rather than to an app that will not launch.
-                return SingleInstance(null, "", portFile)
+                return SingleInstance(null, "", portFile, handoff)
             }
 
             val secret = SecureRandom().ints(24, 0, ALPHABET.length)
@@ -246,31 +338,57 @@ class SingleInstance private constructor(
                 // to get wrong, and the file sits under the user's own profile.
                 if (PrivateFiles.posix) PrivateFiles.replace(portFile, record) else portFile.writeBytes(record)
             }
-            return SingleInstance(server, secret, portFile)
+            return SingleInstance(server, secret, portFile, handoff)
         }
 
-        /** True when a live instance accepted the hand-off. */
-        private fun forward(portFile: File, url: String?): Boolean = runCatching {
-            val lines = portFile.readLines()
-            val port = lines.getOrNull(0)?.trim()?.toIntOrNull() ?: return false
+        /**
+         * Hands [url] to the instance [portFile] records, if one answers there and
+         * proves it holds the record's secret.
+         *
+         * ⚠ NOTHING IS SENT BEFORE THE PROOF. The secret used to be the first line
+         * out, to whatever held the port; now the nonce is, and the secret and
+         * the link follow only a correct answer. Every read is bounded by one
+         * deadline, so a listener that says nothing costs a launch a few seconds,
+         * once, and never hangs it.
+         */
+        private fun forward(portFile: File, url: String?): Handoff {
+            val lines = runCatching { portFile.readLines() }.getOrNull() ?: return Handoff.NOBODY
+            val port = lines.getOrNull(0)?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 } ?: return Handoff.NOBODY
             val secret = lines.getOrNull(1)?.trim().orEmpty()
-            Socket().use { s ->
-                s.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1_500)
-                s.soTimeout = 3_000
-                s.getOutputStream().apply {
-                    write("$secret\n${handOff(url)}\n".toByteArray(Charsets.UTF_8))
-                    flush()
+            val s = Socket()
+            try {
+                try {
+                    s.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 1_500)
+                } catch (_: IOException) {
+                    return Handoff.NOBODY
                 }
-                // Bounded on this side too: whatever holds that port has not
-                // proved it is the running app until it says "ok".
-                val reply = readLine(
-                    BufferedInputStream(s.getInputStream(), REPLY_MAX_BYTES),
-                    REPLY_MAX_BYTES,
-                    System.nanoTime() + 3_000_000_000L,
-                )
-                reply == "ok"
+                return if (handOver(s, secret, url)) Handoff.DELIVERED else Handoff.UNPROVEN
+            } catch (_: Exception) {
+                return Handoff.UNPROVEN
+            } finally {
+                runCatching { s.close() }
             }
-        }.getOrDefault(false)
+        }
+
+        /** The exchange on a connected [s]: the nonce, the proof, then the secret and the link. */
+        private fun handOver(s: Socket, secret: String, url: String?): Boolean {
+            if (secret.isEmpty()) return false
+            s.soTimeout = 3_000
+            val deadline = System.nanoTime() + 3_000_000_000L
+            val input = BufferedInputStream(s.getInputStream(), 128)
+            val out = s.getOutputStream()
+            val nonce = ByteArray(NONCE_BYTES).also { SecureRandom().nextBytes(it) }.toHex()
+            out.write("$PROVE$nonce\n".toByteArray(Charsets.UTF_8))
+            out.flush()
+            val answer = readLine(input, PROOF_MAX_BYTES, deadline) ?: return false
+            val expected = proof(secret, nonce)
+            if (!MessageDigest.isEqual(answer.toByteArray(Charsets.UTF_8), expected.toByteArray(Charsets.UTF_8))) {
+                return false
+            }
+            out.write("$secret\n${handOff(url)}\n".toByteArray(Charsets.UTF_8))
+            out.flush()
+            return readLine(input, REPLY_MAX_BYTES, deadline) == "ok"
+        }
 
         /**
          * The URL line a launch sends: [url] as it is, or blank (bring the window

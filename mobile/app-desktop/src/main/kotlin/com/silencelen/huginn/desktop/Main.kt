@@ -130,6 +130,11 @@ fun main(args: Array<String>) {
     // lease. Null means an instance was already running and has taken delivery.
     val instance = SingleInstance.claimOrForward(configDir, Activations.urlFromArgv(args))
         ?: return
+    // Logged because a second window is otherwise unexplained: an app from
+    // before the listener's proof, or another account's listener on the port.
+    if (instance.handoff == SingleInstance.Handoff.UNPROVEN) {
+        AppLog.warn("instance", "the recorded instance did not prove itself and take the link; this launch took over")
+    }
 
     val presence = Presence()
     // SupervisorJob: one loop failing (a watch stream against an unreachable
