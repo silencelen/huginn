@@ -14,12 +14,15 @@
 #   2. mints the bearer token at /etc/huginn-appd/token if there is none
 #   3. installs the systemd unit and the hardening drop-in, and writes site.conf
 #      once (HUGINN_WORKDIR -> HUGINN_APPD_WORKDIR) when it does not exist yet
-#   4. adds the daemon's Claude Code hooks to ~/.claude/settings.json
+#   4. adds the daemon's Claude Code hooks to ~/.claude/settings.json, and the
+#      few Claude Code settings Huginn relies on where they are absent
+#      (install-hooks.js --claude-defaults)
 #   5. enables and restarts the service, then checks /v1/ping over HTTP and HTTPS
 #      on loopback
 #
 # Environment: HUGINN_WORKDIR (where chats run; default the service's HOME),
-# HUGINN_APPD_NO_START=1 (install only; used by image builds).
+# HUGINN_APPD_NO_START=1 (install only; used by image builds),
+# HUGINN_KEEP_CLAUDE_FEEDBACK=1 (leave Claude Code's feedback prompts on).
 set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST=/opt/huginn-appd
@@ -100,6 +103,12 @@ fi
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-headroom-gate" --headroom-dir "$HEADROOM_DIR"
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-permission-hook"
 node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
+# The Claude Code settings the apps' fast-mode control relies on, and the
+# feedback prompts that would otherwise read as a question in an unwatched
+# pane — each only where the key is absent. setup.sh writes the same set from
+# its jq merge (server/claude-settings.jq), so a daemon-only update agrees with
+# a full install. HUGINN_KEEP_CLAUDE_FEEDBACK=1 keeps the feedback prompts.
+node "$DEST/install-hooks.js" --claude-defaults
 
 if [ "${HUGINN_APPD_NO_START:-}" = 1 ]; then
   say "installed; not started (HUGINN_APPD_NO_START=1)"

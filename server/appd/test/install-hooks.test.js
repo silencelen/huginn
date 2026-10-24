@@ -413,3 +413,104 @@ test('the modelswitch hook installs as PostModelSwitch "*" timeout 10', () => {
   assert.equal(rules[0].matcher, '*');
   assert.equal(rules[0].hooks[0].timeout, 10);
 });
+
+// ---- --claude-defaults ----------------------------------------------------------
+
+const { applyClaudeDefaults, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV } = require('../install-hooks');
+
+test('--claude-defaults adds the four settings where absent and merges into an existing env', () => {
+  const dir = scratch();
+  const file = copyFixture(dir);
+  const before = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(before.fastModePerSessionOptIn, undefined, 'the fixture must not carry it yet');
+  const { stdout } = run(['--settings', file, '--claude-defaults']);
+  assert.match(stdout, /added fastModePerSessionOptIn/);
+  assert.match(stdout, /added env\.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY/);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.fastModePerSessionOptIn, true);
+  assert.equal(after.feedbackSurveyRate, 0);
+  assert.equal(after.feedbackDrafts, 'off');
+  // The fixture's own env entry survives beside ours.
+  assert.deepEqual(after.env, { MCP_TIMEOUT: '120000', CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' });
+  // Nothing else moved: hooks, model, statusLine, plugins.
+  assert.deepEqual(after.hooks, before.hooks);
+  assert.equal(after.model, before.model);
+  assert.deepEqual(after.statusLine, before.statusLine);
+  assert.deepEqual(after.enabledPlugins, before.enabledPlugins);
+});
+
+test('--claude-defaults never changes a key that is present, and a second run writes nothing', () => {
+  const dir = scratch();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, `${JSON.stringify({
+    feedbackSurveyRate: 1, feedbackDrafts: 'on', fastModePerSessionOptIn: false,
+    env: { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '0' },
+  }, null, 2)}\n`);
+  const once = fs.readFileSync(file, 'utf8');
+  const { stdout } = run(['--settings', file, '--claude-defaults']);
+  assert.match(stdout, /already current/);
+  assert.equal(fs.readFileSync(file, 'utf8'), once, 'an operator\'s own values are theirs');
+  // And a file without the keys: the second run is byte-identical and not rewritten.
+  const file2 = path.join(dir, 'fresh.json');
+  fs.writeFileSync(file2, '{}\n');
+  run(['--settings', file2, '--claude-defaults']);
+  const written = fs.readFileSync(file2, 'utf8');
+  const stat1 = fs.statSync(file2);
+  run(['--settings', file2, '--claude-defaults']);
+  assert.equal(fs.readFileSync(file2, 'utf8'), written);
+  assert.equal(fs.statSync(file2).mtimeMs, stat1.mtimeMs);
+});
+
+test('--keep-feedback (or HUGINN_KEEP_CLAUDE_FEEDBACK=1) skips the three feedback keys', () => {
+  const dir = scratch();
+  for (const [name, args, env] of [
+    ['flag', ['--keep-feedback'], {}],
+    ['env', [], { HUGINN_KEEP_CLAUDE_FEEDBACK: '1' }],
+  ]) {
+    const file = path.join(dir, `${name}.json`);
+    fs.writeFileSync(file, '{"model":"claude-fable-5-1"}\n');
+    run(['--settings', file, '--claude-defaults', ...args], { env });
+    const o = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.deepEqual(o, { model: 'claude-fable-5-1', fastModePerSessionOptIn: true }, name);
+  }
+});
+
+test('--claude-defaults keeps the installer\'s rules: unparseable refused, env that is not an object refused, dry run writes nothing', () => {
+  const dir = scratch();
+  const broken = path.join(dir, 'broken.json');
+  fs.writeFileSync(broken, '{\n  "model": "x",\n');
+  const r1 = run(['--settings', broken, '--claude-defaults'], { expect: 2 });
+  assert.match(r1.stderr, /REFUSING/);
+  assert.equal(fs.readFileSync(broken, 'utf8'), '{\n  "model": "x",\n');
+
+  const badEnv = path.join(dir, 'badenv.json');
+  fs.writeFileSync(badEnv, '{"env": ["A=1"]}\n');
+  const r2 = run(['--settings', badEnv, '--claude-defaults'], { expect: 2 });
+  assert.match(r2.stderr, /"env" value that is not an object/);
+  assert.equal(fs.readFileSync(badEnv, 'utf8'), '{"env": ["A=1"]}\n');
+  // With the feedback keys skipped, env is not ours to judge.
+  run(['--settings', badEnv, '--claude-defaults', '--keep-feedback']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(badEnv, 'utf8')), { env: ['A=1'], fastModePerSessionOptIn: true });
+
+  const dry = path.join(dir, 'dry.json');
+  fs.writeFileSync(dry, '{}\n');
+  const r3 = run(['--settings', dry, '--claude-defaults', '--dry-run']);
+  assert.match(r3.stdout, /would write/);
+  assert.equal(fs.readFileSync(dry, 'utf8'), '{}\n');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['badenv.json', 'broken.json', 'dry.json']);
+
+  run(['--settings', dry, '--claude-defaults', '--uninstall'], { expect: 2 });
+});
+
+test('applyClaudeDefaults is the pure heart: adds, keeps, reports', () => {
+  const s = { feedbackDrafts: 'on' };
+  const { changes } = applyClaudeDefaults(s);
+  assert.deepEqual(s, {
+    feedbackDrafts: 'on', fastModePerSessionOptIn: true, feedbackSurveyRate: 0,
+    env: { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' },
+  });
+  assert.deepEqual(changes.filter((c) => c.action === 'kept').map((c) => c.key), ['feedbackDrafts']);
+  assert.deepEqual(Object.keys(CLAUDE_DEFAULTS), ['fastModePerSessionOptIn']);
+  assert.deepEqual(Object.keys(FEEDBACK_DEFAULTS).sort(), ['feedbackDrafts', 'feedbackSurveyRate']);
+  assert.deepEqual(FEEDBACK_ENV, { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' });
+});
