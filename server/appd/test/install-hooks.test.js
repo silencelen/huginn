@@ -461,6 +461,23 @@ test('--claude-defaults never changes a key that is present, and a second run wr
   assert.equal(fs.statSync(file2).mtimeMs, stat1.mtimeMs);
 });
 
+test('--claude-defaults treats a key present as null as absent (Claude Code leaves fastModePerSessionOptIn: null behind)', () => {
+  const dir = scratch();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, `${JSON.stringify({
+    fastMode: true, fastModePerSessionOptIn: null, feedbackDrafts: null,
+    env: { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: null },
+  }, null, 2)}\n`);
+  const { stdout } = run(['--settings', file, '--claude-defaults']);
+  assert.match(stdout, /added fastModePerSessionOptIn/);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.fastModePerSessionOptIn, true, 'null is nobody\'s choice');
+  assert.equal(after.feedbackDrafts, 'off');
+  assert.equal(after.feedbackSurveyRate, 0);
+  assert.equal(after.env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY, '1');
+  assert.equal(after.fastMode, true, 'the host-wide flag is the operator\'s and stays');
+});
+
 test('--keep-feedback (or HUGINN_KEEP_CLAUDE_FEEDBACK=1) skips the three feedback keys', () => {
   const dir = scratch();
   for (const [name, args, env] of [

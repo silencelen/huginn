@@ -16,7 +16,9 @@
 # again would chain Huginn to itself. `padding` is kept.
 #
 # The defaults, each only where the key is ABSENT: an operator's own value,
-# whatever it is, is never touched and nothing is ever removed.
+# whatever it is, is never touched and nothing is ever removed. A key present as
+# null counts as absent — Claude Code leaves `fastModePerSessionOptIn: null`
+# behind in a settings.json it has written, and null is nobody's choice.
 #
 #   fastModePerSessionOptIn: true     a session's /fast changes that session only
 #   feedbackSurveyRate: 0, feedbackDrafts: "off", env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1"
@@ -43,14 +45,14 @@ def install_statusline:
 def install_defaults:
   (if $keep_feedback == "1" then .
    else
-     (if has("feedbackSurveyRate") then . else .feedbackSurveyRate = 0 end)
-     | (if has("feedbackDrafts") then . else .feedbackDrafts = "off" end)
+     (if .feedbackSurveyRate != null then . else .feedbackSurveyRate = 0 end)
+     | (if .feedbackDrafts != null then . else .feedbackDrafts = "off" end)
      | (if (.env | type) == "object"
-        then (if (.env | has("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")) then . else .env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY = "1" end)
+        then (if .env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY != null then . else .env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY = "1" end)
         elif has("env") then .      # an env that is not an object is somebody's to fix
         else .env = {CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1"} end)
    end)
-  | (if has("fastModePerSessionOptIn") then . else .fastModePerSessionOptIn = true end);
+  | (if .fastModePerSessionOptIn != null then . else .fastModePerSessionOptIn = true end);
 
 def uninstall_statusline:
   if ours then

@@ -27,8 +27,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
   configured before it (kept as the argument after `--`), or `<model> · ctx N%`.
 - `server/setup.sh` installs it as `statusLine` in the sessions account's `settings.json`, keeping
   an existing status line and its padding, and adds `fastModePerSessionOptIn` and the three keys
-  that turn Claude Code's feedback prompts off where they are absent (`HUGINN_KEEP_CLAUDE_FEEDBACK=1`
-  skips the feedback keys). A re-run never chains the status line to itself.
+  that turn Claude Code's feedback prompts off where they are absent or `null`
+  (`HUGINN_KEEP_CLAUDE_FEEDBACK=1` skips the feedback keys). A re-run never chains the status line to itself.
 
 ### Changed
 - `huginn uninstall` also removes the Claude Code skills huginn put in `~/.claude/skills`.

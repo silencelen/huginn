@@ -146,6 +146,13 @@ OUT="$(run_block uninstall-block.sh "$H2")"; RC=$?
   && [ "$(jq -c '[.feedbackSurveyRate, .feedbackDrafts, .fastModePerSessionOptIn]' "$S2")" = '[1,"off",true]' ] \
   && ok "uninstall puts the previous status line back and leaves the fast-mode and feedback keys" \
   || bad "uninstall and the status line (exit $RC): $(jq -c . "$S2") / $OUT"
+# A key Claude Code left behind as null (it writes fastModePerSessionOptIn: null) counts as absent.
+H4="$T/homes/null-keys"; mkdir -p "$H4/.claude"
+printf '%s\n' '{"fastMode":true,"fastModePerSessionOptIn":null,"feedbackDrafts":null,"env":{"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":null}}' > "$H4/.claude/settings.json"
+OUT="$(run_block setup-block.sh "$H4")"; RC=$?
+[ "$(jq -c '[.fastModePerSessionOptIn, .feedbackDrafts, .feedbackSurveyRate, .env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY, .fastMode]' "$H4/.claude/settings.json")" = '[true,"off",0,"1",true]' ] \
+  && ok "a key present as null counts as absent; the owner's fastMode stays" \
+  || bad "null keys (exit $RC): $(jq -c . "$H4/.claude/settings.json") / $OUT"
 H3="$T/homes/keep-feedback"; mkdir -p "$H3"
 OUT="$(HUGINN_KEEP_CLAUDE_FEEDBACK=1 run_block setup-block.sh "$H3")"; RC=$?
 [ "$(jq -c '[has("feedbackSurveyRate"), has("feedbackDrafts"), has("env"), .fastModePerSessionOptIn]' "$H3/.claude/settings.json")" = '[false,false,false,true]' ] \

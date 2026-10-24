@@ -174,7 +174,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-/** The settings --claude-defaults adds, each only where the key is absent. */
+/** The settings --claude-defaults adds, each only where the key is absent or null. */
 const CLAUDE_DEFAULTS = Object.freeze({
   fastModePerSessionOptIn: true,
 });
@@ -188,24 +188,28 @@ const FEEDBACK_ENV = Object.freeze({ CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' })
  * Pure. Adds [CLAUDE_DEFAULTS] (and, unless `keepFeedback`, [FEEDBACK_DEFAULTS]
  * and the [FEEDBACK_ENV] entry under `env`) where the key is ABSENT. A key that
  * is present keeps its value whatever it is — `feedbackSurveyRate: 1` is an
- * operator's choice, not a mistake. Returns { settings, changes: [{key, action:
- * 'added'|'kept'}] }; `settings` is the same object, mutated in place.
+ * operator's choice, not a mistake. A key present as `null` counts as absent:
+ * Claude Code leaves `fastModePerSessionOptIn: null` behind in a settings.json
+ * it has written, and null is nobody's choice. Returns { settings, changes:
+ * [{key, action: 'added'|'kept'}] }; `settings` is the same object, mutated in
+ * place.
  *
  * A present `env` that is not an object is REFUSED by main() before this runs,
  * the same doctrine as a malformed `hooks`.
  */
 function applyClaudeDefaults(settings, { keepFeedback = false } = {}) {
   const changes = [];
+  const present = (o, key) => Object.prototype.hasOwnProperty.call(o, key) && o[key] !== null;
   const want = { ...CLAUDE_DEFAULTS, ...(keepFeedback ? {} : FEEDBACK_DEFAULTS) };
   for (const [key, value] of Object.entries(want)) {
-    if (Object.prototype.hasOwnProperty.call(settings, key)) { changes.push({ key, action: 'kept' }); continue; }
+    if (present(settings, key)) { changes.push({ key, action: 'kept' }); continue; }
     settings[key] = value;
     changes.push({ key, action: 'added' });
   }
   if (!keepFeedback) {
     if (settings.env === undefined) settings.env = {};
     for (const [key, value] of Object.entries(FEEDBACK_ENV)) {
-      if (Object.prototype.hasOwnProperty.call(settings.env, key)) { changes.push({ key: `env.${key}`, action: 'kept' }); continue; }
+      if (present(settings.env, key)) { changes.push({ key: `env.${key}`, action: 'kept' }); continue; }
       settings.env[key] = value;
       changes.push({ key: `env.${key}`, action: 'added' });
     }

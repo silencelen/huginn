@@ -24,7 +24,7 @@ version number collided. Entries below are reconstructed from the shipping commi
 - Chats take `fast: true|false|null` at creation and on PATCH; a pinned value reaches the run as
   `--settings '{"fastMode":…}'`.
 - `install-hooks.js --claude-defaults`: `fastModePerSessionOptIn` and the three feedback-off keys,
-  each only where absent; `--keep-feedback` or `HUGINN_KEEP_CLAUDE_FEEDBACK=1` skips the feedback
+  each only where absent or `null`; `--keep-feedback` or `HUGINN_KEEP_CLAUDE_FEEDBACK=1` skips the feedback
   keys. `install.sh` runs it.
 - The pane's fast-mode refusal (`Fast mode unavailable…` and its siblings) is served as
   `fast.available` and `fast.reason`.
