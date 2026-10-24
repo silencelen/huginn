@@ -98,6 +98,38 @@ seed "$TMP/b7" bgsess "$OLD"
 bg_hook "$TMP/b7" Stop "$BGP" CLAUDE_CODE_SESSION_KIND=bg
 check test "$(jq -r .state "$TMP/b7/bgsess" 2>/dev/null)" = idle
 
+# B8. The shared temp name taken (here by a directory standing in for another
+#     writer's temp, renamed or half-written): the record must survive. The old
+#     fallback wrote the bare state word over it, after which no event of the
+#     job could find its file again.
+seed "$TMP/b8" bgsess "$OLD"; mkdir -p "$TMP/b8/bgsess.tmp"
+bg_hook "$TMP/b8" Stop "$BGP" "${JOB[@]}"
+check test "$(jq -r .sessionId "$TMP/b8/bgsess" 2>/dev/null)" = bbbbbbbb-bg-test
+check test "$(jq -r .state "$TMP/b8/bgsess" 2>/dev/null)" = idle
+bg_hook "$TMP/b8" PreToolUse '{"session_id":"bbbbbbbb-bg-test","transcript_path":"/nonexistent/bg.jsonl","cwd":"/tmp","tool_name":"Bash"}' "${JOB[@]}"
+check test "$(jq -r .state "$TMP/b8/bgsess" 2>/dev/null)" = running
+
+# B9. Sixteen of one job's hooks at once, three times over (a turn that starts
+#     background agents): the record is the job's JSON after every burst, and no
+#     temp is left behind.
+bg_burst() {   # $1 = n, $2 = dir, $3 = event, $4 = payload, then env for the job
+  local n="$1" dir="$2" ev="$3" pl="$4" i; shift 4
+  local tag="$TMP/burst.$RANDOM$RANDOM"
+  for i in $(seq "$n"); do
+    ( env -u TMUX -u TMUX_PANE -u CLAUDECODE -u CLAUDE_CODE_SESSION_KIND -u CLAUDE_JOB_DIR "$@" \
+        HUGINN_CLAUDE_STATE_DIR="$dir" PAYLOAD="$pl" HOOK="$HOOK" EV="$ev" DONE="$tag.$i" \
+        "$TMP/claude" -c 'printf "%s" "$PAYLOAD" | "$HOOK" "$EV"; : > "$DONE"' & )
+  done
+  for _ in $(seq 400); do [ "$(ls "$tag".* 2>/dev/null | wc -l)" -ge "$n" ] && return 0; sleep 0.05; done
+  echo "  (bg_burst: the hooks did not all finish)"; return 1
+}
+seed "$TMP/b9" bgsess "$OLD"
+for _ in 1 2 3; do
+  bg_burst 16 "$TMP/b9" PreToolUse '{"session_id":"bbbbbbbb-bg-test","transcript_path":"/nonexistent/bg.jsonl","cwd":"/tmp","tool_name":"Bash"}' "${JOB[@]}"
+  check test "$(jq -r .sessionId "$TMP/b9/bgsess" 2>/dev/null)" = bbbbbbbb-bg-test
+done
+check test -z "$(ls -A "$TMP/b9" | grep '\.tmp$')"
+
 if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
   echo "SKIP test-claude-title cases 1-10: not inside a tmux pane (the hook resolves the session name via tmux)"
   echo "test-claude-title: $pass passed, $fail failed"

@@ -279,13 +279,27 @@ if [ -n "$st" ]; then
   # same moment) dropped an automated send ten minutes later. appd reads the unit
   # off the magnitude, so a file this hook wrote before the change still works.
   if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+    # ⚠ A TEMP NAME OF THIS PROCESS'S OWN, AND NEVER A BARE WORD OVER THE RECORD.
+    # One session's hooks run at once (a turn that starts four background agents
+    # fires four), and with one shared temp name the first rename took the temp
+    # from under the others; their fallback then wrote the bare state word over
+    # the JSON. A background job finds its file ONLY by the JSON's sessionId or
+    # job (_bg_session), so from then on every event of that session gave up and
+    # the apps lost its conversation until the session ended. A write that fails
+    # now leaves the record as it was, for the next event to write again; the
+    # bare word is only ever the first record of a session whose payload jq
+    # could not read. (`*.tmp`, as before: _bg_session and appd's sweep skip it.)
+    tmpf="$STATE_DIR/$sess.$$.tmp"
     # `job` only from a background job: what finds its file again after a fork.
-    printf '%s' "$payload" | jq -c --arg st "$st" --arg job "$bg_job_id" \
+    if printf '%s' "$payload" | jq -c --arg st "$st" --arg job "$bg_job_id" \
       '{state:$st, sessionId:(.session_id // null), transcript:(.transcript_path // null), cwd:(.cwd // null), ts:(now*1000|floor)}
        + (if $job != "" then {job:$job} else {} end)' \
-      > "$STATE_DIR/$sess.tmp" 2>/dev/null \
-      && mv -fT "$STATE_DIR/$sess.tmp" "$STATE_DIR/$sess" 2>/dev/null \
-      || printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+      > "$tmpf" 2>/dev/null; then
+      mv -fT "$tmpf" "$STATE_DIR/$sess" 2>/dev/null || rm -f "$tmpf" 2>/dev/null
+    else
+      rm -f "$tmpf" 2>/dev/null
+      [ -e "$STATE_DIR/$sess" ] || printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
+    fi
   else
     printf '%s\n' "$st" > "$STATE_DIR/$sess" 2>/dev/null
   fi
@@ -348,10 +362,13 @@ if command -v jq >/dev/null 2>&1; then
   _write_sidecar() {   # $1 = dir, $2 = tool
     umask 077
     mkdir -p "$1" 2>/dev/null && chmod 700 "$1" 2>/dev/null
+    # A temp of this process's own, as for the state file above: two writers
+    # sharing one name could rename the other's half-written file into place.
     printf '%s' "$payload" | jq -c --arg tool "$2" \
       '{v:1, tool:$tool, sessionId:(.session_id // null), ts:now|floor, input:(.tool_input // null)}' \
-      > "$1/$sess.tmp" 2>/dev/null \
-      && mv -fT "$1/$sess.tmp" "$1/$sess" 2>/dev/null
+      > "$1/$sess.$$.tmp" 2>/dev/null \
+      && mv -fT "$1/$sess.$$.tmp" "$1/$sess" 2>/dev/null
+    rm -f "$1/$sess.$$.tmp" 2>/dev/null
   }
   _clear_sidecars() {
     rm -f "$ASK_DIR/$sess" "$ASK_DIR/$sess.tmp" "$PLAN_DIR/$sess" "$PLAN_DIR/$sess.tmp" 2>/dev/null
