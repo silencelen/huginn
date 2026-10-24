@@ -2,6 +2,7 @@ package com.silencelen.huginn.widget
 
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -30,6 +31,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,11 +78,31 @@ import com.silencelen.huginn.ui.theme.huginnFilterChipColors
  */
 class AskActivity : FragmentActivity() {
 
+    /**
+     * Whether the lock is up on this sheet. Compose reads it; the lifecycle below
+     * writes it, as MainActivity's own does.
+     *
+     * ⚠ NOT A `remember` IN THE COMPOSITION, AND NOT DECIDED ONCE. It was both:
+     * the lock was weighed in onCreate and the answer kept in composition. But a
+     * sheet left open behind Home is not created again — tapping the bar later
+     * brings the same activity forward, and onCreate does not run — so a sheet
+     * unlocked once stayed unlocked however long it had been away, while the
+     * app's front door had locked a minute after it was left. Whoever held the
+     * phone then had free text to Claude, Act mode included. The lock is now
+     * decided every time the sheet comes to the foreground ([onStart]) by the
+     * rule the front door uses, the grace is stamped when it leaves ([onStop]),
+     * and Send checks again ([submit]).
+     */
+    private val locked = mutableStateOf(AppLock.lockedNow)
+
+    /** The setting as read at creation; [onStart] says why the cache joins it. */
+    private var lockEnabled = true
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The same blocking read MainActivity makes at creation, for the same
         // reason: the lock decision cannot wait on DataStore.
-        val lockEnabled = runBlocking {
+        lockEnabled = runBlocking {
             lockEnabledOrLocked { SettingsStore(applicationContext).appLock.first() }
         }
         if (lockEnabled) {
@@ -88,13 +111,15 @@ class AskActivity : FragmentActivity() {
                 WindowManager.LayoutParams.FLAG_SECURE,
             )
         }
-        val startLocked = AppLock.lockedNow ||
-            AppLock.shouldLock(lockEnabled, AppLock.lastAwayAt, android.os.SystemClock.elapsedRealtime())
 
         setContent {
             HuginnTheme {
-                var locked by remember { mutableStateOf(startLocked) }
-                if (locked) {
+                // ⚠ THE QUESTION OUTLIVES THE LOCK. A lock that comes back takes
+                // the composer out of composition, and what was typed would go
+                // with it; held here, outside the branch, the draft is there again
+                // after the unlock, the way MainActivity keeps its place.
+                val held = rememberSaveableStateHolder()
+                if (locked.value) {
                     // Scrim only while the system sheet decides; the composer
                     // must not be drawn — or focused, or filled — behind it.
                     Scrim(onDismiss = { finish() })
@@ -102,31 +127,53 @@ class AskActivity : FragmentActivity() {
                         AppLock.authenticate(this@AskActivity) { ok, _ ->
                             if (ok) {
                                 AppLock.lockedNow = false
-                                locked = false
+                                locked.value = false
                             } else {
                                 finish()
                             }
                         }
                     }
                 } else {
-                    AskSheet(
-                        onCancel = { finish() },
-                        onSubmit = { mode, text -> submit(mode, text) },
-                        onSent = { chatId ->
-                            startActivity(
-                                Intent(this@AskActivity, MainActivity::class.java).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                        Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                    putExtra(SessionWatchWorker.EXTRA_CHAT, chatId)
-                                }
-                            )
-                            finish()
-                        },
-                    )
+                    held.SaveableStateProvider(ASK_STATE_KEY) {
+                        AskSheet(
+                            onCancel = { finish() },
+                            onSubmit = { mode, text -> submit(mode, text) },
+                            onSent = { chatId ->
+                                startActivity(
+                                    Intent(this@AskActivity, MainActivity::class.java).apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                            Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                            Intent.FLAG_ACTIVITY_CLEAR_TOP
+                                        putExtra(SessionWatchWorker.EXTRA_CHAT, chatId)
+                                    }
+                                )
+                                finish()
+                            },
+                        )
+                    }
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // The setting as read at creation, or the app's cache of it: a lock
+        // turned on in the app while this sheet waited behind Home is seen here,
+        // and one turned off leaves this sheet asking until it closes, the safe
+        // way round.
+        val enabled = lockEnabled || AppLock.enabledCache
+        if (askSheetLocks(enabled, AppLock.lockedNow, AppLock.lastAwayAt, SystemClock.elapsedRealtime())) {
+            AppLock.lockedNow = true
+            locked.value = true
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // As MainActivity: recorded only while unlocked, so a lock left up in the
+        // background never refreshes its own grace and lets the sheet back in.
+        if (!locked.value) AppLock.lastAwayAt = SystemClock.elapsedRealtime()
     }
 
     /**
@@ -143,8 +190,16 @@ class AskActivity : FragmentActivity() {
      */
     private val attempt = AskAttempt()
 
-    /** Creates the chat and hands it the question. Returns the chat to open. */
+    /**
+     * Creates the chat and hands it the question. Returns the chat to open.
+     *
+     * ⚠ NOT WHILE THE LOCK IS UP, checked here as well as at the door: before the
+     * chat is created and again right before the question is queued. A press
+     * that reaches this past a lock that has just come back is refused, and the
+     * sheet shows the unlock instead.
+     */
     private suspend fun submit(mode: String, text: String): String {
+        requireUnlocked()
         val settings = SettingsStore(applicationContext)
         val bearer = settings.token.first()
         if (bearer.isBlank()) throw IllegalStateException("Not signed in — open Huginn first")
@@ -153,12 +208,44 @@ class AskActivity : FragmentActivity() {
         return withTimeout(25_000) {
             attempt.submit(
                 create = { client.createChat(mode).id },
-                queue = { id -> client.queueMessage(id, text) },
+                queue = { id ->
+                    requireUnlocked()
+                    client.queueMessage(id, text)
+                },
                 discard = { id -> client.deleteChat(id) },
             )
         }
     }
+
+    /** Throws, and puts the lock up on this sheet, unless [askMaySend] says Send may go. */
+    private fun requireUnlocked() {
+        if (askMaySend(locked.value, AppLock.lockedNow)) return
+        locked.value = true
+        throw IllegalStateException("Huginn is locked")
+    }
 }
+
+/** Where the composer's draft is held while the lock is up. */
+private const val ASK_STATE_KEY = "ask"
+
+/**
+ * Whether the ask sheet comes to the foreground locked: [AppLock.lockedNow], or
+ * the grace rule MainActivity applies at its own door — which also locks a
+ * process with no memory of an unlock (`awayAt == 0`) and a clock that went
+ * back. Asked every time the sheet comes to the foreground, not once at its
+ * creation: a sheet brought back from behind Home is not created again.
+ *
+ * Pure, so the decision is asserted without a device; [AskActivity] feeds it.
+ */
+internal fun askSheetLocks(lockEnabled: Boolean, lockedNow: Boolean, awayAt: Long, now: Long): Boolean =
+    lockedNow || AppLock.shouldLock(lockEnabled, awayAt, now)
+
+/**
+ * Whether Send may go to the host: never while the lock is up, on this sheet or
+ * on the app. The grace is not weighed here — it is a question about coming
+ * back, and a sheet in the foreground has not been away.
+ */
+internal fun askMaySend(sheetLocked: Boolean, lockedNow: Boolean): Boolean = !sheetLocked && !lockedNow
 
 @Composable
 private fun Scrim(onDismiss: () -> Unit) {
@@ -180,8 +267,9 @@ private fun AskSheet(
     onSubmit: suspend (mode: String, text: String) -> String,
     onSent: (chatId: String) -> Unit,
 ) {
-    var text by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf("ask") }
+    // Saveable, so the holder in AskActivity can keep them across the lock.
+    var text by rememberSaveable { mutableStateOf("") }
+    var mode by rememberSaveable { mutableStateOf("ask") }
     var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
