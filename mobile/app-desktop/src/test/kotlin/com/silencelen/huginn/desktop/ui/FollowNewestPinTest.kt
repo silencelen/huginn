@@ -27,6 +27,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import com.silencelen.huginn.ui.Follow
 import com.silencelen.huginn.ui.FollowNewest
 import com.silencelen.huginn.ui.onScrollInput
 import kotlinx.coroutines.delay
@@ -62,6 +63,10 @@ class FollowNewestPinTest {
         val top: MutableState<Boolean>,
         /** The phone's composer grown by the keyboard or by typing, below the list. */
         val composerTall: MutableState<Boolean>,
+        /** How many EARLIER rows have been loaded above row 0 — the window's start, as the views pass it. */
+        val earlier: MutableState<Int>,
+        /** What the latch reported at the last frame: the pill's two readings. */
+        val follow: () -> Follow.State,
     )
 
     /**
@@ -84,19 +89,25 @@ class FollowNewestPinTest {
         val count = mutableStateOf(rows)
         val top = mutableStateOf(false)
         val composerTall = mutableStateOf(false)
+        val earlier = mutableStateOf(0)
+        var follow = Follow.State()
         lateinit var list: LazyListState
         setContent {
             list = rememberLazyListState()
             val scrolls = remember { mutableStateOf(0) }
             val thumb = remember { MutableInteractionSource() }
-            val n = count.value
-            if (phone) {
+            val loaded = earlier.value
+            val n = count.value + loaded
+            // `prepends` is the window's start, which only moves when an earlier
+            // page lands: the session views pass `windowStart`, this passes the
+            // count of rows above row 0, which moves the same way.
+            follow = if (phone) {
                 // Exactly the phone's call: everything else left at its default.
-                FollowNewest(list, itemCount = n, revision = n, key = "chat")
+                FollowNewest(list, itemCount = n, revision = n, key = "chat", prepends = loaded)
             } else {
                 FollowNewest(
                     list, itemCount = n, revision = n, key = "chat", scrolls = scrolls,
-                    scrollbar = if (scrollbar) thumb else null,
+                    scrollbar = if (scrollbar) thumb else null, prepends = loaded,
                 )
             }
             // After the first frames, so it lands on a list that has already
@@ -110,9 +121,11 @@ class FollowNewestPinTest {
                             .let { if (phone) it else it.onScrollInput { scrolls.value++ } },
                         state = list,
                     ) {
-                        items(n, key = { "row$it" }) { i ->
+                        // Keyed by the row's own identity: an earlier page is the
+                        // rows -loaded..-1, which keeps row 0 where it was.
+                        items(n, key = { "row${it - loaded}" }) { i ->
                             val h = if (i == n - 1 && tall.value) 400.dp else 56.dp
-                            Text("message $i", Modifier.height(h))
+                            Text("message ${i - loaded}", Modifier.height(h))
                         }
                     }
                     if (scrollbar) PaneScrollbar(list, thumb)
@@ -123,7 +136,7 @@ class FollowNewestPinTest {
             }
         }
         waitForIdle()
-        return Conversation(list, bar, tall, count, top, composerTall)
+        return Conversation(list, bar, tall, count, top, composerTall, earlier) { follow }
     }
 
     @Test
@@ -236,6 +249,63 @@ class FollowNewestPinTest {
         c.rows.value = c.rows.value + 1
         waitForIdle()
         assertEquals(reading, c.list.firstVisibleItemIndex, "a new message pulled them to the newest")
+    }
+
+    // ------------------------------------------- BUG 6: earlier pages (2026-10-23)
+
+    /**
+     * ⚠ THE BUG: "Load earlier messages" grew the list, the growth read as new
+     * content, and a reader at the top got a "New messages" pill for pages that
+     * landed ABOVE them. The views now pass the window's start as `prepends`;
+     * a growth that comes with it is history, and the reader stays on the row
+     * they were reading with nothing announced.
+     */
+    @Test
+    fun `an earlier page landing above a reader raises no pill and moves nothing`() = runComposeUiTest {
+        val c = conversation()
+        onNodeWithTag("transcript").performTouchInput { swipeDown() }
+        waitForIdle()
+        assertTrue(c.list.canScrollForward, "the swipe took them back into older messages")
+        assertTrue(c.follow().away, "and the pill reads Back to bottom")
+        val readingKey = c.list.layoutInfo.visibleItemsInfo.first().key
+
+        c.earlier.value = 20 // the page before row 0 lands
+        waitForIdle()
+        assertFalse(c.follow().unseen, "history above the reader was announced as new messages below them")
+        assertEquals(readingKey, c.list.layoutInfo.visibleItemsInfo.first().key, "the row they were reading moved")
+        assertTrue(c.list.canScrollForward, "they were pulled to the newest")
+
+        // And a genuinely new row after that is still announced, not jumped to.
+        c.rows.value = c.rows.value + 1
+        waitForIdle()
+        assertTrue(c.follow().unseen, "a real arrival below the fold is still news")
+        assertEquals(readingKey, c.list.layoutInfo.visibleItemsInfo.first().key)
+    }
+
+    /**
+     * The other half: a short transcript that fits the screen is FOLLOWING when
+     * the reader asks for history. The page lands above; the list fills the
+     * viewport from its end, so the newest stays in view with the nearest
+     * history above it — nothing is announced, and the latch stays armed for the
+     * next real message, which the reader (still at the tail) should be taken to.
+     */
+    @Test
+    fun `an earlier page on a transcript that fitted keeps the newest in view and the latch armed`() = runComposeUiTest {
+        val c = conversation(rows = 4)
+        assertFalse(c.list.canScrollForward, "four rows fit; the conversation sits at its newest")
+        assertFalse(c.follow().away)
+
+        c.earlier.value = 30
+        waitForIdle()
+        assertTrue(c.list.canScrollBackward, "the history is above, where it was asked for")
+        assertFalse(c.list.canScrollForward, "and the newest is still in view")
+        assertFalse(c.follow().unseen, "history above was announced as new messages below")
+        assertFalse(c.follow().away)
+
+        c.rows.value = c.rows.value + 1
+        waitForIdle()
+        assertFalse(c.list.canScrollForward, "a reader still at the tail is taken to the new message")
+        assertFalse(c.follow().unseen)
     }
 
     @Test

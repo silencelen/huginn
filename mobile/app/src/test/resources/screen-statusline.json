@@ -1,0 +1,59 @@
+{
+ "width": 56,
+ "height": 64,
+ "cursorX": 3,
+ "cursorY": 59,
+ "attachedClients": 1,
+ "altScreen": true,
+ "historySize": 0,
+ "windowSize": "smallest",
+ "sizeLeased": false,
+ "leaseHeldBy": null,
+ "resizeBlocked": false,
+ "lines": [],
+ "scrollback": [],
+ "hash": "<hash scrubbed, 16 chars>",
+ "unchanged": false,
+ "prompt": null,
+ "ask": null,
+ "planPending": null,
+ "spinner": null,
+ "statusLines": [],
+ "transientLine": null,
+ "liveModel": "Haiku 5.5",
+ "liveMode": "accept edits",
+ "liveBranch": "main",
+ "contextPercent": 4,
+ "compacting": false,
+ "context": {
+  "used": 35503,
+  "window": 1000000,
+  "percent": 4,
+  "exceeds200k": false
+ },
+ "model": "Haiku 5.5",
+ "effort": "medium",
+ "fast": {
+  "on": true,
+  "available": true,
+  "reason": null
+ },
+ "limits": {
+  "fiveHour": {
+   "usedPercent": 5,
+   "resetsAt": 1792830600
+  },
+  "sevenDay": {
+   "usedPercent": 1,
+   "resetsAt": 1793001600
+  },
+  "spend": null
+ },
+ "cost": {
+  "usd": 0.0034573600000000005,
+  "durationMs": 37177,
+  "apiMs": 10015,
+  "linesAdded": 0,
+  "linesRemoved": 0
+ }
+}

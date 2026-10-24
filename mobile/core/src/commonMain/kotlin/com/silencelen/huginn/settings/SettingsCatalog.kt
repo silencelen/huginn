@@ -130,6 +130,8 @@ fun SettingScope.heading(surface: Surface): String = when (this) {
  *   drawn only while it is on.
  * @param pushKnown the host said whether it can push (phone: delivery details).
  * @param appLockOn the app lock is on (phone: "Lock now" locks something).
+ * @param claudeSettings the host serves `/v1/settings/claude` (appd 3.14.0):
+ *   the one row that writes the sessions account's Claude Code settings.
  */
 data class SettingsProbe(
     val headroom: Boolean = false,
@@ -154,6 +156,7 @@ data class SettingsProbe(
     val deviceNotify: Boolean = false,
     val pushKnown: Boolean = false,
     val appLockOn: Boolean = false,
+    val claudeSettings: Boolean = false,
 )
 
 /**
@@ -538,6 +541,17 @@ object SettingsCatalog {
                 // the row under (the desktop did not draw it at all until the
                 // 2026-10-23 audit).
                 availability = { it.projects },
+                scope = SettingScope.SERVER,
+            ),
+            // The one Claude Code setting the daemon writes for the sessions
+            // account (appd 3.14.0). A session's own `/fast` never changes it:
+            // the install sets Claude Code's per-session opt-in.
+            SettingsItem(
+                id = "chats.fast-default",
+                title = "Fast mode by default for new sessions",
+                summary = "Whether a session starts in Claude Code's fast mode. A session can still turn it on or off for itself.",
+                keywords = listOf("fast", "fast mode", "speed", "quick", "default", "claude code", "settings.json"),
+                availability = { it.claudeSettings },
                 scope = SettingScope.SERVER,
             ),
         ),

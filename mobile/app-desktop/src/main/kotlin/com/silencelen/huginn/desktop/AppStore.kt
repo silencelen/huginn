@@ -1,6 +1,7 @@
 package com.silencelen.huginn.desktop
 
 import com.silencelen.huginn.data.Chat
+import com.silencelen.huginn.data.ClaudeSettings
 import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.AppCreate
 import com.silencelen.huginn.data.AppForm
@@ -1199,6 +1200,41 @@ class AppStore(
      */
     private val _appsAvailable = MutableStateFlow<Boolean?>(null)
     val appsAvailable: StateFlow<Boolean?> = _appsAvailable.asStateFlow()
+
+    /**
+     * The sessions account's Claude Code settings the daemon exposes (appd
+     * 3.14.0), and whether this daemon HAS the route — the same probe contract
+     * as [appsAvailable]: null until it has answered, false on a 404, and a
+     * failure that says nothing about the feature leaves it null to be asked
+     * again next tick. The Settings row and the chats' fast option are drawn
+     * only on true.
+     */
+    private val _claudeSettings = MutableStateFlow<ClaudeSettings?>(null)
+    val claudeSettings: StateFlow<ClaudeSettings?> = _claudeSettings.asStateFlow()
+    private val _claudeSettingsAvailable = MutableStateFlow<Boolean?>(null)
+    val claudeSettingsAvailable: StateFlow<Boolean?> = _claudeSettingsAvailable.asStateFlow()
+
+    suspend fun refreshClaudeSettings() {
+        runCatching { client.claudeSettings() }
+            .onSuccess { s ->
+                if (s == null) {
+                    _claudeSettingsAvailable.value = false
+                    return@onSuccess
+                }
+                _claudeSettingsAvailable.value = true
+                _claudeSettings.value = s
+            }
+            .onFailure {
+                if (it is HuginnClient.HuginnException && it.code == 404) _claudeSettingsAvailable.value = false
+            }
+    }
+
+    /** Writes the default for new sessions and adopts the daemon's answer; the refusal is the note. */
+    suspend fun setFastModeDefault(on: Boolean) {
+        runCatching { client.setClaudeSettings(fastModeDefault = on) }
+            .onSuccess { _claudeSettings.value = it }
+            .onFailure { noteError(it) }
+    }
 
     /**
      * The daemon's answer to the last add, or null.
@@ -2425,6 +2461,10 @@ class AppStore(
                 // fresh install's first tick gets while setup is still open is not
                 // an answer about the feature. See `shouldProbeApps`.
                 if (shouldProbeApps(_appsAvailable.value, _view.value)) refreshApps()
+                // Until it answers, and again whenever Settings is open: the one
+                // row it feeds is written from any app, so the value on this
+                // page must not be a memory of the last time it was read.
+                if (_claudeSettingsAvailable.value == null || _view.value == View.SETTINGS) refreshClaudeSettings()
                 // ⚠ THE TWO SESSION LISTS MOVE TOGETHER. A graceful archive leaves
                 // the session on screen for as long as its turn runs and then
                 // moves it — so a Sessions poll that did not also fetch the

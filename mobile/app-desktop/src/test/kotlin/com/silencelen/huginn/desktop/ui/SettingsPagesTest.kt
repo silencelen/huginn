@@ -23,6 +23,7 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Account
 import com.silencelen.huginn.data.AccountSwitch
+import com.silencelen.huginn.data.ClaudeSettings
 import com.silencelen.huginn.data.Device
 import com.silencelen.huginn.data.Headroom
 import com.silencelen.huginn.data.HeadroomSettings
@@ -277,6 +278,10 @@ class SettingsPagesTest {
         flow<List<Device>>(store, "_devices").value = listOf(Device(id = "1", machine = "m1", scope = "work", online = true))
         flow<Boolean?>(store, "_appsAvailable").value = w.apps
         flow<Boolean?>(store, "_projectsAvailable").value = w.projects
+        // appd 3.14.0: the one Claude Code setting the daemon writes. A host
+        // that answers has the route; the dead-host world above never gets here.
+        flow<Boolean?>(store, "_claudeSettingsAvailable").value = true
+        flow<ClaudeSettings?>(store, "_claudeSettings").value = ClaudeSettings(fastModeDefault = false, fastModePerSession = true)
     }
 
     private fun seedLogins(state: SettingsPaneState, w: World) {

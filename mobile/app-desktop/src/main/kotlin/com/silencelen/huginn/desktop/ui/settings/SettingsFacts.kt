@@ -61,6 +61,8 @@ data class SettingsFacts(
     val appsAvailable: Boolean = false,
     /** The host serves projects — `AppStore.projectsAvailable`. */
     val projectsAvailable: Boolean = false,
+    /** The host serves `/v1/settings/claude` (appd 3.14.0) — `AppStore.claudeSettingsAvailable`. */
+    val claudeSettingsAvailable: Boolean = false,
 )
 
 /**
@@ -112,6 +114,7 @@ fun desktopProbe(f: SettingsFacts): SettingsProbe {
         coreInstalled = f.coreInstalled,
         apps = f.appsAvailable,
         projects = f.projectsAvailable,
+        claudeSettings = f.claudeSettingsAvailable,
     )
 }
 

@@ -1,6 +1,7 @@
 package com.silencelen.huginn
 
 import com.silencelen.huginn.data.Alerts
+import com.silencelen.huginn.data.ClaudeSettings
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.StatusHeadroom
@@ -249,6 +250,21 @@ class SettingsPhoneTest {
 
     private fun shownOn(category: String, f: PhoneSettingsFacts) =
         SettingsCatalog.itemsOf(category, phoneProbe(f), Surface.PHONE).map { it.id }
+
+    /**
+     * The fast-mode default (appd 3.14.0) exists only where the daemon serves
+     * `/v1/settings/claude`: the page draws it `claudeSettings?.let`, so the
+     * probe reads the same fact — an older host loses the row, not the drawer.
+     */
+    @Test
+    fun `the fast-mode default follows the claude settings route`() {
+        val with = PhoneSettingsFacts(quickActions = QuickActions(rev = 1), claudeSettings = ClaudeSettings())
+        val without = PhoneSettingsFacts(quickActions = QuickActions(rev = 1))
+        assertTrue("offered where the route answers", "chats.fast-default" in shownOn("chats", with))
+        assertFalse("offered where the page hides it", "chats.fast-default" in shownOn("chats", without))
+        assertTrue("the drawer keeps its other rows", "chats.quick-actions" in shownOn("chats", without))
+        assertEquals("added at the end of its category", "chats.fast-default", shownOn("chats", with).last())
+    }
 
     @Test
     fun `this phone never claims to serve local models`() {

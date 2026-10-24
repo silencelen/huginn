@@ -1,0 +1,25 @@
+{
+ "context": {
+  "used": 28700,
+  "window": 1000000,
+  "percent": 3,
+  "exceeds200k": false
+ },
+ "model": "Haiku 5.5",
+ "breakdown": {
+  "asOf": 1792819386000,
+  "categories": [
+   {"id": "system_prompt", "name": "System prompt", "tokens": 3700, "kind": "used"},
+   {"id": "system_tools", "name": "System tools", "tokens": 20800, "kind": "used"},
+   {"id": "mcp_tools", "name": "MCP tools", "tokens": 671, "kind": "used"},
+   {"id": "mcp_instructions", "name": "MCP server instructions", "tokens": 717, "kind": "used"},
+   {"id": "skills", "name": "Skills", "tokens": 2800, "kind": "used"},
+   {"id": "messages", "name": "Messages", "tokens": 10, "kind": "used"},
+   {"id": "free_space", "name": "Free space", "tokens": 938300, "kind": "free"},
+   {"id": "autocompact_buffer", "name": "Autocompact buffer", "tokens": 33000, "kind": "buffer"}
+  ],
+  "totalTokens": 28700,
+  "maxTokens": 1000000,
+  "autocompactSource": "transcript"
+ }
+}

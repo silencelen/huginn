@@ -172,6 +172,7 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
     val via by store.viaCoreState.collectAsState()
     val apps by store.appsAvailable.collectAsState()
     val projects by store.projectsAvailable.collectAsState()
+    val claudeSettings by store.claudeSettingsAvailable.collectAsState()
     // Asked of the disk when the core's tray comes or goes, as the Appearance
     // page itself asks it: the same answer behind the row and behind the hit.
     val coreTray by store.coreDevice.coreTray.collectAsState()
@@ -197,5 +198,6 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
         coreInstalled = coreInstalled,
         appsAvailable = apps == true,
         projectsAvailable = projects == true,
+        claudeSettingsAvailable = claudeSettings == true,
     )
 }

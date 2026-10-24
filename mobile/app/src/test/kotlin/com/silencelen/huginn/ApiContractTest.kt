@@ -2,6 +2,8 @@ package com.silencelen.huginn
 
 import com.silencelen.huginn.data.AgentsInfo
 import com.silencelen.huginn.data.ChatList
+import com.silencelen.huginn.data.ClaudeSettings
+import com.silencelen.huginn.data.SessionContext
 import com.silencelen.huginn.data.AppList
 import com.silencelen.huginn.data.AppRefusal
 import com.silencelen.huginn.data.DeviceList
@@ -1541,5 +1543,105 @@ class ApiContractTest {
         // ⚠ PARSED OUT OF THE STATUSLINE, not swallowed into the branch — which
         // is what the old regex did, leaving the meter with nothing to draw.
         assertEquals(java.lang.Integer.valueOf(47), s.contextPercent)
+    }
+
+    // ------------------------------------------- the status-line record (appd 3.14.0)
+
+    /**
+     * ⚠ CONTRACT-DERIVED FIXTURES (README). The daemon that serves these blocks
+     * was built in parallel with this client, so the files were written from the
+     * lane contract and the figures inside from a real Claude Code 2.1.306
+     * status-line record; they assert the NAMES the two sides agreed on, and the
+     * day a capture replaces them this test is what notices a rename.
+     */
+    @Test
+    fun `a session row carries the status line's six blocks by the contract's names`() {
+        val raw = json.parseToJsonElement(fixture("session-statusline.json")).jsonObject["sessions"]!!.jsonArray[0].jsonObject
+        for (name in listOf("context", "model", "effort", "fast", "limits", "cost", "contextPercent")) {
+            assertTrue("a session row carries $name", name in raw)
+        }
+        val ctx = raw["context"]!!.jsonObject
+        assertEquals(setOf("used", "window", "percent", "exceeds200k"), ctx.keys)
+        assertEquals(setOf("on", "available", "reason"), raw["fast"]!!.jsonObject.keys)
+        assertEquals(setOf("fiveHour", "sevenDay", "spend"), raw["limits"]!!.jsonObject.keys)
+        assertEquals(setOf("usedPercent", "resetsAt"), raw["limits"]!!.jsonObject["fiveHour"]!!.jsonObject.keys)
+        assertEquals(setOf("usd", "durationMs", "apiMs", "linesAdded", "linesRemoved"), raw["cost"]!!.jsonObject.keys)
+
+        val list = json.decodeFromString<SessionList>(fixture("session-statusline.json"))
+        val s = list.sessions[0]
+        assertEquals(35_503L, s.context!!.used)
+        assertEquals(1_000_000L, s.context!!.window)
+        assertEquals(4, s.context!!.percent)
+        assertFalse(s.context!!.exceeds200k)
+        assertEquals("the percent is still served beside the block", java.lang.Integer.valueOf(4), s.contextPercent)
+        assertEquals("Haiku 5.5", s.model)
+        assertEquals("medium", s.effort)
+        assertFalse(s.fast!!.on)
+        assertTrue(s.fast!!.available)
+        assertEquals(java.lang.Long.valueOf(1_792_830_600_000L), s.limits!!.fiveHour!!.resetsAtEpochMs())
+        assertNull(s.limits!!.spend)
+        assertEquals(37_177L, s.cost!!.durationMs)
+
+        // A plain shell: every block null, and fast unavailable WITH Claude Code's reason.
+        val shell = list.sessions[1]
+        assertNull(shell.context)
+        assertNull(shell.model)
+        assertNull(shell.contextPercent)
+        assertNull(shell.limits)
+        assertNull(shell.cost)
+        assertFalse(shell.fast!!.available)
+        assertTrue("the reason is Claude Code's sentence, carried whole", !shell.fast!!.reason.isNullOrBlank())
+    }
+
+    @Test
+    fun `a screen carries the same six blocks`() {
+        val raw = json.parseToJsonElement(fixture("screen-statusline.json")).jsonObject
+        for (name in listOf("context", "model", "effort", "fast", "limits", "cost", "contextPercent")) {
+            assertTrue("a screen carries $name", name in raw)
+        }
+        val s = json.decodeFromString<Screen>(fixture("screen-statusline.json"))
+        assertEquals(35_503L, s.context!!.used)
+        assertEquals("Haiku 5.5", s.model)
+        assertEquals("medium", s.effort)
+        assertTrue(s.fast!!.on)
+        assertEquals(0.0034573600000000005, s.cost!!.usd, 0.0)
+        // And the older reading, which a 3.13 client keeps drawing.
+        assertEquals(java.lang.Integer.valueOf(4), s.contextPercent)
+        assertEquals("Haiku 5.5", s.liveModel)
+    }
+
+    @Test
+    fun `the context route carries the table by Claude Code's own category ids`() {
+        val raw = json.parseToJsonElement(fixture("session-context.json")).jsonObject
+        assertEquals(setOf("context", "model", "breakdown"), raw.keys)
+        val b = raw["breakdown"]!!.jsonObject
+        assertEquals(setOf("asOf", "categories", "totalTokens", "maxTokens", "autocompactSource"), b.keys)
+        assertEquals(setOf("id", "name", "tokens", "kind"), b["categories"]!!.jsonArray[0].jsonObject.keys)
+
+        val c = json.decodeFromString<SessionContext>(fixture("session-context.json"))
+        val ids = c.breakdown!!.categories.map { it.id }
+        assertEquals(
+            listOf("system_prompt", "system_tools", "mcp_tools", "mcp_instructions", "skills", "messages", "free_space", "autocompact_buffer"),
+            ids,
+        )
+        assertEquals(setOf("used", "free", "buffer"), c.breakdown!!.categories.map { it.kind }.toSet())
+        assertEquals(1_000_000L, c.breakdown!!.maxTokens)
+        assertEquals(28_700L, c.breakdown!!.totalTokens)
+        assertEquals("milliseconds, like every /v1/headroom stamp", 1_792_819_386_000L, c.breakdown!!.asOf)
+        assertEquals("transcript", c.breakdown!!.autocompactSource)
+        // The table sums to the window within its own rounding (the real one came
+        // to 999,998 of 1,000,000): what the bar is drawn from.
+        val sum = c.breakdown!!.categories.sumOf { it.tokens }
+        assertTrue("the rows do not add up to the window: $sum", kotlin.math.abs(sum - c.breakdown!!.maxTokens) < 1_000L)
+    }
+
+    @Test
+    fun `claude settings are three booleans by name`() {
+        val raw = json.parseToJsonElement(fixture("settings-claude.json")).jsonObject
+        assertEquals(setOf("fastModeDefault", "fastModePerSession", "feedbackOff"), raw.keys)
+        val s = json.decodeFromString<ClaudeSettings>(fixture("settings-claude.json"))
+        assertFalse(s.fastModeDefault)
+        assertTrue("the install sets the per-session opt-in", s.fastModePerSession)
+        assertFalse(s.feedbackOff)
     }
 }

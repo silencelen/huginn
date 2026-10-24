@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui.settings
 
 import com.silencelen.huginn.data.Alerts
+import com.silencelen.huginn.data.ClaudeSettings
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.StatusHeadroom
@@ -64,6 +65,8 @@ data class PhoneSettingsFacts(
     /** The host serves projects / its Apps page: each drawn row's own condition. */
     val projectsAvailable: Boolean = false,
     val appsAvailable: Boolean = false,
+    /** The host serves `/v1/settings/claude` (appd 3.14.0): the fast-mode default row's own condition. */
+    val claudeSettings: ClaudeSettings? = null,
     // ------------------------------------------------------------- notify
     /** Null when `/v1/alerts` did not answer: huginn cannot reach you at all. */
     val alerts: Alerts? = null,
@@ -154,6 +157,7 @@ fun phoneProbe(f: PhoneSettingsFacts): SettingsProbe = SettingsProbe(
     appLockOn = f.appLock,
     apps = f.appsAvailable,
     projects = f.projectsAvailable,
+    claudeSettings = f.claudeSettings != null,
 )
 
 /**

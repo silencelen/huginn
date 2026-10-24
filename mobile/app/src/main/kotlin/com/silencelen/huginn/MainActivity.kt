@@ -965,6 +965,8 @@ fun HuginnApp(
     val loadingScrollback by vm.loadingScrollback.collectAsState()
     val chatModel by vm.chatModel.collectAsState()
     val chatEffort by vm.chatEffort.collectAsState()
+    val chatFast by vm.chatFast.collectAsState()
+    val claudeSettingsAvailable by vm.claudeSettingsAvailable.collectAsState()
     val chatStarted by vm.chatStarted.collectAsState()
     val chatGone by vm.chatGone.collectAsState()
     val chatWaking by vm.chatWaking.collectAsState()
@@ -1481,6 +1483,9 @@ fun HuginnApp(
                 waking = chatWaking,
                 onSetOptions = { m, e -> vm.setChatOptions(id, model = m, effort = e) },
                 onMode = { vm.setChatOptions(id, mode = it) },
+                fast = chatFast,
+                fastSupported = claudeSettingsAvailable == true,
+                onFast = { vm.setChatOptions(id, fast = it) },
                 onEscalate = if (com.silencelen.huginn.ui.ModelLabels.isLocal(chatModel, models)) ({
                     vm.escalateLocalChat { newId -> vm.openChat(newId); dest = Dest.Chat(newId) }
                 }) else null,
@@ -1717,6 +1722,15 @@ fun HuginnApp(
                 onRemoveAttachment = { vm.removeAttachment(it) },
                 onPasteImage = { vm.pasteImage(HuginnViewModel.sessionDraftKey(name)) },
                 onCopy = { vm.copy(it) },
+                // The card behind the context meter reads through the view model,
+                // so `:ui` holds no client; fast mode is queued like /compact.
+                contextSource = remember(name) {
+                    com.silencelen.huginn.ui.ContextSource(
+                        load = { vm.sessionContext(name) },
+                        refresh = { vm.refreshSessionContext(name) },
+                    )
+                },
+                onFast = { vm.setSessionFast(name, it) },
                 hasEarlier = hasEarlier,
                 loadingHistory = loadingHistory,
                 onLoadEarlier = { vm.loadEarlierTranscript(name) },

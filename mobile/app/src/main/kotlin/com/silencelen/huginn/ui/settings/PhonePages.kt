@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Alerts
 import com.silencelen.huginn.data.ClientsInfo
+import com.silencelen.huginn.data.ClaudeSettings
 import com.silencelen.huginn.data.HeadroomSettings
 import com.silencelen.huginn.data.ModelChoice
 import com.silencelen.huginn.data.PushStatus
@@ -158,6 +159,12 @@ fun ChatsPage(
      */
     onOpenApps: (() -> Unit)? = null,
     appCount: Int = 0,
+    /**
+     * The sessions account's Claude Code settings (appd 3.14.0). Null against a
+     * daemon with no `/v1/settings/claude` — the row is gone, not greyed.
+     */
+    claudeSettings: ClaudeSettings? = null,
+    onFastModeDefault: (Boolean) -> Unit = {},
 ) {
     // The wording, the phrase and the pages huginn hosts: all kept on huginn.
     ScopeOf("chats.soft-end")
@@ -216,6 +223,20 @@ fun ChatsPage(
             trailingText = if (appCount == 0) "none" else "$appCount",
             onOpen = open,
             highlighted = SettingsRowStyle.isHighlighted("chats.apps", highlight),
+            modifier = Modifier.padding(top = 10.dp),
+        )
+    }
+    // The one Claude Code setting the daemon writes for the sessions account.
+    // Written straight through: the switch shows the daemon's answer, never a
+    // local flip, so two phones cannot disagree about it.
+    claudeSettings?.let { cs ->
+        SettingsToggleRow(
+            id = "chats.fast-default",
+            title = "Fast mode by default for new sessions",
+            checked = cs.fastModeDefault,
+            onCheckedChange = onFastModeDefault,
+            summary = "Whether a session starts in Claude Code's fast mode. A session can still turn it on or off for itself.",
+            highlighted = SettingsRowStyle.isHighlighted("chats.fast-default", highlight),
             modifier = Modifier.padding(top = 10.dp),
         )
     }

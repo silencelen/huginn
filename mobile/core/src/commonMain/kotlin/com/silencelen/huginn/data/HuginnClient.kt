@@ -1246,6 +1246,63 @@ class HuginnClient(
     suspend fun compactSession(name: String): CompactResult =
         decode(post("/v1/sessions/${seg(name)}/compact", body = buildJsonObject {}))
 
+    // ---- the context window and fast mode (appd 3.14.0)
+
+    /**
+     * The session's context window: the live status-line reading, the model,
+     * and the last `/context` table the daemon parsed from the transcript —
+     * `breakdown` is null until the session has run `/context` once.
+     */
+    suspend fun sessionContext(name: String): SessionContext =
+        decode(call("/v1/sessions/${seg(name)}/context"))
+
+    /**
+     * Asks the daemon to type `/context` into the pane at the next turn
+     * boundary. 202 queues it; a 409 is an ANSWER carrying why it could not be
+     * queued (`busy`, `shell`, `dialog`), returned as [Queued.reason] rather
+     * than thrown — the reason is the whole message a card has to show.
+     */
+    suspend fun refreshSessionContext(name: String): Queued =
+        queue("/v1/sessions/${seg(name)}/context/refresh", buildJsonObject {})
+
+    /**
+     * Fast mode for one session: the daemon types `/fast on|off` through the
+     * send queue, so like [refreshSessionContext] this is 202 queued or a 409
+     * with its reason. The install sets Claude Code's per-session opt-in, so this
+     * never changes another session.
+     */
+    suspend fun setSessionFast(name: String, on: Boolean): Queued =
+        queue("/v1/sessions/${seg(name)}/fast", buildJsonObject { put("on", JsonPrimitive(on)) })
+
+    private suspend fun queue(path: String, body: JsonObject): Queued {
+        val resp = http().request { build(path, HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val refusal = runCatching { decode<Queued>(text) }.getOrNull()
+            return Queued(queued = false, reason = refusal?.reason ?: "busy")
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return decode<Queued>(text).copy(queued = true)
+    }
+
+    /**
+     * The sessions account's Claude Code settings the daemon exposes, or NULL
+     * when this daemon has no such route (pre-3.14.0) — the feature probe the
+     * Settings row and the chat's fast option are gated on, in the same shape as
+     * [projects] and [apps]: absent and present are different answers.
+     */
+    suspend fun claudeSettings(): ClaudeSettings? =
+        probeGet("/v1/settings/claude")?.let { decode<ClaudeSettings>(it) }
+
+    /**
+     * Writes `fastMode` in the sessions account's settings.json (the daemon
+     * does it atomically and mode-preserving) and answers with the whole block.
+     */
+    suspend fun setClaudeSettings(fastModeDefault: Boolean): ClaudeSettings =
+        decode(call("/v1/settings/claude", HttpMethod.Patch, body = buildJsonObject {
+            put("fastModeDefault", JsonPrimitive(fastModeDefault))
+        }))
+
     // ---- archive: sessions ended on purpose, and the way back into them
 
     /**
@@ -1925,12 +1982,25 @@ class HuginnClient(
         return decode(post("/v1/chats", body = body))
     }
 
-    /** Model, effort and mode apply to the chat's NEXT turn. */
-    suspend fun updateChat(id: String, model: String? = null, effort: String? = null, mode: String? = null): ChatDetail {
+    /**
+     * Model, effort, mode and fast mode apply to the chat's NEXT turn.
+     *
+     * @param fast tri-state: null leaves the chat's choice alone; [ChatFast.DEFAULT]
+     *   sends an explicit JSON null, which is how the host default is restored
+     *   (an absent key would mean "no change", so it cannot be the same thing).
+     */
+    suspend fun updateChat(
+        id: String,
+        model: String? = null,
+        effort: String? = null,
+        mode: String? = null,
+        fast: ChatFast? = null,
+    ): ChatDetail {
         val body = buildJsonObject {
             if (model != null) put("model", JsonPrimitive(model))
             if (effort != null) put("effort", JsonPrimitive(effort))
             if (mode != null) put("mode", JsonPrimitive(mode))
+            if (fast != null) put("fast", fast.wire?.let { JsonPrimitive(it) } ?: JsonNull)
         }
         return decode(call("/v1/chats/${seg(id)}", HttpMethod.Patch, body = body))
     }

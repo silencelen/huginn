@@ -2,16 +2,25 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import com.silencelen.huginn.data.FastMode
 import com.silencelen.huginn.data.SessionHeadroom
+import com.silencelen.huginn.ui.system.HouseDialog
 import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 
@@ -68,6 +77,79 @@ fun AutoResumeChip(
             .padding(horizontal = 6.dp, vertical = 2.dp),
     )
 }
+
+/** The fast chip's words: the state, never the mechanics. */
+fun fastWords(fast: FastMode): String = when {
+    !fast.available -> "fast unavailable"
+    fast.on -> "fast on"
+    else -> "fast off"
+}
+
+/** The one-line note a reader sees before fast mode goes on. Claude Code's own trade. */
+const val FAST_ON_NOTE: String = "Auto mode turns off while fast is on."
+
+/**
+ * Fast mode for one session, drawn like [AutoResumeChip] because it is the
+ * same kind of thing: a per-session switch the header shows as a fact.
+ *
+ * Disabled when Claude Code says it is unavailable, with Claude Code's own
+ * [FastMode.reason] beside it ([showReason], the phone) or in the shell's
+ * tooltip (the desktop). Turning it ON asks once, in the house dialog, because
+ * fast mode turns auto mode off while it is on — the reader should hear that
+ * from the switch, not discover it mid-run. Turning it OFF just turns it off.
+ *
+ * Not drawn at all by callers against a daemon that reports no [FastMode].
+ */
+@Composable
+fun FastChip(
+    fast: FastMode,
+    onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    showReason: Boolean = false,
+) {
+    val scheme = MaterialTheme.colorScheme
+    var confirming by remember { mutableStateOf(false) }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
+        Text(
+            fastWords(fast),
+            style = MaterialTheme.typography.labelSmall,
+            color = when {
+                !fast.available -> scheme.onSurfaceVariant.copy(alpha = 0.6f)
+                fast.on -> scheme.primary
+                else -> scheme.onSurfaceVariant
+            },
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier
+                .testTag(FAST_CHIP_TAG)
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (fast.on && fast.available) scheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+                .clickable(enabled = fast.available) { if (fast.on) onToggle(false) else confirming = true }
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        val reason = fast.reason
+        if (showReason && !fast.available && !reason.isNullOrBlank()) {
+            Text(
+                reason,
+                style = MaterialTheme.typography.labelSmall,
+                color = scheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(start = 4.dp).testTag("fast.reason"),
+            )
+        }
+    }
+    if (confirming) {
+        HouseDialog(
+            title = "Turn fast mode on?",
+            onDismiss = { confirming = false },
+            confirmLabel = "Turn on",
+            onConfirm = { confirming = false; onToggle(true) },
+        ) { Text(FAST_ON_NOTE, style = MaterialTheme.typography.bodyMedium) }
+    }
+}
+
+const val FAST_CHIP_TAG: String = "fast.chip"
 
 /**
  * What the limit has done to this session, in the daemon's own terms — or

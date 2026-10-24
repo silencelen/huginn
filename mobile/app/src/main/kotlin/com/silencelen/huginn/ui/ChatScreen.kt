@@ -89,6 +89,10 @@ fun ChatScreen(
     onSetOptions: (String?, String?) -> Unit,
     onMode: (String) -> Unit,
     onEscalate: (() -> Unit)? = null,
+    /** The chat's fast-mode choice and whether this daemon stores one (appd 3.14.0). */
+    fast: Boolean? = null,
+    fastSupported: Boolean = false,
+    onFast: (com.silencelen.huginn.data.ChatFast) -> Unit = {},
     chatId: String,
     suggestions: List<String>,
     voiceReady: Boolean,
@@ -151,7 +155,7 @@ fun ChatScreen(
     // opening, took their height out of the viewport and left the newest message
     // below the fold. The desktop's fix for exactly that lives in the shared one,
     // and so do its tests.
-    val hasUnseen = FollowNewest(
+    val follow = FollowNewest(
         listState = listState,
         itemCount = itemCount,
         revision = tailRevision(page?.nextOffset, events.size, streamingText?.length, activeTool),
@@ -186,6 +190,9 @@ fun ChatScreen(
             onEffort = { onSetOptions(null, it) },
             onMode = onMode,
             onEscalate = onEscalate,
+            fast = fast,
+            fastSupported = fastSupported,
+            onFast = onFast,
         )
         if (error != null && !streaming) {
             // NOT the empty state. A chat that failed to load looks identical to a
@@ -262,11 +269,14 @@ fun ChatScreen(
               }
               }
               }
+              // The shared pill, floating over the list's bottom edge (`:ui`
+              // Follow.kt): "Back to bottom" while scrolled up, "New messages"
+              // once something landed below. It lands with the same
+              // scrollToNewest the latch uses, or the latch never re-arms.
+              BackToBottomPill(follow.away, follow.unseen) {
+                  scope.launch { listState.scrollToNewest(itemCount, animate = true) }
+              }
             }
-        }
-
-        if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
         }
 
         // Same contract as the session chips: a suggestion FILLS the composer,

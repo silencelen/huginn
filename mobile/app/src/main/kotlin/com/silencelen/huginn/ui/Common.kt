@@ -1,24 +1,16 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import com.silencelen.huginn.ui.theme.stateWord
 import com.silencelen.huginn.ui.theme.stateColor
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,48 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.silencelen.huginn.data.localTimeFormat
 import kotlinx.coroutines.delay
-
-/**
- * Shown when new content arrived while the reader was scrolled up. Without it,
- * deliberately scrolling back to read something older looks like the app has
- * stopped following — the reader cannot tell "nothing new" from "not following".
- *
- * The latch behind it is the shared one, `FollowNewest` in `:ui`'s Follow.kt,
- * and its tap must land with the same `scrollToNewest` — the phone's own copy of
- * both lived here until it missed the fix for bars arriving under the list.
- */
-@Composable
-fun JumpToNewest(onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.primary,
-            shape = CircleShape,
-            modifier = Modifier.clip(CircleShape).clickable(onClick = onClick),
-        ) {
-            Row(
-                Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(
-                    Icons.Filled.ArrowDownward,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "New messages",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                )
-            }
-        }
-    }
-}
 
 /**
  * Session state marks. Deliberately a small filled dot plus a word rather than a

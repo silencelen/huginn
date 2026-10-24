@@ -43,14 +43,26 @@ class PhoneFollowTest {
             assertFalse("$name still follows with the phone's own copy", "AutoScrollToNewest(" in src)
             assertTrue("$name's pill does not land with the shared scrollToNewest", "scrollToNewest(" in src)
             assertFalse("$name's pill lands with the phone's own scroll", "jumpToTail(" in src)
+            // 2026-10-23: one floating pill for both apps, drawn from the latch's
+            // two readings. The phone's own "New messages" row is gone with it.
+            assertTrue("$name does not draw the shared BackToBottomPill", "BackToBottomPill(" in src)
+            assertFalse("$name still draws the phone's own JumpToNewest", "JumpToNewest(" in src)
+            assertTrue("$name's pill does not read both the away and unseen states", "follow.away, follow.unseen" in src)
         }
+    }
+
+    /** The session screen tells the latch when an earlier page landed above the reader. */
+    @Test
+    fun `the session screen tells the latch about earlier pages`() {
+        val src = screen("SessionScreen.kt")
+        assertTrue("SessionScreen does not pass the window start as `prepends`", "prepends = shown?.windowStart" in src)
     }
 
     @Test
     fun `the app keeps no copy of the latch`() {
         val copies = File(root(), "app/src/main/kotlin").walk()
             .filter { it.isFile && it.extension == "kt" }
-            .filter { f -> f.readText().let { "fun AutoScrollToNewest(" in it || "fun LazyListState.jumpToTail(" in it } }
+            .filter { f -> f.readText().let { "fun AutoScrollToNewest(" in it || "fun LazyListState.jumpToTail(" in it || "fun JumpToNewest(" in it } }
             .map { it.name }
             .toList()
         assertTrue("a private copy of the follow latch drifts from the shared one: $copies", copies.isEmpty())

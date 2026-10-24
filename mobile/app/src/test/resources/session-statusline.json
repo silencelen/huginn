@@ -1,0 +1,90 @@
+{
+ "sessions": [
+  {
+   "name": "andrev",
+   "addressable": true,
+   "createdAt": 1785136601,
+   "activityAt": 1785166755,
+   "sessionActivityAt": 1785166702,
+   "attachedClients": 1,
+   "windows": 1,
+   "cols": 56,
+   "rows": 64,
+   "windowSize": "smallest",
+   "sizeLeased": false,
+   "softEnding": false,
+   "pendingSends": 0,
+   "contextPercent": 4,
+   "compacting": false,
+   "state": "idle",
+   "stateSince": 1785167453,
+   "claudeSessionId": "<claudeSessionId scrubbed, 36 chars>",
+   "hasTranscript": true,
+   "title": "<title scrubbed, 58 chars>",
+   "preview": [],
+   "liveModel": "Haiku 5.5",
+   "liveMode": "accept edits",
+   "context": {
+    "used": 35503,
+    "window": 1000000,
+    "percent": 4,
+    "exceeds200k": false
+   },
+   "model": "Haiku 5.5",
+   "effort": "medium",
+   "fast": {
+    "on": false,
+    "available": true,
+    "reason": null
+   },
+   "limits": {
+    "fiveHour": {
+     "usedPercent": 5,
+     "resetsAt": 1792830600
+    },
+    "sevenDay": {
+     "usedPercent": 1,
+     "resetsAt": 1793001600
+    },
+    "spend": null
+   },
+   "cost": {
+    "usd": 0.0034573600000000005,
+    "durationMs": 37177,
+    "apiMs": 10015,
+    "linesAdded": 0,
+    "linesRemoved": 0
+   }
+  },
+  {
+   "name": "plainshell",
+   "addressable": true,
+   "createdAt": 1785137048,
+   "activityAt": 1785166751,
+   "sessionActivityAt": 1785166740,
+   "attachedClients": 0,
+   "windows": 1,
+   "cols": 56,
+   "rows": 64,
+   "windowSize": "smallest",
+   "sizeLeased": false,
+   "softEnding": false,
+   "pendingSends": 0,
+   "contextPercent": null,
+   "compacting": false,
+   "state": null,
+   "hasTranscript": false,
+   "preview": [],
+   "context": null,
+   "model": null,
+   "effort": null,
+   "fast": {
+    "on": false,
+    "available": false,
+    "reason": "<reason scrubbed, 41 chars>"
+   },
+   "limits": null,
+   "cost": null
+  }
+ ]
+}

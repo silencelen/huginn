@@ -1,5 +1,23 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Added
+- The context meter in a session's header opens a card: tokens used of the window, the model,
+  effort and fast mode, and Claude Code's own `/context` table as a bar and rows, with when it was
+  taken and a Refresh that asks the session for a new one at its next idle moment.
+- A fast-mode chip beside the model and effort pickers; turning it on notes that auto mode turns
+  off while fast is on. Disabled with Claude Code's reason when the session cannot use it.
+- A chat's options row offers fast mode: host default, fast or normal speed.
+- Settings › Chats & sessions: "Fast mode by default for new sessions", kept on huginn.
+
+### Changed
+- One "Back to bottom" pill floats over a conversation while you are scrolled up, reading "New
+  messages" once something has arrived below; it no longer takes a row of its own under the list.
+
+### Fixed
+- Loading earlier messages no longer raises "New messages" or scrolls the conversation to its end.
+
 ## 2.6.7
 
 Carries core 2.6.7.
