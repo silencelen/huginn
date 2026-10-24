@@ -73,8 +73,9 @@ Claude Code tells Huginn what it is doing through hooks in `~/.claude/settings.j
   `ExitPlanMode` prompt.
 - **The daemon's own hooks** (`server/appd/hooks/`, merged by `server/appd/install-hooks.js`):
   the headroom gate (`SubagentStart`, `PreToolUse`) delays new subagents while a usage stop
-  is armed; the permission hook (`PermissionRequest`) lets a tap in an app answer a tool
-  prompt through Claude Code's own hook instead of keystrokes; the model-switch hook
+  is armed; the permission hook (`PermissionRequest`) parks every tool prompt as a request the
+  daemon's registry lists and the apps answer through Claude Code's own hook instead of
+  keystrokes; the model-switch hook
   (`PostModelSwitch`) records each model switch so the model ladder can confirm a move. Each
   of them always exits 0: it can delay, never block.
 - **`huginn-statusline`** (set as `statusLine` by `setup.sh`) is not a hook but lives in the

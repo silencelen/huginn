@@ -23,9 +23,9 @@ sessions (`~/.claude/settings.json`; root by default, `HUGINN_HOME` in `server/s
 
 | Script | Events (matcher) | Timeout | Installed by |
 |---|---|---|---|
-| `server/bin/huginn-claude-title` | `UserPromptSubmit`, `PreToolUse` (`.*`), `PostToolUse` (`.*`), `Notification`, `Stop`, `SubagentStop`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd` | 10 s, `async: true` | `server/setup.sh`, which merges `server/claude-hooks.json` with `jq` |
+| `server/bin/huginn-claude-title` | `UserPromptSubmit`, `PreToolUse` (`.*`), `PostToolUse` (`.*`), `PostToolUseFailure` (`.*`), `PermissionDenied` (`.*`), `Notification`, `Stop`, `SubagentStop`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd` | 10 s, `async: true` | `server/setup.sh`, which merges `server/claude-hooks.json` with `jq` (re-run it on a server set up before `PostToolUseFailure`/`PermissionDenied` were in the roster) |
 | `server/appd/hooks/huginn-headroom-gate` | `SubagentStart` (`*`), `PreToolUse` (`Agent\|Workflow`) | 1800 s | `server/appd/install.sh` through `install-hooks.js` |
-| `server/appd/hooks/huginn-permission-hook` | `PermissionRequest` (`*`) | 960 s | same |
+| `server/appd/hooks/huginn-permission-hook` | `PermissionRequest` (`*`) | 960 s, never async (it holds the prompt) | same |
 | `server/appd/hooks/huginn-modelswitch-hook` | `PostModelSwitch` (`*`) | 10 s | same |
 
 Not a hook but installed into the same file: `server/bin/huginn-statusline` as `statusLine.command`
@@ -52,7 +52,7 @@ Every hook script follows the same contract:
 
 | Event | `state` | Shown as |
 |---|---|---|
-| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `PreCompact`, `PostCompact` | `running` | working |
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `SubagentStop`, `PreCompact`, `PostCompact` | `running` | working |
 | `Notification` with `notification_type` other than `idle_prompt` | `attention` | needs you |
 | `Stop`, `SessionStart`, `Notification` with `idle_prompt` | `idle` | waiting |
 | `SessionEnd` | file removed | |
@@ -67,9 +67,10 @@ session-name namespace):
 | Path | Written on | Cleared on |
 |---|---|---|
 | `.compacting/<session>` (empty marker) | `PreCompact` | `PostCompact`, `Stop`, `SessionEnd` |
-| `.ask/<session>` | `PreToolUse` for `AskUserQuestion` | that tool's `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd` |
+| `.ask/<session>` | `PreToolUse` for `AskUserQuestion` | that tool's `PostToolUse` or `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionEnd` |
 | `.plan/<session>` | `PreToolUse` for `ExitPlanMode` | same |
 | `.status/<session>` | every redraw of the status line (`huginn-statusline`, not the hook) | the daemon, with the other per-name files, when the name changes hands; ignored after 6 hours |
+| `.perm/<session>/<id>.json` | written by `huginn-permission-hook` (below), not by this hook | the tool's `PostToolUse`, `PostToolUseFailure` or `PermissionDenied` (the oldest request for that tool with that exact `tool_input`); `UserPromptSubmit` and `Stop` (the main thread's requests, those with no `agentId`); `SubagentStop` (that agent's); `SessionEnd` (all) |
 
 A sidecar holds `{v, tool, sessionId, ts, input}`, where `input` is the exact `tool_input`. The
 daemon fuses it with the pane scrape (`server/appd/lib/ask.js`): labels come from the sidecar,
@@ -128,40 +129,80 @@ the pane (`Fast mode disabled · …`, `Fast mode unavailable…`, `Fast mode re
 `auto mode unavailable while fast mode is on`). The daemon watches `.status/` with `fs.watch` like
 the state directory, to wake a parked screen poll; the lists are polled anyway.
 
-### The permission hook
+### The permission hook and the request registry
 
-`huginn-permission-hook` lets a tap in an app answer a prompt through Claude Code's own
-`PermissionRequest` hook instead of keystrokes.
+`huginn-permission-hook` parks **every** tool prompt — `AskUserQuestion`, `ExitPlanMode`, `Bash`,
+`Edit`, MCP tools, all of them — where the daemon can answer it through Claude Code's own
+`PermissionRequest` hook instead of keystrokes. Verified against Claude Code 2.1.306 (2026-10-23).
 
-1. For a `Bash` or `AskUserQuestion` prompt in the top-level session (its `session_id` must
-   equal the one in the state file), the hook writes `.perm/<session>/<id>.json` and polls.
-2. `/answer` in the daemon (`server/appd/lib/permhook.js`) matches the tap against the dialog on
-   screen **exactly**: an `AskUserQuestion` by its whole question and option list, a Bash prompt
-   by its whole command. On exactly one match it writes `<id>.ans`.
-3. The hook claims the answer by renaming it to `<id>.taken` and prints it. If the hook has not
-   claimed it within a moment, the daemon retracts it and types the digit instead.
+1. For a prompt in the top-level session (its `session_id` must equal the one in the state
+   file) the hook writes `.perm/<session>/<id>.json` and polls. The record is the hook's whole
+   input as the registry needs it: `tool`, the exact `input`, `suggestions`
+   (`permission_suggestions`: the permission-update entries an "always allow" would write),
+   `mcpServer`, `agentId`/`agentType` (a subagent's prompt), `permissionMode`, `cwd`, `ts`,
+   `pid`, and `pane` (false for a background job, which no screen can show). It finds its tmux
+   session the way the title hook does — recovered from the nearest ancestor that carries
+   `TMUX`/`TMUX_PANE` when Claude Code's bg-pty-host dropped them, or, for a `claude --bg` job
+   (`CLAUDE_JOB_DIR` in its hooks' environment), through the one state file naming its session
+   id — so a session hosted in a background PTY still binds.
+2. The daemon's **request registry** (`server/appd/lib/questions.js`) turns the live request
+   files into the list `GET /v1/sessions/:name/questions` serves and `/screen` carries as
+   `questions`. A request is live while its file exists and its hook process is alive. An
+   `AskUserQuestion` request is additionally confirmed by the `.ask/<session>` sidecar whose
+   input deep-equals its own (the sidecar is cleared the moment the question is answered
+   anywhere, while the hook lingers). A plan approval comes from `.plan/<session>` as
+   `kind: "plan"`, carrying the plan text and file path, bound to the live `ExitPlanMode`
+   request when there is one. A request ends when its hook claims an answer, when its file is
+   gone, or when the title hook drops it on the tool's `PostToolUse`, `PostToolUseFailure` or
+   `PermissionDenied` (plus `UserPromptSubmit`/`Stop` for the main thread's, `SubagentStop` for
+   an agent's). A pane-backed permission request older than two seconds while the pane shows
+   Claude Code's composer and no dialog is left out: it was answered at the keyboard with "No",
+   which interrupts the turn and fires no hook event at all.
+3. `POST /v1/sessions/:name/questions/:id` answers one request by id (`fingerprint` required).
+   The daemon validates the body against the request (`decisionFor`), writes `<id>.ans`, and the
+   hook claims it by renaming it to `<id>.taken` and prints it. If the hook has not claimed it
+   within a moment the answer is retracted; the keys then answer only when the dialog on screen
+   is demonstrably this request's (an ask by its whole text and option list, a Bash prompt by
+   its exact command, any other tool by being the one live request under a permission dialog),
+   else `409 unbound`. The response says `via: "hook"` or `via: "keys"`.
 
-The decision the hook prints:
+The decisions the daemon writes and the hook prints:
 
 ```json
 {"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedPermissions":[...]}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"…","interrupt":false}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{...tool_input,"answers":{...},"annotations":{...},"response":"…"}}}}
 ```
 
-For `AskUserQuestion`, `allow` carries
-`updatedInput: {...tool_input, answers: {"<question text>": "<label>"}}`; a multi-select answer
-is the labels joined with `", "`. The hook gives up 60 s before its 960 s timeout
-(`HUGINN_PERM_WAIT`, default 900) so that it always exits on its own.
+| Kind | Answer body | Decision | Measured on 2.1.306 |
+|---|---|---|---|
+| `ask` | `answers: {"<question text>": string \| string[]}` for **every** question (an array only for a multi-select); optional `annotations` (`{preview, notes}` per question) and `response` (free text) | `allow` + `updatedInput = tool_input + {answers, annotations?, response?}` | a two-question call resolved with a free-text string for one and an array for the other; the transcript shows `User answered Claude's questions … Allowed by PermissionRequest hook`; an array is recorded joined with `", "` (labels containing `", "` are quoted, which is why arrays, never joined strings, go on the wire). The `kind: "text"` / `"number"` question shapes exist in the binary behind an SDK flag and are not reachable from the interactive CLI; the parser and the cards accept them unverified. |
+| `permission` | `behavior: "allow"` (+ `updatedPermissions`, each entry deep-equal to one of the request's `suggestions`) or `behavior: "deny"` (+ `message`) | `allow` / `allow` + `updatedPermissions` / `deny` with the message and `interrupt: false` when there are words, `interrupt: true` (the TUI's own No) when there are none | a Bash prompt approved through the hook ran without the dialog being touched; `permission_suggestions` on a Bash prompt in a fresh directory were `addDirectories` + `setMode: acceptEdits` |
+| `plan` | `behavior: "allow"` (+ `mode: "auto"`) or `behavior: "deny"` + `message` | approval is **keystrokes** (the dialog's own "Yes, manually approve edits" row, or the auto-mode row on request); feedback is `deny` + `message` through the live `ExitPlanMode` hook, else typed into the dialog's "Tell Claude what to change" row and sent with Enter | an `allow` for `ExitPlanMode` is accepted and **ignored** (the dialog stays); a `deny` with a `message` **is honoured**: the pane showed `Error: <message>` · `Denied by PermissionRequest hook` and the plan came back revised with the message addressed. The feedback row takes typed text after its digit focuses it; Enter sends it, shift+tab approves with it. |
 
 Behaviour of Claude Code that this design rests on:
 
 - The TUI draws the dialog while the hook waits; whichever answers first wins.
 - Answering at the keyboard does not stop a waiting hook. A request file therefore means "a
-  hook is alive", never "this prompt is on screen", and matching is by content.
+  hook is alive", never "this prompt is on screen"; the title hook's drops and the `.ask`
+  sidecar are what end a request, and the pane only breaks ties on the legacy `/answer` route.
 - The hook fires in headless `claude -p` runs too, and the run waits for it. That is why the
-  hook acts only for the pane's top-level session.
-- An `allow` for `ExitPlanMode` is accepted and ignored. Plan approval stays on keystrokes.
-- With zero or several matching requests (parallel subagents share a session id), nothing goes
-  through the hook.
+  hook acts only for the pane's top-level session (or a background job's own).
+- A keyboard "No" on a permission dialog **interrupts** the turn and fires no `PermissionDenied`
+  (that event is auto mode's own refusal) and no `Stop`.
+- `PermissionRequest` input carries `permission_suggestions`, `permission_mode`, `agent_id`,
+  `agent_type` and (for MCP tools) `mcp_server: {name, source}`, but no `tool_use_id`;
+  `PostToolUse`/`PostToolUseFailure` carry `tool_use_id`, so a request is matched to its end
+  by tool name and exact `tool_input`.
+- The hook gives up 60 s before its 960 s timeout (`HUGINN_PERM_WAIT`, default 900) so that
+  it always exits on its own, and exits at once when its request file is dropped.
+
+Notifications are built from the registry when it holds exactly one bound request (the exact
+option labels of a single single-select question, `Yes`/`No` for a permission, nothing for a
+multi-question or multi-select ask or a plan) and from the pane otherwise, with the TUI's own
+rows filtered out; `/answer` with a registry fingerprint resolves through that request's hook,
+and a pane fingerprint keeps today's path.
 
 ### The headroom gate
 
@@ -378,7 +419,8 @@ What it reads off the screen:
 
 | What | Code | Used for |
 |---|---|---|
-| Numbered selectors (permission prompts, `AskUserQuestion`, plan approval) | `detectNumberedPrompt` in `lib/pane.js` | Prompt cards, notification actions, `/answer` |
+| Numbered selectors (permission prompts, `AskUserQuestion`, plan approval) | `detectNumberedPrompt` in `lib/pane.js` | The link bar's fallback prompt, notification actions, `/answer`, the registry's keystroke fallback and plan approval |
+| The composer drawn with no dialog over it | `composerDrawn` in `lib/typing.js` with `detectPrompt` | The registry leaves out a pane-backed permission request that was answered at the keyboard |
 | The folder-trust dialog (unnumbered) | `detectTrustDialog` | Answered with arrow keys |
 | Any other unnumbered selector (`❯` indented under a column-0 rule, no `N.`) | `detectUnnumberedSelector` | Holds a send as a dialog; not offered as a prompt |
 | The usage-credits consent dialog | `consentRecommended` | A prompt card with a recommended row |
@@ -461,13 +503,19 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     `routes-headroom.test.js`, `headroom.test.js`, `transcript.test.js`.
 17. **Hook roster and payloads**: the event names in the hook table above and the input fields
     listed under [Stable interfaces](#stable-interfaces). A renamed event or field drops a sidecar
-    back to the pane-only path without an error. Tests: `install-hooks.test.js`,
-    `hook-gate.test.js`, `permission-hook-script.test.js`, `permhook.test.js`,
-    `routes-permhook.test.js`.
+    back to the pane-only path without an error; a renamed `permission_suggestions` costs the
+    "Always allow" button, a lost `PostToolUseFailure` leaves a failed tool's request listed until
+    the hook's deadline. Tests: `install-hooks.test.js`, `hook-gate.test.js`,
+    `permission-hook-script.test.js`, `permhook.test.js`, `routes-permhook.test.js`,
+    `questions.test.js`, `routes-questions.test.js`, `scripts/test-claude-title.sh` (cases P1 to P6).
 18. **Permission-hook behaviour**: that the dialog and the hook still race, that a keyboard
-    answer still leaves the hook waiting, that `ExitPlanMode` still ignores `allow`, and that
-    `-p` runs still wait on the hook. These are behaviours, not shapes; verify them on a
-    throwaway session.
+    answer still leaves the hook waiting, that an `allow` with `updatedInput.answers` still
+    resolves an `AskUserQuestion` (arrays for a multi-select), that `updatedPermissions` still
+    applies, that `ExitPlanMode` still ignores `allow` and still honours `deny` + `message`, that
+    the plan dialog's feedback row still takes typed text, and that `-p` runs still wait on the
+    hook. These are behaviours, not shapes; verify them on a throwaway session. Payload fixtures:
+    `bash-permission.hook.json`, `exitplanmode-2.1.306.hook.json`, `posttoolusefailure-read.hook.json`,
+    `ask-3q-preview.input.json`.
 19. **The title hook's process tree**: the nested-claude guard and the tmux-variable recovery.
     Test: `scripts/test-claude-title.sh`, which must run inside a tmux pane (it skips otherwise).
 20. **Device argv**: `cd server/appd && HUGINN_DEVICE_BIN=<path to huginn> node --test
@@ -527,9 +575,12 @@ Check the capture contains the dialog before you commit it.
 These are structured, and Huginn builds on them freely:
 
 - **Hook input** (JSON on stdin): `hook_event_name`, `session_id`, `transcript_path`, `cwd`,
-  `notification_type`, `tool_name`, `tool_input`; for `PostModelSwitch` also `from_model`,
-  `to_model`, `requested_model`, `source`.
-- **Hook output**: the `PermissionRequest` decision object above.
+  `permission_mode`, `notification_type`, `tool_name`, `tool_input`; for `PermissionRequest`
+  also `permission_suggestions`, `agent_id`, `agent_type`, `mcp_server`; for `PostToolUse`,
+  `PostToolUseFailure` and `PermissionDenied` also `tool_use_id`; for `PostModelSwitch` also
+  `from_model`, `to_model`, `requested_model`, `source`.
+- **Hook output**: the `PermissionRequest` decision objects above (`allow` with `updatedInput`
+  and `updatedPermissions`, `deny` with `message` and `interrupt`).
 - **Huginn's own files** under `/run/huginn-claude-state/`, whose schema Huginn defines.
 - **Transcript JSONL** record and block types listed above.
 - **`--output-format stream-json`** events: `system`/`init`, `stream_event`, `assistant`,

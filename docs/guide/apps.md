@@ -79,20 +79,25 @@ What the run has done and spent (tokens and an estimated cost), your own goals a
 session, and whether it picks itself back up after a usage limit. See
 [Usage limits](usage-limits.md).
 
-## Permission prompts become buttons
+## Questions become a card
 
-When Claude Code shows a numbered question in the pane (a permission prompt, a choice, a plan to
-approve), the apps offer its options as buttons in both the Conversation and the Screen tab.
-Questions that take several answers are offered as a multi-select. Detection requires Claude
-Code's live selection marker, so an answer that merely ends in a numbered list does not produce
-buttons.
+When Claude Code stops to ask (a permission prompt, a question with options, a plan to approve),
+the server receives the request itself through Claude Code's own hook, and the Conversation tab
+shows it as a compact card: every part of a multi-part question in turn, options with their
+explanations and previews, a multi-select as a checklist, an **Other…** line, **Yes** /
+**Always allow** / **No** (with a note for Claude) for a permission, the plan text with **Yes** /
+**No, tell Claude what to change** for a plan. The answer reaches Claude Code the way its own
+dialog would deliver it, and the dialog closes by itself. See
+[Questions from the apps](sessions.md#questions-from-the-apps) for what each kind shows.
 
-Every answer carries a fingerprint of the question it was offered for. The server reads the pane
-again in the same request and refuses the answer if that question is no longer on screen, because
-it was answered in a terminal, from another device, or replaced by a different question. A stale
-tap can never answer something you did not see. Moving the selection highlight does not change
-the fingerprint. The same check protects the answer buttons on Android notifications; see
-[Notifications](notifications.md).
+When there is no request behind a dialog (an older server, or a dialog Claude Code draws without
+a hook), the Conversation tab shows a one-line bar that takes you to the Screen tab, where every
+dialog can be answered by hand. Nothing is drawn over the Screen tab itself.
+
+Every answer carries a fingerprint of the request it was offered for, and the server refuses it
+if that request is gone or has changed — answered in a terminal, from another device, or replaced
+by a different question. A stale tap can never answer something you did not see. The same check
+protects the answer buttons on Android notifications; see [Notifications](notifications.md).
 
 ## Chats
 

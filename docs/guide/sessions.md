@@ -254,6 +254,32 @@ Stops the session now, with no wrap-up. Unsaved work in it is lost. The daemon a
 knew about the session, so a killed session is not brought back after a server reboot. If the
 daemon cannot be reached at all, the client ends the tmux session directly.
 
+## Questions from the apps
+
+When Claude Code stops to ask — a permission for a command or a file change, a question with
+options, a plan to approve — the session reads **needs you**, and the desktop app and the Android
+app show the question on the session's Conversation tab:
+
+- **A compact card** when the server has the request itself (Claude Code hands it over as the
+  dialog opens). It shows what the terminal shows, whatever its width: every question of a
+  multi-part ask one at a time ("1 of 2"), the options with their explanations and previews,
+  an **Other…** line for your own words, a multi-select as a checklist; for a permission, the
+  command or file and **Yes** / **Always allow** / **No**, where **No** takes a note for Claude;
+  for a plan, the plan text and **Yes** / **No, tell Claude what to change** with your feedback.
+  The answer goes to Claude Code the way its own dialog would deliver it, so the dialog closes by
+  itself; the Screen tab is never typed into unless the server can see that the dialog on screen
+  is this very request.
+- **A one-line bar** ("Claude is asking a question · Answer on Screen") when there is no request
+  behind the dialog: a server from before this version, a dialog Claude Code draws without a
+  hook (the folder-trust dialog), or a question the server could not bind. The bar and the dot on
+  the Screen tab take you to the live pane, where every dialog can be answered by hand.
+
+Nothing is ever drawn over the Screen tab: there the pane is the dialog. An answer that no longer
+applies — the question was answered in a terminal, or replaced by another — is refused with a
+sentence, never typed somewhere else. "Always allow" grants only what Claude Code itself offered
+for that prompt, never a rule the app made up. A notification's buttons answer the same way; see
+[The apps](apps.md) and [Notifications](notifications.md).
+
 ## See also
 
 - [The console](console.md): the same session actions from a full-screen menu.
