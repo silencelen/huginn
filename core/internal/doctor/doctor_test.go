@@ -379,6 +379,33 @@ func TestServerDownBehindAReachableRoute(t *testing.T) {
 	}
 }
 
+// A hostile or impostor daemon must not be able to drive the operator's
+// terminal through the status row: the host and version fields, which the core
+// proxies verbatim from /v1/status, go through oneLine like every other remote
+// string in the report. Fails on the pre-fix row, which formatted them raw.
+func TestServerStatusStripsControlSequences(t *testing.T) {
+	m := healthy(t)
+	m.core["/appd/v1/status"] = map[string]any{
+		"host":        "evil\x1b[2J\x1b[Hhost",
+		"appdVersion": "3.14.0\x1b]0;pwned\x07",
+		"claude":      "2.1.306\x1b[31m",
+		"uptimeSec":   180000, "sessions": 3,
+	}
+	c := byID(Run(m.p))["server.status"]
+	if c.State != OK {
+		t.Fatalf("server.status: %+v", c)
+	}
+	for _, r := range c.Detail {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			t.Errorf("server.status detail carries control rune %#U: %q", r, c.Detail)
+		}
+	}
+	// the honest text survives, the ESC that arms every sequence is gone
+	if !strings.Contains(c.Detail, "evil") || !strings.Contains(c.Detail, "host") || strings.ContainsRune(c.Detail, 0x1b) {
+		t.Errorf("server.status detail = %q", c.Detail)
+	}
+}
+
 func TestDeviceStates(t *testing.T) {
 	m := healthy(t)
 	st := m.core["/core/status"].(map[string]any)

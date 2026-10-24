@@ -535,11 +535,15 @@ func (r *report) server() {
 			"huginn core route (which address is active); on the server: systemctl status huginn-appd")
 		return
 	}
-	claude := st.Claude
+	claude := oneLine(st.Claude)
 	if claude == "" {
 		claude = "unknown"
 	}
-	r.add("server.status", "server", OK, fmt.Sprintf("huginn-appd %s on %s, Claude Code %s, %d sessions, up %s", st.AppdVersion, st.Host, claude, st.Sessions, dur(time.Duration(st.UptimeSec)*time.Second)), "")
+	// host and version come from the paired daemon's /v1/status, which the
+	// core proxies verbatim; neutralize them like every other remote string
+	// in this file so a hostile or impostor server cannot drive the
+	// operator's terminal with escape sequences through this row.
+	r.add("server.status", "server", OK, fmt.Sprintf("huginn-appd %s on %s, Claude Code %s, %d sessions, up %s", oneLine(st.AppdVersion), oneLine(st.Host), claude, st.Sessions, dur(time.Duration(st.UptimeSec)*time.Second)), "")
 }
 
 func (r *report) device() {
