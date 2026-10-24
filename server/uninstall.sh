@@ -5,8 +5,8 @@
 #   sudo bash /usr/local/src/huginn/server/uninstall.sh --purge    remove those too
 #
 # Removes the huginn-appd service, its files and drop-ins, the Claude Code hooks
-# setup.sh added, the host tools in /usr/local/bin and the tmux server service
-# when no session is running. It leaves alone: Claude Code, Node.js, tmux and the
+# and the huginn-server skill link setup.sh added, the host tools in
+# /usr/local/bin and the tmux server service when no session is running. It leaves alone: Claude Code, Node.js, tmux and the
 # other packages, root's tmux config (the one before Huginn is in
 # ~/.tmux.conf.pre-huginn), and your sessions' files. --purge also deletes
 # /var/lib/huginn-appd (chats, uploads, settings, certificate) and
@@ -122,6 +122,13 @@ if { [ -e "$SETTINGS" ] || [ -L "$SETTINGS" ]; } \
     fi
   fi
 fi
+# The huginn-server skill link setup.sh made in this home, and only that: a
+# directory or a link elsewhere at that name is the account's own.
+SKILL_LINK="$TARGET_HOME/.claude/skills/huginn-server"
+if [ -L "$SKILL_LINK" ] && [ "$(readlink -- "$SKILL_LINK")" = /usr/local/share/huginn/skills/huginn-server ]; then
+  if as_home_owner rm -f -- "$SKILL_LINK"; then say "removed the huginn-server skill link from $TARGET_HOME/.claude/skills"
+  else say "could not remove $SKILL_LINK as the home's owner - remove the link by hand"; fi
+fi
 # END huginn-home-writes
 
 rm -rf /opt/huginn-appd /etc/systemd/system/huginn-appd.service /etc/systemd/system/huginn-appd.service.d
@@ -141,8 +148,9 @@ for t in cc huginn-status huginn-rounds huginn-devices huginn-headroom huginn-ar
          huginn-projects huginn-claude-title huginn-llm huginn-ask; do
   rm -f "/usr/local/bin/$t"
 done
-rm -rf /usr/local/lib/huginn
-say "removed the host tools from /usr/local/bin and /usr/local/lib/huginn"
+rm -rf /usr/local/lib/huginn /usr/local/share/huginn/skills
+rmdir /usr/local/share/huginn 2>/dev/null || true
+say "removed the host tools from /usr/local/bin, /usr/local/lib/huginn and the huginn-server skill from /usr/local/share/huginn"
 
 if [ -n "$PURGE" ]; then
   rm -rf /var/lib/huginn-appd /etc/huginn-appd /run/huginn-claude-state

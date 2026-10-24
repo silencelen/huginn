@@ -1228,6 +1228,14 @@ function _Huginn-HelpBody {
   huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
                               for attaching and the session verbs, on a
                               machine set up from the desktop or a package
+  huginn doctor [--json]      health report of THIS machine's huginn: core,
+                              CLI, service, pairing, routes, ssh, Claude Code
+                              and its skills; exit 1 when a check fails
+  huginn skills [status]      the Huginn skills for Claude Code on this
+                              machine (huginn, huginn-doctor)
+  huginn skills install       put them in ~/.claude/skills (links to the
+                              core's copy; Windows copies them)
+  huginn skills remove        take them out again (only what huginn put there)
   huginn main                 attach/create the live 'main' session
                               (Claude Code starts in a new one)
   huginn <name>               a separate named session
@@ -1467,6 +1475,13 @@ function huginn {
     $core = _Huginn-CoreBin
     if ($core) { & $core setup @($args | Select-Object -Skip 1) }
     else { _Huginn-Fail "huginn setup needs huginn core: install it with huginn core install (or the one-liner in the README)" }
+  } elseif ($args[0] -in 'doctor', 'skills') {
+    # Both are the core's: a health report of THIS machine's huginn (doctor
+    # [--json]), and the Claude Code skills the core carries (skills
+    # install|remove|status).
+    $core = _Huginn-CoreBin
+    if ($core) { & $core @args }
+    else { _Huginn-Fail "huginn $($args[0]) needs huginn core: install it with huginn core install (or the one-liner in the README)" }
   } elseif ($args[0] -eq 'console') {
     $core = _Huginn-CoreBin
     if ($core) { & $core console --probe *> $null }
@@ -1641,6 +1656,10 @@ function huginn {
         _Huginn-UiRecords $rep $started
         Remove-Item $rep -Force -ErrorAction SilentlyContinue
         if ($elevRc -ne 0) { _Huginn-Fail "huginn core install: the elevated step failed (exit $elevRc)" }
+        # The elevated step cannot ask anything (its window is hidden and its
+        # lines are records), so the Claude Code skills question is asked here,
+        # unelevated, where the core asks it itself on every other path.
+        & $bin skills offer
       }
       if ($env:HUGINN_CORE_NOPAIR) {
         # huginn setup: the host does not trust this computer yet, so there is
@@ -2156,7 +2175,7 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
   # release behind (`persist` shipped in 1.1.0), and the aliases the dispatcher
   # accepts (ls, st, mv, round, project, ccusage, unarchive) were offered by
   # neither.
-  $cmds = 'console', 'setup', 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
+  $cmds = 'console', 'setup', 'doctor', 'skills', 'list', 'ls', 'status', 'st', 'rounds', 'round', 'headroom', 'devices', 'device', 'core', 'local', 'llm', 'projects', 'project', 'solo', 'attach', 'rename', 'mv', 'kill', 'end', 'archive', 'revive', 'unarchive', '-p', '-y', 'usage', 'cost', 'ccusage', 'desktop', 'update', 'uninstall', 'version', 'help'
   # tokens already typed after the command name, excluding the partial word being completed
   $typed = @($ast.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })
   if ($word -and $typed.Count -ge 1) { $typed = @($typed | Select-Object -SkipLast 1) }
@@ -2188,6 +2207,10 @@ Register-ArgumentCompleter -CommandName huginn, rclaude, rcc -ScriptBlock {
     $candidates = 'software', 'infra', 'hardware', 'docs', 'research', 'other'
   } elseif ($prev -eq 'uninstall') {
     $candidates = '--all', '--yes'
+  } elseif ($prev -eq 'skills') {
+    $candidates = 'status', 'install', 'remove', '--help'
+  } elseif ($prev -eq 'doctor') {
+    $candidates = '--json', '--help'
   } else {
     $candidates = @()
   }

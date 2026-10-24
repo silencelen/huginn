@@ -11,6 +11,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/proc"
 	"github.com/silencelen/huginn/core/internal/service"
+	"github.com/silencelen/huginn/core/internal/skills"
 	"github.com/silencelen/huginn/core/internal/tray"
 	"github.com/silencelen/huginn/core/internal/ui"
 	"github.com/silencelen/huginn/core/internal/version"
@@ -61,6 +62,14 @@ func installBinaryUI(u *ui.Out, compact bool) (string, bool) {
 		u.Line(ui.Warn, "CLI", "could not install the huginn CLI: "+err.Error())
 	case len(steps) > 0 || !compact:
 		u.Line(ui.OK, "CLI", cliSummary(home, e, steps))
+	}
+	// The Claude Code skills the core carries go under the install root with
+	// the binary; whether they are linked into ~/.claude/skills is decided
+	// after the service (skillsOffer).
+	if se, err := skills.DefaultEnv(); err == nil {
+		if _, err := skills.Lay(se); err != nil {
+			u.Line(ui.Warn, "skills", "could not lay the Claude Code skills down: "+err.Error())
+		}
 	}
 	return r.Binary, true
 }

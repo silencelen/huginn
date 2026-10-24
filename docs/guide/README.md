@@ -13,4 +13,6 @@
 - [Rounds](rounds.md): unattended work on the server on a schedule, with a report.
 - [Usage limits](usage-limits.md): how Huginn watches your plan's limits and keeps work moving.
 - [Hosted apps](hosted-apps.md): the web pages your server serves, listed and checked.
+- [Claude Code skills](skills.md): what Claude Code learns about Huginn on your computers and your
+  server, and `huginn doctor`.
 - [Local AI](local-ai.md) (experimental): local models served from a computer with a GPU.

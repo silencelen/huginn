@@ -27,6 +27,14 @@
   huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
                               for attaching and the session verbs, on a
                               machine set up from the desktop or a package
+  huginn doctor [--json]      health report of THIS machine's huginn: core,
+                              CLI, service, pairing, routes, ssh, Claude Code
+                              and its skills; exit 1 when a check fails
+  huginn skills [status]      the Huginn skills for Claude Code on this
+                              machine (huginn, huginn-doctor)
+  huginn skills install       put them in ~/.claude/skills (links to the
+                              core's copy; Windows copies them)
+  huginn skills remove        take them out again (only what huginn put there)
   huginn main                 attach/create the live 'main' session
                               (Claude Code starts in a new one)
   huginn <name>               a separate named session

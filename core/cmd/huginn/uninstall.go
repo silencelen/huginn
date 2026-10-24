@@ -18,6 +18,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/install"
 	"github.com/silencelen/huginn/core/internal/localtier"
 	"github.com/silencelen/huginn/core/internal/proc"
+	"github.com/silencelen/huginn/core/internal/skills"
 	"github.com/silencelen/huginn/core/internal/store"
 	"github.com/silencelen/huginn/core/internal/ui"
 	"github.com/silencelen/huginn/core/internal/version"
@@ -31,9 +32,10 @@ import (
 //	1. the desktop app        (it cannot work without what follows)
 //	2. the local-AI tier      (its manager lives in ~/.huginn, removed in 5)
 //	3. the device row         (while the core and its token still exist)
-//	4. huginn core            (service, tray, binary, config, secrets)
-//	5. the CLI                (~/.huginn and the shell startup lines)
-//	6. --all: the `Host huginn` SSH stanza, and its key if it is huginn's own
+//	4. the Claude Code skills (the links or copies in ~/.claude/skills)
+//	5. huginn core            (service, tray, binary, config, secrets)
+//	6. the CLI                (~/.huginn and the shell startup lines)
+//	7. --all: the `Host huginn` SSH stanza, and its key if it is huginn's own
 //
 // The shell clients hand `huginn uninstall` here whenever a core is installed;
 // their own copy remains only for platforms with no core (Termux).
@@ -153,6 +155,9 @@ func uninstall(args []string) int {
 	}
 	row(dirExists(ldir), "local AI", h(ldir)+": models, sessions, runtime ("+localSize+") - asked separately", "not installed here")
 	row(deviceEnrolled(p), "device", "this machine's row on huginn, retired first, while the token exists", "none enrolled here")
+	se, seErr := skills.DefaultEnv()
+	skillsDir := h(filepath.Join(home, ".claude", "skills"))
+	row(seErr == nil && skills.AnyOurs(se), "skills", "huginn's Claude Code skills in "+skillsDir+" (links to the core's copy)", "none installed")
 	coreWhat := h(l.Root) + ", " + h(p.Config) + ", " + h(p.State)
 	if svc {
 		coreWhat = "the boot service, the tray, " + coreWhat
@@ -231,6 +236,21 @@ func uninstall(args []string) int {
 	t = part("device")
 	retireDevice(t, p)
 	end(t, "this machine's device row on huginn", "none enrolled here")
+
+	t = part("skills")
+	if seErr == nil {
+		r := skills.Remove(se)
+		for _, n := range r.Done {
+			t.gone(filepath.Join(se.LinkDir(), n))
+		}
+		for _, k := range r.Kept {
+			t.keep(k)
+		}
+		for _, e := range r.Errors {
+			t.stays(e)
+		}
+	}
+	end(t, "huginn's Claude Code skills from "+skillsDir, "none installed")
 
 	t = part("core")
 	removeService(t)

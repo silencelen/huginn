@@ -48,6 +48,9 @@ What you get:
   limits you set on that machine.
 - **Usage awareness.** Huginn watches your plan's limits, warns before a session runs out,
   and resumes stalled work when the limit resets.
+- **Claude Code knows Huginn.** The client ships skills that teach a Claude Code on your
+  computer what `huginn` is and how to diagnose it (`huginn doctor`); the server ships one for
+  the sessions it runs.
 
 Huginn signs in with your Claude Pro or Max subscription (or an API key) and works entirely
 on your own network. Nothing needs to be exposed to the internet.

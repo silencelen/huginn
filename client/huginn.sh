@@ -1619,6 +1619,14 @@ _huginn_help_body() {
   huginn setup ssh            SSH to the huginn host (key + 'Host huginn'),
                               for attaching and the session verbs, on a
                               machine set up from the desktop or a package
+  huginn doctor [--json]      health report of THIS machine's huginn: core,
+                              CLI, service, pairing, routes, ssh, Claude Code
+                              and its skills; exit 1 when a check fails
+  huginn skills [status]      the Huginn skills for Claude Code on this
+                              machine (huginn, huginn-doctor)
+  huginn skills install       put them in ~/.claude/skills (links to the
+                              core's copy; Windows copies them)
+  huginn skills remove        take them out again (only what huginn put there)
   huginn main                 attach/create the live 'main' session
                               (Claude Code starts in a new one)
   huginn <name>               a separate named session
@@ -1851,6 +1859,18 @@ huginn() {
         "$core" console "${@:2}"
       else
         echo "huginn console needs huginn core 2.3.0 or newer: huginn core install (or huginn core update)" >&2
+        return 1
+      fi
+      ;;
+    doctor|skills)
+      # Both are the core's: a health report of THIS machine's huginn (doctor
+      # [--json]), and the Claude Code skills the core carries (skills
+      # install|remove|status). Not on Termux: no core runs there.
+      local core
+      if [ "$(uname -o 2>/dev/null)" != Android ] && core="$(_huginn_core_bin)"; then
+        "$core" "$@"
+      else
+        echo "huginn $1 needs huginn core: install it with huginn core install (or the one-liner in the README)" >&2
         return 1
       fi
       ;;
@@ -2277,7 +2297,7 @@ _huginn_complete() {
   local cur prev cmds
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  cmds="console setup list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
+  cmds="console setup doctor skills list ls status st rounds round headroom devices device local llm projects project solo attach rename mv kill end archive revive unarchive -p -y usage cost ccusage desktop update uninstall version help"
   COMPREPLY=()
   if [ "$COMP_CWORD" -eq 1 ]; then
     # first word: subcommands + live session names (bare name attaches to it).
@@ -2303,6 +2323,10 @@ _huginn_complete() {
         mapfile -t COMPREPLY < <(compgen -W "--json --help" -- "$cur") ;;
       uninstall)
         mapfile -t COMPREPLY < <(compgen -W "--all --yes" -- "$cur") ;;
+      skills)
+        mapfile -t COMPREPLY < <(compgen -W "status install remove --help" -- "$cur") ;;
+      doctor)
+        mapfile -t COMPREPLY < <(compgen -W "--json --help" -- "$cur") ;;
       --scope)
         mapfile -t COMPREPLY < <(compgen -W "look work own" -- "$cur") ;;
       --kind)

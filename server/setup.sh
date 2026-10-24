@@ -101,6 +101,15 @@ install -d /usr/local/lib/huginn
 for f in state-table.json state-table.sh state-table.py state-table.js; do
   install_script "$HERE/lib/$f" "/usr/local/lib/huginn/$f" 0644
 done
+# The Claude Code skill for sessions ON this server (skills/huginn-server):
+# what Huginn is here, where its state and logs live, which host tools read
+# it, and what is safe to do without the person. Data, not programs: 0644.
+# Linked into the sessions account's ~/.claude/skills below, with everything
+# else this script writes in that home.
+install -d /usr/local/share/huginn/skills/huginn-server
+for f in "$HERE"/../skills/huginn-server/*.md; do
+  install_script "$f" "/usr/local/share/huginn/skills/huginn-server/$(basename "$f")" 0644
+done
 
 # BEGIN huginn-home-writes - everything this script writes in HUGINN_HOME, and
 # the only part of it scripts/test-home-writes.sh runs, against a scratch home.
@@ -262,6 +271,27 @@ if command -v jq >/dev/null 2>&1; then
   fi
 else
   echo "[huginn] jq not found - skipping terminal-title hooks (install jq + re-run, or merge server/claude-hooks.json by hand)." >&2
+fi
+
+# The huginn-server skill, for Claude Code sessions in this home: a link into
+# /usr/local/share/huginn/skills, made as the home's owner, so every session
+# here loads it. Already linked there: nothing to do. Anything else at that
+# name is the account's own (its own skill of that name, a link elsewhere) and
+# is left alone, with why. The link is made and removed, never written through.
+SKILL_DIR=/usr/local/share/huginn/skills/huginn-server
+SKILL_LINK="$TARGET_HOME/.claude/skills/huginn-server"
+if home_path_ok "$TARGET_HOME/.claude" && home_path_ok "$TARGET_HOME/.claude/skills"; then
+  if [ -L "$SKILL_LINK" ] && [ "$(readlink -- "$SKILL_LINK")" = "$SKILL_DIR" ]; then
+    :   # ours already
+  elif [ -e "$SKILL_LINK" ] || [ -L "$SKILL_LINK" ]; then
+    echo "[huginn] NOT writing $SKILL_LINK: something that is not huginn's link is there - move it aside to get the huginn-server skill" >&2
+    HOME_REFUSED="$HOME_REFUSED $SKILL_LINK"
+  elif as_home_owner mkdir -p -- "$TARGET_HOME/.claude/skills" && as_home_owner ln -s -- "$SKILL_DIR" "$SKILL_LINK"; then
+    echo "[huginn] linked the huginn-server skill into $TARGET_HOME/.claude/skills (Claude Code sessions here load it)"
+  else
+    echo "[huginn] NOT written: $SKILL_LINK (could not make the link as the home's owner)" >&2
+    HOME_REFUSED="$HOME_REFUSED $SKILL_LINK"
+  fi
 fi
 # END huginn-home-writes
 

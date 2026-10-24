@@ -43,6 +43,7 @@ unanswered question is answered no. See [Install the clients](../install/clients
 | `HUGINN_GUI` | asks (default yes) | `y` or `n`: install the desktop app. On Linux the question is only asked in a graphical session, unless this is set. | installers |
 | `HUGINN_DEVICE` | asks (default yes) | `y` or `n`: offer this computer to Huginn as a device. | installers |
 | `HUGINN_LOCAL` | asks (default no) | `y` or `n`: serve local AI models from this computer. Only asked on a computer with a suitable GPU. | installers |
+| `HUGINN_SKILLS` | asks (default yes) | `1` or `0` (`y`/`n` work too): put the Huginn skills for Claude Code in `~/.claude/skills`. Only asked on a computer that has Claude Code and nothing of Huginn's there yet; `0` is remembered. Read by `huginn core install`, so it works for the one-line installers and for the command alone. See [Claude Code skills](../guide/skills.md). | installers, core |
 | `HUGINN_APPD_URL` | worked out from the server address you give | The daemon's address to pair huginn core with, for example `https://192.168.1.20:8787`. The installers derive it from the address you type (`https://` and port `8787` when you give neither); a preset value is used when the address you type has no scheme or port. `huginn core install` also uses it to pair with a pasted token when SSH does not answer. | installers, bash, PowerShell |
 
 The server's address itself is the argument on Linux (`sh -s -- <server>`) and `HUGINN_HOST` on
