@@ -81,14 +81,14 @@ class AttachmentImagesTest {
     /**
      * ⚠⚠ THE DEFECT, AS A FILE. An answer that names an image path has it fetched
      * and decoded with nobody clicking anything, and the decode allocated width ×
-     * height × 4 bytes for whatever the header said. This one is 7 KB and says
-     * 7500 × 7500: 56 MP, 225 MB of pixels the old decoder produced without a
-     * murmur. Past the budget it is refused before anything is allocated, the
-     * same null as bytes that do not decode.
+     * height × 4 bytes for whatever the header said. This one is about 13 KB
+     * and says 10,500 × 10,500: 110 MP, 441 MB of pixels the old decoder
+     * produced without a murmur. Past the budget it is refused before anything
+     * is allocated, the same null as bytes that do not decode.
      */
     @Test
     fun `a small file declaring more pixels than the budget is refused, not decoded`() {
-        val bomb = bilevelPng(7500, 7500)
+        val bomb = bilevelPng(10_500, 10_500)
         assertTrue(bomb.size < 16 * 1024, "the file is ${bomb.size} bytes")
         assertNull(SkiaImageBytesDecoder().decode(bomb))
     }
@@ -103,7 +103,9 @@ class AttachmentImagesTest {
         assertEquals(16_383L * 16_383L, SkiaImageBytesDecoder.declaredPixels(head))
         assertEquals(56_250_000L, SkiaImageBytesDecoder.declaredPixels(bilevelPng(7500, 7500)))
         assertNull(SkiaImageBytesDecoder.declaredPixels(byteArrayOf(1, 2, 3, 4, 5)))
-        assertTrue(56_250_000L > SkiaImageBytesDecoder.MAX_PIXELS, "the file above must be over the budget")
+        assertEquals(110_250_000L, SkiaImageBytesDecoder.declaredPixels(bilevelPng(10_500, 10_500)))
+        assertTrue(110_250_000L > SkiaImageBytesDecoder.MAX_PIXELS, "the bomb above must be over the budget")
+        assertTrue(11_648L * 8_736L <= SkiaImageBytesDecoder.MAX_PIXELS, "a 100 MP camera's photo must fit")
     }
 
     @Test

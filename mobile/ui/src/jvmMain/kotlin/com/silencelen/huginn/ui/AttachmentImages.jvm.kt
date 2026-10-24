@@ -40,19 +40,18 @@ class SkiaImageBytesDecoder(
 
     companion object {
         /**
-         * 50 megapixels (50 × 2²⁰), 200 MiB as RGBA: room for what an answer
+         * 100 megapixels (100 × 2²⁰), 400 MiB as RGBA: room for what an answer
          * really shows, and a hard stop for what it should not.
          *
          * An 8K screenshot is 33 MP, a full-page capture of a long web page at
-         * 2× (2560 × 16,000) is 41 MP, and a phone's full-resolution photo from
-         * a 48 or 50 MP sensor is 48–50.3 MP (8192 × 6144) — which is why this is
-         * 50 × 2²⁰ and not fifty million. A 64 MP or larger full-resolution
-         * photo draws the placeholder instead: the one kind of real picture
-         * given up.
+         * 2× (2560 × 16,000) is 41 MP, a phone's full-resolution photo is 48–64
+         * MP, and a 100 MP camera's is 101.8 MP (11,648 × 8,736) — which is why
+         * this is 100 × 2²⁰ and not a hundred million. Anything larger draws the
+         * placeholder instead.
          * The apps' own uploads never come near it: each scales a picture to
          * 2048 px on the long edge before sending it.
          */
-        const val MAX_PIXELS: Long = 50L * 1024 * 1024
+        const val MAX_PIXELS: Long = 100L * 1024 * 1024
 
         /**
          * width × height as the file's header declares it, or null when skia has
