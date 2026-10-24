@@ -957,6 +957,37 @@ function parseStatusLine(lines) {
 }
 
 /**
+ * Claude Code's own sentence for a fast mode that cannot be used, if one is on
+ * screen, else null. The status-line JSON says only whether fast mode is ON
+ * (`fast_mode`); when a `/fast on` does not take, the TUI prints why, in one of
+ * these shapes (2.1.306):
+ *
+ *     Fast mode disabled · <why>
+ *     Fast mode unavailable <why>
+ *     Fast mode requires usage credits <why>
+ *     auto mode unavailable while fast mode is on
+ *
+ * The bottom of the pane is read, newest row first — the last `rows` rows that
+ * say anything, since a capture carries every blank row of a tall pane — and
+ * the sentence is returned as drawn (minus a leading glyph), so the apps can
+ * show Claude Code's wording rather than invent their own.
+ * Fixture: test/fixtures/prompts/fast-mode-unavailable-80.txt.
+ */
+const FAST_UNAVAILABLE_RE = /^\s*(?:[^\w\s]\s+)?((?:Fast mode (?:disabled|unavailable|requires usage credits)|auto mode unavailable while fast mode is on)\b.*)$/i;
+function fastModeUnavailable(lines, rows = 12) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  let seen = 0;
+  for (let i = arr.length - 1; i >= 0 && seen < rows; i--) {
+    const plain = stripAnsi(String(arr[i])).replace(/\s+$/, '');
+    if (!plain.trim()) continue;
+    seen += 1;
+    const m = FAST_UNAVAILABLE_RE.exec(plain);
+    if (m) return m[1].trim().slice(0, 160);
+  }
+  return null;
+}
+
+/**
  * Is the session compacting its context right now? Claude Code draws
  * "Compacting conversation…" as the live spinner while it does; that arrives via
  * parseSpinner as the spinner string, so this reads it there. A dedicated
@@ -1040,5 +1071,5 @@ module.exports = {
   sameConsent,
   parseModelPicker,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
-  extractLoginUrl, parseStatusLine, loginPaneState,
+  extractLoginUrl, parseStatusLine, fastModeUnavailable, loginPaneState,
 };

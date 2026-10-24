@@ -30,10 +30,14 @@ This downloads the newest Huginn release to `/usr/local/src/huginn` and runs its
    and `ccusage` for usage reports;
 2. installs the host tools (`cc`, `huginn-status`, `huginn-headroom` and the others) to
    `/usr/local/bin`, the tmux configuration to `/root/.tmux.conf` (an existing one is saved as
-   `.tmux.conf.pre-huginn`), Claude Code hooks that keep terminal titles current, and the
-   `huginn-server` [Claude Code skill](../guide/skills.md) (to
-   `/usr/local/share/huginn/skills/`, linked into `/root/.claude/skills/huginn-server`), so
-   sessions on the server know where Huginn keeps things and what not to touch;
+   `.tmux.conf.pre-huginn`), Claude Code hooks that keep terminal titles current, Claude Code's
+   status line (`huginn-statusline`, which gives the apps each session's live context window; a
+   status line you already had keeps printing, chained after it), and the `huginn-server`
+   [Claude Code skill](../guide/skills.md) (to `/usr/local/share/huginn/skills/`, linked into
+   `/root/.claude/skills/huginn-server`), so sessions on the server know where Huginn keeps things
+   and what not to touch. It also turns Claude Code's feedback prompts off and sets
+   `fastModePerSessionOptIn` where those settings are absent; see
+   [Server configuration](../reference/server-config.md#claude-code-settings-the-installer-writes);
 3. installs `huginn-appd`: the daemon in `/opt/huginn-appd`, an access token in
    `/etc/huginn-appd/token`, a TLS certificate, and the `huginn-appd` systemd service;
 4. checks that the daemon answers, and prints your next steps.
@@ -55,6 +59,7 @@ Set these before the command (for the one-liner: `curl … | sudo HUGINN_WORKDIR
 | `HUGINN_NO_DAEMON=1` | Install a terminal-only server, without `huginn-appd`. Clients can then only attach over SSH: no console, desktop app, Android app or devices. |
 | `HUGINN_REF=<tag>` | Install a specific release instead of the newest. |
 | `HUGINN_FORCE=1` | Overwrite host tools that were edited on this machine (otherwise they are kept and listed). |
+| `HUGINN_KEEP_CLAUDE_FEEDBACK=1` | Leave Claude Code's feedback prompts on (the installer otherwise sets `feedbackSurveyRate: 0`, `feedbackDrafts: "off"` and `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` where they are absent). |
 
 ## Sign Claude Code in
 
@@ -104,5 +109,7 @@ sudo bash /usr/local/src/huginn/server/uninstall.sh --purge    # removes those t
 ```
 
 It removes the daemon, its service and drop-ins, the Claude Code hooks and the skill link setup
-added, and the host tools. Claude Code, Node.js, tmux and your files stay. `--purge` deletes the token, which
-disconnects every paired client. Remove each client separately: [Uninstall](uninstall.md).
+added, Huginn's status line (the one you had before it is put back) and the host tools. Claude
+Code, Node.js, tmux and your files stay, and so do the fast-mode and feedback settings the
+installer added to `~/.claude/settings.json`. `--purge` deletes the token, which disconnects every
+paired client. Remove each client separately: [Uninstall](uninstall.md).

@@ -167,6 +167,26 @@ the 7-bit marks are used when the server's locale is not UTF-8. Set `HUGINN_NO_T
 your tab titles alone. If a tab does not rename, check that your terminal allows applications to
 set the title and that the tab title is not pinned.
 
+## Context window and fast mode
+
+The desktop and Android apps show, on every session, what Claude Code's own status line reports:
+how full the context window is (tokens used of the window, as a percentage), the model, the effort
+level, whether fast mode is on, the account's five-hour and weekly usage, and what the session has
+cost so far. The figures come from the status line the server installer sets up
+(`huginn-statusline`; a status line you had before keeps printing after it), so they are as current
+as the bottom of the pane. Before the first response of a session there is no context figure yet.
+
+A session's context card can also show the breakdown by category, system prompt, tools, skills,
+messages, free space and the auto-compact buffer, as Claude Code's `/context` prints it. The apps
+ask the session to run `/context` for that (it goes through the same queue as a message, so it
+waits for a question on screen to be answered and never lands after text you left unsent), and the
+table is read from the conversation, never shown in it.
+
+Fast mode can be switched per session from the apps (`/fast on` or `/fast off`, typed for you), and
+a default for every new session and chat is kept in Claude Code's settings. The installer sets
+`fastModePerSessionOptIn`, so switching one session never changes another. When your account
+cannot use fast mode, the apps show Claude Code's own sentence saying so.
+
 ## Rename a session
 
 ```bash

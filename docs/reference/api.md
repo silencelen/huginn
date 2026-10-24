@@ -144,6 +144,8 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/headroom` | The whole usage picture: every account's limits, what is stalled or held, and why. Timestamps in milliseconds. |
 | PATCH | `/v1/headroom/settings` | Thresholds, model order, default model, auto-resume and account switching. |
 | GET, POST | `/v1/autoswitch` | Deprecated alias for the account-switching part of `/v1/headroom/settings`. |
+| GET | `/v1/settings/claude` | `{fastModeDefault, fastModePerSession, feedbackOff, statusLine}`: the Claude Code settings the apps show, read from the sessions account's `settings.json` (`fastMode`, `fastModePerSessionOptIn`, the three feedback keys the installer turns off, and whether Huginn's status line is installed). |
+| PATCH | `/v1/settings/claude` | `{fastModeDefault: true \| false}`: write `fastMode` in that file, for every new session and chat. Written through a link, keeping the file's mode and everything else in it; `409` if the file cannot be parsed. Answers as the GET. |
 
 ### Sessions
 
@@ -161,6 +163,9 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/sessions/<name>/answer` | `{option}`, or `{options: [...]}` for a multiple choice: answer the question on screen. `409` if that question is gone. |
 | POST | `/v1/sessions/<name>/soft-end` | `{phrase?, auto?, force?}`: ask Claude Code to wrap up, then end the session once it settles. |
 | POST | `/v1/sessions/<name>/compact` | Ask the session to compact its context. |
+| GET | `/v1/sessions/<name>/context` | `{context, model, breakdown}`: the live context window and model (from the status line, see below) and the last `/context` table Claude Code wrote, parsed: `breakdown: {asOf (ms), uuid, totalTokens, maxTokens, percent, categories: [{id, name, tokens, percent, kind}], autocompactWindow, autocompactSource, model: {display, id}, mcpTools: [{name, tokens}], mcpAvailable: [name], skills: [{name, tokens}]}`, or `null` until the session has run `/context`. `kind` is `used`, `free`, `buffer` or `deferred`; ids are Claude Code's (`system_prompt`, `system_tools`, `mcp_tools`, `mcp_instructions`, `mcp_tools_deferred`, `system_tools_deferred`, `custom_agents`, `memory_files`, `skills`, `messages`, `autocompact_buffer`, `compact_buffer`, `free_space`). |
+| POST | `/v1/sessions/<name>/context/refresh` | Type `/context` into the session, through the send queue: `202 {queued, delivered, blockedBy}`. Sent mid-turn, Claude Code runs it when the turn ends; the next GET has the table. `409 {reason, error}` when it cannot be queued: `shell` (no Claude Code here, or its prompt is in shell mode), `dialog` (a question is on screen), `busy` (the same command is already waiting). |
+| POST | `/v1/sessions/<name>/fast` | `{on: true \| false}`: type `/fast on` or `/fast off` into the session, through the same queue with the same answers. With `fastModePerSessionOptIn` set (the installer sets it), this changes only this session. |
 | POST | `/v1/sessions/<name>/archive` | Wrap up and archive the session. |
 | POST | `/v1/sessions/<name>/meta` | `{goals?, notes?, autoResume?}`: per-session notes and settings. |
 | GET | `/v1/sessions/<name>/suggestions` | Suggested next messages at a turn boundary. |
@@ -170,14 +175,26 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/sessions/<name>/agents/<agentId>/transcript` | One agent's transcript. |
 | POST | `/v1/sessions/<name>/headroom/undo` | Put a session back on the model the usage ladder moved it off. |
 
+Every session row (`GET /v1/sessions`) and `GET /v1/sessions/<name>/screen` carry what Claude Code's
+own status line last reported for the session, when the server's status line is installed (it is,
+by `server/setup.sh`): `context: {used, window, percent, exceeds200k}` (tokens; `null` before the
+first response), `model` (the display name, for example `Fable 5.1`), `effort` (`low` to `max`),
+`fast: {on, available, reason}` (`reason` is Claude Code's own sentence when fast mode cannot be
+used, read off the screen; `available` is decided on the preview list and the screen, and `true` on
+the plain list), `limits: {fiveHour, sevenDay, spend}` (each `{usedPercent, resetsAt}` in seconds,
+or `null`) and `cost: {usd, durationMs, apiMs, linesAdded, linesRemoved}`. Each is `null` without
+a record, and a record older than six hours or from another Claude session under the same name is
+ignored. `contextPercent` keeps being served for older clients, filled from `context.percent`,
+else from a status line drawn in the `[name] Model · ctx N%` shape.
+
 ### Chats
 
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/chats` | Chats, newest first. |
-| POST | `/v1/chats` | `{mode: "ask" \| "act", model?, effort?, title?, host?}`: create a chat; `host` is a device id to run it on instead of the server. Returns the chat with its `id` (`201`). |
+| POST | `/v1/chats` | `{mode: "ask" \| "act", model?, effort?, fast?, title?, host?}`: create a chat; `host` is a device id to run it on instead of the server; `fast` (`true`, `false` or `null`, the default) pins fast mode for its runs, passed to Claude Code as `--settings '{"fastMode":…}'`; `null` leaves the host default (`PATCH /v1/settings/claude`). Returns the chat with its `id` (`201`). |
 | GET | `/v1/chats/<id>` | The chat, its transcript and any text still arriving. |
-| PATCH | `/v1/chats/<id>` | `{title}`: rename it. |
+| PATCH | `/v1/chats/<id>` | `{title?, model?, effort?, fast?, mode?}`: rename it, or change what the next turn runs with. |
 | DELETE | `/v1/chats/<id>` | Delete it. Refused while a run is active. With `?ifEmpty=1`, deletes it only if nothing was ever sent in it and answers `409` otherwise; the clients send this when the person leaves an empty chat. |
 | POST | `/v1/chats/<id>/messages` | `{text, scratchpadId?}`: send a message. `?stream=1` streams the run; otherwise `202`. A message sent while a run is active is queued. |
 | GET | `/v1/chats/<id>/stream` | `?since=<id>`: reattach to a running run. |

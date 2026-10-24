@@ -1,0 +1,171 @@
+#!/bin/bash
+# huginn-statusline — Claude Code's status line on a Huginn Server.
+#
+# server/setup.sh installs this as `statusLine.command` in the sessions
+# account's ~/.claude/settings.json (verified against Claude Code 2.1.306).
+# Claude Code runs it on every redraw with the status-line JSON on stdin —
+# model, effort, context window, fast mode, rate limits, cost, session id — and
+# shows what it prints at the bottom of the pane. It does two things:
+#
+#   1. RECORDS the JSON, verbatim, as `.status/<tmux session>` under the state
+#      directory the title hook writes to (/run/huginn-claude-state; 0700
+#      directory, 0600 file, written beside and renamed into place). That file
+#      is how huginn-appd serves a session's live context window, model,
+#      effort, fast mode, limits and cost without scraping the pane.
+#   2. PRINTS the line the terminal shows. setup.sh keeps the status line that
+#      was configured before Huginn's as the argument after `--`
+#      (`huginn-statusline -- '<previous command>'`); that command is run with
+#      the same JSON on stdin and its output is printed. With none, or when it
+#      fails or takes too long, the line is `<model> · ctx N%` — just the model
+#      before the first response, when the harness reports no usage yet.
+#
+# Contract: never prints an error, always exits 0, coreutils + jq only. It runs
+# on every render, so there is no node here and every step is one process.
+#
+# The tmux session is resolved exactly as server/bin/huginn-claude-title does
+# it (TMUX/TMUX_PANE, recovered from an ancestor under Claude Code's
+# background PTY host, the state file for a background job) and the same
+# nested-claude guard applies, so a `claude` started by a Bash tool inside a
+# session never writes the parent's record. THAT FILE IS THE CANONICAL COPY of
+# the resolution: change it there first and carry the change here.
+
+set -u
+
+payload="$(cat 2>/dev/null)"
+prev=""
+[ "${1:-}" = "--" ] && prev="${2:-}"
+
+# --- the line the terminal shows -------------------------------------------------
+# Decided first, from the JSON alone, so a record that cannot be written (no
+# tmux, no state directory) still leaves the person a status line.
+sep=' · '
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;;
+  *) sep=' - ' ;;
+esac
+line=""
+if [ -n "$payload" ] && command -v jq >/dev/null 2>&1; then
+  # One jq pass: a non-object (a truncated write, not JSON) empties `line` and
+  # also says the payload is not worth recording.
+  line="$(printf '%s' "$payload" | jq -r --arg sep "$sep" '
+    if type != "object" then error("not an object") else . end
+    | (.model.display_name // "Claude" | tostring) as $m
+    | (.context_window.used_percentage) as $p
+    | if ($p | type) == "number" then "\($m)\($sep)ctx \($p | floor)%" else $m end
+  ' 2>/dev/null)" || line=""
+fi
+
+# --- the record -------------------------------------------------------------------
+_is_ancestor() {   # $1 = pid: is it one of this process's ancestors?
+  local pid="$PPID" hops=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 24 ]; do
+    [ "$pid" = "$1" ] && return 0
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_ancestor_tmux() {
+  local pid="$PPID" hops=0 env t p panepid
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 16 ]; do
+    env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"
+    t="$(printf '%s\n' "$env" | sed -n 's/^TMUX=//p' | head -1)"
+    p="$(printf '%s\n' "$env" | sed -n 's/^TMUX_PANE=//p' | head -1)"
+    if [ -n "$t" ] && [ -n "$p" ]; then
+      panepid="$(TMUX="$t" tmux display-message -p -t "$p" '#{pane_pid}' 2>/dev/null)" || return 1
+      [ -n "$panepid" ] && _is_ancestor "$panepid" || return 1
+      TMUX="$t"; TMUX_PANE="$p"; export TMUX TMUX_PANE
+      return 0
+    fi
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_is_claude_proc() {   # $1 = pid
+  local comm cmd
+  comm="$(cat "/proc/$1/comm" 2>/dev/null)" || return 1
+  [ "$comm" = claude ] && return 0
+  cmd="$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)"
+  case "$cmd" in
+    claude\ *|*/claude\ *|*claude-code/cli.js*|*/claude/cli.js*) return 0 ;;
+    claude.exe\ *|*/claude.exe\ *|*/claude.exe) return 0 ;;
+  esac
+  return 1
+}
+_nested_claude() {
+  case "${HUGINN_CLAUDE_TITLE_NESTED:-}" in 1) return 0 ;; 0) return 1 ;; esac
+  local pid="$PPID" hops=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 8 ]; do
+    if _is_claude_proc "$pid"; then
+      tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -q '^CLAUDECODE=' && return 0
+      return 1
+    fi
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
+# A background job's tmux session: the ONE state file naming its session id.
+_bg_session() {
+  local sid f found='' n=0
+  sid="$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null)"
+  [ -n "$sid" ] || return 1
+  for f in "$STATE_DIR"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in *.tmp) continue ;; esac
+    if jq -e --arg sid "$sid" 'type == "object" and .sessionId == $sid' "$f" >/dev/null 2>&1; then
+      found="${f##*/}"; n=$((n + 1))
+    fi
+  done
+  [ "$n" -eq 1 ] || return 1
+  printf '%s' "$found"
+}
+_session_name() {
+  local info
+  if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
+    if ! _ancestor_tmux; then
+      # No pane anywhere above: a background job finds its session by id;
+      # anything else (a `claude` outside tmux) records nothing.
+      [ -n "${CLAUDE_JOB_DIR:-}" ] || [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ] || return 1
+      _bg_session
+      return
+    fi
+  fi
+  info="$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)" || return 1
+  [ -n "$info" ] || return 1
+  printf '%s' "$info"
+}
+_record() {   # $1 = session name
+  local dir="$STATE_DIR/.status" tmpf
+  umask 077
+  mkdir -p "$dir" 2>/dev/null && chmod 700 "$dir" 2>/dev/null || return 0
+  # A temp of this process's own, renamed into place: a reader sees the whole
+  # old record or the whole new one, never a half.
+  tmpf="$dir/$1.$$.tmp"
+  if printf '%s\n' "$payload" > "$tmpf" 2>/dev/null; then
+    mv -fT "$tmpf" "$dir/$1" 2>/dev/null || rm -f "$tmpf" 2>/dev/null
+  else
+    rm -f "$tmpf" 2>/dev/null
+  fi
+}
+if [ -n "$line" ] && command -v tmux >/dev/null 2>&1 && ! _nested_claude; then
+  if sess="$(_session_name)" && [ -n "$sess" ]; then
+    case "$sess" in */*|.*) ;; *) _record "$sess" ;; esac
+  fi
+fi
+
+# --- the previous status line, chained ----------------------------------------------
+# Bounded: a status line that hangs would hold Claude Code's redraw, and this
+# one has already recorded what it came for. Its output is printed whole
+# (several lines are allowed); nothing, or a failure, falls back to ours.
+if [ -n "$prev" ]; then
+  if out="$(printf '%s' "$payload" | timeout -k 1 3 bash -c "$prev" 2>/dev/null)" \
+     && [ -n "${out//[[:space:]]/}" ]; then
+    printf '%s\n' "$out"
+    exit 0
+  fi
+fi
+[ -n "$line" ] && printf '%s\n' "$line"
+exit 0

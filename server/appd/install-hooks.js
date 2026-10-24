@@ -5,6 +5,25 @@
 //
 //   node install-hooks.js [--settings <path>] [--script <abs path>]
 //                         [--headroom-dir <path>] [--uninstall] [--dry-run]
+//   node install-hooks.js --claude-defaults [--settings <path>] [--keep-feedback] [--dry-run]
+//
+// --claude-defaults is the OTHER thing deploy.sh writes into settings.json: the
+// few Claude Code settings Huginn relies on, each only where the key is ABSENT
+// (an operator's own value is never touched, and nothing is removed):
+//
+//   fastModePerSessionOptIn: true              a session's `/fast` changes that
+//                                              session only, so the fast-mode
+//                                              control in the apps cannot flip
+//                                              every other session on the host
+//   feedbackSurveyRate: 0, feedbackDrafts: "off",
+//   env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1"   no feedback prompts in a pane
+//                                              nobody is watching (they read as
+//                                              a question in the apps)
+//
+// --keep-feedback, or HUGINN_KEEP_CLAUDE_FEEDBACK=1 in the environment, skips the
+// three feedback keys. server/setup.sh writes the same defaults with jq
+// (server/claude-settings.jq), so a server set up from either path agrees;
+// uninstall.sh leaves all four alone, by design.
 //
 // --headroom-dir binds the daemon's sentinel directory to the hook (`env
 // HUGINN_HEADROOM_DIR=… <script>`). Without it the gate uses its own compiled-in
@@ -133,6 +152,7 @@ function scriptOf(command) {
 function parseArgs(argv) {
   const opts = {
     settings: null, script: DEFAULT_SCRIPT, headroomDir: null, uninstall: false, dryRun: false,
+    claudeDefaults: false, keepFeedback: process.env.HUGINN_KEEP_CLAUDE_FEEDBACK === '1',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -141,12 +161,56 @@ function parseArgs(argv) {
     if (a === '--headroom-dir') { opts.headroomDir = valueFor('--headroom-dir', argv, ++i); continue; }
     if (a === '--uninstall') { opts.uninstall = true; continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
+    if (a === '--claude-defaults') { opts.claudeDefaults = true; continue; }
+    if (a === '--keep-feedback') { opts.keepFeedback = true; continue; }
     if (a === '-h' || a === '--help') { opts.help = true; continue; }
     throw new Error(`unknown argument: ${a}`);
   }
   if (!opts.settings) opts.settings = defaultSettingsPath();
   if (!opts.script) throw new Error('--script needs a path');
+  if (opts.claudeDefaults && opts.uninstall) {
+    throw new Error('--claude-defaults has no --uninstall: the keys it adds are left in place on purpose');
+  }
   return opts;
+}
+
+/** The settings --claude-defaults adds, each only where the key is absent. */
+const CLAUDE_DEFAULTS = Object.freeze({
+  fastModePerSessionOptIn: true,
+});
+const FEEDBACK_DEFAULTS = Object.freeze({
+  feedbackSurveyRate: 0,
+  feedbackDrafts: 'off',
+});
+const FEEDBACK_ENV = Object.freeze({ CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' });
+
+/**
+ * Pure. Adds [CLAUDE_DEFAULTS] (and, unless `keepFeedback`, [FEEDBACK_DEFAULTS]
+ * and the [FEEDBACK_ENV] entry under `env`) where the key is ABSENT. A key that
+ * is present keeps its value whatever it is — `feedbackSurveyRate: 1` is an
+ * operator's choice, not a mistake. Returns { settings, changes: [{key, action:
+ * 'added'|'kept'}] }; `settings` is the same object, mutated in place.
+ *
+ * A present `env` that is not an object is REFUSED by main() before this runs,
+ * the same doctrine as a malformed `hooks`.
+ */
+function applyClaudeDefaults(settings, { keepFeedback = false } = {}) {
+  const changes = [];
+  const want = { ...CLAUDE_DEFAULTS, ...(keepFeedback ? {} : FEEDBACK_DEFAULTS) };
+  for (const [key, value] of Object.entries(want)) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) { changes.push({ key, action: 'kept' }); continue; }
+    settings[key] = value;
+    changes.push({ key, action: 'added' });
+  }
+  if (!keepFeedback) {
+    if (settings.env === undefined) settings.env = {};
+    for (const [key, value] of Object.entries(FEEDBACK_ENV)) {
+      if (Object.prototype.hasOwnProperty.call(settings.env, key)) { changes.push({ key: `env.${key}`, action: 'kept' }); continue; }
+      settings.env[key] = value;
+      changes.push({ key: `env.${key}`, action: 'added' });
+    }
+  }
+  return { settings, changes };
 }
 
 function ruleFor(matcher, script, headroomDir = null) {
@@ -261,7 +325,8 @@ function main(argv) {
   if (opts.help) {
     process.stdout.write(
       'usage: install-hooks.js [--settings <path>] [--script <abs path>]\n'
-      + '                        [--headroom-dir <path>] [--uninstall] [--dry-run]\n',
+      + '                        [--headroom-dir <path>] [--uninstall] [--dry-run]\n'
+      + '       install-hooks.js --claude-defaults [--settings <path>] [--keep-feedback] [--dry-run]\n',
     );
     return 0;
   }
@@ -309,15 +374,23 @@ function main(argv) {
       process.stderr.write('[install-hooks] nothing was written. Fix the file and re-run.\n');
       return 2;
     }
+    // And `env`, which --claude-defaults writes into: an array or a string there
+    // is somebody's file to fix, not ours to replace with `{}`.
+    if (opts.claudeDefaults && !opts.keepFeedback && 'env' in settings
+      && (settings.env === null || typeof settings.env !== 'object' || Array.isArray(settings.env))) {
+      process.stderr.write(`[install-hooks] REFUSING: ${opts.settings} has an "env" value that is not an object\n`);
+      process.stderr.write('[install-hooks] nothing was written. Fix the file and re-run.\n');
+      return 2;
+    }
   }
 
-  const { changes } = mergeHooks(settings, opts.script, {
-    uninstall: opts.uninstall, headroomDir: opts.headroomDir,
-  });
+  const { changes } = opts.claudeDefaults
+    ? applyClaudeDefaults(settings, { keepFeedback: opts.keepFeedback })
+    : mergeHooks(settings, opts.script, { uninstall: opts.uninstall, headroomDir: opts.headroomDir });
   const body = `${JSON.stringify(settings, null, 2)}\n`;
   const touched = changes.some((c) => c.action !== 'kept');
   const summary = changes.length
-    ? changes.map((c) => `${c.action} ${c.event}`).join(', ')
+    ? changes.map((c) => `${c.action} ${c.event || c.key}`).join(', ')
     : 'nothing to do';
 
   if (opts.dryRun) {
@@ -356,7 +429,8 @@ function main(argv) {
     process.stderr.write(`[install-hooks] cannot write ${opts.settings}: ${e.message}\n`);
     return 2;
   }
-  process.stdout.write(`[install-hooks] ${opts.settings}: ${summary} (gate: ${commandFor(opts.script, opts.headroomDir)})\n`);
+  const what = opts.claudeDefaults ? 'claude defaults' : `gate: ${commandFor(opts.script, opts.headroomDir)}`;
+  process.stdout.write(`[install-hooks] ${opts.settings}: ${summary} (${what})\n`);
   return 0;
 }
 
@@ -364,5 +438,5 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
   DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, SCRIPT_SPECS, specFor, mergeHooks, parseArgs, main, isOurCommand,
-  commandFor, scriptOf,
+  commandFor, scriptOf, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV, applyClaudeDefaults,
 };

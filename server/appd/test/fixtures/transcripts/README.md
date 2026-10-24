@@ -131,3 +131,31 @@ task ids and tool-use ids replaced, the `<output-file>` paths shortened, both
 short sentence each. Every field classification depends on (`type`,
 `operation`, `origin`, `promptSource`, `reason`, the timestamps and the
 notification elements themselves) is verbatim.
+
+---
+
+`context-local-command.jsonl` — the two records Claude Code **2.1.306** writes for `/context`,
+captured 2026-10-23 from a throwaway session (not the owner's). Unlike `/model` or `/effort`,
+which arrive as `user` records of command tags (see `slash-command.jsonl`), `/context` writes
+`type: "system", subtype: "local_command"`: first the `<command-name>/context</command-name>`
+record, then the whole table, ANSI-coloured, inside `<local-command-stdout>…</local-command-stdout>`:
+
+```text
+ Context Usage
+⛁ ⛁ ⛁ ⛁ ⛁ ⛀ ⛀ ⛀ ⛀ ⛶ …   Haiku 5.5
+⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ …   claude-haiku-5-5
+⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ …   28.7k/1m tokens (3%)
+⛶ …                        Estimated usage by category
+⛶ …                        ⛁ System prompt: 3.7k tokens (0.4%)
+                           ⛶ Free space: 938.3k (93.8%)
+                           ⛝ Autocompact buffer: 33k tokens (3.3%)
+Auto-compact window: 1m tokens
+MCP tools · /mcp (loaded on-demand)   Loaded  ├ name: 165 tokens   Available  ├ name
+Skills · /skills                      Built-in  ├ dataviz: ~480 tokens
+```
+
+What is load-bearing: the record type (a `system` record short enough to draw as a note used to
+render the first one as raw tags in the conversation), the `Context Usage` heading
+(`lib/contextusage.js` decodes only lines carrying it and `<local-command-stdout>`), the glyphs in
+front of the category rows (⛁/⛀ used, ⛶ free, ⛝ buffer), the `k`/`m` suffixes, `Free space` with no
+`tokens` word, and the `~N tokens` of the skills list. Both records are verbatim except `cwd`.

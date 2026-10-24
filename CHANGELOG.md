@@ -22,9 +22,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions
 - The server installs the `huginn-server` skill for sessions running on it
   (`/usr/local/share/huginn/skills`, linked into the sessions account's `~/.claude/skills`);
   `uninstall.sh` removes it.
+- `huginn-statusline`: Claude Code's status line on the server. It records each session's status
+  JSON under `/run/huginn-claude-state/.status/` for the daemon and prints the status line that was
+  configured before it (kept as the argument after `--`), or `<model> · ctx N%`.
+- `server/setup.sh` installs it as `statusLine` in the sessions account's `settings.json`, keeping
+  an existing status line and its padding, and adds `fastModePerSessionOptIn` and the three keys
+  that turn Claude Code's feedback prompts off where they are absent (`HUGINN_KEEP_CLAUDE_FEEDBACK=1`
+  skips the feedback keys). A re-run never chains the status line to itself.
 
 ### Changed
 - `huginn uninstall` also removes the Claude Code skills huginn put in `~/.claude/skills`.
+- `uninstall.sh` puts the previous status line back and leaves the fast-mode and feedback settings
+  in place.
 
 ## [2.6.7] - 2026-10-23
 
