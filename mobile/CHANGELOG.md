@@ -1,5 +1,26 @@
 # Huginn changelog
 
+## 3.12.6 — 2026-10-23
+
+### Security
+- With the app lock on, the ask bar's sheet asks for the unlock whenever it comes back after the
+  lock's minute, not only when it first opens. Nothing is sent from it while the app is locked, and
+  what was typed is still there after the unlock.
+
+### Fixed
+- A conversation stays on its newest message when the work strip, suggestions, question bar or
+  keyboard appear around it. Once you swipe up to read, nothing pulls you back down, and "New
+  messages" lands at the very end.
+- An answer with a very long run of path-like punctuation no longer freezes the app when its chat
+  is opened or while it streams.
+- Settings search no longer offers settings the page hides: Sign out with nobody signed in, the
+  relay-only alert switch without a relay, Background use and the notification details while this
+  phone's notifications are off, Lock now with the lock off, the account-switching thresholds while
+  switching is off, and Projects and Apps against a host without them.
+
+### Changed
+- Settings pages say where each setting is kept: on huginn, shared by every app, or on this phone.
+
 ## 3.12.5 — 2026-10-21
 
 ### Fixed
