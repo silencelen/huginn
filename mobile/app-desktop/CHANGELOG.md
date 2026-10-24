@@ -1,5 +1,36 @@
 # Huginn Desktop changelog
 
+## 2.6.7
+
+Carries core 2.6.7.
+
+### Security
+- A second launch hands its link only to a running Huginn Desktop that proves it holds this
+  account's instance secret. Anything else on the recorded port is told nothing, and the launch
+  starts the app instead of exiting. Next to an app from before this version, a launch opens a
+  second window until that one is quit.
+- An image that declares more than 100 megapixels is not decoded; its path is shown in its place.
+- Purging the Debian package runs nothing in another account's home with root's terminal or
+  environment.
+
+### Fixed
+- Open in terminal works on Arch and other Linux systems, not only Debian and Ubuntu. It uses
+  `$TERMINAL` or xdg-terminal-exec, then the usual terminals, and when none is found it says which it
+  tried and copies the command.
+- A conversation stays on its newest message when the work strip, suggestions or a taller composer
+  appear under it, or the window is resized. Once you scroll up, by wheel, drag or scrollbar, nothing
+  pulls you back down.
+- Every setting Settings search finds is on the page it opens. Through huginn core, Host & sign-in
+  shows the token, saved logins, adding a login and Run setup again; Chats & sessions has Projects
+  and Apps; Updates & diagnostics has Check for updates, and a huginn core row replaces CLI sync.
+- Settings search no longer offers settings hidden behind a switch that is off.
+- An answer with a very long run of path-like punctuation no longer freezes the window when its chat
+  is opened or while it streams.
+
+### Changed
+- Settings pages say where each setting is kept: on huginn for every app, by huginn core on this
+  computer, or by this app.
+
 ## 2.6.6
 
 Carries core 2.6.6.

@@ -9,6 +9,22 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.13.10 — 2026-10-23
+
+### Security
+- A folder handed to tmux is taken literally. A project member's folder, a session's recorded folder
+  or an archive card's could carry a tmux format that ran a command when the session was created.
+- A project member starts only in a folder that exists inside its project once links are resolved;
+  any other is reported as that member's failure instead of starting it in the home folder.
+- A tap on a question is never taken as approval of a Bash permission request. While a question is
+  on screen or waiting, a Bash prompt is answered by keystroke.
+- Over HTTPS the challenge answers with the certificate-bound proof only. The older proof is given
+  over plain HTTP alone, which by default means this host.
+
+### Fixed
+- A transcript record with a long run of spaces or many unclosed tags no longer stalls the daemon
+  each time the transcript is read.
+
 ## 3.13.9 — 2026-10-22
 
 ### Fixed

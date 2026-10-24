@@ -8,6 +8,38 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.6.7] - 2026-10-23
+
+### Security
+- Windows local AI: `huginn local on` and `update` no longer reuse a `huginn-local` folder that
+  another account created, or one that is a link. It is moved aside under a name that says so and
+  set up fresh; nothing inside it is run, locked or deleted. An existing service is stopped by name,
+  and links inside a folder that is kept are removed before it is locked.
+- Windows local AI: `huginn local status` and `doctor` run nothing from a local-AI folder the install
+  did not lock, and report it as not set up.
+- Windows local AI: the generate service always runs its own fixed engine and scope; a change to the
+  settings file in its token folder no longer changes them.
+- huginn core does not write the local-AI token through a junction in its folder, and reads that
+  folder's owner without following links.
+- An existing model server's API key can be given with `--adapter-key-file`, so it stays off the
+  command line; `huginn local on --system` no longer passes the key itself to sudo or pkexec.
+- huginn core reads at most 16 KiB of headers from an address it has not yet proved to be the
+  server, so another machine answering there can no longer exhaust its memory.
+- `huginn setup ssh` moves a `Host huginn` entry it has just written to another of the server's
+  addresses only when SSH finds the server's known host key there. Otherwise it prints the
+  `huginn setup ssh --host ADDRESS` command.
+- `setup.sh` and `uninstall.sh` work in a `HUGINN_HOME` owned by another account without lending it
+  root's terminal or environment, and refuse a FIFO, socket or device file there as they refuse a
+  link.
+- The headless device runner refuses work whose mode is not exactly `ask`, `act` or `generate`, or
+  whose prompt, model, effort or resume id is not text, and never starts Claude Code on a
+  generate-only machine.
+
+### Fixed
+- The apps keep a session's conversation when several of its hooks run at once, as when a turn
+  starts background agents. Its state record could be overwritten with the bare state word, and a
+  backgrounded session then showed no conversation until it ended.
+
 ## [2.6.6] - 2026-10-22
 
 ### Security
