@@ -154,6 +154,7 @@ object TerminalLaunch {
         "headroom", "devices", "projects", "project", "llm", "device", "core", "local",
         "uninstall", "desktop", "usage", "cost", "ccusage", "solo", "rename", "mv",
         "kill", "end", "archive", "revive", "unarchive", "attach", "console", "setup",
+        "doctor", "skills",
     )
 
     /**
