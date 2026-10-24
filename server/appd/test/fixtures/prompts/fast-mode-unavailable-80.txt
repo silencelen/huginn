@@ -1,0 +1,15 @@
+# SYNTHESISED from Claude Code 2.1.306 wording — replace with a real capture the
+# first time a `/fast on` is refused on a live session (an account without usage
+# credits). The load-bearing part is the sentence's opening, which lib/pane.js
+# fastModeUnavailable matches; the rest of the row is Claude Code's own wording
+# and travels to the apps as `fast.reason`. Geometry 80x24, no ANSI.
+
+❯ /fast on
+
+ ⎿  Fast mode requires usage credits · run /usage-credits to enable it
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  [alex] Fable 5.1 · ctx 4% · main
+  ⏵⏵ auto mode on (shift+tab to cycle)

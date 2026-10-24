@@ -1,0 +1,74 @@
+{
+ "session_id": "5e7af109-c414-4c06-97b0-718f216cc78d",
+ "transcript_path": "/home/alex/.claude/projects/-home-alex-project/0000.jsonl",
+ "cwd": "/home/alex/project",
+ "scratchpad_dir": "/tmp/claude/scratchpad",
+ "prompt_id": "aa134d16-8ea7-4679-9927-cc363bbe5e5b",
+ "effort": {
+  "level": "medium"
+ },
+ "session_name": "AskUserQuestion tool test",
+ "model": {
+  "id": "claude-haiku-5-5",
+  "display_name": "Haiku 5.5"
+ },
+ "workspace": {
+  "current_dir": "/home/alex/project",
+  "project_dir": "/home/alex/project"
+ },
+ "version": "2.1.306",
+ "output_style": {
+  "name": "default"
+ },
+ "cost": {
+  "total_cost_usd": 0.0034573600000000005,
+  "total_duration_ms": 37177,
+  "total_api_duration_ms": 10015,
+  "total_lines_added": 0,
+  "total_lines_removed": 0
+ },
+ "context_window": {
+  "total_input_tokens": 35334,
+  "total_output_tokens": 169,
+  "context_window_size": 1000000,
+  "current_usage": {
+   "input_tokens": 2,
+   "output_tokens": 169,
+   "cache_creation_input_tokens": 398,
+   "cache_read_input_tokens": 34934
+  },
+  "used_percentage": 4,
+  "remaining_percentage": 96
+ },
+ "exceeds_200k_tokens": false,
+ "prompt_cache": {
+  "warm": true,
+  "caching_observed": true,
+  "ttl": "1h",
+  "expires_at": 1792819386,
+  "requests": 2,
+  "misses": 0,
+  "expected_rebuilds": 0,
+  "hit_ratio": 0.8558986765333713,
+  "cache_write_tokens": 10122,
+  "miss_recache_tokens": 0,
+  "last_miss_at": null,
+  "last_miss_cause": null,
+  "miss_causes": {},
+  "recache_tokens_if_cold": 35334
+ },
+ "fast_mode": false,
+ "thinking": {
+  "enabled": true
+ },
+ "rate_limits": {
+  "five_hour": {
+   "used_percentage": 5,
+   "resets_at": 1792830600
+  },
+  "seven_day": {
+   "used_percentage": 1,
+   "resets_at": 1793001600
+  }
+ }
+}

@@ -30,3 +30,4 @@ mistimed capture failed loudly instead of becoming a fixture.
 A real permission dialog is NOT captured here — the attempt mistimed onto the
 composer. Permission-dialog detection is covered by the hand-verified inline
 fixture in `pane.test.js` (the "Do you want to create hello.txt?" case).
+| `fast-mode-unavailable-80.txt` | **SYNTHESISED, not captured** (Claude Code 2.1.306 wording): a refused `/fast on` with the `Fast mode requires usage credits …` sentence above a live composer and a `[alex] Fable 5.1 · ctx 4% · main` status line. Pins `fastModeUnavailable` in `lib/pane.js`. Replace it with a real capture the first time the sentence is seen on a live session. |
