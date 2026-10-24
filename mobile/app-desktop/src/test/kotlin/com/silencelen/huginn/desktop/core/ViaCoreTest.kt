@@ -35,7 +35,7 @@ import kotlin.test.fail
  *
  * The fake serves TLS and answers the token-bound challenge like a real appd:
  * since 2.6.2 neither the core nor the app sends a token to a loopback daemon
- * that has not proved itself (security scan F8/F9).
+ * that has not proved itself.
  */
 class ViaCoreTest {
     private var core: Process? = null

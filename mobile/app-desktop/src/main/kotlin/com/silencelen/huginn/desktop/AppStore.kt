@@ -1817,8 +1817,7 @@ class AppStore(
 
         // ⚠ THE CORE HOLDS ITS OWN COPY OF THE TOKEN, and a core that did not
         // unpair keeps it, stays enabled, and enrols again at its next start —
-        // on a machine the owner was just told is removed (security scan F2,
-        // 2026-10-15). So a core that is installed but does not confirm is a
+        // on a machine the owner was just told is removed. So a core that is installed but does not confirm is a
         // FAILED removal: nothing local is cleared, the desktop keeps its token,
         // and pressing Remove again finishes the job (the rows are already gone,
         // so the retry is just this step). A machine with no core is unaffected.

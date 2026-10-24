@@ -9,7 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * Security scan F2 (2026-10-15): a core that is installed but does not confirm
+ * A core that is installed but does not confirm
  * the unpair must FAIL the removal; a machine with no core must not.
  */
 class CoreUnpairTest {

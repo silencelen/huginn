@@ -285,7 +285,7 @@ object LocalServe {
             // BUILTIN\Users read on new children, and this app is UNELEVATED, so
             // a token placed here would be readable by every account on the PC
             // until the elevated manager's lockTree runs — and forever if UAC is
-            // declined or fails (2026-10-18, F17). Instead it is staged owner-only
+            // declined or fails. Instead it is staged owner-only
             // in this user's own temp and handed to the elevated manager, which
             // writes it into device\ after lockTree (HUGINN_SEED_TOKEN_FILE).
             val stage = try {
@@ -302,7 +302,7 @@ object LocalServe {
             // POSIX: the tier dir is this user's own ~/.config/huginn-local, so a
             // 0600 file there is private. Create it 0600 ATOMICALLY (O_EXCL + the
             // mode at creation, never the umask mode then chmod — the old write
-            // was world-readable for the window between the two; F17). Refreshed
+            // was world-readable for the window between the two). Refreshed
             // whenever it DIFFERS, not only when absent: a rotated daemon token
             // must reach a stale seed, or the services 401 while the app works.
             val tok = File(File(localDataDir(), "device"), "appd-token")

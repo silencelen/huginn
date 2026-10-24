@@ -1795,7 +1795,7 @@ function huginn {
       # ProgramData here: that tree inherits BUILTIN\Users:read until
       # huginn-local's lockTree runs, and a token placed before it is readable by
       # every account on the PC for the whole run - downloads included - and
-      # indefinitely if the run aborts before lockTree (2026-10-18, F2). Instead
+      # indefinitely if the run aborts before lockTree. Instead
       # it is staged owner-only in THIS user's profile and handed to the elevated
       # manager through HUGINN_SEED_TOKEN_FILE; the manager writes it into
       # device\ only AFTER lockTree, via a temp that already carries the locked

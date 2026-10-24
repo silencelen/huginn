@@ -284,7 +284,7 @@ class LocalServeTest {
         assertTrue(LocalServe.cmdArgSafe("https://huginn.example&hostname"))
     }
 
-    // ------------------------------------------------ token seeding (F17)
+    // ------------------------------------------------ token seeding
 
     @Test
     fun `the elevated cmd hands the manager the staged token path, after the lock not before`() {
