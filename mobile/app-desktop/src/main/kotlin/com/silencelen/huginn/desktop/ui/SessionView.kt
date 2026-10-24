@@ -390,7 +390,11 @@ fun SessionView(store: AppStore, name: String) {
         val prompt = rawPrompt?.takeUnless { PromptGate.paneOnlyMultiQuestion(it) }
         val ask = screen?.ask ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
         val planPending = screen?.planPending
-        val hasQuestion = prompt != null || ask != null || planPending != null
+        // The registry's bound request, when there is one: the compact card's
+        // question. Null keeps the link bar (an older daemon, a dialog with no
+        // hook behind it, `fallback: "screen"`).
+        val cardQuestion = PromptGate.cardQuestion(screen?.questions.orEmpty())
+        val hasQuestion = PromptGate.hasQuestion(prompt, ask, planPending, screen?.questions.orEmpty())
         TabStrip(
             tab,
             { controller.openTab(it) },
@@ -468,7 +472,7 @@ fun SessionView(store: AppStore, name: String) {
         DisposableEffect(name) { onDispose { cue.clear() } }
         val suggestions by cue.suggestions.collectAsState()
         LaunchedEffect(page?.nextOffset, working) { cue.onTurnBoundary(page?.nextOffset, working) }
-        if (onConversation && screen?.prompt == null && Suggest.visible(suggestions, working, draft)) {
+        if (onConversation && screen?.prompt == null && cardQuestion == null && Suggest.visible(suggestions, working, draft)) {
             SuggestionChips(suggestions, onPick = setDraft)
         }
 
@@ -492,16 +496,34 @@ fun SessionView(store: AppStore, name: String) {
         // route from the Screen tab's own controls, and the phone's lock-screen
         // notification buttons are untouched. This is where a question is
         // PRESENTED, not how it is answered.
+        //
+        // AND THE CARD IS BACK, FOR A BOUND REQUEST (2026-10-23, decision 23
+        // re-opened): Claude Code 2.1.306 answers a parked request whole through
+        // its own hook, so the compact card can finish every shape the daemon's
+        // registry binds. The link bar stays for everything it does not.
         if (PromptGate.visible(hasQuestion = hasQuestion, face = tab.face)) {
+            val placement = PromptPlacement.of(tab.face, PromptSurface.SESSION, bound = cardQuestion != null)
             Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
-                QuestionLinkBar(
-                    // A plan approval carries no question text of its own, and the
-                    // bar's own sentence is the whole fact for it. BLANK, not null:
-                    // null means nothing is pending at all.
-                    question = prompt?.question ?: ask?.question ?: "",
-                    onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
-                    placement = PromptPlacement.of(tab.face, PromptSurface.SESSION),
-                )
+                if (placement == PromptPlacement.INLINE_COMPACT && cardQuestion != null) {
+                    val answering by controller.answering.collectAsState()
+                    val answerNote by controller.answerNote.collectAsState()
+                    com.silencelen.huginn.ui.QuestionCard(
+                        question = cardQuestion,
+                        answering = answering,
+                        note = answerNote,
+                        onAnswer = { body -> controller.answerQuestion(cardQuestion, body) },
+                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                    )
+                } else {
+                    QuestionLinkBar(
+                        // A plan approval carries no question text of its own, and the
+                        // bar's own sentence is the whole fact for it. BLANK, not null:
+                        // null means nothing is pending at all.
+                        question = prompt?.question ?: ask?.question ?: "",
+                        onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
+                        placement = placement,
+                    )
+                }
             }
         }
 

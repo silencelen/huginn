@@ -186,6 +186,36 @@ class PromptGateTest {
     }
 
     @Test
+    fun `a BOUND request puts the compact card on a session's conversation, and nothing on the screen`() {
+        // Decision 23 re-opened (2026-10-23): Claude Code 2.1.306 answers a parked
+        // request whole through its hook, so the card can answer every shape the
+        // registry binds. The Screen face still wins, first and regardless.
+        assertEquals(
+            PromptPlacement.INLINE_COMPACT,
+            PromptPlacement.of(SessionFace.CONVERSATION, PromptSurface.SESSION, bound = true),
+        )
+        assertEquals(
+            PromptPlacement.INLINE_COMPACT,
+            PromptPlacement.of(SessionFace.OVERVIEW, PromptSurface.SESSION, bound = true),
+        )
+        assertEquals(
+            PromptPlacement.NONE,
+            PromptPlacement.of(SessionFace.SCREEN, PromptSurface.SESSION, bound = true),
+        )
+        // Not bound (no hook behind the dialog, an older daemon, fallback: screen):
+        // the link bar, exactly as before.
+        assertEquals(
+            PromptPlacement.LINK_TO_SCREEN,
+            PromptPlacement.of(SessionFace.CONVERSATION, PromptSurface.SESSION, bound = false),
+        )
+        assertEquals(
+            PromptPlacement.LINK_TO_SCREEN,
+            PromptPlacement.of(SessionFace.CONVERSATION, PromptSurface.SESSION),
+            "the two-argument form is the unbound one, so every older call site keeps its answer",
+        )
+    }
+
+    @Test
     fun `the phone's screen tab and the desktop's reach the same answer`() {
         // The anti-drift property, and the only reason this lives in core: the
         // phone arrives by index and the desktop by enum, and the two clients

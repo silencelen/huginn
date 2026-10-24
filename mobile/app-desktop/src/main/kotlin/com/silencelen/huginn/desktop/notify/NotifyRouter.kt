@@ -273,7 +273,9 @@ class NotifyRouter(
             !backend.supportsActions -> emptyList()
             prompt?.fingerprint.isNullOrEmpty() -> emptyList()
             prompt?.multiSelect == true -> emptyList()
-            else -> prompt?.options.orEmpty().map { AnswerOption(it.number, it.label) }
+            // Never the TUI's own rows ("Type something.", "Chat about this"): a
+            // tap on one only focuses an input nobody is at.
+            else -> prompt?.options.orEmpty().filter { !it.extra }.map { AnswerOption(it.number, it.label) }
         }
         // ONE NONCE PER TOAST, for exactly the question and the options it shows.
         // This toast replaces any earlier one under the same key, so that one's

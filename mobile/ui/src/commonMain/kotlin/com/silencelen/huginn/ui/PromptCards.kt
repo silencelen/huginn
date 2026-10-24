@@ -34,10 +34,21 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.font.FontWeight
+import com.silencelen.huginn.data.AnswerValue
+import com.silencelen.huginn.data.AskQuestionSpec
 import com.silencelen.huginn.data.DegradedAsk
 import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.data.PlanPending
 import com.silencelen.huginn.data.PromptOption
+import com.silencelen.huginn.data.QuestionAnswers
+import com.silencelen.huginn.data.SessionQuestion
+import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import kotlinx.serialization.json.JsonObject
 
 // ⚠ WHO DRAWS THESE CARDS, AS OF 2026-09-15 (owner decision 23).
 //
@@ -491,5 +502,359 @@ private fun NoteLine(note: String?) {
             color = MaterialTheme.colorScheme.error,
             modifier = Modifier.padding(top = 6.dp),
         )
+    }
+}
+
+// ---- the request registry's card (decision 23 re-opened, 2026-10-23) ----------
+//
+// A SESSION DRAWS THIS AGAIN, compact, for a BOUND request: Claude Code 2.1.306
+// answers a parked PermissionRequest whole through its own hook, so the card can
+// finish every shape the registry binds — a two-question ask with a typed answer
+// and a multi-select, a permission with "Always allow", a plan with feedback.
+// [PromptGate.cardQuestion] picks the one request; [QuestionLinkBar] stays the
+// surface for everything the registry does not hold. The 40dp lesson stands: the
+// card is [promptCardMetrics] `compact` — cap before fill, options in a wrapping
+// row, four lines of question with "more" — and nothing wider.
+
+/** How many lines of a permission's detail (an Edit's old text) show before "more". */
+const val DETAIL_FOLD_LINES: Int = 6
+
+/** How tall a plan's text may draw before it scrolls inside the card. */
+val PLAN_FOLD_HEIGHT: Dp = 220.dp
+
+/**
+ * ONE card for a registry question, by kind. [onAnswer] receives the wire body
+ * ([QuestionAnswers] builds it; the shell adds the id and fingerprint through
+ * `HuginnClient.answerQuestion`). [note] is the daemon's refusal, drawn under
+ * the buttons; a `409` is ordinary and never retried.
+ */
+@Composable
+fun QuestionCard(
+    question: SessionQuestion,
+    answering: Boolean = false,
+    note: String? = null,
+    compact: Boolean = true,
+    onAnswer: (JsonObject) -> Unit,
+    onOpenScreen: (() -> Unit)? = null,
+) {
+    when {
+        question.isAsk -> AskQuestionCard(question, answering, note, compact, onAnswer)
+        question.isPlan -> PlanQuestionCard(question, answering, note, compact, onAnswer, onOpenScreen)
+        else -> PermissionQuestionCard(question, answering, note, compact, onAnswer)
+    }
+}
+
+/**
+ * An AskUserQuestion, one question at a time ([AskStepper]): a single choice
+ * answers on tap (and submits when it was the last), a multi-select is a
+ * checklist with its own button, a text or number question is a field, and
+ * every choice question has an "Other…" field under its options. Options carry
+ * their descriptions; a preview shows for the option last looked at.
+ */
+@Composable
+private fun AskQuestionCard(
+    question: SessionQuestion,
+    answering: Boolean,
+    note: String?,
+    compact: Boolean,
+    onAnswer: (JsonObject) -> Unit,
+) {
+    val metrics = promptCardMetrics(compact)
+    // Keyed on the request's identity: a new question starts a new walk, a
+    // repaint of the same one keeps where the thumb was.
+    var stepper by remember(question.id, question.fingerprint) { mutableStateOf(AskStepper.of(question)) }
+    var otherOpen by remember(question.id, stepper.index) { mutableStateOf(false) }
+    var typed by remember(question.id, stepper.index) { mutableStateOf("") }
+    var previewOf by remember(question.id, stepper.index) { mutableStateOf<Int?>(null) }
+    val spec = stepper.current
+    // Submit when the walk is complete: the hook answers the whole call once.
+    fun advance(next: AskStepper) {
+        stepper = next
+        if (next.complete && next.isLast) next.body(question)?.let(onAnswer)
+    }
+    CardShell(metrics) {
+        if (spec == null) {
+            Text("Claude is asking a question", style = MaterialTheme.typography.bodyMedium)
+            NoteLine(note)
+            return@CardShell
+        }
+        spec.header?.takeIf { it.isNotBlank() }?.let { HeaderChip(it, question.agentType) }
+        QuestionHeader(
+            question = spec.question.ifBlank { "Claude is asking" },
+            questionIndex = stepper.index,
+            questionCount = stepper.count,
+            maxLines = metrics.questionMaxLines,
+        )
+        spec.description?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(8.dp))
+        when {
+            spec.isText -> {
+                OutlinedTextField(
+                    value = typed, onValueChange = { typed = it },
+                    placeholder = { Text(spec.placeholder ?: "Type your answer") },
+                    enabled = !answering, singleLine = false, minLines = 1, maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                StepButtons(stepper, answering, enabled = typed.isNotBlank(),
+                    label = if (stepper.isLast) "Answer" else "Next",
+                    onBack = { stepper = stepper.back() },
+                    onNext = { advance(stepper.answer(AnswerValue.Text(typed.trim()))) })
+            }
+            spec.isNumber -> {
+                val hint = listOfNotNull(spec.min?.let { "min ${trimNumber(it)}" }, spec.max?.let { "max ${trimNumber(it)}" }, spec.unit).joinToString(" · ")
+                OutlinedTextField(
+                    value = typed.ifEmpty { spec.default?.let(::trimNumber) ?: "" }, onValueChange = { typed = it.filter { c -> c.isDigit() || c == '.' || c == '-' } },
+                    placeholder = { Text(hint.ifBlank { "A number" }) }, supportingText = if (hint.isBlank()) null else ({ Text(hint) }),
+                    enabled = !answering, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                val value = typed.ifEmpty { spec.default?.let(::trimNumber) ?: "" }
+                StepButtons(stepper, answering, enabled = value.toDoubleOrNull() != null,
+                    label = if (stepper.isLast) "Answer" else "Next",
+                    onBack = { stepper = stepper.back() },
+                    onNext = { advance(stepper.answer(AnswerValue.Text(value))) })
+            }
+            spec.multiSelect -> {
+                val chosen = stepper.currentChosen
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    spec.options.forEachIndexed { i, o ->
+                        CheckRow(
+                            option = PromptOption(number = i + 1, label = o.label, description = o.description),
+                            checked = o.label in chosen, enabled = !answering,
+                            onToggle = { stepper = stepper.toggle(o.label); previewOf = i },
+                        )
+                    }
+                }
+                PreviewBlock(spec, previewOf)
+                StepButtons(stepper, answering, enabled = true,
+                    label = (if (stepper.isLast) "Answer" else "Next") + if (chosen.isEmpty()) " with none selected" else " with ${chosen.size} selected",
+                    onBack = { stepper = stepper.back() },
+                    onNext = { advance(stepper.confirmMany()) })
+            }
+            else -> {
+                val wrap = metrics.wrapOptions
+                val picked = (stepper.currentAnswer as? AnswerValue.One)?.label
+                OptionLayout(wrap) {
+                    spec.options.forEachIndexed { i, o ->
+                        AnswerButton(
+                            option = PromptOption(number = i + 1, label = o.label, description = o.description),
+                            highlighted = o.label == picked, enabled = !answering, wrap = wrap,
+                            onClick = { previewOf = i; advance(stepper.answer(AnswerValue.One(o.label))) },
+                        )
+                    }
+                }
+                PreviewBlock(spec, previewOf)
+                // "Other…": the free text the TUI offers as "Type something."; the
+                // daemon takes any string, so it is just another answer.
+                if (!otherOpen) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { otherOpen = true }, enabled = !answering,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                            Text("Other…", style = MaterialTheme.typography.labelMedium)
+                        }
+                        if (!stepper.isFirst) {
+                            TextButton(onClick = { stepper = stepper.back() }, enabled = !answering,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                                Text("Back", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = typed, onValueChange = { typed = it }, placeholder = { Text("Something else…") },
+                        enabled = !answering, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    )
+                    StepButtons(stepper, answering, enabled = typed.isNotBlank(),
+                        label = if (stepper.isLast) "Answer" else "Next",
+                        onBack = { stepper = stepper.back() },
+                        onNext = { advance(stepper.answer(AnswerValue.Text(typed.trim()))) })
+                }
+            }
+        }
+        if (stepper.count > 1 && stepper.answers.isNotEmpty()) {
+            // What was already answered, so "2 of 2" is never answered blind.
+            Text(
+                stepper.specs.take(stepper.index).mapNotNull { s -> stepper.answers[s.question]?.let { "${s.header ?: s.question}: ${QuestionAnswers.summary(it)}" } }
+                    .joinToString("  ·  "),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        NoteLine(note)
+    }
+}
+
+/** The ask dialog's own chip ("Colour"), and which agent asked when a subagent did. */
+@Composable
+private fun HeaderChip(header: String, agentType: String?) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 2.dp)) {
+        Text(header, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        agentType?.takeIf { it.isNotBlank() }?.let {
+            Spacer(Modifier.width(8.dp))
+            Text("asked by $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** Back (when there is an earlier question) and the one forward button. */
+@Composable
+private fun StepButtons(stepper: AskStepper, answering: Boolean, enabled: Boolean, label: String, onBack: () -> Unit, onNext: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!stepper.isFirst) {
+            TextButton(onClick = onBack, enabled = !answering) { Text("Back") }
+            Spacer(Modifier.width(6.dp))
+        }
+        Button(onClick = onNext, enabled = enabled && !answering, modifier = Modifier.weight(1f)) { Text(label, maxLines = 1) }
+    }
+}
+
+/**
+ * The preview of the option last looked at: text as it is, in the mono style;
+ * HTML (the TUI's `previewFormat: html`) as a folded code block, never rendered.
+ */
+@Composable
+private fun PreviewBlock(spec: AskQuestionSpec, index: Int?) {
+    val preview = index?.let { spec.options.getOrNull(it)?.preview }?.takeIf { it.isNotBlank() } ?: return
+    val html = preview.trimStart().startsWith("<")
+    var open by remember(preview) { mutableStateOf(!html) }
+    Column(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (html) "HTML preview" else "Preview", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (html) {
+                TextButton(onClick = { open = !open }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                    Text(if (open) "hide" else "show source", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (open) MonoBlock(preview)
+    }
+}
+
+/** A folded monospace block: capped height, scrolls both ways, never wraps a diff. */
+@Composable
+private fun MonoBlock(text: String, maxHeight: Dp = PLAN_FOLD_HEIGHT) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+        modifier = Modifier.fillMaxWidth()) {
+        Box(Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(8.dp)) {
+            Text(text, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun trimNumber(d: Double): String = if (d == kotlin.math.floor(d) && !d.isInfinite()) d.toLong().toString() else d.toString()
+
+/**
+ * A tool permission: what the tool wants to do (the command, the file, the URL
+ * — [SessionQuestion.headline]), the rest of its input folded under "more", and
+ * Yes / Always allow (only when the CLI offered suggestions) / No. A No opens a
+ * line for "tell Claude what to change"; sent empty it is the TUI's own No.
+ */
+@Composable
+private fun PermissionQuestionCard(
+    question: SessionQuestion,
+    answering: Boolean,
+    note: String?,
+    compact: Boolean,
+    onAnswer: (JsonObject) -> Unit,
+) {
+    val metrics = promptCardMetrics(compact)
+    var more by remember(question.id) { mutableStateOf(false) }
+    var noOpen by remember(question.id) { mutableStateOf(false) }
+    var words by remember(question.id) { mutableStateOf("") }
+    val lines = question.permissionLines()
+    CardShell(metrics) {
+        HeaderChip(question.toolName.let { t -> question.mcpServer?.let { "$it · ${t.removePrefix("mcp__${it}__")}" } ?: t }, question.agentType)
+        val detail = question.permissionDetail()
+        if (detail != null) {
+            MonoBlock(detail, maxHeight = 120.dp)
+        } else {
+            Text("Claude wants to use ${question.toolName}", style = MaterialTheme.typography.bodyMedium)
+        }
+        if (lines.isNotEmpty()) {
+            if (more) {
+                Spacer(Modifier.height(4.dp))
+                MonoBlock(lines.joinToString("\n"))
+            }
+            TextButton(onClick = { more = !more }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                Text(if (more) "less" else "more (${lines.size} more field${if (lines.size == 1) "" else "s"})",
+                    style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        OptionLayout(wrap = true) {
+            Button(onClick = { onAnswer(QuestionAnswers.permissionBody(question, allow = true)) }, enabled = !answering) { Text("Yes") }
+            if (!question.suggestions.isNullOrEmpty()) {
+                OutlinedButton(onClick = { onAnswer(QuestionAnswers.permissionBody(question, allow = true, always = true)) }, enabled = !answering) {
+                    Text("Always allow")
+                }
+            }
+            OutlinedButton(onClick = { noOpen = !noOpen }, enabled = !answering) { Text("No") }
+        }
+        if (noOpen) {
+            OutlinedTextField(
+                value = words, onValueChange = { words = it },
+                placeholder = { Text("Tell Claude what to do instead (optional)") },
+                enabled = !answering, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+            Button(
+                onClick = { onAnswer(QuestionAnswers.permissionBody(question, allow = false, message = words)) },
+                enabled = !answering, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            ) { Text(if (words.isBlank()) "No" else "No, and tell Claude") }
+        }
+        NoteLine(note)
+    }
+}
+
+/**
+ * A plan approval: the plan itself, folded, then "Yes" (approval by the dialog's
+ * own keys, keeping the mode) and "No, tell Claude what to change" with the
+ * words (through the hook when one waits, else typed into the dialog's row).
+ */
+@Composable
+private fun PlanQuestionCard(
+    question: SessionQuestion,
+    answering: Boolean,
+    note: String?,
+    compact: Boolean,
+    onAnswer: (JsonObject) -> Unit,
+    onOpenScreen: (() -> Unit)?,
+) {
+    val metrics = promptCardMetrics(compact)
+    var planOpen by remember(question.id) { mutableStateOf(false) }
+    var noOpen by remember(question.id) { mutableStateOf(false) }
+    var words by remember(question.id) { mutableStateOf("") }
+    CardShell(metrics) {
+        Text("Plan ready — approve to continue", style = MaterialTheme.typography.bodyMedium)
+        question.planText()?.let { plan ->
+            TextButton(onClick = { planOpen = !planOpen }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                Text(if (planOpen) "hide the plan" else "read the plan", style = MaterialTheme.typography.labelSmall)
+            }
+            if (planOpen) MonoBlock(plan)
+        }
+        question.planFilePath()?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Spacer(Modifier.height(6.dp))
+        OptionLayout(wrap = true) {
+            Button(onClick = { QuestionAnswers.planBody(approve = true)?.let(onAnswer) }, enabled = !answering) { Text("Yes") }
+            OutlinedButton(onClick = { noOpen = !noOpen }, enabled = !answering) { Text("No, tell Claude what to change") }
+            onOpenScreen?.let { TextButton(onClick = it) { Text("Screen tab") } }
+        }
+        if (noOpen) {
+            OutlinedTextField(
+                value = words, onValueChange = { words = it },
+                placeholder = { Text("What should change?") },
+                enabled = !answering, minLines = 1, maxLines = 5, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            )
+            Button(
+                onClick = { QuestionAnswers.planBody(approve = false, message = words)?.let(onAnswer) },
+                enabled = !answering && words.isNotBlank(), modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            ) { Text("Send feedback") }
+        }
+        NoteLine(note)
     }
 }

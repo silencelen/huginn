@@ -180,6 +180,8 @@ fun SessionScreen(
      */
     wrapUpNotice: String? = null,
     onDismissWrapUpNotice: () -> Unit = {},
+    /** The compact card's answer: a registry question and the body `QuestionAnswers` built. */
+    onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -195,7 +197,10 @@ fun SessionScreen(
         val degradedAsk = screen?.ask
             ?: rawPrompt?.takeIf { PromptGate.paneOnlyMultiQuestion(it) }?.asMultiPartSteer()
         val planPending = screen?.planPending
-        val hasQuestion = readablePrompt != null || degradedAsk != null || planPending != null
+        // The registry's bound request, when there is one: the compact card's
+        // question (2026-10-23). Null keeps the link bar.
+        val cardQuestion = PromptGate.cardQuestion(screen?.questions.orEmpty())
+        val hasQuestion = PromptGate.hasQuestion(readablePrompt, degradedAsk, planPending, screen?.questions.orEmpty())
         TabRow(selectedTabIndex = tab) {
             Tab(selected = tab == 0, onClick = { onTab(0) }, text = { Text("Conversation") })
             Tab(
@@ -283,6 +288,10 @@ fun SessionScreen(
                     // readable, not the absence of one.
                     questionText = if (!questionVisible) null
                     else readablePrompt?.question ?: degradedAsk?.question ?: "",
+                    // The compact card's question, when the registry binds one and
+                    // this face may draw it; the bar is drawn instead otherwise.
+                    cardQuestion = if (questionVisible) cardQuestion else null,
+                    onAnswerQuestion = onAnswerQuestion,
                     onOpenScreen = { onTab(1) },
                     quickActions = quickActions,
                     onSelectionAction = onSelectionAction,
@@ -373,6 +382,9 @@ private fun SessionConversation(
      * still need the bar.
      */
     questionText: String?,
+    /** The registry's bound request this face draws as the compact card; null draws the bar. */
+    cardQuestion: com.silencelen.huginn.data.SessionQuestion? = null,
+    onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
     spinner: String?,
     statusLines: List<String>,
     transientLine: String?,
@@ -681,7 +693,7 @@ private fun SessionConversation(
         // no cap at all: the second suggestion started 102 px from the right edge
         // of the owner's 1080 px screen. SuggestionChips is what both desktop
         // surfaces already draw, and the cap lives there once.
-        if (suggestions.isNotEmpty() && questionText == null && !working && draft.isBlank()) {
+        if (suggestions.isNotEmpty() && questionText == null && cardQuestion == null && !working && draft.isBlank()) {
             SuggestionChips(suggestions, onPick = onDraft)
         }
 
@@ -695,11 +707,26 @@ private fun SessionConversation(
         // WHAT DID NOT CHANGE: `vm.answerPrompt` / `answerPromptMulti` and the
         // daemon's `/answer` route, and the lock-screen notification buttons that
         // call them for a single bounded question. This is presentation.
-        QuestionLinkBar(
-            question = questionText,
-            onOpenScreen = onOpenScreen,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        )
+        //
+        // AND THE CARD IS BACK FOR A BOUND REQUEST (2026-10-23, decision 23
+        // re-opened): Claude Code 2.1.306 answers a parked request whole through
+        // its own hook, so the compact card finishes every shape the daemon's
+        // registry binds — on this face only, never over the Screen tab.
+        if (cardQuestion != null) {
+            Box(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                QuestionCard(
+                    question = cardQuestion,
+                    onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
+                    onOpenScreen = onOpenScreen,
+                )
+            }
+        } else {
+            QuestionLinkBar(
+                question = questionText,
+                onOpenScreen = onOpenScreen,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
 
         // The long-press verbs, ABOVE the composer and below everything else, so
         // the text being acted on stays visible while the verb is chosen.

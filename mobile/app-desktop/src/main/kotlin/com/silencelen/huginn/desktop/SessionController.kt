@@ -889,7 +889,8 @@ class SessionController(
         val cur = s.cursorX to s.cursorY
         _echo.value = LocalEcho.frame(_echo.value, prevCursor, cur)
         prevCursor = cur
-        val fp = s.prompt?.fingerprint
+        // The card's question when the registry has one, else the pane's prompt.
+        val fp = PromptGate.cardQuestion(s.questions)?.fingerprint ?: s.prompt?.fingerprint
         // A different question is a different answer: whatever the last one had to
         // say about a refusal does not apply to this one.
         if (fp != lastPromptFingerprint) {
@@ -916,14 +917,43 @@ class SessionController(
 
     // --------------------------------------------------------------- answering
     //
-    // ⚠ NO CALLER IN THIS SHELL SINCE 2026-09-15, AND DELIBERATELY KEPT. The
-    // owner's decision 23 replaced the session's answerable card with a one-line
-    // steer to the Screen tab, so nothing in `SessionView` taps an option any
-    // more — the reader answers in the pane, which is the surface that handles
-    // every prompt type. This is still the client half of `POST /answer`,
-    // including its fingerprint and its 409 vocabulary, and it is what a
-    // notification action or a restored card would call. Deleting it and writing
-    // it again later is how the fingerprint rule gets lost.
+    // Two routes. `answerQuestion` is the card's (since 2026-10-23): it answers a
+    // REQUEST from the daemon's registry by id, through Claude Code's own hook —
+    // every question of an ask at once, a permission with "always allow", a plan
+    // with feedback. The three below are the older client half of `POST /answer`
+    // (a pane row by number): no card calls them since decision 23, but the
+    // `huginn://` notification links still do, and they keep the fingerprint
+    // rule and the 409 vocabulary in one place.
+
+    /**
+     * Answers a registry question. [body] comes from `QuestionAnswers`; the
+     * question's own fingerprint goes with it, REQUIRED, so the daemon can refuse
+     * an answer meant for a request that has since changed. `unbound` (the hook
+     * did not take it and the keys cannot say it) steers to the Screen tab, where
+     * the dialog can still be answered by hand; `gone` and `changed` are the
+     * card's own red line.
+     */
+    fun answerQuestion(q: com.silencelen.huginn.data.SessionQuestion, body: kotlinx.serialization.json.JsonObject) {
+        val fp = q.fingerprint
+        if (fp.isNullOrEmpty()) {
+            _answerNote.value = "This question carries no fingerprint, so it cannot be answered safely from here."
+            return
+        }
+        if (_answering.value) return
+        _answering.value = true
+        _answerNote.value = null
+        scope.launch {
+            runCatching { client.answerQuestion(name, q.id, body, fp) }
+                .onSuccess { r ->
+                    if (!r.ok) {
+                        if (r.reason == "unbound") openTab(SessionTab.SCREEN)
+                        else _answerNote.value = r.error ?: "The question moved on."
+                    }
+                }
+                .onFailure { e -> _answerNote.value = e.message ?: "Could not answer." }
+            _answering.value = false
+        }
+    }
 
     /**
      * Answers the question on the pane.

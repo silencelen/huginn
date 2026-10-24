@@ -2,6 +2,8 @@ package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.DegradedAsk
 import com.silencelen.huginn.data.PanePrompt
+import com.silencelen.huginn.data.PlanPending
+import com.silencelen.huginn.data.SessionQuestion
 
 /**
  * Which face of a session is being looked at.
@@ -82,12 +84,29 @@ enum class PromptPlacement {
     NONE;
 
     companion object {
-        fun of(face: SessionFace, surface: PromptSurface): PromptPlacement = when {
+        /**
+         * Where a question goes, given whether a BOUND request exists.
+         *
+         * Decision 23 (2026-09-15) sent every session question to the Screen tab
+         * for two reasons: the cards cost 290-330dp, and the pane could answer
+         * every shape while the cards could not. Claude Code 2.1.306 removes the
+         * second: a request parked by its PermissionRequest hook is answered
+         * WHOLE through that hook — a two-question ask with a free-text answer and
+         * an array, a permission with "always allow", a plan with feedback — and
+         * the daemon's registry says which requests are so bound. So a session's
+         * Conversation (and Overview) draws the COMPACT card for a bound request,
+         * and the link bar remains the fallback for everything the registry does
+         * not hold: a dialog with no hook behind it, a daemon too old to have the
+         * route, `fallback: "screen"`. The first reason still holds, which is why
+         * the card is the compact shape and nothing else.
+         */
+        fun of(face: SessionFace, surface: PromptSurface, bound: Boolean = false): PromptPlacement = when {
             // THE SCREEN FACE FIRST, and before the surface is even consulted. The
             // terminal below IS the dialog; anything drawn over it is the bug this
             // gate was written for (see [PromptGate]).
             face == SessionFace.SCREEN -> NONE
             surface == PromptSurface.CHAT -> INLINE_COMPACT
+            bound -> INLINE_COMPACT
             else -> LINK_TO_SCREEN
         }
     }
@@ -188,6 +207,25 @@ object PromptGate {
      */
     fun paneOnlyMultiQuestion(prompt: PanePrompt): Boolean =
         prompt.source != "hook" && prompt.headers.size >= 2
+
+    /**
+     * The ONE request the compact card draws, or null when the link bar is the
+     * surface: the oldest bound question. Several bound requests (parallel
+     * subagents each asking) are taken one at a time, oldest first — the one the
+     * terminal is also showing first — and the next appears when it is answered.
+     * An unbound request is never carded: its [SessionQuestion.fallback] is the
+     * Screen tab, which is what the bar says.
+     */
+    fun cardQuestion(questions: List<SessionQuestion>): SessionQuestion? =
+        questions.filter { it.bound && it.fingerprint?.isNotEmpty() == true }.minByOrNull { it.since }
+
+    /**
+     * "A question is pending" for a session: a readable pane prompt, the
+     * degraded ask, a plan, or any registry request. The registry counts even
+     * when the pane could not be read, which is the gap the hook path closes.
+     */
+    fun hasQuestion(prompt: PanePrompt?, ask: DegradedAsk?, plan: PlanPending?, questions: List<SessionQuestion>): Boolean =
+        prompt != null || ask != null || plan != null || questions.isNotEmpty()
 }
 
 /**

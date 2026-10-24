@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Added
+- A session's Conversation tab shows a compact question card again for a request the server has
+  bound: a multi-part ask stepped one question at a time, options with explanations and previews,
+  a multi-select checklist, an Other… line, Yes / Always allow / No with a note for a permission,
+  the plan text with Yes / No, tell Claude what to change for a plan. The one-line bar stays for
+  everything else; nothing is drawn over the Screen tab.
+
+### Fixed
+- The transcript's "waiting for your answer" line no longer promises buttons that are not there.
+
 ## 3.13.0 — 2026-10-24
 
 ### Added

@@ -1687,6 +1687,7 @@ fun HuginnApp(
                 onDraft = { vm.setDraft(HuginnViewModel.sessionDraftKey(name), it) },
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
+                onAnswerQuestion = { q, body -> vm.answerQuestion(name, q, body) },
                 onLive = { vm.sendLive(name, it) },
                 // Live typing is what entitles this phone to reshape the owner's
                 // tmux window; leaving it hands the window straight back.

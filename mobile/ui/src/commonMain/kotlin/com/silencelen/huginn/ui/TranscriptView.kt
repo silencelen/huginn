@@ -794,7 +794,7 @@ private fun AskCard(ev: TranscriptEvent) {
             } else {
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Waiting for your answer — buttons below, or on the Screen tab",
+                    "Waiting for your answer — the card below, or the Screen tab",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

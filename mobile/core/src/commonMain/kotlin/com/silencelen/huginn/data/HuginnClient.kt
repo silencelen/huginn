@@ -975,6 +975,38 @@ class HuginnClient(
         throw errorFrom(resp.status.value, text)
     }
 
+    /**
+     * What the session is asking, as requests (the daemon's registry). A daemon
+     * older than 3.14 has no such route: the 404 arrives as a [HuginnException]
+     * and the caller keeps the link bar.
+     */
+    suspend fun sessionQuestions(session: String): List<SessionQuestion> =
+        decode<SessionQuestions>(call("/v1/sessions/${seg(session)}/questions")).questions
+
+    /**
+     * Answers one registry question by its id, through Claude Code's own hook.
+     *
+     * [body] comes from [QuestionAnswers]; [fingerprint] is the question's own,
+     * REQUIRED: it is what lets the daemon refuse an answer meant for a request
+     * that has since changed. A 409 (`gone`, `changed`, `unbound`) decodes into
+     * the result rather than throwing, like [answerPrompt]'s; every other status
+     * throws as usual.
+     */
+    suspend fun answerQuestion(session: String, id: String, body: JsonObject, fingerprint: String): QuestionAnswerResult {
+        val full = buildJsonObject {
+            body.forEach { (k, v) -> put(k, v) }
+            put("fingerprint", JsonPrimitive(fingerprint))
+        }
+        val resp = http().request {
+            build("/v1/sessions/${seg(session)}/questions/${seg(id)}", HttpMethod.Post, Tier.NORMAL, full)
+        }
+        val text = resp.bodyAsText()
+        if (resp.status.isSuccess() || resp.status.value == 409) {
+            runCatching { decode<QuestionAnswerResult>(text) }.getOrNull()?.let { return it }
+        }
+        throw errorFrom(resp.status.value, text)
+    }
+
     suspend fun autoswitch(): Autoswitch = decode(call("/v1/autoswitch"))
 
     suspend fun setAutoswitch(enabled: Boolean): Autoswitch {

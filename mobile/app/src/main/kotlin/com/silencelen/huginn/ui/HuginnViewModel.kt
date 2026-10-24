@@ -4269,16 +4269,34 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * ⚠ NO CALLER IN THIS APP SINCE 2026-09-15, AND DELIBERATELY KEPT.
-     *
-     * The owner's decision 23 replaced the session's answerable cards with a
-     * one-line steer to the Screen tab, so nothing in the UI taps an option any
-     * more — the reader answers in the pane, which handles every prompt type. The
-     * lock-screen notification buttons still answer, through their OWN client in
-     * `AnswerReceiver` (a broadcast receiver has no view model), so this and
-     * [answerPrompt] are the in-app half of `POST /answer`: the fingerprint, the
-     * 409 vocabulary and the toast wording. Deleting them and writing them again
-     * later is how the fingerprint rule gets lost.
+     * Answers a registry question from the compact card (2026-10-23, decision 23
+     * re-opened): one request by id, through Claude Code's own hook, with the
+     * question's fingerprint so the host refuses an answer for a request that has
+     * since changed. A refusal is a sentence in the toast; `unbound` names the
+     * Screen tab, which is where the dialog can still be answered by hand.
+     */
+    fun answerQuestion(name: String, q: com.silencelen.huginn.data.SessionQuestion, body: kotlinx.serialization.json.JsonObject) {
+        val fp = q.fingerprint
+        if (fp.isNullOrEmpty()) { _toast.value = "This question carries no fingerprint, so it cannot be answered safely from here."; return }
+        viewModelScope.launch {
+            runCatching { client.answerQuestion(name, q.id, body, fp) }
+                .onSuccess { r ->
+                    if (!r.ok) {
+                        _toast.value = if (r.reason == "unbound") "Answer it on the Screen tab — ${r.error ?: "the hook did not take it"}"
+                        else r.error ?: "The question moved on — check the session"
+                    }
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * The older client half of `POST /answer` (a pane row by number). No card
+     * calls this or [answerPrompt] since decision 23 — the compact card answers
+     * through [answerQuestion] — but the lock-screen notification buttons still
+     * answer through their OWN client in `AnswerReceiver` (a broadcast receiver
+     * has no view model), and these keep the fingerprint rule, the 409
+     * vocabulary and the toast wording in one place.
      */
     fun answerPromptMulti(name: String, options: List<Int>, fingerprint: String?) {
         viewModelScope.launch {
