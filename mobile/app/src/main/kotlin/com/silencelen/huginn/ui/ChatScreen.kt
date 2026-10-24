@@ -144,7 +144,14 @@ fun ChatScreen(
 
     // streamingText.length is what makes a live answer follow: the item count does
     // not change while tokens arrive into the same block.
-    val hasUnseen = AutoScrollToNewest(
+    //
+    // ⚠ THE SHARED LATCH (`:ui` Follow.kt), not a copy of it. The phone had its own
+    // (`AutoScrollToNewest`), which scrolled only when content changed: the
+    // suggestion chips arriving under the list after a turn, or the keyboard
+    // opening, took their height out of the viewport and left the newest message
+    // below the fold. The desktop's fix for exactly that lives in the shared one,
+    // and so do its tests.
+    val hasUnseen = FollowNewest(
         listState = listState,
         itemCount = itemCount,
         revision = tailRevision(page?.nextOffset, events.size, streamingText?.length, activeTool),
@@ -259,7 +266,7 @@ fun ChatScreen(
         }
 
         if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.jumpToTail(itemCount, animate = true) } }
+            JumpToNewest { scope.launch { listState.scrollToNewest(itemCount, animate = true) } }
         }
 
         // Same contract as the session chips: a suggestion FILLS the composer,

@@ -149,11 +149,12 @@ object Follow {
  * Keeps a conversation pinned to its newest content, and reports when there is
  * something new below the fold. The rules are [Follow]; this is the wiring.
  *
- * This is the phone's `AutoScrollToNewest`, moved where both clients can render
- * from it; `:app`'s copy in `ui/Common.kt` is the one to delete when the phone is
- * next touched. The desktop needs it just as much — a chat that renders the real
- * transcript grows thinking blocks and tool cards mid-turn, and a view that
- * jumps to the tail on every one of those cannot be read while a run is live.
+ * BOTH CLIENTS FOLLOW WITH THIS ONE. It began as the phone's `AutoScrollToNewest`,
+ * moved here for the desktop, and the phone kept its own copy until 2026-10-23 —
+ * when that copy missed the fix for bars arriving under the list (see
+ * [Follow.relaid]) and was deleted. A chat that renders the real transcript
+ * grows thinking blocks and tool cards mid-turn, and a view that jumps to the
+ * tail on every one of those cannot be read while a run is live, on either.
  *
  * @param key re-arms the initial jump when the conversation changes.
  * @param scrolls the reader's own scroll input, counted by [onScrollInput] on the

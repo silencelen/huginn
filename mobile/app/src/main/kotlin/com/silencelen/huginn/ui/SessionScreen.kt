@@ -441,7 +441,12 @@ private fun SessionConversation(
     // Revision keys on nextOffset, which strictly increases as transcript bytes
     // arrive. Event COUNT is useless here: the retained window is capped, so on a
     // long session it stops changing and following would silently stop with it.
-    val hasUnseen = AutoScrollToNewest(
+    //
+    // ⚠ THE SHARED LATCH (`:ui` Follow.kt), not the phone's old copy: the work
+    // strip above the list, and the suggestions and question bar below it, come
+    // and go after the jump to the newest, and only the shared one keeps the
+    // newest message in view when they do. See ChatScreen.
+    val hasUnseen = FollowNewest(
         listState = listState,
         itemCount = rows.size + headerItems,
         revision = tailRevision(shown?.nextOffset, events.size, events.lastOrNull()?.text?.length),
@@ -644,7 +649,7 @@ private fun SessionConversation(
         }
 
         if (hasUnseen) {
-            JumpToNewest { scope.launch { listState.jumpToTail(rows.size + headerItems, animate = true) } }
+            JumpToNewest { scope.launch { listState.scrollToNewest(rows.size + headerItems, animate = true) } }
         }
 
         // Suggested next messages, at the turn boundary only. A live prompt's
