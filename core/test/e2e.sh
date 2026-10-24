@@ -152,15 +152,16 @@ if command -v ssh-keygen >/dev/null 2>&1; then
   grep -q "is already in" <<<"$SU2" && grep -q 'does not know this key yet' <<<"$SU2" && [ "$SURC" = 1 ] && [ "$(grep -c '^Host huginn' "$T/sshhome/.ssh/config")" = 1 ] \
     && ok "a second setup ssh leaves the stanza alone and checks the key" || { bad "setup ssh twice (rc $SURC)"; printf '%s\n' "$SU2"; }
   # The address it is paired on does not carry ssh from here (seen
-  # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh finds
-  # the first that answers on port 22. An entry this run has just written
-  # follows that list (it is huginn's, and pairing proved the server: owner
-  # decision 2026-10-19). An entry that was already there is the person's:
-  # huginn's list is no proof that it is the same machine, so it stays as it is
-  # and the command that moves it is printed; --host, the person's own word,
-  # moves it. The stub times out for the paired address and refuses the key
+  # 2026-10-17): appd lists its own addresses (3.12.1), and setup ssh offers
+  # each that answers on port 22 to ssh's host-key proof, in huginn's order.
+  # huginn's list says where the server is on its own networks, not what
+  # answers those addresses from here, so an entry moves only to an address
+  # that holds the host key known for the one it names, whether this run has
+  # just written it or it was already there. Otherwise it stays as it is and
+  # the command that moves it is printed; --host, the person's own word, moves
+  # it. The first stub times out for the paired address and refuses the key
   # everywhere else, so ssh never shows that a new address holds the old one's
-  # host key.
+  # host key; the second finds that key wherever it is asked to look for it.
   mkdir -p "$T/sshstub2" "$T/sshhome2"
   cat > "$T/sshstub2/ssh" <<'STUB'
 #!/bin/sh
@@ -176,8 +177,9 @@ STUB
   done
   if [ -n "$ANY22" ]; then
     SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
-    grep -q 'this setup wrote the entry' <<<"$SU3" && ! grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
-      && ok "a first setup ssh points its own new 'Host huginn' at an address of huginn's that answers ssh" \
+    grep -q 'does not answer ssh from here' <<<"$SU3" && grep -q 'HostName 127.0.0.1' "$T/sshhome2/.ssh/config" \
+      && grep -q 'huginn setup ssh --host ' <<<"$SU3" \
+      && ok "a first setup ssh keeps its own new 'Host huginn' when nothing shows another address is the same machine" \
       || { bad "first setup ssh with another address that answers ssh"; printf '%s\n' "$SU3"; }
     sed -i 's/^  HostName .*/  HostName 127.0.0.1/' "$T/sshhome2/.ssh/config"
     SU3=$(HOME="$T/sshhome2" PATH="$T/sshstub2:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
@@ -190,6 +192,19 @@ STUB
       && grep -q 'does not know this key yet' <<<"$SU4" \
       && ok "setup ssh --host points 'Host huginn' at the address the person names" \
       || { bad "setup ssh --host ${ALT:-none}"; printf '%s\n' "$SU4"; }
+    mkdir -p "$T/sshstub3" "$T/sshhome3"
+    cat > "$T/sshstub3/ssh" <<'STUB'
+#!/bin/sh
+case " $* " in *" HostKeyAlias=127.0.0.1 "*) case " $* " in *" StrictHostKeyChecking=yes "*) exit 0 ;; esac ;; esac
+hn="$(awk '/^Host huginn$/{f=1;next} /^Host /{f=0} f&&$1=="HostName"{print $2}' "$HOME/.ssh/config" 2>/dev/null)"
+[ "$hn" = 127.0.0.1 ] && { echo "ssh: connect to host 127.0.0.1 port 22: Connection timed out" >&2; exit 255; }
+echo "Permission denied (publickey)." >&2; exit 255
+STUB
+    chmod +x "$T/sshstub3/ssh"
+    SU5=$(HOME="$T/sshhome3" PATH="$T/sshstub3:$PATH" "$T/huginn" setup ssh </dev/null 2>&1)
+    grep -q 'has the host key this computer knows for 127.0.0.1' <<<"$SU5" && grep -qx "  HostName $ANY22" "$T/sshhome3/.ssh/config" \
+      && ok "a first setup ssh moves its own new 'Host huginn' to $ANY22, where ssh finds the paired address's host key" \
+      || { bad "first setup ssh with the paired address's host key at another address"; printf '%s\n' "$SU5"; }
   else
     echo "SKIP  no address of this host answers on port 22: the ssh-address search is untested here"
   fi

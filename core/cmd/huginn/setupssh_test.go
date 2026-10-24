@@ -82,20 +82,20 @@ func TestRepointStanzaRefusesAnythingButAPlainHost(t *testing.T) {
 	}
 }
 
-// sshAddress takes only plain addresses from huginn's list: the injected one
-// answers on the port like any other, so the dial alone let it through.
+// sshAddresses takes only plain addresses from huginn's list: the injected
+// one answers on the port like any other, so the dial alone let it through.
 func TestSSHAddressSkipsAnAddressThatIsNotPlain(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake core below listens on a unix socket path")
 	}
 	fakeSSHD(t)
 	fakeCoreListing(t, []string{injected, "::1"})
-	alt, all := sshAddress("192.0.2.1")
-	if alt != "::1" {
-		t.Fatalf("sshAddress chose %q; want the plain ::1", alt)
+	alts, all := sshAddresses("192.0.2.1")
+	if len(alts) != 1 || alts[0] != "::1" {
+		t.Fatalf("sshAddresses offered %q; want only the plain ::1", alts)
 	}
 	if len(all) != 1 || all[0] != "::1" {
-		t.Fatalf("sshAddress passed on %q; an address that is not plain must not leave it (it is printed and matched)", all)
+		t.Fatalf("sshAddresses passed on %q; an address that is not plain must not leave it (it is printed and matched)", all)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestRepointStanzaReplacesTheValueNotTheKeyword(t *testing.T) {
 }
 
 // fakeSSHD stands a listener in for sshd on [::1], so "::1" answers on the
-// port sshAddress knocks on.
+// port sshAddresses knocks on.
 func fakeSSHD(t *testing.T) {
 	t.Helper()
 	sshd, err := net.Listen("tcp", "[::1]:0")
@@ -210,7 +210,7 @@ func TestSSHFallbackMovesTheEntryOnlyForTheSameHostKey(t *testing.T) {
 			return sameKey
 		}
 		var out bytes.Buffer
-		moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "127.0.0.1", false)
+		moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "127.0.0.1")
 		sshSameHost = was
 		b, _ := os.ReadFile(cfg)
 		if !sameKey {
@@ -238,42 +238,11 @@ func TestSSHFallbackMovesTheEntryOnlyForTheSameHostKey(t *testing.T) {
 	}
 	defer func() { sshSameHost = was }()
 	var out bytes.Buffer
-	if moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "my-jump-box", false); moved != "" {
+	if moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "my-jump-box"); moved != "" {
 		t.Fatalf("moved the person's own stanza to %q", moved)
 	}
 	if b, _ := os.ReadFile(cfg); string(b) != "Host huginn\n  HostName my-jump-box\n" {
 		t.Fatalf("the person's own stanza changed: %q", b)
-	}
-}
-
-// An entry this setup run just wrote, from the paired core's address, follows
-// huginn's list without a host-key proof: nothing of the person's is moved, and
-// the install on a client whose VLAN reaches ssh on another address stays one
-// step (owner decision, 2026-10-19). A stanza that names something other than
-// huginn is still never moved.
-func TestSSHFallbackMovesItsOwnNewEntryWithoutAKeyProof(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the fake core below listens on a unix socket path")
-	}
-	fakeSSHD(t)
-	fakeCoreListing(t, []string{"127.0.0.1", "::1"})
-	cfg := filepath.Join(t.TempDir(), "config")
-	os.WriteFile(cfg, []byte("Host huginn\n  HostName 127.0.0.1\n  User root\n"), 0o600)
-	was := sshSameHost
-	sshSameHost = func(string, string, string) bool {
-		t.Error("its own new entry needs no host-key proof")
-		return false
-	}
-	defer func() { sshSameHost = was }()
-	var out bytes.Buffer
-	moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "127.0.0.1", true)
-	b, _ := os.ReadFile(cfg)
-	if moved != "::1" || !strings.Contains(string(b), "Host huginn\n  HostName ::1\n") {
-		t.Fatalf("this run's own entry did not follow huginn's list (%q):\n%s\n%s", moved, b, out.String())
-	}
-	os.WriteFile(cfg, []byte("Host huginn\n  HostName my-jump-box\n"), 0o600)
-	if moved := sshFallback(ui.For(&out, false, false), cfg, "huginn", "my-jump-box", true); moved != "" {
-		t.Fatalf("moved a stanza that does not name huginn to %q", moved)
 	}
 }
 
