@@ -32,6 +32,9 @@ const (
 	// maxProbeBody: a challenge answer is a few hundred bytes; a host that
 	// sends more is not huginn.
 	maxProbeBody = 64 << 10
+	// maxProbeHeader bounds the challenge answer's status line and headers
+	// together. appd's are a few hundred bytes.
+	maxProbeHeader = 16 << 10
 )
 
 // Config is what a Client needs. Only URL is required.
@@ -423,10 +426,22 @@ func (c *Client) probe(ctx context.Context, tok string, pinned bool) (string, er
 	if err := req.Write(tc); err != nil {
 		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false, pinned)
 	}
-	res, err := http.ReadResponse(bufio.NewReader(tc), req)
+	// ⚠ THE ANSWER IS READ THROUGH A BUDGET, HEADER FIRST. http.ReadResponse
+	// takes a status line and header block of any length (a server bounds its
+	// requests with MaxHeaderBytes; a client has nothing of the kind), and this
+	// peer has proved nothing: a status line that never ends would grow in our
+	// memory until the deadline, and over a fast link that is gigabytes. So the
+	// header gets maxProbeHeader, and only once it has parsed does the body get
+	// its maxProbeBody on top.
+	budget := &io.LimitedReader{R: tc, N: maxProbeHeader}
+	res, err := http.ReadResponse(bufio.NewReader(budget), req)
 	if err != nil {
+		if budget.N <= 0 {
+			return "", fmt.Errorf("challenge at %s: the answer's header ran past %d KiB, and a daemon's is a few hundred bytes", c.origin(), maxProbeHeader>>10)
+		}
 		return "", c.handshakeErr(pctx, ctx, addr, c.probeT, err, false, pinned)
 	}
+	budget.N += maxProbeBody
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxProbeBody))
 	res.Body.Close()
 	if err != nil {
