@@ -66,6 +66,10 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import com.silencelen.huginn.desktop.update.UpdateState
+import com.silencelen.huginn.update.UpdateReminder
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -278,6 +282,44 @@ class AppStore(
      * background decision.
      */
     val updater = DesktopUpdater()
+
+    // ------------------------------------------------------------ update notice
+    //
+    // The updater parks a verified file and stops; these decide who is TOLD.
+    // The rule is `UpdateReminder` in :core; this is its inputs: the parked
+    // state, "Later" (this run only, so it lives here and nowhere on disk),
+    // and the two persisted answers in DesktopSettings.
+
+    private val _updateLater = MutableStateFlow<String?>(null)
+
+    /** The version put off with Later, this run only: a relaunch clears it, which is what Later means. */
+    val updateLater: StateFlow<String?> = _updateLater.asStateFlow()
+
+    fun updateLater(version: String) { _updateLater.value = version }
+
+    /** "Don't remind me": that version stays quiet everywhere until a newer one lands. */
+    fun updateSilence(version: String) = settings.setUpdateSilencedVersion(version)
+
+    /** Settings > Updates: reminders back on for whatever is parked. */
+    fun updateUnsilence() = settings.setUpdateSilencedVersion(null)
+
+    /** The verified update the lists announce with a card (UpdateReminder.show), or null. */
+    val updateNotice: StateFlow<UpdateState.Ready?> = combine(
+        updater.state, _updateLater, settings.updateSilencedVersion, settings.updateNotify,
+    ) { state, later, silenced, notify ->
+        (state as? UpdateState.Ready)?.takeIf { UpdateReminder.show(it.version, later, silenced, notify) }
+    }.stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * The verified update the quiet marks name — the rail dot and the tray row
+     * (UpdateReminder.mark): Later leaves them, the switch and Don't remind me
+     * take them down.
+     */
+    val updateMark: StateFlow<UpdateState.Ready?> = combine(
+        updater.state, settings.updateSilencedVersion, settings.updateNotify,
+    ) { state, silenced, notify ->
+        (state as? UpdateState.Ready)?.takeIf { UpdateReminder.mark(it.version, silenced, notify) }
+    }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
      * "Quit, when you can" — asked for from a view, which cannot do it itself.

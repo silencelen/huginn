@@ -127,6 +127,26 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
         val closeToTray: Boolean = true,
 
         /**
+         * The update the owner answered "Don't remind me" to: the notice outside
+         * Settings stays away for THAT version only (`UpdateReminder`), so the
+         * next release is a new question. Blank: none. "Later" is not here on
+         * purpose — it lasts one run and lives in `AppStore`.
+         */
+        val updateSilencedVersion: String = "",
+        /**
+         * Whether a verified update is announced outside Settings at all: the
+         * card on the lists, the rail dot, the tray row. Off leaves fetching and
+         * verifying alone; the Updates page then is the only place that says.
+         */
+        val updateNotify: Boolean = true,
+        /**
+         * Which terminal "Open in terminal" starts: blank is Auto (the launcher's
+         * own order), else a `TerminalLaunch.Candidate` id — `wt`, `pwsh`,
+         * `powershell` on Windows, a terminal's name on Linux.
+         */
+        val terminal: String = "",
+
+        /**
          * STARTS WITH THE SESSION. Off by default, like every other thing this
          * app does to the machine it is installed on — a client that adds itself
          * to somebody's login without being asked is a client they uninstall.
@@ -318,6 +338,9 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     private val _lastWatchError = MutableStateFlow(stored.lastWatchError)
     private val _lastWatchErrorAt = MutableStateFlow(stored.lastWatchErrorAt)
     private val _closeToTray = MutableStateFlow(stored.closeToTray)
+    private val _updateSilencedVersion = MutableStateFlow(stored.updateSilencedVersion.takeIf { it.isNotBlank() })
+    private val _updateNotify = MutableStateFlow(stored.updateNotify)
+    private val _terminal = MutableStateFlow(stored.terminal)
     private val _autostart = MutableStateFlow(stored.autostart)
     private val _deviceEnabled = MutableStateFlow(stored.deviceEnabled)
     private val _deviceUnenrolPending = MutableStateFlow(stored.deviceUnenrolPending)
@@ -682,6 +705,45 @@ class DesktopSettings(private val file: File = defaultFile()) : HuginnSettings {
     }
 
     fun closeToTrayNow(): Boolean = _closeToTray.value
+
+    // ------------------------------------------------------------ update notice
+    //
+    // Same shape as close-to-tray, for the same reasons: desktop-only, and NOT
+    // suspend — "Don't remind me" is a click on a card and the toggle a click
+    // on a row, neither with a coroutine scope worth acquiring for a boolean
+    // already in memory.
+
+    /** The version "Don't remind me" was answered for, or null. See `UpdateReminder`. */
+    val updateSilencedVersion: StateFlow<String?> = _updateSilencedVersion.asStateFlow()
+
+    fun setUpdateSilencedVersion(version: String?) {
+        val v = version?.takeIf { it.isNotBlank() }
+        _updateSilencedVersion.value = v
+        mutate { it.copy(updateSilencedVersion = v.orEmpty()) }
+    }
+
+    /** Settings > Updates: whether a ready update is announced outside that page. */
+    val updateNotify: StateFlow<Boolean> = _updateNotify.asStateFlow()
+
+    fun setUpdateNotify(value: Boolean) {
+        _updateNotify.value = value
+        mutate { it.copy(updateNotify = value) }
+    }
+
+    fun updateNotifyNow(): Boolean = _updateNotify.value
+
+    // ------------------------------------------------------------------ terminal
+
+    /** The Terminal setting: "" is Auto, else a `TerminalLaunch.Candidate` id. */
+    val terminal: StateFlow<String> = _terminal.asStateFlow()
+
+    fun setTerminal(value: String) {
+        _terminal.value = value
+        mutate { it.copy(terminal = value) }
+    }
+
+    /** Read by `TerminalLaunch.preferred` at the moment a window opens. */
+    fun terminalNow(): String = _terminal.value
 
     // ------------------------------------------------------- setup + autostart
     //

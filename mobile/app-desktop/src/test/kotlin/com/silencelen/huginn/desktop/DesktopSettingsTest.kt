@@ -252,6 +252,33 @@ class DesktopSettingsTest {
     }
 
     @Test
+    fun `the update answers and the terminal choice survive a relaunch`() {
+        val file = freshFile()
+        val s = DesktopSettings(file)
+        assertEquals(null, s.updateSilencedVersion.value)
+        assertTrue(s.updateNotifyNow(), "announced by default: a client that says nothing is a client nobody updates")
+        assertEquals("", s.terminalNow(), "Auto by default")
+        s.setUpdateSilencedVersion("2.7.0")
+        s.setUpdateNotify(false)
+        s.setTerminal("kitty")
+
+        val next = DesktopSettings(file)
+        assertEquals("2.7.0", next.updateSilencedVersion.value)
+        assertFalse(next.updateNotifyNow())
+        assertEquals("kitty", next.terminalNow())
+        // Cleared is cleared: "Remind me" must not leave an empty string that
+        // reads as a version.
+        next.setUpdateSilencedVersion(null)
+        assertEquals(null, DesktopSettings(file).updateSilencedVersion.value)
+        // A file from before these keys reads the defaults, not a throw.
+        file.writeText("""{"token":"t"}""")
+        val old = DesktopSettings(file)
+        assertEquals(null, old.updateSilencedVersion.value)
+        assertTrue(old.updateNotifyNow())
+        assertEquals("", old.terminalNow())
+    }
+
+    @Test
     fun `an install that predates the notch opens with its list showing`() {
         // The owner's own settings file has no such key. A client that decided
         // "absent means shut" would launch with no visible navigation at all.

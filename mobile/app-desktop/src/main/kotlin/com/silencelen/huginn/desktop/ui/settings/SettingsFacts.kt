@@ -61,6 +61,8 @@ data class SettingsFacts(
     val appsAvailable: Boolean = false,
     /** The host serves projects — `AppStore.projectsAvailable`. */
     val projectsAvailable: Boolean = false,
+    /** This OS has more than one terminal to open a session in (`TerminalLaunch.offersChoice`). */
+    val terminalChoice: Boolean = false,
 )
 
 /**
@@ -112,6 +114,8 @@ fun desktopProbe(f: SettingsFacts): SettingsProbe {
         coreInstalled = f.coreInstalled,
         apps = f.appsAvailable,
         projects = f.projectsAvailable,
+        // The Appearance page draws the Terminal row under the same fact.
+        terminalChoice = f.terminalChoice,
     )
 }
 

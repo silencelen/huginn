@@ -1,16 +1,29 @@
 package com.silencelen.huginn.desktop.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import com.silencelen.huginn.desktop.TerminalLaunch
+import com.silencelen.huginn.ui.system.LocalRowMetrics
+import com.silencelen.huginn.ui.system.Scale
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -744,6 +757,10 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         modifier = revealMark("appearance.shortcuts"),
         trailingText = "F1",
     )
+    // Which terminal "Open in terminal" starts. Under the same fact the probe
+    // reads (`SettingsFacts.terminalChoice`), so search never offers it where it
+    // is not drawn — macOS, where there is the one Terminal.
+    if (TerminalLaunch.offersChoice()) TerminalRow(store, mark)
     // The way back after "Hide this icon" (owner, 2026-10-17), and the way to
     // hide it from here. Only where huginn core is installed: elsewhere this
     // app's own icon follows Close to tray.
@@ -774,6 +791,71 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
     }
 }
 
+/**
+ * The Terminal setting: Auto, then every terminal this machine has
+ * ([TerminalLaunch.candidates]), as the radio form the Devices page uses for a
+ * choice. Auto is the launcher's own order, said in the blurb so the person
+ * choosing knows what they are choosing instead of.
+ *
+ * A chosen terminal that has since gone is still listed, so it can be changed:
+ * a setting that names something absent and offers no way off it is a setting
+ * that is broken. `TerminalLaunch` skips it and says so at open time.
+ */
+@Composable
+private fun TerminalRow(store: AppStore, mark: String?) {
+    val choice by store.settings.terminal.collectAsState()
+    // Asked of the machine once per page: a PATH walk per frame would be a poll.
+    val candidates = remember { TerminalLaunch.candidates() }
+    val highlighted = SettingsRowStyle.isHighlighted("appearance.terminal", mark)
+    val metrics = LocalRowMetrics.current
+    val windows = TerminalLaunch.os == TerminalLaunch.Os.WINDOWS
+    val autoBlurb = if (windows) {
+        "Windows Terminal when it is installed, then PowerShell 7, then Windows PowerShell."
+    } else {
+        "\$TERMINAL when it is set, then xdg-terminal-exec, then the first terminal found on this machine."
+    }
+    val shown = buildList {
+        add(TerminalLaunch.Candidate("", "Auto"))
+        addAll(candidates)
+        if (choice.isNotBlank() && candidates.none { it.id == choice }) add(TerminalLaunch.Candidate(choice, choice))
+    }
+    // Framed like the shared field row: cap before fill, the arrival target is
+    // the Low surface tier plus a SemiBold title and nothing else.
+    Column(
+        Modifier
+            .testTag("appearance.terminal")
+            .then(revealMark("appearance.terminal"))
+            .widthIn(max = SettingsRowStyle.ROW_MAX_WIDTH)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(Scale.radiusCard))
+            .background(if (highlighted) MaterialTheme.colorScheme.surfaceContainerLow else Color.Transparent)
+            .padding(horizontal = metrics.inset, vertical = metrics.vertical),
+    ) {
+        Text(
+            "Terminal",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (highlighted) FontWeight.SemiBold else FontWeight.Medium,
+        )
+        Text(
+            "Which terminal opens a session when you ask for one from a row, the palette or the session's name.",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        for (c in shown) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                RadioButton(selected = choice == c.id, onClick = { store.settings.setTerminal(c.id) })
+                Column(Modifier.padding(start = 6.dp)) {
+                    Text(c.title, style = MaterialTheme.typography.bodyMedium)
+                    when {
+                        c.id.isEmpty() -> Muted(autoBlurb, maxLines = 2)
+                        candidates.none { it.id == c.id } -> Muted("not found on this machine; Auto is used until it is back", maxLines = 2)
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ----------------------------------------------------- updates & diagnostics
 
 /**
@@ -792,6 +874,9 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
     val state by store.updater.state.collectAsState()
     val clipboard = LocalClipboardManager.current
     var note by remember { mutableStateOf<String?>(null) }
+    // The two answers that quiet the notice outside this page (UpdateReminder).
+    val silenced by store.settings.updateSilencedVersion.collectAsState()
+    val notify by store.settings.updateNotify.collectAsState()
 
     ScopeOf("updates.check", store)
     // ⚠ A ROW, WITH ITS CATALOG ID (2026-10-23 audit). The check was a bare
@@ -809,7 +894,8 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
             UpdateState.Checking -> "checking…"
             is UpdateState.UpToDate -> "up to date (${s.version})"
             is UpdateState.Downloading -> "downloading ${s.version}…"
-            is UpdateState.Ready -> "${s.version} downloaded and verified"
+            is UpdateState.Ready -> "${s.version} downloaded and verified" +
+                if (silenced == s.version) " · reminders off" else ""
             // Said under the row in the error colour, as it always was.
             is UpdateState.Error -> null
         },
@@ -851,6 +937,32 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
             maxLines = 3,
         )
     }
+    // "Don't remind me" was answered for a version: said here, where the parked
+    // update is, with the one way back. Shown whenever it is set, not only while
+    // that version is the one parked — a stored answer the page hid would be a
+    // card that never comes back for no reason anybody can see.
+    silenced?.let { v ->
+        Row(Modifier.padding(top = 4.dp, start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Muted("Reminders off for $v")
+            TextButton(onClick = { store.updateUnsilence() }, modifier = Modifier.testTag("updates.check.remind")) {
+                Text("Remind me")
+            }
+        }
+    }
+    SettingsToggleRow(
+        id = "updates.notify",
+        title = "Tell me when an update is ready",
+        checked = notify,
+        onCheckedChange = { store.settings.setUpdateNotify(it) },
+        summary = if (notify) {
+            "A downloaded, verified update is announced at the top of the session and chat lists, " +
+                "with a dot on Settings and a row in the tray menu, until you install it or say not to."
+        } else {
+            "Updates are still fetched and verified; this page is the only place that says one is ready."
+        },
+        highlighted = SettingsRowStyle.isHighlighted("updates.notify", mark),
+        modifier = revealMark("updates.notify"),
+    )
 
     SettingsActionRow(
         id = "updates.copy-diagnostics",

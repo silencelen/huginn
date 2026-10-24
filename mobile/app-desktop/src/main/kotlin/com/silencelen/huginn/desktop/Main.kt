@@ -65,6 +65,7 @@ import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.ui.common.rememberLinkUriHandler
 import androidx.compose.ui.platform.LocalUriHandler
 import com.silencelen.huginn.desktop.ui.common.DesktopRowTime
+import com.silencelen.huginn.desktop.ui.common.rememberTerminalVerb
 import com.silencelen.huginn.ui.LocalRowTime
 import com.silencelen.huginn.ui.LocalWrapUpPhrase
 import com.silencelen.huginn.ui.LocalTranscriptMetrics
@@ -121,6 +122,10 @@ fun main(args: Array<String>) {
         System.setProperty("skiko.renderApi", it)
     }
     val settings = DesktopSettings()
+    // The Terminal setting, for every "Open in terminal" — the row menus, the
+    // palette and the session header's name menu all open through TerminalLaunch
+    // without a settings object in reach.
+    TerminalLaunch.preferred = { settings.terminalNow() }
     val configDir = File(settings.path).parentFile ?: File(System.getProperty("user.home"), ".config")
 
     // FIRST, before anything opens a socket or claims a lease. A protocol
@@ -607,6 +612,9 @@ fun main(args: Array<String>) {
         }
 
         val coreTray by store.coreDevice.coreTray.collectAsState()
+        // A verified update, for the tray row below (UpdateReminder.mark: the
+        // switch and Don't remind me take it down, Later does not).
+        val updateReady by store.updateMark.collectAsState()
         // ⚠ ONE ICON (owner, 2026-10-17). Where huginn core is installed, its
         // icon is the only one: hiding it ("Hide this icon") used to bring this
         // app's own older icon up in its place, with no clear way back. The way
@@ -627,6 +635,15 @@ fun main(args: Array<String>) {
                 onAction = { summon() },
             ) {
                 Item("Open Huginn", onClick = { summon() })
+
+                // A verified update, one click from the page that installs it.
+                // The core's tray cannot carry this row without a change on its
+                // side (its menu is fixed in Go: Open, the needs-you rows, Close
+                // to tray, Quit, Hide), so it is this app's tray alone.
+                updateReady?.let { ready ->
+                    Separator()
+                    Item("Update ready: ${ready.version}", onClick = { summon(); store.openSettings("updates") })
+                }
 
                 if (summary.attention.isNotEmpty()) {
                     Separator()
@@ -922,6 +939,9 @@ fun main(args: Array<String>) {
                     // that does not publish one, which is the old behaviour.
                     LocalWrapUpPhrase provides store.status.collectAsState().value?.softEndPhrase,
                 ) {
+                    // The same verb the row menus carry, for the palette's
+                    // "Open <session> in terminal" on the session that is open.
+                    val terminalVerb = rememberTerminalVerb(store)
                     Shell(store)
 
                     if (paletteOpen.value) {
@@ -954,12 +974,22 @@ fun main(args: Array<String>) {
                                 store.projectsAvailable.collectAsState().value,
                                 store.appsAvailable.collectAsState().value,
                             ),
+                            // "Open <session> in terminal", for the session that is
+                            // open — and only one the CLI can open as named, the
+                            // same gate the row menu applies.
+                            terminal = store.sessionName.collectAsState().value
+                                ?.takeIf { TerminalLaunch.problem(it) == null }
+                                ?.let { name ->
+                                    val title = store.sessions.collectAsState().value.firstOrNull { it.name == name }?.title
+                                    com.silencelen.huginn.desktop.ui.TerminalTarget(name, title, terminalVerb.label)
+                                },
                             onDismiss = { paletteOpen.value = false },
                             onPick = { item ->
                                 paletteOpen.value = false
                                 when (item) {
                                     is PaletteItem.OpenChat -> store.openChat(item.id)
                                     is PaletteItem.OpenSession -> store.openSession(item.name)
+                                    is PaletteItem.OpenTerminal -> terminalVerb.open(item.name)
                                     is PaletteItem.OpenSettings -> store.openSettings(item.categoryId)
                                     is PaletteItem.OpenScratchpad -> {
                                         store.openView(View.SCRATCHPADS)

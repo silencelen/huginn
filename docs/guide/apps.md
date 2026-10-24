@@ -161,13 +161,17 @@ not running, the window offers the one button that fixes it.
 - **The rail** on the left holds Chats, Sessions, Projects, Rounds, Devices, Apps, Pages, Status
   and Settings. Projects and Apps appear when your server has any. Pages are your own notes, which
   a message can carry along.
-- **Right-click** any row for every action on it; Ctrl+click and Shift+click select several.
+- **Right-click** any row for every action on it; Ctrl+click and Shift+click select several. A
+  session row's **Open in terminal** attaches a terminal to it through the `huginn` command; see
+  [Sessions](sessions.md#from-the-desktop-app).
 - **Updates.** The app checks the project's GitHub releases when it starts and every four hours,
-  downloads a newer build and verifies its checksum, then waits. **Settings > Updates &
-  diagnostics** offers **Install and restart**; nothing restarts on its own. A `.deb` or Arch
-  package needs root to install, so the app never asks for a password: it shows the `sudo apt
-  install …` or `sudo pacman -U …` command for the file it downloaded. `huginn desktop install`
-  switches Linux to the per-user build, which updates itself.
+  downloads a newer build and verifies its checksum, then says so: a card at the top of the
+  session and chat lists with **Install and restart**, **Later** and **Don't remind me**, a dot on
+  Settings and a row in the tray menu. **Settings > Updates & diagnostics** offers **Install and
+  restart** too; nothing restarts on its own. A `.deb` or Arch package needs root to install, so
+  the app never asks for a password: it shows the `sudo apt install …` or `sudo pacman -U …`
+  command for the file it downloaded. `huginn desktop install` switches Linux to the per-user
+  build, which updates itself.
 
 ### Keyboard
 
@@ -230,5 +234,7 @@ only one of them.
 | Privacy & security | Remove this computer's access (desktop) | Unenrols this computer and unpairs huginn core. Nothing on the server is deleted. |
 | Appearance & behaviour | Close to tray, Tray icon, Start with your session (desktop) | How the window and the tray icon behave, and whether the window opens at sign-in. |
 | Appearance & behaviour | Terminal text size (Android) | Text size in the Screen tab. |
+| Appearance & behaviour | Terminal (desktop) | Which terminal **Open in terminal** starts: Auto, or one of the terminals found on this computer. |
 | Updates & diagnostics | Check for updates | Looks for a newer build and installs it when you say so. |
+| Updates & diagnostics | Tell me when an update is ready (desktop) | Whether a verified update is announced on the lists, the rail and the tray menu. |
 | Updates & diagnostics | Copy diagnostics | Puts the app's version, connection, notification delivery and recent log on the clipboard, without the token. |

@@ -17,6 +17,7 @@ import com.silencelen.huginn.desktop.ui.common.HuginnMenuItem
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.SelectionVerbs
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
+import com.silencelen.huginn.desktop.ui.common.TerminalVerb
 import com.silencelen.huginn.desktop.ui.common.bgWorkTip
 import com.silencelen.huginn.desktop.ui.common.chatMenu
 import com.silencelen.huginn.desktop.ui.common.chatStateTip
@@ -1077,8 +1078,61 @@ class DesktopSurfaceTest {
     private fun ChatVerbs.copyDelete(delete: (List<String>) -> Unit) =
         ChatVerbs(open, rename, stop, copyId, delete)
 
-    private fun noSessionVerbs(archive: ((List<String>) -> Unit)? = null) = SessionVerbs(
+    private fun noSessionVerbs(
+        archive: ((List<String>) -> Unit)? = null,
+        openTerminal: TerminalVerb? = null,
+    ) = SessionVerbs(
         open = {}, rename = {}, interrupt = {}, copyName = {}, compact = {},
-        softEnd = {}, archive = archive, kill = {},
+        softEnd = {}, archive = archive, kill = {}, openTerminal = openTerminal,
     )
+
+    // ------------------------------------------------- open in terminal
+
+    /**
+     * The session's own right-click gets the verb the header's name menu had
+     * alone: a real terminal on this session, through the CLI. It sits right
+     * after Open because it IS a way of opening; the label is the launcher's,
+     * so Windows says which shell it will start.
+     */
+    @Test
+    fun `open in terminal sits right after Open, on single rows only, and never for a name the CLI cannot open`() {
+        val verb = TerminalVerb("Open in terminal") {}
+        assertEquals(
+            listOf("Open", "Open in terminal", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wrap up", "Kill session"),
+            labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs(openTerminal = verb))),
+        )
+        // Windows names the shell it starts; the label is whatever the launcher decided.
+        assertEquals(
+            "Open in PowerShell",
+            labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs(openTerminal = TerminalVerb("Open in PowerShell") {})))[1],
+        )
+        // Without the verb (no launcher wired), the menu is what it always was.
+        assertEquals(
+            listOf("Open", "Rename…", "Interrupt (Esc)", "Copy session name", "Compact context", "Wrap up", "Kill session"),
+            labelsOf(sessionMenu(session(), emptySet(), noSessionVerbs())),
+        )
+        // A multi-selection is verbs about all of them, and a terminal opens one.
+        assertFalse(
+            labelsOf(sessionMenu(session(name = "b"), setOf("a", "b"), noSessionVerbs(openTerminal = verb))).any { "terminal" in it },
+        )
+        // A name the CLI would fold or refuse is not offered an open that would
+        // reach a different session (TerminalLaunch.problem), and a session the
+        // daemon will not route to is not offered either.
+        assertFalse("Open in terminal" in labelsOf(sessionMenu(session(name = "Foo"), emptySet(), noSessionVerbs(openTerminal = verb))))
+        assertFalse("Open in terminal" in labelsOf(sessionMenu(session(name = "a.b"), emptySet(), noSessionVerbs(openTerminal = verb))))
+        assertFalse(
+            "Open in terminal" in labelsOf(sessionMenu(session().copy(addressable = false), emptySet(), noSessionVerbs(openTerminal = verb))),
+        )
+        // And the verb gets the row's name, not the selection's.
+        var opened: String? = null
+        sessionMenu(session(name = "dev"), emptySet(), noSessionVerbs(openTerminal = TerminalVerb("Open in terminal") { opened = it }))
+            .filterIsInstance<HuginnMenuItem>().first { it.label == "Open in terminal" }.onClick()
+        assertEquals("dev", opened)
+        // Plain, like Open: nothing about a terminal is destructive.
+        assertEquals(
+            VerbTone.PLAIN,
+            sessionMenu(session(), emptySet(), noSessionVerbs(openTerminal = verb))
+                .filterIsInstance<HuginnMenuItem>().first { it.label == "Open in terminal" }.tone,
+        )
+    }
 }

@@ -49,6 +49,7 @@ import com.silencelen.huginn.desktop.ui.common.NothingOpen
 import com.silencelen.huginn.desktop.ui.common.ProjectVerbs
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.projectMenu
+import com.silencelen.huginn.desktop.ui.common.rememberTerminalVerb
 import com.silencelen.huginn.ui.CreateProjectSheet
 import com.silencelen.huginn.ui.ManifestCard
 import com.silencelen.huginn.ui.PROJECTS_BLURB
@@ -164,6 +165,7 @@ fun ProjectsList(store: AppStore) {
                 store.refreshSessions()
             }
         },
+        openTerminal = rememberTerminalVerb(store),
     )
 
     Column(Modifier.fillMaxSize()) {
@@ -322,6 +324,8 @@ fun ProjectsDetail(store: AppStore) {
                 store.refreshSessions()
             }
         },
+        // A member is a session: the same terminal verb its row would have.
+        openTerminal = rememberTerminalVerb(store),
     )
 
     Column(Modifier.fillMaxSize()) {

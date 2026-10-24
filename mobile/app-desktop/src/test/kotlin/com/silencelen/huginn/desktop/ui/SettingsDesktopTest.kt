@@ -195,6 +195,20 @@ class SettingsDesktopTest {
         assertEquals(listOf("host", "privacy", "appearance", "updates", "about"), shown.map { it.id })
     }
 
+    /**
+     * The Terminal row is about THIS MACHINE (which terminals it has), so it
+     * follows the OS fact and not the host; the notice switch rides the update
+     * channel exactly as Check for updates does.
+     */
+    @Test
+    fun `the Terminal row follows the machine, and the notice switch the update channel`() {
+        val none = desktopProbe(SettingsFacts())
+        assertTrue("appearance.terminal" !in SettingsCatalog.itemsOf("appearance", none, Surface.DESKTOP).map { it.id })
+        val here = desktopProbe(SettingsFacts(terminalChoice = true))
+        assertTrue("appearance.terminal" in SettingsCatalog.itemsOf("appearance", here, Surface.DESKTOP).map { it.id })
+        assertTrue("updates.notify" in SettingsCatalog.itemsOf("updates", none, Surface.DESKTOP).map { it.id })
+    }
+
     @Test
     fun `a 3-0-0 daemon has no usage and no quick actions`() {
         // The shape the redesign's own screenshot asks for: a host that answers

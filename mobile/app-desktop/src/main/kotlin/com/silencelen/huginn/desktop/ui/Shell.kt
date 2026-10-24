@@ -104,7 +104,12 @@ import com.silencelen.huginn.desktop.ui.common.archiveFor
 import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
 import com.silencelen.huginn.desktop.ui.common.sessionEndedCopy
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
+import com.silencelen.huginn.desktop.ui.common.rememberTerminalVerb
 import com.silencelen.huginn.desktop.ui.common.Space
+import com.silencelen.huginn.desktop.update.UpdateState
+import com.silencelen.huginn.desktop.update.installThenQuit
+import com.silencelen.huginn.ui.UpdateNoticeCard
+import com.silencelen.huginn.update.UpdateReminder
 import com.silencelen.huginn.desktop.ui.common.Tints
 import com.silencelen.huginn.desktop.ui.common.Tip
 import com.silencelen.huginn.desktop.setup.SetupHost
@@ -232,6 +237,12 @@ fun Shell(store: AppStore) {
     val listWidth by store.settings.listWidth.collectAsState()
     val listCollapsed by store.settings.listCollapsed.collectAsState()
     val notifyEnabled by store.settings.notifyEnabled.collectAsState(true)
+    // A verified update: the card on the lists, and the quieter rail dot. Two
+    // flows because Later takes the card and not the dot (UpdateReminder).
+    val updateNotice by store.updateNotice.collectAsState()
+    val updateMark by store.updateMark.collectAsState()
+    // "Open in terminal" for the session rows, built once per Terminal setting.
+    val terminalVerb = rememberTerminalVerb(store)
     val scope = rememberCoroutineScope()
 
     // THE CHAT LIST LANDS ON THE LATEST CHAT WHEN YOU ARRIVE FROM ANOTHER RAIL
@@ -307,6 +318,7 @@ fun Shell(store: AppStore) {
         // menu entirely rather than offering a verb that can only 404.
         archive = if (archiveAvailable == true) ({ names -> confirming = ConfirmTarget.ArchiveSessions(names) }) else null,
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
+        openTerminal = terminalVerb,
     )
 
     // Pages get the list-plus-detail shape too: the list IS the navigation, and an
@@ -413,6 +425,8 @@ fun Shell(store: AppStore) {
                         // here because this is where both halves already are; the rail
                         // draws whatever it is handed and nothing when that is null.
                         sessionUsage = SessionUsageFill.of(headroom, statusHeadroomOf(headroom) ?: status?.headroom),
+                        // The dot on Settings while a verified update waits there.
+                        updateReady = updateMark?.version,
                         onSelect = { store.openView(it) },
                     )
                     VerticalDivider(color = LocalHuginnColors.current.outlineHairline)
@@ -468,6 +482,10 @@ fun Shell(store: AppStore) {
                             ) {
                                 when (view) {
                                     View.CHATS -> Column(Modifier.fillMaxSize()) {
+                                        // A verified update, above the offer below in the
+                                        // same slot and shape: the one card a reader sees
+                                        // first is the one that is about to restart the app.
+                                        updateNotice?.let { ready -> UpdateNotice(store, ready) { copy(it) } }
                                         // First-launch offer, once and dismissible: the
                                         // machine may be able to SERVE, and the only
                                         // door was a Settings section nobody is told
@@ -539,27 +557,34 @@ fun Shell(store: AppStore) {
                                     View.SCRATCHPADS -> ScratchpadsList(store)
                                     View.PROJECTS -> ProjectsList(store)
                                     View.SETTINGS -> SettingsNavPane(store, settingsPane)
-                                    View.SESSIONS -> SessionsList(
-                                        sessions = listedSessions,
-                                        inProjects = sessionSplit.inProjects.size,
-                                        projectCount = projects.size,
-                                        onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
-                                        loaded = sessionsLoaded,
-                                        activeName = sessionName,
-                                        selection = sessionSel,
-                                        onSelect = { sessionSel = it },
-                                        onOpen = { if (sessionAddressable(it)) store.openSession(it) },
-                                        onNew = { namingSession = true },
-                                        verbs = sessionVerbs,
-                                        archives = if (archiveAvailable == true) archives else emptyList(),
-                                        archiveAvailable = archiveAvailable,
-                                        onRevive = { row -> act { store.reviveArchive(row) } },
-                                        onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { copy(it) } },
-                                        onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
-                                        // READ it without bringing it back: the
-                                        // detail pane, read only, no decision made.
-                                        onViewArchive = { store.openArchive(it) },
-                                    )
+                                    // The same card as the chat list's, in the same
+                                    // place: whichever list is open says it.
+                                    View.SESSIONS -> Column(Modifier.fillMaxSize()) {
+                                        updateNotice?.let { ready -> UpdateNotice(store, ready) { copy(it) } }
+                                        Box(Modifier.weight(1f)) {
+                                            SessionsList(
+                                                sessions = listedSessions,
+                                                inProjects = sessionSplit.inProjects.size,
+                                                projectCount = projects.size,
+                                                onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
+                                                loaded = sessionsLoaded,
+                                                activeName = sessionName,
+                                                selection = sessionSel,
+                                                onSelect = { sessionSel = it },
+                                                onOpen = { if (sessionAddressable(it)) store.openSession(it) },
+                                                onNew = { namingSession = true },
+                                                verbs = sessionVerbs,
+                                                archives = if (archiveAvailable == true) archives else emptyList(),
+                                                archiveAvailable = archiveAvailable,
+                                                onRevive = { row -> act { store.reviveArchive(row) } },
+                                                onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { copy(it) } },
+                                                onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
+                                                // READ it without bringing it back: the
+                                                // detail pane, read only, no decision made.
+                                                onViewArchive = { store.openArchive(it) },
+                                            )
+                                        }
+                                    }
                                     else -> Unit
                                 }
                             }
@@ -922,6 +947,8 @@ private fun NavRail(
     appsDown: Int,
     /** The 5-hour session window under the Status icon; null draws no line. */
     sessionUsage: UsageFill?,
+    /** A verified update's version, for the dot on Settings; null for none. */
+    updateReady: String? = null,
     onSelect: (View) -> Unit,
 ) {
     Column(
@@ -1064,10 +1091,44 @@ private fun NavRail(
             label = "Settings",
             count = 0,
             active = current == View.SETTINGS,
-            tip = "Settings · server, accounts, notifications, diagnostics",
-            mark = null,
+            tip = "Settings · server, accounts, notifications, diagnostics" +
+                (updateReady?.let { " · update $it is ready to install" } ?: ""),
+            // The rail's "waiting on you" dot, the same one the Sessions item
+            // uses: a verified update is a decision parked behind this icon, and
+            // a third colour for it would need a legend. Later leaves it; Don't
+            // remind me and the Settings switch take it down (UpdateReminder.mark).
+            mark = if (updateReady != null) LocalHuginnColors.current.stateAttention else null,
         ) { onSelect(View.SETTINGS) }
     }
+}
+
+/**
+ * The shared [UpdateNoticeCard] wired to this app: Install hands the parked file
+ * to the updater and quits the way the Updates page does ([installThenQuit]), so
+ * the installer can replace files this process holds open; a launch that did not
+ * take leaves the window up and opens the Updates page, where the reason is. Copy
+ * command takes the manual-install command for a kind this client cannot apply.
+ * Later is this run's ([AppStore.updateLater]); Don't remind me is this version's
+ * ([AppStore.updateSilence]).
+ */
+@Composable
+private fun UpdateNotice(store: AppStore, ready: UpdateState.Ready, copy: (String) -> Unit) {
+    val command = UpdateReminder.commandOf(ready.hint)
+    UpdateNoticeCard(
+        version = ready.version,
+        line = UpdateReminder.firstLine(ready.notes),
+        installable = ready.installable,
+        hint = ready.hint,
+        command = command,
+        onInstall = {
+            if (!installThenQuit(install = store.updater::install, quit = store::requestQuit)) {
+                store.openSettings("updates")
+            }
+        },
+        onCopyCommand = { command?.let(copy) },
+        onLater = { store.updateLater(ready.version) },
+        onSilence = { store.updateSilence(ready.version) },
+    )
 }
 
 /**

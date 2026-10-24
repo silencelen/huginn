@@ -55,6 +55,89 @@ object TerminalLaunch {
             }
         }
 
+    /**
+     * The Terminal setting (Settings > Appearance & behaviour), read at the moment
+     * a window opens: "" is Auto, else a [Candidate.id]. A hook rather than a
+     * parameter because the session header's name menu and every row menu call
+     * [open] and [label] without a settings object in reach; the app points it at
+     * `DesktopSettings.terminalNow()` once at launch, and a test leaves it Auto.
+     */
+    @Volatile
+    var preferred: () -> String = { "" }
+
+    /**
+     * The terminals Windows can open, in the order Auto tries them: Windows
+     * Terminal when it is installed (its own tabs, the owner's profile), then
+     * PowerShell 7, then the Windows PowerShell every machine has. [powershell]
+     * says whether the WINDOW is a PowerShell one, which is what the menu label
+     * names; a Windows Terminal tab runs PowerShell inside it, but the thing that
+     * opens is the terminal.
+     */
+    enum class WindowsTerminal(val id: String, val exe: String, val title: String, val powershell: Boolean) {
+        WINDOWS_TERMINAL("wt", "wt.exe", "Windows Terminal", false),
+        PWSH("pwsh", "pwsh.exe", "PowerShell 7", true),
+        POWERSHELL("powershell", "powershell.exe", "Windows PowerShell", true),
+    }
+
+    /**
+     * What [pickWindowsTerminal] decided: the terminal, where it is (an absolute
+     * path when the machine answered, the bare exe when it did not), and the
+     * shell a Windows Terminal tab runs — PowerShell 7 when present, else Windows
+     * PowerShell. The shell is passed to `wt` by its bare name on purpose: `wt`
+     * rebuilds the tab's command line from the words it is given, and a path with
+     * a space in it (`C:\Program Files\PowerShell\7\pwsh.exe`) is exactly the word
+     * that comes apart there. Both shells resolve through PATH the way `wt`
+     * itself does.
+     */
+    class WindowsPick(val terminal: WindowsTerminal, val path: String, val shell: WindowsTerminal)
+
+    /**
+     * The terminal a Windows window opens in: the setting's [choice] when that
+     * terminal is on this machine, else Auto's order. [which] answers where an
+     * exe is (null when it is not), so the order is testable with a fake machine.
+     * Windows PowerShell is the floor: it is on every Windows install, and a PATH
+     * walk from an app started by a shortcut can still miss it, so it is returned
+     * by name rather than reported absent.
+     */
+    fun pickWindowsTerminal(choice: String, which: (String) -> String?): WindowsPick {
+        val chosen = WindowsTerminal.entries.firstOrNull { it.id == choice }
+        val order = (listOfNotNull(chosen) + WindowsTerminal.entries).distinct()
+        val shell = when {
+            which(WindowsTerminal.PWSH.exe) != null -> WindowsTerminal.PWSH
+            else -> WindowsTerminal.POWERSHELL
+        }
+        for (t in order) {
+            val path = which(t.exe) ?: continue
+            return WindowsPick(t, path, if (t == WindowsTerminal.WINDOWS_TERMINAL) shell else t)
+        }
+        return WindowsPick(WindowsTerminal.POWERSHELL, WindowsTerminal.POWERSHELL.exe, WindowsTerminal.POWERSHELL)
+    }
+
+    /** One terminal the Settings row can offer: the id the setting stores, and its name. */
+    class Candidate(val id: String, val title: String)
+
+    /** Whether this OS has a choice to make at all: macOS has the one Terminal. */
+    fun offersChoice(os: Os = this.os): Boolean = os != Os.MAC
+
+    /**
+     * The terminals on THIS machine, for the Terminal row: Windows lists the
+     * three it knows that answer (Windows PowerShell always), Linux the ones of
+     * [LINUX_TERMINALS] that are installed — launchers included, since
+     * `xdg-terminal-exec` is how a person says "my terminal" on a desktop that
+     * reads xdg-terminals.list.
+     */
+    fun candidates(
+        os: Os = this.os,
+        env: (String) -> String? = System::getenv,
+        which: (String) -> String? = whichFor(os, env),
+    ): List<Candidate> = when (os) {
+        Os.WINDOWS -> WindowsTerminal.entries
+            .filter { it == WindowsTerminal.POWERSHELL || which(it.exe) != null }
+            .map { Candidate(it.id, it.title) }
+        Os.LINUX -> LINUX_TERMINALS.filter { which(it.name) != null }.map { Candidate(it.name, it.name) }
+        Os.MAC -> emptyList()
+    }
+
     /** appd's NAME_RE (server/appd/huginn-appd.js) — the one rule for the product. */
     private val NAME_RE = Regex("^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$")
 
@@ -90,8 +173,26 @@ object TerminalLaunch {
         else -> null
     }
 
-    /** The menu word: the thing that opens, named after the shell the OS has. */
-    fun label(os: Os = this.os): String = if (os == Os.WINDOWS) "Open in PowerShell" else "Open in terminal"
+    /**
+     * The menu word: the thing that opens. On Windows it names the shell only
+     * when the terminal that will start IS PowerShell — with Windows Terminal
+     * installed (or chosen) the window is a terminal, and "Open in PowerShell"
+     * would name the thing inside it. Asked of the machine the way [open] will
+     * ask it, so the label and the window cannot disagree.
+     */
+    fun label(
+        os: Os = this.os,
+        choice: String = preferred(),
+        env: (String) -> String? = System::getenv,
+        which: (String) -> String? = whichFor(os, env),
+    ): String = if (os == Os.WINDOWS) label(pickWindowsTerminal(choice, which).terminal) else "Open in terminal"
+
+    /** The label for a decided Windows terminal. */
+    fun label(terminal: WindowsTerminal?): String =
+        if (terminal?.powershell == true) "Open in PowerShell" else "Open in terminal"
+
+    /** The palette's row for [subject]: "Open <session> in terminal", in the label's own words. */
+    fun paletteLabel(subject: String, label: String): String = label.replaceFirst("Open ", "Open $subject ")
 
     /** True when `huginn <name>` would run a CLI verb rather than attach. */
     fun isVerb(name: String): Boolean = name.lowercase() in CLI_VERBS
@@ -200,14 +301,24 @@ object TerminalLaunch {
      * [env] reads the environment and [which] says where a program is (null when
      * it is not there), so the whole order is testable with a fake PATH.
      *
-     * $TERMINAL comes first because it is the one place a person SAYS which
-     * terminal is theirs. Its first word is the program and the rest are its own
+     * The Terminal setting ([choice], a [LINUX_TERMINALS] name) comes first: it
+     * is this app's own answer, given on its Settings page. Then $TERMINAL,
+     * because it is the one place a person SAYS which terminal is theirs
+     * machine-wide. Its first word is the program and the rest are its own
      * arguments (the convention every launcher that reads it follows); a terminal
      * this file knows gets its own "run this" word, any other gets `-e`, which is
-     * xterm's and the default every launcher assumes.
+     * xterm's and the default every launcher assumes. A setting naming a terminal
+     * that is gone is skipped and said, like a $TERMINAL that is.
      */
-    fun pickLinuxTerminal(env: (String) -> String?, which: (String) -> String?): TerminalPick {
+    fun pickLinuxTerminal(env: (String) -> String?, which: (String) -> String?, choice: String = ""): TerminalPick {
         val tried = mutableListOf<String>()
+        if (choice.isNotBlank()) {
+            tried += "Terminal setting ($choice)"
+            which(choice)?.let { path ->
+                val run = LINUX_TERMINALS.firstOrNull { it.name == File(choice).name }?.run ?: listOf("-e")
+                return TerminalPick.Found(listOf(path) + run)
+            }
+        }
         val chosen = env("TERMINAL")?.trim()?.split(Regex("\\s+"))?.filter { it.isNotEmpty() }.orEmpty()
         if (chosen.isNotEmpty()) {
             tried += "\$TERMINAL (${chosen.joinToString(" ")})"
@@ -244,6 +355,32 @@ object TerminalLaunch {
         return dirs.distinct().map { File(it, name) }.firstOrNull(runnable)?.path
     }
 
+    /**
+     * [onPath] for Windows: `;`-separated, and the three places a terminal lives
+     * that a shortcut-started app's PATH tends to lack — the Store alias
+     * directory `wt.exe` is published through, PowerShell 7's install directory,
+     * and Windows PowerShell's. A [name] with a separator in it is a path and is
+     * only checked. Nothing here runs anything.
+     */
+    fun onPathWindows(
+        name: String,
+        env: (String) -> String?,
+        runnable: (File) -> Boolean = { it.isFile },
+    ): String? {
+        if ('\\' in name || '/' in name) return File(name).takeIf(runnable)?.path
+        val dirs = env("PATH").orEmpty().split(';').filter { it.isNotBlank() } +
+            listOfNotNull(
+                env("LOCALAPPDATA")?.takeIf { it.isNotBlank() }?.let { "$it\\Microsoft\\WindowsApps" },
+                env("ProgramFiles")?.takeIf { it.isNotBlank() }?.let { "$it\\PowerShell\\7" },
+                env("SystemRoot")?.takeIf { it.isNotBlank() }?.let { "$it\\System32\\WindowsPowerShell\\v1.0" },
+            )
+        return dirs.distinct().map { File(it, name) }.firstOrNull(runnable)?.path
+    }
+
+    /** The machine's "where is this program" for [os], over [env]. */
+    fun whichFor(os: Os, env: (String) -> String?): (String) -> String? =
+        if (os == Os.WINDOWS) ({ onPathWindows(it, env) }) else ({ onPath(it, env) })
+
     /** The sentence for a Linux machine where nothing in [pickLinuxTerminal]'s list answered. */
     fun noTerminal(tried: List<String>): String =
         "no terminal was found to open it in (tried ${tried.joinToString(", ")}); " +
@@ -257,19 +394,49 @@ object TerminalLaunch {
     private fun appleQuoted(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 
     /**
+     * A word for a PowerShell command line: bare when it is a plain program name,
+     * single-quoted (with `'` doubled) when it is a path — `C:\Program Files\…`
+     * has a space, and a user directory can hold an apostrophe.
+     */
+    private fun psArg(s: String): String =
+        if (s.all { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }) s else "'" + s.replace("'", "''") + "'"
+
+    /**
      * The argv to spawn, or null when the CLI cannot open the name (see [problem]).
      *
      * On Linux [terminal] is the launcher [pickLinuxTerminal] found — the
      * terminal and its "run this" words — and the window's command follows it.
-     * Windows and macOS each have the one terminal and ignore it.
+     * On Windows [windows] is [pickWindowsTerminal]'s answer (Windows PowerShell
+     * when null, which is what every build before the Terminal setting did).
+     * macOS has the one terminal and ignores both.
+     *
+     * ⚠ THE OUTER `powershell.exe -NoProfile -NonInteractive -Command Start-Process …`
+     * STAYS, whichever terminal opens. A console program started straight from
+     * this JVM gets pipes for its stdio and no console of its own, so an
+     * interactive shell spawned directly would read from a pipe nothing writes.
+     * `Start-Process` gives the window a console and detaches it; the outer
+     * shell is Windows PowerShell because it is on every machine.
      */
-    fun argv(name: String, os: Os = this.os, terminal: List<String> = emptyList()): List<String>? {
+    fun argv(
+        name: String,
+        os: Os = this.os,
+        terminal: List<String> = emptyList(),
+        windows: WindowsPick? = null,
+    ): List<String>? {
         if (problem(name) != null) return null
         return when (os) {
-            Os.WINDOWS -> listOf(
-                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                "Start-Process powershell.exe -ArgumentList '-NoExit','-EncodedCommand','${encoded(script(name))}'",
-            )
+            Os.WINDOWS -> {
+                val w = windows ?: WindowsPick(WindowsTerminal.POWERSHELL, WindowsTerminal.POWERSHELL.exe, WindowsTerminal.POWERSHELL)
+                val b64 = encoded(script(name))
+                val inner = when (w.terminal) {
+                    // `-w 0`: into the existing window, or a new one when there is
+                    // none; `nt`: a new tab running the shell with our script.
+                    WindowsTerminal.WINDOWS_TERMINAL ->
+                        "Start-Process ${psArg(w.path)} -ArgumentList '-w','0','nt','${w.shell.exe}','-NoExit','-EncodedCommand','$b64'"
+                    else -> "Start-Process ${psArg(w.path)} -ArgumentList '-NoExit','-EncodedCommand','$b64'"
+                }
+                listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", inner)
+            }
             Os.MAC -> listOf(
                 "osascript",
                 "-e", "tell application \"Terminal\" to do script \"${appleQuoted(posixLine(name))}\"",
@@ -308,25 +475,28 @@ object TerminalLaunch {
      * null — no clipboard, no log. The one failure that CAN be seen from here is
      * checked first: the file every install path puts the CLI in.
      *
-     * [env] and [which] are the machine as Linux's terminal choice sees it
-     * ([pickLinuxTerminal]); a test hands in its own.
+     * [env] and [which] are the machine as the terminal choice sees it
+     * ([pickLinuxTerminal], [pickWindowsTerminal]); a test hands in its own.
+     * [choice] is the Terminal setting, [preferred] unless a test says otherwise.
      */
     fun open(
         name: String,
         os: Os = this.os,
         home: File = File(System.getProperty("user.home") ?: "."),
         env: (String) -> String? = System::getenv,
-        which: (String) -> String? = { onPath(it, env) },
+        which: (String) -> String? = whichFor(os, env),
+        choice: String = preferred(),
         start: (List<String>) -> Unit = { spawn(it, os) },
     ): String? {
         problem(name)?.let { return "'$name' cannot be opened through the huginn CLI: $it; not opening it" }
         val cli = cliFile(os, home)
         if (!cli.isFile) return "the huginn CLI is not installed here (no ${cli.path}); install it, then run: ${shellLine(name)}"
-        val terminal = if (os != Os.LINUX) emptyList() else when (val pick = pickLinuxTerminal(env, which)) {
+        val terminal = if (os != Os.LINUX) emptyList() else when (val pick = pickLinuxTerminal(env, which, choice)) {
             is TerminalPick.Found -> pick.launcher
             is TerminalPick.NotFound -> return noTerminal(pick.tried)
         }
-        val argv = argv(name, os, terminal) ?: return "'$name' cannot be opened through the huginn CLI; not opening it"
+        val windows = if (os == Os.WINDOWS) pickWindowsTerminal(choice, which) else null
+        val argv = argv(name, os, terminal, windows) ?: return "'$name' cannot be opened through the huginn CLI; not opening it"
         return try { start(argv); null } catch (e: Exception) { "could not open a terminal: ${e.message}" }
     }
 

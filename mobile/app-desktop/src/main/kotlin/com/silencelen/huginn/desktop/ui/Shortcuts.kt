@@ -6,6 +6,7 @@ import com.silencelen.huginn.data.App
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.Scratchpad
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.desktop.TerminalLaunch
 import com.silencelen.huginn.desktop.View
 import com.silencelen.huginn.ui.AppRules
 import com.silencelen.huginn.ui.ProjectRules
@@ -333,6 +334,14 @@ sealed interface PaletteItem {
     data class Verb(val shortcut: Shortcut, override val label: String, override val detail: String) : PaletteItem
 
     /**
+     * A terminal on the session that is open: "Open <session> in terminal", the
+     * row menu's verb for the reader who is already in the session and does not
+     * want to go and find its row. Carries the tmux NAME, which is what the CLI
+     * attaches to; the label says the title, which is what the reader knows.
+     */
+    data class OpenTerminal(val name: String, override val label: String, override val detail: String) : PaletteItem
+
+    /**
      * One Settings drawer, by name.
      *
      * The redesign's own argument, applied to the palette: nine categories is
@@ -406,8 +415,26 @@ fun paletteItems(
      * matters.
      */
     offered: List<View> = emptyList(),
+    /**
+     * The session the window is showing, when there is one the CLI can open, with
+     * the launcher's label for what a terminal on it is called. Null draws no row:
+     * a palette verb onto no session is a verb that does nothing.
+     */
+    terminal: TerminalTarget? = null,
 ): List<PaletteItem> =
     verbsFor(View.PROJECTS in offered, View.APPS in offered) +
+        // With the verbs, because it is one: it acts on what is open rather than
+        // naming something to go to.
+        listOfNotNull(
+            terminal?.let {
+                PaletteItem.OpenTerminal(
+                    it.name,
+                    TerminalLaunch.paletteLabel(it.title ?: it.name, it.label),
+                    listOfNotNull("session", it.name.takeIf { n -> n != (it.title ?: n) }, "a terminal attached through the huginn CLI")
+                        .joinToString(" · "),
+                )
+            },
+        ) +
         // Right after the verbs, which is where "Settings" itself already is: the
         // reader who typed a settings word wants the drawer, not a chat that
         // mentions it.
@@ -466,6 +493,14 @@ fun paletteItems(
                 listOfNotNull("chat", it.mode, it.lastSnippet?.take(60)).joinToString(" · "),
             )
         }
+
+/**
+ * The session a palette terminal row would open: its tmux [name], the [title]
+ * the reader knows it by, and the launcher's [label] ("Open in terminal", or
+ * "Open in PowerShell" where that is what opens). Built by the window from the
+ * open session and `rememberTerminalVerb`; null when no session is open.
+ */
+class TerminalTarget(val name: String, val title: String?, val label: String)
 
 /**
  * Subsequence match on the label, then the detail — typing "hdk" finds

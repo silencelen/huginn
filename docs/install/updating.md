@@ -31,6 +31,15 @@ This updates everything Huginn installed on that computer, each from its newest 
 before changing anything). huginn core and the desktop app check for updates by themselves as
 well.
 
+The desktop app downloads a newer build, verifies it, and then says so: a card at the top of the
+session and chat lists (**Huginn x.y.z is ready**, with the first line of what changed), a dot on
+Settings and an **Update ready** row in the tray menu. The card offers three answers:
+**Install and restart** applies it (a `.deb` or Arch package shows the install command to copy
+instead, since those need root); **Later** hides the card until the next launch; **Don't remind
+me** hides that version until a newer one arrives. **Settings > Updates & diagnostics** keeps
+**Install and restart**, shows when reminders are off, and has **Tell me when an update is ready**
+to turn the notice off altogether. Nothing installs on its own.
+
 ## The Android app
 
 The app checks GitHub for a newer release and offers it under Settings. A build you made yourself

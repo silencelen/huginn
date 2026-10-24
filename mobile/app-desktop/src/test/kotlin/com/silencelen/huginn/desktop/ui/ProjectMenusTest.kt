@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.ui
 import com.silencelen.huginn.data.ProjectLive
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.desktop.ui.common.ProjectVerbs
+import com.silencelen.huginn.desktop.ui.common.TerminalVerb
 import com.silencelen.huginn.desktop.ui.common.labelsOf
 import com.silencelen.huginn.desktop.ui.common.projectMenu
 import java.io.File
@@ -28,7 +29,7 @@ import kotlin.test.assertTrue
  */
 class ProjectMenusTest {
 
-    private fun verbs() = ProjectVerbs(
+    private fun verbs(openTerminal: TerminalVerb? = null) = ProjectVerbs(
         open = {},
         rename = {},
         setStatus = { _, _ -> },
@@ -36,7 +37,32 @@ class ProjectMenusTest {
         openMember = { _, _ -> },
         message = { _, _ -> },
         endMember = { _, _ -> },
+        openTerminal = openTerminal,
     )
+
+    /**
+     * A member is a session, so it gets the session's terminal verb — right after
+     * Open, like the session row — and loses it once the session is over: an
+     * ended member has no pane to attach to, and a terminal on a tmux name that
+     * will be reused is a terminal on somebody else's work.
+     */
+    @Test
+    fun `a member row opens in a terminal while its session lives, and not after`() {
+        var opened: String? = null
+        val verb = TerminalVerb("Open in terminal") { opened = it }
+        val labels = labelsOf(projectMenu(project("active"), member, verbs(verb)))
+        assertEquals(listOf("Open", "Open in terminal", "Message…", "Kill session"), labels)
+        projectMenu(project("active"), member, verbs(verb))
+            .first { it.label == "Open in terminal" }.onClick()
+        assertEquals("statusflap-db", opened, "the tmux name, which is what the CLI attaches to")
+        // Ended, or no tmux session at all: the verb is absent, not greyed.
+        val ended = member.copy(endedAt = 1_700_000_000_000L, present = false, alive = false)
+        assertFalse("Open in terminal" in labelsOf(projectMenu(project("active"), ended, verbs(verb))))
+        val gone = member.copy(present = false)
+        assertFalse("Open in terminal" in labelsOf(projectMenu(project("active"), gone, verbs(verb))))
+        // Still Rename-free: the member overload did not grow the session list.
+        assertFalse(labels.any { it.startsWith("Rename") }, labels.toString())
+    }
 
     private fun project(status: String) = ProjectRow(
         id = "6f0d2c41-0000-4000-8000-0000000000b2",

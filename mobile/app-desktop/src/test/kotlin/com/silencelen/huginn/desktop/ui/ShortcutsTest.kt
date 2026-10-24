@@ -217,6 +217,28 @@ class ShortcutsTest {
         Scratchpad(id = id, name = name, size = size)
 
     @Test
+    fun `the open session gets a terminal row, and no session gets none`() {
+        // The row menu's verb, for the reader already in the session: it says the
+        // title they know and carries the tmux name the CLI attaches to.
+        val items = paletteItems(
+            emptyList(), listOf(session("dev", "Deploy work")),
+            terminal = TerminalTarget("dev", "Deploy work", "Open in terminal"),
+        )
+        val row = items.filterIsInstance<PaletteItem.OpenTerminal>().single()
+        assertEquals("Open Deploy work in terminal", row.label)
+        assertEquals("dev", row.name)
+        assertTrue("dev" in row.detail, "the tmux name is findable too: ${row.detail}")
+        assertTrue(filterPalette(items, "terminal").contains(row), "found by the obvious word")
+        // With the verbs, before the destinations: it acts on what is open.
+        assertTrue(items.indexOf(row) < items.indexOfFirst { it is PaletteItem.OpenSession })
+        // Windows wording follows the launcher's label.
+        val ps = paletteItems(emptyList(), emptyList(), terminal = TerminalTarget("dev", null, "Open in PowerShell"))
+        assertEquals("Open dev in PowerShell", ps.filterIsInstance<PaletteItem.OpenTerminal>().single().label)
+        // No session open: no row, rather than a verb that does nothing.
+        assertTrue(paletteItems(emptyList(), listOf(session("dev", null))).none { it is PaletteItem.OpenTerminal })
+    }
+
+    @Test
     fun `pages are offered by name, ahead of the conversations`() {
         // There are a handful of pages and hundreds of chats, and a page is looked
         // up BY NAME — which is the one thing the palette does better than the rail.

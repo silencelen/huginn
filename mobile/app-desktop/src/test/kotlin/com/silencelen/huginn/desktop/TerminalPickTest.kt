@@ -187,15 +187,163 @@ class TerminalPickTest {
         assertTrue(why in note, note)
     }
 
+    // ------------------------------------------------------------- the setting
+
+    /**
+     * Settings > Appearance & behaviour > Terminal. The app's own answer comes
+     * before the machine's ($TERMINAL), and a terminal that has gone since it was
+     * chosen is skipped and named, like a $TERMINAL that is.
+     */
     @Test
-    fun `windows does not ask the machine for a terminal`() {
+    fun `the Terminal setting outranks TERMINAL on Linux, and is skipped and said when gone`() {
+        val m = machine("/usr/bin/kitty", "/usr/bin/alacritty", "/usr/bin/xdg-terminal-exec")
+        assertEquals(
+            listOf("/usr/bin/kitty", "--"),
+            launcher(TerminalLaunch.pickLinuxTerminal(env("TERMINAL" to "alacritty"), m, choice = "kitty")),
+        )
+        val gone = TerminalLaunch.pickLinuxTerminal(env("TERMINAL" to "alacritty"), m, choice = "foot")
+        assertEquals(listOf("/usr/bin/alacritty", "-e"), launcher(gone))
+        val none = TerminalLaunch.pickLinuxTerminal(env(), machine(), choice = "foot") as TerminalPick.NotFound
+        assertEquals("Terminal setting (foot)", none.tried.first())
+        // open() reads the setting through the hook the app points at DesktopSettings.
         var got: List<String>? = null
-        val why = TerminalLaunch.open(
-            "jotter", TerminalLaunch.Os.WINDOWS, homeWithCli().also { File(it, ".huginn/huginn.ps1").writeText("# stub\n") },
-            env = { error("Windows read the environment for a terminal") },
-            which = { error("Windows looked for a terminal on PATH") },
-        ) { got = it }
+        TerminalLaunch.preferred = { "kitty" }
+        try {
+            assertNull(TerminalLaunch.open("jotter", TerminalLaunch.Os.LINUX, homeWithCli(), env = env(), which = m) { got = it })
+        } finally {
+            TerminalLaunch.preferred = { "" }
+        }
+        assertEquals(listOf("/usr/bin/kitty", "--"), got!!.take(2))
+    }
+
+    @Test
+    fun `the Terminal row offers what this machine has, Windows PowerShell always`() {
+        assertEquals(
+            listOf("wt", "pwsh", "powershell"),
+            TerminalLaunch.candidates(TerminalLaunch.Os.WINDOWS, env(), windows(WT, PWSH, POWERSHELL)).map { it.id },
+        )
+        assertEquals(listOf("powershell"), TerminalLaunch.candidates(TerminalLaunch.Os.WINDOWS, env(), windows()).map { it.id })
+        assertEquals(
+            listOf("xdg-terminal-exec", "kitty"),
+            TerminalLaunch.candidates(TerminalLaunch.Os.LINUX, env(), machine("/usr/bin/xdg-terminal-exec", "/usr/bin/kitty")).map { it.id },
+        )
+        assertEquals(emptyList(), TerminalLaunch.candidates(TerminalLaunch.Os.MAC, env()) { "/usr/bin/anything" })
+        assertTrue(TerminalLaunch.offersChoice(TerminalLaunch.Os.WINDOWS) && TerminalLaunch.offersChoice(TerminalLaunch.Os.LINUX))
+        assertFalse(TerminalLaunch.offersChoice(TerminalLaunch.Os.MAC), "macOS has the one Terminal")
+    }
+
+    // ---------------------------------------------------------------- windows
+    //
+    // Reasoned, not run: no Windows box takes part in this gate. What is pinned
+    // is everything up to the spawn — which terminal, from where, with which
+    // shell inside it, and the command line the outer shell is handed.
+
+    private val WT = """C:\Users\alex\AppData\Local\Microsoft\WindowsApps\wt.exe"""
+    private val PWSH = """C:\Program Files\PowerShell\7\pwsh.exe"""
+    private val POWERSHELL = """C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"""
+
+    /** A Windows machine: which exes answer, by their bare names. */
+    private fun windows(vararg installed: String): (String) -> String? = { exe ->
+        installed.firstOrNull { it.substringAfterLast('\\') == exe }
+    }
+
+    @Test
+    fun `Auto on Windows is Windows Terminal, then PowerShell 7, then Windows PowerShell`() {
+        val full = TerminalLaunch.pickWindowsTerminal("", windows(WT, PWSH, POWERSHELL))
+        assertEquals(TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL, full.terminal)
+        assertEquals(WT, full.path)
+        assertEquals(TerminalLaunch.WindowsTerminal.PWSH, full.shell, "a Windows Terminal tab runs PowerShell 7 when it is there")
+        assertEquals(TerminalLaunch.WindowsTerminal.PWSH, TerminalLaunch.pickWindowsTerminal("", windows(PWSH, POWERSHELL)).terminal)
+        assertEquals(TerminalLaunch.WindowsTerminal.POWERSHELL, TerminalLaunch.pickWindowsTerminal("", windows(POWERSHELL)).terminal)
+        // Windows Terminal without PowerShell 7 runs Windows PowerShell in its tab.
+        assertEquals(TerminalLaunch.WindowsTerminal.POWERSHELL, TerminalLaunch.pickWindowsTerminal("", windows(WT, POWERSHELL)).shell)
+        // A PATH walk that finds nothing still opens Windows PowerShell, by name:
+        // it is on every install, and a shortcut-started app's PATH can miss it.
+        val none = TerminalLaunch.pickWindowsTerminal("", windows())
+        assertEquals(TerminalLaunch.WindowsTerminal.POWERSHELL, none.terminal)
+        assertEquals("powershell.exe", none.path)
+    }
+
+    @Test
+    fun `the Terminal setting outranks Auto on Windows, when that terminal is there`() {
+        val full = windows(WT, PWSH, POWERSHELL)
+        assertEquals(TerminalLaunch.WindowsTerminal.PWSH, TerminalLaunch.pickWindowsTerminal("pwsh", full).terminal)
+        assertEquals(TerminalLaunch.WindowsTerminal.POWERSHELL, TerminalLaunch.pickWindowsTerminal("powershell", full).terminal)
+        assertEquals(TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL, TerminalLaunch.pickWindowsTerminal("wt", full).terminal)
+        // Chosen but gone: Auto's order. An id this build does not know: Auto.
+        assertEquals(TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL, TerminalLaunch.pickWindowsTerminal("pwsh", windows(WT, POWERSHELL)).terminal)
+        assertEquals(TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL, TerminalLaunch.pickWindowsTerminal("cmd", full).terminal)
+    }
+
+    @Test
+    fun `the label names PowerShell only when PowerShell is what opens`() {
+        assertEquals("Open in terminal", TerminalLaunch.label(TerminalLaunch.Os.WINDOWS, "", which = windows(WT, PWSH, POWERSHELL)))
+        assertEquals("Open in PowerShell", TerminalLaunch.label(TerminalLaunch.Os.WINDOWS, "", which = windows(PWSH, POWERSHELL)))
+        assertEquals("Open in PowerShell", TerminalLaunch.label(TerminalLaunch.Os.WINDOWS, "pwsh", which = windows(WT, PWSH, POWERSHELL)))
+        assertEquals("Open in terminal", TerminalLaunch.label(TerminalLaunch.Os.LINUX, "", which = { null }))
+        assertEquals("Open dev in terminal", TerminalLaunch.paletteLabel("dev", "Open in terminal"))
+        assertEquals("Open dev in PowerShell", TerminalLaunch.paletteLabel("dev", "Open in PowerShell"))
+    }
+
+    @Test
+    fun `windows opens the chosen terminal through the outer shell, with the tab's shell by name`() {
+        val home = homeWithCli().also { File(it, ".huginn/huginn.ps1").writeText("# stub\n") }
+        var got: List<String>? = null
+        val why = TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL)) { got = it }
         assertNull(why)
-        assertEquals("powershell.exe", got!![0])
+        val argv = got!!
+        assertEquals(listOf("powershell.exe", "-NoProfile", "-NonInteractive", "-Command"), argv.take(4), "the outer shell is the one every machine has")
+        val cmd = argv.last()
+        assertTrue(
+            cmd.startsWith(
+                "Start-Process 'C:\\Users\\alex\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe' " +
+                    "-ArgumentList '-w','0','nt','pwsh.exe','-NoExit','-EncodedCommand','",
+            ),
+            cmd,
+        )
+        assertEquals(TerminalLaunch.script("jotter"), TerminalLaunch.decoded(cmd.substringAfterLast("','").removeSuffix("'")))
+        // PowerShell 7 chosen: its own window, from where it was found.
+        assertNull(
+            TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows(WT, PWSH, POWERSHELL), choice = "pwsh") { got = it },
+        )
+        assertTrue(
+            got!!.last().startsWith("Start-Process 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -ArgumentList '-NoExit','-EncodedCommand','"),
+            got!!.last(),
+        )
+        // Nothing found: Windows PowerShell by name, exactly as every build before.
+        assertNull(TerminalLaunch.open("jotter", TerminalLaunch.Os.WINDOWS, home, env = { null }, which = windows()) { got = it })
+        assertTrue(got!!.last().startsWith("Start-Process powershell.exe -ArgumentList '-NoExit','-EncodedCommand','"), got!!.last())
+    }
+
+    @Test
+    fun `a path with a quote in it is quoted for PowerShell`() {
+        val pick = TerminalLaunch.WindowsPick(
+            TerminalLaunch.WindowsTerminal.WINDOWS_TERMINAL,
+            """C:\Users\O'Brien\AppData\Local\Microsoft\WindowsApps\wt.exe""",
+            TerminalLaunch.WindowsTerminal.POWERSHELL,
+        )
+        val cmd = TerminalLaunch.argv("jotter", TerminalLaunch.Os.WINDOWS, windows = pick)!!.last()
+        assertTrue(
+            cmd.startsWith("Start-Process 'C:\\Users\\O''Brien\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe' -ArgumentList '-w','0','nt','powershell.exe'"),
+            cmd,
+        )
+    }
+
+    @Test
+    fun `the Windows PATH walk is semicolon-separated and knows the three homes`() {
+        val files = setOf(WT, PWSH, POWERSHELL, """C:\Tools\kitty.exe""")
+        // java.io.File joins with '/' on this box; the names under test are Windows'.
+        val runnable: (File) -> Boolean = { it.path.replace('/', '\\') in files }
+        val env = env(
+            "PATH" to """C:\Windows\System32;C:\Tools""",
+            "LOCALAPPDATA" to """C:\Users\alex\AppData\Local""",
+            "ProgramFiles" to """C:\Program Files""",
+            "SystemRoot" to """C:\Windows""",
+        )
+        assertTrue(TerminalLaunch.onPathWindows("kitty.exe", env, runnable)!!.endsWith("kitty.exe"), "PATH itself")
+        assertTrue(TerminalLaunch.onPathWindows("wt.exe", env, runnable)!!.endsWith("wt.exe"), "the Store alias directory")
+        assertTrue(TerminalLaunch.onPathWindows("pwsh.exe", env, runnable)!!.endsWith("pwsh.exe"), "PowerShell 7's install directory")
+        assertTrue(TerminalLaunch.onPathWindows("powershell.exe", env, runnable)!!.endsWith("powershell.exe"), "Windows PowerShell's")
+        assertNull(TerminalLaunch.onPathWindows("cmd.exe", env, runnable))
     }
 }

@@ -60,6 +60,7 @@ import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.QuickActions
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.desktop.TerminalLaunch
 import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.ui.ProjectRules
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -384,6 +385,15 @@ fun chatMenu(chat: Chat, selection: Set<String>, verbs: ChatVerbs): List<Context
     return items
 }
 
+/**
+ * "Open in terminal": a real terminal attached to a tmux session through the
+ * huginn CLI (`TerminalLaunch`). [label] is the launcher's own word for what will
+ * open — Windows says "Open in PowerShell" only when PowerShell is the terminal
+ * that will start — and [open] takes the tmux NAME, which is what the CLI
+ * attaches to. Built once per Terminal setting by `rememberTerminalVerb`.
+ */
+class TerminalVerb(val label: String, val open: (String) -> Unit)
+
 /** The handlers a session row's menu needs. */
 class SessionVerbs(
     val open: (String) -> Unit,
@@ -403,7 +413,22 @@ class SessionVerbs(
      */
     val archive: ((List<String>) -> Unit)? = null,
     val kill: (List<String>) -> Unit,
+    /**
+     * A terminal on this session, right after Open. Null where nothing wires a
+     * launcher (a test), which keeps the item out rather than inert.
+     */
+    val openTerminal: TerminalVerb? = null,
 )
+
+/**
+ * Whether a row may offer "Open in terminal" on [name]: the daemon routes to it,
+ * and the CLI can open the name as it is. A name the CLI would fold (`Foo`) or
+ * refuse (`a.b`) is not offered an open that reaches a different session or
+ * none — the header's name menu applies the same gate (`TerminalLaunch.offer`)
+ * and offers a copy instead; a row has "Copy session name" for that.
+ */
+private fun terminalOffered(name: String, addressable: Boolean): Boolean =
+    addressable && TerminalLaunch.problem(name) == null
 
 fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): List<ContextMenuItem> {
     val multi = selection.size > 1 && session.name in selection
@@ -417,6 +442,12 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
     }
     return buildList {
         add(HuginnMenuItem("Open") { verbs.open(session.name) })
+        // A terminal IS a way of opening, so it sits with Open rather than among
+        // the verbs that act on the session. Single rows only: a terminal
+        // attaches to one session, and a multi-selection is verbs about all of them.
+        verbs.openTerminal?.takeIf { terminalOffered(session.name, session.addressable) }?.let { t ->
+            add(HuginnMenuItem(t.label) { t.open(session.name) })
+        }
         add(HuginnMenuItem("Rename…") { verbs.rename(session) })
         // Esc into the pane. Named for the key so the menu teaches the keyboard
         // rather than competing with it.
@@ -458,6 +489,8 @@ class ProjectVerbs(
     val message: (ProjectRow, ProjectMemberState) -> Unit,
     /** End that member's tmux session. The project keeps the membership row. */
     val endMember: (ProjectRow, ProjectMemberState) -> Unit,
+    /** A terminal on a member's session, as on a session row. Null where nothing wires a launcher. */
+    val openTerminal: TerminalVerb? = null,
 )
 
 /**
@@ -517,6 +550,12 @@ fun projectMenu(
     verbs: ProjectVerbs,
 ): List<ContextMenuItem> = buildList {
     add(HuginnMenuItem("Open") { verbs.openMember(project, member) })
+    // A member is a session, so it gets the session row's terminal — while it
+    // has one. An ended member has no pane, and its tmux name is reused on this
+    // host within hours; a terminal on it would be a terminal on somebody else's work.
+    verbs.openTerminal
+        ?.takeIf { !ProjectRules.ended(member) && member.present && terminalOffered(member.name, addressable = true) }
+        ?.let { t -> add(HuginnMenuItem(t.label) { t.open(member.name) }) }
     // ⚠ THE DAEMON TYPES THIS; the sessions' own `SendMessage` does not come
     // through here at all. Named "Message" rather than "Send" because it lands in
     // a composer through the send queue and its gates, which is a message being

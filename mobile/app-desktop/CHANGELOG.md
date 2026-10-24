@@ -1,5 +1,23 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Added
+- A notice when a verified update is ready: a card at the top of the session and chat lists with
+  Install and restart, Later and Don't remind me, a dot on Settings and an Update ready row in the
+  tray menu. Later lasts until the next launch; Don't remind me covers that version only.
+- Settings > Updates & diagnostics: Tell me when an update is ready, and a Remind me line while
+  a version is silenced.
+- Open in terminal on session rows and project member rows, right after Open, and in the palette
+  as Open <session> in terminal for the open session.
+- Settings > Appearance & behaviour > Terminal: Auto or one of the terminals found on this
+  computer.
+
+### Changed
+- On Windows, Open in terminal prefers Windows Terminal, then PowerShell 7, then Windows
+  PowerShell; the menu says Open in PowerShell only when PowerShell is what opens.
+- On Linux, the Terminal setting comes before $TERMINAL in the terminal order.
+
 ## 2.6.7
 
 Carries core 2.6.7.

@@ -33,6 +33,17 @@ Attaching needs SSH access to the server (the `Host huginn` entry the client ins
 On a computer set up from the desktop app, run `huginn setup ssh` once first; see
 [Install the clients](../install/clients.md).
 
+### From the desktop app
+
+Right-click a session row, or a project member, and choose **Open in terminal** (on Windows,
+**Open in PowerShell** when PowerShell is the terminal that opens): a terminal window attaches to
+that session through the `huginn` command, so it needs the command installed on that computer.
+The same verb is in the palette (`Ctrl+K`) as **Open <session> in terminal** for the session that
+is open, and on the session's name in the header. **Settings > Appearance & behaviour > Terminal**
+chooses the terminal: **Auto** takes Windows Terminal, then PowerShell 7, then Windows PowerShell;
+on Linux `$TERMINAL`, then `xdg-terminal-exec`, then the first terminal found. When a terminal
+cannot be opened, the command to type is copied to the clipboard and the status line says why.
+
 ### Where a new session starts
 
 - A session created from a terminal starts in `$HUGINN_WORKDIR` as the server's SSH login sees

@@ -15,6 +15,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.TerminalLaunch
 import com.silencelen.huginn.desktop.core.CoreSetup
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.settings.AboutPage
@@ -197,5 +198,6 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
         coreInstalled = coreInstalled,
         appsAvailable = apps == true,
         projectsAvailable = projects == true,
+        terminalChoice = TerminalLaunch.offersChoice(),
     )
 }

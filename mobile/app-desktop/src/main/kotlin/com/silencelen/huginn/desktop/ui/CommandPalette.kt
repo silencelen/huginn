@@ -68,12 +68,14 @@ fun CommandPalette(
     apps: List<com.silencelen.huginn.data.App> = emptyList(),
     /** What this host offers — `railViews`, so the box and the rail agree. */
     offered: List<com.silencelen.huginn.desktop.View> = emptyList(),
+    /** The open session a terminal row would attach to, or null for no row ([paletteItems]). */
+    terminal: TerminalTarget? = null,
     onPick: (PaletteItem) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(0) }
-    val all = remember(chats, sessions, pads, settings, projects, apps, offered) {
+    val all = remember(chats, sessions, pads, settings, projects, apps, offered, terminal) {
         paletteItems(
             chats = chats,
             sessions = sessions,
@@ -82,6 +84,7 @@ fun CommandPalette(
             projects = projects,
             apps = apps,
             offered = offered,
+            terminal = terminal,
         )
     }
     val shown = remember(all, query) { filterPalette(all, query) }
