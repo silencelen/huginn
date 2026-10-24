@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 2.7.0
 
 ### Added
 - A notice when a verified update is ready: a card at the top of the session and chat lists with

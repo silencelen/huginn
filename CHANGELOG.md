@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.7.0] - 2026-10-24
 
 ### Added
 - `huginn doctor [--json]`: a deterministic health report of this machine's huginn (binary, CLI,

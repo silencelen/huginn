@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.13.0 — 2026-10-24
 
 ### Added
 - Tap the context meter in a session's strip for a sheet: tokens used of the window, the model,

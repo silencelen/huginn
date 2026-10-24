@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.14.0 — 2026-10-24
 
 ### Added
 - Every session row and `/screen` carry the context window, model, effort, fast mode, rate limits

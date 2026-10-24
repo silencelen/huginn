@@ -4,9 +4,9 @@
 #     [ -f ~/.huginn/huginn.sh ] && source ~/.huginn/huginn.sh
 # Targets the `huginn` SSH alias by default; override per-device with:  export HUGINN_HOST=my-host
 # Self-update with:  huginn update   (from the newest release on GitHub)
-# Version: 2.6.7
+# Version: 2.7.0
 
-HUGINN_VERSION='2.6.7'
+HUGINN_VERSION='2.7.0'
 HUGINN_REPO='silencelen/huginn'
 # Client code - this file, and the runners it installs - comes from the newest
 # cli-v release on GitHub: a tagged build, never a moving branch. Only
