@@ -9,11 +9,13 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.core.CoreSetup
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.settings.AboutPage
 import com.silencelen.huginn.desktop.ui.settings.AppearancePage
@@ -165,8 +167,15 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
     val notifyEnabled by store.settings.notifyEnabled.collectAsState(initial = true)
     val closeToTray by store.settings.closeToTray.collectAsState()
     val deviceEnabled by store.settings.deviceEnabled.collectAsState()
+    val deviceScope by store.settings.deviceScope.collectAsState()
     val update by store.updater.state.collectAsState()
     val via by store.viaCoreState.collectAsState()
+    val apps by store.appsAvailable.collectAsState()
+    val projects by store.projectsAvailable.collectAsState()
+    // Asked of the disk when the core's tray comes or goes, as the Appearance
+    // page itself asks it: the same answer behind the row and behind the hit.
+    val coreTray by store.coreDevice.coreTray.collectAsState()
+    val coreInstalled = remember(coreTray) { CoreSetup.installedBinary() != null }
 
     return SettingsFacts(
         account = state.account,
@@ -184,5 +193,9 @@ private fun settingsFacts(store: AppStore, state: SettingsPaneState): SettingsFa
         deviceEnabled = deviceEnabled,
         update = update,
         installedVersion = store.updater.installedVersion,
+        deviceScope = deviceScope,
+        coreInstalled = coreInstalled,
+        appsAvailable = apps == true,
+        projectsAvailable = projects == true,
     )
 }

@@ -28,6 +28,9 @@ class SettingsCatalogTest {
         headroom = true, quickActions = true, alerts = true, padsAvailable = true,
         localServe = true, appLockAvailable = true, enrolable = true,
         savedAccounts = 3, diagnostics = true, selfUpdate = true,
+        accountSwitchOn = true, deviceOn = true, workScope = true, coreInstalled = true,
+        apps = true, projects = true, signedIn = true, alertsRelayOn = true,
+        deviceNotify = true, pushKnown = true, appLockOn = true,
     )
 
     /**
@@ -135,6 +138,20 @@ class SettingsCatalogTest {
         for ((from, to) in SettingsCatalog.aliases) {
             assertTrue(SettingsCatalog.items.any { it.id == to }, "$from points at $to, which does not exist")
         }
+    }
+
+    /**
+     * ⚠ "CLI SYNC" WAS A ROW NOTHING DREW (2026-10-23 audit). The launch-time sync
+     * of the huginn command retired when huginn core took the command over, and
+     * search went on offering it onto Updates & diagnostics. Its id now arrives
+     * at the core's row, which answers the same question.
+     */
+    @Test
+    fun theRetiredCliSyncArrivesAtTheCore() {
+        assertTrue(SettingsCatalog.items.none { it.id == "updates.cli-sync" }, "a row for a feature that is gone")
+        assertEquals("updates.core", SettingsCatalog.item("updates.cli-sync")?.id)
+        val hits = SettingsSearch.hits("cli", SettingsProbe(), Surface.DESKTOP).map { it.item.id }
+        assertTrue("updates.core" in hits, "searching the old word finds where it went: $hits")
     }
 
     /**

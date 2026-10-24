@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.Account
@@ -34,6 +35,7 @@ import com.silencelen.huginn.data.SavedAccount
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.DesktopSettings
 import com.silencelen.huginn.desktop.View
+import com.silencelen.huginn.desktop.core.CoreSetup
 import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.notify.Notifiers
@@ -41,6 +43,9 @@ import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.update.UpdateState
 import com.silencelen.huginn.desktop.update.installThenQuit
+import com.silencelen.huginn.settings.SettingsCatalog
+import com.silencelen.huginn.settings.Surface as SettingsSurface
+import com.silencelen.huginn.settings.scopeOn
 import com.silencelen.huginn.ui.HeadroomSettingsSection
 import com.silencelen.huginn.ui.settings.AccountsEditor
 import com.silencelen.huginn.ui.settings.AccountsIo
@@ -51,9 +56,12 @@ import com.silencelen.huginn.ui.settings.SettingsNavRow
 import com.silencelen.huginn.ui.settings.RouteListActions
 import com.silencelen.huginn.ui.settings.SettingsReadOnlyRow
 import com.silencelen.huginn.ui.settings.SettingsRouteListRow
+import com.silencelen.huginn.ui.settings.SettingsScopeLabel
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import com.silencelen.huginn.ui.settings.SettingsRowStyle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -84,6 +92,21 @@ import kotlinx.serialization.json.put
  * which page they are drawn on and in what order.
  */
 
+/**
+ * The scope heading over the rows that follow ([SettingsScopeLabel]): on huginn
+ * for every app, huginn core on this computer, or this app alone.
+ *
+ * It names a ROW, not a scope: the words are the catalog's answer for
+ * [firstId], so a page cannot file a row under a scope the catalog does not give
+ * it. `SettingsPagesTest` renders every page and checks each row it finds
+ * against the nearest heading above it.
+ */
+@Composable
+internal fun ScopeOf(firstId: String, store: AppStore) {
+    val item = SettingsCatalog.item(firstId) ?: return
+    SettingsScopeLabel(item.scopeOn(SettingsSurface.DESKTOP, store.viaCore != null), SettingsSurface.DESKTOP)
+}
+
 // ------------------------------------------------------------ host & sign-in
 
 /**
@@ -100,11 +123,62 @@ import kotlinx.serialization.json.put
  * WHAT USED TO BE HERE: a read-only row printing `known routes: Tailscale
  * http://… Yggdrasil http://…` as a flat string, and a Base URL box with its own
  * Save. One could not be changed and the other could not be named.
+ *
+ * ⚠ THROUGH HUGINN CORE THIS PAGE STOPPED AFTER THE ROUTES (2026-10-23 audit).
+ * It returned as soon as the core's route book was drawn, so on the standard
+ * path the saved logins, adding a login and Run setup again were never drawn —
+ * all three found by search, and the first two the desktop's only way to manage
+ * the host's Claude logins. The LINK is the core's; the rest of the page is not.
  */
 @Composable
 fun ColumnScope.HostPage(store: AppStore, mark: String?) {
-    // Through huginn core, the link is the core's: its route book, no token here.
-    store.viaCore?.let { CoreHostSection(store, it); return }
+    val via = store.viaCore
+    ScopeOf("host.route", store)
+    if (via != null) {
+        // Through huginn core, the link is the core's: its route book, and its
+        // token, which this app never holds — said here, where it is looked for.
+        CoreHostSection(store, via, mark)
+        SettingsReadOnlyRow(
+            id = "host.token",
+            title = "Token",
+            value = "kept by huginn core",
+            summary = "huginn core holds it and sends it on its own proven link; this app never sees it. " +
+                "To replace it, run huginn core pair in a terminal.",
+            highlighted = SettingsRowStyle.isHighlighted("host.token", mark),
+            modifier = revealMark("host.token"),
+        )
+    } else {
+        OwnLinkRows(store, mark)
+    }
+
+    // The saved logins and the three-step add, from `:ui`. `showAutoswitch =
+    // false`: account switching now has ONE rendering, in Usage & headroom,
+    // where its threshold and margin are also editable. They live on huginn,
+    // whichever link reaches it.
+    ScopeOf("host.saved-logins", store)
+    AccountsEditor(
+        io = remember(store) { DesktopAccountsIo(store) },
+        openLink = ::openInBrowser,
+        showAutoswitch = false,
+        // Section-accurate, like the usage form: the editor draws both rows and
+        // takes no mark of its own.
+        modifier = revealSection { it == "host.saved-logins" || it == "host.sign-in" }.padding(top = 10.dp),
+    )
+
+    // The door back into the first-run flow. It lives HERE, under the address
+    // and the token, because those two are the steps somebody comes to this
+    // page to fix — and re-checking them is what the flow does first.
+    ScopeOf("host.run-setup", store)
+    RunSetupAgainRow(mark)
+}
+
+/**
+ * This app's OWN link: the route list and the token field. Only a run that huginn
+ * core does not carry draws these — an install from before the core, or
+ * `HUGINN_DESKTOP_DIRECT=1` — and only then are they this app's to keep.
+ */
+@Composable
+private fun ColumnScope.OwnLinkRows(store: AppStore, mark: String?) {
     val settings = store.settings
     val scope = rememberCoroutineScope()
     val book by store.routeBook.collectAsState()
@@ -170,21 +244,6 @@ fun ColumnScope.HostPage(store: AppStore, mark: String?) {
             modifier = Modifier.padding(top = 8.dp, start = 8.dp),
         )
     }
-
-    // The saved logins and the three-step add, from `:ui`. `showAutoswitch =
-    // false`: account switching now has ONE rendering, in Usage & headroom,
-    // where its threshold and margin are also editable.
-    AccountsEditor(
-        io = remember(store) { DesktopAccountsIo(store) },
-        openLink = ::openInBrowser,
-        showAutoswitch = false,
-        modifier = Modifier.padding(top = 10.dp),
-    )
-
-    // The door back into the first-run flow. It lives HERE, under the address
-    // and the token, because those two are the steps somebody comes to this
-    // page to fix — and re-checking them is what the flow does first.
-    RunSetupAgainRow(mark)
 }
 
 /** [AccountsIo] over this client's daemon connection. Nothing but forwarding. */
@@ -226,6 +285,8 @@ fun ColumnScope.UsagePage(store: AppStore, mark: String?) {
         runCatching { store.client.models() }.onSuccess { models = it }
     }
 
+    // Every rule on this page is kept on huginn: one heading for all of it.
+    ScopeOf("usage.plan", store)
     // The numbers themselves live on Status — this page is where the RULES are,
     // and a reader who wants the figure should be sent rather than shown a copy
     // that is as old as the last visit to the other pane.
@@ -337,9 +398,18 @@ fun ColumnScope.ChatsPage(store: AppStore, mark: String?) {
     val actions = status?.quickActions
     var busy by remember { mutableStateOf(false) }
     var note by remember { mutableStateOf<String?>(null) }
+    val projectsAvailable by store.projectsAvailable.collectAsState()
+    val appsAvailable by store.appsAvailable.collectAsState()
+    val projects by store.projects.collectAsState()
+    val apps by store.apps.collectAsState()
 
+    // All of it is kept on huginn: the wording, the phrase, the pages it hosts.
+    ScopeOf("chats.quick-actions", store)
     if (actions != null) {
         QuickActionsEditor(
+            // Tagged and revealed as a whole: the editor draws the four
+            // wordings and takes no mark of its own.
+            modifier = Modifier.testTag("chats.quick-actions").then(revealMark("chats.quick-actions")),
             actions = actions,
             busy = busy,
             note = note,
@@ -377,6 +447,35 @@ fun ColumnScope.ChatsPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("chats.soft-end", mark),
         modifier = revealMark("chats.soft-end").padding(top = 10.dp),
     )
+
+    // ⚠ THE TWO ROWS SEARCH OFFERED AND THIS PAGE NEVER HAD (2026-10-23 audit):
+    // "Projects" and "Apps" were catalog rows of this drawer on both shells and
+    // drawn only by the phone, so on the desktop the hit opened Chats & sessions
+    // onto neither. The phone's doors, in the same place and on the same
+    // condition the rail uses for its own items.
+    if (projectsAvailable == true) {
+        SettingsNavRow(
+            id = "chats.projects",
+            title = "Projects",
+            onOpen = { store.openView(View.PROJECTS) },
+            summary = "Clusters of sessions with roles: a lead sizes the work and proposes the members, " +
+                "and you approve them before anything starts.",
+            highlighted = SettingsRowStyle.isHighlighted("chats.projects", mark),
+            modifier = revealMark("chats.projects").padding(top = 10.dp),
+            trailingText = if (projects.isEmpty()) "none" else "${projects.size}",
+        )
+    }
+    if (appsAvailable == true) {
+        SettingsNavRow(
+            id = "chats.apps",
+            title = "Apps",
+            onOpen = { store.openView(View.APPS) },
+            summary = "The pages huginn hosts itself, whether each one answers, and whether your devices can reach it.",
+            highlighted = SettingsRowStyle.isHighlighted("chats.apps", mark),
+            modifier = revealMark("chats.apps").padding(top = 10.dp),
+            trailingText = if (apps.apps.isEmpty()) "none" else "${apps.apps.size}",
+        )
+    }
 }
 
 // ------------------------------------------------------------- notifications
@@ -395,6 +494,7 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
     val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)
     val present by store.presence.present.collectAsState()
 
+    ScopeOf("notify.claim-route", store)
     SettingsToggleRow(
         id = "notify.claim-route",
         title = "Claim the notification route",
@@ -430,6 +530,9 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
 fun ColumnScope.DevicesPage(store: AppStore, mark: String?) {
     val devices by store.devices.collectAsState()
 
+    // The fleet is huginn's list; everything under the second heading is this
+    // machine's, kept by the huginn core that runs its work and serves its models.
+    ScopeOf("devices.fleet", store)
     SettingsNavRow(
         id = "devices.fleet",
         title = "All devices",
@@ -440,7 +543,8 @@ fun ColumnScope.DevicesPage(store: AppStore, mark: String?) {
         trailingText = devices.takeIf { it.isNotEmpty() }?.let { SettingsSummaries.of("devices", SettingsFacts(devices = it)) },
     )
 
-    DeviceSection(store)
+    ScopeOf("devices.this-machine", store)
+    DeviceSection(store, mark = mark)
     LocalServeSection(store)
 }
 
@@ -462,6 +566,9 @@ fun ColumnScope.PrivacyPage(store: AppStore, mark: String?) {
     var busy by remember { mutableStateOf(false) }
     var outcome by remember { mutableStateOf<String?>(null) }
 
+    // Both rows are about the access this computer holds — huginn core's,
+    // through the core; this app's own on the old direct link.
+    ScopeOf("privacy.token", store)
     SettingsReadOnlyRow(
         id = "privacy.token",
         title = "What the token is",
@@ -590,6 +697,9 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
     var trayNote by remember { mutableStateOf<String?>(null) }
     var trayBusy by remember { mutableStateOf(false) }
 
+    // ⚠ GROUPED BY WHERE EACH ONE IS KEPT (2026-10-23): this app's three, then
+    // huginn core's icon. Close to tray's "Show the icon below" still holds.
+    ScopeOf("appearance.close-to-tray", store)
     SettingsToggleRow(
         id = "appearance.close-to-tray",
         title = "Close to tray",
@@ -622,10 +732,24 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
         // install) gets back exactly the answer its owner last gave.
         enabled = trayHere,
     )
+    // Beside close-to-tray on purpose: the two of them are the whole answer to
+    // "is this thing running when I am not looking at it".
+    StartupRow(store, mark)
+    SettingsNavRow(
+        id = "appearance.shortcuts",
+        title = "Keyboard shortcuts",
+        onOpen = { store.openCheatsheet() },
+        summary = "Every chord this window answers to.",
+        highlighted = SettingsRowStyle.isHighlighted("appearance.shortcuts", mark),
+        modifier = revealMark("appearance.shortcuts"),
+        trailingText = "F1",
+    )
     // The way back after "Hide this icon" (owner, 2026-10-17), and the way to
     // hide it from here. Only where huginn core is installed: elsewhere this
     // app's own icon follows Close to tray.
     if (coreInstalled) {
+        // The core's own icon, not this app's: kept where the core keeps it.
+        ScopeOf("appearance.tray-icon", store)
         SettingsToggleRow(
             id = "appearance.tray-icon",
             title = "Tray icon",
@@ -648,18 +772,6 @@ fun ColumnScope.AppearancePage(store: AppStore, mark: String?) {
             modifier = revealMark("appearance.tray-icon"),
         )
     }
-    SettingsNavRow(
-        id = "appearance.shortcuts",
-        title = "Keyboard shortcuts",
-        onOpen = { store.openCheatsheet() },
-        summary = "Every chord this window answers to.",
-        highlighted = SettingsRowStyle.isHighlighted("appearance.shortcuts", mark),
-        modifier = revealMark("appearance.shortcuts"),
-        trailingText = "F1",
-    )
-    // Beside close-to-tray on purpose: the two of them are the whole answer to
-    // "is this thing running when I am not looking at it".
-    StartupRow(store, mark)
 }
 
 // ----------------------------------------------------- updates & diagnostics
@@ -681,32 +793,45 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
     val clipboard = LocalClipboardManager.current
     var note by remember { mutableStateOf<String?>(null) }
 
-    Text(
-        when (val s = state) {
+    ScopeOf("updates.check", store)
+    // ⚠ A ROW, WITH ITS CATALOG ID (2026-10-23 audit). The check was a bare
+    // sentence and a button, so a search for "update" opened this page with
+    // nothing marked and nothing to scroll to; the phone has drawn it as the
+    // `updates.check` row all along. Same words, same button, same refusals.
+    SettingsActionRow(
+        id = "updates.check",
+        title = "Check for updates",
+        actionLabel = "Check now",
+        onAction = { scope.launch { store.updater.check() } },
+        enabled = state !is UpdateState.Checking && state !is UpdateState.Downloading,
+        summary = when (val s = state) {
             UpdateState.Idle -> "installed ${store.updater.installedVersion} · not checked yet"
             UpdateState.Checking -> "checking…"
             is UpdateState.UpToDate -> "up to date (${s.version})"
             is UpdateState.Downloading -> "downloading ${s.version}…"
             is UpdateState.Ready -> "${s.version} downloaded and verified"
-            is UpdateState.Error -> "update check failed: ${s.message}"
+            // Said under the row in the error colour, as it always was.
+            is UpdateState.Error -> null
         },
-        style = MaterialTheme.typography.bodyMedium,
-        color = if (state is UpdateState.Error) MaterialTheme.colorScheme.error
-        else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier.padding(start = 8.dp),
+        highlighted = SettingsRowStyle.isHighlighted("updates.check", mark),
+        modifier = revealMark("updates.check"),
     )
+    (state as? UpdateState.Error)?.let { e ->
+        Text(
+            "update check failed: ${e.message}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(start = 8.dp),
+        )
+    }
     (state as? UpdateState.Downloading)?.fraction?.let { f ->
         LinearProgressIndicator(progress = { f }, modifier = Modifier.padding(top = 6.dp, start = 8.dp).width(280.dp))
     }
     (state as? UpdateState.Ready)?.let { ready ->
         if (ready.notes.isNotBlank()) Muted(ready.notes, Modifier.padding(top = 4.dp, start = 8.dp), maxLines = 4)
     }
-    Row(Modifier.padding(top = 8.dp, start = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            enabled = state !is UpdateState.Checking && state !is UpdateState.Downloading,
-            onClick = { scope.launch { store.updater.check() } },
-        ) { Text("Check now") }
-        (state as? UpdateState.Ready)?.let { ready ->
+    (state as? UpdateState.Ready)?.let { ready ->
+        Row(Modifier.padding(top = 8.dp, start = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             // And restart, which until now it only claimed: the installer cannot
             // replace files this process holds open, and it closes this client
             // itself if we do not — killing the process TREE it is standing in,
@@ -781,6 +906,44 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
         highlighted = SettingsRowStyle.isHighlighted("updates.client-id", mark),
         modifier = revealMark("updates.client-id"),
     )
+
+    ScopeOf("updates.core", store)
+    CoreRow(store, mark)
+}
+
+/**
+ * huginn core as this computer has it: the version carrying this app, and
+ * whether it starts at boot. It answers what the retired "CLI sync" row did —
+ * the core now lays the huginn command down and keeps it current.
+ *
+ * Read-only: the core is set up from Devices or `huginn core`, and updated with
+ * everything else by `huginn update`.
+ */
+@Composable
+private fun CoreRow(store: AppStore, mark: String?) {
+    val via = store.viaCore
+    val coreTray by store.coreDevice.coreTray.collectAsState()
+    val installed = remember(coreTray) { CoreSetup.installedBinary() != null }
+    var atBoot by remember { mutableStateOf<Boolean?>(null) }
+    // Off the UI thread: on Windows the question is a `schtasks` call.
+    LaunchedEffect(coreTray) { atBoot = withContext(Dispatchers.IO) { CoreSetup.serviceInstalled() } }
+    SettingsReadOnlyRow(
+        id = "updates.core",
+        title = "huginn core",
+        value = when {
+            via != null -> via.coreVersion
+            installed -> "not carrying this app"
+            else -> "not installed"
+        },
+        summary = "Holds the link to huginn and runs this computer's work; the huginn command uses it too." +
+            when (atBoot) {
+                true -> " Starts at boot."
+                false -> " Does not start at boot."
+                null -> ""
+            },
+        highlighted = SettingsRowStyle.isHighlighted("updates.core", mark),
+        modifier = revealMark("updates.core"),
+    )
 }
 
 // -------------------------------------------------------------------- about
@@ -790,6 +953,9 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
 fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
     val status by store.status.collectAsState()
 
+    // This app's three facts, then the one about huginn: grouped by where
+    // each comes from, as every other page now is.
+    ScopeOf("about.version", store)
     SettingsReadOnlyRow(
         id = "about.version",
         title = "Version",
@@ -797,14 +963,6 @@ fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
         summary = "This app.",
         highlighted = SettingsRowStyle.isHighlighted("about.version", mark),
         modifier = revealMark("about.version"),
-    )
-    SettingsReadOnlyRow(
-        id = "about.host-version",
-        title = "Host version",
-        value = status?.appdVersion ?: "not answering",
-        summary = "The huginn daemon this client is talking to.",
-        highlighted = SettingsRowStyle.isHighlighted("about.host-version", mark),
-        modifier = revealMark("about.host-version"),
     )
     SettingsReadOnlyRow(
         id = "about.repo",
@@ -823,5 +981,14 @@ fun ColumnScope.AboutPage(store: AppStore, mark: String?) {
         summary = "A front end for Claude Code sessions running on your own machine.",
         highlighted = SettingsRowStyle.isHighlighted("about.what-this-is", mark),
         modifier = revealMark("about.what-this-is"),
+    )
+    ScopeOf("about.host-version", store)
+    SettingsReadOnlyRow(
+        id = "about.host-version",
+        title = "Host version",
+        value = status?.appdVersion ?: "not answering",
+        summary = "The huginn daemon this client is talking to.",
+        highlighted = SettingsRowStyle.isHighlighted("about.host-version", mark),
+        modifier = revealMark("about.host-version"),
     )
 }

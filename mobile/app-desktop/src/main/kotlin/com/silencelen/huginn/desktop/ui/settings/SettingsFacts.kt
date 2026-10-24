@@ -53,6 +53,14 @@ data class SettingsFacts(
     val deviceEnabled: Boolean = false,
     val update: UpdateState = UpdateState.Idle,
     val installedVersion: String = "",
+    /** The scope this machine takes work in (`look` | `work` | `own`): Work alone has a folder. */
+    val deviceScope: String = "",
+    /** huginn core is installed here, so its tray icon has a switch. */
+    val coreInstalled: Boolean = false,
+    /** The host serves its Apps page — the rail's own answer, `AppStore.appsAvailable`. */
+    val appsAvailable: Boolean = false,
+    /** The host serves projects — `AppStore.projectsAvailable`. */
+    val projectsAvailable: Boolean = false,
 )
 
 /**
@@ -95,6 +103,15 @@ fun desktopProbe(f: SettingsFacts): SettingsProbe {
         // The saved switch, for the same reason as the phone's: the shared form
         // draws the model picker and quiet hours only `if (draft.keepAwake)`.
         keepAwake = f.headroom?.settings?.keepAwake == true,
+        // ⚠ EACH OF THESE IS A CONDITION A PAGE DRAWS A ROW UNDER (2026-10-23
+        // audit): the same fact, read from the same place the page reads it, so
+        // a search hit can never open onto a page that has hidden its row.
+        accountSwitchOn = f.headroom?.settings?.let { it.accountSwitch.enabled } == true,
+        deviceOn = f.deviceEnabled,
+        workScope = f.deviceScope == "work",
+        coreInstalled = f.coreInstalled,
+        apps = f.appsAvailable,
+        projects = f.projectsAvailable,
     )
 }
 

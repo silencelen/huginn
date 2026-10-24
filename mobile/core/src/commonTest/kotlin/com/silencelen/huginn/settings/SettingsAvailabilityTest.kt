@@ -23,6 +23,9 @@ class SettingsAvailabilityTest {
         headroom = true, quickActions = true, alerts = true, padsAvailable = true,
         localServe = true, appLockAvailable = true, enrolable = true,
         savedAccounts = 3, diagnostics = true, selfUpdate = true, keepAwake = true,
+        accountSwitchOn = true, deviceOn = true, workScope = true, coreInstalled = true,
+        apps = true, projects = true, signedIn = true, alertsRelayOn = true,
+        deviceNotify = true, pushKnown = true, appLockOn = true,
     )
 
     /**
@@ -100,7 +103,9 @@ class SettingsAvailabilityTest {
 
     @Test
     fun quickActionsNeedTheDaemonsTemplates() {
-        val old = all.copy(quickActions = false)
+        // A daemon from before the templates is from before Apps and Projects
+        // too, which now answer to their own routes rather than to this shelf.
+        val old = all.copy(quickActions = false, apps = false, projects = false)
         assertTrue(SettingsCatalog.itemsOf("chats", old, Surface.DESKTOP).isEmpty())
         assertTrue("chats" !in SettingsCatalog.visibleCategories(old, Surface.DESKTOP).map { it.id })
     }
@@ -195,6 +200,101 @@ class SettingsAvailabilityTest {
         assertTrue(SettingsCatalog.itemsOf("nope", all, Surface.PHONE).isEmpty())
         assertEquals(null, SettingsCatalog.category("nope"))
         assertEquals(null, SettingsCatalog.item("nope.nope"))
+    }
+
+    // ------------------------------------------------ the 2026-10-23 audit
+    //
+    // The owner: "they are searchable but when clicking the result its not
+    // present on the directed to settings page". Each test below is one row a
+    // page draws only under a condition the catalog did not know, so search
+    // offered it onto a page that had hidden it. (The desktop's own pages are
+    // rendered and checked row by row in `SettingsPagesTest`, `:app-desktop`.)
+
+    private fun shown(category: String, probe: SettingsProbe, surface: Surface) =
+        SettingsCatalog.itemsOf(category, probe, surface).map { it.id }
+
+    /** The form draws "Switch at" and the margin only while switching is on. */
+    @Test
+    fun switchingsThresholdsFollowTheSavedSwitch() {
+        for (surface in listOf(Surface.PHONE, Surface.DESKTOP)) {
+            val off = shown("usage", all.copy(accountSwitchOn = false), surface)
+            assertTrue("usage.account-switch" in off, "the switch itself stays: $off")
+            assertTrue("usage.switch-at" !in off && "usage.switch-margin" !in off, "on $surface: $off")
+            val on = shown("usage", all, surface)
+            assertTrue("usage.switch-at" in on && "usage.switch-margin" in on, "on $surface: $on")
+        }
+    }
+
+    /**
+     * Devices draws what this machine may do, act-while-locked and the path to
+     * claude only while "Available to huginn" is on, and the Work folder only in
+     * Work.
+     */
+    @Test
+    fun theRowsUnderAvailableToHuginnFollowItsSwitch() {
+        val off = shown("devices", all.copy(deviceOn = false), Surface.DESKTOP)
+        assertTrue("devices.this-machine" in off, "the switch itself stays: $off")
+        for (id in listOf("devices.scope", "devices.act-while-locked", "devices.claude-path", "devices.work-folder")) {
+            assertTrue(id !in off, "$id offered while this machine is off: $off")
+        }
+        val look = shown("devices", all.copy(workScope = false), Surface.DESKTOP)
+        assertTrue("devices.scope" in look && "devices.claude-path" in look, "$look")
+        assertTrue("devices.work-folder" !in look, "the Work folder offered outside Work: $look")
+        assertTrue("devices.work-folder" in shown("devices", all, Surface.DESKTOP))
+    }
+
+    @Test
+    fun theTrayIconSwitchNeedsAnInstalledCore() {
+        assertTrue("appearance.tray-icon" !in shown("appearance", all.copy(coreInstalled = false), Surface.DESKTOP))
+        assertTrue("appearance.tray-icon" in shown("appearance", all, Surface.DESKTOP))
+    }
+
+    /**
+     * Apps and Projects were gated on the status shelf while both shells draw
+     * them only when their own route answers — and the desktop not at all.
+     */
+    @Test
+    fun appsAndProjectsFollowTheirOwnRoutes() {
+        for (surface in listOf(Surface.PHONE, Surface.DESKTOP)) {
+            val none = shown("chats", all.copy(apps = false, projects = false), surface)
+            assertTrue("chats.apps" !in none && "chats.projects" !in none, "on $surface: $none")
+            assertTrue("chats.quick-actions" in none, "the rest of the drawer stays: $none")
+            val both = shown("chats", all, surface)
+            assertTrue("chats.apps" in both && "chats.projects" in both, "on $surface: $both")
+        }
+    }
+
+    /** The phone's conditional rows: each one's own switch, never the host's. */
+    @Test
+    fun thePhonesConditionalRowsFollowWhatItsPagesTest() {
+        assertTrue("host.sign-out" !in shown("host", all.copy(signedIn = false), Surface.PHONE), "nobody to sign out")
+        assertTrue("host.sign-out" in shown("host", all, Surface.PHONE))
+
+        val noRelay = shown("notify", all.copy(alertsRelayOn = false), Surface.PHONE)
+        assertTrue("notify.host-alerts" in noRelay && "notify.host-alerts-mode" !in noRelay, "$noRelay")
+
+        val quiet = shown("notify", all.copy(deviceNotify = false), Surface.PHONE)
+        assertTrue("notify.device-watch" in quiet, "the switch itself stays: $quiet")
+        for (id in listOf("notify.background", "notify.permission", "notify.delivery")) {
+            assertTrue(id !in quiet, "$id offered while this phone does not notify: $quiet")
+        }
+        assertTrue("notify.delivery" !in shown("notify", all.copy(pushKnown = false), Surface.PHONE))
+
+        val unlocked = shown("privacy", all.copy(appLockOn = false), Surface.PHONE)
+        assertTrue("privacy.app-lock" in unlocked && "privacy.lock-now" !in unlocked, "$unlocked")
+    }
+
+    /**
+     * ⚠ STILL NEVER THE HOST'S. The rows under the phone's own switch were left
+     * ungated on purpose so an old or unreachable daemon could not hide the
+     * switch that decides whether the phone notifies; gating them on the
+     * switch must not have quietly made them the host's again.
+     */
+    @Test
+    fun thePhonesOwnRowsSurviveADeadHost() {
+        val dead = SettingsProbe(deviceNotify = true, pushKnown = true)
+        val ids = shown("notify", dead, Surface.PHONE)
+        assertTrue(ids.containsAll(listOf("notify.device-watch", "notify.background", "notify.permission", "notify.delivery")), "$ids")
     }
 
     /**

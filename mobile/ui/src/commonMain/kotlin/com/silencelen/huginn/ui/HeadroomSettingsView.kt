@@ -35,7 +35,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -250,17 +252,17 @@ fun HeadroomSettingsSection(
     // the intro paragraph set ~135 characters on one line. Both clients, one file.
     Column(modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Label("Thresholds")
-        PctRow("Heads-up at", draft.headsUpPct, HeadroomForm.range("headsUpPct")) { draft = draft.copy(headsUpPct = it) }
-        PctRow("Move down the ladder at", draft.ladderPct, HeadroomForm.range("ladderPct")) { draft = draft.copy(ladderPct = it) }
-        PctRow("Move back up below", draft.ladderUpBelowPct, HeadroomForm.range("ladderUpBelowPct")) { draft = draft.copy(ladderUpBelowPct = it) }
-        PctRow("Hold new subagents at", draft.stopPct, HeadroomForm.range("stopPct")) { draft = draft.copy(stopPct = it) }
-        PctRow("Hold Fable subagents at", draft.stopFablePct, HeadroomForm.range("stopFablePct")) { draft = draft.copy(stopFablePct = it) }
-        PctRow("Treat a window as cleared below", draft.clearBelowPct, HeadroomForm.range("clearBelowPct")) { draft = draft.copy(clearBelowPct = it) }
+        PctRow("Heads-up at", draft.headsUpPct, HeadroomForm.range("headsUpPct"), tag = "usage.heads-up-pct") { draft = draft.copy(headsUpPct = it) }
+        PctRow("Move down the ladder at", draft.ladderPct, HeadroomForm.range("ladderPct"), tag = "usage.ladder-pct") { draft = draft.copy(ladderPct = it) }
+        PctRow("Move back up below", draft.ladderUpBelowPct, HeadroomForm.range("ladderUpBelowPct"), tag = "usage.ladder-up-pct") { draft = draft.copy(ladderUpBelowPct = it) }
+        PctRow("Hold new subagents at", draft.stopPct, HeadroomForm.range("stopPct"), tag = "usage.stop-pct") { draft = draft.copy(stopPct = it) }
+        PctRow("Hold Fable subagents at", draft.stopFablePct, HeadroomForm.range("stopFablePct"), tag = "usage.stop-fable-pct") { draft = draft.copy(stopFablePct = it) }
+        PctRow("Treat a window as cleared below", draft.clearBelowPct, HeadroomForm.range("clearBelowPct"), tag = "usage.clear-below-pct") { draft = draft.copy(clearBelowPct = it) }
         Muted2("Holding a foreground Agent call freezes the turn that made it — the parent waits too.")
 
         Label("Ladder")
         Muted2("The order a live session is moved through when its window runs out.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.testTag("usage.ladder"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             val rungs = draft.ladder
             for (i in 0 until 3) {
                 FamilyPicker(
@@ -276,7 +278,7 @@ fun HeadroomSettingsSection(
         }
 
         Label("Auto-resume")
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.testTag("usage.auto-resume"), verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = draft.autoResume, onCheckedChange = { draft = draft.copy(autoResume = it) })
             Spacer(Modifier.width(10.dp))
             Text(
@@ -298,15 +300,17 @@ fun HeadroomSettingsSection(
             minLines = 2,
             maxLines = 4,
             isError = problems.any { it.field == "resumePhrase" },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("usage.resume-phrase"),
         )
 
         Label("Default model")
-        ModelPicker(
-            value = draft.defaultModel,
-            models = models,
-            onPick = { draft = draft.copy(defaultModel = it) },
-        )
+        Box(Modifier.testTag("usage.default-model")) {
+            ModelPicker(
+                value = draft.defaultModel,
+                models = models,
+                onPick = { draft = draft.copy(defaultModel = it) },
+            )
+        }
 
         Label("Heads-up message")
         OutlinedTextField(
@@ -319,11 +323,11 @@ fun HeadroomSettingsSection(
             minLines = 3,
             isError = problems.any { it.field == "headsUpText" },
             supportingText = { Text("{pct} becomes the percentage, {next} the model it is moving to, {ladderPct} the trigger.") },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().testTag("usage.heads-up-text"),
         )
 
         Label("Account switching")
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.testTag("usage.account-switch"), verticalAlignment = Alignment.CenterVertically) {
             Switch(
                 checked = draft.accountSwitch.enabled,
                 onCheckedChange = { draft = draft.copy(accountSwitch = draft.accountSwitch.copy(enabled = it)) },
@@ -338,16 +342,16 @@ fun HeadroomSettingsSection(
             // Hoisted: a property of another module is not smart-cast through a
             // `copy` chain, and a local val is the fix rather than `!!`.
             val sw: AccountSwitch = draft.accountSwitch
-            PctRow("Switch at", sw.threshold, HeadroomForm.range("accountSwitch.threshold")) {
+            PctRow("Switch at", sw.threshold, HeadroomForm.range("accountSwitch.threshold"), tag = "usage.switch-at") {
                 draft = draft.copy(accountSwitch = sw.copy(threshold = it))
             }
-            PctRow("Only to an account this much freer", sw.margin, HeadroomForm.range("accountSwitch.margin")) {
+            PctRow("Only to an account this much freer", sw.margin, HeadroomForm.range("accountSwitch.margin"), tag = "usage.switch-margin") {
                 draft = draft.copy(accountSwitch = sw.copy(margin = it))
             }
         }
 
         Label("Keep a window rotating")
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.testTag("usage.keep-awake"), verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = draft.keepAwake, onCheckedChange = { draft = draft.copy(keepAwake = it) })
             Spacer(Modifier.width(10.dp))
             // ⚠ THE COPY SAYS WHAT IT COSTS, in both states. This is the only
@@ -369,11 +373,13 @@ fun HeadroomSettingsSection(
             )
         }
         if (draft.keepAwake) {
-            ModelPicker(
-                value = draft.keepAwakeModel,
-                models = models,
-                onPick = { draft = draft.copy(keepAwakeModel = it) },
-            )
+            Box(Modifier.testTag("usage.keep-awake-model")) {
+                ModelPicker(
+                    value = draft.keepAwakeModel,
+                    models = models,
+                    onPick = { draft = draft.copy(keepAwakeModel = it) },
+                )
+            }
             Muted2(
                 "The 5-hour window is account-wide, so the cheapest model opens the same window " +
                     "every other model then shares.",
@@ -388,7 +394,7 @@ fun HeadroomSettingsSection(
                 singleLine = true,
                 isError = problems.any { it.field == "keepAwakeQuietHours" },
                 supportingText = { Text("Local time, as 01:00-07:00. A span crossing midnight is fine. Empty means never quiet.") },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag("usage.keep-awake-quiet"),
             )
         }
 
@@ -448,6 +454,8 @@ private fun PctRow(
     value: Int,
     /** [HeadroomForm.range] for this field — the SAME object both controls use. */
     range: IntRange,
+    /** Its settings-catalog id, as a testTag, so a page can be checked row by row. */
+    tag: String? = null,
     onChange: (Int) -> Unit,
 ) {
     // ⚠ THE SLIDER IS THE ONLY CHILD THAT CAN SHRINK, so it absorbs everything the
@@ -459,7 +467,7 @@ private fun PctRow(
     // Under the width where all three fit, the label goes on its own line and the
     // slider gets the whole of the next one. Same three controls, same order, and
     // the slider never drops below a draggable track.
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    BoxWithConstraints(Modifier.fillMaxWidth().let { m -> if (tag != null) m.testTag(tag) else m }) {
         val stacked = maxWidth < PCT_ROW_STACK_BELOW
 
         @Composable

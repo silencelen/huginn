@@ -18,6 +18,7 @@ import com.silencelen.huginn.desktop.core.CoreRoutes
 import com.silencelen.huginn.ui.settings.SettingsActionRow
 import com.silencelen.huginn.ui.settings.SettingsFieldRow
 import com.silencelen.huginn.ui.settings.SettingsReadOnlyRow
+import com.silencelen.huginn.ui.settings.SettingsRowStyle
 import com.silencelen.huginn.ui.settings.SettingsToggleRow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -32,7 +33,7 @@ import java.time.Instant
  * There is no token here to show or type: the core holds it.
  */
 @Composable
-internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.ViaCore) {
+internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.ViaCore, mark: String? = null) {
     val core = remember(via.socket) { CoreClient(via.socket) }
     val scope = rememberCoroutineScope()
     var book by remember { mutableStateOf<CoreRoutes?>(null) }
@@ -55,12 +56,17 @@ internal fun ColumnScope.CoreHostSection(store: AppStore, via: CoreBoot.Outcome.
         }
     }
 
+    // The head of the core's route book, so it answers to the catalog's
+    // `host.route`: a search for "routes" or "address" lands here, marked. (It
+    // was `host.link`, an id the catalog never had — nothing could arrive at it.)
     SettingsReadOnlyRow(
-        id = "host.link",
+        id = "host.route",
         title = "Link to huginn",
         value = "through huginn core ${via.coreVersion}",
         summary = "huginn core keeps the token and proves huginn's certificate; this app sends " +
             "everything through it and keeps no credential of its own." + (via.note?.let { " At this start: $it." } ?: ""),
+        highlighted = SettingsRowStyle.isHighlighted("host.route", mark),
+        modifier = revealMark("host.route"),
     )
     val routes = book?.routes.orEmpty()
     for (r in routes) {

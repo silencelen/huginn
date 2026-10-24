@@ -206,6 +206,50 @@ class SettingsPhoneTest {
         assertFalse("$ids", "usage.keep-awake-model" in ids)
     }
 
+    /**
+     * ⚠ THE 2026-10-23 AUDIT, THE PHONE'S HALF: every row a phone page draws only
+     * under a condition, with the catalog told that condition from the SAME fact
+     * the page tests — or search offers the row onto a page that has hidden it.
+     * Each pair is (the facts with the condition false, the row that must go).
+     * NOTE JUnit's order: (message, expected, actual).
+     */
+    @Test
+    fun `every row a phone page draws under a condition is offered only under it`() {
+        val on = PhoneSettingsFacts(
+            headroomSettings = HeadroomSettings(accountSwitch = com.silencelen.huginn.data.AccountSwitch(enabled = true)),
+            savedAccounts = 2, signedIn = true, quickActions = QuickActions(rev = 1),
+            projectsAvailable = true, appsAvailable = true,
+            alerts = Alerts(enabled = true, channel = "telegram"), notifyEnabled = true, pushKnown = true,
+            appLock = true, appLockAvailable = true,
+        )
+        // HostPage: `if (signedIn)`. UsagePage's form: `if (draft.accountSwitch.enabled)`.
+        // ChatsPage: `onOpenProjects?.let`, `onOpenApps?.let`. NotifyPage: `if (al.enabled &&
+        // al.channel != "none")`, `if (!notifyEnabled) return`, `push?.let`. PrivacyPage:
+        // `if (appLock && appLockAvailable)`.
+        val cases = listOf(
+            on.copy(signedIn = false) to "host.sign-out",
+            on.copy(headroomSettings = HeadroomSettings()) to "usage.switch-at",
+            on.copy(headroomSettings = HeadroomSettings()) to "usage.switch-margin",
+            on.copy(projectsAvailable = false) to "chats.projects",
+            on.copy(appsAvailable = false) to "chats.apps",
+            on.copy(alerts = Alerts(enabled = false, channel = "telegram")) to "notify.host-alerts-mode",
+            on.copy(alerts = Alerts(enabled = true, channel = "none")) to "notify.host-alerts-mode",
+            on.copy(notifyEnabled = false) to "notify.background",
+            on.copy(notifyEnabled = false) to "notify.permission",
+            on.copy(notifyEnabled = false) to "notify.delivery",
+            on.copy(pushKnown = false) to "notify.delivery",
+            on.copy(appLock = false) to "privacy.lock-now",
+        )
+        for ((facts, id) in cases) {
+            val category = SettingsCatalog.categoryOf(id)!!.id
+            assertTrue("$id is offered while its condition holds", id in shownOn(category, on))
+            assertFalse("$id is offered while its page hides it", id in shownOn(category, facts))
+        }
+    }
+
+    private fun shownOn(category: String, f: PhoneSettingsFacts) =
+        SettingsCatalog.itemsOf(category, phoneProbe(f), Surface.PHONE).map { it.id }
+
     @Test
     fun `this phone never claims to serve local models`() {
         // Serving is a machine's own decision and a phone is not a candidate; the

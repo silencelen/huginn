@@ -22,6 +22,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.testTag
+import com.silencelen.huginn.ui.settings.SettingsRowStyle
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.LocalServe
 import com.silencelen.huginn.desktop.ui.Muted
@@ -92,9 +94,14 @@ internal val SETUP_OWNS_THE_INTRO: Map<com.silencelen.huginn.settings.SetupStep,
  * @param intro draw the section's own heading and blurb. FALSE inside the setup
  *   flow (D-13): the step already carries a title and a subtitle saying this, and
  *   the two were the same sentence four words apart. See [SETUP_OWNS_THE_INTRO].
+ * @param mark the row a settings search is arriving at. Every control here
+ *   answers to its catalog id — the switch and act-while-locked are marked like
+ *   any row, the scope radios, the Work folder and the path to claude are
+ *   revealed as the blocks they are (2026-10-23 audit: search found them and
+ *   nothing here said where they were).
  */
 @Composable
-internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
+internal fun DeviceSection(store: AppStore, intro: Boolean = true, mark: String? = null) {
     val settings = store.settings
     val enabled by settings.deviceEnabled.collectAsState()
     val scopeWire by settings.deviceScope.collectAsState()
@@ -129,7 +136,8 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
         } else {
             "huginn will not run work on this computer."
         },
-        modifier = Modifier.padding(top = 10.dp),
+        highlighted = SettingsRowStyle.isHighlighted("devices.this-machine", mark),
+        modifier = revealMark("devices.this-machine").padding(top = 10.dp),
     )
 
     // No core answering: the one action that fixes every device setting below.
@@ -147,19 +155,21 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
     }
 
     if (enabled) {
-        FormHeader("What it may do")
-        for ((wire, label, blurb) in SCOPE_CHOICES) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(top = 4.dp),
-            ) {
-                RadioButton(
-                    selected = scopeWire == wire,
-                    onClick = { store.coreDevice.setScope(wire) },
-                )
-                Column(Modifier.padding(start = 6.dp)) {
-                    Text(label, style = MaterialTheme.typography.bodyMedium)
-                    Muted(blurb, maxLines = 2)
+        Column(Modifier.testTag("devices.scope").then(revealMark("devices.scope"))) {
+            FormHeader("What it may do")
+            for ((wire, label, blurb) in SCOPE_CHOICES) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 4.dp),
+                ) {
+                    RadioButton(
+                        selected = scopeWire == wire,
+                        onClick = { store.coreDevice.setScope(wire) },
+                    )
+                    Column(Modifier.padding(start = 6.dp)) {
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                        Muted(blurb, maxLines = 2)
+                    }
                 }
             }
         }
@@ -182,13 +192,14 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
                 onValueChange = { store.coreDevice.setRoot(it) },
                 label = { Text("Folder for Work runs") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                modifier = Modifier.testTag("devices.work-folder").then(revealMark("devices.work-folder"))
+                    .fillMaxWidth().padding(top = 8.dp),
             )
         }
 
         // In setup, step 3 is this very field; asking again a step later read as
         // a second claude to find.
-        if (intro) ClaudePathField(store)
+        if (intro) ClaudePathField(store, Modifier.testTag("devices.claude-path").then(revealMark("devices.claude-path")))
 
         // ⚠ THE SAME SHARED ROW AS EVERY OTHER TOGGLE, drawn from the catalog id
         // so search can find it and land on something that exists. It sits here,
@@ -210,7 +221,8 @@ internal fun DeviceSection(store: AppStore, intro: Boolean = true) {
             } else {
                 "Off: while the screen is locked this machine drops to Look and refuses Act."
             },
-            modifier = Modifier.padding(top = 10.dp),
+            highlighted = SettingsRowStyle.isHighlighted("devices.act-while-locked", mark),
+            modifier = revealMark("devices.act-while-locked").padding(top = 10.dp),
         )
 
         lockSentence(actWhileLocked, status.locked, status.lockKnown, isWindowsHost()).takeIf { it.isNotBlank() }?.let {
@@ -285,7 +297,7 @@ private fun scopeLabel(wire: String): String =
  * with something it has actually run.
  */
 @Composable
-internal fun ClaudePathField(store: AppStore) {
+internal fun ClaudePathField(store: AppStore, modifier: Modifier = Modifier) {
     val settings = store.settings
     val claudePath by settings.deviceClaudePath.collectAsState()
     OutlinedTextField(
@@ -293,7 +305,7 @@ internal fun ClaudePathField(store: AppStore) {
         onValueChange = { store.coreDevice.setClaudePath(it) },
         label = { Text("Path to claude (leave blank to use PATH)") },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = modifier.fillMaxWidth().padding(top = 8.dp),
     )
 }
 
@@ -471,7 +483,10 @@ internal object LocalLog {
 /** The shell's own platform, asked once — the manager reports its own. */
 private fun isWindowsHost() = System.getProperty("os.name")?.startsWith("Windows") == true
 
-/** @param intro see [DeviceSection]. False inside the setup flow (D-13). */
+/**
+ * @param intro see [DeviceSection]. False inside the setup flow (D-13). A
+ *   settings search for local AI is revealed at the section's own heading.
+ */
 @Composable
 internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing: ((String) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
@@ -510,7 +525,7 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
     LaunchedEffect(busy) { if (!busy) refresh() }
 
     if (intro) {
-        FormHeader(LOCAL_SERVE_SECTION_TITLE)
+        FormHeader(LOCAL_SERVE_SECTION_TITLE, Modifier.testTag("devices.local-ai").then(revealMark("devices.local-ai")))
         Muted(LOCAL_SERVE_SECTION_BLURB, maxLines = 4)
     }
 
@@ -707,11 +722,11 @@ internal fun LocalServeSection(store: AppStore, intro: Boolean = true, onServing
  * form whose halves run together is the other way to make a screen unreadable.
  */
 @Composable
-private fun FormHeader(text: String) {
+private fun FormHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 24.dp, bottom = 6.dp),
+        modifier = modifier.padding(top = 24.dp, bottom = 6.dp),
     )
 }

@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -125,7 +126,10 @@ fun AccountsEditor(
                 else -> "Signed in: ${who.email ?: "unknown"}" + (who.subscriptionType?.let { " · $it" } ?: "")
             },
             style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 8.dp),
+            // The head of the saved logins, tagged with their catalog id so a
+            // settings page can be checked for them (the add-login steps below
+            // carry `host.sign-in`).
+            modifier = Modifier.testTag("host.saved-logins").padding(top = 8.dp),
         )
         if (showAutoswitch) {
             EditorNote(autoswitchLine(autoswitch), Modifier.padding(top = 2.dp), maxLines = 2)
@@ -232,7 +236,7 @@ fun AccountsEditor(
         EditorNote(
             "1 · Start sign-in    2 · Approve in the browser    3 · Paste the code" +
                 "        (now: step $step)",
-            Modifier.padding(top = 14.dp),
+            Modifier.testTag("host.sign-in").padding(top = 14.dp),
             // ⚠ THREE LINES, BECAUSE THE POINT OF THE SENTENCE IS AT ITS END.
             // `EditorNote` defaults to one, and at one line a phone cut this at
             // "3 · Paste the co…" — losing the step marker, which is the entire

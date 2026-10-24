@@ -51,6 +51,8 @@ data class PhoneSettingsFacts(
     val connected: Boolean? = null,
     val accountEmail: String? = null,
     val savedAccounts: Int = 0,
+    /** The host is signed in to a Claude login now: Sign out is drawn only then. */
+    val signedIn: Boolean = false,
     // -------------------------------------------------------------- usage
     /** Null against a daemon older than 3.0 — the whole usage tier goes with it. */
     val headroomSettings: HeadroomSettings? = null,
@@ -59,6 +61,9 @@ data class PhoneSettingsFacts(
     // -------------------------------------------------------------- chats
     /** Null against a daemon that owns no templates (pre-3.0.1). */
     val quickActions: QuickActions? = null,
+    /** The host serves projects / its Apps page: each drawn row's own condition. */
+    val projectsAvailable: Boolean = false,
+    val appsAvailable: Boolean = false,
     // ------------------------------------------------------------- notify
     /** Null when `/v1/alerts` did not answer: huginn cannot reach you at all. */
     val alerts: Alerts? = null,
@@ -68,6 +73,8 @@ data class PhoneSettingsFacts(
     val dozeExempt: Boolean = false,
     val pushConfigured: Boolean = false,
     val pushRegistered: Boolean = false,
+    /** The host answered about push at all — the delivery row is drawn only then. */
+    val pushKnown: Boolean = false,
     val pushesSent: Long = 0,
     val pushesReceived: Long = 0,
     /** What the background alarm settled on, in milliseconds. */
@@ -134,6 +141,19 @@ fun phoneProbe(f: PhoneSettingsFacts): SettingsProbe = SettingsProbe(
     // seeded from exactly this field — so this is the fact that decides whether
     // those two catalog rows exist at all.
     keepAwake = f.headroomSettings?.keepAwake == true,
+    // ⚠ THE SAME RULE FOR EVERY ROW A PAGE DRAWS UNDER A CONDITION (2026-10-23
+    // audit). Each is the condition the page itself tests, read from the same
+    // fact: switching's two thresholds, Sign out, the relay-only switch, the
+    // three rows under "Tell me when a session needs me", Lock now, and the two
+    // doors that need their own routes.
+    accountSwitchOn = f.headroomSettings?.let { it.accountSwitch.enabled } == true,
+    signedIn = f.signedIn,
+    alertsRelayOn = f.alerts?.let { it.enabled && it.channel != "none" } == true,
+    deviceNotify = f.notifyEnabled,
+    pushKnown = f.pushKnown,
+    appLockOn = f.appLock,
+    apps = f.appsAvailable,
+    projects = f.projectsAvailable,
 )
 
 /**

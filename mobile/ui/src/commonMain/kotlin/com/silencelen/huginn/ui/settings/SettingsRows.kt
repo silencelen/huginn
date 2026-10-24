@@ -41,6 +41,9 @@ import com.silencelen.huginn.data.DaemonChallenge
 import com.silencelen.huginn.ui.REMOVE_ROUTE_BODY
 import com.silencelen.huginn.ui.RemoveConfirmDialog
 import com.silencelen.huginn.data.RouteHealth
+import com.silencelen.huginn.settings.SettingScope
+import com.silencelen.huginn.settings.Surface as SettingsSurface
+import com.silencelen.huginn.settings.heading
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -93,6 +96,32 @@ object SettingsRowStyle {
 fun SettingsStateDot(color: Color) {
     Box(Modifier.padding(end = 6.dp).size(7.dp).clip(CircleShape).background(color))
 }
+
+/**
+ * Where the rows under it are kept: on huginn for every app, by huginn core on
+ * this computer, or by this app alone ([SettingScope]).
+ *
+ * THE PHONE'S OWN GROUP LABEL, not a new mark: its Notifications page already
+ * splits "From huginn" from "From this phone" with exactly this muted line, and
+ * the scope is the same question asked of every page. A word above a run of
+ * rows rather than a badge on each one — the page reads as two or three groups
+ * instead of every row repeating where it lives. No colour, no rule, no bar.
+ *
+ * The words are [heading]'s, from `:core`, and the testTag is [scopeTag], which
+ * is how a page test checks every row sits under its own scope.
+ */
+@Composable
+fun SettingsScopeLabel(scope: SettingScope, surface: SettingsSurface, modifier: Modifier = Modifier) {
+    Text(
+        scope.heading(surface),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier.testTag(scopeTag(scope)).padding(top = 14.dp, bottom = 2.dp, start = 8.dp),
+    )
+}
+
+/** The testTag a [SettingsScopeLabel] carries. */
+fun scopeTag(scope: SettingScope): String = "settings.scope.${scope.name.lowercase()}"
 
 /**
  * The shared frame: the house [ListRow] under the id tag and the reading cap.

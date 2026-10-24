@@ -23,6 +23,14 @@ package com.silencelen.huginn.settings
  * ⚠ ADDING A SETTING MEANS ADDING AN ITEM HERE FIRST. A control drawn by a shell
  * with no item in this file is invisible to search and to the summary line, and
  * that is the state the redesign was called in to fix.
+ *
+ * ⚠ AND SEARCH MUST NEVER OFFER WHAT A PAGE DOES NOT DRAW (2026-10-23 audit:
+ * "they are searchable but when clicking the result its not present on the
+ * directed to settings page"). An item's availability is the condition its page
+ * draws it under, every such condition is a [SettingsProbe] fact, and every item
+ * says where it is kept ([SettingScope]), which the desktop pages head their
+ * rows with. `SettingsPagesTest` in `:app-desktop` opens every hit through the
+ * real search and checks the page draws it under that heading.
  */
 
 /**
@@ -36,6 +44,36 @@ package com.silencelen.huginn.settings
  * and the union has no caller.
  */
 enum class Surface { PHONE, DESKTOP, BOTH }
+
+/**
+ * Where a setting is KEPT, and so what changing it reaches.
+ *
+ * The owner's words (2026-10-23): *"we have to think about 'cloud settings'
+ * (which apply to the 'server'/ to all the other huginn clients), the local
+ * settings for the device itself, and the core settings for the core cli
+ * install"*. A page that mixes the three without saying which is which leaves
+ * the reader to guess whether a switch they flip here also flips on the phone.
+ *
+ * - [SERVER]: stored on huginn (the daemon). Change it in any app and every
+ *   app — the phone, each desktop, the console — sees the new value.
+ * - [CORE]: kept by huginn core on this computer, the background service that
+ *   holds the link to huginn, runs this machine's work and serves its local AI.
+ *   The `huginn` command on the same machine reads it too. A phone has no core.
+ * - [DEVICE]: this app's own, on this device — its settings file, its OS
+ *   permissions, its window. Nothing else sees it.
+ */
+enum class SettingScope { SERVER, CORE, DEVICE }
+
+/**
+ * The heading a settings page draws over a run of rows kept in this scope. In
+ * `:core` with the scope itself, so both shells, the pages and the tests read
+ * one set of words.
+ */
+fun SettingScope.heading(surface: Surface): String = when (this) {
+    SettingScope.SERVER -> "On huginn · every app"
+    SettingScope.CORE -> "huginn core · this computer"
+    SettingScope.DEVICE -> if (surface == Surface.PHONE) "This phone" else "This app"
+}
 
 /**
  * Every fact the catalog may ask about the world before deciding a row exists.
@@ -69,6 +107,29 @@ enum class Surface { PHONE, DESKTOP, BOTH }
  *   that request, and quiet hours — are drawn by the shared form only
  *   `if (draft.keepAwake)`, so without this fact the catalog claimed them on
  *   every headroom host and search offered a row that its own page hides.
+ *
+ * ⚠ THE REST ARE THE SAME RULE, FOUND BY THE 2026-10-23 AUDIT (owner: "they are
+ * searchable but when clicking the result its not present on the directed to
+ * settings page"). Each one is a condition a page draws a row under, and the
+ * catalog did not know it:
+ *
+ * @param accountSwitchOn the SAVED account-switch toggle is on. The shared form
+ *   draws "Switch at" and "Only to an account this much freer" only under it.
+ * @param deviceOn this computer is available to huginn (desktop). What it may
+ *   do, the act-while-locked switch and the path to claude are drawn only then.
+ * @param workScope … and it may Work: the folder for Work runs is that scope's.
+ * @param coreInstalled huginn core is installed here (desktop): its tray icon's
+ *   switch is drawn only then.
+ * @param apps the host serves its Apps page (`/v1/apps` or `/v1/consoles`).
+ * @param projects the host serves projects (`/v1/projects`).
+ * @param signedIn the host is signed in to a Claude login now (phone: Sign out).
+ * @param alertsRelayOn huginn's own alerts are on AND it has a relay to send
+ *   them over (phone: "Only when the app is out of contact" modifies that).
+ * @param deviceNotify this phone raises its own notifications. Background use,
+ *   the Android permission and the delivery details are about that, and are
+ *   drawn only while it is on.
+ * @param pushKnown the host said whether it can push (phone: delivery details).
+ * @param appLockOn the app lock is on (phone: "Lock now" locks something).
  */
 data class SettingsProbe(
     val headroom: Boolean = false,
@@ -82,6 +143,17 @@ data class SettingsProbe(
     val diagnostics: Boolean = false,
     val selfUpdate: Boolean = false,
     val keepAwake: Boolean = false,
+    val accountSwitchOn: Boolean = false,
+    val deviceOn: Boolean = false,
+    val workScope: Boolean = false,
+    val coreInstalled: Boolean = false,
+    val apps: Boolean = false,
+    val projects: Boolean = false,
+    val signedIn: Boolean = false,
+    val alertsRelayOn: Boolean = false,
+    val deviceNotify: Boolean = false,
+    val pushKnown: Boolean = false,
+    val appLockOn: Boolean = false,
 )
 
 /**
@@ -106,6 +178,11 @@ data class SettingsProbe(
  *   today: the shared `:ui` sections, the six stranded controls, and the
  *   read-only rows. [SettingsCatalogTest] asserts 1..61 appear exactly once
  *   across the catalog, which is the regression that stops the accretion.
+ * @param scope where it is kept — see [SettingScope]. No default on purpose:
+ *   a new setting cannot be added without somebody deciding what it reaches.
+ * @param scopeViaCore where the DESKTOP keeps it while huginn core carries the
+ *   app's link (the standard path), when that differs from [scope]: the core,
+ *   not the app, then holds the routes and the token. Null = same as [scope].
  */
 data class SettingsItem(
     val id: String,
@@ -115,7 +192,16 @@ data class SettingsItem(
     val surface: Surface = Surface.BOTH,
     val availability: (SettingsProbe) -> Boolean = { true },
     val inventory: List<Int> = emptyList(),
+    val scope: SettingScope,
+    val scopeViaCore: SettingScope? = null,
 )
+
+/**
+ * Where [this] is kept on [surface]: [SettingsItem.scope], or on a desktop that
+ * huginn core carries ([viaCore]), [SettingsItem.scopeViaCore] when it has one.
+ */
+fun SettingsItem.scopeOn(surface: Surface, viaCore: Boolean = false): SettingScope =
+    if (surface == Surface.DESKTOP && viaCore) scopeViaCore ?: scope else scope
 
 /**
  * One drawer. Shown when it has at least one available item for this surface —
@@ -151,13 +237,19 @@ object SettingsCatalog {
                     "route", "routes", "server", "host", "url", "base url", "switch", "vpn", "allowlist",
                 ),
                 inventory = listOf(1, 2, 3, 4, 29, 30),
+                scope = SettingScope.DEVICE,
+                scopeViaCore = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "host.token",
                 title = "Token",
-                summary = "The bearer this app sends with every request.",
+                // Neutral about WHO sends it: through huginn core (the desktop's
+                // standard path) the core holds it and this app never sees it.
+                summary = "The bearer huginn accepts from this device, and where it is kept.",
                 keywords = listOf("bearer", "secret", "auth", "password", "key"),
                 inventory = listOf(5, 6, 31, 32),
+                scope = SettingScope.DEVICE,
+                scopeViaCore = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "host.connect",
@@ -166,6 +258,7 @@ object SettingsCatalog {
                 keywords = listOf("save", "connect", "reconnect"),
                 surface = Surface.PHONE,
                 inventory = listOf(7),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "host.saved-logins",
@@ -173,6 +266,7 @@ object SettingsCatalog {
                 summary = "The Claude logins kept on the host, which one is serving, and how usable each token is.",
                 keywords = listOf("accounts", "claude", "switch", "use", "forget", "refresh", "expired", "duplicate", "freshness"),
                 inventory = listOf(14, 15, 16, 33, 34, 35),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "host.sign-in",
@@ -180,6 +274,7 @@ object SettingsCatalog {
                 summary = "Signs another Claude account in on the host, through the browser and back.",
                 keywords = listOf("sign in", "login", "add account", "authorize", "code", "browser", "email"),
                 inventory = listOf(17, 36, 37, 38, 39, 40, 41),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "host.sign-out",
@@ -187,8 +282,11 @@ object SettingsCatalog {
                 summary = "Signs the host out of the Claude login that is serving now.",
                 keywords = listOf("logout", "sign out", "claude"),
                 surface = Surface.PHONE,
-                availability = { it.savedAccounts > 0 },
+                // The page draws it while somebody IS signed in, which saved
+                // logins only suggested: a host can keep logins and serve none.
+                availability = { it.signedIn },
                 inventory = listOf(18),
+                scope = SettingScope.SERVER,
             ),
             // NO INVENTORY NUMBER, and that is the honest reading: the Part 1
             // audit numbered the controls that EXISTED, and there was no setup
@@ -204,6 +302,7 @@ object SettingsCatalog {
                     "test", "connection", "diagnose", "again",
                 ),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
         ),
     )
@@ -228,6 +327,14 @@ object SettingsCatalog {
     private val keepAwakeOn: (SettingsProbe) -> Boolean = { it.headroom && it.keepAwake }
     private val canRotate: (SettingsProbe) -> Boolean = { it.headroom && it.savedAccounts > 1 }
 
+    /**
+     * ⚠ AND THE TWO ROWS IT DRAWS ONLY WHILE ACCOUNT SWITCHING IS ON — the same
+     * rule as [keepAwakeOn], missed for these: the form puts "Switch at" and the
+     * margin under `if (draft.accountSwitch.enabled)`, so searching *switch at*
+     * with switching off opened Usage onto a form without it.
+     */
+    private val switchingOn: (SettingsProbe) -> Boolean = { canRotate(it) && it.accountSwitchOn }
+
     private val usage = SettingsCategory(
         id = "usage",
         title = "Usage & headroom",
@@ -239,6 +346,7 @@ object SettingsCatalog {
                 summary = "How full a window gets before huginn says so.",
                 keywords = listOf("warn", "warning", "threshold", "percent", "limit"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.ladder-pct",
@@ -246,6 +354,7 @@ object SettingsCatalog {
                 summary = "How full a window gets before a live session is moved to the next model.",
                 keywords = listOf("threshold", "percent", "downgrade", "model", "ladder"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.ladder-up-pct",
@@ -253,6 +362,7 @@ object SettingsCatalog {
                 summary = "How empty a window has to be before a moved session goes back to its own model.",
                 keywords = listOf("threshold", "percent", "upgrade", "restore", "ladder"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.stop-pct",
@@ -260,6 +370,7 @@ object SettingsCatalog {
                 summary = "How full a window gets before new subagents stop being spawned.",
                 keywords = listOf("threshold", "percent", "agents", "subagent", "spawn", "hold"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.stop-fable-pct",
@@ -267,6 +378,7 @@ object SettingsCatalog {
                 summary = "The same hold, at its own level, for subagents on Fable.",
                 keywords = listOf("threshold", "percent", "fable", "subagent", "spawn", "hold"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.clear-below-pct",
@@ -274,6 +386,7 @@ object SettingsCatalog {
                 summary = "How empty a window has to read before huginn counts it as reset.",
                 keywords = listOf("threshold", "percent", "reset", "cleared"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.ladder",
@@ -281,6 +394,7 @@ object SettingsCatalog {
                 summary = "The order a live session is moved through when its window runs out.",
                 keywords = listOf("models", "fable", "opus", "sonnet", "haiku", "order", "fallback"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.auto-resume",
@@ -288,6 +402,7 @@ object SettingsCatalog {
                 summary = "Whether a stopped session picks itself back up when the window resets.",
                 keywords = listOf("resume", "restart", "continue", "automatic"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.resume-phrase",
@@ -295,6 +410,7 @@ object SettingsCatalog {
                 summary = "The message typed into a session when it picks itself back up.",
                 keywords = listOf("resume", "phrase", "continue", "prompt"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.default-model",
@@ -302,6 +418,7 @@ object SettingsCatalog {
                 summary = "The model a new chat starts on.",
                 keywords = listOf("model", "fable", "opus", "sonnet", "default"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.heads-up-text",
@@ -309,6 +426,7 @@ object SettingsCatalog {
                 summary = "What is typed into a session before it is moved down the ladder.",
                 keywords = listOf("message", "warning", "text", "handoff", "pct"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.account-switch",
@@ -317,20 +435,23 @@ object SettingsCatalog {
                 keywords = listOf("autoswitch", "rotate", "accounts", "switch", "automatic"),
                 availability = canRotate,
                 inventory = listOf(13),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.switch-at",
                 title = "Switch at",
                 summary = "How full the active login gets before huginn rotates away from it.",
                 keywords = listOf("autoswitch", "threshold", "percent", "rotate"),
-                availability = canRotate,
+                availability = switchingOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.switch-margin",
                 title = "Only to an account this much freer",
                 summary = "How much more room another login needs before it is worth switching to.",
                 keywords = listOf("autoswitch", "margin", "percent", "rotate"),
-                availability = canRotate,
+                availability = switchingOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.keep-awake",
@@ -338,6 +459,7 @@ object SettingsCatalog {
                 summary = KeepAwakeCopy.WHAT,
                 keywords = listOf("keep awake", "keepawake", "window", "5-hour", "session", "rotating", "ping", "cost", "spend", "idle"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.keep-awake-model",
@@ -345,6 +467,7 @@ object SettingsCatalog {
                 summary = "Which model the keep-awake request runs on. The cheapest one that counts.",
                 keywords = listOf("keep awake", "haiku", "model", "cheap", "cost"),
                 availability = keepAwakeOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.keep-awake-quiet",
@@ -352,6 +475,7 @@ object SettingsCatalog {
                 summary = "A span of the day when huginn spends nothing keeping a window open.",
                 keywords = listOf("keep awake", "quiet", "hours", "night", "overnight", "schedule", "pause"),
                 availability = keepAwakeOn,
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "usage.plan",
@@ -359,6 +483,7 @@ object SettingsCatalog {
                 summary = "Where the live percentages for every saved login are shown.",
                 keywords = listOf("plan", "percent", "limit", "week", "session", "status", "numbers"),
                 availability = headroomOn,
+                scope = SettingScope.SERVER,
             ),
         ),
     )
@@ -377,6 +502,7 @@ object SettingsCatalog {
                 keywords = listOf("explain", "execute", "ask", "quote", "selection", "composer", "templates", "wording"),
                 availability = { it.quickActions },
                 inventory = listOf(42, 43, 44, 45, 46),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "chats.soft-end",
@@ -385,6 +511,7 @@ object SettingsCatalog {
                 keywords = listOf("soft end", "wrap up", "finish", "phrase", "end"),
                 // The same `/v1/status` shelf the templates come from.
                 availability = { it.quickActions },
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "chats.apps",
@@ -392,12 +519,14 @@ object SettingsCatalog {
                 summary = "The pages huginn hosts itself, whether each one answers, and whether " +
                     "your devices can reach it.",
                 keywords = listOf("app", "apps", "console", "consoles", "dashboard", "page", "link", "retrofit"),
-                // The same `/v1/status` shelf its siblings use — the probe carries
-                // no apps fact — and the shells additionally hide their own entry
-                // when neither `/v1/apps` nor `/v1/consoles` answers. `console`
-                // stays in the keywords: this row is where somebody searching the
-                // old word has to land.
-                availability = { it.quickActions },
+                // ⚠ ITS OWN FACT, NOT THE STATUS SHELF (2026-10-23 audit). It was
+                // gated on `quickActions` while the shells drew it only when
+                // `/v1/apps` or `/v1/consoles` answered — and the desktop did not
+                // draw it at all, so a search for "apps" opened Chats & sessions
+                // onto nothing. `console` stays in the keywords: this row is where
+                // somebody searching the old word has to land.
+                availability = { it.apps },
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "chats.projects",
@@ -405,10 +534,11 @@ object SettingsCatalog {
                 summary = "Clusters of sessions with roles: the tree, each project's dashboard, and a lead's proposals.",
                 keywords = listOf("project", "projects", "cluster", "members", "lead", "spawn", "proposal", "manifest"),
                 // Reached from the Sessions screen too; the row exists so search finds it.
-                // Gated like its siblings on the daemon having answered `/v1/status`
-                // (the probe carries no projects fact yet); the shells additionally
-                // hide their own entry when `/v1/projects` is absent.
-                availability = { it.quickActions },
+                // Gated on `/v1/projects` itself, which is what both shells draw
+                // the row under (the desktop did not draw it at all until the
+                // 2026-10-23 audit).
+                availability = { it.projects },
+                scope = SettingScope.SERVER,
             ),
         ),
     )
@@ -435,6 +565,7 @@ object SettingsCatalog {
                 surface = Surface.PHONE,
                 availability = { it.alerts },
                 inventory = listOf(8),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "notify.host-alerts-mode",
@@ -442,8 +573,11 @@ object SettingsCatalog {
                 summary = "Holds huginn's own messages back while this app is awake and watching.",
                 keywords = listOf("alerts", "telegram", "fallback", "quiet", "mode"),
                 surface = Surface.PHONE,
-                availability = { it.alerts },
+                // Drawn only while huginn's alerts are on AND it has a relay to hold
+                // back: with either missing there is nothing for this to modify.
+                availability = { it.alerts && it.alertsRelayOn },
                 inventory = listOf(9),
+                scope = SettingScope.SERVER,
             ),
             // ⚠ The four rows below are THIS PHONE's own — its watch, its doze
             // exemption, its delivery witnesses, Android's permission. None of
@@ -452,6 +586,11 @@ object SettingsCatalog {
             // old or unreachable daemon hide the switch that decides whether the
             // phone notifies at all. Only the two host-alert rows above are the
             // host's to have or lack.
+            //
+            // The three under the switch are gated on the SWITCH (2026-10-23
+            // audit): the page stops after it while it is off, so a search for
+            // "battery" or "permission" opened Notifications onto a page without
+            // them. Still this phone's own fact, still never the host's.
             SettingsItem(
                 id = "notify.device-watch",
                 title = "Tell me when a session needs me",
@@ -460,6 +599,7 @@ object SettingsCatalog {
                 surface = Surface.PHONE,
                 availability = { true },
                 inventory = listOf(19, 20),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "notify.background",
@@ -467,8 +607,9 @@ object SettingsCatalog {
                 summary = "Lets Android keep this app's watch awake while the screen is off.",
                 keywords = listOf("doze", "battery", "background", "android", "exemption"),
                 surface = Surface.PHONE,
-                availability = { true },
+                availability = { it.deviceNotify },
                 inventory = listOf(21),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "notify.delivery",
@@ -476,8 +617,9 @@ object SettingsCatalog {
                 summary = "Which route the last notifications actually took, and when each was last heard from.",
                 keywords = listOf("push", "fcm", "delivery", "witness", "cadence", "diagnostics"),
                 surface = Surface.PHONE,
-                availability = { true },
+                availability = { it.deviceNotify && it.pushKnown },
                 inventory = listOf(22, 23),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "notify.permission",
@@ -485,8 +627,9 @@ object SettingsCatalog {
                 summary = "Whether Android lets this app show notifications at all.",
                 keywords = listOf("permission", "allow", "android", "system", "blocked"),
                 surface = Surface.PHONE,
-                availability = { true },
+                availability = { it.deviceNotify },
                 inventory = listOf(24, 25),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "notify.path",
@@ -502,6 +645,7 @@ object SettingsCatalog {
                 // Notifications drawer appear against a dead daemon, which is the
                 // one thing the five local drawers are carefully NOT.
                 availability = { it.alerts },
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "notify.claim-route",
@@ -511,11 +655,21 @@ object SettingsCatalog {
                 surface = Surface.DESKTOP,
                 availability = { it.alerts },
                 inventory = listOf(47),
+                scope = SettingScope.DEVICE,
             ),
         ),
     )
 
     // --------------------------------------------------------------- devices
+
+    /**
+     * ⚠ THE ROWS UNDER "AVAILABLE TO HUGINN" (2026-10-23 audit). The page draws
+     * what this machine may do, the act-while-locked switch and the path to
+     * claude only while the machine is on, and the Work folder only in Work —
+     * the catalog offered all four whenever there was a host, so search opened
+     * Devices onto a page without them.
+     */
+    private val deviceOn: (SettingsProbe) -> Boolean = { it.enrolable && it.deviceOn }
 
     /**
      * Split by OWNERSHIP, not by screen. This drawer holds only THIS machine —
@@ -537,6 +691,7 @@ object SettingsCatalog {
                 surface = Surface.DESKTOP,
                 availability = { it.enrolable },
                 inventory = listOf(48),
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.scope",
@@ -544,8 +699,9 @@ object SettingsCatalog {
                 summary = "Whether huginn may only read here, may change and run things, or owns the machine.",
                 keywords = listOf("scope", "look", "work", "own", "permission", "lock"),
                 surface = Surface.DESKTOP,
-                availability = { it.enrolable },
+                availability = deviceOn,
                 inventory = listOf(49),
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.act-while-locked",
@@ -563,7 +719,8 @@ object SettingsCatalog {
                 // The same gate as the scope it modifies, and no narrower: both
                 // describe what this computer will let a remote request do to
                 // it, so they appear and disappear together.
-                availability = { it.enrolable },
+                availability = deviceOn,
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.work-folder",
@@ -571,8 +728,9 @@ object SettingsCatalog {
                 summary = "Where a run starts on this machine.",
                 keywords = listOf("folder", "directory", "path", "root", "work", "cwd"),
                 surface = Surface.DESKTOP,
-                availability = { it.enrolable },
+                availability = { deviceOn(it) && it.workScope },
                 inventory = listOf(50),
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.claude-path",
@@ -580,8 +738,9 @@ object SettingsCatalog {
                 summary = "Which claude binary this machine runs, when PATH is not the right answer.",
                 keywords = listOf("claude", "binary", "path", "executable", "cli"),
                 surface = Surface.DESKTOP,
-                availability = { it.enrolable },
+                availability = deviceOn,
                 inventory = listOf(51),
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.local-ai",
@@ -597,6 +756,7 @@ object SettingsCatalog {
                 surface = Surface.DESKTOP,
                 availability = { it.localServe },
                 inventory = listOf(52, 53, 54, 55, 56, 57),
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "devices.fleet",
@@ -605,6 +765,7 @@ object SettingsCatalog {
                 keywords = listOf("fleet", "machines", "devices", "manage", "ask", "act", "forget"),
                 availability = { it.enrolable },
                 inventory = listOf(10),
+                scope = SettingScope.SERVER,
             ),
         ),
     )
@@ -629,6 +790,7 @@ object SettingsCatalog {
                 surface = Surface.PHONE,
                 availability = { it.appLockAvailable },
                 inventory = listOf(11),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "privacy.lock-now",
@@ -636,8 +798,9 @@ object SettingsCatalog {
                 summary = "Locks huginn immediately instead of waiting for the next time it is opened.",
                 keywords = listOf("lock", "now", "immediately"),
                 surface = Surface.PHONE,
-                availability = { it.appLockAvailable },
+                availability = { it.appLockAvailable && it.appLockOn },
                 inventory = listOf(12),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "privacy.remove-this-computer",
@@ -646,12 +809,16 @@ object SettingsCatalog {
                 keywords = listOf("remove", "unenrol", "unenroll", "revoke", "forget", "access", "uninstall"),
                 surface = Surface.DESKTOP,
                 inventory = listOf(61),
+                scope = SettingScope.DEVICE,
+                scopeViaCore = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "privacy.token",
                 title = "What the token is",
                 summary = "Where the bearer is kept on this device and what holding it lets somebody do.",
                 keywords = listOf("token", "bearer", "secret", "stored", "keystore", "risk"),
+                scope = SettingScope.DEVICE,
+                scopeViaCore = SettingScope.CORE,
             ),
         ),
     )
@@ -676,6 +843,7 @@ object SettingsCatalog {
                 summary = "Whether closing the window leaves huginn running in the tray.",
                 keywords = listOf("tray", "close", "minimise", "minimize", "background", "quit"),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
             // One icon (owner, 2026-10-17): huginn core's, which "Hide this icon"
             // takes away. This is the way to bring it back, and to hide it.
@@ -685,6 +853,10 @@ object SettingsCatalog {
                 summary = "Whether huginn core's icon shows in the notification area.",
                 keywords = listOf("tray", "icon", "notification area", "system tray", "hide", "show", "bring back"),
                 surface = Surface.DESKTOP,
+                // The page draws it only where huginn core is installed; elsewhere
+                // this app's own icon follows Close to tray.
+                availability = { it.coreInstalled },
+                scope = SettingScope.CORE,
             ),
             SettingsItem(
                 id = "appearance.terminal-text-size",
@@ -692,6 +864,7 @@ object SettingsCatalog {
                 summary = "How large the terminal sets its text.",
                 keywords = listOf("font", "text", "size", "zoom", "terminal", "scale"),
                 surface = Surface.PHONE,
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "appearance.shortcuts",
@@ -699,6 +872,7 @@ object SettingsCatalog {
                 summary = "Every key this window answers to.",
                 keywords = listOf("keyboard", "shortcuts", "keys", "f1", "hotkey"),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
             // The single most-expected missing setting for an always-on tray
             // app, and it was missing everywhere: the recon grep over the whole
@@ -713,6 +887,7 @@ object SettingsCatalog {
                     "run at startup", "shortcut",
                 ),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
         ),
     )
@@ -731,6 +906,7 @@ object SettingsCatalog {
                 keywords = listOf("update", "upgrade", "version", "download", "install", "release"),
                 availability = { it.selfUpdate },
                 inventory = listOf(26, 27, 28, 58, 59),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "updates.copy-diagnostics",
@@ -739,6 +915,7 @@ object SettingsCatalog {
                 keywords = listOf("diagnostics", "report", "copy", "log", "support", "paste", "debug"),
                 availability = { it.diagnostics },
                 inventory = listOf(60),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "updates.log-path",
@@ -746,6 +923,7 @@ object SettingsCatalog {
                 summary = "Where this client writes its own log.",
                 keywords = listOf("log", "file", "path", "debug"),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "updates.install-path",
@@ -753,6 +931,7 @@ object SettingsCatalog {
                 summary = "Where this copy lives and whether it is a packaged build or running from source.",
                 keywords = listOf("install", "path", "packaged", "source", "build"),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "updates.client-id",
@@ -760,13 +939,25 @@ object SettingsCatalog {
                 summary = "The identity this copy enrols and claims notifications under.",
                 keywords = listOf("client", "id", "identity", "enrolment", "enrollment"),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.DEVICE,
             ),
+            // ⚠ WAS "CLI SYNC" (`updates.cli-sync`, aliased below): the launch-time
+            // sync of the huginn command, retired when huginn core took the
+            // command over. Search kept offering it onto a page that had not drawn
+            // it since (2026-10-23 audit). The core is what answers the same
+            // question now, and the one row that says so.
             SettingsItem(
-                id = "updates.cli-sync",
-                title = "CLI sync",
-                summary = "What the launch-time sync did to the huginn command on this machine.",
-                keywords = listOf("cli", "sync", "command", "huginn", "terminal"),
+                id = "updates.core",
+                title = "huginn core",
+                summary = "The background service on this computer that holds the link to huginn and runs " +
+                    "its work, which the huginn command uses too: its version, and whether it starts at boot.",
+                keywords = listOf(
+                    // Not "daemon": in this product that word is huginn's own appd.
+                    "core", "cli", "sync", "command", "huginn", "terminal", "service", "boot", "background",
+                    "version",
+                ),
                 surface = Surface.DESKTOP,
+                scope = SettingScope.CORE,
             ),
         ),
     )
@@ -783,24 +974,28 @@ object SettingsCatalog {
                 title = "Version",
                 summary = "Which build of this client is installed.",
                 keywords = listOf("version", "build", "release", "number"),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "about.host-version",
                 title = "Host version",
                 summary = "Which version of the huginn daemon is answering.",
                 keywords = listOf("appd", "daemon", "server", "host", "version"),
+                scope = SettingScope.SERVER,
             ),
             SettingsItem(
                 id = "about.repo",
                 title = "Source",
                 summary = "Where this app's source and releases live.",
                 keywords = listOf("repo", "github", "source", "open source", "licence", "license"),
+                scope = SettingScope.DEVICE,
             ),
             SettingsItem(
                 id = "about.what-this-is",
                 title = "What huginn is",
                 summary = "A front end for Claude Code sessions running on your own machine.",
                 keywords = listOf("what", "about", "help", "claude", "sessions"),
+                scope = SettingScope.DEVICE,
             ),
         ),
     )
@@ -826,9 +1021,13 @@ object SettingsCatalog {
      * promise is kept when two settings become one: `host.base-url` was its own
      * field until routes made the address a property of a pin, and a search hit
      * or a saved destination carrying that id has to keep arriving somewhere
-     * real rather than onto a blank page.
+     * real rather than onto a blank page. `updates.cli-sync` named the CLI
+     * sync that huginn core replaced, so it arrives at the core's row.
      */
-    val aliases: Map<String, String> = mapOf("host.base-url" to "host.route")
+    val aliases: Map<String, String> = mapOf(
+        "host.base-url" to "host.route",
+        "updates.cli-sync" to "updates.core",
+    )
 
     /** The id that actually names a row today — see [aliases]. */
     fun resolveId(itemId: String): String = aliases[itemId] ?: itemId

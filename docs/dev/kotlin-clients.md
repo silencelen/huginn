@@ -228,6 +228,23 @@ error, info. The daemon's wire words (`running`, `attention`, `idle`) are mapped
 failure. Every colour comes from the brand tokens; read
 [`assets/brand/BRAND.md`](../../assets/brand/BRAND.md) before changing any of them.
 
+## Settings: one catalog
+
+Every setting either app shows is an item in `:core`'s `settings/SettingsCatalog.kt`: its id, its
+words, the shell that draws it, when it exists, and where it is kept. Search, the category list and
+the arrival mark come from the catalog; the pages are written by hand in each shell.
+
+- **Add the item first, then the row.** A row's `id` is its catalog id and its testTag. A row with
+  no item is invisible to search.
+- **A row drawn only under a condition needs that condition in `SettingsProbe`,** read from the
+  same fact the page reads. Otherwise search offers the row onto a page that hides it.
+- **Every item says where it is kept** (`SettingScope`, no default): `SERVER` on huginn, so every
+  app sees it; `CORE` by huginn core on this computer, desktop only; `DEVICE` by this app on this
+  device. The desktop pages head each run of rows with `ScopeOf(id)`, which reads it.
+- `SettingsPagesTest` in `:app-desktop` types every row's title into the real search, opens the
+  hit, and checks that the page draws the row under the right heading. `SettingsPhoneTest` holds
+  the phone's conditions; its pages cannot be rendered on the JVM.
+
 ## Compose rules
 
 Each of these fails silently: nothing warns, and the screen is wrong.
