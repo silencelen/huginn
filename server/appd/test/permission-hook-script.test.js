@@ -1,6 +1,7 @@
 'use strict';
 // hooks/huginn-permission-hook, run for real against a private tmux pane: the
-// guards that keep it from ever holding a headless run, and the hand-off.
+// guards that keep it from ever holding a headless run, what it records, and the
+// hand-off. Claude Code 2.1.306 payload shapes.
 require('./tmux-cleanup'); // its scratch tmux server and socket go with the process
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -35,7 +36,7 @@ function runHook(event, env = {}, onSpawn = null, script = HOOK) {
     const sockPath = path.join(process.env.TMUX_TMPDIR || '/tmp', `tmux-${process.getuid()}`, SOCK);
     const child = spawn(script, [], {
       env: {
-        PATH: process.env.PATH, HUGINN_CLAUDE_STATE_DIR: stateDir, HUGINN_PERM_POLL: '0.05',
+        PATH: process.env.PATH, HUGINN_CLAUDE_STATE_DIR: stateDir, HUGINN_PERM_POLL: '0.05', HUGINN_PERM_WAIT: '20',
         TMUX: `${sockPath},0,0`, TMUX_PANE: pane, ...env,
       },
     });
@@ -47,57 +48,83 @@ function runHook(event, env = {}, onSpawn = null, script = HOOK) {
   });
 }
 const ev = (over = {}) => ({ hook_event_name: 'PermissionRequest', session_id: 'sid-top', tool_name: 'Bash',
-  tool_input: { command: 'touch x' }, ...over });
-const permDir = () => path.join(stateDir, '.perm', SESSION);
+  tool_input: { command: 'touch x' }, permission_mode: 'default', cwd: '/srv/x', ...over });
+const permDir = (sess = SESSION, dir = stateDir) => path.join(dir, '.perm', sess);
+const requestFiles = (sess = SESSION, dir = stateDir) => {
+  try { return fs.readdirSync(permDir(sess, dir)).filter((f) => f.endsWith('.json')); } catch { return []; }
+};
+/** Waits for the hook's request file, then answers it with `decision` (or runs `act`). */
+function whenParked(act, sess = SESSION, dir = null) {
+  return () => {
+    const iv = setInterval(() => {
+      const d = dir || stateDir;
+      const files = requestFiles(sess, d);
+      if (!files.length) return;
+      clearInterval(iv);
+      const req = JSON.parse(fs.readFileSync(path.join(permDir(sess, d), files[0]), 'utf8'));
+      act(req, path.join(permDir(sess, d), `${req.id}.ans`));
+    }, 30);
+  };
+}
+const answerWith = (decision) => whenParked((req, ans) => {
+  fs.writeFileSync(`${ans}.tmp`, JSON.stringify(decision)); fs.renameSync(`${ans}.tmp`, ans);
+});
+const ALLOW = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
 
-test('no TMUX_PANE (cron, headless -p): returns at once, prints nothing, writes nothing', async () => {
-  const r = await runHook(ev(), { TMUX_PANE: '' });
-  assert.equal(r.code, 0); assert.equal(r.out, ''); assert.ok(r.ms < 2000);
-  assert.equal(fs.existsSync(permDir()), false);
+test('no tmux and no job (cron, headless -p): returns at once, prints nothing, writes nothing', async () => {
+  const r = await runHook(ev(), { TMUX: '', TMUX_PANE: '' });
+  assert.equal(r.code, 0); assert.equal(r.out, ''); assert.ok(r.ms < 3000);
+  assert.deepEqual(requestFiles(), []);
 });
 
 test('a session id that is not the pane\'s top-level claude (a nested claude -p): returns at once', async () => {
   const r = await runHook(ev({ session_id: 'sid-nested' }));
-  assert.equal(r.out, ''); assert.ok(r.ms < 2000);
-  assert.equal(fs.existsSync(permDir()), false);
+  assert.equal(r.out, ''); assert.ok(r.ms < 3000);
+  assert.deepEqual(requestFiles(), []);
 });
 
-test('ExitPlanMode: returns at once (the CLI ignores a hook allow there)', async () => {
-  const r = await runHook(ev({ tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } }));
-  assert.equal(r.out, ''); assert.ok(r.ms < 2000);
+test('EVERY tool parks — Bash, Edit, an MCP tool, AskUserQuestion, ExitPlanMode — and the record carries what the registry shows', async () => {
+  const seen = [];
+  const cases = [
+    ev({ permission_suggestions: [{ type: 'addDirectories', directories: ['/srv/x'], destination: 'session' }] }),
+    ev({ tool_name: 'Edit', tool_input: { file_path: '/srv/x/a.txt', old_string: 'a', new_string: 'b' }, agent_id: 'agent-7', agent_type: 'Explore' }),
+    ev({ tool_name: 'mcp__grafana__query', tool_input: { q: 'up' }, mcp_server: { name: 'grafana', source: 'user' } }),
+    ev({ tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] } }),
+    ev({ tool_name: 'ExitPlanMode', tool_input: { plan: '# P', planFilePath: '/home/alex/.claude/plans/p.md' } }),
+  ];
+  for (const c of cases) {
+    const r = await runHook(c, {}, whenParked((req, ans) => {
+      seen.push(req);
+      fs.writeFileSync(`${ans}.tmp`, JSON.stringify(ALLOW)); fs.renameSync(`${ans}.tmp`, ans);
+    }));
+    assert.equal(r.code, 0);
+    assert.deepEqual(JSON.parse(r.out), ALLOW, c.tool_name);
+  }
+  assert.deepEqual(seen.map((r) => r.tool), ['Bash', 'Edit', 'mcp__grafana__query', 'AskUserQuestion', 'ExitPlanMode']);
+  for (const r of seen) {
+    assert.equal(r.v, 1); assert.equal(r.sessionId, 'sid-top'); assert.equal(r.pane, true);
+    assert.equal(r.permissionMode, 'default'); assert.equal(r.cwd, '/srv/x');
+    assert.ok(Number.isInteger(r.pid) && Math.abs(r.ts - Date.now()) < 60_000);
+  }
+  assert.deepEqual(seen[0].suggestions, [{ type: 'addDirectories', directories: ['/srv/x'], destination: 'session' }]);
+  assert.equal(seen[1].suggestions, null);
+  assert.equal(seen[1].agentId, 'agent-7'); assert.equal(seen[1].agentType, 'Explore');
+  assert.equal(seen[0].agentId, null);
+  assert.deepEqual(seen[2].mcpServer, { name: 'grafana', source: 'user' });
+  assert.deepEqual(seen[4].input, { plan: '# P', planFilePath: '/home/alex/.claude/plans/p.md' });
+  assert.deepEqual(fs.readdirSync(permDir()), [], 'requests and claimed answers removed');
 });
 
-test('the hand-off: writes the request, prints the decision appd leaves, cleans up', async () => {
-  const decision = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } };
-  const r = await runHook(ev(), { HUGINN_PERM_WAIT: '20' }, () => {
-    const iv = setInterval(() => {
-      let files = [];
-      try { files = fs.readdirSync(permDir()).filter((f) => f.endsWith('.json')); } catch { return; }
-      if (!files.length) return;
-      clearInterval(iv);
-      const req = JSON.parse(fs.readFileSync(path.join(permDir(), files[0]), 'utf8'));
-      assert.equal(req.v, 1); assert.equal(req.tool, 'Bash'); assert.equal(req.sessionId, 'sid-top');
-      assert.deepEqual(req.input, { command: 'touch x' });
-      const ans = path.join(permDir(), `${req.id}.ans`);
-      fs.writeFileSync(`${ans}.tmp`, JSON.stringify(decision)); fs.renameSync(`${ans}.tmp`, ans);
-    }, 30);
-  });
-  assert.equal(r.code, 0);
-  assert.deepEqual(JSON.parse(r.out), decision);
-  assert.deepEqual(fs.readdirSync(permDir()), [], 'request and claimed answer removed');
+test('a deny with a message is printed as given (ExitPlanMode feedback rides this; measured honoured on 2.1.306)', async () => {
+  const deny = { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'add a rollback step', interrupt: false } } };
+  const r = await runHook(ev({ tool_name: 'ExitPlanMode', tool_input: { plan: 'p' } }), {}, answerWith(deny));
+  assert.deepEqual(JSON.parse(r.out), deny);
 });
 
 test('a malformed answer is claimed but NOT printed (the dialog stays for the keys)', async () => {
-  const r = await runHook(ev(), { HUGINN_PERM_WAIT: '20' }, () => {
-    const iv = setInterval(() => {
-      let files = [];
-      try { files = fs.readdirSync(permDir()).filter((f) => f.endsWith('.json')); } catch { return; }
-      if (!files.length) return;
-      clearInterval(iv);
-      const id = files[0].slice(0, -5);
-      fs.writeFileSync(path.join(permDir(), `${id}.ans`), '{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}');
-    }, 30);
-  });
+  const r = await runHook(ev(), {}, whenParked((req, ans) => {
+    fs.writeFileSync(ans, '{"hookSpecificOutput":{"decision":{"behavior":"allow"}}}');
+  }));
   assert.equal(r.out, '');
 });
 
@@ -105,6 +132,45 @@ test('nobody answers: leaves at its own deadline with nothing printed and nothin
   const r = await runHook(ev(), { HUGINN_PERM_WAIT: '1' });
   assert.equal(r.code, 0); assert.equal(r.out, '');
   assert.deepEqual(fs.readdirSync(permDir()), []);
+});
+
+test('its request file dropped (the title hook saw the tool\'s PostToolUse): the wait ends at once', async () => {
+  const r = await runHook(ev(), { HUGINN_PERM_WAIT: '20' }, whenParked((req) => {
+    fs.unlinkSync(path.join(permDir(), `${req.id}.json`));
+  }));
+  assert.equal(r.code, 0); assert.equal(r.out, '');
+  assert.ok(r.ms < 5000, `left within a poll, not at the deadline (${r.ms} ms)`);
+});
+
+test('a background job (no pane anywhere above it, CLAUDE_JOB_DIR set) parks under the session whose state file names its id, pane: false', async () => {
+  // Claude Code's bg-pty-host hands a job's hooks no TMUX/TMUX_PANE and no pane
+  // sits above them. HUGINN_PERM_FORCE_BG stands in for "no ancestor has them"
+  // (a subreaper hands this test's orphans back to a pane of its own).
+  const bgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'permhook-bg-'));
+  fs.writeFileSync(path.join(bgDir, 'bgsess'), JSON.stringify({ state: 'running', sessionId: 'sid-bg', job: 'job1' }));
+  fs.writeFileSync(path.join(bgDir, 'other'), JSON.stringify({ state: 'idle', sessionId: 'sid-other' }));
+  const env = { TMUX: '', TMUX_PANE: '', CLAUDE_JOB_DIR: '/nonexistent/jobs/job1/', HUGINN_PERM_FORCE_BG: '1', HUGINN_CLAUDE_STATE_DIR: bgDir };
+  let seen = null;
+  const r = await runHook(ev({ session_id: 'sid-bg' }), env, whenParked((req, ans) => {
+    seen = req;
+    fs.writeFileSync(`${ans}.tmp`, JSON.stringify(ALLOW)); fs.renameSync(`${ans}.tmp`, ans);
+  }, 'bgsess', bgDir));
+  assert.equal(r.code, 0);
+  assert.ok(seen, 'parked under the job\'s session');
+  assert.equal(seen.pane, false, 'no pane backs a job\'s request');
+  assert.equal(seen.sessionId, 'sid-bg');
+  assert.deepEqual(JSON.parse(r.out), ALLOW, 'the job\'s prompt was answered through the hook');
+  assert.equal(fs.existsSync(path.join(bgDir, '.perm', 'other')), false);
+  fs.rmSync(bgDir, { recursive: true, force: true });
+});
+
+test('a background job whose session id no state file names: returns at once', async () => {
+  const bgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'permhook-bg-'));
+  fs.writeFileSync(path.join(bgDir, 'other'), JSON.stringify({ state: 'idle', sessionId: 'sid-other' }));
+  const r = await runHook(ev({ session_id: 'sid-unknown' }), { TMUX: '', TMUX_PANE: '', CLAUDE_JOB_DIR: '/nonexistent/jobs/j2/', HUGINN_CLAUDE_STATE_DIR: bgDir });
+  assert.equal(r.out, ''); assert.ok(r.ms < 3000);
+  assert.equal(fs.existsSync(path.join(bgDir, '.perm')), false);
+  fs.rmSync(bgDir, { recursive: true, force: true });
 });
 
 // ---- hooks/huginn-modelswitch-hook (PostModelSwitch recorder) ---------------

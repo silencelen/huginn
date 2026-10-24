@@ -1,30 +1,39 @@
 #!/usr/bin/env bash
-# huginn-permission-hook — lets a tap in the huginn app ANSWER a Claude Code prompt
-# through the CLI's own PermissionRequest hook instead of keystrokes at the pane.
+# huginn-permission-hook — parks EVERY Claude Code tool prompt where huginn-appd can
+# answer it through the CLI's own PermissionRequest hook instead of keystrokes.
 #
 # Installed by install-hooks.js as `PermissionRequest` matcher "*", timeout 960.
-# For each tool prompt (AskUserQuestion included) it writes the request to
+# For each prompt (AskUserQuestion, ExitPlanMode, Bash, Edit, MCP tools — all of
+# them) it writes the request to
 #   $STATE_DIR/.perm/<tmux session>/<id>.json
-# and waits. huginn-appd's /answer (lib/permhook.js) matches a tap against the
-# dialog on screen and, when it is sure, writes <id>.ans; this script claims it by
-# renaming it to <id>.taken and prints it — the CLI applies the decision and closes
-# its own dialog. Anything else (no answer, appd down, a choice appd routes to the
-# keys) and this exits 0 having printed nothing: the dialog is still there and is
-# answered exactly as before. The exit code is ALWAYS 0 and we never print anything
-# but a well-formed decision, so this hook can delay a prompt but never block or
-# answer it on its own.
+# and waits. The daemon's request registry (lib/questions.js) lists the file as a
+# live question while this process is alive; a tap in an app writes <id>.ans and
+# this script claims it by renaming it to <id>.taken and prints it — the CLI
+# applies the decision and closes its own dialog. Anything else (no answer, appd
+# down, a choice appd routes to the keys) and this exits 0 having printed nothing:
+# the dialog is still there and is answered exactly as before. The exit code is
+# ALWAYS 0 and we never print anything but a well-formed decision, so this hook
+# can delay a prompt but never block or answer it on its own.
 #
-# ⚠ MEASURED (Claude Code 2.1.296, 2026-10-10), and why the guards below exist:
+# ⚠ MEASURED (Claude Code 2.1.306, 2026-10-23), and why the guards below exist:
 #   * A PermissionRequest hook fires in headless `claude -p` runs TOO, and the run
 #     WAITS on it. So we act only for the top-level interactive claude of a huginn
 #     tmux pane — the one whose session id huginn-claude-title recorded in
-#     $STATE_DIR/<session>. Cron runs (no TMUX_PANE), nested `claude -p` children
-#     (a different session id) and everything else return at once.
-#   * Answering the dialog at the keyboard does NOT stop this hook; it lingers until
-#     its own deadline. appd therefore treats a request file as "a hook is alive",
-#     never as "this prompt is on screen", and matches by content.
+#     $STATE_DIR/<session> — or for a Claude Code background job whose session id
+#     a state file names. Cron runs (no pane, no job), nested `claude -p`
+#     children (a different session id) and everything else return at once.
+#   * Answering the dialog at the keyboard does NOT stop this hook; it lingers
+#     until its own deadline. The registry therefore treats a request file as "a
+#     hook is alive" and lets huginn-claude-title drop the file on the tool's
+#     PostToolUse / PostToolUseFailure, on a new prompt and on Stop.
+#   * ExitPlanMode: an `allow` is accepted and IGNORED (the dialog stays), but a
+#     `deny` with a `message` IS honoured — the plan comes back with the message
+#     as feedback. Approval stays on the keys; feedback can ride this hook.
 #   * On the CLI's `timeout` the hook is SIGKILLed (no trap runs), so we leave 60 s
 #     early and clean up ourselves.
+#   * Claude Code 2.1.300+ can host a session in a background PTY that drops TMUX
+#     and TMUX_PANE from the hook's environment; a `claude --bg` job has no pane
+#     at all. Both are recovered the way huginn-claude-title does it.
 set -u
 umask 077
 
@@ -33,19 +42,76 @@ WAIT="${HUGINN_PERM_WAIT:-900}"      # installer timeout is 960
 POLL="${HUGINN_PERM_POLL:-0.25}"
 
 in=$(cat) || exit 0
-[ -n "${TMUX_PANE:-}" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
-sess=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null) || exit 0
-case "$sess" in ''|.*|*[!A-Za-z0-9_.-]*) exit 0 ;; esac
+command -v tmux >/dev/null 2>&1 || exit 0
 
 sid=$(printf '%s' "$in" | jq -r '.session_id // empty' 2>/dev/null)
 tool=$(printf '%s' "$in" | jq -r '.tool_name // empty' 2>/dev/null)
 [ -n "$sid" ] && [ -n "$tool" ] || exit 0
-# Only the two prompts appd can bind a tap to EXACTLY (lib/permhook.js): a Bash
-# command and a single AskUserQuestion. Everything else — plan approval (the CLI
-# ignores a hook allow there, measured), file and MCP tools — returns at once and
-# stays on the keystroke path, with no process left waiting.
-case "$tool" in Bash|AskUserQuestion) ;; *) exit 0 ;; esac
+
+# --- which tmux session is this prompt's? -----------------------------------
+# The same recovery huginn-claude-title performs (see its header): a hook whose
+# environment lost TMUX/TMUX_PANE takes them from the nearest ancestor that has
+# them, provided that pane's own process is one of our ancestors (fail closed);
+# a background job, which has no pane anywhere above it, is known by
+# CLAUDE_JOB_DIR (handed to its hooks) and finds its session through the ONE
+# state file that names its session id.
+_is_ancestor() {   # $1 = pid
+  local pid="$PPID" hops=0
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 24 ]; do
+    [ "$pid" = "$1" ] && return 0
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_ancestor_tmux() {
+  local pid="$PPID" hops=0 env t p panepid
+  while [ "${pid:-0}" -gt 1 ] && [ "$hops" -lt 16 ]; do
+    env="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null)"
+    t="$(printf '%s\n' "$env" | sed -n 's/^TMUX=//p' | head -1)"
+    p="$(printf '%s\n' "$env" | sed -n 's/^TMUX_PANE=//p' | head -1)"
+    if [ -n "$t" ] && [ -n "$p" ]; then
+      panepid="$(TMUX="$t" tmux display-message -p -t "$p" '#{pane_pid}' 2>/dev/null)" || return 1
+      [ -n "$panepid" ] && _is_ancestor "$panepid" || return 1
+      TMUX="$t"; TMUX_PANE="$p"; export TMUX TMUX_PANE
+      return 0
+    fi
+    pid="$(awk '/^PPid:/{print $2}' "/proc/$pid/status" 2>/dev/null)" || return 1
+    hops=$((hops + 1))
+  done
+  return 1
+}
+_bg_session() {   # the one state file naming $sid, else nothing
+  local f found='' n=0
+  for f in "$STATE_DIR"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in *.tmp) continue ;; esac
+    if jq -e --arg sid "$sid" 'type == "object" and .sessionId == $sid' "$f" >/dev/null 2>&1; then
+      found="${f##*/}"; n=$((n + 1))
+    fi
+  done
+  [ "$n" -eq 1 ] || return 1
+  printf '%s' "$found"
+}
+
+bg_job=
+# HUGINN_PERM_FORCE_BG=1 skips the ancestor walk, for a test that cannot be run
+# outside every tmux pane (a subreaper hands an orphan back to one).
+if [ -z "${TMUX:-}" ] || [ -z "${TMUX_PANE:-}" ]; then
+  if [ "${HUGINN_PERM_FORCE_BG:-}" = 1 ] || ! _ancestor_tmux; then
+    [ -n "${CLAUDE_JOB_DIR:-}" ] || [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ] || exit 0
+    bg_job=1
+  fi
+fi
+if [ -n "$bg_job" ]; then
+  sess=$(_bg_session) || exit 0
+else
+  sess=$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null) || exit 0
+fi
+case "$sess" in ''|.*|*[!A-Za-z0-9_.-]*) exit 0 ;; esac
+# Only the pane's TOP-LEVEL claude (its session id is the one in the state
+# file); a nested `claude -p` started by a Bash tool has a different one.
 own=$(jq -r '.sessionId // empty' "$STATE_DIR/$sess" 2>/dev/null)
 [ -n "$own" ] && [ "$own" = "$sid" ] || exit 0
 
@@ -54,8 +120,15 @@ mkdir -p "$dir" 2>/dev/null || exit 0
 id="$(date +%s%N)-$$"
 req="$dir/$id.json"
 trap 'rm -f "$req" "$dir/$id.taken" "$dir/.$id.tmp"' EXIT
-printf '%s' "$in" | jq -c --arg id "$id" --argjson pid "$$" \
-  '{v:1, id:$id, pid:$pid, sessionId:.session_id, tool:.tool_name, input:(.tool_input // {}), ts:(now*1000|floor)}' \
+# Everything the registry shows and answers with: the exact tool input, the
+# CLI's own permission suggestions (what "always allow" would write), which
+# agent asked, the mode, and whether a pane backs this request (`pane`: a
+# background job's does not, so its dialog can never be read off a screen).
+printf '%s' "$in" | jq -c --arg id "$id" --argjson pid "$$" --argjson pane "$([ -n "$bg_job" ] && echo false || echo true)" \
+  '{v:1, id:$id, pid:$pid, sessionId:.session_id, tool:.tool_name, input:(.tool_input // {}), ts:(now*1000|floor),
+    suggestions:(.permission_suggestions // null), mcpServer:(.mcp_server // null),
+    agentId:(.agent_id // null), agentType:(.agent_type // null),
+    permissionMode:(.permission_mode // null), cwd:(.cwd // null), pane:$pane}' \
   > "$dir/.$id.tmp" 2>/dev/null && mv "$dir/.$id.tmp" "$req" 2>/dev/null || exit 0
 
 deadline=$(( $(date +%s) + WAIT ))
@@ -69,6 +142,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     exit 0
   fi
+  # The request was dropped (the tool ran, the turn moved on, the title hook
+  # saw its PostToolUse): nothing can be answered any more, so stop waiting.
+  [ -e "$req" ] || exit 0
   sleep "$POLL"
 done
 exit 0
