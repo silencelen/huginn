@@ -17,7 +17,7 @@ func restrictFile(string) error { return nil }
 // the only interesting attack and it is declined rather than chmod'd.
 func secureSeedDir(dir string) error {
 	if fi, err := os.Lstat(dir); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
+		if isReparse(fi.Mode()) {
 			return foreignOwnerErr(dir, "a symlink")
 		}
 		if err := refuseForeignStat(dir, fi); err != nil {
@@ -41,7 +41,7 @@ func refuseForeignFile(path string) error {
 		}
 		return err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
+	if isReparse(fi.Mode()) {
 		return foreignOwnerErr(path, "a symlink")
 	}
 	return refuseForeignStat(path, fi)

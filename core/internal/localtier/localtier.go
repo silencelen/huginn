@@ -135,6 +135,17 @@ func foreignUID(ownerUID, selfUID int) bool {
 	return ownerUID != selfUID && ownerUID != 0
 }
 
+// isReparse reports whether a directory entry is a reparse point — a symlink or
+// an NTFS junction — and so a redirect to somewhere else, never a plain
+// directory a secret may be written into. Both bits matter: this toolchain
+// reports a junction's Lstat mode as os.ModeIrregular, not os.ModeSymlink, so a
+// check that looked only at ModeSymlink let a junction planted where our
+// directory should be pass straight through, and the token followed it out of
+// the protected tree. Pure.
+func isReparse(mode os.FileMode) bool {
+	return mode&(os.ModeSymlink|os.ModeIrregular) != 0
+}
+
 // foreignOwnerErr is the one sentence a refusal reads with, in one place.
 func foreignOwnerErr(path, owner string) error {
 	return fmt.Errorf("localtier: %s is owned by %s, not this user, SYSTEM or the Administrators — refusing to seed the appd token into a tree another account controls", path, owner)

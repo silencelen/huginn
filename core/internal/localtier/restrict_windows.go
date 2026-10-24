@@ -32,10 +32,29 @@ func selfSID() (string, error) {
 	return tu.User.Sid.String(), nil
 }
 
-// ownerSID reads the owner SID of an existing path; the error is os.IsNotExist
-// when the path is absent.
+// ownerSID reads the owner SID of an existing path WITHOUT following a reparse
+// point, so a junction planted where our directory should be is read as its own
+// (the attacker's) object, not as whatever it redirects to — the by-path
+// GetNamedSecurityInfo it replaced followed the link and read the target's
+// owner, which let a junction to a SYSTEM-owned folder look trusted. The handle
+// is opened with FILE_FLAG_OPEN_REPARSE_POINT (do not traverse the final link)
+// and FILE_FLAG_BACKUP_SEMANTICS (needed to open a directory handle);
+// READ_CONTROL is all the access an owner query needs. The error is
+// os.IsNotExist when the path is absent.
 func ownerSID(path string) (string, error) {
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(p, windows.READ_CONTROL,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	sd, err := windows.GetSecurityInfo(h, windows.SE_FILE_OBJECT,
 		windows.OWNER_SECURITY_INFORMATION)
 	if err != nil {
 		return "", err
@@ -77,10 +96,14 @@ func restrictFile(path string) error {
 
 // createDirSecure makes dir (and any missing parents) exist with the owner-only
 // protected DACL, so a child created in it is never Users-readable.
+//
+// ⚠ IT CREATES, IT NEVER ADOPTS. The caller reaches here only after an Lstat
+// said the path was absent, so a directory already present when CreateDirectory
+// runs is one that appeared in between — the race a local attacker runs to seat
+// a tree of their own exactly where a root-equivalent token is about to be
+// written. ERROR_ALREADY_EXISTS is therefore a failure, not a success: a
+// pre-existing directory is never silently taken over.
 func createDirSecure(dir, self string) error {
-	if _, err := os.Lstat(dir); err == nil {
-		return nil // already there
-	}
 	parent := filepath.Dir(dir)
 	if parent != dir {
 		if _, err := os.Lstat(parent); os.IsNotExist(err) {
@@ -99,7 +122,7 @@ func createDirSecure(dir, self string) error {
 	if err != nil {
 		return err
 	}
-	if err := windows.CreateDirectory(p, sa); err != nil && err != windows.ERROR_ALREADY_EXISTS {
+	if err := windows.CreateDirectory(p, sa); err != nil {
 		return fmt.Errorf("localtier: create %s: %w", dir, err)
 	}
 	return nil
@@ -123,7 +146,7 @@ func secureSeedDir(dir string) error {
 		return fmt.Errorf("localtier: inspect %s: %w", dir, serr)
 	}
 	// A reparse point (symlink/junction) where our dir should be is a redirect.
-	if fi.Mode()&os.ModeSymlink != 0 {
+	if isReparse(fi.Mode()) {
 		return foreignOwnerErr(dir, "a reparse point")
 	}
 	owner, oerr := ownerSID(dir)
@@ -148,7 +171,7 @@ func refuseForeignFile(path string) error {
 		}
 		return err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
+	if isReparse(fi.Mode()) {
 		return foreignOwnerErr(path, "a reparse point")
 	}
 	owner, oerr := ownerSID(path)

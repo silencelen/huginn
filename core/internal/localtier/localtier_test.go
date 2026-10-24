@@ -83,6 +83,27 @@ func TestSidTrusted(t *testing.T) {
 	}
 }
 
+// isReparse must catch an NTFS junction, which this toolchain reports as
+// ModeIrregular rather than ModeSymlink — the case the old symlink-only check
+// waved through, letting a junction redirect the appd token out of the tree.
+func TestIsReparse(t *testing.T) {
+	if !isReparse(os.ModeSymlink) {
+		t.Error("a symlink is a reparse point")
+	}
+	if !isReparse(os.ModeIrregular) {
+		t.Error("an irregular entry (an NTFS junction) is a reparse point")
+	}
+	if !isReparse(os.ModeIrregular | os.ModeDir) {
+		t.Error("a junction can carry the directory bit too")
+	}
+	if isReparse(os.ModeDir) {
+		t.Error("a plain directory is not a reparse point")
+	}
+	if isReparse(0) {
+		t.Error("a plain file is not a reparse point")
+	}
+}
+
 // foreignUID is the POSIX counterpart: anyone but the current user, bar root.
 func TestForeignUID(t *testing.T) {
 	const self = 1000
