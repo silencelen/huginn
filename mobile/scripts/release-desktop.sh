@@ -527,6 +527,15 @@ cat > "$DEB_TMP/hygiene.sh" <<'HYGIENE_EOF'
 # a symlink anywhere below the home is left alone, and the rm's run AS the
 # home's owner (setpriv, util-linux): what that account could not delete
 # itself, this does not delete either. Root's own home is root's.
+#
+# ⚠ AND WHAT RUNS AS AN ACCOUNT TAKES NOTHING OF ROOT'S WITH IT. That account
+# can trace any process of its own, and dpkg runs this from the operator's
+# terminal: a command left holding that terminal would take keystrokes pushed
+# into it, for the operator's shell to run once the purge is done, and root's
+# environment would be readable in /proc. So each one runs in a session of its
+# own with no controlling terminal (setsid), nothing on stdin (the loop's is
+# the passwd list), no output, and PATH for an environment. Where setsid cannot
+# do that, the other accounts' homes are left as they are.
 if [ "$1" = purge ]; then
   hy_nolink() {   # $1 = home, $2 = path under it: true when no part of $2 is a link
     hy_p="$1"; hy_r="$2"
@@ -537,10 +546,14 @@ if [ "$1" = purge ]; then
     done
     return 0
   }
+  hy_detach=; setsid --fork --wait true </dev/null >/dev/null 2>&1 && hy_detach=1
   hy_as() {       # $1 = uid, $2 = gid, then a command to run as that account
     hy_u="$1"; hy_g="$2"; shift 2
     if [ "$hy_u" = 0 ]; then "$@"
-    else setpriv --reuid="$hy_u" --regid="$hy_g" --clear-groups -- "$@" 2>/dev/null
+    elif [ -n "$hy_detach" ]; then
+      env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin setsid --fork --wait \
+        setpriv --reuid="$hy_u" --regid="$hy_g" --clear-groups -- "$@" </dev/null >/dev/null 2>&1
+    else return 1
     fi
   }
   # uid >= 1000 is "a person", and root is added because plenty of these boxes

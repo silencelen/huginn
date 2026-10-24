@@ -395,6 +395,37 @@ else
     || bad "the purge deleted root's files in an account's home - it acted as root"
   [ ! -e "$H5/.config/huginn-desktop-kt" ] && ok "root's own home is still cleaned" \
     || bad "the purge no longer cleans root's own home"
+
+  # The account can trace any process of its own, so what the purge runs as it
+  # must hold nothing of root's: dpkg runs a postrm from the operator's
+  # terminal. The block is sourced with a getent that lists nobody, so only its
+  # helpers are defined, and its hy_as runs a probe that writes its report to a
+  # file (what hy_as runs has no output of its own to read).
+  if ! command -v script >/dev/null 2>&1; then
+    skip "the purge's terminal probe (no util-linux script here)"
+  else
+    mkdir -p "$P/none/bin" "$P/report"; chmod 1777 "$P/report"
+    printf '#!/bin/sh\nexit 0\n' > "$P/none/bin/getent"; chmod 0755 "$P/none/bin/getent"
+    cat > "$T/purge-probe.sh" <<'PROBE'
+export HUGINN_PROBE_MARK=root-env
+PATH="$1/none/bin:$PATH"
+REPORT="$2" BLOCK="$3"
+set -- purge
+. "$BLOCK"
+hy_as 61001 61001 sh -c '
+  read -r s < /proc/self/stat; set -- $s
+  { printf "tty_nr=%s" "$7"
+    for fd in 0 1 2; do [ ! -t "$fd" ] || printf " fd%s-is-a-terminal" "$fd"; done
+    ! ( : < /dev/tty ) 2>/dev/null || printf " opens-/dev/tty"
+    ! env | grep -q "^HUGINN_PROBE_MARK=" || printf " has-root-env"
+    echo; } > "$0"' "$REPORT"
+PROBE
+    timeout 60 script -qec "sh $(printf '%q ' "$T/purge-probe.sh" "$P" "$P/report/purge.txt" "$T/hygiene.sh")" /dev/null </dev/null >/dev/null 2>&1
+    LINE="$(head -1 "$P/report/purge.txt" 2>/dev/null)"
+    [ "$LINE" = "tty_nr=0" ] \
+      && ok "what the purge runs as an account: no controlling terminal, no terminal on fds 0-2, none of root's environment" \
+      || bad "what the purge runs as an account, from root's terminal: ${LINE:-no report}"
+  fi
 fi
 
 echo
