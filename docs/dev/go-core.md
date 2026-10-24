@@ -29,6 +29,8 @@ core/
 | `route.go` | `huginn core route add`, `remove`, `pin`, `auto` |
 | `device.go`, `device_printargv.go` | `huginn device on`, `off`, `status`; `print-argv`, which prints the argument list the policy gives (the case-matrix test drives it) |
 | `setup.go` | `huginn setup ssh`: the SSH key and `Host` entry for attaching |
+| `doctor.go` | `huginn doctor [--json]`: runs `internal/doctor` and prints it, exit 1 on a failed check |
+| `skills.go` | `huginn skills status|install|remove`, and the installer's `Install Huginn skills for Claude Code? [Y/n]` (`skillsOffer`, which `core install` runs; the hidden `skills offer` is the PowerShell client's way to it after its elevated step) |
 | `upgrade.go`, `downgrade.go` | What `self-install` does to a running core and tray; never replacing a newer installed core |
 | `uninstall*.go` | `huginn uninstall [--all] [--yes]`, top down: desktop app, local AI tier, device row (on the server first), core, shell client; `--all` also removes the `Host huginn` SSH entry and huginn's own key |
 | `installui.go`, `elevate.go`, `startup_*.go` | Installer-style output, the one elevated step on Windows, Windows start-up details |
@@ -41,6 +43,7 @@ core/
 | `clientkit` | The shell client the core carries and installs (see below) |
 | `console` | The interactive console, on Bubble Tea. Talks only to the core's socket; attaches over SSH |
 | `daemon` | Assembles `huginn core run`: store, token, appd client, device runner, IPC routes, the `/appd/*` proxy, the route book, the watch stream, the local tier's token seed |
+| `doctor` | `huginn doctor`: the chain of checks over a `Probe` (files for real, commands, the socket and the network through function fields a test replaces); `Default()` is the real machine, `Render` the installer-style lines, `JSON` the stable array |
 | `install` | The per-user layout and the atomic version swap; the one implementation behind the installers, the desktop app's setup and `self-install` |
 | `ipc` | HTTP/1.1 over AF_UNIX with a per-connection peer check, the protocol-version gate and the server-sent event hub |
 | `localtier` | Where the local AI tier lives and where its token file goes |
@@ -50,6 +53,7 @@ core/
 | `proc` | Starting the tray detached from its caller; session and elevation checks |
 | `runner` | The device runner: pull work, run `claude -p`, stream output, honour cancels |
 | `service` | The boot service: the systemd user unit and linger on Linux, the scheduled tasks and shortcuts on Windows |
+| `skills` | The Claude Code skills the core carries (`files/`, a copy of `skills/huginn*` at the repository root): laid under the install root, linked (Linux) or copied with a marker (Windows) into `~/.claude/skills`, replacing only what Huginn made; `Decide` is the installer's question as a pure rule |
 | `store` | `core.json`, the secrets store (file or OS keyring) and the one-time import of older on-disk state |
 | `tray` | The tray role: icon, menu and OS notifications, drawn from `/core/events` |
 | `traystate` | The event types shared by `core run` and the tray role |
@@ -69,13 +73,13 @@ Two programs answer to `huginn`:
   `~/.huginn/huginn.ps1` in a PowerShell profile) owns attaching and the session verbs. A loaded
   function shadows the binary on `PATH`.
 - **The binary** (`~/.local/bin/huginn`, `%LOCALAPPDATA%\huginn\bin\huginn.exe`) owns
-  `version`, `core`, `device`, `console`, `setup` and `uninstall`.
+  `version`, `core`, `device`, `console`, `setup`, `doctor`, `skills` and `uninstall`.
 
 Each hands the other what it does not own:
 
 - The shell client calls the binary for `huginn core ...`, `huginn device ...` (when a core is
-  installed), `huginn setup`, `huginn console`, and for plain `huginn` in an interactive
-  terminal once `huginn console --probe` exits 0.
+  installed), `huginn setup`, `huginn console`, `huginn doctor`, `huginn skills`, and for plain
+  `huginn` in an interactive terminal once `huginn console --probe` exits 0.
 - The binary, called with any other verb (from fish, `cmd.exe`, a PowerShell without the
   profile, a script), runs the installed shell client with that verb: `bash -c '. "$0" &&
   huginn "$@"'` on Linux, and on Windows `powershell.exe` with the arguments passed as JSON in
@@ -109,6 +113,27 @@ for f in huginn.sh huginn.ps1 huginn-local huginn-llm-shim; do
   tr -d '\r' < "client/$f" > "core/internal/clientkit/files/$f.txt"
 done
 ```
+
+## The embedded skills
+
+`core/internal/skills/files/` is a copy of `skills/huginn/` and `skills/huginn-doctor/` at the
+repository root, embedded the same way (`embed` cannot reach outside the package). `core
+self-install` lays them under the install root (`<root>/skills/<name>/`) and refreshes the ones
+already in `~/.claude/skills`; `huginn core install` asks whether to link them there the first
+time (`HUGINN_SKILLS=1|0` presets the answer; no terminal means no, not remembered); `huginn
+skills install|remove|status` is the same by hand. A link whose target is under the install
+root, or a directory carrying the `.huginn-skill` marker (Windows copies), is Huginn's to
+replace and remove; anything else at that name is the person's and is left alone.
+
+`TestEmbeddedMatchesSkills` fails when a copy differs from its source in either direction, and
+`core/build.sh` refuses to build. After editing a skill:
+
+```bash
+rm -r core/internal/skills/files/huginn core/internal/skills/files/huginn-doctor
+cp -r skills/huginn skills/huginn-doctor core/internal/skills/files/
+```
+
+`skills/huginn-server/` is not embedded: `server/setup.sh` installs it from the checkout.
 
 ## IPC
 
@@ -297,6 +322,8 @@ core/test/e2e.sh && core/test/e2e-migrate.sh     # from the repository root
 | Notification rules, and the watch stream from a real daemon | `internal/notify` |
 | Runner against a fake daemon and a fake `claude` | `internal/runner` |
 | Embedded client matches `client/` | `internal/clientkit` |
+| Embedded skills match `skills/`; install, refresh and remove against a scratch home | `internal/skills` |
+| The doctor's checks against a fake machine (files in a scratch home; commands, socket and network faked) | `internal/doctor` |
 | Pairing, proxy, route book, device runner, upgrade, uninstall | `core/test/e2e.sh` |
 
 The tests that start a real daemon need `node` and `tmux` and skip without them. Details,

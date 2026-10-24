@@ -12,7 +12,7 @@ sub-verbs and the names of live sessions.
 |---|---|---|
 | Over SSH | sessions, `list`, `status`, `usage`, `-p`, `-y` | SSH to the server (`Host huginn`, or the alias in `HUGINN_HOST`) |
 | Over SSH, through the daemon | `rename`, `end`, `kill`, `archive`, `revive`, `rounds`, `devices`, `headroom`, `projects`, `llm` | SSH, and the daemon (`huginn-appd`) running on the server. The command runs on the server and reads the access token there, so the token never reaches this computer. `rename` and `kill` also work when the daemon is down. |
-| On this computer, through huginn core | `huginn` (the console), `console`, `setup`, `core`, `device`, `uninstall` | huginn core installed (and, for most, running and paired) |
+| On this computer, through huginn core | `huginn` (the console), `console`, `setup`, `core`, `device`, `doctor`, `skills`, `uninstall` | huginn core installed (and, for most, running and paired) |
 | On this computer only | `desktop`, `update`, `version`, `help` | Nothing; `desktop` and `update` download from GitHub Releases |
 
 huginn core runs on Linux and Windows. On Termux, only the SSH commands are available.
@@ -57,6 +57,31 @@ See [Install the clients](../install/clients.md).
 | `huginn setup ssh [--host HOST] [--user USER]` | Set up SSH to the server on a computer installed from the desktop app or a package: create a key if there is none, add a `Host huginn` entry to `~/.ssh/config`, and check that the server accepts the key (if it does not, it prints the line to add to `~/.ssh/authorized_keys` on the server and waits for you). `--host` defaults to the server huginn core is paired with; `--user` defaults to `HUGINN_USER`, or `root`. Existing keys are never replaced. When the address does not answer SSH from here, the `Host huginn` entry, whether this run has just written it or it was already there, is switched to another of the server's addresses only when SSH shows that address has the same host key; otherwise it is kept, and setup prints the server's addresses with the `huginn setup ssh --host ADDRESS` command that switches it. |
 | `huginn core install [flags]` | Install huginn core to start at boot, as you, with nobody signed in, and pair it with the server (it fetches the token over SSH, or asks you to paste it). See [huginn core](#huginn-core) for the flags. |
 | `huginn core pair --url URL` | Pair huginn core with the server at `URL` (for example `https://192.168.1.20:8787`). The token is read from standard input, or from `HUGINN_APPD_TOKEN`; at a prompt it is not shown as you type. huginn core must be running. |
+
+## Health check
+
+| Command | What it does |
+|---|---|
+| `huginn doctor` | A deterministic report of this computer's Huginn, with nothing changed: the core binary and the CLI (installed, versions match), the boot service (`huginn-core.service` and linger; the "Huginn Core" task), whether the core answers on its socket, the tray, the pairing, every server address (reachable, latency, certificate is the proved one), the daemon's `/v1/status` through the core (daemon and Claude Code versions), this computer's device enrolment and scope, the local AI tier if installed, SSH (`Host huginn`, `ssh -G`, port 22 by a TCP connect only, the host key in `known_hosts`), Claude Code and the Huginn skills. One line per check, `ok`, `warn`, `fail` or `skip`, with the one thing to try under a line that is not ok. |
+| `huginn doctor --json` | The same as a JSON array of `{id, state, detail, fix}` on standard output, for scripts. The ids are stable: `core.binary`, `core.cli`, `core.service`, `core.socket`, `core.tray`, `core.pairing`, `route:<url>` per address, `server.status`, `device`, `local-ai`, `ssh.config`, `ssh.resolve`, `ssh.port`, `ssh.hostkey`, `claude.code`, `claude.skills`. |
+
+Exit status: 0 when no check failed, 1 otherwise (`warn` and `skip` do not fail it). See
+[Claude Code skills](../guide/skills.md#checking-a-computer-huginn-doctor).
+
+## Claude Code skills
+
+See [Claude Code skills](../guide/skills.md).
+
+| Command | What it does |
+|---|---|
+| `huginn skills` (`status`) | One line per skill huginn core carries (`huginn`, `huginn-doctor`): linked or copied into `~/.claude/skills`, stale, yours (a skill you wrote under that name), or not installed; then whether Claude Code is on this computer. Exit 1 when a skill is not installed as this version lays it. |
+| `huginn skills install` | Put them in `~/.claude/skills`: a link per skill to huginn core's copy on Linux, a copy on Windows. Replaces only what Huginn put there; a skill you wrote is left alone and named. Forgets an earlier no. |
+| `huginn skills remove` | Take Huginn's links or copies out, leave anything else, and remember the no so updates and installs do not put them back. |
+
+The installer asks `Install Huginn skills for Claude Code? [Y/n]` when Claude Code is on the
+computer and nothing of Huginn's is in `~/.claude/skills` yet; `HUGINN_SKILLS=1|0` answers up
+front, and with no terminal the answer is no. Updates refresh what is there; `huginn uninstall`
+removes it.
 
 ## huginn core
 

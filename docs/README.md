@@ -33,6 +33,7 @@ and an Android app connects the same way.
 | [Rounds](guide/rounds.md) | scheduled, unattended work on the server |
 | [Usage limits](guide/usage-limits.md) | how Huginn handles your plan's limits |
 | [Hosted apps](guide/hosted-apps.md) | listing the web apps your server serves |
+| [Claude Code skills](guide/skills.md) | what Claude Code knows about Huginn on your computers and the server; `huginn doctor` |
 | [Local AI](guide/local-ai.md) | serving local models from a computer with a GPU (experimental) |
 
 ## Reference

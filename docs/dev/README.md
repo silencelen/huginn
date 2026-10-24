@@ -29,6 +29,7 @@ mobile/ui/           shared Compose UI (Android + JVM)
 mobile/app/          the Android app
 mobile/app-desktop/  the desktop app (Windows, Linux)
 shared/              data files several languages read: device policy, local AI pins
+skills/              the Claude Code skills: huginn, huginn-doctor (carried by the core), huginn-server (installed by the server)
 scripts/             generators and test gates
 assets/brand/        the brand: mark, tokens, rules, design card
 docs/                user, reference and contributor documentation
@@ -46,6 +47,7 @@ docs/                user, reference and contributor documentation
 | `mobile/app-desktop/` | The Compose Desktop app. It reaches the daemon through huginn core. |
 | `mobile/scripts/` | `build.sh` (the Kotlin and daemon test gate, then an APK) and `package-linux.sh` (a portable tarball and an Arch package from a built app-image). The other scripts there are release tooling. |
 | `shared/` | `device-policy.json` and its generated case matrix, `local-runtime.json` (the local AI tier's download pins). |
+| `skills/` | Claude Code skills, each a directory with `SKILL.md` and topic files: `huginn` and `huginn-doctor` for a client computer (embedded in huginn core from `core/internal/skills/files/`), `huginn-server` for sessions on the server (`server/setup.sh` installs it). Placeholders only, like the docs. |
 | `scripts/` | Generators (`gen-help.js`, `gen-device-policy.js`, `gen-state-table.js`, `gen-local-manifest.js`), the client gate `test-client.sh`, the shared test floors `test-floors.env`, and focused test files (`test-device-tls.js`, `test-local-tier.js`, `test-llm-shim.js`, `test-claude-title.sh`). |
 | `assets/brand/` | `raven.svg` (the one canonical mark), `BRAND.md` (the rules), the design card and its generator, `generate.sh` (every raster from the mark). |
 | `docs/` | This documentation. |
@@ -91,7 +93,9 @@ These hold everywhere in the tree. Most are enforced by a test, named in bracket
    `core/internal/clientkit/files/*.txt`, with carriage returns stripped. When you change
    one of those files, refresh its copy in the same commit:
    `tr -d '\r' < client/huginn.sh > core/internal/clientkit/files/huginn.sh.txt`.
-   [`TestEmbeddedMatchesClient`; `core/build.sh` refuses to build on drift]
+   [`TestEmbeddedMatchesClient`; `core/build.sh` refuses to build on drift] The same holds
+   for the skills it carries: `skills/huginn` and `skills/huginn-doctor` are copied into
+   `core/internal/skills/files/`. [`TestEmbeddedMatchesSkills`; `core/build.sh`]
 7. **Kotlin goes in the lowest module that can hold it:** `:core`, then `:ui`, then the
    app (`:app` or `:app-desktop`). Logic one app needs today, the other will need
    tomorrow. See [Kotlin clients](kotlin-clients.md).

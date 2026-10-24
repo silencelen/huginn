@@ -66,6 +66,9 @@ Every installer always installs from the newest release, never from a developmen
    You can widen or withdraw this later; see [Devices](../guide/devices.md).
 6. **Local AI?** Only offered on a computer with a suitable GPU (default no; experimental); see
    [Local AI](../guide/local-ai.md).
+7. **Install Huginn skills for Claude Code?** (default yes.) Only asked when Claude Code is on
+   this computer. It links two short documents into `~/.claude/skills` that teach your Claude
+   Code what `huginn` is and how to diagnose it; see [Claude Code skills](../guide/skills.md).
 
 It ends with a summary of what it set up.
 
@@ -79,6 +82,7 @@ Answer the questions up front; with no terminal to ask on, unanswered questions 
 | `HUGINN_GUI=y\|n` | `$env:HUGINN_GUI` | install the desktop app |
 | `HUGINN_DEVICE=y\|n` | `$env:HUGINN_DEVICE` | offer this computer as a device |
 | `HUGINN_LOCAL=y\|n` | `$env:HUGINN_LOCAL` | set up local AI |
+| `HUGINN_SKILLS=1\|0` | `$env:HUGINN_SKILLS` | install the Claude Code skills |
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.sh \
@@ -91,6 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/silencelen/huginn/main/client/get.s
 huginn                  # the console: sessions, devices, usage, settings
 huginn main             # attach to the main session (created on first use)
 huginn core status      # is huginn core running and paired
+huginn doctor           # a health report of everything huginn needs on this computer
 ```
 
 New to Huginn? Start with [Sessions](../guide/sessions.md) and [The console](../guide/console.md).

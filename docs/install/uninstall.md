@@ -8,8 +8,8 @@ huginn uninstall --all      # also removes the 'Host huginn' SSH entry, and the 
 ```
 
 It removes everything Huginn installed on that computer, top down: the desktop app, the local-AI
-tier, the computer's device entry on the server, huginn core and its boot service, and the
-`huginn` command. It prints what it removed and what it kept on purpose (for example an SSH key
+tier, the computer's device entry on the server, the Claude Code skills Huginn put in
+`~/.claude/skills`, huginn core and its boot service, and the `huginn` command. It prints what it removed and what it kept on purpose (for example an SSH key
 you had before Huginn). Windows asks for administrator approval once, to remove the boot task.
 
 Removing only the desktop app (Programs and Features on Windows, `apt purge huginn-desktop-kt` on
@@ -28,7 +28,7 @@ sudo bash /usr/local/src/huginn/server/uninstall.sh            # keeps chats, se
 sudo bash /usr/local/src/huginn/server/uninstall.sh --purge    # removes those too
 ```
 
-It removes the daemon, its service and settings, the Claude Code hooks setup added, and the host
-tools. Claude Code, Node.js, tmux and your files stay. A tmux server that still has sessions is
+It removes the daemon, its service and settings, the Claude Code hooks and the skill link setup
+added, and the host tools. Claude Code, Node.js, tmux and your files stay. A tmux server that still has sessions is
 left running until you end them. `--purge` deletes the access token, which disconnects every
 paired client.

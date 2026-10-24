@@ -30,7 +30,10 @@ This downloads the newest Huginn release to `/usr/local/src/huginn` and runs its
    and `ccusage` for usage reports;
 2. installs the host tools (`cc`, `huginn-status`, `huginn-headroom` and the others) to
    `/usr/local/bin`, the tmux configuration to `/root/.tmux.conf` (an existing one is saved as
-   `.tmux.conf.pre-huginn`), and Claude Code hooks that keep terminal titles current;
+   `.tmux.conf.pre-huginn`), Claude Code hooks that keep terminal titles current, and the
+   `huginn-server` [Claude Code skill](../guide/skills.md) (to
+   `/usr/local/share/huginn/skills/`, linked into `/root/.claude/skills/huginn-server`), so
+   sessions on the server know where Huginn keeps things and what not to touch;
 3. installs `huginn-appd`: the daemon in `/opt/huginn-appd`, an access token in
    `/etc/huginn-appd/token`, a TLS certificate, and the `huginn-appd` systemd service;
 4. checks that the daemon answers, and prints your next steps.
@@ -100,6 +103,6 @@ sudo bash /usr/local/src/huginn/server/uninstall.sh            # keeps chats, se
 sudo bash /usr/local/src/huginn/server/uninstall.sh --purge    # removes those too
 ```
 
-It removes the daemon, its service and drop-ins, the Claude Code hooks setup added and the host
-tools. Claude Code, Node.js, tmux and your files stay. `--purge` deletes the token, which
+It removes the daemon, its service and drop-ins, the Claude Code hooks and the skill link setup
+added, and the host tools. Claude Code, Node.js, tmux and your files stay. `--purge` deletes the token, which
 disconnects every paired client. Remove each client separately: [Uninstall](uninstall.md).

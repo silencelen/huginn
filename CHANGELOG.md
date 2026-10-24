@@ -8,6 +8,24 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `huginn doctor [--json]`: a deterministic health report of this machine's huginn (binary, CLI,
+  boot service, socket, tray, pairing, each route and its TLS pin, the server through the core,
+  device, local AI, ssh, Claude Code, skills); exit 1 when a check fails.
+- Claude Code skills `huginn` and `huginn-doctor`, carried by huginn core and laid under its
+  install directory on every install and update; `huginn skills install|remove|status` links
+  (Linux) or copies (Windows) them into `~/.claude/skills`, replacing only what huginn put there.
+- The installer asks `Install Huginn skills for Claude Code? [Y/n]` when Claude Code is on the
+  machine; `HUGINN_SKILLS=1|0` presets it; no terminal means no.
+- The server installs the `huginn-server` skill for sessions running on it
+  (`/usr/local/share/huginn/skills`, linked into the sessions account's `~/.claude/skills`);
+  `uninstall.sh` removes it.
+
+### Changed
+- `huginn uninstall` also removes the Claude Code skills huginn put in `~/.claude/skills`.
+
 ## [2.6.7] - 2026-10-23
 
 ### Security

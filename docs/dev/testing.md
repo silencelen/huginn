@@ -145,6 +145,11 @@ go vet ./... && go test ./...
 - `TestEmbeddedMatchesClient` in `core/internal/clientkit` fails when the embedded shell
   client differs from `client/`. Refresh the copies (see
   [Go core](go-core.md#the-embedded-shell-client)).
+- `TestEmbeddedMatchesSkills` in `core/internal/skills` fails the same way when the embedded
+  Claude Code skills differ from `skills/` (see [Go core](go-core.md#the-embedded-skills)).
+- `core/internal/doctor` runs every `huginn doctor` check against a fake machine: real files in
+  a scratch home, and commands, the core's socket and the network answered from tables. A new
+  check gets its fake and its failing case there; nothing in that package reaches the network.
 - `core/internal/policy` holds the Go table to `shared/device-policy-cases.json`.
 
 ### Golden files
