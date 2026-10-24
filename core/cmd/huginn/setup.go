@@ -265,7 +265,7 @@ func sshAddresses(host string) (answering, all []string) {
 		return nil, nil
 	}
 	// Only a plain address is tried, printed or passed on to be written into
-	// ~/.ssh/config. The dial below is no check (security scan F12).
+	// ~/.ssh/config. The dial below is no check.
 	st.Addresses = slices.DeleteFunc(st.Addresses, func(a string) bool { return !plainHost(a) })
 	type res struct {
 		i  int

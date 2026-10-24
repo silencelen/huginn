@@ -80,8 +80,7 @@ func TestSeatGraphicalNeedsLogindsAnswer(t *testing.T) {
 // One system bus or logind fault on a desktop, end to end through the reader:
 // the probe cannot list sessions and loginctl cannot reach logind for the seat
 // either. The fence must hold (locked, not known). On the old code this read
-// "headless: no graphical seat", unlocked and known (security review,
-// 2026-10-18).
+// "headless: no graphical seat", unlocked and known.
 func TestLogindDownReadsLocked(t *testing.T) {
 	busDown := "Failed to connect to bus: No such file or directory\n"
 	p := lock.Prober{GOOS: "linux", UID: 1000,

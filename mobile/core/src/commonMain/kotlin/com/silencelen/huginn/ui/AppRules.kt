@@ -543,8 +543,8 @@ object AppRules {
      * `http://huginn:8088/` is how every row in this registry is written, and a
      * name with no dot in it cannot resolve past the local search domain.
      *
-     * ⚠⚠ THE HOST JUDGED IS THE HOST A BROWSER WILL VISIT (security review,
-     * 2026-10). This used to judge the host as written, but a browser — and the
+     * ⚠⚠ THE HOST JUDGED IS THE HOST A BROWSER WILL VISIT.
+     * This used to judge the host as written, but a browser — and the
      * daemon, through `new URL` in lib/apps.js — first percent-decodes it, maps
      * IDNA full stops to `.` and reads a numeric host as IPv4 in any of its
      * spellings. So `evil%2ecom`, `evil。com`, `0x08080808` or a decimal past

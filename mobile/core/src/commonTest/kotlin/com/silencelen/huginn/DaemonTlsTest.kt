@@ -130,7 +130,7 @@ class DaemonTlsTest {
     // ------------------------------------------------------------ the URL rule
 
     /**
-     * Security scan F9: loopback has no identity. Any app on a phone (or any
+     * Loopback has no identity. Any app on a phone (or any
      * account on a desktop) can hold the port of a port-forward or of the daemon
      * while it is down, so a loopback route is dialled over https and proved
      * like any other.
@@ -169,7 +169,7 @@ class DaemonTlsTest {
     fun `routes are stored upgraded`() = withPlaintextLoopback(on = false) {
         assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("http://192.168.1.20:8787/"))
         assertEquals("https://[fd00::1]:8787", RouteGuard.normalize("http://[FD00::1]:8787"))
-        assertEquals("https://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"), "loopback too (scan F9)")
+        assertEquals("https://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"), "loopback too")
         assertEquals("https://[::1]:8787", RouteGuard.normalize("http://[::1]:8787"))
         withPlaintextLoopback {
             assertEquals("http://127.0.0.1:8787", RouteGuard.normalize("127.0.0.1:8787"), "kept plain only by the switch")
@@ -342,7 +342,7 @@ class DaemonTlsTest {
         assertEquals(listOf(MockTransport.TEST_FP), pins.pinsFor(tok))
     }
 
-    // ------------------------------------------------ loopback (scan F9)
+    // ------------------------------------------------ loopback
 
     /**
      * A route that is a port-forward on this machine (`adb reverse`, an SSH

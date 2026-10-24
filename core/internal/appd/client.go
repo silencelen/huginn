@@ -218,7 +218,7 @@ func (c *Client) raw1(ctx context.Context, method, path string, payload []byte) 
 // already dials every other http:// as https://, a loopback one included; this
 // re-check is so no caller that builds a Client some other way (or keeps one
 // across a change of the switch) can put the token on the wire unproved. A
-// loopback port proves nothing about who holds it (security scan F8).
+// loopback port proves nothing about who holds it.
 func plainRefusal(u *url.URL) error {
 	if !IsLoopbackHost(u.Hostname()) {
 		return fmt.Errorf("refusing plain http to %s: cleartext is for loopback only", u.Host)
@@ -552,7 +552,7 @@ func (c *Client) pinnedTransport(tok string, pins []string) *http.Transport {
 // it to that.) InsecureSkipVerify only turns off the CA/hostname check, which
 // the pin replaces (rule 4): the cert is named `huginn-appd` and dialled by IP.
 //
-// ⚠ THE HANDSHAKE HAS A DEADLINE (Node scan F1). A peer that accepts TCP and
+// ⚠ THE HANDSHAKE HAS A DEADLINE. A peer that accepts TCP and
 // never finishes TLS would otherwise hold the request — and the serve loop
 // waiting on it — for as long as the caller's context allows, which for a
 // background context is forever.

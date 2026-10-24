@@ -12,7 +12,7 @@ import (
 // The uninstall log lives in the shared /tmp, where another account can make
 // a name first. On the old code the name was the time alone, opened to create
 // or truncate: a link planted there sent the log into a file of the person's
-// own, which it truncated first (security review, 2026-10-18).
+// own, which it truncated first.
 func TestUninstallLogIsNotWrittenThroughAPlantedLink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("making a symlink needs a privilege on Windows, and its temp dir is per user")

@@ -277,8 +277,8 @@ func TestPlainHTTPOldDaemonNeverDowngraded(t *testing.T) {
 	// From nothing (the probe meets it): "old daemon". Already pinned (the
 	// pinned dial meets it, or a re-proof does): the daemon at this token has
 	// proved itself over TLS, so plain HTTP at its address is somebody else,
-	// an interception (security review, 2026-10-18; the old code said "old
-	// daemon, update it" here too). Neither tries cleartext.
+	// an interception (the old code said "old daemon,
+	// update it" here too). Neither tries cleartext.
 	for _, pinned := range []bool{false, true} {
 		store := &MemoryPinStore{}
 		if pinned {

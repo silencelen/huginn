@@ -50,8 +50,7 @@ func TestRepointStanzaOnlyForHuginnsOwnAddress(t *testing.T) {
 
 // injected is what a hostile huginn can list as one of its addresses: Go reads
 // everything after '%' as an IPv6 zone, so this DIALS (to ::1), and spliced
-// into a HostName line it gives `Host huginn` a ProxyCommand (security scan
-// F12, 2026-10-18).
+// into a HostName line it gives `Host huginn` a ProxyCommand.
 const injected = "::1%x\nProxyCommand sh -c 'touch /tmp/huginn-was-here'"
 
 // The repoint writes only a plain host, whoever asks: a line break, a space,
@@ -189,8 +188,7 @@ func fakeSSHD(t *testing.T) {
 
 // A listed address that takes connections on port 22 is not the same machine
 // because huginn says so: `Host huginn` moves to it only when ssh finds there
-// the host key known for the address it names now (security review,
-// 2026-10-18). On the old code the stanza moved on the list's word alone.
+// the host key known for the address it names now. On the old code the stanza moved on the list's word alone.
 func TestSSHFallbackMovesTheEntryOnlyForTheSameHostKey(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake core below listens on a unix socket path")

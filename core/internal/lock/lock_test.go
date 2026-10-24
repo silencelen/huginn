@@ -90,8 +90,7 @@ func TestWindowsReading(t *testing.T) {
 		{"no quser falls back", "", set(), Unlocked},
 		{"nonsense", "nonsense that is not a table", set(1), Locked},
 
-		// Only the owner's own sessions are somebody here (security review,
-		// 2026-10-18): on the old rule every one of these read unlocked.
+		// Only the owner's own sessions are somebody here: on the old rule every one of these read unlocked.
 		{"owner's console locked, another account's rdp active", lockedBesideRDP, set(1), Locked},
 		{"owner signed out, another account's rdp active", otherRDPOnly, set(1), Locked},
 		{"owner switched away, another account at the console", switchedAway, set(), Locked},
@@ -238,8 +237,7 @@ func TestLinuxHeadlessIsUnknownNotLocked(t *testing.T) {
 
 // A logind or system bus that cannot be asked is a lock state that cannot be
 // read, never "no session": NoSession sends the daemon on to its headless
-// check, which read unlocked when logind was down (security review,
-// 2026-10-18). On the old code each of these came back NoSession.
+// check, which read unlocked when logind was down. On the old code each of these came back NoSession.
 func TestLinuxLogindUnreachableIsUnreadableNotNoSession(t *testing.T) {
 	busDown := func(context.Context) ([]Session, error) {
 		return nil, errors.New("dial unix /run/dbus/system_bus_socket: connect: no such file or directory")

@@ -6,8 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// Server and model text is shown, never obeyed (security scan F25,
-// 2026-10-18). Chat messages, streamed answers, tool inputs, titles,
+// Server and model text is shown, never obeyed. Chat messages, streamed answers, tool inputs, titles,
 // snippets, round headlines and pane previews are written by a model, and a
 // model writes what it read: a log line, a fetched page, a file name. A
 // terminal EXECUTES some of what it is handed. OSC 52 writes the clipboard,

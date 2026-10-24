@@ -25,7 +25,7 @@ import (
 // ⚠ AND IT IS OFF BY DEFAULT, UNLIKE THE DAEMON'S. Loopback has no identity:
 // any account on the machine can bind the daemon's port while appd restarts,
 // and a client that sent the token in the clear to whatever answered there
-// handed that account root on the host (security scan F8). appd serves TLS on
+// handed that account root on the host. appd serves TLS on
 // that same port, so the default is the proof and the pin used everywhere
 // else; this switch exists only for a daemon that cannot do TLS (one older
 // than 3.11), and must be set in the environment of the process that dials
@@ -111,7 +111,7 @@ func URLRefusal(u string) error {
 // http://127.0.0.1:8787 until loopback was proved too; refusing those would
 // strand them, while upgrading reaches the same daemon on the same port (it
 // sniffs the first byte for TLS).
-// ⚠ LOOPBACK IS UPGRADED TOO (security scan F8). It used to stay plain, on the
+// ⚠ LOOPBACK IS UPGRADED TOO. It used to stay plain, on the
 // theory that nothing on the box can read a loopback packet; but whoever binds
 // the port while appd restarts is sent the token, and any account can.
 // ⚠ AND THERE IS NO OPT-OUT FOR ANY OTHER HOST, AND THERE MUST NEVER BE ONE:

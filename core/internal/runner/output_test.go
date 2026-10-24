@@ -114,7 +114,7 @@ func TestMachineKey(t *testing.T) {
 
 func TestExecForShim(t *testing.T) {
 	dir := t.TempDir()
-	// F1: a .cmd/.bat with nothing to run it safely is REFUSED, never spawned.
+	// A .cmd/.bat with nothing to run it safely is REFUSED, never spawned.
 	for _, name := range []string{"claude.cmd", "CLAUDE.CMD", "claude.bat"} {
 		if _, _, ok := execFor(filepath.Join(dir, name), []string{"-p"}, "node"); ok {
 			t.Fatalf("%s with no cli.js beside it was accepted", name)

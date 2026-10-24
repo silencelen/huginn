@@ -173,7 +173,7 @@ test('a request from a previous claude in the same tmux name (other session id) 
   assert.equal(fs.existsSync(path.join(dir, `${id}.ans`)), false);
 });
 
-test('two live requests matching the same dialog: neither gets it, the keys answer (F1/F2)', async () => {
+test('two live requests matching the same dialog: neither gets it, the keys answer', async () => {
   const { name, fingerprint } = await questionSession();
   const a = writeReq(name, { tool: 'Bash', input: { command: 'touch probe.txt' } });
   await wait(5);

@@ -45,7 +45,7 @@ func TokenFile(dir string) string { return filepath.Join(dir, "device", "appd-to
 // 401ing under an app that worked), and an unchanged one is not rewritten.
 //
 // The token is root-equivalent on the paired huginn host, so it is never a
-// Users-readable file for even an instant (security review, 2026-10-18, F6):
+// Users-readable file for even an instant:
 //
 //   - the containing directories are made owner-only (SYSTEM + the current
 //     user; on POSIX 0700) BEFORE the token is written, and a pre-existing tree
@@ -113,7 +113,7 @@ var bestEffortLock = func(path string) { _ = lock(path) }
 // service), the Administrators and this account, nothing inherited. 0600
 // means nothing there on Windows, and a file that inherited ProgramData's
 // "Users: read" was the appd token readable by every account on the PC
-// (security review, 2026-10-17). A var so a test can see it is asked for.
+//. A var so a test can see it is asked for.
 var lock = func(path string) error { return restrictFile(path) }
 
 // sidTrusted reports whether a pre-existing tree owned by ownerSid may be

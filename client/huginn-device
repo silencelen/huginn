@@ -651,7 +651,7 @@ const gateLocked = (lock, actWhileLocked) => !!lock && actWhileLocked !== true;
 // setting that re-enables cleartext to a remote host, and a failed proof never
 // falls back to anything.
 //
-// ⚠ AND A DAEMON ON THIS MACHINE IS PROVED THE SAME WAY (security scan F13).
+// ⚠ AND A DAEMON ON THIS MACHINE IS PROVED THE SAME WAY.
 // Loopback used to skip the proof and the pin: the token went in cleartext to
 // whatever held 127.0.0.1:8787, and the work that listener handed back was run.
 // Any account on the machine can bind that port while appd restarts, so
@@ -826,7 +826,7 @@ class JudgedAgent extends https.Agent {
       rejectUnauthorized: false,   // ⚠ ONLY because `judge` below is the check
       ALPNProtocols: ['http/1.1'],
     });
-    // ⚠ THE HANDSHAKE HAS A DEADLINE (security scan 2026-10-13, F1). The stock
+    // ⚠ THE HANDSHAKE HAS A DEADLINE. The stock
     // agent applies the request's `timeout` to the socket from the moment it
     // exists; this one hands the socket over only after the judgement, so the
     // http layer's timer cannot start until then. A peer that accepts TCP and
@@ -1010,8 +1010,8 @@ function api(method, p, body, { timeoutMs = 20000 } = {}) {
     method, timeoutMs, payload,
     headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
   };
-  // ⚠ ONLY THE PINNED PATH CARRIES THE TOKEN, TO THIS MACHINE TOO (security scan
-  // F13). upgradeUrl() has already turned every http:// into https://, a
+  // ⚠ ONLY THE PINNED PATH CARRIES THE TOKEN, TO THIS MACHINE TOO.
+  // upgradeUrl() has already turned every http:// into https://, a
   // loopback one included, so plain http reaches here only under
   // HUGINN_APPD_PLAINTEXT=local, and plainRefusal() says no to anything else.
   // Nothing a listener that has not proved itself answers is ever acted on:

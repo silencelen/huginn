@@ -196,7 +196,7 @@ test('the shared test vector, byte for byte', () => {
 
 // -------------------------------------------------------------- url upgrade
 
-test('every http:// is dialled and stored as https://, a daemon on this machine included (scan F13)', () => {
+test('every http:// is dialled and stored as https://, a daemon on this machine included', () => {
   const remote = {
     'http://192.168.1.20:8787': 'https://192.168.1.20:8787',
     'http://[fd00::1]:8787': 'https://[fd00::1]:8787',
@@ -284,7 +284,7 @@ test('MITM: a proof over a DIFFERENT certificate is refused, and the token never
   assert.deepEqual(dev.pinsFor(readConf(), TOKEN), [], 'nothing was pinned');
 });
 
-test('a peer that accepts TCP and never finishes TLS fails the request instead of hanging it (scan F1)', async () => {
+test('a peer that accepts TCP and never finishes TLS fails the request instead of hanging it', async () => {
   // Already pinned, so api() goes straight to the pinned channel — the path the
   // serve loop sits on. The listener accepts and then says nothing at all.
   const held = [];
@@ -330,7 +330,7 @@ test('a correct proof pins, and the pinned request carries the token', async () 
   assert.equal(fake.seen[1].auth, `Bearer ${TOKEN}`);
 });
 
-// ------------------------------------------- loopback squatters (scan F13)
+// ------------------------------------------- loopback squatters
 
 /**
  * What grabs 127.0.0.1:<port> while appd is down: plain HTTP, answering every
@@ -347,7 +347,7 @@ async function squatter() {
   return { port, seen };
 }
 
-test('F13: a plain-http squatter on 127.0.0.1 is never sent the token, by any call', async () => {
+test('a plain-http squatter on 127.0.0.1 is never sent the token, by any call', async () => {
   const sq = await squatter();
   writeConf({ url: `http://127.0.0.1:${sq.port}`, id: 'dev1', scope: 'work' });
   assert.equal(dev.loadConf().url, `https://127.0.0.1:${sq.port}`, 'a loopback http:// is dialled as https://');
@@ -362,7 +362,7 @@ test('F13: a plain-http squatter on 127.0.0.1 is never sent the token, by any ca
   assert.deepEqual(sq.seen, [], 'not one request reached it, let alone a token');
 });
 
-test('F13: a TLS squatter on a loopback http:// is the interception case, and gets no token', async () => {
+test('a TLS squatter on a loopback http:// is the interception case, and gets no token', async () => {
   const m = mintCert('squatter');
   const realFp = 'f'.repeat(64);
   const fake = await fakeDaemon(m, (n) => ({
@@ -602,7 +602,7 @@ test('E2E: enrol against a real appd over https, pin its own certificate, long-p
   assert.match(st.stdout, new RegExp(`tls +pinned sha256 ${appdFp()}`));
 });
 
-test('E2E F13: `on --url http://127.0.0.1:<port>` (the host itself) proves the real appd over TLS and stores https://', async () => {
+test('E2E: `on --url http://127.0.0.1:<port>` (the host itself) proves the real appd over TLS and stores https://', async () => {
   const d = fs.mkdtempSync(path.join(tmp, 'host-'));
   const r = spawnSync(process.execPath, [RUNNER, 'on', '--url', `http://127.0.0.1:${appdPort}`, '--scope', 'look', '--name', 'tls-host'], {
     env: { ...process.env, HUGINN_DEVICE_DIR: d }, encoding: 'utf8', timeout: 60000,

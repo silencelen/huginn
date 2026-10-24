@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
  * no new test dependency, and nothing here talks to anything but 127.0.0.1.
  *
  * Most tests point the client at `https://127.0.0.1:<port>`; the loopback ones
- * (security scan F9) use `http://127.0.0.1:<port>`, which is dialled over TLS on
+ * use `http://127.0.0.1:<port>`, which is dialled over TLS on
  * the same port exactly like any other address.
  */
 class TlsTransportIntegrationTest {
@@ -192,7 +192,7 @@ class TlsTransportIntegrationTest {
         assertTrue(bearersReceived.isEmpty(), "not over https, not over a downgrade: $bearersReceived")
     }
 
-    // ------------------------------------------------ loopback (security scan F9)
+    // ------------------------------------------------ loopback
 
     /** A daemon on this machine, or a port-forward to one: TLS on the same port, proved first. */
     @Test

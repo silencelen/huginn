@@ -443,7 +443,7 @@ func (m *model) onChatEvent(e chatEvent) tea.Cmd {
 		Position int    `json:"position"`
 	}
 	json.Unmarshal(e.data, &d)
-	scrub(&d) // model text, one delta at a time (F25)
+	scrub(&d) // model text, one delta at a time
 	switch e.event {
 	case "delta":
 		m.chat.live.WriteString(d.Text)

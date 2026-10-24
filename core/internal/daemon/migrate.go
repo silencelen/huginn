@@ -76,7 +76,7 @@ func (d *Daemon) firstStartImport(ctx context.Context) string {
 //
 // ⚠ WHY, WHEN THE CLIENT UPGRADES ON ITS OWN. A core paired on the server
 // itself, or adopted from the Node runner's default, holds
-// http://127.0.0.1:8787 from before loopback was proved (security scan F8).
+// http://127.0.0.1:8787 from before loopback was proved.
 // appd.New dials it as https:// either way, so the route keeps working; but
 // the route book compares the address typed with the address stored (remove,
 // pin, the health beside each row), and `huginn core status` would go on

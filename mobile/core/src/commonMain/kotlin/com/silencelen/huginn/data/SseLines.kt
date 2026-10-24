@@ -42,7 +42,7 @@ class SseFrameTooLargeException(val limit: Int) : Exception("stream frame longer
  * never mistaken for part of a character. `\r\n` is accepted because the spec
  * allows it, even though huginn-appd only ever sends `\n`.
  *
- * ⚠⚠ A LINE IS AT MOST [maxLine] BYTES (security review, 2026-10). The buffer
+ * ⚠⚠ A LINE IS AT MOST [maxLine] BYTES. The buffer
  * used to grow for as long as the peer withheld a newline, by a doubling loop
  * that wrapped to zero and spun forever at 1 GiB, so one response with no line
  * break could take the app down. A line past the limit now ends the stream with

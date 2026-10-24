@@ -70,7 +70,7 @@ func exitedText(mode, host string, code int, stderr string) string {
 // leaves `claude.cmd` on PATH, and the shim only runs the cli.js beside it, so
 // run that. ⚠⚠ Go's os/exec does NOT refuse a .cmd the way Node does: it runs
 // it through cmd.exe, quoting for CommandLineToArgvW only, so `opus&calc.exe`
-// in a model name ran a second command (security scan F1, 2026-10-15). A
+// in a model name ran a second command. A
 // .cmd/.bat with no cli.js beside it is therefore REFUSED (ok=false), never
 // spawned. The native claude.exe needs none of this.
 func execFor(engineBin string, argv []string, node string) (string, []string, bool) {

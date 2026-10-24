@@ -3,7 +3,7 @@ package appd
 // What a peer writes reaches an error, and errors reach the terminal, the log
 // and the status note the apps show. The challenge is answered by whoever
 // holds the address, before it has proved anything, so its body is cleaned
-// and clipped first (security review, 2026-10-18). On the old code the body
+// and clipped first. On the old code the body
 // went into the error as sent: escape sequences, line breaks and all.
 
 import (

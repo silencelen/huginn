@@ -304,7 +304,7 @@ function versionString() {
 
 // --------------------------------------------------------- engine identity
 //
-// ⚠ A LOOPBACK PORT IS NOT AN IDENTITY (security review, 2026-10-18). The
+// ⚠ A LOOPBACK PORT IS NOT AN IDENTITY. The
 // engine's key and the owner's prompt went to whatever held 127.0.0.1:8748 (or
 // an adopted engine's port), and its reply was filed as the model's answer.
 // Every account on the machine can bind that port while llama-swap restarts

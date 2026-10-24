@@ -43,7 +43,7 @@ expect fun huginnTransport(): DaemonTransport
  * there for why it exists and why it is off by default.
  *
  * ⚠ ALWAYS FALSE ON ANDROID. Every installed app shares the phone's loopback,
- * so a port there proves nothing at all (security scan F9), and an Android app
+ * so a port there proves nothing at all, and an Android app
  * has no environment a person sets: a switch nobody can see is one nobody can
  * be held to having turned on.
  */

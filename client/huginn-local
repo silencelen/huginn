@@ -243,7 +243,7 @@ function parseFlags(argv, known) {
  * `--adapter-key-file PATH` (read and trimmed) is preferred; `--adapter-key K`
  * still works but is no longer recommended, because a key on argv is readable
  * by every local account through the process list and is logged by sudo/pkexec
- * (security review). null when neither is given.
+ *. null when neither is given.
  */
 function resolveAdapterKey(flags) {
   if (flags['adapter-key-file']) {
@@ -1256,9 +1256,9 @@ function winAclInfo(dir) {
  * and change on device\, where huginn core reseeds the token). ProgramData's
  * defaults gave every account on the PC read on the appd token beside the
  * runner, and the right to ADD files to every folder here - beside a model
- * server that runs as LocalSystem (security review, 2026-10-17). A standard
+ * server that runs as LocalSystem. A standard
  * user may also pre-create this folder and keep an explicit ACE and ownership
- * on the files a LocalSystem service then runs (2026-10-18, F14) - so this
+ * on the files a LocalSystem service then runs - so this
  * takes ownership and wipes every explicit ACE, not only the inherited ones,
  * then verifies the result. Run elevated, before anything is downloaded or
  * unpacked; the api-key keeps its own SYSTEM-only ACL.
@@ -1383,7 +1383,7 @@ function lockTree() {
  * or the desktop staged it in an owner-only file in the user's profile and
  * handed its path over (HUGINN_SEED_TOKEN_FILE). The token is root-equivalent
  * on the host, so it is never written into ProgramData before lockTree has run
- * (2026-10-18, F2/F17): the staging file is read here, written through a random
+ *: the staging file is read here, written through a random
  * O_EXCL temp that inherits device\'s locked DACL (0600 on POSIX), renamed into
  * place, and the staging copy is shredded. Returns true when it seeded.
  *
@@ -1502,7 +1502,7 @@ function serviceState(which, conf) {
     // By service name through the Service Control Manager, never by running
     // <tree>\runtime\winsw\<name>.exe status: on a tree a standard user planted,
     // that exe is their program, and a status check must execute nothing from
-    // the tree (security review). sc needs no tree access.
+    // the tree. sc needs no tree access.
     const r = RUN('sc', ['query', name]);
     return parseScQuery((r.stdout || '') + (r.stderr || ''));
   }
@@ -1620,7 +1620,7 @@ async function health(conf) {
   const base = conf.mode === 'adapter' ? conf.adapter.url : `http://127.0.0.1:${conf.port}`;
   const key = conf.mode === 'adapter' ? (conf.adapter.key || null) : readKey();
   const listPath = conf.mode === 'adapter' && conf.adapter.kind === 'ollama' ? '/api/tags' : '/v1/models';
-  // ⚠ THE KEY GOES ONLY TO THE ENGINE (security review, 2026-10-18). This asked
+  // ⚠ THE KEY GOES ONLY TO THE ENGINE. This asked
   // whatever held the port, key attached, on every `on`, `update`, `status` and
   // `doctor`, and another account can hold that port while the engine is down.
   // So a keyed request goes over a connection whose far side has been judged
@@ -1764,7 +1764,7 @@ function resolveSystemInstall(flags, argv = process.argv.slice(2)) {
   if (process.platform !== 'linux' || !flags.system || isRoot()) return 'direct';
   // The elevated re-run gets a FILE path for any engine key, never the value:
   // sudo/pkexec log their argv, and the value would otherwise be in that log
-  // and in the process list for the life of the run (security review).
+  // and in the process list for the life of the run.
   const safe = keyOffElevatedArgv(argv);
   let r;
   try {

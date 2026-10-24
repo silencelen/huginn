@@ -17,7 +17,7 @@ import (
 	"github.com/silencelen/huginn/core/internal/store"
 )
 
-// Security scan F8: `huginn core pair --url http://127.0.0.1:8787` on the
+// `huginn core pair --url http://127.0.0.1:8787` on the
 // server itself skipped the proof, and the status request that followed handed
 // the token to whatever held that port. Pairing proves a daemon on this
 // machine exactly as it proves one anywhere else.

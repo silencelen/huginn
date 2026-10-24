@@ -21,8 +21,8 @@ import kotlin.test.assertTrue
  * Each case below is a CLASS of address, not an example, because the rule is
  * about shape: https anywhere — and since appd 3.11 (docs/dev/protocol-tls.md) every
  * http address is STORED AS https rather than refused, because the TLS proof is
- * what now keeps the bearer from a stranger. Loopback included (security scan
- * F9): only HUGINN_APPD_PLAINTEXT=local keeps a loopback address plain.
+ * what now keeps the bearer from a stranger. Loopback included:
+ * only HUGINN_APPD_PLAINTEXT=local keeps a loopback address plain.
  */
 class RouteGuardTest {
 
@@ -112,7 +112,7 @@ class RouteGuardTest {
         assertEquals("https://192.168.1.20:8787", RouteGuard.normalize("192.168.1.20:8787"))
         assertEquals("https://192.168.1.20:8787", RouteGuard.require(" 192.168.1.20:8787/ "))
         withPlaintextLoopback(on = false) {
-            assertEquals("https://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"), "this machine too (scan F9)")
+            assertEquals("https://127.0.0.1:8787", RouteGuard.require("127.0.0.1:8787"), "this machine too")
         }
     }
 

@@ -70,14 +70,14 @@ import kotlinx.serialization.json.jsonPrimitive
  * `proven` means the CHANNEL-BOUND proof of `docs/dev/protocol-tls.md` (appd 3.11+):
  * the token holder is behind the certificate this client's own handshake saw.
  * ⚠ The legacy proof (an HMAC over the bare nonce) NEVER counts, a loopback
- * address included (security scan F9): the daemon hands it to anybody who asks,
+ * address included: the daemon hands it to anybody who asks,
  * so whatever holds a loopback port can relay it from the daemon's own address.
  *
  * @param version the PROVED daemon's own, from the challenge body (or the header
  *   it stamps) on the connection the proof just bound, and only if it is shaped
  *   like a release number ([DaemonTls.versionShape]). ⚠ Null whenever [proven] is
  *   false: before a proof the far end's version is a claim anybody can print, and
- *   it used to lead the setup flow's sentence (security review, 2026-10).
+ *   it used to lead the setup flow's sentence.
  * @param answered something huginn-SHAPED is at that address. Useful to SAY
  *   (a pre-3.6 daemon 404s the challenge and is still a real daemon); never
  *   sufficient to adopt.
@@ -317,7 +317,7 @@ class HuginnClient(
             if (probe.address.isBlank()) return NO_ROUTE
             val where = probe.address.removePrefix("https://").removePrefix("http://").trimEnd('/')
             // ⚠⚠ THE VERDICT LEADS, AND ONLY A PROVED DAEMON IS NAMED BY ITS VERSION
-            // (security review, 2026-10). These words used to open with
+            //. These words used to open with
             // "appd <version>" whatever the verdict, and the version is what the
             // far end SAYS — so an unproved answer chose the first words of the
             // sentence the reader decides on. Everything below is built from the
@@ -409,7 +409,7 @@ class HuginnClient(
         client.plugin(HttpSend).intercept { request ->
             if (request.url.protocol != URLProtocol.HTTPS) {
                 // ⚠ PLAIN HTTP CARRIES THE BEARER ONLY UNDER THE SWITCH, AND ONLY TO
-                // LOOPBACK (security scan F9). withScheme() dials every other
+                // LOOPBACK. withScheme() dials every other
                 // http:// as https://, a loopback one included, so this is the
                 // re-check where the request leaves: refused before a byte of it
                 // is written, never sent and then regretted.
@@ -589,7 +589,7 @@ class HuginnClient(
         // rolled-back one — still says `http://192.168.x.y` or
         // `http://127.0.0.1:8787`. Upgrading at the last point before the socket
         // means no path can put the bearer on the wire in cleartext, to this
-        // machine's loopback included (security scan F9), unless
+        // machine's loopback included, unless
         // HUGINN_APPD_PLAINTEXT=local says so.
         val full = if (schemed) b else "http://$b"
         return if (viaCore) DaemonTls.secureUrl(full, plaintext = true) else DaemonTls.secureUrl(full)
@@ -742,8 +742,8 @@ class HuginnClient(
         // trust-anything probe connection and proves the channel (TLS.md).
         if (root.startsWith("https://")) return probeTls(root, address)
 
-        // ⚠⚠ PLAIN HTTP PROVES NOTHING, SO NOTHING IS ASKED TO PROVE IT (security
-        // scan F9). Only HUGINN_APPD_PLAINTEXT=local leaves a route here, and
+        // ⚠⚠ PLAIN HTTP PROVES NOTHING, SO NOTHING IS ASKED TO PROVE IT.
+        // Only HUGINN_APPD_PLAINTEXT=local leaves a route here, and
         // only a loopback one. This used to ask the challenge in plain http and
         // adopt the route on the LEGACY proof — an HMAC over the bare nonce,
         // which the real daemon hands to anybody, so whatever held the port

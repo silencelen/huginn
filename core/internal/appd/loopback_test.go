@@ -1,6 +1,6 @@
 package appd
 
-// Security scan F8: a loopback http:// url used to skip the proof and the pin,
+// A loopback http:// url used to skip the proof and the pin,
 // so the token went in cleartext to whatever held the port, and any account on
 // the machine can hold it while appd restarts. Loopback is now dialled over TLS
 // on the same port and proved like any other address; HUGINN_APPD_PLAINTEXT=local
@@ -56,7 +56,7 @@ func (s *squatter) seen() (hits int, auth []string) {
 	return s.hits, append([]string(nil), s.auth...)
 }
 
-// The scan's F8, for each of the three ways the core sends the token: the
+// For each of the three ways the core sends the token: the
 // device API (Do), the watch stream (Stream) and the /appd proxy (Forward).
 // On the old code all three sent `Authorization: Bearer <token>` to it.
 func TestLoopbackSquatterNeverGetsTheToken(t *testing.T) {

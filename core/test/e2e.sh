@@ -52,7 +52,7 @@ start_core
 
 grep -q "not paired" <<< "$("$T/huginn" core status)" && ok "status says not paired" || bad "status before pairing"
 
-# Security scan F8: a loopback port proves nothing about who holds it. A plain
+# A loopback port proves nothing about who holds it. A plain
 # http listener on 127.0.0.1 (what any account here could bind while appd
 # restarts) answering like a daemon must never be handed the token: the core
 # dials it over TLS, the proof fails, and nothing is paired.

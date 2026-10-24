@@ -6,8 +6,7 @@
 //
 // ⚠ WHY NOT httptest.NewServer. Those suites used a plain-http fake on
 // loopback, because the client used to send the token to a loopback http://
-// address without asking who was there. It no longer does (security scan F8:
-// any account can hold a loopback port while appd restarts), so a fake has to
+// address without asking who was there. It no longer does (any account can hold a loopback port while appd restarts), so a fake has to
 // prove itself exactly as appd does, and the suites now run on the proved,
 // pinned path every real request takes.
 //

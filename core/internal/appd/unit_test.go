@@ -53,7 +53,7 @@ func TestNormalizeURL(t *testing.T) {
 		"http://huginn.lan:8787/":  "https://huginn.lan:8787",
 		"https://10.0.0.5:8787":    "https://10.0.0.5:8787",
 		"https://127.0.0.1:8787":   "https://127.0.0.1:8787",
-		// Loopback is proved like anything else (security scan F8): anything on
+		// Loopback is proved like anything else: anything on
 		// this machine can hold the port while appd restarts.
 		"http://127.0.0.1:8787":        "https://127.0.0.1:8787",
 		"http://127.9.9.9:8787":        "https://127.9.9.9:8787",

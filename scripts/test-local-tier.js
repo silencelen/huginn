@@ -596,7 +596,7 @@ test('plan tells the consent card how the one prompt would happen', () => {
   assert.ok(!fs.existsSync(path.join(dir, 'local.json')));
 });
 
-// ------------------------------------------------- ProgramData lock (F14/F2)
+// ------------------------------------------------- ProgramData lock
 //
 // lockTree itself only runs on Windows (icacls), but the whole security of it
 // is the DECISION and the ORDER, which are pure. These assert the fixes for
@@ -618,7 +618,7 @@ test('lockTree takes ownership and wipes EVERY explicit ACE before granting', ()
   const steps = local.lockTreeSteps('C:\\ProgramData\\huginn-local', me);
   const joined = steps.map(([cmd, args]) => `${cmd} ${args.join(' ')}`);
   // 1. Administrators own the whole tree first — removes a pre-creator's
-  //    implicit WRITE_DAC (the heart of F14). The old lock never did this.
+  //    implicit WRITE_DAC. The old lock never did this.
   assert.match(joined[0], /^icacls C:\\ProgramData\\huginn-local \/setowner \*S-1-5-32-544 .*\/t/,
     joined[0]);
   // 2. /reset discards explicit ACEs; /inheritance:r alone (the old code) left
@@ -765,7 +765,7 @@ test('parseScQuery maps sc query output to a state, without touching the tree', 
   assert.equal(local.parseScQuery(''), 'unknown');
 });
 
-// ------------------------------------------ token seeding after the lock (F2/F17)
+// ------------------------------------------ token seeding after the lock
 //
 // On Windows the wrapper and the desktop no longer write the root-equivalent
 // token into ProgramData themselves; they stage it owner-only in the user

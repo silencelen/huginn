@@ -25,7 +25,7 @@ package com.silencelen.huginn.data
  *   cleartext gets read. Upgrading in [normalize] means a typed `192.168.1.5:8787`
  *   and a migrated `http://…` both land as what is actually dialled, so the
  *   settings screen shows `https://` and never a scheme the client will not use.
- * - ⚠ LOOPBACK INCLUDED (security scan F9). `127.0.0.1` kept plain http on the
+ * - ⚠ LOOPBACK INCLUDED. `127.0.0.1` kept plain http on the
  *   theory that there is no wire; but any app on the phone, or any account on a
  *   desktop, can hold a loopback port while a forward or the daemon is down, and
  *   was handed the bearer. Only [DaemonTls.plaintextLoopback] keeps one plain.

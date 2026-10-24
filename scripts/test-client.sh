@@ -1751,7 +1751,7 @@ rm -rf "$TD3"
 # than reporting green on a box where the port is taken.
 #
 # ⚠ THE STUB DAEMONS PROVE THEMSELVES, the way appd does (docs/dev/protocol-tls.md):
-# the runner sends the token nowhere unproved, 127.0.0.1 included (scan F13), so
+# the runner sends the token nowhere unproved, 127.0.0.1 included, so
 # a plain-http stub would only ever hear the TLS hello. tls-stub.js serves a
 # handler over https on a throwaway self-signed pair and answers /v1/challenge
 # with the bound proof for the stub's token; the lanes below use it.

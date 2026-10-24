@@ -39,7 +39,7 @@ func TestSeed(t *testing.T) {
 
 // The token copy is locked every time it is seeded, and when it is found
 // already in place (a copy written before the lock): on Windows 0600 meant
-// nothing and it inherited "Users: read" (security review, 2026-10-17).
+// nothing and it inherited "Users: read".
 func TestSeedLocksTheTokenFile(t *testing.T) {
 	var locked []string
 	old := bestEffortLock

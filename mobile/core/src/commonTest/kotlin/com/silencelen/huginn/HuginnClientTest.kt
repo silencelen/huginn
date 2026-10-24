@@ -85,7 +85,7 @@ class HuginnClientTest {
     }
 
     /**
-     * Loopback is dialled over https too (security scan F9): a port on this
+     * Loopback is dialled over https too: a port on this
      * machine proves nothing about who holds it. Only HUGINN_APPD_PLAINTEXT=local
      * keeps it plain.
      */
@@ -316,7 +316,7 @@ class HuginnClientTest {
     }
 
     // The probes below run on PLAIN http, which only HUGINN_APPD_PLAINTEXT=local
-    // leaves a route on since loopback is proved too (scan F9); the TLS probe
+    // leaves a route on since loopback is proved too; the TLS probe
     // has its own tests in DaemonTlsTest and TlsTransportIntegrationTest.
 
     @Test
@@ -423,7 +423,7 @@ class HuginnClientTest {
     }
 
     /**
-     * ⚠⚠ SECURITY SCAN F9. The legacy proof — an HMAC over the bare nonce — used
+     * ⚠⚠ THE LEGACY PROOF ADOPTS NOTHING. The legacy proof — an HMAC over the bare nonce — used
      * to adopt a plain-http loopback route. The daemon answers that challenge
      * for anybody, so whatever held the port could relay it from the daemon's
      * own address and be adopted, then handed the bearer. It adopts nothing
@@ -1218,7 +1218,7 @@ class DaemonProbeTest {
 
     @Test
     fun `the proof is what makes the words say it proved anything`() = runTest { withPlaintextLoopback(on = false) {
-        // A daemon on this machine, proved over TLS like any other (scan F9).
+        // A daemon on this machine, proved over TLS like any other.
         val probe = HuginnClient(
             baseUrlProvider = { "http://appd.test" },
             tokenProvider = { "test-token" },

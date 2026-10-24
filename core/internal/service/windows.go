@@ -219,7 +219,7 @@ func TrayTaskRegistered(o WindowsOptions) bool {
 // ⚠ NOT `Register-ScheduledTask -Password $pw`: with PowerShell Module Logging
 // on (a common enterprise baseline), event 4103 records the value of every
 // parameter a cmdlet is bound to, in cleartext, in the very log stdin was
-// meant to keep the password out of (security scan F24, 2026-10-18). Task
+// meant to keep the password out of. Task
 // Scheduler's own COM API takes it instead. A method call is not a cmdlet,
 // so module logging has nothing to bind. RegisterTaskDefinition(path,
 // definition, 6 = TASK_CREATE_OR_UPDATE (what -Force did), user, password,
@@ -402,9 +402,9 @@ func InstallWindows(o WindowsOptions) Report {
 			if logon == LogonPassword {
 				// ⚠ NEVER `schtasks /RP <password>`: argv is recorded by
 				// process-creation auditing and readable by other processes while
-				// it runs (security scan F3, 2026-10-15). The password goes to
+				// it runs. The password goes to
 				// PowerShell on STDIN and from there into Task Scheduler's COM
-				// API, never a cmdlet parameter (F24: see PasswordRegisterScript).
+				// API, never a cmdlet parameter (see PasswordRegisterScript).
 				ir, ok := r.(InputRunner)
 				if !ok {
 					os.Remove(xmlPath)

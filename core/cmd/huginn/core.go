@@ -345,7 +345,7 @@ func coreInstall(args []string) int {
 		case "password":
 			o.Logon = service.LogonPassword
 			how = "with your password, kept by Task Scheduler"
-			// Not echoed (security scan F3): a password on screen is in scrollback
+			// Not echoed: a password on screen is in scrollback
 			// and in every screen share. Piped stdin (automation) still works.
 			// To this window's own stderr even with --report: the person types
 			// it here.

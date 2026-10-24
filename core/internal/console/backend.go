@@ -83,7 +83,7 @@ func (b *backend) do(ctx context.Context, method, path string, body, out any) er
 	}
 	if out != nil && len(raw) > 0 {
 		err := json.Unmarshal(raw, out)
-		scrub(out) // every string, before any screen shows it (F25); a partial decode is shown too
+		scrub(out) // every string, before any screen shows it; a partial decode is shown too
 		return err
 	}
 	return nil

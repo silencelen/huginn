@@ -27,7 +27,7 @@ import kotlin.concurrent.Volatile
  * such cover. So there is deliberately NO setting here that re-enables cleartext
  * to a remote host.
  *
- * ⚠ AND LOOPBACK IS PROVED TOO (security scan F9). It used to stay plain http on
+ * ⚠ AND LOOPBACK IS PROVED TOO. It used to stay plain http on
  * the theory that there is no wire to read; but a loopback port proves nothing
  * about who holds it: any app on a phone (a port-forward, `adb reverse`, an SSH
  * app) or any account on a desktop can bind it while the forward or the daemon
@@ -99,7 +99,7 @@ object DaemonTls {
 
     /**
      * Appended to [INTERCEPTED] when a port on this machine answered the TLS
-     * hello in plain HTTP. Since security scan F9 a loopback address is dialled
+     * hello in plain HTTP. A loopback address is now dialled
      * over TLS like any other, so a plain answer there is never the daemon this
      * client can prove: it is another program (or account) holding the port, or
      * a daemon too old for TLS. Display only, like [TOKEN_HINT]; it changes
@@ -207,7 +207,7 @@ object DaemonTls {
      * still change is which sentence is printed.
      *
      * ⚠⚠ "TOO OLD" IS AN UNPROVEN ANSWER'S OWN CLAIM, so it is believed only
-     * where nothing better is known (security review, 2026-10). A plain-HTTP
+     * where nothing better is known. A plain-HTTP
      * reply to the TLS hello and a version number in a body are both free for
      * an interceptor to print, and believing them turned an active
      * interception into "update the daemon". So with [tlsRequired] — this

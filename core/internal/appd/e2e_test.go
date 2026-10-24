@@ -300,7 +300,7 @@ func TestE2ERealAppd(t *testing.T) {
 		}
 	})
 
-	// Security scan F8: how a core on the server itself was paired. The same
+	// How a core on the server itself was paired. The same
 	// port answers TLS, so the stored http:// is dialled as https://, proved
 	// and pinned like any other address before the token goes anywhere.
 	t.Run("a loopback http:// is dialled over TLS and proved; a wrong token is refused before it is sent", func(t *testing.T) {

@@ -27,7 +27,7 @@ import kotlin.random.Random
  * captured off somebody else's exchange answers somebody else's nonce; replaying
  * it here fails. That is the only reason this can be asked unauthenticated.
  *
- * ⚠⚠ AND THIS PROOF ALONE NO LONGER ADOPTS ANYTHING (security scan F9). It proves
+ * ⚠⚠ AND THIS PROOF ALONE NO LONGER ADOPTS ANYTHING. It proves
  * that a token holder exists, not that THIS connection ends at it: the daemon
  * answers the challenge for anybody, so whatever holds an address (a loopback
  * port above all) can relay a fresh nonce to the daemon's real address and hand

@@ -428,7 +428,7 @@ func TestInstallWindowsPassword(t *testing.T) {
 	if !rep.OK() {
 		t.Fatalf("%s %v", rep, f.calls)
 	}
-	// F3: the password is on stdin, and in NO argv of any command run.
+	// The password is on stdin, and in NO argv of any command run.
 	for _, c := range f.calls {
 		if strings.Contains(c, "s3cret-pw") || strings.Contains(c, "/RP") {
 			t.Fatalf("password in argv: %s", c)
@@ -444,7 +444,7 @@ func TestInstallWindowsPassword(t *testing.T) {
 	}
 }
 
-// F24: Module Logging (event 4103) writes every value a cmdlet parameter is
+// Module Logging (event 4103) writes every value a cmdlet parameter is
 // bound to into the PowerShell log, in cleartext, so the password may go to
 // no cmdlet at all: only to the ReadLine that takes it off stdin and to the
 // Task Scheduler COM call. No -Password, no pipeline, no Verb-Noun on its way.

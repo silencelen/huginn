@@ -536,7 +536,7 @@ func (d *Daemon) pair(ctx context.Context, p Pair) (fp, saved string, err error)
 	defer probe.Close()
 	pctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	// ⚠ PROVED ON THIS MACHINE TOO (security scan F8). Pairing used to skip the
+	// ⚠ PROVED ON THIS MACHINE TOO. Pairing used to skip the
 	// proof for any http:// url, and the status request below then handed the
 	// token to whatever held a loopback port. NormalizeURL dials a loopback
 	// http:// as https:// now, so the only url left unproved is plain http
@@ -597,7 +597,7 @@ func (d *Daemon) routes(mux *http.ServeMux) {
 			// no second tray icon, no second copy of every notification.
 			// A tray that cannot show a notification (no notification server,
 			// no shortcut carrying the toast identity) is not a reason to take
-			// them away from Telegram (security review, 2.1.0).
+			// them away from Telegram.
 			if r.URL.Query().Get("deliver") != "0" {
 				d.watch.senders.Add(1)
 				defer d.watch.senders.Add(-1)

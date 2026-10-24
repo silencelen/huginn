@@ -49,7 +49,7 @@ func newNotifier(l *log.Logger) Notifier {
 // unescaped, an <a href> in it is a clickable link in a trusted "huginn"
 // notification, opened by the server — around OpenURL's huginn://-only rule —
 // and an <img src> makes the server read a local file. The summary (title) is
-// plain text by the spec, so it is left as is. (Security review, 2.1.0.)
+// plain text by the spec, so it is left as is.
 func bodyText(s string) string {
 	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
