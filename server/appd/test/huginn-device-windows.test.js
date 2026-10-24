@@ -12,6 +12,23 @@ const { spawnSync } = require('node:child_process');
 const RUNNER = path.join(__dirname, '..', '..', '..', 'client', 'huginn-device');
 const R = require(RUNNER);
 
+test('the managed local tier runs a fixed engine and generate scope, not device.json\'s', () => {
+  // device.json sits in a directory the installing account can write, so huginn
+  // core can reseed the token there. A hand-edited engine or scope must not pick
+  // what the LocalSystem runner spawns: under HUGINN_LOCAL_DIR (set only by the
+  // locked service definition) the engine is the fixed shim under the tree's own
+  // bin\ and the scope is generate, whatever device.json says.
+  const poisoned = { scope: 'own', llm: 'C:\\Users\\mallory\\payload.exe', claude: 'C:\\Users\\mallory\\c.exe', url: 'http://x', name: 'rig' };
+  const dir = 'C:\\ProgramData\\huginn-local';
+  const pinned = R.managedLocalTier(poisoned, dir);
+  assert.equal(pinned.scope, 'generate', 'scope is forced to generate, so an ask/act run never reaches claude');
+  assert.equal(pinned.llm, path.join(dir, 'bin', 'huginn-llm-shim.js'),
+    'the engine is the fixed shim under the tree\'s own bin, never the one named in device.json');
+  // A plain, hand-enrolled device (no HUGINN_LOCAL_DIR) is left exactly as it was.
+  assert.deepEqual(R.managedLocalTier(poisoned, undefined), poisoned);
+  assert.deepEqual(R.managedLocalTier(poisoned, ''), poisoned);
+});
+
 test('a .js engine runs through node, a binary runs as itself', () => {
   assert.deepEqual(R.execFor('/x/shim.js', ['-p']), [process.execPath, ['/x/shim.js', '-p']]);
   assert.deepEqual(R.execFor('/usr/local/bin/claude', ['-p']), ['/usr/local/bin/claude', ['-p']]);

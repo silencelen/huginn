@@ -136,6 +136,32 @@ const DEFAULTS = {
   actWhileLocked: false,
 };
 
+/**
+ * ⚠ THE MANAGED LOCAL-AI RUNNER DOES NOT LET device.json CHOOSE WHAT IT RUNS.
+ * On Windows this runner is a LocalSystem service, and the account that set the
+ * tier up keeps write access to its device\ directory so huginn core can reseed
+ * the token there without elevating. device.json lives in that writable
+ * directory — so a lower-privilege process could point `llm` at a program of
+ * its own (or widen `scope` so an ask/act run reaches `claude`) and have SYSTEM
+ * run it, with no prompt. That is a local privilege escalation.
+ *
+ * The signal that this is the managed tier is HUGINN_LOCAL_DIR, set only by the
+ * locked service definition (the WinSW XML or the systemd unit), which that
+ * account cannot edit. Under it the generate engine is fixed to the shim under
+ * the tier's own bin\ — read-only to that account — and the scope is pinned to
+ * generate, so neither can be changed by editing device.json. A plain,
+ * hand-enrolled device (no HUGINN_LOCAL_DIR) is left exactly as its config says.
+ * Pure.
+ */
+function managedLocalTier(conf, localDir) {
+  if (!localDir) return conf;
+  return {
+    ...conf,
+    scope: 'generate',
+    llm: path.join(localDir, 'bin', 'huginn-llm-shim.js'),
+  };
+}
+
 function loadConf() {
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(CONF_FILE, 'utf8')); } catch { /* first run */ }
@@ -150,7 +176,9 @@ function loadConf() {
     c.url = up;
     if (raw.url) { try { saveConf({ ...raw, url: up }); } catch { /* dialled upgraded anyway */ } }
   }
-  return c;
+  // The managed local-AI tier pins its own engine and scope regardless of what
+  // device.json (in its writable directory) was edited to say. See managedLocalTier.
+  return managedLocalTier(c, process.env.HUGINN_LOCAL_DIR);
 }
 
 /**
@@ -1940,7 +1968,7 @@ if (require.main === module) {
     locked, gateLocked,
     engineRefusal, execFor, engineWords, errWords, notFoundText, exitedText, urlRefusal,
     permanent, authFailed, noTokenError, retryDelayMs,
-    boundProof, proofMatches, upgradeUrl, isLoopbackHost, pinsFor, addPin, pinTag, proveDaemon, api, loadConf,
+    boundProof, proofMatches, upgradeUrl, isLoopbackHost, pinsFor, addPin, pinTag, proveDaemon, api, loadConf, managedLocalTier,
     MAX_PINS, INTERCEPTED, OLD_DAEMON, PLAINTEXT_ENV, plaintextLoopback, plainRefusal, enrol,
     termSafe, CHALLENGE_MAX_BYTES, CHALLENGE_DEADLINE_MS,
   };
