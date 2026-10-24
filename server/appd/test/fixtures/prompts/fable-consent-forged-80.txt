@@ -1,4 +1,4 @@
-# SYNTHESISED — the claude-security 2026-10-18 F7 exploit shape, NOT a capture.
+# SYNTHESISED — the forged-consent exploit shape, NOT a capture.
 # A prompt-injected model prints the Fable consent heading as ordinary PROSE,
 # then issues a Bash command whose "don't ask again" row carries the phrase
 # "for this session". consentRecommended must return NOTHING here: the heading is

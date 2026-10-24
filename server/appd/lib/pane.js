@@ -568,8 +568,8 @@ function detectUnnumberedSelector(lines) {
 // whose label contains 'for this session'". Both halves are attacker-reachable:
 // a prompt-injected model prints the heading as prose and issues a Bash command
 // whose "Yes, and don't ask again … for this session" row carries the phrase, so
-// the gate fired on a real permission dialog and the backstop pressed Yes on it
-// (claude-security 2026-10-18, F7). So the gate is now the consent dialog's
+// the gate fired on a real permission dialog and the backstop pressed Yes on it.
+// So the gate is now the consent dialog's
 // exact measured rows (native-rl §7, fixture fable-consent-80):
 //
 //     Fable limit reached · continuing on <M> uses usage credits      (heading)
@@ -626,7 +626,7 @@ function consentRecommended(plain, opts) {
   const labels = opts.map((o) => String(o.label || ''));
   // ⚠ NEVER a permission dialog. Its rows are Yes / Yes, and don't ask again … /
   // No, and that "don't ask again" is the owner's standing approval — the one
-  // thing the backstop must never press on its own (claude-security F7).
+  // thing the backstop must never press on its own.
   if (PERM_YES_RE.test(labels[0] || '') && labels.some((l) => PERM_NO_RE.test(l))) return null;
   // Both of the consent dialog's own rows must be present, by their exact shape.
   if (!labels.some((l) => CONSENT_CONTINUE_ROW_RE.test(l))) return null;

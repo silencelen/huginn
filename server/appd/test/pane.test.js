@@ -946,8 +946,8 @@ test('recommended is absent from every ordinary dialog', () => {
     'but it carries neither "limit reached" nor "now uses usage credits", so it is not the dialog');
 });
 
-test('F7: a forged consent heading over a permission dialog is NOT recommended', () => {
-  // claude-security 2026-10-18 F7: the old gate searched the WHOLE pane for the
+test('a forged consent heading over a permission dialog is NOT recommended', () => {
+  // The old gate searched the WHOLE pane for the
   // heading and picked ANY option containing "for this session". A prompt-injected
   // model prints the heading as prose and runs a Bash command whose "Yes, and
   // don't ask again … for this session" row carries the phrase — and the backstop

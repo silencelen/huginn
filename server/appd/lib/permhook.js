@@ -23,7 +23,7 @@
 // command block (the lines between its `╌╌╌` rules). No other tool takes the hook
 // path — their dialog shapes were never captured — and when more than one live
 // request matches, nothing does: an approval must bind to exactly one request
-// (claude-security scan 2026-10-11, F1/F2: a prefix or basename match plus a
+// (a prefix or basename match plus a
 // newest-wins tie-break could route a Yes to a different, unseen tool call when
 // parallel subagents — which share the session id — have prompts pending).
 // Anything this module is not sure about returns null, and /answer types the
@@ -62,7 +62,7 @@ const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
  * case. The old `squash()` deleted all whitespace and lowercased, which made
  * different commands — `rm -rf ~/tmp/x` and `rm -rf ~ /tmp/x` — compare equal, so
  * a tap meant for the dialog on screen could approve a different, unseen live
- * request (claude-security 2026-10-18, F20). `joinBlock` strips the dialog pad;
+ * request. `joinBlock` strips the dialog pad;
  * `joinLines` does not. A wrapped-but-identical command still matches; a command
  * that differs by a single space no longer does.
  */

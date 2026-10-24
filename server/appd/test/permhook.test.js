@@ -120,7 +120,7 @@ test('liveRequests: dead pids, malformed files, stale and foreign-named files ar
 });
 
 test('pickRequest: two live requests that both match -> NONE (an approval binds to exactly one request)', () => {
-  // claude-security 2026-10-11 F1/F2: newest-wins could hand a Yes to an unseen twin.
+  // Newest-wins could hand a Yes to an unseen twin.
   const prompt = detectPrompt(BASH_PANE);
   const region = ph.dialogRegion(BASH_PANE);
   const old = { id: 'o', tool: 'Bash', input: { command: 'touch hello2.txt' }, ts: 1 };
@@ -158,7 +158,7 @@ test('clearRequests removes the whole name', () => {
   assert.equal(fs.existsSync(ph.permDir(dir, 's')), false);
 });
 
-test('F2: a command that only STARTS like the dialog\'s (a hidden second line) does not match', () => {
+test('a command that only STARTS like the dialog\'s (a hidden second line) does not match', () => {
   const pane = ['─'.repeat(60), ' Bash command', '╌'.repeat(60), ' npm test', '╌'.repeat(60),
     ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel'];
   const prompt = detectPrompt(pane);
@@ -168,14 +168,14 @@ test('F2: a command that only STARTS like the dialog\'s (a hidden second line) d
   assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'npm testx' } }, prompt, region), false);
 });
 
-test('F1: a command that merely APPEARS inside the dialog\'s command does not match', () => {
+test('a command that merely APPEARS inside the dialog\'s command does not match', () => {
   const pane = ['─'.repeat(60), ' Bash command', '╌'.repeat(60), ' echo "rm -rf ~/projects is bad"', '╌'.repeat(60),
     ' Do you want to proceed?', ' ❯ 1. Yes', '   2. No', ' Esc to cancel'];
   assert.equal(ph.matchesPrompt({ tool: 'Bash', input: { command: 'rm -rf ~/projects' } }, detectPrompt(pane), ph.dialogRegion(pane)), false);
 });
 
-test('F20: two commands that differ only by a space (or case) do NOT match', () => {
-  // claude-security 2026-10-18 F20: `squash()` deleted ALL whitespace and
+test('two commands that differ only by a space (or case) do NOT match', () => {
+  // `squash()` deleted ALL whitespace and
   // lowercased, so the dialog for `rm -rf ~/tmp/x` matched a live, unseen request
   // for `rm -rf ~ /tmp/x` — a tap meant for one approved the other. Word
   // boundaries and case must survive the normalisation.

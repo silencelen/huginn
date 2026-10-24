@@ -1691,8 +1691,8 @@ const ICON_HEAD_MAX = 64 * 1024;
  * ⚠ LINEAR BY CONSTRUCTION. The old `/<link\b[^>]*>/gi`, run over all
  * [ICON_MAX_BYTES] of fetched HTML, was quadratic on a page of many `<link`
  * openers with no closing `>`: every match attempt scanned to the end before
- * failing, and it stalled the daemon's single event loop on each favicon refresh
- * (claude-security 2026-10-18, F22). A bounded quantifier still backtracks; an
+ * failing, and it stalled the daemon's single event loop on each favicon refresh.
+ * A bounded quantifier still backtracks; an
  * indexOf walk does not. Each `>` is sought once, so an opener with no `>` ends
  * the scan at once. `<linkfoo` (no word boundary) is skipped, matching `<link\b`.
  */

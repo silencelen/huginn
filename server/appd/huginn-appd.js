@@ -10766,8 +10766,8 @@ async function consentWatch(state, settings, sessions, now) {
     if (!prompt || !prompt.recommended) { consentSeen.delete(s.name); continue; }
     // ⚠ NEVER over a live tool-permission request. The backstop presses a bare
     // digit; a Bash / AskUserQuestion permission dialog is waiting on its own
-    // hook, and a digit pressed into one approves a tool call nobody reviewed
-    // (claude-security F7). consentRecommended already refuses the permission
+    // hook, and a digit pressed into one approves a tool call nobody reviewed.
+    // consentRecommended already refuses the permission
     // SHAPE; this refuses on the daemon's own evidence — the request sidecars it
     // already reads — that a tool prompt is live, whatever the scrape made of it.
     try {
