@@ -47,27 +47,36 @@ class ContextClientTest {
         assertNull(got.breakdown)
     }
 
+    /** The 202 body as appd 3.14.0 serves it: `queued`, plus whether it was typed now or what holds it. */
     @Test
     fun `a refresh is a POST that comes back queued`() = runTest {
-        val c = client { respond("""{"queued":true}""", HttpStatusCode.Accepted) }
+        val c = client { respond("""{"queued":true,"delivered":false,"blockedBy":"draft"}""", HttpStatusCode.Accepted) }
         val q = c.refreshSessionContext("alex")
         assertEquals("/v1/sessions/alex/context/refresh", seen.single().url.encodedPath)
         assertEquals(HttpMethod.Post, seen.single().method)
         assertTrue(q.queued)
         assertNull(q.reason)
+        assertEquals(false, q.delivered, "held, not typed yet")
+        assertEquals("draft", q.blockedBy)
+        assertNull(q.error)
+        val typed = client { respond("""{"queued":true,"delivered":true,"blockedBy":null}""", HttpStatusCode.Accepted) }.refreshSessionContext("alex")
+        assertEquals(true, typed.delivered)
+        assertNull(typed.blockedBy)
     }
 
-    /** ⚠ A 409 IS AN ANSWER: the reason is the whole message the card shows. */
+    /** ⚠ A 409 IS AN ANSWER: the reason word and the daemon's own sentence are the whole message the card shows. */
     @Test
     fun `a refresh the daemon cannot queue answers with its reason instead of throwing`() = runTest {
-        val c = client { respond("""{"reason":"dialog"}""", HttpStatusCode.Conflict) }
+        val c = client { respond("""{"reason":"dialog","error":"answer the waiting question first, then /context"}""", HttpStatusCode.Conflict) }
         val q = c.refreshSessionContext("alex")
         assertFalse(q.queued)
         assertEquals("dialog", q.reason)
+        assertEquals("answer the waiting question first, then /context", q.error, "the daemon's sentence rides along")
         // And a 409 with no body still reads as a refusal rather than a crash.
         val bare = client { respond("", HttpStatusCode.Conflict) }.refreshSessionContext("alex")
         assertFalse(bare.queued)
         assertEquals("busy", bare.reason)
+        assertNull(bare.error)
     }
 
     @Test
@@ -128,5 +137,52 @@ class ContextClientTest {
         assertEquals(true, d.fast, "and the answer carries the chat's stored choice")
         assertEquals("/v1/chats/c1", seen.last().url.encodedPath)
         assertEquals(HttpMethod.Patch, seen.last().method)
+    }
+
+    /**
+     * ⚠ A NULL WHERE THE CONTRACT SAYS A NUMBER MUST NOT FAIL THE WHOLE LIST.
+     * Observed against appd 3.14.0 (2026-10-24): a status record without a
+     * numeric `context_window_size` is served as `"window": null`. The model's
+     * field is non-nullable with a default, so without `coerceInputValues` the
+     * decode threw and every session vanished behind "not huginn". The null now
+     * reads as the default, which the meter already treats as "no window known".
+     */
+    @Test
+    fun `a null in a non-nullable status field reads as its default instead of failing the session list`() = runTest {
+        val c = client {
+            respond(
+                """{"sessions":[{"name":"alex","contextPercent":4,"context":{"used":35334,"window":null,"percent":4,"exceeds200k":false}}]}""",
+                HttpStatusCode.OK,
+            )
+        }
+        val s = c.sessions().single()
+        assertEquals(35_334L, s.context?.used)
+        assertEquals(0L, s.context?.window, "a null window is the default, not an exception")
+        assertEquals(4, s.context?.percent)
+        assertEquals(4, s.contextPercent)
+    }
+
+    /**
+     * The same for the `/context` table: a record without a stamp has `asOf`
+     * null, a table whose header line did not parse has `totalTokens` and
+     * `maxTokens` null, a row whose count did not parse has `tokens` null
+     * (observed, synthetic records, appd 3.14.0). The card gets zeros, which it
+     * already knows to draw as nothing — not an exception in place of the card.
+     */
+    @Test
+    fun `a null in the context table reads as zero instead of failing the card`() = runTest {
+        val c = client {
+            respond(
+                """{"context":null,"model":"Haiku 5.5","breakdown":{"asOf":null,"totalTokens":null,"maxTokens":null,"autocompactSource":null,
+                    "categories":[{"id":"system_prompt","name":"System prompt","tokens":null,"kind":"used"}]}}""",
+                HttpStatusCode.OK,
+            )
+        }
+        val b = c.sessionContext("alex").breakdown
+        assertEquals(0L, b?.asOf, "no stamp reads as 0, which asOf() prints as no age at all")
+        assertEquals(0L, b?.totalTokens)
+        assertEquals(0L, b?.maxTokens)
+        assertEquals(0L, b?.categories?.single()?.tokens)
+        assertEquals("system_prompt", b?.categories?.single()?.id)
     }
 }

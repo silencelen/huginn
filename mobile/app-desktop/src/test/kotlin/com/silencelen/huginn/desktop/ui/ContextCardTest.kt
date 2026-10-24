@@ -129,5 +129,33 @@ class ContextCardTest {
         onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
         waitForIdle()
         onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals("not now · a question is waiting in the pane")
+
+        // A 409 with the daemon's own sentence shows that sentence (an observed appd 3.14.0 body).
+        answer = Queued(queued = false, reason = "busy", error = "/context is already waiting for this session's next turn boundary")
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true)
+            .assertTextEquals("/context is already waiting for this session's next turn boundary")
+
+        // A 202 held behind unsent composer text says so, rather than "queued".
+        answer = Queued(queued = true, delivered = false, blockedBy = "draft")
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals("held · the composer has unsent text")
+    }
+
+    /** A table without a stamp (asOf 0, as a daemon null decodes) prints no age — never "as of 56 years ago". */
+    @Test
+    fun `a table without a stamp shows no age`() = runComposeUiTest {
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(380.dp)) {
+                    ContextCard(facts, table.copy(asOf = 0L), now, refreshNote = null, onRefresh = {})
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("context.row.system_prompt", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithText("as of", substring = true).assertDoesNotExist()
     }
 }

@@ -1,5 +1,6 @@
 {
  "fastModeDefault": false,
  "fastModePerSession": true,
- "feedbackOff": false
+ "feedbackOff": true,
+ "statusLine": true
 }

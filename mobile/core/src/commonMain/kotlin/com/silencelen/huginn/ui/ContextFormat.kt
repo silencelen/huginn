@@ -3,6 +3,7 @@ package com.silencelen.huginn.ui
 import com.silencelen.huginn.data.ContextBreakdown
 import com.silencelen.huginn.data.ContextCategory
 import com.silencelen.huginn.data.ContextUsage
+import com.silencelen.huginn.data.Queued
 import kotlin.math.roundToLong
 
 /**
@@ -78,18 +79,29 @@ object ContextFormat {
         if (asOfMs <= 0L) "" else "as of " + TimeWords.agoMs(asOfMs, nowMs)
 
     /**
-     * What a queued refresh says, and what each of the daemon's three refusals
-     * means. The reason words are the wire's (`busy` · `shell` · `dialog`); the
-     * sentences are ours and say what is true rather than what to do about it.
+     * What the card says back after a refresh (or a `/fast` toggle). A 202 is
+     * typed now, or held while the composer holds unsent text (`blockedBy:
+     * draft`). A 409 shows the daemon's own sentence where it gave one, else a
+     * sentence per reason word (`busy` · `shell` · `dialog`). `busy` is the same
+     * command already waiting — NOT mid-turn: a refresh asked mid-turn is a 202,
+     * typed for the end of the turn.
      */
-    fun refreshNote(queued: Boolean, reason: String?): String = when {
-        queued -> "queued · appears when the session is idle"
-        reason == "busy" -> "not now · the session is mid-turn"
-        reason == "shell" -> "not here · this pane is a shell, not Claude"
-        reason == "dialog" -> "not now · a question is waiting in the pane"
-        !reason.isNullOrBlank() -> "not now · $reason"
-        else -> "could not ask for a refresh"
+    fun refreshNote(q: Queued): String {
+        val said = q.error?.trim().orEmpty()
+        return when {
+            q.queued && q.delivered == false && q.blockedBy == "draft" -> "held · the composer has unsent text"
+            q.queued -> "queued · appears when the session is idle"
+            said.isNotEmpty() -> said
+            q.reason == "busy" -> "not now · already queued for this session"
+            q.reason == "shell" -> "not here · this pane is a shell, not Claude"
+            q.reason == "dialog" -> "not now · a question is waiting in the pane"
+            !q.reason.isNullOrBlank() -> "not now · ${q.reason}"
+            else -> "could not ask for a refresh"
+        }
     }
+
+    /** The same from the two words alone, for a caller with no daemon sentence in hand. */
+    fun refreshNote(queued: Boolean, reason: String?): String = refreshNote(Queued(queued = queued, reason = reason))
 
     /** The kinds a bar colours by, in the order the legend lists them. */
     val KINDS: List<String> = listOf("used", "buffer", "deferred", "free")

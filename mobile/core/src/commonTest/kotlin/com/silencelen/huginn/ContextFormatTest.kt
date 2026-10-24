@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.ContextBreakdown
 import com.silencelen.huginn.data.ContextCategory
 import com.silencelen.huginn.data.ContextUsage
+import com.silencelen.huginn.data.Queued
 import com.silencelen.huginn.ui.ContextFormat
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -90,20 +91,43 @@ class ContextFormatTest {
         assertEquals(0.033, rows[2].share, 0.0001)
     }
 
+    /**
+     * The 202's two states, then the 409 in the daemon's own words where it gave
+     * any (observed appd 3.14.0 bodies), else a sentence per reason word. `busy`
+     * is the same command already waiting — a refresh asked mid-turn is a 202.
+     */
     @Test
-    fun `the refresh answer is a sentence for each of the daemon's reasons`() {
-        assertEquals("queued · appears when the session is idle", ContextFormat.refreshNote(true, null))
-        assertEquals("not now · the session is mid-turn", ContextFormat.refreshNote(false, "busy"))
+    fun `the refresh answer is what the daemon said, or a sentence for each of its reasons`() {
+        assertEquals("queued · appears when the session is idle", ContextFormat.refreshNote(Queued(queued = true, delivered = true)))
+        assertEquals("queued · appears when the session is idle", ContextFormat.refreshNote(true, null), "a 202 without the delivery fields")
+        assertEquals(
+            "held · the composer has unsent text",
+            ContextFormat.refreshNote(Queued(queued = true, delivered = false, blockedBy = "draft")),
+        )
+        assertEquals(
+            "/context is already waiting for this session's next turn boundary",
+            ContextFormat.refreshNote(Queued(reason = "busy", error = "/context is already waiting for this session's next turn boundary")),
+            "a 409 shows the daemon's own sentence",
+        )
+        assertEquals("not now · already queued for this session", ContextFormat.refreshNote(false, "busy"), "busy is a duplicate, not mid-turn")
         assertEquals("not here · this pane is a shell, not Claude", ContextFormat.refreshNote(false, "shell"))
         assertEquals("not now · a question is waiting in the pane", ContextFormat.refreshNote(false, "dialog"))
+        assertEquals(
+            "not here · this pane is a shell, not Claude",
+            ContextFormat.refreshNote(Queued(reason = "shell", error = "  ")),
+            "a blank sentence falls back to the reason's",
+        )
         assertEquals("not now · rate limited", ContextFormat.refreshNote(false, "rate limited"), "an unknown reason is still shown")
         assertEquals("could not ask for a refresh", ContextFormat.refreshNote(false, null))
     }
 
+    /** No stamp — 0, as a daemon null decodes, or anything negative — prints no age, never "56 years ago". */
     @Test
     fun `as of names the table's age, or nothing when it has no stamp`() {
         val now = 1_789_460_000_000L
         assertEquals("as of 14m ago", ContextFormat.asOf(now - 14 * 60_000L, now))
         assertEquals("", ContextFormat.asOf(0L, now))
+        assertEquals("", ContextFormat.asOf(-1L, now))
+        assertEquals("", ContextFormat.asOf(ContextBreakdown().asOf, now), "the model's default is no stamp")
     }
 }

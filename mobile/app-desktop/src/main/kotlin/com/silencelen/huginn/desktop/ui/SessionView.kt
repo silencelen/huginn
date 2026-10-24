@@ -341,7 +341,7 @@ fun SessionView(store: AppStore, name: String) {
                     runCatching { store.client.setSessionFast(name, on) }
                         .onSuccess { q ->
                             if (q.queued) store.noteAction("fast mode ${if (on) "on" else "off"} · after this turn")
-                            else store.noteAction(ContextFormat.refreshNote(false, q.reason))
+                            else store.noteAction(ContextFormat.refreshNote(q))
                         }
                         .onFailure { store.noteError(it) }
                 }

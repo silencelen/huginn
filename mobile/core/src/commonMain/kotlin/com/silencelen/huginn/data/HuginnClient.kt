@@ -347,7 +347,13 @@ class HuginnClient(
         }
     }
 
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    // `coerceInputValues`: a JSON null on a non-nullable field with a default reads
+    // as that default. appd 3.14.0 serves `context.window: null` for a status
+    // record without a numeric window size, and nulls for `breakdown.asOf`,
+    // `totalTokens`, `maxTokens` and a row's `tokens` when a `/context` table
+    // did not fully parse (observed 2026-10-24); without this one such value
+    // failed the WHOLE session list as "not huginn".
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; coerceInputValues = true }
 
     /** Spelled out rather than `Json.withCharset`, to keep the header byte-identical to what the daemon has always been sent. */
     private val jsonMedia = ContentType.parse("application/json; charset=utf-8")
@@ -1279,7 +1285,8 @@ class HuginnClient(
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
             val refusal = runCatching { decode<Queued>(text) }.getOrNull()
-            return Queued(queued = false, reason = refusal?.reason ?: "busy")
+            // The daemon's own sentence rides along: it is the whole note a card shows.
+            return Queued(queued = false, reason = refusal?.reason ?: "busy", error = refusal?.error)
         }
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         return decode<Queued>(text).copy(queued = true)

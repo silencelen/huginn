@@ -315,7 +315,7 @@ fun ContextCardBody(
     LaunchedEffect(name, refreshes) {
         if (refreshes == 0) return@LaunchedEffect
         note = runCatching { source.refresh() }
-            .fold({ ContextFormat.refreshNote(it.queued, it.reason) }, { it.message ?: ContextFormat.refreshNote(false, null) })
+            .fold({ ContextFormat.refreshNote(it) }, { it.message ?: ContextFormat.refreshNote(false, null) })
     }
 }
 

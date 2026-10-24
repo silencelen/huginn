@@ -25,7 +25,8 @@ import kotlin.test.assertTrue
  */
 class ContextModelsTest {
 
-    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+    /** Mirrors HuginnClient's configuration; the null-tolerance itself is proved through the client in ContextClientTest. */
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false; coerceInputValues = true }
 
     private val row = """{
         "name": "alex", "contextPercent": 3,

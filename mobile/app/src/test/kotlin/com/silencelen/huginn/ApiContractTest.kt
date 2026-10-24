@@ -1548,11 +1548,11 @@ class ApiContractTest {
     // ------------------------------------------- the status-line record (appd 3.14.0)
 
     /**
-     * ⚠ CONTRACT-DERIVED FIXTURES (README). The daemon that serves these blocks
-     * was built in parallel with this client, so the files were written from the
-     * lane contract and the figures inside from a real Claude Code 2.1.306
-     * status-line record; they assert the NAMES the two sides agreed on, and the
-     * day a capture replaces them this test is what notices a rename.
+     * Captured 2026-10-24 from the merged daemon (appd 3.14.0, pre-release) fed
+     * the Claude Code 2.1.306 status-line and `/context` fixtures (README). The
+     * key sets are asserted exactly, the way `project-detail.json` is: a rename
+     * or a dropped field on the daemon is a red test here, not a blank card on a
+     * phone this host cannot run.
      */
     @Test
     fun `a session row carries the status line's six blocks by the contract's names`() {
@@ -1566,10 +1566,13 @@ class ApiContractTest {
         assertEquals(setOf("fiveHour", "sevenDay", "spend"), raw["limits"]!!.jsonObject.keys)
         assertEquals(setOf("usedPercent", "resetsAt"), raw["limits"]!!.jsonObject["fiveHour"]!!.jsonObject.keys)
         assertEquals(setOf("usd", "durationMs", "apiMs", "linesAdded", "linesRemoved"), raw["cost"]!!.jsonObject.keys)
+        // The one instant on this wire in epoch SECONDS, as the status line stamps it.
+        assertEquals("1792830600", raw["limits"]!!.jsonObject["fiveHour"]!!.jsonObject["resetsAt"]!!.jsonPrimitive.content)
 
         val list = json.decodeFromString<SessionList>(fixture("session-statusline.json"))
         val s = list.sessions[0]
-        assertEquals(35_503L, s.context!!.used)
+        // `used` is what the daemon counts against the window: input + both cache figures (= total_input_tokens).
+        assertEquals(35_334L, s.context!!.used)
         assertEquals(1_000_000L, s.context!!.window)
         assertEquals(4, s.context!!.percent)
         assertFalse(s.context!!.exceeds200k)
@@ -1578,36 +1581,48 @@ class ApiContractTest {
         assertEquals("medium", s.effort)
         assertFalse(s.fast!!.on)
         assertTrue(s.fast!!.available)
+        assertNull(s.fast!!.reason)
         assertEquals(java.lang.Long.valueOf(1_792_830_600_000L), s.limits!!.fiveHour!!.resetsAtEpochMs())
+        assertEquals(5.0, s.limits!!.fiveHour!!.usedPercent!!, 0.0)
         assertNull(s.limits!!.spend)
         assertEquals(37_177L, s.cost!!.durationMs)
+        assertEquals(0.0034573600000000005, s.cost!!.usd, 0.0)
 
-        // A plain shell: every block null, and fast unavailable WITH Claude Code's reason.
+        // A shell Claude never ran in: EVERY block null — `fast` included. The daemon
+        // serves no fast block without a status record, so "unavailable with a
+        // reason" is never what a plain shell looks like.
         val shell = list.sessions[1]
         assertNull(shell.context)
         assertNull(shell.model)
+        assertNull(shell.effort)
         assertNull(shell.contextPercent)
         assertNull(shell.limits)
         assertNull(shell.cost)
-        assertFalse(shell.fast!!.available)
-        assertTrue("the reason is Claude Code's sentence, carried whole", !shell.fast!!.reason.isNullOrBlank())
+        assertNull("no record, no fast block", shell.fast)
     }
 
+    /** The screen of a pane whose last `/fast on` was refused: the pane decides `fast.available`, in Claude Code's words. */
     @Test
     fun `a screen carries the same six blocks`() {
         val raw = json.parseToJsonElement(fixture("screen-statusline.json")).jsonObject
         for (name in listOf("context", "model", "effort", "fast", "limits", "cost", "contextPercent")) {
             assertTrue("a screen carries $name", name in raw)
         }
+        assertEquals(setOf("on", "available", "reason"), raw["fast"]!!.jsonObject.keys)
         val s = json.decodeFromString<Screen>(fixture("screen-statusline.json"))
-        assertEquals(35_503L, s.context!!.used)
+        assertEquals(35_334L, s.context!!.used)
+        assertEquals(4, s.context!!.percent)
         assertEquals("Haiku 5.5", s.model)
         assertEquals("medium", s.effort)
         assertTrue(s.fast!!.on)
+        assertFalse("the pane shows the refusal", s.fast!!.available)
+        assertEquals("Fast mode requires usage credits · run /usage-credits to enable it", s.fast!!.reason)
         assertEquals(0.0034573600000000005, s.cost!!.usd, 0.0)
-        // And the older reading, which a 3.13 client keeps drawing.
+        assertEquals(java.lang.Long.valueOf(1_792_830_600_000L), s.limits!!.fiveHour!!.resetsAtEpochMs())
+        // And the older readings, which a 3.13 client keeps drawing: the scraped
+        // `[alex] Fable 5.1 · ctx 4%` beside the record's own model.
         assertEquals(java.lang.Integer.valueOf(4), s.contextPercent)
-        assertEquals("Haiku 5.5", s.liveModel)
+        assertEquals("Fable 5.1", s.liveModel)
     }
 
     @Test
@@ -1615,10 +1630,23 @@ class ApiContractTest {
         val raw = json.parseToJsonElement(fixture("session-context.json")).jsonObject
         assertEquals(setOf("context", "model", "breakdown"), raw.keys)
         val b = raw["breakdown"]!!.jsonObject
-        assertEquals(setOf("asOf", "categories", "totalTokens", "maxTokens", "autocompactSource"), b.keys)
-        assertEquals(setOf("id", "name", "tokens", "kind"), b["categories"]!!.jsonArray[0].jsonObject.keys)
+        // Beyond the five the models read, the daemon serves the record's uuid, the
+        // table's own model line, the whole-table percent, the auto-compact window
+        // and the MCP/skills lists — on the wire, undecoded, kept for a later card.
+        assertEquals(
+            setOf(
+                "asOf", "uuid", "model", "totalTokens", "maxTokens", "percent", "categories",
+                "autocompactWindow", "autocompactSource", "mcpTools", "mcpAvailable", "skills",
+            ),
+            b.keys,
+        )
+        assertEquals(setOf("id", "name", "tokens", "percent", "kind"), b["categories"]!!.jsonArray[0].jsonObject.keys)
 
         val c = json.decodeFromString<SessionContext>(fixture("session-context.json"))
+        // The live reading beside the table is the STATUS LINE's (35334 / 4%), not the table's (28.7k / 3%).
+        assertEquals(35_334L, c.context!!.used)
+        assertEquals(4, c.context!!.percent)
+        assertEquals("Haiku 5.5", c.model)
         val ids = c.breakdown!!.categories.map { it.id }
         assertEquals(
             listOf("system_prompt", "system_tools", "mcp_tools", "mcp_instructions", "skills", "messages", "free_space", "autocompact_buffer"),
@@ -1627,21 +1655,24 @@ class ApiContractTest {
         assertEquals(setOf("used", "free", "buffer"), c.breakdown!!.categories.map { it.kind }.toSet())
         assertEquals(1_000_000L, c.breakdown!!.maxTokens)
         assertEquals(28_700L, c.breakdown!!.totalTokens)
-        assertEquals("milliseconds, like every /v1/headroom stamp", 1_792_819_386_000L, c.breakdown!!.asOf)
-        assertEquals("transcript", c.breakdown!!.autocompactSource)
-        // The table sums to the window within its own rounding (the real one came
+        assertEquals("the record's stamp in milliseconds, like every /v1/headroom stamp", 1_792_815_759_988L, c.breakdown!!.asOf)
+        // The parenthetical after `Auto-compact window: 1m tokens`; this table has none.
+        assertNull(c.breakdown!!.autocompactSource)
+        // The table sums to the window within its own rounding (the real one comes
         // to 999,998 of 1,000,000): what the bar is drawn from.
         val sum = c.breakdown!!.categories.sumOf { it.tokens }
         assertTrue("the rows do not add up to the window: $sum", kotlin.math.abs(sum - c.breakdown!!.maxTokens) < 1_000L)
     }
 
+    /** Four booleans on the wire; the models read three, `statusLine` (Huginn's status line installed) stays raw. */
     @Test
-    fun `claude settings are three booleans by name`() {
+    fun `claude settings are four booleans by name`() {
         val raw = json.parseToJsonElement(fixture("settings-claude.json")).jsonObject
-        assertEquals(setOf("fastModeDefault", "fastModePerSession", "feedbackOff"), raw.keys)
+        assertEquals(setOf("fastModeDefault", "fastModePerSession", "feedbackOff", "statusLine"), raw.keys)
+        assertEquals("true", raw["statusLine"]!!.jsonPrimitive.content)
         val s = json.decodeFromString<ClaudeSettings>(fixture("settings-claude.json"))
         assertFalse(s.fastModeDefault)
         assertTrue("the install sets the per-session opt-in", s.fastModePerSession)
-        assertFalse(s.feedbackOff)
+        assertTrue("the install turns the feedback prompts off", s.feedbackOff)
     }
 }

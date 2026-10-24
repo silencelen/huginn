@@ -3448,7 +3448,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.setSessionFast(name, on) }
                 .onSuccess { q ->
                     _toast.value = if (q.queued) "Fast mode ${if (on) "on" else "off"} for $name after this turn"
-                    else com.silencelen.huginn.ui.ContextFormat.refreshNote(false, q.reason)
+                    else com.silencelen.huginn.ui.ContextFormat.refreshNote(q)
                 }
                 .onFailure { _toast.value = errText(it) }
         }

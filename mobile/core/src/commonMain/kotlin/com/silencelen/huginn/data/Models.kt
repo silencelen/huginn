@@ -596,14 +596,19 @@ data class SessionContext(
 
 /**
  * The answer to a request the daemon types through the send queue at the next
- * turn boundary (`/context` refresh, `/fast on|off`): 202 `queued`, or a 409
- * carrying why it could not be queued — `busy`, `shell` or `dialog`. The 409 is
- * an ANSWER here, not a throw: the reason is the whole message.
+ * turn boundary (`/context` refresh, `/fast on|off`): 202 `queued` — typed now
+ * ([delivered] true) or held until [blockedBy] clears (`draft`: unsent text in
+ * the composer) — or a 409 carrying why it could not be queued: the [reason]
+ * word (`busy` · `shell` · `dialog`) and the daemon's own sentence in [error].
+ * The 409 is an ANSWER here, not a throw: that sentence is the whole message.
  */
 @Serializable
 data class Queued(
     val queued: Boolean = false,
     val reason: String? = null,
+    val delivered: Boolean? = null,
+    val blockedBy: String? = null,
+    val error: String? = null,
 )
 
 /**

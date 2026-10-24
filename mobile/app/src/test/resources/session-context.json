@@ -1,25 +1,175 @@
 {
  "context": {
-  "used": 28700,
+  "used": 35334,
   "window": 1000000,
-  "percent": 3,
+  "percent": 4,
   "exceeds200k": false
  },
  "model": "Haiku 5.5",
  "breakdown": {
-  "asOf": 1792819386000,
-  "categories": [
-   {"id": "system_prompt", "name": "System prompt", "tokens": 3700, "kind": "used"},
-   {"id": "system_tools", "name": "System tools", "tokens": 20800, "kind": "used"},
-   {"id": "mcp_tools", "name": "MCP tools", "tokens": 671, "kind": "used"},
-   {"id": "mcp_instructions", "name": "MCP server instructions", "tokens": 717, "kind": "used"},
-   {"id": "skills", "name": "Skills", "tokens": 2800, "kind": "used"},
-   {"id": "messages", "name": "Messages", "tokens": 10, "kind": "used"},
-   {"id": "free_space", "name": "Free space", "tokens": 938300, "kind": "free"},
-   {"id": "autocompact_buffer", "name": "Autocompact buffer", "tokens": 33000, "kind": "buffer"}
-  ],
+  "asOf": 1792815759988,
+  "uuid": "729f5ccf-8b84-4a6a-8bd8-8af1ded28ce1",
+  "model": {
+   "display": "Haiku 5.5",
+   "id": "claude-haiku-5-5"
+  },
   "totalTokens": 28700,
   "maxTokens": 1000000,
-  "autocompactSource": "transcript"
+  "percent": 3,
+  "categories": [
+   {
+    "id": "system_prompt",
+    "name": "System prompt",
+    "tokens": 3700,
+    "percent": 0.4,
+    "kind": "used"
+   },
+   {
+    "id": "system_tools",
+    "name": "System tools",
+    "tokens": 20800,
+    "percent": 2.1,
+    "kind": "used"
+   },
+   {
+    "id": "mcp_tools",
+    "name": "MCP tools",
+    "tokens": 671,
+    "percent": 0.1,
+    "kind": "used"
+   },
+   {
+    "id": "mcp_instructions",
+    "name": "MCP server instructions",
+    "tokens": 717,
+    "percent": 0.1,
+    "kind": "used"
+   },
+   {
+    "id": "skills",
+    "name": "Skills",
+    "tokens": 2800,
+    "percent": 0.3,
+    "kind": "used"
+   },
+   {
+    "id": "messages",
+    "name": "Messages",
+    "tokens": 10,
+    "percent": 0,
+    "kind": "used"
+   },
+   {
+    "id": "free_space",
+    "name": "Free space",
+    "tokens": 938300,
+    "percent": 93.8,
+    "kind": "free"
+   },
+   {
+    "id": "autocompact_buffer",
+    "name": "Autocompact buffer",
+    "tokens": 33000,
+    "percent": 3.3,
+    "kind": "buffer"
+   }
+  ],
+  "autocompactWindow": 1000000,
+  "autocompactSource": null,
+  "mcpTools": [
+   {
+    "name": "mcp__claude_ai_Claude_Docs__batch",
+    "tokens": 165
+   },
+   {
+    "name": "mcp__claude_ai_Claude_Docs__guide",
+    "tokens": 208
+   },
+   {
+    "name": "mcp__claude_ai_Claude_Docs__update",
+    "tokens": 298
+   }
+  ],
+  "mcpAvailable": [
+   "mcp__claude_ai_Claude_Docs__create",
+   "mcp__claude_ai_Claude_Docs__delete",
+   "mcp__claude_ai_Claude_Docs__export",
+   "mcp__claude_ai_Claude_Docs__query",
+   "mcp__claude_ai_Claude_Docs__read"
+  ],
+  "skills": [
+   {
+    "name": "dataviz",
+    "tokens": 480
+   },
+   {
+    "name": "claude-api",
+    "tokens": 360
+   },
+   {
+    "name": "code-review",
+    "tokens": 330
+   },
+   {
+    "name": "artifact-capabilities",
+    "tokens": 250
+   },
+   {
+    "name": "update-config",
+    "tokens": 240
+   },
+   {
+    "name": "claude-in-chrome",
+    "tokens": 180
+   },
+   {
+    "name": "schedule",
+    "tokens": 130
+   },
+   {
+    "name": "run",
+    "tokens": 120
+   },
+   {
+    "name": "loop",
+    "tokens": 120
+   },
+   {
+    "name": "plugin-authoring",
+    "tokens": 90
+   },
+   {
+    "name": "workflow-authoring",
+    "tokens": 80
+   },
+   {
+    "name": "keybindings-help",
+    "tokens": 80
+   },
+   {
+    "name": "artifact-diagramming",
+    "tokens": 70
+   },
+   {
+    "name": "artifact-design",
+    "tokens": 70
+   },
+   {
+    "name": "fewer-permission-prompts",
+    "tokens": 60
+   },
+   {
+    "name": "simplify",
+    "tokens": 60
+   },
+   {
+    "name": "security-review",
+    "tokens": 30
+   },
+   {
+    "name": "init",
+    "tokens": 20
+   }
+  ]
  }
 }
