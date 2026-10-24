@@ -236,6 +236,78 @@ function machineText(s) {
   return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+|\[Your previous response)/.test(s);
 }
 
+// ---- tags, found in one pass -------------------------------------------------
+//
+// ⚠ LAZY TAG PATTERNS ARE QUADRATIC, OR WORSE, IN THE TEXT THEY ARE GIVEN, and
+// that text is a transcript record a model wrote: a background agent's report
+// is copied into its parent's transcript word for word. `/<x>[\s\S]*?<\/x>/`
+// retries from every opening it finds and scans to the end each time the closer
+// is missing, and `/<x>\s*([^<]+?)\s*<\/x>/` backtracks through every split of
+// a run of spaces: 2,000 spaces after an unclosed `<command-name>` held the
+// event loop 3 s, ten thousand would hold it for minutes, and every transcript
+// read (each poll, each tick) starts over. These do the same jobs with indexOf.
+// A closer that is not after the first opening is not after any later one.
+
+/**
+ * The first `open … close` in [s] as [start, end), or null: what
+ * `/<open>[\s\S]*?<close>/` finds. `boundary` adds the `\b` after the opening.
+ */
+function elementSpan(s, open, close, { boundary = false } = {}) {
+  let i = s.indexOf(open);
+  while (i >= 0 && boundary && /\w/.test(s.charAt(i + open.length))) i = s.indexOf(open, i + 1);
+  if (i < 0) return null;
+  const j = s.indexOf(close, i + open.length);
+  return j < 0 ? null : [i, j + close.length];
+}
+
+/** The text inside the first `open … close` in [s], or null. */
+function innerText(s, open, close) {
+  const span = elementSpan(s, open, close);
+  return span ? s.slice(span[0] + open.length, span[1] - close.length) : null;
+}
+
+/**
+ * The text inside the first `open … close` with no `<` in it (and, with
+ * `nonEmpty`, at least one character), or null: the reading of
+ * `/<open>\s*([^<]*?)\s*<close>/`, untrimmed.
+ */
+function plainInner(s, open, close, { nonEmpty = false } = {}) {
+  let i = s.indexOf(open);
+  while (i >= 0) {
+    const start = i + open.length;
+    const lt = s.indexOf('<', start);
+    if (lt < 0) return null;
+    if (s.startsWith(close, lt) && (!nonEmpty || lt > start)) return s.slice(start, lt);
+    i = s.indexOf(open, lt);
+  }
+  return null;
+}
+
+/**
+ * [s] with every element of the given kinds removed, earliest first: what
+ * `.replace(/<a>[\s\S]*?<\/a>|<b>[\s\S]*?<\/b>/g, '')` leaves.
+ * @param pairs [[open, close], …]
+ */
+function stripElements(s, pairs) {
+  const next = pairs.map(([open]) => s.indexOf(open));
+  let out = '';
+  let at = 0;
+  for (;;) {
+    let k = -1;
+    for (let p = 0; p < pairs.length; p++) {
+      if (next[p] >= 0 && next[p] < at) next[p] = s.indexOf(pairs[p][0], at);
+      if (next[p] >= 0 && (k < 0 || next[p] < next[k])) k = p;
+    }
+    if (k < 0) break;
+    const [open, close] = pairs[k];
+    const j = s.indexOf(close, next[k] + open.length);
+    if (j < 0) { next[k] = -1; continue; }
+    out += s.slice(at, next[k]);
+    at = j + close.length;
+  }
+  return out + s.slice(at);
+}
+
 /**
  * Turns Claude Code's slash-command bookkeeping into something worth reading, or
  * into nothing.
@@ -252,16 +324,16 @@ function describeMachineText(s) {
   if (/^\s*<local-command-caveat/.test(s)) return null;
   if (/^\s*<system-reminder/.test(s)) return null;
 
-  const cmd = /<command-name>\s*([^<]+?)\s*<\/command-name>/.exec(s);
-  if (cmd) {
-    const args = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(s);
-    const text = args && args[1] ? `${cmd[1]} ${args[1]}` : cmd[1];
+  const cmd = plainInner(s, '<command-name>', '</command-name>', { nonEmpty: true });
+  if (cmd !== null) {
+    const args = (plainInner(s, '<command-args>', '</command-args>') || '').trim();
+    const text = args ? `${cmd.trim()} ${args}` : cmd;
     return { kind: 'command', text: text.trim() };
   }
 
-  const out = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(s);
-  if (out) {
-    const body = stripAnsiText(out[1]).trim();
+  const out = innerText(s, '<local-command-stdout>', '</local-command-stdout>');
+  if (out !== null) {
+    const body = stripAnsiText(out).trim();
     return body ? { kind: 'command_result', text: clip(body, 300) } : null;
   }
 
@@ -274,8 +346,8 @@ function describeMachineText(s) {
 
   if (/<task-notification/.test(s) || /^\s*\[SYSTEM NOTIFICATION/.test(s)) {
     // The summary is written for exactly this purpose; use it.
-    const sum = /<summary>\s*([\s\S]*?)\s*<\/summary>/.exec(s);
-    return { kind: 'system', text: sum ? clip(sum[1].replace(/\s+/g, ' '), 160) : 'background task reported back' };
+    const sum = innerText(s, '<summary>', '</summary>');
+    return { kind: 'system', text: sum !== null ? clip(sum.trim().replace(/\s+/g, ' '), 160) : 'background task reported back' };
   }
   return { kind: 'system', text: 'injected input' };
 }
@@ -373,8 +445,8 @@ function notificationEcho(d) {
 // itself — which is also what pairs the two records, since the enqueue's content
 // is exactly the element the `user` record embeds.
 
-/** The `<cross-session-message …>…</cross-session-message>` element, or null. */
-const CROSS_RE = /<cross-session-message\b[\s\S]*?<\/cross-session-message>/;
+/** The `<cross-session-message …>…</cross-session-message>` element (elementSpan). */
+const CROSS_TAG = ['<cross-session-message', '</cross-session-message>'];
 
 /**
  * A subagent's report, `<agent-message from="…">…</agent-message>`, with no
@@ -382,7 +454,13 @@ const CROSS_RE = /<cross-session-message\b[\s\S]*?<\/cross-session-message>/;
  * record a moment later says "Another Claude session sent a message:" before
  * it), so it matched nothing here and was drawn as a raw bubble beside the note.
  */
-const AGENT_RE = /<agent-message\b[\s\S]*?<\/agent-message>/;
+const AGENT_TAG = ['<agent-message', '</agent-message>'];
+
+/** The first element of [tag] in [s] as {text, index}, or null. */
+function firstElement(s, [open, close]) {
+  const span = elementSpan(s, open, close, { boundary: true });
+  return span ? { text: s.slice(span[0], span[1]), index: span[0] } : null;
+}
 
 /** The largest peer or summary body sent for a folded card; past it, clipped. */
 const FOLD_MAX = 200_000;
@@ -557,7 +635,7 @@ function peerNote(d, text, peerIds) {
   const origin = d && d.origin;
   if (origin && origin.kind === 'peer') {
     const name = typeof origin.name === 'string' && origin.name ? origin.name : 'another session';
-    const element = CROSS_RE.exec(String(text || ''))?.[0] || AGENT_RE.exec(String(text || ''))?.[0] || '';
+    const element = firstElement(String(text || ''), CROSS_TAG)?.text || firstElement(String(text || ''), AGENT_TAG)?.text || '';
     const body = peerBody(origin.body || element);
     const pid = Number(origin.verifiedPeerPid) || null;
     return {
@@ -584,14 +662,14 @@ function peerNote(d, text, peerIds) {
 /** The same note, from the QUEUE record that lands ~90 ms before the user one. */
 function peerNoteFromQueue(content, peerIds) {
   const s = String(content || '');
-  const block = CROSS_RE.exec(s);
+  const block = firstElement(s, CROSS_TAG);
   if (block) {
-    const name = /from-name="([^"]*)"/.exec(block[0]);
-    const pid = /from="uds:[^"]*?\/(\d+)\.sock"/.exec(block[0]);
-    const body = peerBody(block[0]);
+    const name = /from-name="([^"]*)"/.exec(block.text);
+    const pid = /from="uds:[^"]*?\/(\d+)\.sock"/.exec(block.text);
+    const body = peerBody(block.text);
     const who = (name && name[1]) || 'another session';
     return {
-      key: block[0],
+      key: block.text,
       text: body ? `Message from ${who}: ${clip(body, 300)}` : `Message from ${who}`,
       body: body ? clip(body, FOLD_MAX) : null,
       peer: {
@@ -603,12 +681,12 @@ function peerNoteFromQueue(content, peerIds) {
   }
   // A subagent's report: the bare element. Its name comes with the `user`
   // record that follows (origin.name), which then relabels this note.
-  const agent = AGENT_RE.exec(s);
+  const agent = firstElement(s, AGENT_TAG);
   if (agent && agent.index <= 2) {
-    const body = peerBody(agent[0]);
+    const body = peerBody(agent.text);
     const who = 'a subagent';
     return {
-      key: agent[0],
+      key: agent.text,
       text: body ? `Message from ${who}: ${clip(body, 300)}` : `Message from ${who}`,
       body: body ? clip(body, FOLD_MAX) : null,
       peer: { name: who, sessionId: null, pid: null },
@@ -637,20 +715,23 @@ function skillNameFromBody(s) {
  * the worst failure this file can have, and cheap to rule out.
  */
 function humanRemainder(s) {
-  const stripped = String(s)
-    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, '')
-    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, '')
-    .replace(/<command-(name|message|args)>[\s\S]*?<\/command-\1>/g, '')
-    // The bracketed preamble FIRST, while its terminating tag still exists —
-    // stripped after the element it would run to end-of-string and eat any real
-    // message concatenated behind the notification.
-    .replace(/\[SYSTEM NOTIFICATION - NOT USER INPUT\][\s\S]*?(?=<task-notification|$)/g, '')
-    // Then the WHOLE element, not just its tags: stripping tags alone left the
-    // inner task-id/summary text to render as a message the user supposedly wrote.
-    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
-    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
-    .replace(/<\/?(task-notification|system-reminder)[^>]*>/g, '')
-    .trim();
+  let t = stripElements(String(s), [['<local-command-caveat>', '</local-command-caveat>']]);
+  t = stripElements(t, [['<local-command-stdout>', '</local-command-stdout>']]);
+  t = stripElements(t, [['<command-name>', '</command-name>'], ['<command-message>', '</command-message>'],
+    ['<command-args>', '</command-args>']]);
+  // The bracketed preamble FIRST, while its terminating tag still exists —
+  // stripped after the element it would run to end-of-string and eat any real
+  // message concatenated behind the notification.
+  t = t.replace(/\[SYSTEM NOTIFICATION - NOT USER INPUT\][\s\S]*?(?=<task-notification|$)/g, '');
+  // Then the WHOLE element, not just its tags: stripping tags alone left the
+  // inner task-id/summary text to render as a message the user supposedly wrote.
+  t = stripElements(t, [['<task-notification>', '</task-notification>']]);
+  t = stripElements(t, [['<system-reminder>', '</system-reminder>']]);
+  // Stray tags. Only text up to the last `>` can hold one, and an opening past
+  // it would scan to the end of the string for a `>` that is not there.
+  const gt = t.lastIndexOf('>');
+  const stripped = (t.slice(0, gt + 1).replace(/<\/?(task-notification|system-reminder)[^>]*>/g, '')
+    + t.slice(gt + 1)).trim();
   // Short leftovers are tag debris, not prose.
   return stripped.length >= 12 ? stripped : '';
 }
@@ -1732,4 +1813,5 @@ function transcriptHead(file) {
 module.exports = { readTranscript, digestToolInput, workflowName, textOf, liveActivity, machineText, describeMachineText, humanRemainder, parseAsk, startsAtBoundary,
   injectedByTool, typedByHuman, notificationEcho, skillNameFromBody,
   peerBody, peerNote, peerNoteFromQueue, projectRelayNote, unwrapPasted, lastWorkAt, transcriptHead,
+  firstElement, CROSS_TAG, AGENT_TAG,
 };
