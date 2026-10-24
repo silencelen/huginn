@@ -9185,7 +9185,10 @@ async function tryHookAnswer(name, prompt, lines, choice) {
     const sid = st && st.sessionId;
     const reqs = permhook.liveRequests(STATE_DIR, name).filter((r) => !sid || r.sessionId === sid);
     if (!reqs.length) return null;
-    const req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines));
+    // A question the main thread raised and has not cleared makes this tap an
+    // answer to THAT question, never a Bash approval (lib/permhook matchesPrompt).
+    const askPending = !!askPendingSince(name, sid);
+    const req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines), { askPending });
     if (!req) return null;
     const decision = permhook.decisionFor(req, prompt, choice);
     if (!decision) return null;

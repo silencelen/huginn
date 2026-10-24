@@ -103,7 +103,8 @@ const indentOf = (s) => /^\s*/.exec(String(s))[0].length;
  * different live request whose command was only the tail. Claude Code draws a
  * dialog's own rules at its edge and every content row (the command included)
  * one column in, so only a rule left of the options is the dialog's. A layout
- * with no such pad (0) keeps the old reading.
+ * with no such pad (0) is an AskUserQuestion's, never a Bash dialog's: it has a
+ * region but no command block (dialogCommandBlock).
  */
 function optionIndent(rows, first) {
   let min = Infinity;
@@ -144,7 +145,13 @@ function dialogCommandBlock(region) {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (OPTION_ONE_RE.test(lines[i])) { first = i; break; }
   }
-  const structural = structuralIn(first < 0 ? 0 : optionIndent(lines, first));
+  // ⚠ A BASH DIALOG PADS ITS CONTENT ONE COLUMN IN, so a region with no option
+  // row, or with options at the very edge, has no command block at all. An
+  // AskUserQuestion draws its first option at the edge, and read with no pad
+  // every row of the model's own question text counted as the dialog's rules.
+  const pad = first < 0 ? 0 : optionIndent(lines, first);
+  if (pad === 0) return null;
+  const structural = structuralIn(pad);
   const rules = [];
   for (let i = 0; i < lines.length && rules.length < 2; i++) {
     if (/^\s*╌{10,}\s*$/.test(lines[i]) && structural(lines[i])) rules.push(i);
@@ -160,9 +167,13 @@ function askQuestion(req) {
 
 /** Rows the TUI adds under every AskUserQuestion; not part of the tool's options. */
 const TUI_ASK_ROWS = new Set(['type something.', 'chat about this']);
+const drawsAskRows = (prompt) => prompt.options.some((o) => TUI_ASK_ROWS.has(norm(o && o.label)));
 
-/** Is this request EXACTLY the dialog on screen? */
-function matchesPrompt(req, prompt, region) {
+/**
+ * Is this request EXACTLY the dialog on screen?
+ * @param opts.askPending the session's hook says a question is waiting
+ */
+function matchesPrompt(req, prompt, region, { askPending = false } = {}) {
   if (!req || !prompt || !Array.isArray(prompt.options)) return false;
   if (req.tool === 'AskUserQuestion') {
     // One question only: a tabbed dialog is answered a tab at a time on the
@@ -175,6 +186,13 @@ function matchesPrompt(req, prompt, region) {
     return want.length > 0 && want.length === got.length && want.every((l, i) => l === got[i]);
   }
   if (req.tool !== 'Bash') return false;
+  // ⚠ ONLY A PERMISSION DIALOG ANSWERS A BASH REQUEST. A question's text is the
+  // model's own: one that printed `╌╌╌` rows around a command and offered Yes
+  // and No read as a Bash dialog showing that command, so a Yes tapped on the
+  // QUESTION went to a live, unseen Bash request for it (a background agent's,
+  // queued behind the question). While a question is on screen, by its own TUI
+  // rows or by the hook's word that one is waiting, nothing here answers Bash.
+  if (askPending || drawsAskRows(prompt)) return false;
   const labels = prompt.options.map((o) => o.label);
   if (labels[0] !== 'Yes' || !labels.includes('No')) return false;
   const cmd = req.input && typeof req.input.command === 'string' ? req.input.command : '';
@@ -186,8 +204,8 @@ function matchesPrompt(req, prompt, region) {
  * The ONE request a tap on this dialog answers, or null. Zero matches or more
  * than one: null, and the tap goes to the keys.
  */
-function pickRequest(reqs, prompt, region) {
-  const hits = reqs.filter((r) => matchesPrompt(r, prompt, region));
+function pickRequest(reqs, prompt, region, opts = {}) {
+  const hits = reqs.filter((r) => matchesPrompt(r, prompt, region, opts));
   return hits.length === 1 ? hits[0] : null;
 }
 
