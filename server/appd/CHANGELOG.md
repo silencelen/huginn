@@ -9,6 +9,32 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- Every session row and `/screen` carry the context window, model, effort, fast mode, rate limits
+  and cost Claude Code's status line last reported, read from `.status/<session>` (written by
+  `huginn-statusline`); `contextPercent` is filled from it, falling back to the pane.
+- `GET /v1/sessions/<name>/context`: the last `/context` table in the transcript, parsed by
+  category, MCP tool and skill. `POST /v1/sessions/<name>/context/refresh` types `/context`
+  through the send queue; `409 {reason: shell|dialog|busy}` when it cannot.
+- `POST /v1/sessions/<name>/fast {on}` types `/fast on` or `/fast off` through the send queue.
+- `GET`/`PATCH /v1/settings/claude`: fast mode as the host default, per-session opt-in, the
+  feedback keys and whether the status line is installed; PATCH writes `fastMode`.
+- Chats take `fast: true|false|null` at creation and on PATCH; a pinned value reaches the run as
+  `--settings '{"fastMode":…}'`.
+- `install-hooks.js --claude-defaults`: `fastModePerSessionOptIn` and the three feedback-off keys,
+  each only where absent; `--keep-feedback` or `HUGINN_KEEP_CLAUDE_FEEDBACK=1` skips the feedback
+  keys. `install.sh` runs it.
+- The pane's fast-mode refusal (`Fast mode unavailable…` and its siblings) is served as
+  `fast.available` and `fast.reason`.
+
+### Changed
+- `/context`'s `system`/`local_command` records draw as a `/context` chip and the table never
+  appears as a message; a `/fast on|off` record updates the reported fast mode at once, like
+  `/effort`.
+- The default-model repair and the settings PATCH share one settings.json writer.
+
 ## 3.13.10 — 2026-10-23
 
 ### Security

@@ -28,6 +28,10 @@ sessions (`~/.claude/settings.json`; root by default, `HUGINN_HOME` in `server/s
 | `server/appd/hooks/huginn-permission-hook` | `PermissionRequest` (`*`) | 960 s | same |
 | `server/appd/hooks/huginn-modelswitch-hook` | `PostModelSwitch` (`*`) | 10 s | same |
 
+Not a hook but installed into the same file: `server/bin/huginn-statusline` as `statusLine.command`
+(by `server/setup.sh`, through `server/claude-settings.jq`). Claude Code runs it on every redraw of
+its status line with the status JSON on stdin; see [The status line](#the-status-line).
+
 Every hook script follows the same contract:
 
 - **Always exit 0.** Claude Code reads a non-zero exit as a block, and a block on
@@ -65,6 +69,7 @@ session-name namespace):
 | `.compacting/<session>` (empty marker) | `PreCompact` | `PostCompact`, `Stop`, `SessionEnd` |
 | `.ask/<session>` | `PreToolUse` for `AskUserQuestion` | that tool's `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionEnd` |
 | `.plan/<session>` | `PreToolUse` for `ExitPlanMode` | same |
+| `.status/<session>` | every redraw of the status line (`huginn-statusline`, not the hook) | the daemon, with the other per-name files, when the name changes hands; ignored after 6 hours |
 
 A sidecar holds `{v, tool, sessionId, ts, input}`, where `input` is the exact `tool_input`. The
 daemon fuses it with the pane scrape (`server/appd/lib/ask.js`): labels come from the sidecar,
@@ -92,6 +97,36 @@ Two process-tree rules keep the state file honest:
 The daemon watches the directory with `fs.watch` for sub-second reaction and keeps a 10-second
 poll as a floor. The hooks read `HUGINN_CLAUDE_STATE_DIR` and the daemon reads
 `HUGINN_APPD_STATE_DIR`; both default to `/run/huginn-claude-state`.
+
+### The status line
+
+`huginn-statusline` is Claude Code's `statusLine.command` on a Huginn Server (verified against
+2.1.306). Claude Code runs it, through a shell, on every redraw of the status line, with a JSON
+object on stdin whose top-level keys are `context_window{total_input_tokens, total_output_tokens,
+context_window_size, current_usage{input_tokens, output_tokens, cache_creation_input_tokens,
+cache_read_input_tokens}, used_percentage, remaining_percentage}` (`current_usage` and both
+percentages are `null` before the first response), `cost{total_cost_usd, total_duration_ms,
+total_api_duration_ms, total_lines_added, total_lines_removed}`, `cwd`, `effort{level}`,
+`exceeds_200k_tokens`, `fast_mode` (a boolean), `model{id, display_name}`, `output_style{name}`,
+`prompt_id`, `rate_limits{five_hour{used_percentage, resets_at}, seven_day{…}, spend_limit?}`
+(`resets_at` in epoch seconds), `scratchpad_dir`, `session_id`, `thinking{enabled}`,
+`transcript_path`, `version`, `workspace`. Sample: `server/appd/test/fixtures/statusline-2.1.306.json`.
+
+The script writes that JSON verbatim to `.status/<session>` (0600, a temp file renamed into
+place), resolving the tmux session exactly as the title hook does (the same ancestor recovery and
+nested-claude guard; the title hook is the canonical copy of that code), and then prints the line:
+the output of the status line that was configured before Huginn's, which `setup.sh` keeps as the
+argument after `--` (`huginn-statusline -- '<previous command>'`, shell-quoted) and the script runs
+with the same JSON on stdin, capped at 3 s; or, with none, `<model display name> · ctx N%` (the
+model alone before the first response). It never prints an error and always exits 0.
+
+`server/appd/lib/statusline.js` reads the record into the `context`, `model`, `effort`, `fast`,
+`limits` and `cost` objects on every session row and on `/screen`, ignoring a record older than six
+hours or whose `session_id` is not the state file's. `fast.available` and `fast.reason` are not in
+the JSON: `fastModeUnavailable` in `lib/pane.js` reads Claude Code's own sentence off the bottom of
+the pane (`Fast mode disabled · …`, `Fast mode unavailable…`, `Fast mode requires usage credits…`,
+`auto mode unavailable while fast mode is on`). The daemon watches `.status/` with `fs.watch` like
+the state directory, to wake a parked screen poll; the lists are polled anyway.
 
 ### The permission hook
 
@@ -160,11 +195,20 @@ node install-hooks.js [--settings <path>] [--script <abs path>]
 `HUGINN_CLAUDE_SETTINGS` names another settings file; set but empty is an error, so a test
 cannot reach the live file by accident.
 
+`install-hooks.js --claude-defaults` writes, only where the key is absent, `fastModePerSessionOptIn:
+true`, `feedbackSurveyRate: 0`, `feedbackDrafts: "off"` and `env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY:
+"1"` (`--keep-feedback` or `HUGINN_KEEP_CLAUDE_FEEDBACK=1` skips the last three), under the same
+rules. `server/setup.sh` writes the same four and the `statusLine` entry with `jq`
+(`server/claude-settings.jq`); `uninstall.sh` runs that program the other way to put the previous
+status line back. The daemon itself writes exactly one key, `fastMode`, for `PATCH
+/v1/settings/claude`, through `rewriteClaudeSettings` in `huginn-appd.js` (the same rules again:
+parse first, through a link, mode kept, temp file and rename).
+
 ## Headless runs (`claude -p`)
 
 | Caller | Arguments (after `claude`) | Prompt |
 |---|---|---|
-| App chats and Rounds (`startRun` in `server/appd/huginn-appd.js`) | `-p --output-format stream-json --verbose --include-partial-messages [--model M] [--effort E] [--resume <uuid>] [--append-system-prompt <persona>] --allowedTools "<tools>" [--disallowedTools "<tools>"]` | stdin |
+| App chats and Rounds (`startRun` in `server/appd/huginn-appd.js`) | `-p --output-format stream-json --verbose --include-partial-messages [--model M] [--effort E] [--settings '{"fastMode":true\|false}'] [--resume <uuid>] [--append-system-prompt <persona>] --allowedTools "<tools>" [--disallowedTools "<tools>"]` | stdin |
 | `huginn -p` / `huginn -y` (`server/bin/huginn-ask ask\|act`) | `-p --allowedTools "<tools>" [--disallowedTools "<tools>"] [--append-system-prompt <persona>]` | stdin |
 | Device runs (`ArgvFor` in `core/internal/policy`) | `-p --output-format stream-json --verbose --include-partial-messages [--model] [--effort] [--resume <uuid>] --allowedTools ... [--disallowedTools ...]` | stdin |
 | Reply suggestions, Round polish | `-p --setting-sources '' --model haiku\|sonnet --max-turns 1 --tools '' -- <prompt>` | argv |
@@ -219,6 +263,10 @@ exists to start.
 A usage-limit failure in a `-p` run arrives as a `result` with `is_error` and the reason in
 `result`, not as a transcript record.
 
+A chat whose `fast` is `true` or `false` is spawned with `--settings '{"fastMode":…}'`, a JSON
+string layered over the account's `settings.json` for that run only; `null` passes nothing and the
+host's `fastMode` decides. Device runs do not carry it.
+
 ### Other CLI calls
 
 | Call | Used for |
@@ -235,7 +283,8 @@ A usage-limit failure in a `-p` run arrives as a `result` with `is_error` and th
 |---|---|---|
 | `~/.claude/projects/<slug>/<session-id>.jsonl` (slug = the cwd with `/` replaced by `-`) | `lib/transcript.js`, `lib/typing.js`, `lib/limits.js` | Record types `user`, `assistant`, `system`, `queue-operation`, `ai-title`, `permission-mode`; block types `text`, `thinking`, `tool_use`, `tool_result`. |
 | `<projects>/<slug>/<session-id>/subagents/agent-<id>.jsonl` and `.meta.json`; workflow runs under `subagents/workflows/` and `<session-id>/workflows/` | `lib/agents.js` | One transcript per subagent or workflow member. |
-| `~/.claude/settings.json` | `install-hooks.js`, `server/setup.sh` | The `hooks` object. Written, nothing else touched. |
+| `~/.claude/settings.json` | `install-hooks.js`, `server/setup.sh`, `uninstall.sh`, `GET/PATCH /v1/settings/claude` | The `hooks` object, `statusLine`, and the keys named under [How the settings file is edited](#how-the-settings-file-is-edited) (`fastMode`, `fastModePerSessionOptIn`, the three feedback keys). Written, nothing else touched. |
+| `/run/huginn-claude-state/.status/<session>` | `lib/statusline.js` | Claude Code's status-line JSON, as `huginn-statusline` recorded it; the keys listed under [The status line](#the-status-line). |
 | `~/.claude.json` | `cwdIsTrusted` in `huginn-appd.js` | `projects[<dir>].hasTrustDialogAccepted`, read up the directory tree. Never written. |
 | `~/.claude/.credentials.json` | `lib/accounts.js` | The active login (`claudeAiOauth`). |
 | `~/.claude/shell-snapshots/` in a process's argv | `lib/tasks.js` | The `source <snapshot> && eval '<command>'` wrapper Claude Code puts around Bash tool calls. |
@@ -272,6 +321,21 @@ Notes:
   openings (`[SYSTEM NOTIFICATION - NOT USER INPUT]`, image captions and others) that Claude Code
   writes into `user` records. A new wording not on the list shows up as a message the person
   appears to have typed.
+- **Slash commands.** A command typed at the keyboard or by the daemon (`/model`, `/effort`,
+  `/fast on|off`, `/compact`) is recorded as `user` records of command tags: a
+  `<local-command-caveat>`, the `<command-name>…<command-args>` record, and a
+  `<local-command-stdout>`. `/context` (2.1.306) is the exception: it writes two `system` records
+  of `subtype: "local_command"`, the `<command-name>` one and then the whole table, ANSI-coloured,
+  inside `<local-command-stdout>` (`28.7k/1m tokens (3%)`, `Estimated usage by category`, rows like
+  `⛁ System prompt: 3.7k tokens (0.4%)`, `⛶ Free space: 938.3k (93.8%)`, `⛝ Autocompact buffer: 33k
+  tokens (3.3%)`, `Auto-compact window: 1m tokens`, then `MCP tools · /mcp` with `├ name: N tokens`
+  rows and `Skills · /skills` with `├ name: ~N tokens` rows; the model's display name and id sit
+  beside the first grid rows). `lib/contextusage.js` parses that record for
+  `GET /v1/sessions/<name>/context`, finding the latest one by reading the transcript forward from
+  where it last looked and decoding only lines that carry both `<local-command-stdout>` and
+  `Context Usage`. Both record kinds draw as a `/…` chip in the conversation and never as a
+  message (`describeMachineText`; the table draws nothing). Neither is conversation to the send
+  queue (`isConversationalRecord`). Sample: `test/fixtures/transcripts/context-local-command.jsonl`.
 - **Compaction.** A `system`/`compact_boundary` record is followed by a `user` record with
   `isCompactSummary: true` and `isVisibleInTranscriptOnly: true` and no `isMeta` ("This session is
   being continued from a previous conversation…"). It is drawn as a folded `compact` note, the send
@@ -323,12 +387,13 @@ What it reads off the screen:
 | The composer in shell mode (`!` where the `❯` was; Enter runs the box as a command) | `composerShellMode` | Nothing is submitted into it (409) |
 | Spinner, progress rows, `N/M agents done` | `parseSpinner`, `parseStatusExtras` | Working status in the apps |
 | Mode hint (`⏵⏵ accept edits on`, `⏸ plan mode on`) | `MODE_HINT_RE`, `parseStatusLine` | Live mode |
-| A status line `[<session>] <model> · ctx <N>% · <branch>` | `parseStatusLine` | Live model, context percentage, branch |
+| A status line `[<session>] <model> · ctx <N>% · <branch>` | `parseStatusLine` | Live model, context percentage, branch, where no status-line record exists |
+| `Fast mode disabled · …`, `Fast mode unavailable…`, `Fast mode requires usage credits…`, `auto mode unavailable while fast mode is on` | `fastModeUnavailable` | `fast.available` and `fast.reason` |
 | The sign-in pane | `extractLoginUrl`, `loginPaneState` | Sign-in from the apps |
 
-Huginn does not install a Claude Code status line. If you configure one that prints the shape
-above, the daemon reads the live model, context percentage and branch from it; otherwise those
-fields stay empty.
+The context window, model and effort come from the status-line record (see
+[The status line](#the-status-line)) wherever one exists; the `parseStatusLine` scrape is the
+fallback for a server whose `statusLine` was not installed by `setup.sh` but prints the shape above.
 
 ## Fragility checklist
 
@@ -415,6 +480,31 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     session reading as working. Tests: `transcript.test.js`, `peer-transcript.test.js`,
     `typing.test.js`, `sessiongraph.test.js`, `scripts/test-claude-title.sh` (cases 8 to 10), and
     `WrappedTextTest.kt`.
+22. **The status-line JSON** (`lib/statusline.js`): the keys listed under
+    [The status line](#the-status-line), in particular `context_window.used_percentage` and
+    `current_usage`, `model.display_name`, `effort.level`, `fast_mode`, `rate_limits.*.resets_at`
+    in seconds, and `session_id` (the record is matched against the state file's). A renamed key
+    empties the context card on every session with no error; a status line Claude Code stops
+    running leaves every `.status` file to go stale. Also the shell contract of `huginn-statusline`
+    itself: JSON on stdin, `statusLine.command` run through a shell (which is what lets the previous
+    command ride as an argument after `--`), and the pane's redraw on every write. Tests:
+    `statusline.test.js`, `statusline-script.test.js`, `routes-context-fast.test.js`,
+    `scripts/test-home-writes.sh`.
+23. **The `/context` record** (`lib/contextusage.js`): `system`/`local_command` with the table in
+    `<local-command-stdout>`, the `Context Usage` heading, the `N/M tokens (P%)` header, the
+    glyphs `⛁ ⛀ ⛶ ⛝` in front of the category rows, the category names (mapped to ids in
+    `CATEGORY_IDS`; an unknown name is slugged), `Auto-compact window:`, the `MCP tools` /
+    `Loaded` / `Available` and `Skills` lists with `├`/`└` rows, and the `k`/`m` suffixes. A
+    redrawn table answers `GET /context` with `breakdown: null` or missing categories, silently;
+    a change of record type draws the table into the conversation again. Tests:
+    `contextusage.test.js`, `transcript.test.js`, `routes-context-fast.test.js`.
+24. **Fast mode** (`fastModeUnavailable`, the `/fast on|off` record): the four sentences above,
+    and that `/fast` is recorded as `user` command tags like `/effort`. Its fixture
+    `fast-mode-unavailable-80.txt` is assembled from the known wording, not captured; replace it
+    with a real capture the first time a `/fast on` is refused on a live session. The `--settings
+    '{"fastMode":…}'` flag on a chat run, and `fastModePerSessionOptIn`, are behaviours: verify on
+    a throwaway session that a `/fast on` in one session leaves another alone. Tests:
+    `statusline.test.js`, `transcript.test.js`, `routes-context-fast.test.js`.
 
 ### Capturing a new fixture
 
@@ -444,11 +534,15 @@ These are structured, and Huginn builds on them freely:
 - **Transcript JSONL** record and block types listed above.
 - **`--output-format stream-json`** events: `system`/`init`, `stream_event`, `assistant`,
   `result`.
+- **The status-line JSON** on `statusLine.command`'s stdin: the keys under
+  [The status line](#the-status-line).
 - **CLI flags in use**: `-p`, `--output-format`, `--verbose`, `--include-partial-messages`,
-  `--model`, `--effort`, `--resume`, `--name`, `--append-system-prompt`,
+  `--model`, `--effort`, `--settings`, `--resume`, `--name`, `--append-system-prompt`,
   `--append-system-prompt-file`, `--allowedTools`, `--disallowedTools`, `--setting-sources`,
   `--strict-mcp-config`, `--no-session-persistence`, `--tools`, `--max-turns`; the subcommands
   `auth status`, `auth login`, `auth logout`; `--version`.
+- **Settings keys**: `hooks`, `statusLine`, `fastMode`, `fastModePerSessionOptIn`,
+  `feedbackSurveyRate`, `feedbackDrafts`, `env`.
 
 ## What Huginn deliberately does not use
 

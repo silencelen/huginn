@@ -1481,3 +1481,57 @@ test('lastWorkAt sees an appended record on the next call', () => {
   fs.appendFileSync(p, JSON.stringify({ type: 'assistant', message: { content: [] }, timestamp: '2026-10-17T02:00:00.000Z' }) + '\n');
   assert.equal(lastWorkAt(p), Math.floor(Date.parse('2026-10-17T02:00:00.000Z') / 1000));
 });
+
+// ---- /fast and /context (Claude Code 2.1.306) --------------------------------
+
+test('a /fast on|off command sets the reported fast mode; a bare /fast sets nothing', () => {
+  // `/fast` is recorded like `/effort`: a user record of command tags
+  // (fixtures/transcripts/context-local-command.jsonl's sibling shape, 2.1.300+).
+  const cmd = (args) => ({
+    type: 'user', timestamp: T,
+    message: { content: `<command-name>/fast</command-name>\n            <command-message>fast</command-message>\n            <command-args>${args}</command-args>` },
+  });
+  assert.strictEqual(readTranscript(writeFixture([cmd('on')])).fast, true);
+  assert.strictEqual(readTranscript(writeFixture([cmd('off')])).fast, false);
+  assert.strictEqual(readTranscript(writeFixture([cmd('')])).fast, null, 'a toggle says nothing about where it landed');
+  assert.strictEqual(readTranscript(writeFixture([cmd('on'), cmd('off')])).fast, false, 'the last one wins');
+  const r = readTranscript(writeFixture([cmd('on')]));
+  assert.deepStrictEqual(r.events.map((e) => [e.kind, e.text]), [['command', '/fast on']], 'drawn as a chip');
+  // And it touches nothing else.
+  const p = writeFixture([
+    { type: 'assistant', timestamp: T, effort: 'high', message: { content: [{ type: 'text', text: 'hi' }] } },
+    cmd('on'),
+  ]);
+  assert.strictEqual(readTranscript(p).effort, 'high');
+});
+
+test('/context writes system/local_command records: a /context chip, and the table is never a message', () => {
+  // The real pair Claude Code 2.1.306 wrote (fixtures/transcripts/context-local-command.jsonl).
+  // The first record is short enough that it used to draw as a system note of
+  // raw <command-name> tags; the table is read by lib/contextusage.js instead.
+  const file = path.join(__dirname, 'fixtures', 'transcripts', 'context-local-command.jsonl');
+  const r = readTranscript(file);
+  assert.deepStrictEqual(r.events.map((e) => [e.kind, e.text]), [['command', '/context']]);
+  for (const e of r.events) {
+    assert.doesNotMatch(e.text, /<command-name>|Context Usage|⛁|⛶/, 'no tag debris and no grid on the conversation');
+    assert.notStrictEqual(e.kind, 'user');
+  }
+  // The send queue's classification agrees: neither record is conversation.
+  const typing = require('../lib/typing');
+  for (const line of fs.readFileSync(file, 'utf8').trim().split('\n')) {
+    assert.strictEqual(typing.isConversationalRecord(JSON.parse(line)), false);
+  }
+});
+
+test('other local_command system records draw like their user-record twins', () => {
+  const p = writeFixture([
+    { type: 'system', subtype: 'local_command', timestamp: T, content: '<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>' },
+    { type: 'system', subtype: 'local_command', timestamp: T, content: '<local-command-stdout>Catch you later!</local-command-stdout>' },
+    { type: 'system', subtype: 'informational', timestamp: T, content: 'Compacted while idle, before the prompt cache expired' },
+  ]);
+  assert.deepStrictEqual(readTranscript(p).events.map((e) => [e.kind, e.text]), [
+    ['command', '/exit'],
+    ['command_result', 'Catch you later!'],
+    ['system', 'Compacted while idle, before the prompt cache expired'],
+  ]);
+});

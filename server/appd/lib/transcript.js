@@ -334,6 +334,10 @@ function describeMachineText(s) {
   const out = innerText(s, '<local-command-stdout>', '</local-command-stdout>');
   if (out !== null) {
     const body = stripAnsiText(out).trim();
+    // The `/context` table (2.1.306): a grid of glyphs and a dozen rows that
+    // GET /v1/sessions/<name>/context serves parsed. Clipped to 300 characters
+    // it is a block of ⛶ with no numbers in it, so it draws nothing here.
+    if (/^Context Usage\b/.test(body)) return null;
     return body ? { kind: 'command_result', text: clip(body, 300) } : null;
   }
 
@@ -1011,6 +1015,9 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
     gitBranch: null,
     cwd: null,
     effort: null,
+    // Fast mode as the LAST `/fast on|off` in the window set it; null when no
+    // such command is in view (the status-line record is the live source).
+    fast: null,
     lastActivityTs: null,
   };
 
@@ -1453,10 +1460,16 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
             // assistant record to stamp it would leave a control showing the
             // previous value for as long as the turn takes.
             if (d2.kind === 'command') {
-              const setting = /^\/(effort|model)\s+(\S+)$/.exec(d2.text);
+              const setting = /^\/(effort|model|fast)\s+(\S+)$/.exec(d2.text);
               if (setting) {
                 if (setting[1] === 'effort') out.effort = setting[2].toLowerCase();
-                else out.model = setting[2].toLowerCase();
+                else if (setting[1] === 'model') out.model = setting[2].toLowerCase();
+                // `/fast on|off` (2.1.306) is recorded like `/effort`: a user
+                // record of command tags. A bare `/fast` toggles, and what it
+                // toggled TO is not in the transcript, so only an explicit
+                // argument sets anything here.
+                else if (/^on$/i.test(setting[2])) out.fast = true;
+                else if (/^off$/i.test(setting[2])) out.fast = false;
               }
             }
           }
@@ -1589,7 +1602,20 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
       case 'system': {
         // Compaction notices and similar. Only surface ones with real content.
         const t = typeof d.content === 'string' ? d.content : textOf(d.content);
-        if (t && t.trim() && t.length < 400) {
+        if (!t || !t.trim()) continue;
+        // ⚠ A LOCAL COMMAND'S BOOKKEEPING IS NOT A NOTICE. Since 2.1.306 `/context`
+        // writes `system`/`local_command` records: `<command-name>/context…` and
+        // then the whole table inside `<local-command-stdout>`. The first is
+        // short enough to have drawn here as a system note of raw tags; the
+        // table is read by lib/contextusage.js for GET /context and is nothing
+        // a reader wants as a message. Both go the way a `/model` typed into a
+        // `user` record goes: a `/…` chip, and the stdout dropped or clipped.
+        if (d.subtype === 'local_command' || machineText(t)) {
+          const d2 = describeMachineText(t);
+          if (d2) out.events.push({ seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text });
+          continue;
+        }
+        if (t.length < 400) {
           out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: t.trim() });
         }
         continue;
@@ -1687,7 +1713,7 @@ function emptyResult(offset, truncated) {
   return {
     events: [], deliveredQueued: [], nextOffset: offset, windowStart: offset, truncated,
     title: null, permissionMode: null, model: null, gitBranch: null, cwd: null,
-    effort: null, lastActivityTs: null,
+    effort: null, fast: null, lastActivityTs: null,
   };
 }
 

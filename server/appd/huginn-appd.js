@@ -70,6 +70,8 @@ const { suggestionContext, buildPrompt, parseSuggestions } = require('./lib/sugg
 const { createApiLane } = require('./lib/apilane');
 const permhook = require('./lib/permhook');
 const modelswitch = require('./lib/modelswitch');
+const statuslineLib = require('./lib/statusline');
+const contextusage = require('./lib/contextusage');
 const { FIELDS: POLISH_FIELDS, buildPolishPrompt, parsePolish } = require('./lib/polish');
 // Only `agedLimits` is still called from here: the account-switch DECISION moved
 // inside lib/headroom's arbiter, which imports the rest of this module itself so
@@ -717,6 +719,17 @@ function resolveLocalModel(rawId) {
 }
 
 /** Same matrix as modelDecision: absent or empty clears, unknown non-empty refuses. */
+/**
+ * A chat's `fast`: true or false pins fast mode for its runs (`--settings
+ * '{"fastMode":…}'` at spawn), null leaves the host default. Undefined means the
+ * body did not mention it.
+ */
+function fastDecision(v) {
+  if (v === undefined) return { fast: undefined };
+  if (v === null || typeof v === 'boolean') return { fast: v };
+  return { error: 'fast must be true, false or null (the host default)' };
+}
+
 function effortDecision(v) {
   if (v === undefined || v === null) return { effort: null };
   if (typeof v !== 'string') {
@@ -946,7 +959,7 @@ function ofThisIncarnation(name, st) {
  * dialog was disabled host-wide. A leading dot is outside NAME_RE, so no session
  * can address one. The names are reserved too (lib/session-registry RESERVED).
  */
-const SIDECAR_DIRS = ['.ask', '.plan', '.compacting'];
+const SIDECAR_DIRS = ['.ask', '.plan', '.compacting', statuslineLib.DIRNAME];
 
 /**
  * The pre-3.3 spelling. Still READ and still CLEARED, because /run survives a
@@ -1601,9 +1614,17 @@ async function listSessions({ preview = false, shared = false } = {}) {
       // "queued" mark from this, so a send that is legitimately waiting reads
       // as waiting rather than as a send that silently did nothing.
       pendingSends: pendingSendCount(name),
-      // Context-window pressure (filled from the pane on a preview list) and
-      // whether this session is compacting (cheap marker check, so it works even
-      // on the quick non-preview list).
+      // What Claude Code's own status line last reported for this session
+      // (lib/statusline.js, from `.status/<name>`): the context window, the
+      // model's display name, effort, fast mode, the account's rate limits and
+      // the run's cost. Every field null without a record. One small file read
+      // per row; `fast.available` needs the pane and is decided on the preview
+      // list and on /screen.
+      ...statuslineLib.statusFor(STATE_DIR, name, { sessionId: st.sessionId ?? null }),
+      // Context-window pressure for older clients: `context.percent` when there
+      // is a record, else filled from the pane on a preview list. Whether this
+      // session is compacting is a cheap marker check, so it works even on the
+      // quick non-preview list.
       contextPercent: null,
       compacting: isCompacting(name),
       state: st.state ?? null,
@@ -1699,12 +1720,22 @@ async function listSessions({ preview = false, shared = false } = {}) {
         const st = parseStatusLine(paneLines);
         r.liveModel = st.model;
         r.liveMode = st.mode;
-        // Context-window pressure for the list's per-row meter, and whether this
-        // session is compacting right now.
-        r.contextPercent = st.contextPercent;
+        // Context-window pressure for the list's per-row meter: the status-line
+        // record where there is one, else what a status line drawn in the
+        // `[name] Model · ctx N%` shape says. And whether this session is
+        // compacting right now.
+        r.contextPercent = r.context ? r.context.percent : st.contextPercent;
+        if (r.model === null && st.model) r.model = st.model;
+        // Whether fast mode CAN be used is only on the pane (lib/pane.js).
+        if (r.fast) {
+          const reason = paneLib.fastModeUnavailable(paneLines);
+          r.fast = { ...r.fast, available: reason === null, reason };
+        }
         r.compacting = spinnerIsCompacting(parseSpinner(paneLines)) || isCompacting(r.name);
       }
     }));
+  } else {
+    for (const r of rows) if (r.context) r.contextPercent = r.context.percent;
   }
 
   rows.sort((a, b) => b.activityAt - a.activityAt);
@@ -1992,6 +2023,94 @@ async function dialogRefusal(name) {
   return why === 'trust'
     ? 'this session is waiting on the folder-trust dialog — answer that first'
     : 'a question is on screen in this session — answer it first';
+}
+
+/**
+ * Type a slash command that changes nothing but what Claude Code shows or
+ * remembers (`/context`, `/fast on`) into a session, through the send queue —
+ * the path `/compact` takes, and for the same reasons.
+ *
+ * A person asked for it, so it rides the queue's human lane: held by a dialog
+ * (`modal`, `trust`, `attention`) and, because `bareCaret` is set, by unsent
+ * text in the composer — a slash command pasted after somebody's words submits
+ * their draft with it stuck on the end — and otherwise typed now. Mid-turn,
+ * Claude Code queues the command itself and runs it when the turn ends, which
+ * is the turn boundary the result lands at.
+ *
+ * ⚠ NOT THE AUTOMATED LANE, DELIBERATELY. That lane waits for the transcript's
+ * boundary, and Claude Code records a typed `/fast on` as a `user` record of
+ * command tags that no `end_turn` ever follows — so a refresh queued after a
+ * fast-mode toggle sat on `turn` until the next real turn ended (measured
+ * against test/fixtures/fake-claude-records.js, which writes that record). Its
+ * `human` drop rule is also the wrong rule here: a person typing is no reason
+ * to throw their own tap away.
+ *
+ * Refused, with the word the clients key on, when it cannot be queued: `shell`
+ * (no Claude recorded here, or a shell prompt where the composer was, or the
+ * composer in shell mode where Enter RUNS the box), `dialog` (a question is on
+ * screen; the command would answer it), `busy` (the same command is already
+ * waiting, or the queue would not take it).
+ *
+ * @returns {{queued: true, delivered: boolean, blockedBy: string|null}
+ *   | {reason: 'shell'|'dialog'|'busy', error: string}}
+ */
+async function queueSlashCommand(name, text, origin) {
+  const st = readSessionState(name);
+  if (!st) return { reason: 'shell', error: 'no Claude state recorded for this session — it may be a plain shell' };
+  if (st.state === 'attention') return { reason: 'dialog', error: `answer the waiting question first, then ${text}` };
+  const lines = await capturePaneLines(name);
+  if (lines) {
+    const why = typing.paneReadyForInput(lines).why;
+    if (typing.paneBlocks(why)) {
+      return { reason: 'dialog', error: await dialogRefusal(name) || 'a question is on screen in this session — answer it first' };
+    }
+    if (typing.composerShellMode(lines)) {
+      return { reason: 'shell', error: 'the prompt is in shell mode (!), where Enter runs it as a command' };
+    }
+    if (!typing.composerDrawn(lines) && typing.shellPrompt(lines)) {
+      return { reason: 'shell', error: 'claude is no longer running in the pane (a shell prompt is on its last row)' };
+    }
+  }
+  if (pendingEntries(name).some((e) => e.origin === origin && e.text === text)) {
+    return { reason: 'busy', error: `${text} is already waiting for this session's next turn boundary` };
+  }
+  const out = await enqueueSend(name, text, { origin, submit: true, bareCaret: true });
+  if (out.result && !out.result.ok) return { reason: 'busy', error: out.result.message || `${text} was not queued` };
+  if (out.dropped) return { reason: 'busy', error: `${text} was dropped: ${out.dropped}` };
+  return { queued: true, delivered: !!out.delivered, blockedBy: out.blockedBy || null };
+}
+
+/**
+ * The latest `/context` table of each session, parsed (lib/contextusage.js),
+ * found by reading its transcript FORWARD from where the last look ended: a
+ * poll of a session that has not run `/context` again costs one stat. Keyed by
+ * tmux name; forgotten with the rest of a name's memory (forgetSessionMemory)
+ * and reset when the transcript behind the name changes or shrinks.
+ */
+const contextCache = new Map();   // name -> { transcript, scannedTo, uuid, breakdown }
+function contextBreakdownFor(name, st) {
+  const file = st && st.transcript ? st.transcript : null;
+  if (!file) { contextCache.delete(name); return null; }
+  let size;
+  try { size = fs.statSync(file).size; } catch { contextCache.delete(name); return null; }
+  let c = contextCache.get(name);
+  if (!c || c.transcript !== file || size < c.scannedTo) {
+    const from = contextusage.coldStart(size);
+    const r = contextusage.scanForward(file, from, size, { aligned: from === 0 });
+    c = { transcript: file, scannedTo: r.scannedTo, uuid: null, breakdown: null };
+    if (r.record) { c.breakdown = contextusage.breakdownFromRecord(r.record); c.uuid = r.record.uuid || null; }
+    contextCache.set(name, c);
+    return c.breakdown;
+  }
+  if (size > c.scannedTo) {
+    const r = contextusage.scanForward(file, c.scannedTo, size);
+    c.scannedTo = r.scannedTo;
+    if (r.record && r.record.uuid !== c.uuid) {
+      const b = contextusage.breakdownFromRecord(r.record);
+      if (b) { c.breakdown = b; c.uuid = r.record.uuid || null; }
+    }
+  }
+  return c.breakdown;
 }
 
 /**
@@ -2876,6 +2995,8 @@ function forgetSessionMemory(name) {
   // previous holder. Kept, the new session's first stable idle ended it.
   softEnds.delete(name);
   archiveIntents.delete(name);
+  // The `/context` breakdown cached for the previous holder's transcript.
+  contextCache.delete(name);
 }
 
 function markLaunching(name) {
@@ -4506,9 +4627,18 @@ async function captureScreen(name, {
     // which the old regex swallowed into `branch` — now parsed out for the meter.
     ...(() => {
       const st = parseStatusLine(lines);
+      // What Claude Code's status line last reported (lib/statusline.js), with
+      // the pane deciding whether fast mode is available; the scraped `ctx N%`
+      // and model only where there is no record.
+      const sess = readSessionState(name);
+      const live = statuslineLib.statusFor(STATE_DIR, name, {
+        sessionId: sess && sess.sessionId ? sess.sessionId : null, paneLines: lines,
+      });
       return {
         liveModel: st.model, liveMode: st.mode, liveBranch: st.branch,
-        contextPercent: st.contextPercent,
+        contextPercent: live.context ? live.context.percent : st.contextPercent,
+        ...live,
+        model: live.model ?? st.model ?? null,
       };
     })(),
   };
@@ -4852,6 +4982,10 @@ function startRun(meta, userText) {
   if (meta.model) args.push('--model', meta.model);
   else if (downgrade) args.push('--model', downgrade);
   if (meta.effort) args.push('--effort', meta.effort);
+  // Fast mode pinned on the chat, for this run only: `--settings` takes a JSON
+  // string and layers it over the account's settings.json, so a chat set to
+  // false stays slow on a host whose default is fast. Null: the host decides.
+  if (typeof meta.fast === 'boolean') args.push('--settings', JSON.stringify({ fastMode: meta.fast }));
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
   const persona = personaFile();
   if (persona) args.push('--append-system-prompt-file', persona);
@@ -9001,24 +9135,66 @@ function lastModelRecord(tail) {
  * file is worse than a wrong model.
  */
 function repairDefaultModel(expected) {
-  // ⚠ RESOLVE THE LINK FIRST (#29). This wrote `<file>.tmp` and renameSync'd it
-  // over ~/.claude/settings.json — so a settings.json symlinked into a dotfiles
-  // repo was REPLACED by a regular file, and later edits in the repo stopped
-  // reaching the CLI: silent, permanent, and the exact case install-hooks.js
-  // resolves on purpose. `realpathSync` on the symlink's own path, not on the
-  // directory, because the link may point anywhere.
-  let file = path.join(CLAUDE_DIR, 'settings.json');
+  let was = null;
+  const r = rewriteClaudeSettings((o) => {
+    if (o.model === expected) return false;
+    was = o.model ?? null;
+    o.model = expected;
+    return true;
+  }, 'repair');
+  if (r.ok && r.changed) {
+    log(`headroom: restored the host default model to ${expected} (was ${was})`);
+    return { ok: true, changed: true, was };
+  }
+  return r;
+}
+
+/** The sessions account's Claude Code settings file, as the CLI resolves it. */
+function claudeSettingsFile() {
+  return process.env.HUGINN_CLAUDE_SETTINGS || path.join(CLAUDE_DIR, 'settings.json');
+}
+
+/**
+ * `~/.claude/settings.json` read, with the real file behind any link —
+ * `{file, raw, settings}` — or `{error}`. Refuses a file it cannot parse rather
+ * than reading half of it: the caller is about to decide something, or rewrite it.
+ */
+function readClaudeSettings(what = 'read') {
+  // ⚠ RESOLVE THE LINK FIRST (#29). The repair wrote `<file>.tmp` and renameSync'd
+  // it over ~/.claude/settings.json — so a settings.json symlinked into a
+  // dotfiles repo was REPLACED by a regular file, and later edits in the repo
+  // stopped reaching the CLI: silent, permanent, and the exact case
+  // install-hooks.js resolves on purpose. `realpathSync` on the symlink's own
+  // path, not on the directory, because the link may point anywhere.
+  let file = claudeSettingsFile();
   try { file = fs.realpathSync(file); } catch { /* not a link, or not there yet */ }
   let raw;
-  try { raw = fs.readFileSync(file, 'utf8'); } catch { return { ok: false, error: 'no settings.json to repair' }; }
-  let o;
-  try { o = JSON.parse(raw); } catch { return { ok: false, error: 'settings.json is unparseable — refusing to rewrite it' }; }
-  if (!o || typeof o !== 'object' || Array.isArray(o)) {
-    return { ok: false, error: 'settings.json is not an object — refusing to rewrite it' };
+  try { raw = fs.readFileSync(file, 'utf8'); } catch { return { error: `no settings.json to ${what}` }; }
+  let settings;
+  try { settings = JSON.parse(raw); } catch { return { error: 'settings.json is unparseable — refusing to rewrite it' }; }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+    return { error: 'settings.json is not an object — refusing to rewrite it' };
   }
-  if (o.model === expected) return { ok: true, changed: false };
-  const was = o.model ?? null;
-  o.model = expected;
+  return { file, raw, settings };
+}
+
+/**
+ * Change the sessions account's Claude Code settings in place.
+ *
+ * `mutate(settings)` edits the parsed object and returns whether it changed
+ * anything; nothing is written when it did not. Deliberately narrow: this file
+ * is also where the CLI keeps `model`, `permissions` and everybody's hooks, and
+ * every concurrent session on the host reads it. Parse first and refuse on a
+ * file that cannot be read; write 2-space JSON through a temp file and a rename,
+ * keeping the file's own mode and its trailing newline (or the lack of one).
+ *
+ * @returns {{ok: true, changed: boolean} | {ok: false, error: string}}
+ */
+function rewriteClaudeSettings(mutate, what = 'rewrite') {
+  const read = readClaudeSettings(what);
+  if (read.error) return { ok: false, error: read.error };
+  const { file, raw, settings: o } = read;
+  if (!mutate(o)) return { ok: true, changed: false };
   const tmpFile = `${file}.tmp`;
   try {
     // ⚠ AND CARRY THE FILE'S OWN MODE. The tmp was hardcoded 0600 and the rename
@@ -9037,8 +9213,38 @@ function repairDefaultModel(expected) {
     try { fs.unlinkSync(tmpFile); } catch { /* never existed */ }
     return { ok: false, error: e.message };
   }
-  log(`headroom: restored the host default model to ${expected} (was ${was})`);
-  return { ok: true, changed: true, was };
+  return { ok: true, changed: true };
+}
+
+/**
+ * Is `statusLine.command` Huginn's (server/bin/huginn-statusline, as setup.sh
+ * installs it, with or without a chained previous command after `--`)?
+ */
+function isHuginnStatusLine(settings) {
+  const sl = settings && settings.statusLine;
+  const cmd = sl && typeof sl.command === 'string' ? sl.command.trim() : '';
+  return /^(?:\S*\/)?huginn-statusline(?:\s|$)/.test(cmd);
+}
+
+/**
+ * GET /v1/settings/claude: the few Claude Code settings the apps show.
+ *
+ *   fastModeDefault   `fastMode` — fast mode on for every new session and chat
+ *   fastModePerSession `fastModePerSessionOptIn` — a session's `/fast` changes
+ *                     only that session (install sets it)
+ *   feedbackOff       the three feedback keys install turns off are all off
+ *   statusLine        Huginn's status line is installed, so sessions carry a
+ *                     live context window
+ */
+function claudeSettingsView(o) {
+  const env = o.env && typeof o.env === 'object' ? o.env : {};
+  return {
+    fastModeDefault: o.fastMode === true,
+    fastModePerSession: o.fastModePerSessionOptIn === true,
+    feedbackOff: o.feedbackSurveyRate === 0 && o.feedbackDrafts === 'off'
+      && String(env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY ?? '') === '1',
+    statusLine: isHuginnStatusLine(o),
+  };
 }
 
 // ---- the ladder ------------------------------------------------------------
@@ -11463,6 +11669,45 @@ function retryStateWatch() {
   stateWatchRetry.unref();
 }
 
+/**
+ * The status-line records, watched like the state directory.
+ *
+ * `.status/<name>` is rewritten by huginn-statusline on every redraw of Claude
+ * Code's status line, and nothing else moves when it does: the flat state file
+ * is the hook's, not the status line's, so the watch above never hears a record
+ * land. A parked screen poll for that session is woken (its pane has redrawn,
+ * which is what a status-line change means); the session list is polled anyway.
+ * The directory is made here so the watch has something to hold — the status
+ * line makes it too, 0700, and `recursive` keeps the two from racing.
+ */
+let statusWatcher = null;
+let statusWatchRetry = null;
+function startStatusWatch() {
+  if (statusWatcher) return;
+  const dir = path.join(STATE_DIR, statuslineLib.DIRNAME);
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    statusWatcher = fs.watch(dir, (_event, filename) => {
+      const n = filename ? String(filename) : '';
+      if (n && NAME_RE.test(n)) wakePane(n);
+    });
+    statusWatcher.on('error', (e) => {
+      log(`status: watch died (${e.message}); will retry`);
+      try { statusWatcher.close(); } catch { }
+      statusWatcher = null;
+      retryStatusWatch();
+    });
+  } catch (e) {
+    log(`status: could not watch ${dir} (${e.message}); retrying, polling meanwhile`);
+    retryStatusWatch();
+  }
+}
+function retryStatusWatch() {
+  if (statusWatchRetry) return;
+  statusWatchRetry = setTimeout(() => { statusWatchRetry = null; startStatusWatch(); }, 30_000);
+  statusWatchRetry.unref();
+}
+
 function startAlertWatcher() {
   if (alertTimer) return;
   alertTimer = setInterval(() => { alertTick().catch((e) => log('alerts: tick failed', e.message)); },
@@ -11753,6 +11998,35 @@ async function handleRequest(req, res) {
     if (req.method === 'GET' && p === '/v1/headroom') {
       return sendJson(res, 200, headroomPayload());
     }
+    // --- the sessions account's Claude Code settings the apps show and set
+    if (p === '/v1/settings/claude' && (req.method === 'GET' || req.method === 'PATCH')) {
+      if (req.method === 'PATCH') {
+        const body = await readJsonBody(req);
+        if ('fastModeDefault' in body && typeof body.fastModeDefault !== 'boolean') {
+          return sendErr(res, 400, 'fastModeDefault must be true or false');
+        }
+        if ('fastModeDefault' in body) {
+          // Written the way the default-model repair writes: through the link,
+          // keeping the mode, nothing else touched. Every session on the host
+          // reads this file, which is why it is one key and not a merge.
+          const r = rewriteClaudeSettings((o) => {
+            if (o.fastMode === body.fastModeDefault) return false;
+            o.fastMode = body.fastModeDefault;
+            return true;
+          }, 'change');
+          if (!r.ok) return sendErr(res, 409, r.error);
+          if (r.changed) log(`settings: fastMode -> ${body.fastModeDefault}`);
+        }
+      }
+      const read = readClaudeSettings();
+      if (read.error) {
+        // No file yet: nothing is on, which is also the truth.
+        if (/^no settings\.json/.test(read.error)) return sendJson(res, 200, claudeSettingsView({}));
+        return sendErr(res, 409, read.error);
+      }
+      return sendJson(res, 200, claudeSettingsView(read.settings));
+    }
+
     if (req.method === 'PATCH' && p === '/v1/headroom/settings') {
       const body = await readJsonBody(req);
       // Validated BEFORE anything is written, and the rule that failed is the
@@ -13295,6 +13569,47 @@ async function handleRequest(req, res) {
         delivered: out.delivered,
         blockedBy: out.blockedBy || null,
       });
+    }
+
+    // --- the context window, by category (`/context`)
+    //
+    // GET serves what the status line last reported for the window and the
+    // model, with the last `/context` table Claude Code wrote into the
+    // transcript parsed into categories — null until the session has run one.
+    // The refresh types `/context` through the send queue at the next turn
+    // boundary; the table then appears in the transcript and the next GET has
+    // it. 409 with `reason` when it cannot be queued (see queueSlashCommand).
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/context$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await requireSession(res, name))) return;
+      const st = readSessionState(name);
+      const live = statuslineLib.statusFor(STATE_DIR, name, { sessionId: st && st.sessionId ? st.sessionId : null });
+      const breakdown = contextBreakdownFor(name, st);
+      return sendJson(res, 200, {
+        context: live.context,
+        model: live.model ?? (breakdown && breakdown.model ? breakdown.model.display : null),
+        breakdown,
+      });
+    }
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/context\/refresh$/)) && req.method === 'POST') {
+      const name = m[1];
+      if (!(await requireSession(res, name))) return;
+      const r = await queueSlashCommand(name, '/context', 'context');
+      if (r.reason) return sendJson(res, 409, { reason: r.reason, error: r.error });
+      return sendJson(res, 202, { queued: true, delivered: r.delivered, blockedBy: r.blockedBy });
+    }
+
+    // --- fast mode for one session (`/fast on|off`), through the same queue.
+    // `fastModePerSessionOptIn` (set at install) keeps this from changing any
+    // other session; the host default is PATCH /v1/settings/claude.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/fast$/)) && req.method === 'POST') {
+      const name = m[1];
+      const body = await readJsonBody(req);
+      if (typeof body.on !== 'boolean') return sendErr(res, 400, 'on must be true or false');
+      if (!(await requireSession(res, name))) return;
+      const r = await queueSlashCommand(name, body.on ? '/fast on' : '/fast off', 'fast');
+      if (r.reason) return sendJson(res, 409, { reason: r.reason, error: r.error });
+      return sendJson(res, 202, { queued: true, delivered: r.delivered, blockedBy: r.blockedBy });
     }
 
     // --- answering a question from a notification, without opening the app
@@ -15265,6 +15580,8 @@ async function handleRequest(req, res) {
         if (!served.ok) return sendErr(res, 409, served.reason);
         const evL = effortDecision(body.effort);
         if (evL.error) return sendErr(res, 400, evL.error);
+        const fvL = fastDecision(body.fast);
+        if (fvL.error) return sendErr(res, 400, fvL.error);
         const nowL = Math.floor(Date.now() / 1000);
         const metaL = {
           id: crypto.randomUUID(),
@@ -15273,6 +15590,7 @@ async function handleRequest(req, res) {
           host: r.deviceId,
           model: r.id,
           effort: evL.effort,
+          fast: fvL.fast ?? null,
           createdAt: nowL,
           updatedAt: nowL,
           claudeSessionId: null,
@@ -15288,6 +15606,8 @@ async function handleRequest(req, res) {
       if (mv.error) return sendErr(res, 400, mv.error);
       const ev = effortDecision(body.effort);
       if (ev.error) return sendErr(res, 400, ev.error);
+      const fv = fastDecision(body.fast);
+      if (fv.error) return sendErr(res, 400, fv.error);
       const mode = body.mode === 'act' ? 'act' : 'ask';
       const now = Math.floor(Date.now() / 1000);
       // WHERE this chat runs, decided once and for the chat's life. Checked here
@@ -15308,6 +15628,9 @@ async function handleRequest(req, res) {
         host,
         model: mv.model,
         effort: ev.effort,
+        // Fast mode for this chat's runs: true/false pins it, null (the usual)
+        // leaves the host default (`fastMode` in settings.json) to decide.
+        fast: fv.fast ?? null,
         createdAt: now,
         updatedAt: now,
         claudeSessionId: null,
@@ -15657,6 +15980,8 @@ async function handleRequest(req, res) {
           ev = effortDecision(body.effort);
           if (ev.error) return sendErr(res, 400, ev.error);
         }
+        const fv = fastDecision(body.fast);
+        if (fv.error) return sendErr(res, 400, fv.error);
         // Applied to a RELOADED meta for the same reason as the queue branch: the
         // snapshot above predates the readBody await, and saving it back reverted
         // whatever the run recorded meanwhile. The worst case was specific and
@@ -15679,6 +16004,8 @@ async function handleRequest(req, res) {
             if (mv.forceAsk) fresh.mode = 'ask';
           }
           if (ev) { fresh.effort = ev.effort; changed = true; }
+          // Fast mode too applies to the NEXT turn (a `--settings` flag at spawn).
+          if (fv.fast !== undefined) { fresh.fast = fv.fast; changed = true; }
           if ('mode' in body) { fresh.mode = body.mode === 'act' ? 'act' : 'ask'; changed = true; }
         });
         if (!updated) return sendErr(res, 404, 'no such chat');
@@ -15880,6 +16207,7 @@ resolveBind().then(async (bind) => {
   // than only inside startAlertWatcher. Idempotent (guards on stateWatcher), and
   // its alertTick call is a cheap no-op while alerts are off.
   startStateWatch();
+  startStatusWatch();
   // Re-key any profile still stored under the old email-derived name, and clear
   // the duplicates that scheme produced.
   try {
