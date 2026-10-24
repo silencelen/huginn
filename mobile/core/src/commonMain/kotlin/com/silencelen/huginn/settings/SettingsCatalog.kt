@@ -130,6 +130,9 @@ fun SettingScope.heading(surface: Surface): String = when (this) {
  *   drawn only while it is on.
  * @param pushKnown the host said whether it can push (phone: delivery details).
  * @param appLockOn the app lock is on (phone: "Lock now" locks something).
+ * @param terminalChoice this machine has more than one terminal "Open in
+ *   terminal" could start (desktop: Windows and Linux; macOS has the one), so
+ *   the Terminal row is drawn.
  */
 data class SettingsProbe(
     val headroom: Boolean = false,
@@ -154,6 +157,7 @@ data class SettingsProbe(
     val deviceNotify: Boolean = false,
     val pushKnown: Boolean = false,
     val appLockOn: Boolean = false,
+    val terminalChoice: Boolean = false,
 )
 
 /**
@@ -889,6 +893,22 @@ object SettingsCatalog {
                 surface = Surface.DESKTOP,
                 scope = SettingScope.DEVICE,
             ),
+            // Which terminal "Open in terminal" starts. Auto picks the way the
+            // launcher always has (Windows Terminal, then PowerShell; $TERMINAL,
+            // then xdg-terminal-exec, then the first one found); this is the one
+            // place to say otherwise.
+            SettingsItem(
+                id = "appearance.terminal",
+                title = "Terminal",
+                summary = "Which terminal opens a session when you ask for one from a row or the palette.",
+                keywords = listOf(
+                    "terminal", "powershell", "pwsh", "windows terminal", "wt", "shell", "console",
+                    "open in terminal", "kitty", "alacritty", "gnome-terminal", "konsole", "xterm",
+                ),
+                surface = Surface.DESKTOP,
+                availability = { it.terminalChoice },
+                scope = SettingScope.DEVICE,
+            ),
         ),
     )
 
@@ -958,6 +978,22 @@ object SettingsCatalog {
                 ),
                 surface = Surface.DESKTOP,
                 scope = SettingScope.CORE,
+            ),
+            // The notice outside Settings (the lists' card, the rail dot, the
+            // tray row). Off keeps fetching and verifying; this page then stays
+            // the only place that says one is ready.
+            SettingsItem(
+                id = "updates.notify",
+                title = "Tell me when an update is ready",
+                summary = "Whether a downloaded, verified update is announced in the session and chat lists, " +
+                    "on the rail and in the tray menu.",
+                keywords = listOf(
+                    "update", "notice", "notify", "remind", "reminder", "ready", "card", "dismiss",
+                    "don't remind", "later", "silence", "announce",
+                ),
+                surface = Surface.DESKTOP,
+                availability = { it.selfUpdate },
+                scope = SettingScope.DEVICE,
             ),
         ),
     )

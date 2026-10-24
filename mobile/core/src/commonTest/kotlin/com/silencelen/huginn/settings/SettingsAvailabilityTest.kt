@@ -25,7 +25,7 @@ class SettingsAvailabilityTest {
         savedAccounts = 3, diagnostics = true, selfUpdate = true, keepAwake = true,
         accountSwitchOn = true, deviceOn = true, workScope = true, coreInstalled = true,
         apps = true, projects = true, signedIn = true, alertsRelayOn = true,
-        deviceNotify = true, pushKnown = true, appLockOn = true,
+        deviceNotify = true, pushKnown = true, appLockOn = true, terminalChoice = true,
     )
 
     /**
