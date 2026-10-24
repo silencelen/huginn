@@ -1,6 +1,14 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.App
+import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.zip.CRC32
+import java.util.zip.Deflater
+import java.util.zip.DeflaterOutputStream
+import javax.imageio.ImageIO
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.jetbrains.skia.Bitmap
@@ -37,6 +45,114 @@ class AttachmentImagesTest {
     fun `garbage bytes decode to null, never a throw`() {
         assertNull(SkiaImageBytesDecoder().decode(byteArrayOf(1, 2, 3, 4, 5)))
         assertNull(SkiaImageBytesDecoder().decode(ByteArray(0)))
+    }
+
+    // ------------------------------------------------- what a header declares
+
+    private fun chunk(type: String, data: ByteArray): ByteArray {
+        val name = type.toByteArray(Charsets.US_ASCII)
+        val crc = CRC32().apply { update(name); update(data) }
+        return ByteBuffer.allocate(12 + data.size)
+            .putInt(data.size).put(name).put(data).putInt(crc.value.toInt()).array()
+    }
+
+    /** A PNG header for [w] × [h] grey at [bits] per pixel, and the signature before it. */
+    private fun pngHead(w: Int, h: Int, bits: Int = 8): ByteArray =
+        byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A) +
+            chunk("IHDR", ByteBuffer.allocate(13).putInt(w).putInt(h).put(bits.toByte()).put(0).put(0).put(0).put(0).array())
+
+    private fun deflated(rowBytes: Int, rows: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        DeflaterOutputStream(out, Deflater(Deflater.BEST_COMPRESSION)).use { z ->
+            val row = ByteArray(rowBytes)
+            repeat(rows) { z.write(row) }
+        }
+        return out.toByteArray()
+    }
+
+    /**
+     * A complete, valid, black PNG of [w] × [h] at one bit per pixel. Every row
+     * is the same zero bytes, which deflate folds away: a few kilobytes on the
+     * wire, whatever it says it is.
+     */
+    private fun bilevelPng(w: Int, h: Int): ByteArray =
+        pngHead(w, h, bits = 1) + chunk("IDAT", deflated(1 + (w + 7) / 8, h)) + chunk("IEND", ByteArray(0))
+
+    /**
+     * ⚠⚠ THE DEFECT, AS A FILE. An answer that names an image path has it fetched
+     * and decoded with nobody clicking anything, and the decode allocated width ×
+     * height × 4 bytes for whatever the header said. This one is 7 KB and says
+     * 7500 × 7500: 56 MP, 225 MB of pixels the old decoder produced without a
+     * murmur. Past the budget it is refused before anything is allocated, the
+     * same null as bytes that do not decode.
+     */
+    @Test
+    fun `a small file declaring more pixels than the budget is refused, not decoded`() {
+        val bomb = bilevelPng(7500, 7500)
+        assertTrue(bomb.size < 16 * 1024, "the file is ${bomb.size} bytes")
+        assertNull(SkiaImageBytesDecoder().decode(bomb))
+    }
+
+    @Test
+    fun `the dimensions come from the header alone`() {
+        // No image data worth the name: a header for the 16,383 × 16,383 a few
+        // hundred bytes of WebP or PNG can declare (a gigabyte as RGBA) and one
+        // row of pixels. The size is read without decoding any of it.
+        val head = pngHead(16_383, 16_383) + chunk("IDAT", deflated(1 + 16_383, 1)) + chunk("IEND", ByteArray(0))
+        assertTrue(head.size < 1024, "the file is ${head.size} bytes")
+        assertEquals(16_383L * 16_383L, SkiaImageBytesDecoder.declaredPixels(head))
+        assertEquals(56_250_000L, SkiaImageBytesDecoder.declaredPixels(bilevelPng(7500, 7500)))
+        assertNull(SkiaImageBytesDecoder.declaredPixels(byteArrayOf(1, 2, 3, 4, 5)))
+        assertTrue(56_250_000L > SkiaImageBytesDecoder.MAX_PIXELS, "the file above must be over the budget")
+    }
+
+    @Test
+    fun `the budget is width times height, inclusive`() {
+        val decoder = SkiaImageBytesDecoder(maxPixels = 84)
+        assertNotNull(decoder.decode(pngBytes(12, 7)), "84 pixels is within a budget of 84")
+        assertNotNull(decoder.decode(pngBytes(7, 12)), "and so is the same image on its side")
+        assertNull(decoder.decode(pngBytes(12, 8)), "96 is not")
+        assertNull(decoder.decode(pngBytes(85, 1)), "nor is one row of 85")
+    }
+
+    private fun awtEncoded(format: String, w: Int, h: Int): ByteArray {
+        val img = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+        val out = ByteArrayOutputStream()
+        assertTrue(ImageIO.write(img, format, out), "this JDK has no $format writer")
+        return out.toByteArray()
+    }
+
+    /** An icon file holding one PNG, as sites serve favicons. */
+    private fun icoOf(png: ByteArray, w: Int, h: Int): ByteArray =
+        ByteBuffer.allocate(22 + png.size).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort(0).putShort(1).putShort(1)
+            .put(w.toByte()).put(h.toByte()).put(0).put(0).putShort(1).putShort(32).putInt(png.size).putInt(22)
+            .put(png).array()
+
+    /**
+     * The header read must not refuse a format the old decoder drew: every
+     * format a transcript or an app row shows — photos, screenshots, plots,
+     * favicons — still decodes, at its own size.
+     */
+    @Test
+    fun `every format the transcript draws still decodes under the guard`() {
+        val skia = Image.makeFromBitmap(Bitmap().apply {
+            allocPixels(ImageInfo(10, 6, ColorType.RGBA_8888, org.jetbrains.skia.ColorAlphaType.PREMUL))
+            erase(0xFF3366CC.toInt())
+        })
+        val files = mapOf(
+            "png" to pngBytes(10, 6),
+            "jpeg" to skia.encodeToData(EncodedImageFormat.JPEG)!!.bytes,
+            "webp" to skia.encodeToData(EncodedImageFormat.WEBP)!!.bytes,
+            "gif" to awtEncoded("gif", 10, 6),
+            "bmp" to awtEncoded("bmp", 10, 6),
+            "ico" to icoOf(pngBytes(10, 6), 10, 6),
+        )
+        for ((format, bytes) in files) {
+            val bmp = SkiaImageBytesDecoder().decode(bytes)
+            assertNotNull(bmp, "$format no longer decodes")
+            assertEquals(10 to 6, bmp.width to bmp.height, format)
+        }
     }
 
     @Test
