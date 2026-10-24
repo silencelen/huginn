@@ -128,6 +128,7 @@ import com.silencelen.huginn.data.SessionHeadroom
 import com.silencelen.huginn.data.StatusHeadroom
 import com.silencelen.huginn.ui.AutoResumeChip
 import com.silencelen.huginn.ui.CompactingChip
+import com.silencelen.huginn.ui.fastQueuedWords
 import com.silencelen.huginn.ui.SessionStateMark
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.StreamPickerRow
@@ -340,7 +341,7 @@ fun SessionView(store: AppStore, name: String) {
                 viewScope.launch {
                     runCatching { store.client.setSessionFast(name, on) }
                         .onSuccess { q ->
-                            if (q.queued) store.noteAction("fast mode ${if (on) "on" else "off"} · after this turn")
+                            if (q.queued) store.noteAction(fastQueuedWords(on))
                             else store.noteAction(ContextFormat.refreshNote(q))
                         }
                         .onFailure { store.noteError(it) }
@@ -713,7 +714,7 @@ private fun SessionHeader(
             if (fast != null && !cramped) {
                 Tip(
                     if (!fast.available) fast.reason ?: "Fast mode is not available for this session"
-                    else "Fast mode for this session · typed as /fast at the next turn",
+                    else "Fast mode for this session",
                 ) {
                     FastChip(fast, onToggle = onFast, modifier = Modifier.padding(start = 6.dp))
                 }

@@ -1627,6 +1627,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             while (isActive) {
                 refreshHeadroomOnce()
+                // The Claude-settings probe rides the one foreground-wide tick,
+                // as it rides the desktop's poll: UNTIL IT ANSWERS. A transient
+                // non-404 failure at connect used to leave the answer null for
+                // the whole connection — no Settings row, no chat fast option. A
+                // 404 is final for the connection (that is the feature probe).
+                if (_claudeSettingsAvailable.value == null) landClaudeSettings()
                 delay(HEADROOM_POLL_MS)
             }
         }
@@ -3447,7 +3453,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.setSessionFast(name, on) }
                 .onSuccess { q ->
-                    _toast.value = if (q.queued) "Fast mode ${if (on) "on" else "off"} for $name after this turn"
+                    _toast.value = if (q.queued) com.silencelen.huginn.ui.fastQueuedWords(on)
                     else com.silencelen.huginn.ui.ContextFormat.refreshNote(q)
                 }
                 .onFailure { _toast.value = errText(it) }
@@ -3476,6 +3482,30 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             .onFailure { if (it is HuginnClient.HuginnException && it.code == 404) _claudeSettingsAvailable.value = false }
+    }
+
+    private var claudeSettingsPollJob: Job? = null
+
+    /**
+     * Keeps the Claude-settings block live while Settings is on screen, as the
+     * desktop re-asks on every tick of its poll while its Settings view is open:
+     * the one row it feeds is written from any app, so the value on this page
+     * must not be a memory of the last time it was read.
+     */
+    fun startClaudeSettingsPolling() {
+        claudeSettingsPollJob?.cancel()
+        claudeSettingsPollJob = viewModelScope.launch {
+            awaitReady()
+            while (isActive) {
+                landClaudeSettings()
+                delay(5000)
+            }
+        }
+    }
+
+    fun stopClaudeSettingsPolling() {
+        claudeSettingsPollJob?.cancel()
+        claudeSettingsPollJob = null
     }
 
     /** Writes the default for new sessions; the value shown is the daemon's answer, never a local flip. */

@@ -88,17 +88,14 @@ fun ContextMeter(percent: Int?, modifier: Modifier = Modifier, onClick: (() -> U
 
 /**
  * The compact "ctx N%" text alone, no bar — for a dense session-list row where a
- * per-row bar would be noise. Renders nothing when [percent] is null.
+ * per-row bar would be noise. Renders nothing when [percent] is null. Not a
+ * button: the context card opens from the header and strip meters only, by design.
  */
 @Composable
-fun ContextBadge(percent: Int?, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+fun ContextBadge(percent: Int?, modifier: Modifier = Modifier) {
     if (percent == null) return
     val p = percent.coerceIn(0, 100)
     val high = p >= CONTEXT_HIGH
-    val target = if (onClick == null) modifier else modifier
-        .clip(RoundedCornerShape(6.dp))
-        .clickable(onClick = onClick)
-        .padding(horizontal = 4.dp, vertical = 2.dp)
     Text(
         "ctx $p%",
         style = MaterialTheme.typography.labelSmall,
@@ -110,7 +107,7 @@ fun ContextBadge(percent: Int?, modifier: Modifier = Modifier, onClick: (() -> U
         // only gets what the name before it left over.
         maxLines = 1,
         softWrap = false,
-        modifier = target,
+        modifier = modifier,
     )
 }
 

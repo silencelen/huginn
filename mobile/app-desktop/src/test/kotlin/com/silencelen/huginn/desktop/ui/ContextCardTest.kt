@@ -27,6 +27,7 @@ import com.silencelen.huginn.ui.ContextFormat
 import com.silencelen.huginn.ui.ContextSource
 import com.silencelen.huginn.ui.theme.HuginnTheme
 import com.silencelen.huginn.ui.theme.MonoStyleDesktop
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -142,6 +143,71 @@ class ContextCardTest {
         onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
         waitForIdle()
         onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals("held · the composer has unsent text")
+    }
+
+    /**
+     * ⚠ A CANCELLATION IS NOT AN ANSWER. Refresh pressed twice while the first is
+     * in flight cancels the first effect; a `runCatching` around the call caught
+     * that CancellationException and wrote its message ("The coroutine scope left
+     * the composition") into the note. Rethrown, only the live press writes. And
+     * a transport failure is a house note, never the exception's own text.
+     */
+    @Test
+    fun `a cancelled refresh writes no note and a failed one writes the house note`() = runComposeUiTest {
+        val gate = CompletableDeferred<Queued>()
+        var fail = false
+        val source = ContextSource(
+            load = { SessionContext(context = facts.usage, model = "Haiku 5.5", breakdown = table) },
+            refresh = { if (fail) throw IllegalStateException("Connection reset by peer") else gate.await() },
+        )
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(380.dp)) { ContextCardBody("alex", source, facts, now, pollMs = 0L) }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        // Pressed again while the first refresh is still in flight: the first effect is cancelled.
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true).assertDoesNotExist()
+        gate.complete(Queued(queued = true, delivered = true))
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals("queued · appears when the session is idle")
+
+        fail = true
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals(ContextFormat.REFRESH_FAILED)
+    }
+
+    /** A fresher table than the one Refresh was pressed on retires the note: that table IS the answer. */
+    @Test
+    fun `the refresh note clears when a newer table arrives`() = runComposeUiTest {
+        var loads = 0
+        val source = ContextSource(
+            // The load that follows the press brings a newer table than the one on screen.
+            load = {
+                loads++
+                SessionContext(context = facts.usage, model = "Haiku 5.5", breakdown = if (loads >= 2) table.copy(asOf = now) else table)
+            },
+            refresh = { Queued(queued = true, delivered = true) },
+        )
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(380.dp)) { ContextCardBody("alex", source, facts, now, pollMs = 0L) }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        assertEquals(2, loads, "the press re-reads the table")
+        onNodeWithTag("context.note", useUnmergedTree = true).assertDoesNotExist()
+        // Pressed again on that newer table, which the next load repeats: the note shows until something newer again.
+        onNodeWithTag("context.refresh", useUnmergedTree = true).performClick()
+        waitForIdle()
+        onNodeWithTag("context.note", useUnmergedTree = true).assertTextEquals("queued · appears when the session is idle")
     }
 
     /** A table without a stamp (asOf 0, as a daemon null decodes) prints no age — never "as of 56 years ago". */

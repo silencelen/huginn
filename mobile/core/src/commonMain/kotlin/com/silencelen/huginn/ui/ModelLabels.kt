@@ -232,10 +232,12 @@ object ChatFastLabels {
         false -> "Normal speed"
     }
 
+    // The menu row for a state reads as the chip does for that state (house rule:
+    // one wording for one control), so the default is "Default speed" in both.
     fun options(): List<Pair<String, String>> = listOf(
         ON_VALUE to "Fast — Claude Code's fast mode for this chat's runs",
-        OFF_VALUE to "Normal speed",
-        DEFAULT_VALUE to "Host default",
+        OFF_VALUE to label(false),
+        DEFAULT_VALUE to label(null),
     )
 
     fun choice(value: String): com.silencelen.huginn.data.ChatFast = when (value) {

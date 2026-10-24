@@ -103,6 +103,9 @@ object ContextFormat {
     /** The same from the two words alone, for a caller with no daemon sentence in hand. */
     fun refreshNote(queued: Boolean, reason: String?): String = refreshNote(Queued(queued = queued, reason = reason))
 
+    /** The note when the daemon could not be asked at all (transport, timeout): the fact, never the exception's text. */
+    const val REFRESH_FAILED: String = "not now · the server did not answer"
+
     /** The kinds a bar colours by, in the order the legend lists them. */
     val KINDS: List<String> = listOf("used", "buffer", "deferred", "free")
 

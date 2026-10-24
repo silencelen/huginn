@@ -135,4 +135,14 @@ class ModelLabelsOptionsTest {
         assertEquals("Some new mode", ModelLabels.permissionMode("someNewMode"))
         assertEquals(null, ModelLabels.permissionMode(" "))
     }
+
+    /** One wording for one control: the fast chip and its menu row name the same state the same way. */
+    @Test
+    fun theChatFastMenuReadsAsItsChipDoes() {
+        val rows = com.silencelen.huginn.ui.ChatFastLabels.options().toMap()
+        assertEquals("Default speed", com.silencelen.huginn.ui.ChatFastLabels.label(null))
+        assertEquals("Default speed", rows[com.silencelen.huginn.ui.ChatFastLabels.DEFAULT_VALUE], "the chip said Default speed, the row said Host default")
+        assertEquals("Normal speed", rows[com.silencelen.huginn.ui.ChatFastLabels.OFF_VALUE])
+        assertEquals(com.silencelen.huginn.ui.ChatFastLabels.label(false), rows[com.silencelen.huginn.ui.ChatFastLabels.OFF_VALUE])
+    }
 }

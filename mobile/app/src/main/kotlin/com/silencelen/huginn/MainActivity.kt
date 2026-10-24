@@ -2023,6 +2023,13 @@ fun HuginnApp(
         // ONE lambda for the list and for a drawer: the frame decides which of
         // them is on screen, and on a wide display it draws both.
         val settingsPane: @Composable (String?) -> Unit = { section ->
+            // Re-asked while Settings is on screen, as the desktop does on its
+            // poll: the Claude-settings row is written from any app, so what this
+            // page shows must not be a memory of the last time it was read.
+            LifecycleStartEffect(Unit) {
+                vm.startClaudeSettingsPolling()
+                onStopOrDispose { vm.stopClaudeSettingsPolling() }
+            }
             SettingsPhoneScreen(
                 vm = vm,
                 section = section,

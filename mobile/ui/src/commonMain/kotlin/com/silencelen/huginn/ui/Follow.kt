@@ -455,6 +455,12 @@ fun BoxScope.BackToBottomPill(
         enter = fadeIn(tween(PILL_IN_MS, easing = ARRIVE)) + slideInVertically(tween(PILL_IN_MS, easing = ARRIVE)) { it / 2 },
         exit = fadeOut(tween(PILL_OUT_MS, easing = DEPART)) + slideOutVertically(tween(PILL_OUT_MS, easing = DEPART)) { it / 2 },
     ) {
+        // The label is frozen while the pill animates out: a click clears `unseen`
+        // and `away` in the same frame, and a "New messages" pill must not flip to
+        // "Back to bottom" for its 150 ms exit. A plain holder, not state — the
+        // exit frames recompose anyway, and only a visible pill may rewrite it.
+        val shown = remember { arrayOf(if (unseen) NEW_MESSAGES else BACK_TO_BOTTOM) }
+        if (away || unseen) shown[0] = if (unseen) NEW_MESSAGES else BACK_TO_BOTTOM
         Surface(
             color = MaterialTheme.colorScheme.surfaceContainerHighest,
             contentColor = MaterialTheme.colorScheme.onSurface,
@@ -474,7 +480,7 @@ fun BoxScope.BackToBottomPill(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    if (unseen) NEW_MESSAGES else BACK_TO_BOTTOM,
+                    shown[0],
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,

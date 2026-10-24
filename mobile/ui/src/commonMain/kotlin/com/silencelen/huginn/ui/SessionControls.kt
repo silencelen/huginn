@@ -85,6 +85,12 @@ fun fastWords(fast: FastMode): String = when {
     else -> "fast off"
 }
 
+/**
+ * The note after a queued `/fast` toggle, the same sentence on both shells (house
+ * rule: one wording for one control): the state asked for, and when it lands.
+ */
+fun fastQueuedWords(on: Boolean): String = "Fast mode ${if (on) "on" else "off"} · after this turn"
+
 /** The one-line note a reader sees before fast mode goes on. Claude Code's own trade. */
 const val FAST_ON_NOTE: String = "Auto mode turns off while fast is on."
 

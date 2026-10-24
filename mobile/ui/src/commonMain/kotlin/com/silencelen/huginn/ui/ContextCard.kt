@@ -54,6 +54,7 @@ import com.silencelen.huginn.ui.system.Scale
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import com.silencelen.huginn.ui.theme.Severity
 import com.silencelen.huginn.ui.theme.severityColor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 /**
@@ -291,11 +292,23 @@ fun ContextCardBody(
     var live by remember(name) { mutableStateOf<ContextUsage?>(null) }
     var note by remember(name) { mutableStateOf<String?>(null) }
     var refreshes by remember(name) { mutableStateOf(0) }
+    // The table's stamp at the moment Refresh was pressed: the note it earned has
+    // nothing left to say once a fresher table than that one has arrived.
+    var askedAsOf by remember(name) { mutableStateOf(0L) }
     LaunchedEffect(name, refreshes, pollMs) {
         while (true) {
-            runCatching { source.load() }.onSuccess { c ->
+            // ⚠ A CANCELLATION IS NOT A MISSED POLL. The key changed or the card
+            // left the composition; caught, the loop would run on against a
+            // composition that is gone. Rethrown. Any other failure is a missed
+            // poll: the card keeps what it has and asks again.
+            try {
+                val c = source.load()
                 breakdown = c.breakdown
                 live = c.context
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A missed poll: nothing to show, nothing to forget.
             }
             if (pollMs <= 0L) break
             delay(pollMs)
@@ -307,15 +320,27 @@ fun ContextCardBody(
         facts = facts.copy(usage = live ?: facts.usage),
         breakdown = breakdown,
         nowMs = nowMs,
-        refreshNote = note,
-        onRefresh = { refreshes++ },
+        // Shown until a table newer than the one the press was made on lands:
+        // that table IS the answer the note was waiting for.
+        refreshNote = note?.takeIf { (breakdown?.asOf ?: 0L) <= askedAsOf },
+        onRefresh = { askedAsOf = breakdown?.asOf ?: 0L; refreshes++ },
     )
     // The refresh itself, once per press: the counter restarts the reader above
     // so the answer is polled for from the moment it was asked.
     LaunchedEffect(name, refreshes) {
         if (refreshes == 0) return@LaunchedEffect
-        note = runCatching { source.refresh() }
-            .fold({ ContextFormat.refreshNote(it) }, { it.message ?: ContextFormat.refreshNote(false, null) })
+        // ⚠ A CANCELLATION IS NOT AN ANSWER. Refresh pressed twice cancels this
+        // effect's first run with LeftCompositionCancellationException; caught,
+        // its message ("The coroutine scope left the composition") was the note.
+        // Rethrown, only the live press writes one. Any other failure is a house
+        // note, never the exception's own text.
+        note = try {
+            ContextFormat.refreshNote(source.refresh())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            ContextFormat.REFRESH_FAILED
+        }
     }
 }
 
