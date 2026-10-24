@@ -11599,10 +11599,17 @@ async function handleRequest(req, res) {
       return sendErr(res, 400, 'nonce must be 16 to 64 hexadecimal characters');
     }
     // Over TLS, the proof that binds the token to THIS connection's certificate
-    // (lib/tls.js). The legacy proof stays for clients older than 3.11; it proves
-    // the daemon, not the channel, so a 3.11 client never accepts it over TLS.
-    const body = { proof: challengeProof(nonce), version: VERSION };
-    if (req.socket.encrypted) body.tls = { v: 1, fp: TLS.fp, proof: tlsLib.boundProof(TOKEN, nonce, TLS.fp) };
+    // (lib/tls.js), and nothing else.
+    //
+    // ⚠ THE LEGACY PROOF ONLY OVER PLAIN HTTP, which under the default policy
+    // means this host. It proves the daemon, not the channel, and a client older
+    // than 3.11 accepts it before sending its token in the clear. Handed out over
+    // TLS too, it let anybody answering at an address such a client probes relay
+    // the client's nonce here over https and hand back a proof that client would
+    // trust, then collect its token. No 3.11+ client reads it: they judge `tls`.
+    const body = req.socket.encrypted
+      ? { version: VERSION, tls: { v: 1, fp: TLS.fp, proof: tlsLib.boundProof(TOKEN, nonce, TLS.fp) } }
+      : { proof: challengeProof(nonce), version: VERSION };
     return sendJson(res, 200, body);
   }
 

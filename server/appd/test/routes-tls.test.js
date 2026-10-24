@@ -120,6 +120,10 @@ test('over https the challenge carries a proof bound to the certificate the clie
   assert.equal(r.body.tls.v, 1);
   assert.equal(r.body.tls.proof, hmac(d.token, `huginn-tls-v1:${nonce}:${r.fp}`), 'verifiable from the client side alone');
   assert.notEqual(r.body.tls.proof, hmac(d.token, `huginn-tls-v1:${nonce}:${'0'.repeat(64)}`), 'and useless for any other certificate');
+  // ⚠ And NOT the legacy proof. It proves the daemon, not the channel: a fake at
+  // an address an old (pre-3.11, plain-http) client probes could relay that
+  // client's nonce here over https and hand the answer back as its own.
+  assert.equal(r.body.proof, undefined, 'no channel-unbound proof over https');
 });
 
 test('over plain http (loopback) the challenge has no tls proof — nothing to bind to', async () => {

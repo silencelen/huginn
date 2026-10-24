@@ -118,7 +118,7 @@ All routes need the token except `GET /v1/challenge`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/v1/challenge` | **Unauthenticated: no token.** `?nonce=<16-64 hex>` returns `{proof, version}`, plus `tls: {v, fp, proof}` over HTTPS. Limited to 20 requests per second per address. |
+| GET | `/v1/challenge` | **Unauthenticated: no token.** `?nonce=<16-64 hex>` returns `{version, tls: {v, fp, proof}}` over HTTPS, and `{proof, version}` over plain HTTP (this host only, by default) for clients older than 3.11. Limited to 20 requests per second per address. |
 | GET | `/v1/ping` | `{ok, version, host, via: {addr, port}, secure}`: liveness, and which of the server's addresses you reached. Requires the bearer token, like every route except the challenge. |
 | GET | `/v1/status` | Server health: uptime, load, disk, Claude Code version, the server's addresses, session and chat counts, usage summary, quick-action wording. |
 | PATCH | `/v1/quick-actions` | Change the wording behind the quick-reply buttons. Current values come with `/v1/status`. |
