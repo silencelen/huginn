@@ -693,6 +693,51 @@ test('a pre-existing tree is adopted only from a trusted owner and no reparse po
   assert.match(local.adoptReason(null, me), /could not be read/);
 });
 
+test('a folder already there is adopted, moved aside, or left alone when its owner cannot be read', () => {
+  const me = 'S-1-5-21-10-20-30-1001';
+  assert.equal(local.existingTreeAction({ exists: true, ownerSid: 'S-1-5-32-544', reparse: false }, me), 'adopt');
+  assert.equal(local.existingTreeAction({ exists: true, ownerSid: me, reparse: false }, me), 'adopt');
+  assert.equal(local.existingTreeAction({ exists: true, ownerSid: 'S-1-5-21-10-20-30-1055', reparse: false }, me), 'aside');
+  assert.equal(local.existingTreeAction({ exists: true, ownerSid: 'S-1-5-18', reparse: true }, me), 'aside',
+    'a junction is moved aside, never reached into');
+  // A PowerShell that failed for a moment must not cost a real install its models.
+  assert.equal(local.existingTreeAction(null, me), 'refuse');
+  assert.equal(local.asideName('C:\\ProgramData\\huginn-local', new Date(2026, 9, 23, 7, 5, 9)),
+    'C:\\ProgramData\\huginn-local.untrusted-20261023-070509');
+});
+
+test('every recursive lock step works on links themselves (/l), never through them', () => {
+  const steps = local.lockTreeSteps('C:\\ProgramData\\huginn-local', 'S-1-5-21-10-20-30-1001');
+  for (const [, args] of steps) {
+    if (args.includes('/t')) assert.ok(args.includes('/l'), `a recursive icacls without /l: ${args.join(' ')}`);
+  }
+});
+
+test('the links inside an adopted tree are removed, and what they name is untouched', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'local-links-'));
+  try {
+    const tree = path.join(root, 'huginn-local');
+    const outside = path.join(root, 'outside');
+    fs.mkdirSync(path.join(tree, 'device', 'nested'), { recursive: true });
+    fs.mkdirSync(path.join(outside, 'sys'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'sys', 'keep.txt'), 'theirs');
+    fs.writeFileSync(path.join(outside, 'file.txt'), 'theirs');
+    fs.writeFileSync(path.join(tree, 'local.json'), '{}');
+    fs.writeFileSync(path.join(tree, 'device', 'appd-token'), 'tok');
+    fs.symlinkSync(path.join(outside, 'sys'), path.join(tree, 'device', 'to-dir'));
+    fs.symlinkSync(path.join(outside, 'file.txt'), path.join(tree, 'device', 'nested', 'to-file'));
+    fs.symlinkSync(path.join(outside, 'gone'), path.join(tree, 'dangling'));
+    const removed = local.removeLinksIn(tree).map((p) => path.relative(tree, p)).sort();
+    assert.deepEqual(removed, ['dangling', path.join('device', 'nested', 'to-file'), path.join('device', 'to-dir')]);
+    assert.equal(fs.readFileSync(path.join(outside, 'sys', 'keep.txt'), 'utf8'), 'theirs', 'never followed into');
+    assert.equal(fs.readFileSync(path.join(outside, 'file.txt'), 'utf8'), 'theirs');
+    assert.equal(fs.readFileSync(path.join(tree, 'device', 'appd-token'), 'utf8'), 'tok', 'the tree itself is kept');
+    assert.equal(fs.readFileSync(path.join(tree, 'local.json'), 'utf8'), '{}');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('status reads the tree only when a lock left it trusted', () => {
   // Only SYSTEM/Administrators ownership (a lock) and no reparse point: the
   // installer's own SID is NOT enough, because a status check runs as whoever

@@ -1160,13 +1160,18 @@ function lockTreeSteps(dir, sid) {
     '/grant:r', `*${WIN_SID.SYSTEM}:(OI)(CI)F`,
     '/grant:r', `*${WIN_SID.ADMINS}:(OI)(CI)F`];
   if (sid) grant.push('/grant:r', `*${sid}:(OI)(CI)RX`);
-  grant.push('/t', '/c', '/q');
+  // ⚠ `/l` ON EVERY RECURSIVE STEP. icacls acts on the target of a link unless
+  // told otherwise, and these run as an administrator over a tree the installing
+  // account can write into (device\): a link planted there would carry the new
+  // owner and ACL onto whatever it named. lockTree also removes every link in
+  // the tree first (removeLinksIn); `/l` holds for one made after that.
+  grant.push('/t', '/c', '/l', '/q');
   const steps = [
-    ['icacls', [dir, '/setowner', `*${WIN_SID.ADMINS}`, '/t', '/c', '/q']],
-    ['icacls', [dir, '/reset', '/t', '/c', '/q']],
+    ['icacls', [dir, '/setowner', `*${WIN_SID.ADMINS}`, '/t', '/c', '/l', '/q']],
+    ['icacls', [dir, '/reset', '/t', '/c', '/l', '/q']],
     ['icacls', grant],
   ];
-  if (sid) steps.push(['icacls', [dev, '/grant:r', `*${sid}:(OI)(CI)M`, '/t', '/c', '/q']]);
+  if (sid) steps.push(['icacls', [dev, '/grant:r', `*${sid}:(OI)(CI)M`, '/t', '/c', '/l', '/q']]);
   return steps;
 }
 
@@ -1215,7 +1220,9 @@ function verifyLockDecision(info, installerSid) {
  * owner is the directory's own. null when the path cannot be read or is absent.
  */
 function winPathInfo(dir) {
-  if (!fs.existsSync(dir)) return null;
+  // lstat, not existsSync: a junction whose target is gone reads as absent to
+  // anything that follows it, and it is still there to be moved aside.
+  try { fs.lstatSync(dir); } catch { return null; }
   const q = String(dir).replace(/'/g, "''");
   const script =
     `$ErrorActionPreference='Stop';` +
@@ -1223,8 +1230,11 @@ function winPathInfo(dir) {
     `'REPARSE=' + [bool](($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0);` +
     `'OWNER=' + (Get-Acl -LiteralPath '${q}').GetOwner([System.Security.Principal.SecurityIdentifier]).Value`;
   const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' });
-  if (!r || r.status !== 0) return null;
-  return parsePathInfo(r.stdout);
+  const info = parsePathInfo(r && r.stdout);
+  // A reparse point is moved aside whatever its owner reads as (or fails to).
+  if (info.reparse) return info;
+  if (!r || r.status !== 0 || !info.ownerSid) return null;
+  return info;
 }
 
 /** Read the dir's owner SID, protected flag and DACL SIDs via PowerShell Get-Acl. */
@@ -1254,17 +1264,74 @@ function winAclInfo(dir) {
  * unpacked; the api-key keeps its own SYSTEM-only ACL.
  */
 /**
- * Seize and delete a tree we will not adopt: take ownership and clear ACLs
- * first (a plant may carry a deny ACE that would otherwise block the delete),
- * then remove the whole thing, with the same brief retries purgeDir uses while
- * Windows lets go of a just-ended process's files.
+ * What to do with a tier folder that is already there: 'adopt' it, move it
+ * 'aside' and start clean, or 'refuse' to touch it. Pure.
+ *
+ * ⚠ AN OWNER THAT COULD NOT BE READ IS A REFUSAL, NOT A PLANT. A real install
+ * holds gigabytes of downloaded models, and a PowerShell that failed for a
+ * moment must not cost them; the person is told what to do instead.
  */
-function seizeAndRemove(dir) {
-  for (const args of [
-    [dir, '/setowner', `*${WIN_SID.ADMINS}`, '/t', '/c', '/q'],
-    [dir, '/reset', '/t', '/c', '/q'],
-  ]) spawnSync('icacls', args, { encoding: 'utf8' });
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+function existingTreeAction(info, installerSid) {
+  if (!info) return 'refuse';
+  return adoptReason(info, installerSid) ? 'aside' : 'adopt';
+}
+
+/** Where a folder we will not adopt is moved: beside it, stamped. Pure. */
+function asideName(dir, now) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${dir}.untrusted-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}`
+    + `-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+}
+
+/**
+ * Move a folder we will not adopt out of the way, without reaching into it.
+ *
+ * ⚠ NOTHING RECURSIVE ON A FOLDER WE DO NOT TRUST. Taking ownership of it and
+ * resetting its ACLs recursively, then deleting it, ran with an administrator's
+ * rights through whatever links it held: a folder planted as a junction to a
+ * system directory, or holding one, would have had THAT directory's owner and
+ * ACLs reset. A rename moves the entry itself, link or folder, follows nothing,
+ * and needs no rights inside it (an administrator may rename any child of
+ * ProgramData). What is moved aside is left for the person to look at.
+ */
+function moveAside(dir, now = new Date()) {
+  const to = asideName(dir, now);
+  try { fs.renameSync(dir, to); } catch (e) {
+    throw new Error(`${dir} was not created by this install and could not be moved aside (${e.code || e.message}) — remove it by hand, then run this again`);
+  }
+  return to;
+}
+
+/**
+ * Removes every link inside [dir] (symbolic links and, on Windows, junctions,
+ * which Node reports as links) and returns their paths. The link itself goes,
+ * never what it names, and the walk does not follow one. Throws when a link
+ * cannot be removed: the recursive locking that follows must not meet one.
+ */
+function removeLinksIn(dir, fsi = fs) {
+  const removed = [];
+  const walk = (d) => {
+    let names;
+    try { names = fsi.readdirSync(d); } catch { return; }
+    for (const name of names) {
+      const p = path.join(d, name);
+      let st;
+      try { st = fsi.lstatSync(p); } catch { continue; }
+      if (st.isSymbolicLink()) {
+        try { fsi.unlinkSync(p); } catch {
+          // A directory junction or link on Windows is removed as a directory.
+          try { fsi.rmdirSync(p); } catch (e) {
+            throw new Error(`${p} is a link inside ${dir} and could not be removed (${e.code || e.message})`);
+          }
+        }
+        removed.push(p);
+      } else if (st.isDirectory()) {
+        walk(p);
+      }
+    }
+  };
+  walk(dir);
+  return removed;
 }
 
 function lockTree() {
@@ -1279,11 +1346,22 @@ function lockTree() {
   // create is trusted only when it is owned by SYSTEM, the Administrators or
   // this installer, with no junction redirecting it; anything else is wiped and
   // recreated clean, never locked in place.
-  if (fs.existsSync(dir)) {
-    const why = adoptReason(winPathInfo(dir), sid);
-    if (why) {
-      console.error(`  warn    ${dir} was not created by this install (${why}) — removing it and starting clean`);
-      seizeAndRemove(dir);
+  let here = false;
+  try { fs.lstatSync(dir); here = true; } catch { /* nothing there */ }
+  if (here) {
+    const info = winPathInfo(dir);
+    const action = existingTreeAction(info, sid);
+    if (action === 'refuse') {
+      throw new Error(`could not read who owns ${dir}, so it is neither adopted nor moved — check that PowerShell runs here, or move the folder aside yourself, then run this again`);
+    }
+    if (action === 'aside') {
+      const to = moveAside(dir);
+      console.error(`  warn    ${dir} was not created by this install (${adoptReason(info, sid)}) — moved it to ${to}; delete that folder if you do not know where it came from`);
+    } else {
+      const links = removeLinksIn(dir);
+      if (links.length) {
+        console.error(`  warn    removed ${links.length} link(s) inside ${dir} (${links.slice(0, 3).join(', ')}${links.length > 3 ? ', …' : ''}): nothing in the local tier is a link`);
+      }
     }
   }
   fs.mkdirSync(path.join(dir, 'device'), { recursive: true });
@@ -2665,7 +2743,7 @@ if (require.main === module) {
     WIN_SID, ownerTrusted, lockTreeSteps, aclSidsUnexpected, parseAclLines,
     verifyLockDecision, seedTokenFromStage, writeTokenSecure,
     // The pre-existing-tree trust decisions, pure for Linux tests.
-    adoptReason, treeReadTrusted, parsePathInfo, parseScQuery,
+    adoptReason, existingTreeAction, asideName, removeLinksIn, treeReadTrusted, parsePathInfo, parseScQuery,
     // The engine key kept off argv: the resolver and the elevated-argv transform.
     resolveAdapterKey, keyOffElevatedArgv,
     // Where the engine identity check is used here (it lives in the shim).
