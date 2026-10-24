@@ -671,6 +671,55 @@ test('parseAclLines reads the Get-Acl shape winAclInfo asks for', () => {
   assert.equal(local.parseAclLines('OWNER=x\nPROTECTED=False').protected, false);
 });
 
+// ------------------------------------ a pre-created tree is never adopted/run
+//
+// A standard user may create C:\ProgramData\huginn-local and fill it with a
+// WinSW wrapper, a shim and a local.json before an admin runs `on` — so the
+// elevated install must not adopt it, and status/doctor must not read or run
+// it. lockTree and statusInfo gate on these decisions; they are pure, so the
+// security is checked without a Windows box.
+
+test('a pre-existing tree is adopted only from a trusted owner and no reparse point', () => {
+  const me = 'S-1-5-21-10-20-30-1001';
+  // The good end state a prior lock leaves.
+  assert.equal(local.adoptReason({ exists: true, ownerSid: 'S-1-5-32-544', reparse: false }, me), null, 'Administrators');
+  assert.equal(local.adoptReason({ exists: true, ownerSid: 'S-1-5-18', reparse: false }, me), null, 'SYSTEM');
+  assert.equal(local.adoptReason({ exists: true, ownerSid: me, reparse: false }, me), null, 'the installer');
+  // The attack: another standard user pre-created and owns the tree.
+  assert.match(local.adoptReason({ exists: true, ownerSid: 'S-1-5-21-10-20-30-1055', reparse: false }, me), /owned by/);
+  // A junction redirecting the path is refused even when the target is trusted.
+  assert.match(local.adoptReason({ exists: true, ownerSid: 'S-1-5-18', reparse: true }, me), /junction|symlink/);
+  // An owner that could not be read is never adopted.
+  assert.match(local.adoptReason(null, me), /could not be read/);
+});
+
+test('status reads the tree only when a lock left it trusted', () => {
+  // Only SYSTEM/Administrators ownership (a lock) and no reparse point: the
+  // installer's own SID is NOT enough, because a status check runs as whoever
+  // is at the keyboard and a user-owned tree is one nobody locked.
+  assert.equal(local.treeReadTrusted({ exists: true, ownerSid: 'S-1-5-18', reparse: false }), true);
+  assert.equal(local.treeReadTrusted({ exists: true, ownerSid: 'S-1-5-32-544', reparse: false }), true);
+  assert.equal(local.treeReadTrusted({ exists: true, ownerSid: 'S-1-5-21-10-20-30-1001', reparse: false }), false, 'a user-owned tree');
+  assert.equal(local.treeReadTrusted({ exists: true, ownerSid: 'S-1-5-18', reparse: true }), false, 'a junction');
+  assert.equal(local.treeReadTrusted(null), false, 'unreadable');
+});
+
+test('parsePathInfo reads the owner and reparse lines winPathInfo asks for', () => {
+  const a = local.parsePathInfo('REPARSE=False\r\nOWNER=S-1-5-32-544\r\n');
+  assert.equal(a.ownerSid, 'S-1-5-32-544');
+  assert.equal(a.reparse, false);
+  assert.equal(local.parsePathInfo('REPARSE=True\nOWNER=S-1-5-18').reparse, true);
+});
+
+test('parseScQuery maps sc query output to a state, without touching the tree', () => {
+  assert.equal(local.parseScQuery('SERVICE_NAME: huginn-local-llm\n  STATE  : 4  RUNNING'), 'RUNNING');
+  assert.equal(local.parseScQuery('  STATE  : 1  STOPPED'), 'STOPPED');
+  // The desktop decodes "running" (case-insensitive) as up — RUNNING matches.
+  assert.match(local.parseScQuery('STATE : 4 RUNNING'), /running/i);
+  assert.equal(local.parseScQuery('[SC] OpenService FAILED 1060:\n\nThe specified service does not exist'), 'not installed');
+  assert.equal(local.parseScQuery(''), 'unknown');
+});
+
 // ------------------------------------------ token seeding after the lock (F2/F17)
 //
 // On Windows the wrapper and the desktop no longer write the root-equivalent

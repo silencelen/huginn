@@ -1031,6 +1031,62 @@ function ownerTrusted(ownerSid, installerSid) {
 }
 
 /**
+ * Why a pre-existing tree may NOT be adopted (null = safe to adopt and relock).
+ * A standard user can create C:\ProgramData\huginn-local and fill it with a
+ * model server, a WinSW wrapper, a shim and a local.json before any
+ * administrator runs this — and the elevated install would then run those
+ * planted files. So a tree this run did not create is adopted only when its
+ * owner is trusted (ownerTrusted) and no reparse point redirects the path;
+ * anything else — a foreign owner, a junction, or an owner that could not be
+ * read — is treated as a plant, to be removed and recreated rather than locked
+ * in place. `info` is { exists, ownerSid, reparse } or null (unreadable). Pure.
+ */
+function adoptReason(info, installerSid) {
+  if (!info) return 'its owner could not be read';
+  if (info.reparse) return 'a symlink or junction is redirecting the path';
+  if (!ownerTrusted(info.ownerSid, installerSid)) {
+    return `it is owned by ${info.ownerSid || '(unknown)'}`;
+  }
+  return null;
+}
+
+/**
+ * May `status`/`doctor` (and the desktop's local-AI card) read from and report
+ * on the tree? Only when it is a tree a prior elevated lock left: owned by
+ * SYSTEM or the Administrators, with no reparse point. The installer's own SID
+ * is NOT enough here — a check runs as whoever is logged in, and a tree still
+ * owned by a standard account is one nobody locked. An untrusted or unreadable
+ * tree reads as "not set up" so nothing in it is ever executed. Pure.
+ */
+function treeReadTrusted(info) {
+  return !!info && !info.reparse
+    && (info.ownerSid === WIN_SID.SYSTEM || info.ownerSid === WIN_SID.ADMINS);
+}
+
+/** Parse the OWNER=/REPARSE= lines winPathInfo asks PowerShell for. Pure. */
+function parsePathInfo(text) {
+  const info = { exists: true, ownerSid: '', reparse: false };
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('OWNER=')) info.ownerSid = line.slice(6).trim();
+    else if (line.startsWith('REPARSE=')) info.reparse = /^(true|1|yes)$/i.test(line.slice(8).trim());
+  }
+  return info;
+}
+
+/**
+ * Map `sc query <name>` output to a state word, without running anything from
+ * the tier's tree. Error 1060 (or "does not exist") is a service that is not
+ * installed; otherwise the STATE line's word (RUNNING, STOPPED, …). Pure.
+ */
+function parseScQuery(out) {
+  const s = String(out || '');
+  if (/\b1060\b|does not exist/i.test(s)) return 'not installed';
+  const m = /STATE\s*:\s*\d+\s+(\w+)/i.exec(s);
+  return m ? m[1] : 'unknown';
+}
+
+/**
  * The exact icacls argument-lists lockTree runs, in order — pure, so the whole
  * sequence can be asserted off a Windows box. The ORDER is the security:
  *
@@ -1099,6 +1155,26 @@ function verifyLockDecision(info, installerSid) {
   return null;
 }
 
+/**
+ * The owner SID of [dir] and whether it is a reparse point — read WITHOUT being
+ * fooled by a junction. `-Force` returns a hidden/system entry, the attributes
+ * reveal a reparse point (a junction's owner read through Get-Acl would be the
+ * target's, so a junction to a SYSTEM folder must be caught here first), and the
+ * owner is the directory's own. null when the path cannot be read or is absent.
+ */
+function winPathInfo(dir) {
+  if (!fs.existsSync(dir)) return null;
+  const q = String(dir).replace(/'/g, "''");
+  const script =
+    `$ErrorActionPreference='Stop';` +
+    `$i=Get-Item -Force -LiteralPath '${q}';` +
+    `'REPARSE=' + [bool](($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0);` +
+    `'OWNER=' + (Get-Acl -LiteralPath '${q}').GetOwner([System.Security.Principal.SecurityIdentifier]).Value`;
+  const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8' });
+  if (!r || r.status !== 0) return null;
+  return parsePathInfo(r.stdout);
+}
+
 /** Read the dir's owner SID, protected flag and DACL SIDs via PowerShell Get-Acl. */
 function winAclInfo(dir) {
   const q = String(dir).replace(/'/g, "''");
@@ -1125,11 +1201,40 @@ function winAclInfo(dir) {
  * then verifies the result. Run elevated, before anything is downloaded or
  * unpacked; the api-key keeps its own SYSTEM-only ACL.
  */
+/**
+ * Seize and delete a tree we will not adopt: take ownership and clear ACLs
+ * first (a plant may carry a deny ACE that would otherwise block the delete),
+ * then remove the whole thing, with the same brief retries purgeDir uses while
+ * Windows lets go of a just-ended process's files.
+ */
+function seizeAndRemove(dir) {
+  for (const args of [
+    [dir, '/setowner', `*${WIN_SID.ADMINS}`, '/t', '/c', '/q'],
+    [dir, '/reset', '/t', '/c', '/q'],
+  ]) spawnSync('icacls', args, { encoding: 'utf8' });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+}
+
 function lockTree() {
   if (process.platform !== 'win32') return;
   const dir = localDir();
-  fs.mkdirSync(path.join(dir, 'device'), { recursive: true });
   const sid = currentUserSid();
+  // ⚠ A PRE-EXISTING TREE IS ADOPTED ONLY IF WE CAN TRUST IT. A standard user
+  // may create this folder under ProgramData and plant a WinSW wrapper, a shim
+  // and a local.json in it before any administrator runs `on`; the old lock
+  // re-owned and re-ACL'd whatever was there but deleted nothing, so the
+  // elevated install went on to run the planted files. A tree this run did not
+  // create is trusted only when it is owned by SYSTEM, the Administrators or
+  // this installer, with no junction redirecting it; anything else is wiped and
+  // recreated clean, never locked in place.
+  if (fs.existsSync(dir)) {
+    const why = adoptReason(winPathInfo(dir), sid);
+    if (why) {
+      console.error(`  warn    ${dir} was not created by this install (${why}) — removing it and starting clean`);
+      seizeAndRemove(dir);
+    }
+  }
+  fs.mkdirSync(path.join(dir, 'device'), { recursive: true });
   for (const [cmd, args] of lockTreeSteps(dir, sid)) {
     const r = spawnSync(cmd, args, { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`could not lock ${dir} (${cmd} ${args[1] || ''}): ${(r.stderr || r.stdout || '').trim()}`);
@@ -1213,21 +1318,41 @@ function installServiceLinux(which, { system }) {
   console.log(`  service ${name} enabled (${file})`);
 }
 
+/**
+ * Copy the verified WinSW over the service exe, retrying briefly while a
+ * just-stopped service lets go of its image — `sc stop` returns before the
+ * process has fully exited, so the first copy can still meet an EBUSY.
+ */
+function copyOverService(winsw, exe) {
+  for (let i = 0; ; i++) {
+    try { fs.copyFileSync(winsw, exe); return; }
+    catch (e) {
+      if (i >= 30 || !(e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES')) throw e;
+      spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},300)']);
+    }
+  }
+}
+
 function installServiceWindows(which) {
   const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
   const dir = P('runtime', 'winsw');
   fs.mkdirSync(dir, { recursive: true });
   const exe = path.join(dir, `${name}.exe`);
-  // ⚠ NOT COPIED OVER A RUNNING SERVICE. `exe` is the service's own process: on
-  // a re-run of `on` (the retry its enrolment failure asks for) it is running,
-  // and Windows will not open a running image for writing, so the copy threw
-  // EBUSY and `on` failed over services that were fine. The same WinSW stays
-  // where it is; a different one stops its service before it is replaced, and
-  // the start below brings it back.
+  // ⚠ NEVER RUN THE EXE THAT IS ALREADY THERE, AND NEVER COPY OVER A RUNNING
+  // ONE. `exe` is the service's own process. On a re-run of `on` (the retry an
+  // enrolment failure asks for) it is running, and Windows will not open a
+  // running image for writing — the EBUSY that failed `on` over services that
+  // were fine. It may also be a binary a standard user planted in this tree
+  // before the install, so stopping the service by executing it would run that
+  // binary with the installer's elevated token. When it is already the verified
+  // WinSW (hashes match) it is left running, untouched. Otherwise the service
+  // is stopped BY NAME through the Service Control Manager — which runs nothing
+  // from the tree — and only then is the verified WinSW copied over it; the
+  // install/start below run the copy this step wrote and verified.
   const winsw = P('runtime', 'WinSW-x64.exe');
   if (!(fs.existsSync(exe) && sha256File(exe) === sha256File(winsw))) {
-    if (fs.existsSync(exe)) spawnSync(exe, ['stop'], { encoding: 'utf8' });
-    fs.copyFileSync(winsw, exe);
+    if (fs.existsSync(exe)) RUN('sc', ['stop', name]);
+    copyOverService(winsw, exe);
   }
   fs.writeFileSync(path.join(dir, `${name}.xml`), winswXml(which));
   let r = spawnSync(exe, ['install'], { encoding: 'utf8' });
@@ -1244,13 +1369,30 @@ function installServiceWindows(which) {
 function serviceState(which, conf) {
   const name = which === 'llm' ? LLM_SERVICE : RUNNER_SERVICE;
   if (process.platform === 'win32') {
-    const exe = P('runtime', 'winsw', `${name}.exe`);
-    if (!fs.existsSync(exe)) return 'not installed';
-    const r = RUN(exe, ['status']);
-    return (r.stdout || '').trim() || 'unknown';
+    // By service name through the Service Control Manager, never by running
+    // <tree>\runtime\winsw\<name>.exe status: on a tree a standard user planted,
+    // that exe is their program, and a status check must execute nothing from
+    // the tree (security review). sc needs no tree access.
+    const r = RUN('sc', ['query', name]);
+    return parseScQuery((r.stdout || '') + (r.stderr || ''));
   }
   const r = sysctl(['is-active', name], { user: !(conf && conf.systemUnits) });
   return (r.stdout || '').trim() || 'not installed';
+}
+
+/**
+ * Windows: is the ProgramData tree one a prior elevated lock left (owned by
+ * SYSTEM or the Administrators, no junction), so `status`/`doctor` may read it
+ * and run its shim? A standard user can pre-create the folder and fill it with
+ * a local.json, a shim and a model server; a status check by another account
+ * must execute none of that, so an untrusted — or unreadable — tree is reported
+ * as not set up and nothing in it is run. Always true off Windows, and when the
+ * tree does not exist (there is simply nothing set up to distrust).
+ */
+function localTreeReadable() {
+  if (process.platform !== 'win32') return true;
+  if (!fs.existsSync(localDir())) return true;
+  return treeReadTrusted(winPathInfo(localDir()));
 }
 
 // ----------------------------------------------------------------- health
@@ -1981,6 +2123,11 @@ async function cmdOff(flags) {
 // ---------------------------------------------------------------- status
 
 async function statusInfo() {
+  // ⚠ READ AND RUN NOTHING FROM AN UNTRUSTED TREE. Before this touches
+  // local.json, the shim or the engine, the Windows tree must be one an
+  // elevated lock left; an untrusted tree (a standard user's plant) reads as
+  // "not set up" so status/doctor and the desktop's card execute none of it.
+  if (!localTreeReadable()) return { setup: false };
   const conf = loadConf();
   if (!conf) return { setup: false };
   const h = await health(conf).catch(() => ({ reachable: false, models: [] }));
@@ -2456,6 +2603,8 @@ if (require.main === module) {
     // (owner/ACE decisions, the icacls step sequence, ACL-verify parsing).
     WIN_SID, ownerTrusted, lockTreeSteps, aclSidsUnexpected, parseAclLines,
     verifyLockDecision, seedTokenFromStage, writeTokenSecure,
+    // The pre-existing-tree trust decisions, pure for Linux tests.
+    adoptReason, treeReadTrusted, parsePathInfo, parseScQuery,
     // Where the engine identity check is used here (it lives in the shim).
     engineKit, serviceUid, health, identifyAdapter,
     // The elevated hand-back (an update run with sudo writes as root).
