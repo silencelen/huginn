@@ -330,15 +330,19 @@ test('GET /context parses the last `/context` table in the transcript, and follo
   assert.equal(r.body.breakdown.totalTokens, 412500);
 });
 
-test('the /context table is a chip in the conversation, never a message', async () => {
+test('the /context table folds into a card in the conversation, a chip plus a fold, never a message', async () => {
   const { name, transcript } = await mkClaude('ctxchip');
   fs.appendFileSync(transcript, `${CTX_CMD}\n${CTX_TABLE}\n`);
   const t = await api(`/v1/sessions/${name}/transcript`);
   assert.equal(t.status, 200);
   const texts = t.body.events.map((e) => `${e.kind}:${e.text}`);
   assert.ok(texts.includes('command:/context'), JSON.stringify(texts));
+  const fold = t.body.events.find((e) => e.fold === 'context');
+  assert.ok(fold, JSON.stringify(texts));
+  assert.equal(fold.kind, 'system');
+  assert.match(String(fold.body), /Context Usage/, 'the table is carried in the fold body');
   for (const e of t.body.events) {
-    assert.doesNotMatch(String(e.text), /Context Usage|<command-name>|⛁/, 'the table stays out of the conversation');
+    assert.doesNotMatch(String(e.text), /Context Usage|<command-name>|⛁/, 'the table stays off the conversation line itself');
   }
 });
 

@@ -357,6 +357,21 @@ function describeMachineText(s) {
 }
 
 /**
+ * The `/context` usage breakdown, when `s` is its `<local-command-stdout>`
+ * record: the ANSI stripped, trimmed, and returned whole for a folded card;
+ * null when `s` is not that record. It is command OUTPUT, never the owner's
+ * words, so it folds like a compaction summary even when Claude Code
+ * attributes the locally-run command to the human who typed it
+ * (origin.kind 'human'), and is shown rather than dropped when it is not.
+ */
+function contextBreakdownBody(s) {
+  const out = innerText(s, '<local-command-stdout>', '</local-command-stdout>');
+  if (out === null) return null;
+  const body = stripAnsiText(out).trim();
+  return /^Context Usage\b/.test(body) ? body : null;
+}
+
+/**
  * Whether a `user` record is content a TOOL pushed back into the conversation
  * rather than anything a person sent.
  *
@@ -1447,6 +1462,16 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
           // record is the only copy of the notification it will ever get.
           if (resuming) continue;
         }
+        // The `/context` usage table is command OUTPUT, not a message. When the
+        // owner runs /context in the pane its `user` record is human-attributed,
+        // so the gate below (which spares human text) let it through to a bubble —
+        // a page-long table the owner appeared to have sent; unattributed, it was
+        // dropped and the owner saw nothing. Fold it like the compaction summary.
+        const ctxBreakdown = contextBreakdownBody(t);
+        if (ctxBreakdown !== null) {
+          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: 'Context usage', body: clip(ctxBreakdown, FOLD_MAX), fold: 'context' });
+          continue;
+        }
         // Recorded as typed: no heuristic gets to overrule that. Without it a
         // person asking about "<command-name>" had their question collapsed
         // into a `/…` chip, because the CLI's own command bookkeeping is the
@@ -1610,6 +1635,13 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         // table is read by lib/contextusage.js for GET /context and is nothing
         // a reader wants as a message. Both go the way a `/model` typed into a
         // `user` record goes: a `/…` chip, and the stdout dropped or clipped.
+        // The `/context` table is the exception: it folds into a card rather
+        // than being dropped (contextBreakdownBody), matching the user-record path.
+        const ctxBreakdown = contextBreakdownBody(t);
+        if (ctxBreakdown !== null) {
+          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: 'Context usage', body: clip(ctxBreakdown, FOLD_MAX), fold: 'context' });
+          continue;
+        }
         if (d.subtype === 'local_command' || machineText(t)) {
           const d2 = describeMachineText(t);
           if (d2) out.events.push({ seq: ++seq, kind: d2.kind, ts, sidechain, text: d2.text });

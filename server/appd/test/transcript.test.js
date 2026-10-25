@@ -1505,21 +1505,51 @@ test('a /fast on|off command sets the reported fast mode; a bare /fast sets noth
   assert.strictEqual(readTranscript(p).effort, 'high');
 });
 
-test('/context writes system/local_command records: a /context chip, and the table is never a message', () => {
-  // The real pair Claude Code 2.1.306 wrote (fixtures/transcripts/context-local-command.jsonl).
-  // The first record is short enough that it used to draw as a system note of
-  // raw <command-name> tags; the table is read by lib/contextusage.js instead.
+test('/context writes local_command records: a /context chip, and the table folds into a card', () => {
+  // The real pair Claude Code wrote (fixtures/transcripts/context-local-command.jsonl):
+  // a <command-name>/context record and the whole table inside <local-command-stdout>.
+  // The chip stays a chip; the table is OUTPUT, not the owner's words, so it folds
+  // into a collapsed card (it had drawn as raw tags, or a page-long bubble, before).
   const file = path.join(__dirname, 'fixtures', 'transcripts', 'context-local-command.jsonl');
   const r = readTranscript(file);
-  assert.deepStrictEqual(r.events.map((e) => [e.kind, e.text]), [['command', '/context']]);
+  assert.deepStrictEqual(r.events.map((e) => [e.kind, e.text]), [['command', '/context'], ['system', 'Context usage']]);
+  const fold = r.events.find((e) => e.fold === 'context');
+  assert.ok(fold, JSON.stringify(r.events));
+  assert.strictEqual(fold.kind, 'system');
+  assert.match(fold.body, /Context Usage/, 'the grid is carried in the fold body');
   for (const e of r.events) {
-    assert.doesNotMatch(e.text, /<command-name>|Context Usage|⛁|⛶/, 'no tag debris and no grid on the conversation');
+    assert.doesNotMatch(e.text, /<command-name>|Context Usage|⛁|⛶/, 'no tag debris and no grid on the conversation line itself');
     assert.notStrictEqual(e.kind, 'user');
   }
-  // The send queue's classification agrees: neither record is conversation.
+  // The send queue's classification is unchanged: neither record is conversation.
   const typing = require('../lib/typing');
   for (const line of fs.readFileSync(file, 'utf8').trim().split('\n')) {
     assert.strictEqual(typing.isConversationalRecord(JSON.parse(line)), false);
+  }
+});
+
+test('a /context breakdown in a user record folds, never a bubble, typed or injected', () => {
+  // Claude Code 2.1.310 writes /context output as a `user` record with the
+  // <local-command-stdout> wrapper. Typed in the pane it is human-attributed
+  // (origin.kind 'human') and rendered as a message the owner appeared to send;
+  // injected or replayed it has no origin and was dropped. Either way it folds.
+  const table = '<local-command-stdout> \u001b[1mContext Usage\u001b[22m\n'
+    + '\u001b[38;5;140m⛁ ⛁ ⛁\u001b[39m  Opus 4.8\n'
+    + '214.6k/1m tokens (21%)\n'
+    + '⛶ Free space: 752.4k (75.2%)\n</local-command-stdout>';
+  for (const origin of [{ kind: 'human' }, null]) {
+    const rec = { type: 'user', userType: 'external', timestamp: T, message: { role: 'user', content: table } };
+    if (origin) rec.origin = origin;
+    const p = writeFixture([rec]);
+    const { events } = readTranscript(p, { limit: 50 });
+    assert.strictEqual(events.length, 1, JSON.stringify(events));
+    const e = events[0];
+    assert.strictEqual(e.kind, 'system', 'folded card, not a user bubble');
+    assert.strictEqual(e.fold, 'context');
+    assert.strictEqual(e.text, 'Context usage');
+    assert.match(e.body, /^Context Usage/);
+    assert.match(e.body, /214\.6k\/1m tokens/, 'the grid is carried in the fold body');
+    assert.doesNotMatch(e.body, /\u001b\[/, 'ANSI stripped');
   }
 });
 

@@ -9,6 +9,11 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.14.1 — 2026-10-25
+
+### Fixed
+- The `/context` usage breakdown now appears as a collapsed card in the conversation, like the compaction summary, instead of a message.
+
 ## 3.14.0 — 2026-10-24
 
 ### Added
