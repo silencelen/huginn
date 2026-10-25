@@ -99,7 +99,7 @@ class EdgeFadeTest {
             "the shared suggestion chips" to
                 "ui/src/commonMain/kotlin/com/silencelen/huginn/ui/SuggestionChips.kt",
             "the phone's model chips and chat options" to
-                "app/src/main/kotlin/com/silencelen/huginn/ui/SessionControls.kt",
+                "app/src/main/kotlin/com/silencelen/huginn/ui/SessionControlBar.kt",
             "the phone's Screen key pad" to
                 "app/src/main/kotlin/com/silencelen/huginn/ui/TerminalScreen.kt",
             "the desktop's Screen key pad" to
