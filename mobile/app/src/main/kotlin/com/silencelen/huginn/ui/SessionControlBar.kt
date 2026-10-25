@@ -1,15 +1,18 @@
-// ⚠ THE FACADE NAME, and it is load-bearing.
+// ⚠ THE FILE NAME, and it is load-bearing.
 //
-// `:ui` gained its own `SessionControls.kt` in this same package (the shared
-// AutoResumeChip and SessionStateMark). Two files with one name in one package
-// across two modules produce two `SessionControlsKt` classes — harmless until a
-// lambda in either one makes D8 mint `SessionControlsKt$$ExternalSyntheticLambda0`
-// on both sides, at which point `:app:assembleDebug` dies with "Type ... is defined
-// multiple times" and the phone cannot be built at all. Measured on this branch
-// BEFORE any change here: the collision arrived with `:ui`'s file.
+// `:ui` has its own `SessionControls.kt` in this same package (the shared
+// AutoResumeChip, FastChip and SessionStateMark). Two files with one basename in
+// one package across two modules each make the Kotlin facade `SessionControlsKt`
+// AND, because both hold @Composable lambdas, a Compose-generated
+// `ComposableSingletons$SessionControlsKt`. At `:app:assembleDebug` D8 merges
+// `:app` and `:ui` into one APK and dies with "Type ... is defined multiple times"
+// on `ComposableSingletons$SessionControlsKt$$ExternalSyntheticLambda0`, and the
+// phone cannot be built at all.
 //
-// Renaming the facade is the whole fix and costs nothing — no Kotlin call site
-// names it, and `:ui` is left untouched.
+// @file:JvmName renames only the function facade; the Compose singletons class is
+// named from the FILE, so the file itself must differ. This file is therefore
+// SessionControlBar.kt, so both classes become `SessionControlBar*`. `:ui` is left
+// untouched and no Kotlin call site names either class.
 @file:JvmName("SessionControlBarKt")
 
 package com.silencelen.huginn.ui
