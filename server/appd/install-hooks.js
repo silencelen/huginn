@@ -288,8 +288,10 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
     // and a rule that also carried somebody else's hook keeps that hook.
     let pruned = 0;
     let repointed = 0;
+    let retimed = 0;
     let seen = 0;
     const kept = [];
+    const wantTimeout = specFor(script).timeout;
     for (const rule of list) {
       if (!Array.isArray(rule && rule.hooks)) { kept.push(rule); continue; }
       const hooks = [];
@@ -298,6 +300,11 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
         if (h.command !== want && !exists(scriptOf(h.command))) { pruned += 1; continue; }
         if (seen > 0) { pruned += 1; continue; }
         if (h.command !== want) { h.command = want; repointed += 1; }
+        // The timeout is this installer's too. A release that changes it (the
+        // permission hook's 960 -> 3660 for its hour-long wait) must reach a
+        // server that already had the hook, or the CLI keeps killing the hook at
+        // the old limit — before its own deadline, so without its cleanup.
+        if (h.timeout !== wantTimeout) { h.timeout = wantTimeout; retimed += 1; }
         seen += 1;
         hooks.push(h);
       }
@@ -305,7 +312,7 @@ function mergeHooks(settings, script, { uninstall = false, exists = fs.existsSyn
       if (rule.hooks.length) kept.push(rule);
     }
     if (seen) {
-      changes.push({ event, action: pruned || repointed ? 'repaired' : 'kept' });
+      changes.push({ event, action: pruned || repointed || retimed ? 'repaired' : 'kept' });
       settings.hooks[event] = kept;
       continue;
     }

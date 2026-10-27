@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.15.1 — 2026-10-26
+
+### Fixed
+- Upgrading rewrites a hook's timeout when a release changes it. A server that ran 3.14 kept the
+  permission hook at its old 960 s limit, so the hook was stopped before its hour-long wait and a
+  question lost its card after sixteen minutes.
+
 ## 3.15.0 — 2026-10-26
 
 ### Added

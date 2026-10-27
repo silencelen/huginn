@@ -531,3 +531,20 @@ test('applyClaudeDefaults is the pure heart: adds, keeps, reports', () => {
   assert.deepEqual(Object.keys(FEEDBACK_DEFAULTS).sort(), ['feedbackDrafts', 'feedbackSurveyRate']);
   assert.deepEqual(FEEDBACK_ENV, { CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1' });
 });
+
+test('an upgrade rewrites a hook timeout that changed between versions, and says it repaired it', () => {
+  // A server that ran 3.14 holds the permission hook at timeout 960. 3.15 makes
+  // the hook wait an hour; an installer that keeps 960 leaves the CLI killing the
+  // hook at sixteen minutes, before its own deadline and so without its cleanup.
+  const dir = scratch();
+  const file = path.join(dir, 'settings.json');
+  const PERM = '/opt/huginn-appd/hooks/huginn-permission-hook';
+  fs.writeFileSync(file, `${JSON.stringify({ hooks: { PermissionRequest: [
+    { matcher: '*', hooks: [{ type: 'command', command: PERM, timeout: 960 }] },
+  ] } }, null, 2)}\n`);
+  const { stdout } = run(['--settings', file, '--script', PERM]);
+  const rules = JSON.parse(fs.readFileSync(file, 'utf8')).hooks.PermissionRequest;
+  assert.equal(rules.length, 1, 'repaired in place, not a second rule');
+  assert.equal(rules[0].hooks[0].timeout, 3660);
+  assert.match(stdout, /repaired PermissionRequest/);
+});
