@@ -162,9 +162,10 @@ the state directory, to wake a parked screen poll; the lists are polled anyway.
    The daemon validates the body against the request (`decisionFor`), writes `<id>.ans`, and the
    hook claims it by renaming it to `<id>.taken` and prints it. If the hook has not claimed it
    within a moment the answer is retracted; the keys then answer only when the dialog on screen
-   is demonstrably this request's (an ask by its whole text and option list, a Bash prompt by
-   its exact command, any other tool by being the one live request under a permission dialog),
-   else `409 unbound`. The response says `via: "hook"` or `via: "keys"`.
+   is demonstrably this request's by its content (an ask by its whole text and option list, a
+   Bash prompt by its exact command), else `409 unbound`. Any other tool's dialog has no captured
+   shape, so it is never tied to a request by being the only one live: that request's dialog may
+   not be the one drawn. The response says `via: "hook"` or `via: "keys"`.
 
 The decisions the daemon writes and the hook prints:
 

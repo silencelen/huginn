@@ -345,17 +345,53 @@ test('/answer with a registry fingerprint resolves through the hook, by the regi
   assert.equal(typedOnPane(name), false);
 });
 
-test('/answer with the PANE fingerprint still works, and binds a non-Bash tool by uniqueness', async () => {
-  const pane = BASH_PROMPT.replace(' Bash command', ' Edit file').replace(DASH + '\\n touch probe.txt\\n' + DASH, ' /srv/x/a.txt');
-  const name = await session(pane);
+// Security review F1 (2026-10-27): "the one live request" is no proof that the
+// dialog on screen is that request's — its own hook may have run out while a
+// different request, never drawn, waits behind it. So nothing binds by
+// uniqueness: a pane tap reaches a hook only by content, else it types its digit.
+const EDIT_PROMPT = BASH_PROMPT.replace(' Bash command', ' Edit file').replace(DASH + '\\n touch probe.txt\\n' + DASH, ' /srv/x/a.txt');
+
+test('/answer with the PANE fingerprint ties a non-Bash dialog to no hook: its digit answers what is on screen', async () => {
+  const name = await session(EDIT_PROMPT);
   const { dir, id } = park(name, { tool: 'Edit', input: { file_path: '/srv/x/a.txt', old_string: 'a', new_string: 'b' } });
   const { body: scr } = await api(`/v1/sessions/${name}/screen`);
   assert.ok(scr.prompt, 'the dialog is a prompt');
   const got = fakeHook(dir, id);
   const r = await post(`/v1/sessions/${name}/answer`, { option: 1, fingerprint: scr.prompt.fingerprint });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.via, 'hook', 'one live request, one permission dialog: each other');
-  assert.equal((await got).hookSpecificOutput.decision.behavior, 'allow');
+  assert.equal(r.body.via, undefined, 'keys, never the hook');
+  await wait(400);
+  assert.equal(typedOnPane(name), true, 'the digit reached the dialog that was tapped');
+  assert.equal(await got, null, 'the parked request\'s hook was handed nothing');
+});
+
+test('a Yes on one Bash dialog never approves a different, undrawn Bash request', async () => {
+  // Dialog A ("touch probe.txt") is on screen with no live hook of its own;
+  // request B, another command, is parked and never drawn. The old fallback
+  // bound the tap to B (one live request, a Yes/No dialog) and approved a
+  // command nobody was shown.
+  const name = await session(BASH_PROMPT);
+  const { dir, id } = park(name, { tool: 'Bash', input: { command: 'rm -rf /srv/other' } });
+  const { body: scr } = await api(`/v1/sessions/${name}/screen`);
+  const got = fakeHook(dir, id);
+  const r = await post(`/v1/sessions/${name}/answer`, { option: 1, fingerprint: scr.prompt.fingerprint });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.via, undefined, 'keys: the digit answers the dialog on screen');
+  assert.equal(await got, null, 'the undrawn request\'s hook was handed nothing');
+});
+
+test('a card answer its hook does not take never types into a non-Bash dialog it cannot tie to', async () => {
+  // keysFallback's mirror image: with the hook silent, the Edit dialog on screen
+  // cannot be shown to be this request's, so the card is refused rather than a
+  // digit typed that could approve a different dialog.
+  const name = await session(EDIT_PROMPT);
+  park(name, { tool: 'Edit', input: { file_path: '/srv/x/a.txt', old_string: 'a', new_string: 'b' } });
+  const [q] = await questions(name);
+  const r = await post(`/v1/sessions/${name}/questions/${q.id}`, { behavior: 'allow', fingerprint: q.fingerprint });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.reason, 'unbound');
+  await wait(300);
+  assert.equal(typedOnPane(name), false, 'nothing typed into a dialog it could not tie to the request');
 });
 
 test('two live requests behind one dialog: /answer by pane fingerprint types the digit (the pane breaks the tie)', async () => {

@@ -30,7 +30,6 @@ version number collided. Entries below are reconstructed from the shipping commi
 ### Changed
 - Notification buttons come from the registry when it holds one bound request (exact labels,
   never the TUI's own rows); `/answer` with a registry fingerprint resolves through the hook.
-- `/answer`'s hook path binds any tool's dialog when it is the one live request, not only Bash.
 - `/screen`'s hash moves when a question arrives or leaves, so a parked poll wakes for it.
 - The ask sidecar parser accepts option previews and the `text` / `number` question kinds.
 

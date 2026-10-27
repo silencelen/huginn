@@ -9476,18 +9476,15 @@ async function tryHookAnswer(name, prompt, lines, choice) {
     // A question the main thread raised and has not cleared makes this tap an
     // answer to THAT question, never a Bash approval (lib/permhook matchesPrompt).
     const askPending = !!askPendingSince(name, sid);
-    let req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines), { askPending });
-    // Any other tool's dialog (Edit, Write, an MCP tool) has no captured shape to
-    // match by content, so it binds only by UNIQUENESS: the registry lists
-    // exactly one live permission request, it is the only live request at all,
-    // and the pane shows a permission dialog rather than a question. One request
-    // and one dialog can only be each other.
-    if (!req && !askPending && !paneLib.drawsAskRows(prompt)) {
-      const labels = prompt.options.map((o) => o.label);
-      const live = questionsFor(name, lines).filter((q) => q.kind === 'permission');
-      if (reqs.length === 1 && live.length === 1 && live[0].id === reqs[0].id
-          && labels[0] === 'Yes' && labels.includes('No')) req = reqs[0];
-    }
+    // BY CONTENT ONLY: a Bash request by its exact command against the dialog's
+    // own command block, a question by its whole text and options (lib/permhook
+    // pickRequest). Nothing binds by uniqueness. "One live request" is no proof
+    // that the dialog on screen is that request's: its own hook may have run out
+    // while another request — a subagent's, never drawn — waits behind it, and a
+    // Yes tapped on the first would approve the second unseen (security review
+    // F1, 2026-10-27). Any other tool's dialog types its digit instead, which
+    // answers exactly the dialog that was tapped.
+    const req = permhook.pickRequest(reqs, prompt, permhook.dialogRegion(lines), { askPending });
     if (!req) return null;
     const decision = permhook.decisionFor(req, prompt, choice);
     if (!decision) return null;
@@ -9553,8 +9550,7 @@ async function freshPrompt(name) {
  * then the keys when the hook did not claim it and the dialog on screen is
  * demonstrably this request's. Returns { status, body } for the route.
  */
-async function answerQuestion(name, q, body, screen) {
-  const lines = screen ? screen.lines : null;
+async function answerQuestion(name, q, body) {
   const d = questionsLib.decisionFor(q, body);
   if (!d.ok) return { status: d.status || 400, body: { ok: false, error: d.error } };
   if (q.kind === 'plan') return answerPlanQuestion(name, q, d.plan);
@@ -9568,7 +9564,7 @@ async function answerQuestion(name, q, body, screen) {
     }
     log(`questions: ${name} hook for ${q.toolName} did not take the decision — trying the keys`);
   }
-  return keysFallback(name, q, d.decision, lines);
+  return keysFallback(name, q, d.decision);
 }
 
 /**
@@ -9579,7 +9575,7 @@ async function answerQuestion(name, q, body, screen) {
  * say — one label, Yes, No. Everything else is `unbound`: the person is told the
  * hook did not take it and the Screen tab is where it can still be answered.
  */
-async function keysFallback(name, q, decision, lines) {
+async function keysFallback(name, q, decision) {
   const unbound = (error) => ({ status: 409, body: { ok: false, reason: 'unbound', error } });
   const fp = await freshPrompt(name);
   const prompt = fp && fp.prompt;
@@ -9603,13 +9599,12 @@ async function keysFallback(name, q, decision, lines) {
     if (decision.behavior === 'allow' && decision.updatedPermissions) {
       return unbound('a standing permission is granted through the hook only');
     }
-    let same = false;
-    if (q.toolName === 'Bash') {
-      same = permhook.matchesPrompt({ tool: 'Bash', input: q.input }, prompt, permhook.dialogRegion(fp.lines));
-    } else {
-      const live = questionsFor(name, lines).filter((x) => x.kind === 'permission');
-      same = live.length === 1 && live[0].id === q.id;
-    }
+    // Only a Bash request can be tied to the dialog on screen, by its command.
+    // Any other tool's dialog has no captured shape, and "the one live request"
+    // is no proof the dialog is its: a digit typed here could approve a
+    // different, hookless dialog nobody answered (security review F1).
+    const same = q.toolName === 'Bash'
+      && permhook.matchesPrompt({ tool: 'Bash', input: q.input }, prompt, permhook.dialogRegion(fp.lines));
     if (!same) return unbound('the dialog on screen could not be tied to this request');
     row = prompt.options.find((o) => o.label === (decision.behavior === 'allow' ? 'Yes' : 'No')) || null;
     if (!row) return unbound('the dialog offers no plain Yes / No row');
@@ -13944,7 +13939,7 @@ async function handleRequest(req, res) {
                 ok: false, reason: 'changed', error: `option ${option} is not offered any more`,
               });
             }
-            const r = await answerQuestion(name, q, choice, screen);
+            const r = await answerQuestion(name, q, choice);
             const label = (questionsLib.notificationButtons(q).find((b) => b.number === option) || {}).label;
             return sendJson(res, r.status, r.status === 200 ? { ...r.body, option, label } : r.body);
           }
@@ -14126,7 +14121,7 @@ async function handleRequest(req, res) {
             question: questionsLib.publicQuestion(q),
           });
         }
-        const r = await answerQuestion(name, q, body, screen);
+        const r = await answerQuestion(name, q, body);
         return sendJson(res, r.status, r.body);
       });
     }
