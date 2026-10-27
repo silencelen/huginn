@@ -15,6 +15,7 @@
 ### Fixed
 - A question card scrolls within its own height now, so a tall question's lower options and its own
   answer buttons stay reachable instead of running off the bottom.
+- A half-answered question is kept when you switch tabs within a session, rather than cleared.
 
 ## 2.7.0
 

@@ -507,6 +507,7 @@ fun SessionView(store: AppStore, name: String) {
                 if (placement == PromptPlacement.INLINE_COMPACT && cardQuestion != null) {
                     val answering by controller.answering.collectAsState()
                     val answerNote by controller.answerNote.collectAsState()
+                    val questionDrafts by controller.questionDrafts.collectAsState()
                     com.silencelen.huginn.ui.QuestionCard(
                         question = cardQuestion,
                         answering = answering,
@@ -514,6 +515,9 @@ fun SessionView(store: AppStore, name: String) {
                         // A tall question scrolls inside the card instead of
                         // stranding its answer buttons below the fold.
                         maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
+                        // Hoisted like the phone's, so a half answer survives a tab flip.
+                        draft = questionDrafts[cardQuestion.id] ?: com.silencelen.huginn.ui.QuestionDraft.of(cardQuestion),
+                        onDraft = { controller.setQuestionDraft(cardQuestion.id, it) },
                         onAnswer = { body -> controller.answerQuestion(cardQuestion, body) },
                         onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
                     )

@@ -22,6 +22,7 @@ import com.silencelen.huginn.data.TypingState
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.QuestionDraft
 import com.silencelen.huginn.ui.SessionFace
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.isTranscriptRestart
@@ -263,6 +264,18 @@ class SessionController(
 
     private val _answering = MutableStateFlow(false)
     val answering: StateFlow<Boolean> = _answering.asStateFlow()
+
+    // The compact card's working state, hoisted here so a half-answered question
+    // survives the card leaving the tree on a tab flip (mirrors the phone's view
+    // model). Keyed by request id; dropped once the question is answered.
+    private val _questionDrafts = MutableStateFlow<Map<String, QuestionDraft>>(emptyMap())
+    val questionDrafts: StateFlow<Map<String, QuestionDraft>> = _questionDrafts.asStateFlow()
+    fun setQuestionDraft(id: String, draft: QuestionDraft) {
+        if (id.isNotEmpty()) _questionDrafts.value = _questionDrafts.value + (id to draft)
+    }
+    private fun clearQuestionDraft(id: String) {
+        if (_questionDrafts.value.containsKey(id)) _questionDrafts.value = _questionDrafts.value - id
+    }
 
     /**
      * True while this client holds the window at its own size, for the header to say.
@@ -945,7 +958,10 @@ class SessionController(
         scope.launch {
             runCatching { client.answerQuestion(name, q.id, body, fp) }
                 .onSuccess { r ->
-                    if (!r.ok) {
+                    if (r.ok) {
+                        clearQuestionDraft(q.id)                 // answered — drop the draft
+                    } else {
+                        if (r.reason == "gone" || r.reason == "changed") clearQuestionDraft(q.id)
                         if (r.reason == "unbound") openTab(SessionTab.SCREEN)
                         else _answerNote.value = r.error ?: "The question moved on."
                     }
