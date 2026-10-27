@@ -9569,11 +9569,12 @@ async function answerQuestion(name, q, body) {
 
 /**
  * The keystroke fallback for a registry answer: only when the dialog on screen
- * is this request's beyond doubt (an AskUserQuestion by its whole text and
- * option list, a Bash prompt by its exact command, any other tool by being the
- * one live request under a permission dialog), and only for what a digit can
- * say — one label, Yes, No. Everything else is `unbound`: the person is told the
- * hook did not take it and the Screen tab is where it can still be answered.
+ * is this request's beyond doubt by its content (an AskUserQuestion by its
+ * whole text and option list, a Bash prompt by its exact command), and only for
+ * what a digit can say — one label, Yes, No. Any other tool's dialog has no
+ * captured shape and is never tied to a request by being the only one live.
+ * Everything else is `unbound`: the person is told the hook did not take it and
+ * the Screen tab is where it can still be answered.
  */
 async function keysFallback(name, q, decision) {
   const unbound = (error) => ({ status: 409, body: { ok: false, reason: 'unbound', error } });

@@ -19,7 +19,9 @@ version number collided. Entries below are reconstructed from the shipping commi
   AskUserQuestion whole (strings, arrays for a multi-select, free text, annotations), a permission
   with allow / always allow (the prompt's own suggestions only) / deny with a message, a plan with
   approval by its dialog's keys or feedback through the hook (`deny` + message, honoured by
-  Claude Code 2.1.306). `409 gone | changed | unbound`; `via: hook | keys`.
+  Claude Code 2.1.306). `409 gone | changed | unbound`; `via: hook | keys`. Once a request's
+  hook has gone, the keys answer only a question or a Bash prompt whose dialog is the one on
+  screen; any other tool's approval is answered on the Screen tab.
 - The permission hook parks every tool, records `permission_suggestions`, `agent_id`,
   `agent_type`, `mcp_server` and the mode, and binds a session hosted in a background PTY or a
   `claude --bg` job the way the title hook does.
