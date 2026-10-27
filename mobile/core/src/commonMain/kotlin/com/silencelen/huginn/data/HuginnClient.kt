@@ -977,7 +977,7 @@ class HuginnClient(
 
     /**
      * What the session is asking, as requests (the daemon's registry). A daemon
-     * older than 3.14 has no such route: the 404 arrives as a [HuginnException]
+     * older than 3.15 has no such route: the 404 arrives as a [HuginnException]
      * and the caller keeps the link bar.
      */
     suspend fun sessionQuestions(session: String): List<SessionQuestion> =

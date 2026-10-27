@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## [Unreleased]
+## 2.8.0
 
 ### Added
 - A session's Conversation tab shows a compact question card again for a request the server has

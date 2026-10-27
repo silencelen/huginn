@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.14.0 — 2026-10-26
 
 ### Added
 - A session's Conversation tab shows a compact question card again for a request the server has

@@ -489,7 +489,7 @@ data class Screen(
      * What the session is asking, as REQUESTS (the daemon's registry, also at
      * `GET /v1/sessions/:name/questions`): every tool prompt whose Claude Code
      * hook is waiting, plus a pending plan approval. A bound one is answered from
-     * the compact card; see [SessionQuestion]. Empty on a daemon older than 3.14.
+     * the compact card; see [SessionQuestion]. Empty on a daemon older than 3.15.
      */
     val questions: List<SessionQuestion> = emptyList(),
 )

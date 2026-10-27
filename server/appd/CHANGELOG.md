@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.15.0 — 2026-10-26
 
 ### Added
 - A request registry: every Claude Code tool prompt is parked by the permission hook and listed at
@@ -39,8 +39,8 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A question whose dialog the pane could not read is still answerable through its hook.
 - Option labels containing `, ` travel as array elements, never joined.
 - A question stays answerable from the compact card for an hour rather than fifteen minutes (the
-  permission hook's wait and the registry's request age moved together); a hook whose question is
-  answered elsewhere still exits at once, so nothing lingers.
+  permission hook's wait and the registry's request age moved together). After its first minute
+  the hook polls once a second, so the longer wait costs about what the old one did.
 
 ## 3.14.1 — 2026-10-25
 
