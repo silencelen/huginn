@@ -503,7 +503,7 @@ fun SessionView(store: AppStore, name: String) {
         // registry binds. The link bar stays for everything it does not.
         if (PromptGate.visible(hasQuestion = hasQuestion, face = tab.face)) {
             val placement = PromptPlacement.of(tab.face, PromptSurface.SESSION, bound = cardQuestion != null)
-            Box(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+            BoxWithConstraints(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
                 if (placement == PromptPlacement.INLINE_COMPACT && cardQuestion != null) {
                     val answering by controller.answering.collectAsState()
                     val answerNote by controller.answerNote.collectAsState()
@@ -511,6 +511,9 @@ fun SessionView(store: AppStore, name: String) {
                         question = cardQuestion,
                         answering = answering,
                         note = answerNote,
+                        // A tall question scrolls inside the card instead of
+                        // stranding its answer buttons below the fold.
+                        maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
                         onAnswer = { body -> controller.answerQuestion(cardQuestion, body) },
                         onOpenScreen = { controller.openTab(SessionTab.SCREEN) },
                     )

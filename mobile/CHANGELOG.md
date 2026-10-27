@@ -11,6 +11,10 @@
 
 ### Fixed
 - The transcript's "waiting for your answer" line no longer promises buttons that are not there.
+- A question card scrolls within its own height now, so a tall question's lower options and its own
+  answer buttons stay reachable instead of running off the bottom of the screen.
+- A half-answered question is kept when you switch to the Screen tab or to another chat and back: a
+  part-done multi-part ask, a typed Other… answer, or a No, tell Claude message is no longer cleared.
 
 ## 3.13.0 — 2026-10-24
 

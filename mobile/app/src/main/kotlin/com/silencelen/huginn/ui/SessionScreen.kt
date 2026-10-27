@@ -2,6 +2,7 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -182,6 +183,9 @@ fun SessionScreen(
     onDismissWrapUpNotice: () -> Unit = {},
     /** The compact card's answer: a registry question and the body `QuestionAnswers` built. */
     onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    /** The hoisted question-card drafts and setter — persistence across tabs/chats. */
+    questionDrafts: Map<String, QuestionDraft> = emptyMap(),
+    onQuestionDraft: (String, QuestionDraft) -> Unit = { _, _ -> },
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -292,6 +296,8 @@ fun SessionScreen(
                     // this face may draw it; the bar is drawn instead otherwise.
                     cardQuestion = if (questionVisible) cardQuestion else null,
                     onAnswerQuestion = onAnswerQuestion,
+                    questionDrafts = questionDrafts,
+                    onQuestionDraft = onQuestionDraft,
                     onOpenScreen = { onTab(1) },
                     quickActions = quickActions,
                     onSelectionAction = onSelectionAction,
@@ -385,6 +391,8 @@ private fun SessionConversation(
     /** The registry's bound request this face draws as the compact card; null draws the bar. */
     cardQuestion: com.silencelen.huginn.data.SessionQuestion? = null,
     onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    questionDrafts: Map<String, QuestionDraft> = emptyMap(),
+    onQuestionDraft: (String, QuestionDraft) -> Unit = { _, _ -> },
     spinner: String?,
     statusLines: List<String>,
     transientLine: String?,
@@ -713,9 +721,16 @@ private fun SessionConversation(
         // its own hook, so the compact card finishes every shape the daemon's
         // registry binds — on this face only, never over the Screen tab.
         if (cardQuestion != null) {
-            Box(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+            // The card scrolls inside a height cap so a tall question's lower
+            // options and its OWN answer buttons stay reachable (owner, 2026-10-26).
+            // BoxWithConstraints hands it the room this pinned region has; 0.7 keeps
+            // the transcript a sliver and leaves the composer its place.
+            BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
                 QuestionCard(
                     question = cardQuestion,
+                    maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
+                    draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
+                    onDraft = { onQuestionDraft(cardQuestion.id, it) },
                     onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
                     onOpenScreen = onOpenScreen,
                 )

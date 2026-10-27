@@ -12,6 +12,10 @@
 ### Changed
 - Notification buttons never offer the dialog's own "Type something." or "Chat about this" rows.
 
+### Fixed
+- A question card scrolls within its own height now, so a tall question's lower options and its own
+  answer buttons stay reachable instead of running off the bottom.
+
 ## 2.7.0
 
 ### Added

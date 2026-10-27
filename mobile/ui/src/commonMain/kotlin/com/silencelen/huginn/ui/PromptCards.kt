@@ -349,7 +349,7 @@ fun PlanApprovalCard(
 }
 
 @Composable
-private fun CardShell(metrics: PromptCardMetrics, content: @Composable () -> Unit) {
+private fun CardShell(metrics: PromptCardMetrics, maxHeight: Dp = Dp.Unspecified, content: @Composable () -> Unit) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -363,7 +363,16 @@ private fun CardShell(metrics: PromptCardMetrics, content: @Composable () -> Uni
             .then(if (metrics.maxWidth == Dp.Unspecified) Modifier else Modifier.widthIn(max = metrics.maxWidth))
             .fillMaxWidth(),
     ) {
-        Column(Modifier.padding(12.dp)) { content() }
+        // ⚠ A TALL QUESTION SCROLLS INSIDE A HEIGHT CAP when the host gives one.
+        // A long description, five options each with their own, or a diff preview
+        // grew the card past the pinned region above the composer and stranded its
+        // OWN answer buttons below the fold — on a single-choice question the lower
+        // options were then unselectable (owner, 2026-10-26). The cap is the host's
+        // (it knows the room); uncapped callers draw as before.
+        val scroll = rememberScrollState()                   // unconditional: Compose call-site rule
+        val body = if (maxHeight == Dp.Unspecified) Modifier
+        else Modifier.heightIn(max = maxHeight).verticalScroll(scroll)
+        Column(body.padding(12.dp)) { content() }
     }
 }
 
@@ -534,13 +543,24 @@ fun QuestionCard(
     answering: Boolean = false,
     note: String? = null,
     compact: Boolean = true,
+    /** A height cap the card scrolls inside; [Dp.Unspecified] draws uncapped. */
+    maxHeight: Dp = Dp.Unspecified,
+    /** The hoisted working state; null falls back to the card's own `remember`. */
+    draft: QuestionDraft? = null,
+    onDraft: (QuestionDraft) -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
     onOpenScreen: (() -> Unit)? = null,
 ) {
+    // Controlled when the shell hoists a draft (the phone keeps it in the view
+    // model, so a half answer outlives the card leaving the tree); otherwise a
+    // local fallback preserves the old behaviour for callers not yet wired.
+    val fallback = remember(question.id, question.fingerprint) { mutableStateOf(QuestionDraft.of(question)) }
+    val cur = draft ?: fallback.value
+    val set: (QuestionDraft) -> Unit = { d -> fallback.value = d; onDraft(d) }
     when {
-        question.isAsk -> AskQuestionCard(question, answering, note, compact, onAnswer)
-        question.isPlan -> PlanQuestionCard(question, answering, note, compact, onAnswer, onOpenScreen)
-        else -> PermissionQuestionCard(question, answering, note, compact, onAnswer)
+        question.isAsk -> AskQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer)
+        question.isPlan -> PlanQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer, onOpenScreen)
+        else -> PermissionQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer)
     }
 }
 
@@ -557,22 +577,24 @@ private fun AskQuestionCard(
     answering: Boolean,
     note: String?,
     compact: Boolean,
+    maxHeight: Dp,
+    draft: QuestionDraft,
+    onDraft: (QuestionDraft) -> Unit,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val metrics = promptCardMetrics(compact)
-    // Keyed on the request's identity: a new question starts a new walk, a
-    // repaint of the same one keeps where the thumb was.
-    var stepper by remember(question.id, question.fingerprint) { mutableStateOf(AskStepper.of(question)) }
-    var otherOpen by remember(question.id, stepper.index) { mutableStateOf(false) }
-    var typed by remember(question.id, stepper.index) { mutableStateOf("") }
+    // The stepper and the free text live in the hoisted [draft] now, so a
+    // half-walked two-part question or a typed "Other…" survives the card leaving
+    // the tree. `previewOf` is a pure view toggle and stays local.
+    val stepper = draft.stepper
     var previewOf by remember(question.id, stepper.index) { mutableStateOf<Int?>(null) }
     val spec = stepper.current
     // Submit when the walk is complete: the hook answers the whole call once.
-    fun advance(next: AskStepper) {
-        stepper = next
-        if (next.complete && next.isLast) next.body(question)?.let(onAnswer)
+    fun advance(next: QuestionDraft) {
+        onDraft(next)
+        if (next.stepper.complete && next.stepper.isLast) next.stepper.body(question)?.let(onAnswer)
     }
-    CardShell(metrics) {
+    CardShell(metrics, maxHeight) {
         if (spec == null) {
             Text("Claude is asking a question", style = MaterialTheme.typography.bodyMedium)
             NoteLine(note)
@@ -592,28 +614,28 @@ private fun AskQuestionCard(
         when {
             spec.isText -> {
                 OutlinedTextField(
-                    value = typed, onValueChange = { typed = it },
+                    value = draft.typed, onValueChange = { onDraft(draft.copy(typed = it)) },
                     placeholder = { Text(spec.placeholder ?: "Type your answer") },
                     enabled = !answering, singleLine = false, minLines = 1, maxLines = 4,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                StepButtons(stepper, answering, enabled = typed.isNotBlank(),
+                StepButtons(stepper, answering, enabled = draft.typed.isNotBlank(),
                     label = if (stepper.isLast) "Answer" else "Next",
-                    onBack = { stepper = stepper.back() },
-                    onNext = { advance(stepper.answer(AnswerValue.Text(typed.trim()))) })
+                    onBack = { onDraft(draft.back()) },
+                    onNext = { advance(draft.answerCurrent(AnswerValue.Text(draft.typed.trim()))) })
             }
             spec.isNumber -> {
                 val hint = listOfNotNull(spec.min?.let { "min ${trimNumber(it)}" }, spec.max?.let { "max ${trimNumber(it)}" }, spec.unit).joinToString(" · ")
+                val value = draft.typed.ifEmpty { spec.default?.let(::trimNumber) ?: "" }
                 OutlinedTextField(
-                    value = typed.ifEmpty { spec.default?.let(::trimNumber) ?: "" }, onValueChange = { typed = it.filter { c -> c.isDigit() || c == '.' || c == '-' } },
+                    value = value, onValueChange = { onDraft(draft.copy(typed = it.filter { c -> c.isDigit() || c == '.' || c == '-' })) },
                     placeholder = { Text(hint.ifBlank { "A number" }) }, supportingText = if (hint.isBlank()) null else ({ Text(hint) }),
                     enabled = !answering, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
-                val value = typed.ifEmpty { spec.default?.let(::trimNumber) ?: "" }
                 StepButtons(stepper, answering, enabled = value.toDoubleOrNull() != null,
                     label = if (stepper.isLast) "Answer" else "Next",
-                    onBack = { stepper = stepper.back() },
-                    onNext = { advance(stepper.answer(AnswerValue.Text(value))) })
+                    onBack = { onDraft(draft.back()) },
+                    onNext = { advance(draft.answerCurrent(AnswerValue.Text(value))) })
             }
             spec.multiSelect -> {
                 val chosen = stepper.currentChosen
@@ -622,15 +644,15 @@ private fun AskQuestionCard(
                         CheckRow(
                             option = PromptOption(number = i + 1, label = o.label, description = o.description),
                             checked = o.label in chosen, enabled = !answering,
-                            onToggle = { stepper = stepper.toggle(o.label); previewOf = i },
+                            onToggle = { onDraft(draft.toggle(o.label)); previewOf = i },
                         )
                     }
                 }
                 PreviewBlock(spec, previewOf)
                 StepButtons(stepper, answering, enabled = true,
                     label = (if (stepper.isLast) "Answer" else "Next") + if (chosen.isEmpty()) " with none selected" else " with ${chosen.size} selected",
-                    onBack = { stepper = stepper.back() },
-                    onNext = { advance(stepper.confirmMany()) })
+                    onBack = { onDraft(draft.back()) },
+                    onNext = { advance(draft.confirmMany()) })
             }
             else -> {
                 val wrap = metrics.wrapOptions
@@ -640,21 +662,21 @@ private fun AskQuestionCard(
                         AnswerButton(
                             option = PromptOption(number = i + 1, label = o.label, description = o.description),
                             highlighted = o.label == picked, enabled = !answering, wrap = wrap,
-                            onClick = { previewOf = i; advance(stepper.answer(AnswerValue.One(o.label))) },
+                            onClick = { previewOf = i; advance(draft.answerCurrent(AnswerValue.One(o.label))) },
                         )
                     }
                 }
                 PreviewBlock(spec, previewOf)
                 // "Other…": the free text the TUI offers as "Type something."; the
                 // daemon takes any string, so it is just another answer.
-                if (!otherOpen) {
+                if (!draft.otherOpen) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = { otherOpen = true }, enabled = !answering,
+                        TextButton(onClick = { onDraft(draft.copy(otherOpen = true)) }, enabled = !answering,
                             contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
                             Text("Other…", style = MaterialTheme.typography.labelMedium)
                         }
                         if (!stepper.isFirst) {
-                            TextButton(onClick = { stepper = stepper.back() }, enabled = !answering,
+                            TextButton(onClick = { onDraft(draft.back()) }, enabled = !answering,
                                 contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
                                 Text("Back", style = MaterialTheme.typography.labelMedium)
                             }
@@ -662,13 +684,13 @@ private fun AskQuestionCard(
                     }
                 } else {
                     OutlinedTextField(
-                        value = typed, onValueChange = { typed = it }, placeholder = { Text("Something else…") },
+                        value = draft.typed, onValueChange = { onDraft(draft.copy(typed = it)) }, placeholder = { Text("Something else…") },
                         enabled = !answering, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     )
-                    StepButtons(stepper, answering, enabled = typed.isNotBlank(),
+                    StepButtons(stepper, answering, enabled = draft.typed.isNotBlank(),
                         label = if (stepper.isLast) "Answer" else "Next",
-                        onBack = { stepper = stepper.back() },
-                        onNext = { advance(stepper.answer(AnswerValue.Text(typed.trim()))) })
+                        onBack = { onDraft(draft.back()) },
+                        onNext = { advance(draft.answerCurrent(AnswerValue.Text(draft.typed.trim()))) })
                 }
             }
         }
@@ -758,14 +780,17 @@ private fun PermissionQuestionCard(
     answering: Boolean,
     note: String?,
     compact: Boolean,
+    maxHeight: Dp,
+    draft: QuestionDraft,
+    onDraft: (QuestionDraft) -> Unit,
     onAnswer: (JsonObject) -> Unit,
 ) {
     val metrics = promptCardMetrics(compact)
+    // The "No, tell Claude" box and its words are hoisted (a typed message
+    // survives navigation); `more` is a pure fold and stays local.
     var more by remember(question.id) { mutableStateOf(false) }
-    var noOpen by remember(question.id) { mutableStateOf(false) }
-    var words by remember(question.id) { mutableStateOf("") }
     val lines = question.permissionLines()
-    CardShell(metrics) {
+    CardShell(metrics, maxHeight) {
         HeaderChip(question.toolName.let { t -> question.mcpServer?.let { "$it · ${t.removePrefix("mcp__${it}__")}" } ?: t }, question.agentType)
         val detail = question.permissionDetail()
         if (detail != null) {
@@ -791,18 +816,18 @@ private fun PermissionQuestionCard(
                     Text("Always allow")
                 }
             }
-            OutlinedButton(onClick = { noOpen = !noOpen }, enabled = !answering) { Text("No") }
+            OutlinedButton(onClick = { onDraft(draft.copy(noOpen = !draft.noOpen)) }, enabled = !answering) { Text("No") }
         }
-        if (noOpen) {
+        if (draft.noOpen) {
             OutlinedTextField(
-                value = words, onValueChange = { words = it },
+                value = draft.words, onValueChange = { onDraft(draft.copy(words = it)) },
                 placeholder = { Text("Tell Claude what to do instead (optional)") },
                 enabled = !answering, minLines = 1, maxLines = 4, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
             Button(
-                onClick = { onAnswer(QuestionAnswers.permissionBody(question, allow = false, message = words)) },
+                onClick = { onAnswer(QuestionAnswers.permissionBody(question, allow = false, message = draft.words)) },
                 enabled = !answering, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            ) { Text(if (words.isBlank()) "No" else "No, and tell Claude") }
+            ) { Text(if (draft.words.isBlank()) "No" else "No, and tell Claude") }
         }
         NoteLine(note)
     }
@@ -819,14 +844,17 @@ private fun PlanQuestionCard(
     answering: Boolean,
     note: String?,
     compact: Boolean,
+    maxHeight: Dp,
+    draft: QuestionDraft,
+    onDraft: (QuestionDraft) -> Unit,
     onAnswer: (JsonObject) -> Unit,
     onOpenScreen: (() -> Unit)?,
 ) {
     val metrics = promptCardMetrics(compact)
+    // The feedback box and its words are hoisted (survive navigation); the
+    // "read the plan" fold is a pure view toggle and stays local.
     var planOpen by remember(question.id) { mutableStateOf(false) }
-    var noOpen by remember(question.id) { mutableStateOf(false) }
-    var words by remember(question.id) { mutableStateOf("") }
-    CardShell(metrics) {
+    CardShell(metrics, maxHeight) {
         Text("Plan ready — approve to continue", style = MaterialTheme.typography.bodyMedium)
         question.planText()?.let { plan ->
             TextButton(onClick = { planOpen = !planOpen }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
@@ -841,18 +869,18 @@ private fun PlanQuestionCard(
         Spacer(Modifier.height(6.dp))
         OptionLayout(wrap = true) {
             Button(onClick = { QuestionAnswers.planBody(approve = true)?.let(onAnswer) }, enabled = !answering) { Text("Yes") }
-            OutlinedButton(onClick = { noOpen = !noOpen }, enabled = !answering) { Text("No, tell Claude what to change") }
+            OutlinedButton(onClick = { onDraft(draft.copy(noOpen = !draft.noOpen)) }, enabled = !answering) { Text("No, tell Claude what to change") }
             onOpenScreen?.let { TextButton(onClick = it) { Text("Screen tab") } }
         }
-        if (noOpen) {
+        if (draft.noOpen) {
             OutlinedTextField(
-                value = words, onValueChange = { words = it },
+                value = draft.words, onValueChange = { onDraft(draft.copy(words = it)) },
                 placeholder = { Text("What should change?") },
                 enabled = !answering, minLines = 1, maxLines = 5, modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             )
             Button(
-                onClick = { QuestionAnswers.planBody(approve = false, message = words)?.let(onAnswer) },
-                enabled = !answering && words.isNotBlank(), modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                onClick = { QuestionAnswers.planBody(approve = false, message = draft.words)?.let(onAnswer) },
+                enabled = !answering && draft.words.isNotBlank(), modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
             ) { Text("Send feedback") }
         }
         NoteLine(note)

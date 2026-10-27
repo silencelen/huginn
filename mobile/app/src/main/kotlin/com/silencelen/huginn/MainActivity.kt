@@ -864,6 +864,7 @@ fun HuginnApp(
     val archiveRows by vm.archives.collectAsState()
     val archiveRead by vm.archiveRead.collectAsState()
     val rounds by vm.rounds.collectAsState()
+    val questionDrafts by vm.questionDrafts.collectAsState()
     val pads by vm.scratchpads.collectAsState()
     // Null until the probe answers. Every scratchpad control is hidden on false —
     // an older daemon has no such route, and a door that leads to an error is
@@ -1688,6 +1689,8 @@ fun HuginnApp(
                 onSendText = { text, enter -> vm.sendText(name, text, enter) },
                 onSendKeys = { vm.sendKeys(name, it) },
                 onAnswerQuestion = { q, body -> vm.answerQuestion(name, q, body) },
+                questionDrafts = questionDrafts,
+                onQuestionDraft = { id, d -> vm.setQuestionDraft(id, d) },
                 onLive = { vm.sendLive(name, it) },
                 // Live typing is what entitles this phone to reshape the owner's
                 // tmux window; leaving it hands the window straight back.

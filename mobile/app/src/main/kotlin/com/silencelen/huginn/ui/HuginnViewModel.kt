@@ -604,6 +604,23 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _chats = MutableStateFlow<List<Chat>>(emptyList())
     val chats: StateFlow<List<Chat>> = _chats.asStateFlow()
 
+    // The compact question card's working state, lifted out of the card's own
+    // `remember` and keyed by request id, so a half-answered question survives the
+    // card leaving the tree — switching to the Screen tab, or to another chat and
+    // back (owner, 2026-10-26). The view model outlives every one of those.
+    private val _questionDrafts = MutableStateFlow<Map<String, com.silencelen.huginn.ui.QuestionDraft>>(emptyMap())
+    val questionDrafts: StateFlow<Map<String, com.silencelen.huginn.ui.QuestionDraft>> = _questionDrafts.asStateFlow()
+
+    /** The card reports its evolving draft here; held until the question is answered. */
+    fun setQuestionDraft(id: String, draft: com.silencelen.huginn.ui.QuestionDraft) {
+        if (id.isEmpty()) return
+        _questionDrafts.value = _questionDrafts.value + (id to draft)
+    }
+    private fun clearQuestionDraft(id: String) {
+        if (id.isEmpty() || !_questionDrafts.value.containsKey(id)) return
+        _questionDrafts.value = _questionDrafts.value - id
+    }
+
     /** Sessions ended on purpose, kept with the command that brings them back. */
     private val _archives = MutableStateFlow<List<ArchivedSession>>(emptyList())
     val archives: StateFlow<List<ArchivedSession>> = _archives.asStateFlow()
@@ -4281,7 +4298,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.answerQuestion(name, q.id, body, fp) }
                 .onSuccess { r ->
-                    if (!r.ok) {
+                    if (r.ok) {
+                        clearQuestionDraft(q.id)                 // answered — drop the draft
+                    } else {
+                        if (r.reason == "gone" || r.reason == "changed") clearQuestionDraft(q.id)
                         _toast.value = if (r.reason == "unbound") "Answer it on the Screen tab — ${r.error ?: "the hook did not take it"}"
                         else r.error ?: "The question moved on — check the session"
                     }
