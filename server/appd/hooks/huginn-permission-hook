@@ -2,7 +2,7 @@
 # huginn-permission-hook — parks EVERY Claude Code tool prompt where huginn-appd can
 # answer it through the CLI's own PermissionRequest hook instead of keystrokes.
 #
-# Installed by install-hooks.js as `PermissionRequest` matcher "*", timeout 960.
+# Installed by install-hooks.js as `PermissionRequest` matcher "*", timeout 3660.
 # For each prompt (AskUserQuestion, ExitPlanMode, Bash, Edit, MCP tools — all of
 # them) it writes the request to
 #   $STATE_DIR/.perm/<tmux session>/<id>.json
@@ -38,7 +38,7 @@ set -u
 umask 077
 
 STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
-WAIT="${HUGINN_PERM_WAIT:-900}"      # installer timeout is 960
+WAIT="${HUGINN_PERM_WAIT:-3600}"      # installer timeout is 3660
 POLL="${HUGINN_PERM_POLL:-0.25}"
 
 in=$(cat) || exit 0

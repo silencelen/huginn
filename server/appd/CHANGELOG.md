@@ -38,6 +38,9 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A multi-question AskUserQuestion is answerable from the apps.
 - A question whose dialog the pane could not read is still answerable through its hook.
 - Option labels containing `, ` travel as array elements, never joined.
+- A question stays answerable from the compact card for an hour rather than fifteen minutes (the
+  permission hook's wait and the registry's request age moved together); a hook whose question is
+  answered elsewhere still exits at once, so nothing lingers.
 
 ## 3.14.1 — 2026-10-25
 

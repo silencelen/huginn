@@ -111,12 +111,18 @@ test('liveRequests: dead pids, malformed files, stale and foreign-named files ar
   const a = writeReq(dir, 's', { tool: 'Bash', ts: Date.now() - 2000 });
   const b = writeReq(dir, 's', { tool: 'Bash', ts: Date.now() - 1000 });
   writeReq(dir, 's', { tool: 'Bash', pid: 2147483646 });                 // no such process
-  writeReq(dir, 's', { tool: 'Bash', ts: Date.now() - 60 * 60 * 1000 }); // an hour old
+  writeReq(dir, 's', { tool: 'Bash', ts: Date.now() - 70 * 60 * 1000 }); // past the max age
   fs.writeFileSync(path.join(ph.permDir(dir, 's'), 'junk.json'), '{');
   fs.writeFileSync(path.join(ph.permDir(dir, 's'), '123-1.json'), 'not json');
   const got = ph.liveRequests(dir, 's');
   assert.deepEqual(got.map((r) => r.id), [a.id, b.id]);
   assert.deepEqual(ph.liveRequests(dir, 'nobody'), []);
+});
+
+test('liveRequests: a request well within the extended max age is still live (a question has an hour to be answered)', () => {
+  const dir = tmpdir();
+  const r = writeReq(dir, 's', { tool: 'AskUserQuestion', ts: Date.now() - 30 * 60 * 1000 }); // half an hour old
+  assert.deepEqual(ph.liveRequests(dir, 's').map((x) => x.id), [r.id]);
 });
 
 test('pickRequest: two live requests that both match -> NONE (an approval binds to exactly one request)', () => {

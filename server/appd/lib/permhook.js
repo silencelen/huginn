@@ -41,7 +41,7 @@ const path = require('path');
 
 const PERM_DIRNAME = '.perm';
 const ID_RE = /^[0-9]{6,25}-[0-9]{1,10}$/;
-const REQ_MAX_AGE_MS = 20 * 60 * 1000;   // past the hook's own 900 s deadline
+const REQ_MAX_AGE_MS = 65 * 60 * 1000;   // past the hook's own 3600 s deadline
 
 function permDir(stateDir, name) { return path.join(stateDir, PERM_DIRNAME, name); }
 
