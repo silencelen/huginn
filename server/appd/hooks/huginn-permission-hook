@@ -40,6 +40,13 @@ umask 077
 STATE_DIR="${HUGINN_CLAUDE_STATE_DIR:-/run/huginn-claude-state}"
 WAIT="${HUGINN_PERM_WAIT:-3600}"      # installer timeout is 3660
 POLL="${HUGINN_PERM_POLL:-0.25}"
+# After the first minute the wait slows: a request still parked by then is
+# rarely about to be tapped — the usual lingerer is one answered "No" at the
+# keyboard, which fires no event and so never loses its file. A one-second poll
+# still claims an app tap well inside appd's 2.5 s hand-off (lib/permhook.js
+# deliver), and keeps the hour-long wait about as cheap as the old 15-minute one.
+POLL_SLOW="${HUGINN_PERM_POLL_SLOW:-1}"
+FAST_FOR="${HUGINN_PERM_FAST_FOR:-60}"
 
 in=$(cat) || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
@@ -131,8 +138,8 @@ printf '%s' "$in" | jq -c --arg id "$id" --argjson pid "$$" --argjson pane "$([ 
     permissionMode:(.permission_mode // null), cwd:(.cwd // null), pane:$pane}' \
   > "$dir/.$id.tmp" 2>/dev/null && mv "$dir/.$id.tmp" "$req" 2>/dev/null || exit 0
 
-deadline=$(( $(date +%s) + WAIT ))
-while [ "$(date +%s)" -lt "$deadline" ]; do
+SECONDS=0                             # bash's own clock: no `date` fork per tick
+while [ "$SECONDS" -lt "$WAIT" ]; do
   if mv "$dir/$id.ans" "$dir/$id.taken" 2>/dev/null; then
     out=$(cat "$dir/$id.taken" 2>/dev/null)
     if printf '%s' "$out" | jq -e '.hookSpecificOutput.hookEventName == "PermissionRequest"
@@ -145,6 +152,6 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   # The request was dropped (the tool ran, the turn moved on, the title hook
   # saw its PostToolUse): nothing can be answered any more, so stop waiting.
   [ -e "$req" ] || exit 0
-  sleep "$POLL"
+  if [ "$SECONDS" -lt "$FAST_FOR" ]; then sleep "$POLL"; else sleep "$POLL_SLOW"; fi
 done
 exit 0

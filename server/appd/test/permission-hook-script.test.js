@@ -142,6 +142,20 @@ test('its request file dropped (the title hook saw the tool\'s PostToolUse): the
   assert.ok(r.ms < 5000, `left within a poll, not at the deadline (${r.ms} ms)`);
 });
 
+test('in its slow phase the hook still claims an app answer inside appd\'s hand-off window', async () => {
+  // Past FAST_FOR the hook polls at POLL_SLOW; appd's deliver() retracts an
+  // answer the hook has not claimed within 2.5 s and falls back to the keys. So
+  // the slow poll must stay well inside that window — forced on from the start.
+  const ph = require('../lib/permhook');
+  let delivering = null;
+  const r = await runHook(ev(), { HUGINN_PERM_FAST_FOR: '0', HUGINN_PERM_POLL_SLOW: '1' }, whenParked((req) => {
+    delivering = ph.deliver(stateDir, SESSION, req, { behavior: 'allow' });
+  }));
+  assert.equal(r.code, 0);
+  assert.equal(await delivering, true, 'claimed before deliver() gave up and retracted');
+  assert.deepEqual(JSON.parse(r.out), ALLOW, 'the decision went out through the hook');
+});
+
 test('a background job (no pane anywhere above it, CLAUDE_JOB_DIR set) parks under the session whose state file names its id, pane: false', async () => {
   // Claude Code's bg-pty-host hands a job's hooks no TMUX/TMUX_PANE and no pane
   // sits above them. HUGINN_PERM_FORCE_BG stands in for "no ancestor has them"

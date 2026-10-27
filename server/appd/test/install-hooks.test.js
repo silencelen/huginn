@@ -376,7 +376,7 @@ test('a path with spaces survives the env prefix', () => {
   assert.equal(scriptOf('/opt/huginn-appd/hooks/huginn-headroom-gate'), '/opt/huginn-appd/hooks/huginn-headroom-gate');
 });
 
-test('the permission hook installs as PermissionRequest "*" timeout 960, beside the gate, idempotently', () => {
+test('the permission hook installs as PermissionRequest "*" timeout 3660, beside the gate, idempotently', () => {
   const dir = scratch();
   const file = copyFixture(dir);
   const PERM = '/opt/huginn-appd/hooks/huginn-permission-hook';
@@ -389,7 +389,7 @@ test('the permission hook installs as PermissionRequest "*" timeout 960, beside 
   const rules = (hooks.PermissionRequest || []).filter((r) => (r.hooks || []).some((h) => h.command === PERM));
   assert.equal(rules.length, 1);
   assert.equal(rules[0].matcher, '*');
-  assert.equal(rules[0].hooks[0].timeout, 960);
+  assert.equal(rules[0].hooks[0].timeout, 3660);
   assert.equal(rules[0].hooks[0].async, undefined, 'it must hold the prompt, so never async');
   // The gate's own entries are untouched by the second script.
   assert.equal(ours(hooks, 'SubagentStart').length, 1);
