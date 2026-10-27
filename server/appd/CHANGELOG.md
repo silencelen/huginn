@@ -9,6 +9,18 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.15.2 — 2026-10-27
+
+### Fixed
+- A tmux socket unlinked under a running `huginn-tmux.service` (a `/tmp` sweep) no longer reads
+  as "no sessions": the daemon asks the living server to recreate its socket (SIGUSR1) and treats
+  the gap as a failure to observe, so no session is dropped from the registry, no project is
+  archived for a "gone" lead, and no second, empty server is started inside the daemon.
+
+### Added
+- The installer lays a `RefuseManualStart` drop-in for `systemd-tmpfiles-setup.service`: it still
+  runs at boot, but a manual start, which empties `/tmp` and with it the tmux socket, is refused.
+
 ## 3.15.1 — 2026-10-26
 
 ### Fixed

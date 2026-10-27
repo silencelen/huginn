@@ -89,6 +89,7 @@ const { createPending, stepSoftEnd } = require('./lib/softend');
 const typing = require('./lib/typing');
 // Whose journal this unit's really is — see lib/cgroup.js (M5).
 const cgroupLib = require('./lib/cgroup');
+const tmuxSockLib = require('./lib/tmux-socket');
 // The usage model and the arbiter: percentages and settings in, a list of
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
@@ -111,7 +112,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.15.1';
+const VERSION = '3.15.2';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1559,7 +1560,13 @@ async function listSessions({ preview = false, shared = false } = {}) {
     // waiting question was announced as answered, its notification cancelled,
     // and then re-announced once tmux came back. A transient hiccup became a
     // burst of wrong notifications in both directions.
-    if (/no server running|no such file or directory/i.test(stderr || '')) return [];
+    if (/no server running|no such file or directory/i.test(stderr || '')) {
+      // Unless the server is ALIVE in its unit and only the socket is gone: then
+      // nothing is known about the sessions, and saying [] here is what dropped
+      // the registry and archived every project on 2026-10-27 (recreateTmuxSocket).
+      if (await recreateTmuxSocket(stderr, 'list-sessions')) return null;
+      return [];
+    }
     log(`tmux list-sessions failed: ${(stderr || err.message || '').trim().slice(0, 120)}`);
     return null;
   }
@@ -1823,6 +1830,61 @@ function noTmuxServer(stderr) {
     .test(String(stderr || ''));
 }
 
+/**
+ * The pid of the tmux server running as the shared unit, or null.
+ *
+ * Null covers every "I could not tell": no systemd, the unit unknown, a test
+ * socket (whose server is private and never the unit's). A pid is the one fact
+ * that tells an unlinked socket from a fresh boot, so a guess here would make
+ * the daemon signal the wrong process or start a second server over a live one.
+ */
+async function tmuxUnitMainPid() {
+  if (TMUX_SOCKET) return null;
+  const r = await run('systemctl', ['show', `${TMUX_UNIT}.service`, '-p', 'MainPID', '--value']);
+  if (r.err) return null;
+  return tmuxSockLib.unitMainPid(r.stdout);
+}
+
+/**
+ * ⚠ THE SWEPT SOCKET (2026-10-27). `systemd-tmpfiles --remove` (Debian's
+ * `D /tmp` rule, run by hand) unlinked /tmp/tmux-0/default while the server in
+ * huginn-tmux.service kept running with every session. `tmux ls` then said
+ * "No such file or directory", which this daemon read as "no sessions": the
+ * registry dropped 13 rows, two projects were archived for a lead that was
+ * "gone", and ensureTmuxServer started a SECOND, empty server inside the daemon
+ * — the real one stayed alive, unreachable, with all the work in it.
+ *
+ * tmux(1) recreates its socket on SIGUSR1. So when tmux reports no server but
+ * the unit has a living main pid, the answer is one signal to that pid and a
+ * short wait, and the caller treats the gap as a failure to OBSERVE (null), not
+ * as an empty host. Returns true when the server was alive and was signalled —
+ * whether or not the socket is back yet; the next tick re-reads. Rate-limited so
+ * a listing loop does not signal the server every few milliseconds.
+ */
+let tmuxSocketAskedAt = 0;
+async function recreateTmuxSocket(stderr, why) {
+  const pid = await tmuxUnitMainPid();
+  if (!tmuxSockLib.socketLost(stderr, pid)) return false;
+  if (Date.now() - tmuxSocketAskedAt < 5_000) return true;
+  tmuxSocketAskedAt = Date.now();
+  try { process.kill(pid, 'SIGUSR1'); } catch (e) {
+    log(`tmux: socket gone and ${TMUX_UNIT}.service pid ${pid} would not take SIGUSR1 (${e.code || e.message})`);
+    return false;
+  }
+  log(`tmux: the socket is gone but ${TMUX_UNIT}.service (pid ${pid}) is alive with its sessions — asked it to recreate the socket (SIGUSR1); ${why}`);
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    const probe = await run('tmux', ['ls']);
+    if (!probe.err || !noTmuxServer(probe.stderr)) {
+      tmuxSetGen += 1;
+      log(`tmux: socket back after ${(i + 1) * 100} ms; no session was lost`);
+      return true;
+    }
+  }
+  log('tmux: the server has not recreated its socket yet; will re-read on the next tick rather than start a second server');
+  return true;
+}
+
 async function ensureTmuxServer() {
   const probe = await run('tmux', ['ls']);
   // Only "there is no server" means there is nothing there, and tmux says it two
@@ -1835,6 +1897,13 @@ async function ensureTmuxServer() {
     await noteTmuxServerCgroup();
     return;
   }
+
+  // The server may be alive in its unit with only the socket gone (a /tmp
+  // sweep): one SIGUSR1 brings the socket back. Starting another server here
+  // would strand every session in the first one, which is exactly what happened
+  // on 2026-10-27 — the second server even failed to start as the unit (already
+  // loaded) and ran inside this daemon, empty, as the clients' whole world.
+  if (await recreateTmuxSocket(probe.stderr, 'ensureTmuxServer')) return;
 
   // An isolated test socket wants a plain private server, NOT the shared unit:
   // its name is global, so a per-pid test server in it would collide with the

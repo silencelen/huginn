@@ -61,6 +61,11 @@ fi
 install -m 0644 "$SRC/huginn-appd.service" "$UNIT"
 install -d "$DROPIN_DIR"
 install -m 0644 "$SRC/systemd.d/hardening.conf" "$DROPIN_DIR/hardening.conf"
+# A guard for the host, not for this unit: a manual start of systemd-tmpfiles-setup
+# sweeps /tmp and with it the tmux socket every session lives behind (see the file).
+install -d /etc/systemd/system/systemd-tmpfiles-setup.service.d
+install -m 0644 "$SRC/systemd.d/tmpfiles-refuse-manual.conf" \
+  /etc/systemd/system/systemd-tmpfiles-setup.service.d/huginn-refuse-manual.conf
 if [ ! -e "$DROPIN_DIR/site.conf" ]; then
   {
     echo "# This server's own settings for huginn-appd. Written once by install.sh;"

@@ -7,6 +7,7 @@ installs the unit and the files in this directory:
 |---|---|---|
 | `../huginn-appd.service` | `/etc/systemd/system/huginn-appd.service` | the service; replaced on every install |
 | `hardening.conf` | `huginn-appd.service.d/hardening.conf` | kernel-level sandboxing; replaced on every install |
+| `tmpfiles-refuse-manual.conf` | `systemd-tmpfiles-setup.service.d/huginn-refuse-manual.conf` | refuses a manual start of the unit that empties `/tmp` (and the tmux socket with it); boot still runs it |
 | (generated) | `huginn-appd.service.d/site.conf` | this server's own settings; written once, never overwritten |
 
 Put your own settings in `site.conf` (or another drop-in of your own) and run
