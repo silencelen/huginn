@@ -608,18 +608,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     // `remember` and keyed by request id, so a half-answered question survives the
     // card leaving the tree — switching to the Screen tab, or to another chat and
     // back (owner, 2026-10-26). The view model outlives every one of those.
-    private val _questionDrafts = MutableStateFlow<Map<String, com.silencelen.huginn.ui.QuestionDraft>>(emptyMap())
-    val questionDrafts: StateFlow<Map<String, com.silencelen.huginn.ui.QuestionDraft>> = _questionDrafts.asStateFlow()
+    private val questionDraftBook = com.silencelen.huginn.ui.QuestionDraftBook()
+    val questionDrafts: StateFlow<Map<String, com.silencelen.huginn.ui.QuestionDraft>> = questionDraftBook.drafts
 
     /** The card reports its evolving draft here; held until the question is answered. */
-    fun setQuestionDraft(id: String, draft: com.silencelen.huginn.ui.QuestionDraft) {
-        if (id.isEmpty()) return
-        _questionDrafts.value = _questionDrafts.value + (id to draft)
-    }
-    private fun clearQuestionDraft(id: String) {
-        if (id.isEmpty() || !_questionDrafts.value.containsKey(id)) return
-        _questionDrafts.value = _questionDrafts.value - id
-    }
+    fun setQuestionDraft(id: String, draft: com.silencelen.huginn.ui.QuestionDraft) = questionDraftBook.set(id, draft)
+    private fun clearQuestionDraft(id: String) = questionDraftBook.clear(id)
 
     /** Sessions ended on purpose, kept with the command that brings them back. */
     private val _archives = MutableStateFlow<List<ArchivedSession>>(emptyList())
@@ -3470,11 +3464,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             runCatching { client.setSessionFast(name, on) }
                 .onSuccess { q ->
+                    if (q.queued) _fastAsked.value = _fastAsked.value + (name to on)
                     _toast.value = if (q.queued) com.silencelen.huginn.ui.fastQueuedWords(on)
                     else com.silencelen.huginn.ui.ContextFormat.refreshNote(q)
                 }
                 .onFailure { _toast.value = errText(it) }
         }
+    }
+
+    // The fast state each session's queued toggle asked for, by session name, until
+    // the session reports it (the chip then calls [settleFast]). Here and not in the
+    // chip, which leaves the tree on every tab flip and chat switch.
+    private val _fastAsked = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val fastAsked: StateFlow<Map<String, Boolean>> = _fastAsked.asStateFlow()
+    fun settleFast(name: String) {
+        if (_fastAsked.value.containsKey(name)) _fastAsked.value = _fastAsked.value - name
     }
 
     /**

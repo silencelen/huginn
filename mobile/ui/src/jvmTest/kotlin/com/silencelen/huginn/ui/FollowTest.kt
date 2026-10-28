@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -269,5 +270,28 @@ class FollowTest {
     @Test
     fun alreadyAtTheEndThereIsNothingToDo() {
         assertFalse(Follow.relaid(Follow.State(), opened, opened.copy(height = 700), canScrollFurther = false, settling = true))
+    }
+
+    /**
+     * A wheel-down at the bottom while an answer streams: no scroll begins, and
+     * the last row grows past the tail's slack before the start window runs out.
+     * Judged by the measure taken then, the reader who moved nothing was "away".
+     */
+    @Test
+    fun aWheelTickThatMovedNothingIsJudgedByWhereItFoundTheReader() {
+        var s = Follow.tookControl(Follow.State())
+        s = Follow.arrived(s, grew = false)          // a token, while unlatched
+        s = Follow.settled(s, atTail = false)        // the row grew past the slack
+        assertTrue(s.away, "the old settle: a reader who never moved, now away")
+        s = Follow.stoodStill(s, wasAtTail = true)
+        assertTrue(s.following, "the tick found them at the tail and moved nothing")
+        assertFalse(s.away)
+        assertFalse(s.unseen)
+    }
+
+    @Test
+    fun aTickThatMovedNothingAwayFromTheTailChangesNothing() {
+        val away = Follow.settled(Follow.tookControl(Follow.State()), atTail = false)
+        assertEquals(away, Follow.stoodStill(away, wasAtTail = false))
     }
 }

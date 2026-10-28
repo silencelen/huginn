@@ -865,6 +865,7 @@ fun HuginnApp(
     val archiveRead by vm.archiveRead.collectAsState()
     val rounds by vm.rounds.collectAsState()
     val questionDrafts by vm.questionDrafts.collectAsState()
+    val fastAsked by vm.fastAsked.collectAsState()
     val pads by vm.scratchpads.collectAsState()
     // Null until the probe answers. Every scratchpad control is hidden on false —
     // an older daemon has no such route, and a door that leads to an error is
@@ -1735,6 +1736,8 @@ fun HuginnApp(
                     )
                 },
                 onFast = { vm.setSessionFast(name, it) },
+                fastAsked = fastAsked[name],
+                onFastSettled = { vm.settleFast(name) },
                 hasEarlier = hasEarlier,
                 loadingHistory = loadingHistory,
                 onLoadEarlier = { vm.loadEarlierTranscript(name) },

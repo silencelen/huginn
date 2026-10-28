@@ -190,7 +190,10 @@ import androidx.compose.material3.ButtonDefaults
 @Composable
 fun SessionView(store: AppStore, name: String) {
     val controller = remember(name) {
-        SessionController(store.client, name, store.presence, store.paneLease, store.metaSaver, store.scope)
+        SessionController(
+            store.client, name, store.presence, store.paneLease, store.metaSaver, store.scope,
+            questionDraftBook = store.questionDrafts,
+        )
     }
     val draftKey = DraftBook.sessionKey(name)
     DisposableEffect(name) {
@@ -210,6 +213,7 @@ fun SessionView(store: AppStore, name: String) {
     val tab by controller.tab.collectAsState()
     val page by controller.page.collectAsState()
     val screen by controller.screen.collectAsState()
+    val fastAsked by store.fastAsked.collectAsState()
     val gone by controller.gone.collectAsState()
     val sessions by store.sessions.collectAsState()
     // ⚠ READ BEFORE THE `gone` EFFECT, which needs the title this row carries: by
@@ -341,12 +345,16 @@ fun SessionView(store: AppStore, name: String) {
                 viewScope.launch {
                     runCatching { store.client.setSessionFast(name, on) }
                         .onSuccess { q ->
-                            if (q.queued) store.noteAction(fastQueuedWords(on))
-                            else store.noteAction(ContextFormat.refreshNote(q))
+                            if (q.queued) {
+                                store.askFast(name, on)
+                                store.noteAction(fastQueuedWords(on))
+                            } else store.noteAction(ContextFormat.refreshNote(q))
                         }
                         .onFailure { store.noteError(it) }
                 }
             },
+            fastAsked = fastAsked[name],
+            onFastSettled = { store.settleFast(name) },
             compacting = screen?.compacting ?: row?.compacting ?: false,
             leased = controller.leasedHere && screen?.sizeLeased == true,
             cols = screen?.width,
@@ -398,7 +406,7 @@ fun SessionView(store: AppStore, name: String) {
         TabStrip(
             tab,
             { controller.openTab(it) },
-            screenDot = PromptGate.screenTabDot(hasQuestion, tab.face),
+            screenDot = PromptGate.screenTabDot(hasQuestion, tab.face, bound = cardQuestion != null),
         ) {
             // Only on the Screen tab, and only when the pane holds something. The
             // conversation has its own selection and needs none of this.
@@ -602,6 +610,9 @@ private fun SessionHeader(
     /** Fast mode as the status line reports it; null hides the chip (older daemon). */
     fast: FastMode? = null,
     onFast: (Boolean) -> Unit = {},
+    /** The fast state a queued toggle asked for, until the session reports it. */
+    fastAsked: Boolean? = null,
+    onFastSettled: () -> Unit = {},
     compacting: Boolean,
     leased: Boolean,
     cols: Int?,
@@ -745,7 +756,10 @@ private fun SessionHeader(
                     if (!fast.available) fast.reason ?: "Fast mode is not available for this session"
                     else "Fast mode for this session",
                 ) {
-                    FastChip(fast, onToggle = onFast, modifier = Modifier.padding(start = 6.dp))
+                    FastChip(
+                        fast, onToggle = onFast, modifier = Modifier.padding(start = 6.dp),
+                        asked = fastAsked, onSettled = onFastSettled,
+                    )
                 }
             }
             // Permission mode has no slash command that sets it; Shift+Tab cycles it,

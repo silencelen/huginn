@@ -23,6 +23,7 @@ import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.LocalEcho
 import com.silencelen.huginn.ui.PromptGate
 import com.silencelen.huginn.ui.QuestionDraft
+import com.silencelen.huginn.ui.QuestionDraftBook
 import com.silencelen.huginn.ui.SessionFace
 import com.silencelen.huginn.ui.StreamPicker
 import com.silencelen.huginn.ui.isTranscriptRestart
@@ -98,6 +99,12 @@ class SessionController(
     appScope: CoroutineScope,
     /** The strip's poll while it can move ([agentListLoop]); a test shortens it. */
     private val agentsPollMs: Long = AGENTS_POLL_MS,
+    /**
+     * Half-answered question cards. Owned by [AppStore] for the same reason as
+     * [meta]: a draft must outlive this controller, which goes when the reader
+     * switches to another session. A test that builds a bare controller gets its own.
+     */
+    private val questionDraftBook: QuestionDraftBook = QuestionDraftBook(),
 ) {
 
     /**
@@ -265,17 +272,13 @@ class SessionController(
     private val _answering = MutableStateFlow(false)
     val answering: StateFlow<Boolean> = _answering.asStateFlow()
 
-    // The compact card's working state, hoisted here so a half-answered question
-    // survives the card leaving the tree on a tab flip (mirrors the phone's view
-    // model). Keyed by request id; dropped once the question is answered.
-    private val _questionDrafts = MutableStateFlow<Map<String, QuestionDraft>>(emptyMap())
-    val questionDrafts: StateFlow<Map<String, QuestionDraft>> = _questionDrafts.asStateFlow()
-    fun setQuestionDraft(id: String, draft: QuestionDraft) {
-        if (id.isNotEmpty()) _questionDrafts.value = _questionDrafts.value + (id to draft)
-    }
-    private fun clearQuestionDraft(id: String) {
-        if (_questionDrafts.value.containsKey(id)) _questionDrafts.value = _questionDrafts.value - id
-    }
+    // The compact card's working state, keyed by request id and dropped once the
+    // question is answered. Held in [questionDraftBook], which the app store owns:
+    // this controller lives only as long as the session view shows this session,
+    // so a draft kept here died on a switch to another session and back.
+    val questionDrafts: StateFlow<Map<String, QuestionDraft>> = questionDraftBook.drafts
+    fun setQuestionDraft(id: String, draft: QuestionDraft) = questionDraftBook.set(id, draft)
+    private fun clearQuestionDraft(id: String) = questionDraftBook.clear(id)
 
     /**
      * True while this client holds the window at its own size, for the header to say.

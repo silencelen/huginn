@@ -1,5 +1,18 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+### Changed
+- The fast chip shows the state you asked for, faded, with "next turn" until the session takes it,
+  instead of reading as if the click did nothing.
+- The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
+
+### Fixed
+- A half-answered question is kept when you switch to another session and back, not only when you
+  switch tabs within one.
+- A mouse-wheel tick at the bottom of a conversation while an answer streams no longer stops it
+  following the newest text.
+
 ## 2.8.0
 
 ### Added

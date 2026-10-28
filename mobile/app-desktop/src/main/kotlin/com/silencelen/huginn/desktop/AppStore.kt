@@ -702,6 +702,25 @@ class AppStore(
     })
 
     /**
+     * Half-answered question cards, by request id. APP level because the session
+     * view builds a controller per session it shows: kept there, a draft lived
+     * through a Screen-tab flip but died on a switch to another session and back.
+     */
+    val questionDrafts = com.silencelen.huginn.ui.QuestionDraftBook()
+
+    /**
+     * The fast state each session's queued toggle asked for, by session name, until
+     * the session reports it (the chip then calls [settleFast]). App level so the
+     * mark survives a switch to another session while the toggle is still queued.
+     */
+    private val _fastAsked = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val fastAsked: StateFlow<Map<String, Boolean>> = _fastAsked.asStateFlow()
+    fun askFast(name: String, on: Boolean) { _fastAsked.value = _fastAsked.value + (name to on) }
+    fun settleFast(name: String) {
+        if (_fastAsked.value.containsKey(name)) _fastAsked.value = _fastAsked.value - name
+    }
+
+    /**
      * Whether the side panel is open beside the conversation.
      *
      * ONE flag for both the chat and the session view, because it is one panel as

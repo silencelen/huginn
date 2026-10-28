@@ -80,6 +80,8 @@ fun SessionControls(
     /** Fast mode as the status line reports it; null hides the chip (older daemon). */
     fast: FastMode? = null,
     onFast: (Boolean) -> Unit = {},
+    fastAsked: Boolean? = null,
+    onFastSettled: () -> Unit = {},
     compacting: Boolean = false,
     /** This session's headroom row (appd 3.0); null hides both marks. */
     sessionHeadroom: com.silencelen.huginn.data.SessionHeadroom? = null,
@@ -142,7 +144,9 @@ fun SessionControls(
             // Fast mode, beside the pickers it belongs with: a per-session fact
             // the status line reports (appd 3.14.0). Absent on an older daemon;
             // disabled with Claude Code's own reason beside it when unavailable.
-            if (fast != null) FastChip(fast, onToggle = onFast, showReason = true)
+            if (fast != null) {
+                FastChip(fast, onToggle = onFast, showReason = true, asked = fastAsked, onSettled = onFastSettled)
+            }
             // The "context used" meter, after the three controls it is read
             // beside; it renders nothing when the pane has not reported a figure.
             // Tapping it opens the card — the table behind the figure — as a sheet.

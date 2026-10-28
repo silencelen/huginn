@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -78,12 +79,27 @@ fun AutoResumeChip(
     )
 }
 
-/** The fast chip's words: the state, never the mechanics. */
-fun fastWords(fast: FastMode): String = when {
+/**
+ * The fast chip's words: the state, never the mechanics. While a toggle is still
+ * queued ([pending], from [fastPending]) the chip names the state asked for and
+ * when it lands, so the header does not read as if the tap did nothing.
+ */
+fun fastWords(fast: FastMode, pending: Boolean? = null): String = when {
     !fast.available -> "fast unavailable"
+    pending != null -> "fast ${if (pending) "on" else "off"} · next turn"
     fast.on -> "fast on"
     else -> "fast off"
 }
+
+/**
+ * The state a queued `/fast` toggle asked for, while the session has not reported
+ * it yet; null once it has. The daemon types `/fast` at the next turn boundary, so
+ * between the tap and that boundary the status line still reports the old state.
+ * Null too when fast mode is unavailable: no queued toggle is going to land then.
+ * The shell holds [asked] (it must outlive the chip) and drops it once this is null.
+ */
+fun fastPending(fast: FastMode, asked: Boolean?): Boolean? =
+    asked?.takeIf { fast.available && it != fast.on }
 
 /**
  * The note after a queued `/fast` toggle, the same sentence on both shells (house
@@ -104,6 +120,10 @@ const val FAST_ON_NOTE: String = "Auto mode turns off while fast is on."
  * fast mode turns auto mode off while it is on — the reader should hear that
  * from the switch, not discover it mid-run. Turning it OFF just turns it off.
  *
+ * A toggle is queued, not instant (the daemon types `/fast` at the next turn
+ * boundary), so the chip shows the state [asked] for, faded, until the session
+ * reports it. The shell keeps [asked]: the chip leaves the tree on every tab flip.
+ *
  * Not drawn at all by callers against a daemon that reports no [FastMode].
  */
 @Composable
@@ -112,15 +132,25 @@ fun FastChip(
     onToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     showReason: Boolean = false,
+    /** The state a queued toggle asked for (the shell's record), or null. */
+    asked: Boolean? = null,
+    /** The session now reports [asked], or never will: the shell forgets it. */
+    onSettled: () -> Unit = {},
 ) {
     val scheme = MaterialTheme.colorScheme
     var confirming by remember { mutableStateOf(false) }
+    val pending = fastPending(fast, asked)
+    LaunchedEffect(asked, pending) { if (asked != null && pending == null) onSettled() }
+    // What a tap acts on: the state on its way in, when one is queued.
+    val target = pending ?: fast.on
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier) {
         Text(
-            fastWords(fast),
+            fastWords(fast, pending),
             style = MaterialTheme.typography.labelSmall,
             color = when {
                 !fast.available -> scheme.onSurfaceVariant.copy(alpha = 0.6f)
+                // Asked for, not yet true: the colour of the state, faded.
+                pending != null -> (if (pending) scheme.primary else scheme.onSurfaceVariant).copy(alpha = 0.7f)
                 fast.on -> scheme.primary
                 else -> scheme.onSurfaceVariant
             },
@@ -130,7 +160,7 @@ fun FastChip(
                 .testTag(FAST_CHIP_TAG)
                 .clip(RoundedCornerShape(6.dp))
                 .background(if (fast.on && fast.available) scheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                .clickable(enabled = fast.available) { if (fast.on) onToggle(false) else confirming = true }
+                .clickable(enabled = fast.available) { if (target) onToggle(false) else confirming = true }
                 .padding(horizontal = 6.dp, vertical = 2.dp),
         )
         val reason = fast.reason

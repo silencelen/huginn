@@ -4,11 +4,13 @@ import com.silencelen.huginn.data.AnswerValue
 import com.silencelen.huginn.data.SessionQuestion
 import com.silencelen.huginn.data.SessionQuestions
 import com.silencelen.huginn.ui.QuestionDraft
+import com.silencelen.huginn.ui.QuestionDraftBook
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -87,5 +89,19 @@ class QuestionDraftTest {
         d = d.confirmMany()
         assertTrue(d.stepper.complete)
         assertNotNull(d.stepper.body(ask()), "a completed walk builds a body")
+    }
+
+    @Test
+    fun theBookHoldsADraftUntilItIsCleared() {
+        // The desktop's session view builds a new controller per session, so the
+        // book is what a session switch hands back; the shell owns it, not a view.
+        val book = QuestionDraftBook()
+        val half = QuestionDraft.of(ask()).answerCurrent(AnswerValue.One("Blue"))
+        book.set("q-1", half)
+        book.set("", half)
+        assertEquals(setOf("q-1"), book.drafts.value.keys, "an empty id is never stored")
+        assertEquals(half, book.drafts.value["q-1"], "the same half-walk comes back")
+        book.clear("q-1")
+        assertNull(book.drafts.value["q-1"], "answered: nothing left to come back to")
     }
 }

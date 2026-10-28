@@ -97,6 +97,15 @@ class PromptGateTest {
     }
 
     @Test
+    fun `no screen tab dot while the compact card is up`() {
+        // The card answers the question where it is drawn; a dot sending the
+        // reader to the Screen tab pointed away from it.
+        SessionFace.entries.forEach { face ->
+            assertFalse(PromptGate.screenTabDot(hasQuestion = true, face = face, bound = true), "$face")
+        }
+    }
+
+    @Test
     fun `the gist is one line, cut at a word, and never invented`() {
         // A TUI-scraped question arrives with the dialog's own line breaks in it,
         // and those turn a one-line bar into three.

@@ -2,6 +2,9 @@ package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.AnswerValue
 import com.silencelen.huginn.data.SessionQuestion
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * The working state of a [QuestionCard] — the stepper's collected answers and the
@@ -54,5 +57,29 @@ data class QuestionDraft(
 
     companion object {
         fun of(q: SessionQuestion): QuestionDraft = QuestionDraft(stepper = AskStepper.of(q))
+    }
+}
+
+/**
+ * Every half-answered card, by request id, held ABOVE any one session's screen.
+ *
+ * The shell owns one for its whole life (the phone's view model, the desktop's
+ * app store). The desktop first kept the drafts on its per-session controller,
+ * which the session view builds and drops with the session it shows: a draft
+ * then survived a Screen-tab flip but not a switch to another session and back.
+ * Request ids are unique across sessions, so one map serves every session.
+ */
+class QuestionDraftBook {
+    private val _drafts = MutableStateFlow<Map<String, QuestionDraft>>(emptyMap())
+    val drafts: StateFlow<Map<String, QuestionDraft>> = _drafts.asStateFlow()
+
+    /** The card reports its evolving draft here; held until the question is answered. */
+    fun set(id: String, draft: QuestionDraft) {
+        if (id.isNotEmpty()) _drafts.value = _drafts.value + (id to draft)
+    }
+
+    /** Answered, or the request is gone or changed: the draft has nothing left to answer. */
+    fun clear(id: String) {
+        if (_drafts.value.containsKey(id)) _drafts.value = _drafts.value - id
     }
 }

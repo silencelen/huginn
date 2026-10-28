@@ -157,9 +157,13 @@ object PromptGate {
      * with it, and the tab strip never scrolls. Shown on exactly the faces that
      * steer — [PromptPlacement.LINK_TO_SCREEN] — because on the Screen tab the
      * reader is already there and a dot pointing at the tab they are on is noise.
+     *
+     * Not while the compact card is up ([bound]): the question is answered where
+     * it is drawn, and a dot sending the reader to the Screen tab pointed away
+     * from the very card they were meant to use.
      */
-    fun screenTabDot(hasQuestion: Boolean, face: SessionFace): Boolean =
-        hasQuestion && PromptPlacement.of(face, PromptSurface.SESSION) == PromptPlacement.LINK_TO_SCREEN
+    fun screenTabDot(hasQuestion: Boolean, face: SessionFace, bound: Boolean = false): Boolean =
+        hasQuestion && PromptPlacement.of(face, PromptSurface.SESSION, bound) == PromptPlacement.LINK_TO_SCREEN
 
     /** How much of a question a one-line bar can carry beside its own words. */
     const val GIST_MAX: Int = 60

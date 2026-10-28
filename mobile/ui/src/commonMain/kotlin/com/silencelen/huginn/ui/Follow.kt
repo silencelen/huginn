@@ -82,6 +82,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    re-arms at once — a tap that does not move, or a wheel tick at the bottom.
  *  * **Following holds through a re-measure, not only through new content.**
  *    See [relaid].
+ *  * **A wheel tick that moves nothing is judged by where it found the reader,**
+ *    not by a measure taken after the wait for it to start. See [stoodStill].
  */
 object Follow {
 
@@ -119,6 +121,21 @@ object Follow {
      */
     fun settled(s: State, atTail: Boolean): State =
         if (atTail) State(following = true, unseen = false, atTail = true) else s.copy(atTail = false)
+
+    /**
+     * A wheel tick that never started a scroll — a wheel-down at the very bottom —
+     * moved nothing, so the reader is exactly where the tick found them: [wasAtTail]
+     * is that, measured as it arrived. At the tail, following re-arms (and the
+     * caller catches up with whatever landed meanwhile); anywhere else nothing
+     * changes.
+     *
+     * ⚠ THE STREAMING TICK. The settle used to measure only after the start window
+     * ran out, and while an answer streams the last row grows through that window.
+     * More than the tail's slack of new text, and a reader who had moved nothing
+     * measured as scrolled away: following stopped under them and the pill came up.
+     */
+    fun stoodStill(s: State, wasAtTail: Boolean): State =
+        if (wasAtTail) State(following = true, unseen = false, atTail = s.atTail) else s
 
     /**
      * Content changed: while following this stays following and the caller
@@ -256,6 +273,9 @@ fun FollowNewest(
     LaunchedEffect(key, listState, scrolls) {
         snapshotFlow { scrolls.value }.collectLatest { n ->
             if (n == 0) return@collectLatest
+            // Where the tick found them, before anything below can grow the list:
+            // a tick that turns out to move nothing is judged by this (stoodStill).
+            val wasAtTail = state.following || listState.isAtTail()
             state = Follow.tookControl(state)
             // Where that tick left them is only knowable once it has been
             // applied, and the wheel's scroll is both deferred by a frame and
@@ -267,8 +287,23 @@ fun FollowNewest(
             // wheel-down at the very bottom: no scroll ever begins, and without a
             // cap the settle would never run and a reader sitting AT the tail
             // would be left unlatched, watching a conversation stop following.
-            withTimeoutOrNull(SCROLL_START_MS) {
+            val started = withTimeoutOrNull(SCROLL_START_MS) {
                 snapshotFlow { listState.isScrollInProgress }.first { it }
+            }
+            if (started == null) {
+                state = Follow.stoodStill(state, wasAtTail)
+                // Re-armed: catch up with whatever landed while unlatched, which no
+                // arrival scrolled to. Out of any layout pass first, as below.
+                if (state.following && listState.canScrollForward) {
+                    withFrameNanos { }
+                    try {
+                        listState.scrollToNewest(count, animate = false)
+                    } catch (e: CancellationException) {
+                        // Another scroll took the list; that is not this collector ending.
+                        currentCoroutineContext().ensureActive()
+                    }
+                }
+                return@collectLatest
             }
             snapshotFlow { listState.isScrollInProgress }.first { !it }
             state = Follow.settled(state, listState.isAtTail())

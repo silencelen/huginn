@@ -99,6 +99,9 @@ fun SessionScreen(
     /** The card behind the context meter and the fast chip (appd 3.14.0); each absent on an older daemon. */
     contextSource: ContextSource? = null,
     onFast: (Boolean) -> Unit = {},
+    /** The fast state a queued toggle asked for, until the session reports it. */
+    fastAsked: Boolean? = null,
+    onFastSettled: () -> Unit = {},
     hasEarlier: Boolean = false,
     loadingHistory: Boolean = false,
     onLoadEarlier: () -> Unit = {},
@@ -213,7 +216,7 @@ fun SessionScreen(
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Screen")
-                        if (PromptGate.screenTabDot(hasQuestion, face)) {
+                        if (PromptGate.screenTabDot(hasQuestion, face, bound = cardQuestion != null)) {
                             Spacer(Modifier.width(6.dp))
                             TabAttentionDot(true)
                         }
@@ -248,6 +251,8 @@ fun SessionScreen(
             contextSource = contextSource,
             fast = screen?.fast,
             onFast = onFast,
+            fastAsked = fastAsked,
+            onFastSettled = onFastSettled,
             compacting = screen?.compacting ?: false,
             // What the limit has already done to this session, and what it will
             // do when the window resets. Both read as facts about THIS session
