@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 2.8.1
 
 ### Changed
 - The fast chip shows the state you asked for, faded, with "next turn" until the session takes it,

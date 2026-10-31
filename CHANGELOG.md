@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.8.1] - 2026-10-30
 
 ### Fixed
 - Linux: when an update restarts huginn core, the new core is started at once instead of after the
