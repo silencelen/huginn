@@ -8,6 +8,11 @@
   and Open (in the system's default app). Anything that would run when opened, such as an installer or
   a script, is download-only. Needs huginn-appd 3.16.0.
 
+### Security
+- Open is offered only for documents, text, images, audio and video; every other type a file Claude
+  sends is download-only. On Windows, downloaded and opened copies are marked as coming from the
+  internet, so Windows applies its usual protections.
+
 ## 2.8.1
 
 ### Changed

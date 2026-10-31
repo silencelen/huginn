@@ -8,6 +8,10 @@
   for its type). Anything that would run when opened, such as an APK, is download-only. Needs huginn-appd
   3.16.0.
 
+### Security
+- Open is offered only for documents, text, images, audio and video; every other type a file Claude
+  sends is download-only.
+
 ## 3.14.1 — 2026-10-30
 
 ### Changed

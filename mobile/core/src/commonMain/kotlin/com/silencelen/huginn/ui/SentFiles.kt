@@ -8,22 +8,34 @@ import com.silencelen.huginn.data.SentFile
  */
 object SentFiles {
     /**
-     * Never OPENED from the app, only downloaded: anything that runs or installs
-     * when opened, and the types a browser would render as an active page. A file
-     * Claude sent is a file someone could have steered Claude into sending; the
-     * person can still save it and decide.
+     * The only types the app will OPEN - hand to the device's viewer - rather
+     * than only download: documents, text, images, audio and video, the formats
+     * whose viewers display and do not execute.
+     *
+     * ⚠ AN ALLOWLIST, NOT A DENYLIST (security scan, 2026-10-31, F1). The first
+     * version refused a list of dangerous types and opened everything else, and
+     * the list missed what Windows runs when opened (`.vbe`, `.wsh`, `.cpl`,
+     * `.chm`, `.application`…) - a file a prompt-injected Claude could send and
+     * the person could start with one click. Anything not named here, including
+     * archives and macro-enabled Office files, is download-only: saved, never
+     * started from the app.
      */
-    private val DOWNLOAD_ONLY = setOf(
-        "apk", "aab", "xapk", "exe", "msi", "msix", "appx", "bat", "cmd", "com", "scr", "ps1", "psm1", "vbs", "js",
-        "jse", "wsf", "hta", "lnk", "reg", "jar", "sh", "bash", "zsh", "run", "bin", "appimage", "deb", "rpm",
-        "desktop", "command", "app", "dmg", "pkg", "html", "htm", "xhtml", "svg", "xml", "mht", "mhtml",
+    private val OPENABLE = setOf(
+        "pdf", "txt", "md", "markdown", "csv", "tsv", "log", "json", "yaml", "yml", "toml", "ini", "rtf",
+        "docx", "xlsx", "pptx", "odt", "ods", "odp",
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif", "tif", "tiff",
+        "mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac",
+        "mp4", "m4v", "mov", "webm", "mkv",
     )
 
     private fun extOf(name: String): String = name.substringAfterLast('.', "").lowercase()
 
-    /** Whether the card offers Open (a viewer chosen by the device) as well as Download. */
-    fun openable(file: SentFile): Boolean = extOf(file.name.ifBlank { file.id }) !in DOWNLOAD_ONLY &&
-        extOf(file.id) !in DOWNLOAD_ONLY
+    /**
+     * Whether the card offers Open as well as Download. BOTH the original name and
+     * the outbox id must carry an openable extension, so a harmless-looking name
+     * on an executable copy is judged by the copy.
+     */
+    fun openable(file: SentFile): Boolean = extOf(file.name.ifBlank { file.id }) in OPENABLE && extOf(file.id) in OPENABLE
 
     /** The card's second line: the size, and the type when the name does not say it. */
     fun meta(file: SentFile): String {

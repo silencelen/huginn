@@ -25,15 +25,18 @@ class SentFilesTest {
     }
 
     @Test
-    fun anythingThatRunsWhenOpenedIsDownloadOnly() {
+    fun onlyPassiveViewerTypesOpenEverythingElseIsDownloadOnly() {
         fun f(name: String) = SentFile(id = "out-1-abcdef.${name.substringAfterLast('.')}", name = name)
-        assertTrue(SentFiles.openable(f("report.pdf")))
-        assertTrue(SentFiles.openable(f("notes.txt")))
-        assertTrue(SentFiles.openable(f("chart.png")))
-        for (n in listOf("huginn.apk", "setup.exe", "run.sh", "page.html", "logo.svg", "tool.jar", "x.ps1", "a.desktop")) {
+        for (n in listOf("report.pdf", "notes.txt", "chart.png", "data.csv", "deck.pptx", "clip.mp4", "voice.m4a")) {
+            assertTrue(SentFiles.openable(f(n)), n)
+        }
+        // The scan's F1 (2026-10-31): types Windows RUNS when opened, which a
+        // denylist missed, plus anything unknown, archives and macro formats.
+        for (n in listOf("notes.vbe", "a.wsh", "b.cpl", "help.chm", "x.application", "setup.exe", "huginn.apk",
+            "run.sh", "page.html", "logo.svg", "pack.zip", "book.xlsm", "doc.docm", "thing.weird", "noext")) {
             assertFalse(SentFiles.openable(f(n)), n)
         }
-        // A harmless name on an executable id is still judged by the id.
+        // A harmless name on an executable copy is judged by the copy.
         assertFalse(SentFiles.openable(SentFile(id = "out-1-abcdef.exe", name = "readme.txt")))
     }
 

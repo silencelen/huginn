@@ -32,6 +32,7 @@ class DesktopSentFiles(
         val dir = downloads().apply { mkdirs() }
         val dest = freeName(dir, SentFiles.saveName(file))
         dest.writeBytes(bytes)
+        markOfTheWeb(dest)
         AppLog.info("files", "saved a sent file to ${dest.path}")
         "Saved to ${dest.path}"
     }
@@ -40,6 +41,7 @@ class DesktopSentFiles(
         if (!SentFiles.openable(file)) return@withContext "This type is download-only"
         val dir = Files.createTempDirectory("huginn-sent-").toFile().apply { deleteOnExit() }
         val copy = File(dir, SentFiles.saveName(file)).apply { writeBytes(bytes); deleteOnExit() }
+        markOfTheWeb(copy)
         if (opener(copy)) null else "Nothing on this computer opens it - Download keeps it"
     }
 
@@ -55,6 +57,19 @@ class DesktopSentFiles(
                 if (!v.isNullOrBlank() && v.startsWith("/")) return File(v)
             }
             return File(home, "Downloads")
+        }
+
+        /**
+         * Windows: tags [f] as downloaded from the internet (the `Zone.Identifier`
+         * stream, ZoneId 3), so Office opens it in Protected View and SmartScreen
+         * asks before anything runs - the protections a browser download gets.
+         * A file Claude sent came from content someone else may have steered.
+         * Best-effort and a no-op elsewhere (the security scan's F1, 2026-10-31).
+         */
+        internal fun markOfTheWeb(f: File, windows: Boolean = System.getProperty("os.name").lowercase().startsWith("windows")) {
+            if (!windows) return
+            runCatching { File(f.path + ":Zone.Identifier").writeText("[ZoneTransfer]\r\nZoneId=3\r\n") }
+                .onFailure { AppLog.warn("files", "could not mark ${f.name} as downloaded: ${it.message}") }
         }
 
         /** [name] in [dir], or `name (2).ext`, `(3)`… - never an existing file. */
