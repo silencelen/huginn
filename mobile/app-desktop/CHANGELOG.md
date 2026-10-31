@@ -8,6 +8,13 @@
 - The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
 
 ### Fixed
+- The update card's buttons move to the next line when the list pane is narrow, instead of squeezing
+  "Don't remind me" and "Later" into a column of letters.
+- In a narrow list pane: a session's "ctx" badge is no longer cut off by its title, the Sessions
+  header's "+ New" no longer wraps, and a project member's name is no longer pushed out by its status.
+- A page in the Pages list is deleted from a trash icon rather than a "Delete" word on every row, which
+  left the page names little room.
+- A project lead reads "lead", not "lead (lead)".
 - A half-answered question is kept when you switch to another session and back, not only when you
   switch tabs within one.
 - A mouse-wheel tick at the bottom of a conversation while an answer streams no longer stops it

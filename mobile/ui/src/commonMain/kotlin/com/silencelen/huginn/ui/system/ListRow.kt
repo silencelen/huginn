@@ -22,6 +22,13 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Dp
 
 /**
  * THE ONE ROW (UI-AUDIT.md section 3, "Row"): a leading dot or icon, a title
@@ -47,6 +54,12 @@ fun ListRow(
     detail: (@Composable ColumnScope.() -> Unit)? = null,
     /** Drawn on the title line after the title (a state word, a host chip): the title gives way first. */
     titleSuffix: (@Composable RowScope.() -> Unit)? = null,
+    /**
+     * The trailing is TEXT that may be long (a member's status), so it shares the
+     * line with the title — up to half of it, ellipsized — instead of being
+     * measured first and taking what it wants. Off for buttons and short marks.
+     */
+    trailingShares: Boolean = false,
 ) {
     val m = LocalRowMetrics.current
     val base = modifier.fillMaxWidth()
@@ -59,7 +72,14 @@ fun ListRow(
     val topAligned = detail != null
     val titleLine = with(LocalDensity.current) { MaterialTheme.typography.bodyMedium.lineHeight.toDp() }
     val anchor: Modifier = if (topAligned) Modifier.height(titleLine) else Modifier
-    Row(base, verticalAlignment = if (topAligned) Alignment.Top else Alignment.CenterVertically) {
+    // Half the row, for a sharing trailing: it takes what it needs up to that and
+    // stays right-aligned (a weight split the line in two and left a gap).
+    var shareCap by remember { mutableStateOf(Dp.Unspecified) }
+    val density = LocalDensity.current
+    Row(
+        if (trailingShares) base.onSizeChanged { shareCap = with(density) { (it.width / 2).toDp() } } else base,
+        verticalAlignment = if (topAligned) Alignment.Top else Alignment.CenterVertically,
+    ) {
         if (leading != null) {
             Box(anchor, contentAlignment = Alignment.Center) { leading() }
             Spacer(Modifier.width(Scale.s12))
@@ -94,7 +114,10 @@ fun ListRow(
         }
         if (trailing != null) {
             Spacer(Modifier.width(Scale.s12))
-            Row(anchor, verticalAlignment = Alignment.CenterVertically) { trailing() }
+            Row(
+                if (trailingShares) anchor.widthIn(max = shareCap) else anchor,
+                verticalAlignment = Alignment.CenterVertically,
+            ) { trailing() }
         }
     }
 }

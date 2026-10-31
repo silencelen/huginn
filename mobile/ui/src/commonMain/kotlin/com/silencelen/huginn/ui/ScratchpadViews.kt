@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -164,7 +165,19 @@ private fun PadRow(
             )
         },
         trailing = if (onDelete == null) null else {
-            { TextButton(onClick = onDelete) { Text("Delete") } }
+            // An icon, not the word: "Delete" on every row took ~70 dp from each
+            // name, and at the pane's narrowest the name and its size line both
+            // went to an ellipsis (2026-10-30). The confirm dialog still says it.
+            {
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        Icons.Outlined.Delete,
+                        contentDescription = "Delete ${pad.name}",
+                        modifier = Modifier.size(Scale.iconLarge),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         },
     )
 }

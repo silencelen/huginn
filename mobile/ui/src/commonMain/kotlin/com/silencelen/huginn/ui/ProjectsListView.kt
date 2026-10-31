@@ -248,12 +248,19 @@ private fun MemberRow(member: ProjectLive, onClick: () -> Unit) {
         onClick = onClick,
         modifier = Modifier.padding(start = 18.dp),
         leading = { MemberDot(ProjectRules.stateWord(member)) },
+        trailingShares = true,
+        // The status SHARES the line rather than taking what it wants: at the pane's
+        // narrowest "needs you — permission" kept its width and the member's name
+        // went to nothing (2026-10-30). Shared (ListRow.trailingShares), the two
+        // split it and both ellipsize.
         trailing = {
             Text(
                 ProjectRules.memberWords(member),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
         },
     )
@@ -315,7 +322,8 @@ fun memberLabel(member: ProjectMemberState): String {
     val role = member.role.trim().takeIf { it.isNotEmpty() }
         ?: member.claudeName.substringAfterLast('/').takeIf { it.isNotEmpty() }
         ?: member.name
-    return if (member.lead) "$role (lead)" else role
+    // A lead whose role is already "lead" read "lead (lead)".
+    return if (member.lead && !role.equals("lead", ignoreCase = true)) "$role (lead)" else role
 }
 
 /**

@@ -117,8 +117,8 @@ fun AppsPane(store: AppStore) {
         // `ReadingPane`'s cap because a 1590px-wide URL row is not more readable
         // than an 800px one.
         Column(Modifier.fillMaxSize()) {
-            ListHeader("Apps", list.apps.size, selected = 0) {
-                TextButton(onClick = { form = AppForm(); adding = true }) { Text("+ New", style = DeskType.rail) }
+            ListHeader("Apps", list.apps.size, selected = 0, titleYields = true) {
+                TextButton(onClick = { form = AppForm(); adding = true }) { Text("+ New", style = DeskType.rail, maxLines = 1, softWrap = false) }
             }
             ReadingPane(padding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
                 AppsView(

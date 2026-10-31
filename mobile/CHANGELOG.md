@@ -8,6 +8,10 @@
 - The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
 
 ### Fixed
+- A project member's name is no longer pushed out of its row by a long status, and a lead reads
+  "lead", not "lead (lead)".
+- A page in the Pages list is deleted from a trash icon rather than a "Delete" word on every row,
+  which left the page names little room.
 - A mouse-wheel tick at the bottom of a conversation while an answer streams no longer stops it
   following the newest text.
 

@@ -2,7 +2,8 @@ package com.silencelen.huginn.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -26,7 +27,13 @@ import com.silencelen.huginn.update.UpdateReminder
  * The same shape as the first-run local-AI offer the desktop draws in the same
  * place — a tier-2 surface inside the list's own inset, a title line, one line
  * of body, the actions on the right — because two cards in one slot with two
- * shapes is a legend. Not modal, not a toast: it sits where the reader already
+ * shapes is a legend.
+ *
+ * ⚠ THE ACTIONS WRAP AS WHOLE BUTTONS (owner, 2026-10-30). They were one Row, and
+ * at the list pane's default 320 dp Install and restart and Later took their
+ * width and "Don't remind me" was measured into what was left — two letters to
+ * a line, down the card. A FlowRow moves a button that does not fit to the next
+ * line, and no label here may wrap inside its button. Not modal, not a toast: it sits where the reader already
  * looks and waits. Nothing here installs anything; [onInstall] is the caller's
  * hand-off to the updater and the quit that lets the installer replace files.
  *
@@ -35,6 +42,7 @@ import com.silencelen.huginn.update.UpdateReminder
  *   cannot, [hint] says what to do instead and [command] (the command inside
  *   it, [UpdateReminder.commandOf]) gets a Copy button in place of Install.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UpdateNoticeCard(
     version: String,
@@ -77,25 +85,29 @@ fun UpdateNoticeCard(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
-            Row(
+            FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(Scale.s4, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.Center,
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             ) {
                 when {
                     installable -> Button(onClick = onInstall, modifier = Modifier.testTag("$TAG.install")) {
-                        Text("Install and restart")
+                        OneLine("Install and restart")
                     }
                     command != null -> TextButton(onClick = onCopyCommand, modifier = Modifier.testTag("$TAG.copy")) {
-                        Text("Copy command")
+                        OneLine("Copy command")
                     }
                 }
-                TextButton(onClick = onLater, modifier = Modifier.testTag("$TAG.later")) { Text("Later") }
-                TextButton(onClick = onSilence, modifier = Modifier.testTag("$TAG.silence")) { Text("Don't remind me") }
+                TextButton(onClick = onLater, modifier = Modifier.testTag("$TAG.later")) { OneLine("Later") }
+                TextButton(onClick = onSilence, modifier = Modifier.testTag("$TAG.silence")) { OneLine("Don't remind me") }
             }
         }
     }
 }
+
+/** A button label: one line, whole, or the FlowRow moves the button instead. */
+@Composable
+private fun OneLine(text: String) = Text(text, maxLines = 1, softWrap = false)
 
 /** The card's testTag; its buttons are `$TAG.install`, `.copy`, `.later`, `.silence`. */
 const val UPDATE_NOTICE_TAG: String = "update.notice"

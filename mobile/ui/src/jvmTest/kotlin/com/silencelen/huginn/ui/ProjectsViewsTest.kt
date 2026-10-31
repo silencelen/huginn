@@ -200,7 +200,9 @@ class ProjectsViewsTest {
     @Test
     fun `a member row leads with its role, and the lead says so`() {
         assertEquals("db", memberLabel(dashMember("db", "busy")))
-        assertEquals("lead (lead)", memberLabel(dashMember("lead", "idle", lead = true)))
+        assertEquals("architect (lead)", memberLabel(dashMember("architect", "idle", lead = true)))
+        // The role already says it: "lead (lead)" was the word twice.
+        assertEquals("lead", memberLabel(dashMember("lead", "idle", lead = true)))
     }
 
     // ------------------------------------------------------- the dashboard

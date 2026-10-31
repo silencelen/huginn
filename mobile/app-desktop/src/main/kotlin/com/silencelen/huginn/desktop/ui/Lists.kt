@@ -313,8 +313,8 @@ fun SessionsList(
         }
     }
     Column(Modifier.fillMaxSize()) {
-        ListHeader("Sessions", sessions.size, selection.size) {
-            TextButton(onClick = onNew) { Text("+ New", style = DeskType.rail) }
+        ListHeader("Sessions", sessions.size, selection.size, titleYields = true) {
+            TextButton(onClick = onNew) { Text("+ New", style = DeskType.rail, maxLines = 1, softWrap = false) }
         }
         if (sessions.isEmpty()) {
             if (loaded) {
@@ -458,7 +458,9 @@ private fun SessionRow(
             // wasting half its height.
             val title = session.title
             if (title != null && title != session.name) {
-                Muted(title, Modifier.padding(end = Scale.s8))
+                // Weighted so IT is what shortens: unweighted, it took the line and
+                // "ctx 91%" after it was cut mid-glyph at the pane's narrowest.
+                Muted(title, Modifier.padding(end = Scale.s8).weight(1f, fill = false))
             }
             // A row that will not open says so where it stands. Anything else is
             // a click that does nothing, forever, with no way to find out why.
@@ -718,14 +720,31 @@ private fun RowRule() {
  *   multi-select.
  */
 @Composable
-internal fun ListHeader(title: String, count: Int, selected: Int, actions: @Composable () -> Unit) {
+internal fun ListHeader(
+    title: String,
+    count: Int,
+    selected: Int,
+    /**
+     * The title side shortens before the actions do. For a header whose action
+     * is one fixed button; NOT for one that picks its own form from the width it
+     * is given (the chat list's tiers), which would then be measured first, take
+     * the widest form, and clip the title instead.
+     */
+    titleYields: Boolean = false,
+    actions: @Composable () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().padding(start = Space.wide, end = Space.tight, top = Space.tight, bottom = Space.tight),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(title, style = DeskType.paneTitle)
+        // [titleYields]: at the pane's narrowest a live "N selected" pushed the
+        // Sessions header's "+ New" onto two lines (2026-10-30).
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = if (titleYields) Modifier.weight(1f, fill = false) else Modifier,
+        ) {
+            Text(title, style = DeskType.paneTitle, maxLines = 1)
             if (count > 0) Muted("$count", Modifier.padding(start = Space.unit))
             if (selected > 1) {
                 Tip("$selected selected — right-click any of them to act on all $selected") {
@@ -733,6 +752,8 @@ internal fun ListHeader(title: String, count: Int, selected: Int, actions: @Comp
                         "$selected selected",
                         style = DeskType.rowMeta,
                         color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = Space.unit),
                     )
                 }
