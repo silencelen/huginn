@@ -734,6 +734,33 @@ function skillNameFromBody(s) {
  * would silently swallow a real message if the two were ever concatenated —
  * the worst failure this file can have, and cheap to rule out.
  */
+/**
+ * Removes every `[<prefix>…]` note from [s] - with [shape], only those whose text
+ * right after the prefix matches it (a sticky regex) - by indexOf, in time linear
+ * in [s]. A `[^\]]*` regex would rescan to the end of the text from every
+ * unclosed opening: quadratic in text a model writes (transcript-tags-linear).
+ * An opening with no `]` anywhere after it ends the scan, since none can close.
+ */
+function stripBracketNotes(s, prefix, shape) {
+  let out = '';
+  let from = 0;
+  for (;;) {
+    const at = s.indexOf(prefix, from);
+    if (at < 0) break;
+    const end = s.indexOf(']', at + prefix.length);
+    if (end < 0) break;
+    if (shape) shape.lastIndex = at + prefix.length;
+    if (shape && !shape.test(s)) {
+      out += s.slice(from, at + prefix.length);
+      from = at + prefix.length;
+      continue;
+    }
+    out += s.slice(from, at);
+    from = end + 1;
+  }
+  return out + s.slice(from);
+}
+
 function humanRemainder(s) {
   let t = stripElements(String(s), [['<local-command-caveat>', '</local-command-caveat>']]);
   t = stripElements(t, [['<local-command-stdout>', '</local-command-stdout>']]);
@@ -752,8 +779,8 @@ function humanRemainder(s) {
   // caption Claude Code writes after it reads an image ("[Image: original
   // 1536x2048, displayed at …. Multiply coordinates by 1.02 …]", an `isMeta`
   // user record of its own) showed under every attached photo (2026-10-31).
-  t = t.replace(/\[Image: original \d+x\d+[^\]]*\]/g, '');
-  t = t.replace(/\[Your previous response[^\]]*\]/g, '');
+  t = stripBracketNotes(t, '[Image: original ', /\d+x\d+/y);
+  t = stripBracketNotes(t, '[Your previous response', null);
   // Stray tags. Only text up to the last `>` can hold one, and an opening past
   // it would scan to the end of the string for a `>` that is not there.
   const gt = t.lastIndexOf('>');
