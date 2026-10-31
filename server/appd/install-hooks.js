@@ -152,7 +152,7 @@ function scriptOf(command) {
 function parseArgs(argv) {
   const opts = {
     settings: null, script: DEFAULT_SCRIPT, headroomDir: null, uninstall: false, dryRun: false,
-    claudeDefaults: false, keepFeedback: process.env.HUGINN_KEEP_CLAUDE_FEEDBACK === '1',
+    claudeDefaults: false, allowSendFile: false, keepFeedback: process.env.HUGINN_KEEP_CLAUDE_FEEDBACK === '1',
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -162,16 +162,48 @@ function parseArgs(argv) {
     if (a === '--uninstall') { opts.uninstall = true; continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--claude-defaults') { opts.claudeDefaults = true; continue; }
+    if (a === '--allow-send-file') { opts.allowSendFile = true; continue; }
     if (a === '--keep-feedback') { opts.keepFeedback = true; continue; }
     if (a === '-h' || a === '--help') { opts.help = true; continue; }
     throw new Error(`unknown argument: ${a}`);
   }
   if (!opts.settings) opts.settings = defaultSettingsPath();
   if (!opts.script) throw new Error('--script needs a path');
+  if (opts.allowSendFile && (opts.uninstall || opts.claudeDefaults)) {
+    throw new Error('--allow-send-file runs on its own: no --uninstall, no --claude-defaults');
+  }
   if (opts.claudeDefaults && opts.uninstall) {
     throw new Error('--claude-defaults has no --uninstall: the keys it adds are left in place on purpose');
   }
   return opts;
+}
+
+/** The tool --allow-send-file lets run without a prompt (mcp/huginn-mcp.js). */
+const SEND_FILE_TOOL = 'mcp__huginn__send_file';
+
+/**
+ * --allow-send-file: appends the send_file tool to `permissions.allow` when it is
+ * not there, and touches nothing else. The tool only copies a file the session can
+ * already read into the person's own outbox, refusing credentials (lib/outbox.js);
+ * a prompt for each send would be a prompt for every chart. A deny rule the owner
+ * wrote still wins, and a `permissions` or `allow` of the wrong shape is left
+ * exactly as it is - reported, not repaired.
+ */
+function applySendFileAllow(settings) {
+  const key = `permissions.allow:${SEND_FILE_TOOL}`;
+  const perms = settings.permissions;
+  if (perms !== undefined && (perms === null || typeof perms !== 'object' || Array.isArray(perms))) {
+    return { settings, changes: [{ key: 'permissions (not an object)', action: 'kept' }] };
+  }
+  if (perms === undefined) settings.permissions = {};
+  const allow = settings.permissions.allow;
+  if (allow !== undefined && !Array.isArray(allow)) {
+    return { settings, changes: [{ key: 'permissions.allow (not a list)', action: 'kept' }] };
+  }
+  if (allow === undefined) settings.permissions.allow = [];
+  if (settings.permissions.allow.includes(SEND_FILE_TOOL)) return { settings, changes: [{ key, action: 'kept' }] };
+  settings.permissions.allow.push(SEND_FILE_TOOL);
+  return { settings, changes: [{ key, action: 'added' }] };
 }
 
 /** The settings --claude-defaults adds, each only where the key is absent or null. */
@@ -395,7 +427,9 @@ function main(argv) {
     }
   }
 
-  const { changes } = opts.claudeDefaults
+  const { changes } = opts.allowSendFile
+    ? applySendFileAllow(settings)
+    : opts.claudeDefaults
     ? applyClaudeDefaults(settings, { keepFeedback: opts.keepFeedback })
     : mergeHooks(settings, opts.script, { uninstall: opts.uninstall, headroomDir: opts.headroomDir });
   const body = `${JSON.stringify(settings, null, 2)}\n`;
@@ -440,7 +474,8 @@ function main(argv) {
     process.stderr.write(`[install-hooks] cannot write ${opts.settings}: ${e.message}\n`);
     return 2;
   }
-  const what = opts.claudeDefaults ? 'claude defaults' : `gate: ${commandFor(opts.script, opts.headroomDir)}`;
+  const what = opts.allowSendFile ? 'send_file allow rule'
+    : opts.claudeDefaults ? 'claude defaults' : `gate: ${commandFor(opts.script, opts.headroomDir)}`;
   process.stdout.write(`[install-hooks] ${opts.settings}: ${summary} (${what})\n`);
   return 0;
 }
@@ -449,5 +484,5 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
   DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, SCRIPT_SPECS, specFor, mergeHooks, parseArgs, main, isOurCommand,
-  commandFor, scriptOf, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV, applyClaudeDefaults,
+  commandFor, scriptOf, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV, applyClaudeDefaults, applySendFileAllow, SEND_FILE_TOOL,
 };

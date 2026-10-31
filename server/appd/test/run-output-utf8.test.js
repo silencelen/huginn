@@ -64,6 +64,10 @@ function runWith(env) {
       humanizeUserText: (t) => t,
       fableRedDowngrade: () => null,
       personaFile: () => null,
+      // send_file's MCP server (appd 3.16.0): TOOLS names its tool, and every run
+      // passes its --mcp-config, which the stand-in child ignores.
+      outboxLib: require('../lib/outbox'),
+      huginnMcpConfig: () => '{"mcpServers":{}}',
       ranOnLabel: () => null,
       WORKDIR: tmp,
       // The stand-in runs where `claude` would, with the argv startRun built.

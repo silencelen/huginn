@@ -6,4 +6,7 @@
     <!-- Where a downloaded, sha256-verified update APK lives until the system
          installer reads it (PhoneUpdater). App cache only. -->
     <cache-path name="updates" path="updates/" />
+    <!-- A file Claude sent, copied here for the moment another app opens it
+         (AndroidSentFiles). App cache only; overwritten per open. -->
+    <cache-path name="sent" path="sent/" />
 </paths>

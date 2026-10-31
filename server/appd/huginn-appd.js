@@ -112,10 +112,13 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.15.2';
+const VERSION = '3.16.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
+// Files Claude SENT the person through the send_file tool (mcp/huginn-mcp.js,
+// lib/outbox.js): copies under minted ids, served by GET /v1/outbox/<id>.
+const OUTBOX_DIR = path.join(DATA_DIR, 'outbox');
 // Where Claude Code puts its own per-session scratchpad on this host — the
 // directory the assistant writes screenshots and rendered charts into. A ROOT
 // for GET /v1/files/image and nothing else; it is never written to from here.
@@ -133,6 +136,7 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // values, or nothing at all, and exact-match punished the user for their file
 // manager's vocabulary.
 const { uploadExtFor, isReadable, contentTypeForUpload, createUploadPruner } = require('./lib/uploads');
+const outboxLib = require('./lib/outbox');
 // Serving a HOST file the assistant named by path — the resolver behind
 // GET /v1/files/image. Kept out of here because it is all rules and no HTTP,
 // and because a containment check that cannot be unit-tested is a containment
@@ -182,6 +186,13 @@ const UPLOAD_KEEP_DAYS = Math.max(1, Number(process.env.HUGINN_APPD_UPLOAD_KEEP_
  */
 const pruneUploads = createUploadPruner({
   dir: UPLOADS_DIR,
+  fs, path,
+  keepMs: UPLOAD_KEEP_DAYS * 24 * 60 * 60 * 1000,
+});
+// The outbox keeps the same days and the same rule (images stay: the transcript
+// still draws them). Swept when a client fetches from it, throttled the same way.
+const pruneOutbox = createUploadPruner({
+  dir: OUTBOX_DIR,
   fs, path,
   keepMs: UPLOAD_KEEP_DAYS * 24 * 60 * 60 * 1000,
 });
@@ -285,9 +296,30 @@ const TOOLS = {
   // invoking one cannot exceed the tools already granted, and ask's deny list still
   // holds. Without it the project's skills are invisible to app chats. They load
   // only because HUGINN_APPD_WORKDIR points at the project; skills are cwd-scoped.
-  ask: ['Skill', 'WebFetch', 'WebSearch', ...EXTRA_TOOLS].join(' '),
-  act: ['Skill', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', ...EXTRA_TOOLS].join(' '),
+  //
+  // send_file is granted to both, like a read: it copies a file the chat can
+  // already Read into the outbox, for the person's own apps (lib/outbox.js).
+  ask: ['Skill', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, ...EXTRA_TOOLS].join(' '),
+  act: ['Skill', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, ...EXTRA_TOOLS].join(' '),
 };
+
+/**
+ * huginn's own MCP server (mcp/huginn-mcp.js) as `--mcp-config` JSON: the tools
+ * Claude has for reaching the person - send_file so far. Passed to every chat run,
+ * so a chat has it whether or not the host's Claude Code registered it.
+ */
+function huginnMcpConfig() {
+  return JSON.stringify({
+    mcpServers: {
+      huginn: {
+        type: 'stdio',
+        command: process.execPath,
+        args: [path.join(__dirname, 'mcp', 'huginn-mcp.js')],
+        env: { HUGINN_APPD_DATA: DATA_DIR },
+      },
+    },
+  });
+}
 
 // The deny half, which allowedTools cannot express. Measured 2026-07-28, one
 // minute apart in ONE ask chat: two near-identical `curl | python3` commands,
@@ -5140,6 +5172,7 @@ function startRun(meta, userText) {
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
   const persona = personaFile();
   if (persona) args.push('--append-system-prompt-file', persona);
+  args.push('--mcp-config', huginnMcpConfig());
   args.push('--allowedTools', TOOLS[meta.mode] || TOOLS.ask);
   const denied = DISALLOWED[meta.mode] ?? DISALLOWED.ask;
   if (denied) args.push('--disallowedTools', denied);
@@ -14256,6 +14289,25 @@ async function handleRequest(req, res) {
       return serveArtifact(UPLOADS_DIR, name, {
         'Content-Type': contentTypeForUpload(name),
         'X-Content-Type-Options': 'nosniff',
+      });
+    }
+
+    // --- a file Claude SENT the person (the send_file tool). Only an id
+    // lib/outbox.js minted is honoured (ID_RE, then resolveArtifact's own name
+    // check), so this can serve nothing but the outbox. An image goes out as its
+    // image type, inline; everything else as octet-stream with
+    // Content-Disposition: attachment - a download, never rendered - and nosniff.
+    if (req.method === 'GET' && (m = p.match(/^\/v1\/outbox\/([^/]+)$/))) {
+      const id = decodeURIComponent(m[1]);
+      if (!outboxLib.ID_RE.test(id)) return sendErr(res, 404, 'no such file');
+      try { pruneOutbox(); } catch { }
+      const meta = outboxLib.metaOf(OUTBOX_DIR, id) || {};
+      const name = outboxLib.safeDownloadName(meta.name, id);
+      return serveArtifact(OUTBOX_DIR, id, {
+        'Content-Type': outboxLib.contentTypeFor(id),
+        'Content-Disposition': `${outboxLib.isImage(id) ? 'inline' : 'attachment'}; filename="${name}"`,
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
       });
     }
 

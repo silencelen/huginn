@@ -72,6 +72,8 @@ class AttachmentImageLoader(
     private val budgetBytes: Long = DEFAULT_BUDGET_BYTES,
     private val fetchPath: (suspend (path: String, session: String?) -> ByteArray)? = null,
     private val fetchIcon: (suspend (id: String) -> ByteArray)? = null,
+    /** A file Claude sent, by outbox id (appd 3.16.0); null on a shell that does not draw them. */
+    private val fetchOutbox: (suspend (id: String) -> ByteArray)? = null,
     /** Waits before re-asking after a TRANSIENT failure (see [cached]); a test passes short ones. */
     private val retryDelaysMs: List<Long> = listOf(1_000, 3_000),
 ) {
@@ -156,6 +158,16 @@ class AttachmentImageLoader(
      * next caller), and only a PERMANENT answer ([permanent]: the file is gone,
      * refused, or not an image) is remembered; anything else is retried.
      */
+    /**
+     * An image Claude SENT the person (send_file), by its outbox id: a fourth key
+     * space, so an outbox id can never collide with an upload, a path or an icon.
+     */
+    suspend fun loadOutbox(id: String): ImageBitmap? {
+        val fetcher = fetchOutbox ?: return null
+        if (id.isBlank()) return null
+        return cached(OUTBOX_KEY + id) { fetcher(id) }
+    }
+
     private suspend fun cached(key: String, fetchBytes: suspend () -> ByteArray): ImageBitmap? {
         while (true) {
             // Fast path + in-flight join decided under the lock; awaiting a peer's
@@ -261,6 +273,9 @@ class AttachmentImageLoader(
          * routes sharing one LRU; nothing may collide across them.
          */
         private const val ICON_KEY = "icon\u0000"
+
+        /** And the fourth: a file Claude sent, by outbox id. */
+        private const val OUTBOX_KEY = "outbox\u0000"
 
         /**
          * An answer that will not change on asking again: gone (404/410), refused

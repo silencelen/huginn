@@ -11,6 +11,7 @@
 // `nextOffset` from the previous response and get only what is new.
 
 const fs = require('node:fs');
+const outboxLib = require('./outbox');
 
 // A cold open reads at most this much from the END of the file. A long session's
 // transcript reaches many MB and a phone neither needs nor wants the head of it.
@@ -1359,6 +1360,13 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
               if (ev) {
                 ev.result = body;
                 ev.ok = b.is_error !== true;
+                // A file Claude SENT the person (send_file): the result names the
+                // outbox copy, and the card the clients draw is built from it.
+                // Read from the FULL text - the 600-char clip above is for display.
+                if (ev.name === outboxLib.SEND_FILE_TOOL && ev.ok) {
+                  const file = outboxLib.fileFromResult(textOf(b.content));
+                  if (file) ev.file = file;
+                }
                 pendingTools.delete(b.tool_use_id);
               } else {
                 out.events.push({ seq: ++seq, kind: 'tool_result', ts, sidechain, ok: b.is_error !== true, result: body });

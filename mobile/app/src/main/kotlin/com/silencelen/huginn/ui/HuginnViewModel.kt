@@ -562,7 +562,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // check. Against a daemon with no such route this 404s into the
             // negative cache and the placeholder renders.
             fetchPath = { path, session -> client.imageBytes(path, session) },
+            // An image Claude sent (send_file), by outbox id.
+            fetchOutbox = { id -> client.outboxBytes(id) },
         )
+
+    /** Download and Open for a file Claude sent; provided to the shared transcript as [com.silencelen.huginn.ui.LocalSentFiles]. */
+    val sentFiles: com.silencelen.huginn.ui.SentFileHost = AndroidSentFiles(app) { client }
 
     /**
      * Self-update from the public GitHub releases (not the private devstore).

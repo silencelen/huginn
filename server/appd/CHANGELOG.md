@@ -9,6 +9,19 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.16.0 — Unreleased
+
+### Added
+- Claude can send you files. A `send_file` tool (huginn's own MCP server, given to every chat and
+  registered for the server's Claude Code sessions) copies a file into the server's outbox; the apps
+  show an image inline and any other file as a card with Download and Open. Files are copies, kept
+  like uploads, served only by the id the server gave them (`GET /v1/outbox/<id>`).
+
+### Security
+- `send_file` refuses credentials by place and by name after resolving symlinks (`~/.ssh`, `.env`
+  files, keys and keystores, the server's own state and tokens, `/proc`, `/etc/ssh`…), directories,
+  and anything over 50 MB. A file that is not an image is only ever served as a download.
+
 ## 3.15.2 — 2026-10-27
 
 ### Fixed

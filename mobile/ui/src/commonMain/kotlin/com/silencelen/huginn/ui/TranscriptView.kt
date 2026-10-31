@@ -270,7 +270,13 @@ fun TranscriptEventItem(
                 if (isLimitNotice(ev)) LimitNotice(ev) else AssistantBlock(ev, onCopy)
             }
             "thinking" -> ThinkingBlock(ev.text.orEmpty())
-            "tool" -> if (ev.ask != null) AskCard(ev) else ToolCard(ev)
+            // A file Claude sent the person (send_file) replaces its tool row: the
+            // file is the message, the call that carried it is not.
+            "tool" -> when {
+                ev.ask != null -> AskCard(ev)
+                ev.file != null -> SentFileCard(ev.file!!)
+                else -> ToolCard(ev)
+            }
             "tool_result" -> ToolResultOrphan(ev)
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)

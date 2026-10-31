@@ -1,5 +1,13 @@
 # Huginn Desktop changelog
 
+## Unreleased
+
+### Added
+- Files Claude sends you show in the conversation: an image inline (click for full size), any other
+  file as a card with its name and size, with Download (to your Downloads folder, never overwriting)
+  and Open (in the system's default app). Anything that would run when opened, such as an installer or
+  a script, is download-only. Needs huginn-appd 3.16.0.
+
 ## 2.8.1
 
 ### Changed

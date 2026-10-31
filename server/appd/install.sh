@@ -40,9 +40,12 @@ done
 node --check "$SRC/huginn-appd.js"
 
 # 1. the daemon's files
-install -d "$DEST/lib" "$DEST/hooks"
+install -d "$DEST/lib" "$DEST/hooks" "$DEST/mcp"
 install -m 0644 "$SRC/huginn-appd.js" "$DEST/huginn-appd.js"
 install -m 0644 "$SRC"/lib/*.js "$DEST/lib/"
+# huginn's MCP server (send_file): chats get it by --mcp-config, sessions by
+# install-hooks' user-scope registration. It requires ../lib/outbox.js.
+install -m 0755 "$SRC"/mcp/*.js "$DEST/mcp/"
 # 0755: a hook without its exec bit fails open, silently, like a missing one.
 install -m 0755 "$SRC"/hooks/* "$DEST/hooks/"
 install -m 0644 "$SRC/install-hooks.js" "$DEST/install-hooks.js"
@@ -114,6 +117,23 @@ node "$DEST/install-hooks.js" --script "$DEST/hooks/huginn-modelswitch-hook"
 # its jq merge (server/claude-settings.jq), so a daemon-only update agrees with
 # a full install. HUGINN_KEEP_CLAUDE_FEEDBACK=1 keeps the feedback prompts.
 node "$DEST/install-hooks.js" --claude-defaults
+# huginn's MCP server for the host's Claude Code SESSIONS (chats get it by
+# --mcp-config on every run): registered at user scope, re-registered on every
+# install so a moved node or $DEST is picked up, plus the one allow rule its
+# send_file tool needs. Best-effort: a host without the claude CLI on PATH, or
+# one whose CLI refuses, still gets a working daemon - and says so.
+node "$DEST/install-hooks.js" --allow-send-file
+if command -v claude >/dev/null 2>&1; then
+  claude mcp remove -s user huginn >/dev/null 2>&1 || true
+  if claude mcp add -s user -e "HUGINN_APPD_DATA=${DATA_DIR:-/var/lib/huginn-appd}" \
+       huginn -- "$(command -v node)" "$DEST/mcp/huginn-mcp.js" >/dev/null 2>&1; then
+    say "registered huginn's MCP server (send_file) for Claude Code sessions"
+  else
+    say "WARNING: could not register huginn's MCP server with claude; sessions will not have send_file (chats still do)"
+  fi
+else
+  say "no claude CLI on PATH: sessions will not have send_file (chats still do)"
+fi
 
 if [ "${HUGINN_APPD_NO_START:-}" = 1 ]; then
   say "installed; not started (HUGINN_APPD_NO_START=1)"

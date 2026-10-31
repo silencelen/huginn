@@ -315,6 +315,7 @@ class MainActivity : FragmentActivity() {
                     val wrapUpPhrase = vm.status.collectAsState().value?.softEndPhrase
                     CompositionLocalProvider(
                         LocalAttachmentImages provides vm.attachmentImages,
+                        com.silencelen.huginn.ui.LocalSentFiles provides vm.sentFiles,
                         LocalUriHandler provides linkHandler,
                         LocalWrapUpPhrase provides wrapUpPhrase,
                     ) {

@@ -157,7 +157,7 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/sessions/<name>/rename` | `{name}`: rename it. Queued messages move with it; `409` if one is still being typed after 15 seconds. |
 | GET | `/v1/sessions/<name>/screen` | The terminal screen. `?cols=&rows=` report your size; `?live=1` also resizes the pane for you (one client at a time holds this lease); `?history=` adds scrollback; `?hash=&wait=` long-polls. |
 | DELETE | `/v1/sessions/<name>/size` | Release your screen-size lease. |
-| GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. A `system` event with a `body` is a headline over a longer text: `fold: "peer"` is a message from another session or a subagent's report, `fold: "compact"` is the summary written after a compaction. |
+| GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. A `system` event with a `body` is a headline over a longer text: `fold: "peer"` is a message from another session or a subagent's report, `fold: "compact"` is the summary written after a compaction. A `tool` event from the `send_file` tool carries `file: {id, name, mime, size, image, caption}`, fetched from `/v1/outbox/<id>`. |
 | POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`: type into the session. `text` alone fills the prompt without sending; add `keys: ["Enter"]` to send. Allowed keys: `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `DC`, `IC`, arrows, `Home`, `End`, `PPage`, `NPage`, `C-a` to `C-z`, `M-a` to `M-z`, `F1` to `F12`. |
 | GET | `/v1/sessions/<name>/typing` | What is waiting to be typed into the session, and what holds it. |
 | GET | `/v1/sessions/<name>/questions` | What the session is asking, as requests: `{questions: [{id, kind, toolName, agentId?, agentType?, mcpServer?, input, suggestions?, fingerprint, since, bound, fallback}]}`. `kind` is `ask` (an AskUserQuestion: `input.questions`), `permission` (any other tool: `input` is the tool's own input, `suggestions` what "always allow" would grant) or `plan` (`input.plan`, `input.planFilePath`). `bound` means answerable through the route below; `fallback: "screen"` otherwise. The same list rides `/screen` as `questions`. |
@@ -212,6 +212,7 @@ See [Security](../security.md#chats-ask-and-act) for what each mode may do.
 |---|---|---|
 | POST | `/v1/uploads` | The raw file as the body (not multipart), with its `Content-Type`; `?name=` gives the original name. Up to 128 MB. Returns `{ok, path, bytes, ext, readable}`; name `path` in a message so Claude Code can open the file. |
 | GET | `/v1/uploads/<name>` | An uploaded file. |
+| GET | `/v1/outbox/<id>` | A file Claude sent with its `send_file` tool, by the id on the transcript's `tool` event (`file.id`). Images come back inline as their image type; anything else as `application/octet-stream`, `Content-Disposition: attachment`. Only ids the server minted are served. |
 | GET | `/v1/files/image` | `?path=<path>[&session=<name>]`: an image on the server that a transcript names, from the uploads, the scratchpads, Claude Code's scratch folder, or the named session's working folder. |
 
 ### Rounds

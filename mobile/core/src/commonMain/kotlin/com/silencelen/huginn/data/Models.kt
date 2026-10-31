@@ -721,6 +721,29 @@ data class TranscriptEvent(
     val body: String? = null,
     /** What [body] is: `peer` (a message from another session) or `compact`. */
     val fold: String? = null,
+    /**
+     * A file Claude SENT the person with its `send_file` tool (appd 3.16.0), on
+     * that tool's row: the daemon's copy in its outbox, fetched by [SentFile.id]
+     * from `GET /v1/outbox/<id>`. Null on every other row, and from an older daemon.
+     */
+    val file: SentFile? = null,
+)
+
+/**
+ * A file Claude sent: the daemon's outbox copy and what the card says about it.
+ * [image] files are drawn inline; every file can be downloaded, and opened when
+ * [com.silencelen.huginn.ui.SentFiles.openable] says so.
+ */
+@Serializable
+data class SentFile(
+    /** The daemon-minted outbox id: the only thing a client may ask for. */
+    val id: String,
+    /** The original file name, for the card and the downloaded copy. */
+    val name: String = "",
+    val mime: String = "application/octet-stream",
+    val size: Long? = null,
+    val image: Boolean = false,
+    val caption: String? = null,
 )
 
 /**

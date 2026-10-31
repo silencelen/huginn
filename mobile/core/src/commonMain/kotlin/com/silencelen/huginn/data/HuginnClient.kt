@@ -1548,6 +1548,17 @@ class HuginnClient(
     }
 
     /**
+     * A file Claude sent the person (appd 3.16.0's send_file), by its outbox id.
+     * Whole, in memory: the daemon caps a send at 50 MB. A 404 is a file the
+     * outbox has since pruned (non-images go after the retention window).
+     */
+    suspend fun outboxBytes(id: String): ByteArray {
+        val resp = http().request { build("/v1/outbox/" + id.encodeURLParameter(), HttpMethod.Get, Tier.NORMAL, null) }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, resp.bodyAsText())
+        return resp.bodyAsBytes()
+    }
+
+    /**
      * Reads an image file the assistant NAMED — a rendered chart, a screenshot —
      * so the transcript can draw it instead of printing a path nobody can open
      * from here. Distinct from [uploadBytes], which reads back a file this client

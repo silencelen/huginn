@@ -917,6 +917,7 @@ fun main(args: Array<String>) {
                     // Photo attachments render as real thumbnails; without this
                     // (or against an old daemon) the rows fall back to the pill.
                     LocalAttachmentImages provides store.attachmentImages,
+                    com.silencelen.huginn.ui.LocalSentFiles provides store.sentFiles,
                     // A link in an answer opens in the browser — http(s) ONLY, and
                     // never this app's own `huginn://`, which is fingerprint-gated
                     // precisely because it is reachable from outside. What cannot

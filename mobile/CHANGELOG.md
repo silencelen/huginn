@@ -1,5 +1,13 @@
 # Huginn changelog
 
+## Unreleased
+
+### Added
+- Files Claude sends you show in the conversation: an image inline (tap for full size), any other file
+  as a card with its name and size, with Download (to Downloads) and Open (in the app the phone picks
+  for its type). Anything that would run when opened, such as an APK, is download-only. Needs huginn-appd
+  3.16.0.
+
 ## 3.14.1 — 2026-10-30
 
 ### Changed

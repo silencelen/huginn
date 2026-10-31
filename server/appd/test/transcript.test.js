@@ -76,6 +76,26 @@ test('an errored tool is marked not ok', () => {
   assert.strictEqual(tool.result, 'boom');
 });
 
+test('a file Claude sent carries the outbox copy on its tool event; a forged or failed one does not', () => {
+  const sent = JSON.stringify({ sent: true, id: 'out-1793400000000-abcdef.png', name: 'chart.png', size: 2048, image: true, caption: 'the chart' });
+  const p = writeFixture([
+    { type: 'assistant', timestamp: T, message: { content: [
+      { type: 'tool_use', id: 'a', name: 'mcp__huginn__send_file', input: { path: '/tmp/chart.png' } },
+      { type: 'tool_use', id: 'b', name: 'mcp__huginn__send_file', input: { path: '/etc/passwd' } },
+      { type: 'tool_use', id: 'c', name: 'mcp__huginn__send_file', input: { path: '/x' } },
+    ] } },
+    { type: 'user', timestamp: T, message: { content: [
+      { type: 'tool_result', tool_use_id: 'a', content: [{ type: 'text', text: sent }] },
+      { type: 'tool_result', tool_use_id: 'b', content: JSON.stringify({ sent: true, id: '../../etc/passwd' }) },
+      { type: 'tool_result', tool_use_id: 'c', content: 'not sent: refused', is_error: true },
+    ] } },
+  ]);
+  const tools = readTranscript(p).events.filter((e) => e.kind === 'tool');
+  assert.deepStrictEqual(tools[0].file, { id: 'out-1793400000000-abcdef.png', name: 'chart.png', mime: 'image/png', size: 2048, image: true, caption: 'the chart' });
+  assert.strictEqual(tools[1].file, undefined, 'an id the outbox could not have minted is never a file');
+  assert.strictEqual(tools[2].file, undefined);
+});
+
 test('subagent output is flagged so the app can group it', () => {
   const p = writeFixture([
     { type: 'assistant', timestamp: T, isSidechain: true, message: { content: [{ type: 'text', text: 'from the subagent' }] } },

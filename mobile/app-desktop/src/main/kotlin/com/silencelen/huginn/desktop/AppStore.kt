@@ -393,7 +393,12 @@ class AppStore(
         // daemon with no icon route it 404s into the negative cache and the row
         // draws its initial-letter tile.
         fetchIcon = { id -> client.appIconBytes(id) },
+        // And a fourth: an image Claude sent (send_file), by outbox id.
+        fetchOutbox = { id -> client.outboxBytes(id) },
     )
+
+    /** Download and Open for a file Claude sent; provided to the transcript as LocalSentFiles. */
+    val sentFiles = DesktopSentFiles({ client })
 
     init {
         current = this

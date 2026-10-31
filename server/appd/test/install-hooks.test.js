@@ -548,3 +548,29 @@ test('an upgrade rewrites a hook timeout that changed between versions, and says
   assert.equal(rules[0].hooks[0].timeout, 3660);
   assert.match(stdout, /repaired PermissionRequest/);
 });
+
+// --allow-send-file: the one permission rule huginn's send_file tool needs.
+test('--allow-send-file appends the rule once, keeps everything else, and leaves a bad shape alone', () => {
+  const { applySendFileAllow, SEND_FILE_TOOL } = require('../install-hooks');
+  assert.equal(SEND_FILE_TOOL, require('../lib/outbox').SEND_FILE_TOOL, 'one name for the tool');
+  const s = { permissions: { allow: ['Bash(ls:*)'], deny: ['mcp__huginn__send_file'] }, model: 'opus' };
+  assert.deepEqual(applySendFileAllow(s).changes, [{ key: `permissions.allow:${SEND_FILE_TOOL}`, action: 'added' }]);
+  assert.deepEqual(s, { permissions: { allow: ['Bash(ls:*)', SEND_FILE_TOOL], deny: ['mcp__huginn__send_file'] }, model: 'opus' });
+  assert.equal(applySendFileAllow(s).changes[0].action, 'kept', 'a second run changes nothing');
+  const empty = {};
+  applySendFileAllow(empty);
+  assert.deepEqual(empty, { permissions: { allow: [SEND_FILE_TOOL] } });
+  const odd = { permissions: { allow: 'Bash' } };
+  assert.equal(applySendFileAllow(odd).changes[0].action, 'kept');
+  assert.deepEqual(odd, { permissions: { allow: 'Bash' } }, 'reported, not repaired');
+});
+
+test('--allow-send-file writes through main and refuses to be combined', () => {
+  const { main, parseArgs } = require('../install-hooks');
+  const dir = scratch();
+  const file = path.join(dir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ hooks: {} }));
+  assert.equal(main(['--allow-send-file', '--settings', file]), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow, ['mcp__huginn__send_file']);
+  assert.throws(() => parseArgs(['--allow-send-file', '--uninstall']), /runs on its own/);
+});
