@@ -747,6 +747,13 @@ function humanRemainder(s) {
   // inner task-id/summary text to render as a message the user supposedly wrote.
   t = stripElements(t, [['<task-notification>', '</task-notification>']]);
   t = stripElements(t, [['<system-reminder>', '</system-reminder>']]);
+  // The two bracketed notes describeMachineText DROPS. Left here they came back
+  // as the "human remainder" and rendered as a message the owner typed: the
+  // caption Claude Code writes after it reads an image ("[Image: original
+  // 1536x2048, displayed at …. Multiply coordinates by 1.02 …]", an `isMeta`
+  // user record of its own) showed under every attached photo (2026-10-31).
+  t = t.replace(/\[Image: original \d+x\d+[^\]]*\]/g, '');
+  t = t.replace(/\[Your previous response[^\]]*\]/g, '');
   // Stray tags. Only text up to the last `>` can hold one, and an opening past
   // it would scan to the end of the string for a `>` that is not there.
   const gt = t.lastIndexOf('>');

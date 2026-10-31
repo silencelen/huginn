@@ -96,6 +96,20 @@ test('a file Claude sent carries the outbox copy on its tool event; a forged or 
   assert.strictEqual(tools[2].file, undefined);
 });
 
+test("Claude Code's caption after reading an image is never a message from the owner", () => {
+  // Verbatim from a session where the owner attached a photo from the phone
+  // (2026-10-31): an isMeta, turnCompanion user record holding only the caption.
+  // describeMachineText dropped it, and humanRemainder handed it straight back.
+  const CAPTION = '[Image: original 1536x2048, displayed at 1500x2000. Multiply coordinates by 1.02 to map to original image.]';
+  const p = writeFixture([
+    { type: 'user', timestamp: T, isMeta: true, turnCompanion: true, message: { role: 'user', content: CAPTION } },
+    { type: 'user', timestamp: T, message: { role: 'user', content: `${CAPTION}\nwhat does the label on the left say?` } },
+  ]);
+  const events = readTranscript(p).events;
+  assert.deepStrictEqual(events.map((e) => e.kind), ['user']);
+  assert.strictEqual(events[0].text, 'what does the label on the left say?', 'words typed beside it still show');
+});
+
 test('subagent output is flagged so the app can group it', () => {
   const p = writeFixture([
     { type: 'assistant', timestamp: T, isSidechain: true, message: { content: [{ type: 'text', text: 'from the subagent' }] } },

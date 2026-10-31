@@ -9,6 +9,12 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.16.2 — 2026-10-31
+
+### Fixed
+- The note Claude Code writes after it reads an attached image ("[Image: original …, displayed at …
+  Multiply coordinates …]") no longer shows in the Conversation tab as a message you sent.
+
 ## 3.16.1 — 2026-10-30
 
 ### Fixed
