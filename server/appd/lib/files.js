@@ -143,6 +143,31 @@ function liveRoots(roots, fs = nodeFs) {
   return { canon, named };
 }
 
+/**
+ * System trees a session's cwd may never widen the image route to: a session
+ * started in one of them (or at `/`) contributes no root at all. Measured the
+ * other way round, the old rule served nearly any image on the host to a
+ * session whose cwd was `/` (2026-10-31).
+ */
+const SYSTEM_TREES = ['/etc', '/proc', '/sys', '/dev', '/boot', '/run', '/usr', '/bin', '/sbin',
+  '/lib', '/lib32', '/lib64', '/var/lib', '/var/log', '/var/cache', '/var/spool', '/var/mail'];
+
+/**
+ * The canonical root a live session's [cwd] contributes, or null when it may
+ * contribute none: the filesystem root, a system tree, or a cwd that does not
+ * resolve. A HOME directory is allowed - most sessions start in or under one -
+ * and [resolveImage]'s `hiddenUnder` keeps its dot-directories (`.ssh`,
+ * `.config`, `.cache/thumbnails`…) out of reach.
+ */
+function sessionRoot(cwd, fs = nodeFs) {
+  if (!cwd || typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  let real;
+  try { real = fs.realpathSync(cwd); } catch { return null; }
+  if (real === path.parse(real).root) return null;
+  if (SYSTEM_TREES.some((t) => real === t || real.startsWith(t + '/'))) return null;
+  return real;
+}
+
 /** Is `file` inside `root`, both already canonical? */
 function within(file, root) {
   return file === root || file.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
@@ -167,6 +192,9 @@ function homeDir() {
  * @param {string|null} o.cwd    the session cwd a RELATIVE request hangs off, or null
  * @param {string} [o.home]      what a leading `~` stands for; this daemon's home when absent
  * @param {number} o.maxBytes
+ * @param {string[]} [o.hiddenUnder] canonical roots under which a path with any
+ *   dot-segment (a hidden file or directory) is refused - the session roots, so a
+ *   session in a home directory cannot serve `~/.ssh` or `~/.cache`
  * @param {object} o.fs
  * @returns {{ok:true, file:string, contentType:string, size:number, mtimeMs:number, etag:string}
  *          |{ok:false, status:number, error:string}}
@@ -232,6 +260,20 @@ function resolveImage(o = {}) {
     return { ok: false, status: 403, error: 'that path is not in an allowed directory' };
   }
 
+  // PASS 3 — hidden paths under a session root, judged on the REAL path so a
+  // visible name linked to `~/.ssh/…` is judged as what it points at. Only when
+  // no other root contains the file: the session root is the widening one.
+  const hidden = (o.hiddenUnder || []).filter((r) => typeof r === 'string');
+  if (hidden.length) {
+    const others = canon.filter((r) => !hidden.includes(r));
+    if (!others.some((r) => within(real, r))) {
+      const g = hidden.find((r) => within(real, r));
+      if (g && real.slice(g.length).split(path.sep).some((seg) => seg.startsWith('.'))) {
+        return { ok: false, status: 403, error: 'hidden files are not served from a session folder' };
+      }
+    }
+  }
+
   let st;
   try { st = fs.statSync(real); } catch { return { ok: false, status: 404, error: 'no such file' }; }
   // A directory would otherwise be streamed as an EISDIR mid-response, after the
@@ -284,6 +326,7 @@ function etagMatches(ifNoneMatch, etag) {
 }
 
 module.exports = {
+  sessionRoot, SYSTEM_TREES,
   IMAGE_SERVE_TYPES, SCRIPTABLE_EXTS, IMAGE_SERVE_MAX_BYTES,
   extOf, imageContentType, canonicalRoots, within, resolveImage, etagFor, etagMatches,
 };

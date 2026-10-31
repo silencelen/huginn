@@ -14342,13 +14342,21 @@ async function handleRequest(req, res) {
       // see routeName. A name outside the grammar is simply not a session, so
       // it contributes no root, which is the same answer an unknown one gets.
       const sessName = routeName(u.searchParams.get('session'));
+      // And the cwd widens only so far (filesLib.sessionRoot): never `/` or a
+      // system tree, and never to a hidden path under it (hiddenUnder) - a session
+      // started in a home directory used to make ~/.ssh and ~/.cache servable.
+      const hiddenUnder = [];
       if (sessName && await sessionExists(sessName)) {
         const st = readSessionState(sessName);
-        if (st && st.cwd) { cwd = st.cwd; roots.push(st.cwd); }
+        if (st && st.cwd) {
+          cwd = st.cwd;
+          const r = filesLib.sessionRoot(st.cwd, fs);
+          if (r) { roots.push(r); hiddenUnder.push(r); }
+        }
       }
       const found = filesLib.resolveImage({
         requested: u.searchParams.get('path'),
-        roots, cwd, maxBytes: IMAGE_SERVE_MAX_BYTES, fs,
+        roots, cwd, hiddenUnder, maxBytes: IMAGE_SERVE_MAX_BYTES, fs,
       });
       if (!found.ok) return sendErr(res, found.status, found.error);
 

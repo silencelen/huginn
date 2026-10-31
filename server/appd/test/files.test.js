@@ -306,3 +306,38 @@ test('If-None-Match matches the tag, a list containing it, and *', () => {
   assert.equal(etagMatches('', tag), false);
   assert.equal(etagMatches(undefined, tag), false);
 });
+
+// ---- a session's cwd as a root: how far it may widen (2026-10-31) ----------
+// The route made a live session's cwd a root as-is, so a session started at `/`
+// could serve nearly any image on the host, and one in a home directory its
+// `.ssh`, `.config` and `.cache/thumbnails`.
+
+test('a session cwd at / or in a system tree contributes no root', () => {
+  const { sessionRoot } = require('../lib/files');
+  assert.equal(sessionRoot('/'), null);
+  assert.equal(sessionRoot('/etc'), null);
+  assert.equal(sessionRoot('/usr/share'), null);
+  assert.equal(sessionRoot('/var/lib/huginn-appd'), null);
+  assert.equal(sessionRoot('relative/dir'), null);
+  assert.equal(sessionRoot('/no/such/dir/anywhere'), null);
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'sroot-'));
+  assert.equal(sessionRoot(d), fs.realpathSync(d), 'a project folder is a root');
+});
+
+test('hidden paths under a session root are refused, a symlink judged by its target', () => {
+  const { resolveImage } = require('../lib/files');
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'shome-')));
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+  fs.mkdirSync(path.join(home, 'proj'));
+  fs.mkdirSync(path.join(home, '.cache', 'thumbnails'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'proj', 'chart.png'), PNG);
+  fs.writeFileSync(path.join(home, '.cache', 'thumbnails', 'private.png'), PNG);
+  fs.symlinkSync(path.join(home, '.cache', 'thumbnails', 'private.png'), path.join(home, 'proj', 'innocent.png'));
+  const ask = (p) => resolveImage({ requested: p, roots: [home], cwd: home, hiddenUnder: [home], maxBytes: 1e6, fs });
+  assert.equal(ask(path.join(home, 'proj', 'chart.png')).ok, true);
+  assert.equal(ask('proj/chart.png').ok, true, 'relative to the session cwd still works');
+  assert.equal(ask(path.join(home, '.cache', 'thumbnails', 'private.png')).status, 403);
+  assert.equal(ask(path.join(home, 'proj', 'innocent.png')).status, 403, 'a visible link to a hidden file');
+  // Without the guard (the old route) the hidden file was served.
+  assert.equal(resolveImage({ requested: path.join(home, '.cache', 'thumbnails', 'private.png'), roots: [home], cwd: home, maxBytes: 1e6, fs }).ok, true);
+});
