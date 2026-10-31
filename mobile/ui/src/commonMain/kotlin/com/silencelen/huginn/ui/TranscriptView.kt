@@ -5,6 +5,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
@@ -381,6 +384,7 @@ private fun SubagentsCard(group: TranscriptGroups.Row.Subagents, onCopy: (String
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun UserBubble(text: String, queued: Boolean = false) {
     val metrics = LocalTranscriptMetrics.current
@@ -402,30 +406,59 @@ private fun UserBubble(text: String, queued: Boolean = false) {
                 .fillMaxWidth(metrics.userBubbleFraction),
         ) {
             Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                // A photo the message attached, as an actual thumbnail when the
-                // shell provided a loader and the file is still on the host.
-                // Loading and EVERY failure (pruned, offline, undecodable, old
-                // daemon, no loader) fall back to the pill displayText renders —
-                // the behavior this bubble always had.
+                // The photos the message attached, as actual thumbnails when the
+                // shell provided a loader and the files are still on the host.
+                // Until ONE of them loads (and on every failure: pruned, offline,
+                // undecodable, old daemon, no loader) the bubble shows the pill
+                // displayText renders - the behavior it always had.
+                //
+                // ⚠ EVERY PHOTO, not the first (2026-10-30): this took
+                // `imagePaths(text).firstOrNull()` while stripping ALL the markers,
+                // so a message with three photos showed one and the other two
+                // vanished. Each loads on its own; one still loading keeps a
+                // placeholder in its slot rather than disappearing.
                 val loader = LocalAttachmentImages.current
-                val imagePath = remember(text) { AttachmentText.imagePaths(text).firstOrNull() }
-                var thumb by remember(imagePath) { mutableStateOf<ImageBitmap?>(null) }
-                if (loader != null && imagePath != null) {
-                    LaunchedEffect(imagePath) { thumb = loader.load(imagePath) }
+                val imagePaths = remember(text) { AttachmentText.imagePaths(text) }
+                val thumbs = remember(text) { mutableStateMapOf<String, ImageBitmap>() }
+                if (loader != null) {
+                    imagePaths.forEach { path ->
+                        LaunchedEffect(path) { loader.load(path)?.let { thumbs[path] = it } }
+                    }
                 }
-                val shown = thumb
-                if (shown != null) {
-                    Image(
-                        bitmap = shown,
-                        contentDescription = "Photo attachment",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .heightIn(max = 220.dp)
-                            .widthIn(max = 220.dp)
-                            .clip(RoundedCornerShape(10.dp)),
-                    )
-                    // The words beside the photo, if the message had any; the
-                    // thumbnail already says "photo attached".
+                if (thumbs.isNotEmpty()) {
+                    val viewer = remember { ImageViewerState() }
+                    val size = if (imagePaths.size == 1) 220.dp else 120.dp
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        imagePaths.forEach { path ->
+                            val shown = thumbs[path]
+                            if (shown != null) {
+                                Image(
+                                    bitmap = shown,
+                                    contentDescription = "Photo attachment",
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .heightIn(max = size)
+                                        .widthIn(max = size)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { viewer.open(path, shown) },
+                                )
+                            } else {
+                                Box(
+                                    Modifier.size(size / 2).clip(RoundedCornerShape(10.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text("Photo", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
+                    FullImageViewer(viewer)
+                    // The words beside the photos, if the message had any; the
+                    // thumbnails already say "photo attached".
                     val remainder = remember(text) {
                         AttachmentText.displayText(AttachmentText.stripImageMarkers(text.trim()))
                     }

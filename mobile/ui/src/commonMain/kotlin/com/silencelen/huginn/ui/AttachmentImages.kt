@@ -25,7 +25,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.silencelen.huginn.data.huginnIoDispatcher
+import com.silencelen.huginn.data.HuginnClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -68,6 +72,8 @@ class AttachmentImageLoader(
     private val budgetBytes: Long = DEFAULT_BUDGET_BYTES,
     private val fetchPath: (suspend (path: String, session: String?) -> ByteArray)? = null,
     private val fetchIcon: (suspend (id: String) -> ByteArray)? = null,
+    /** Waits before re-asking after a TRANSIENT failure (see [cached]); a test passes short ones. */
+    private val retryDelaysMs: List<Long> = listOf(1_000, 3_000),
 ) {
 
     private class Entry(val bitmap: ImageBitmap?) {
@@ -134,48 +140,107 @@ class AttachmentImageLoader(
         return cached("$ICON_KEY$id@$iconAt") { fetcher(id) }
     }
 
+    /**
+     * One image by [key]: the cache, a fetch already in flight, or a fetch of our own.
+     *
+     * ⚠ THE "PHOTO ATTACHED" BUG (2026-10-30): a photo showed on the device that
+     * sent it and as the text pill everywhere else. Two defects here, both of which
+     * stuck ONE device for the life of the app:
+     *  - a fetch cancelled mid-flight (its row left the screen - a queued row
+     *    replaced by the delivered one, a re-window, a scroll) skipped its cleanup:
+     *    the in-flight entry stayed and its waiters were never completed, so every
+     *    later load of that photo awaited it forever;
+     *  - every failure was remembered as "gone", so a timeout, a 502 from the core
+     *    proxy or a moment offline became a miss cached until restart.
+     * Now the cleanup runs on every exit (a cancelled leader hands the fetch to the
+     * next caller), and only a PERMANENT answer ([permanent]: the file is gone,
+     * refused, or not an image) is remembered; anything else is retried.
+     */
     private suspend fun cached(key: String, fetchBytes: suspend () -> ByteArray): ImageBitmap? {
-        // Fast path + in-flight join decided under the lock; awaiting a peer's
-        // fetch and doing our own both happen OUTSIDE it.
-        var join: CompletableDeferred<ImageBitmap?>? = null
-        var waitFor: CompletableDeferred<ImageBitmap?>? = null
-        lock.withLock {
-            cache[key]?.let { hit ->
-                // Touch: re-insert so eviction order tracks use.
-                cache.remove(key); cache[key] = hit
-                return hit.bitmap
+        while (true) {
+            // Fast path + in-flight join decided under the lock; awaiting a peer's
+            // fetch and doing our own both happen OUTSIDE it.
+            var join: CompletableDeferred<ImageBitmap?>? = null
+            var mine: CompletableDeferred<ImageBitmap?>? = null
+            lock.withLock {
+                cache[key]?.let { hit ->
+                    // Touch: re-insert so eviction order tracks use.
+                    cache.remove(key); cache[key] = hit
+                    return hit.bitmap
+                }
+                val existing = inFlight[key]
+                if (existing != null) join = existing
+                else {
+                    mine = CompletableDeferred()
+                    inFlight[key] = mine!!
+                }
             }
-            val existing = inFlight[key]
-            if (existing != null) join = existing
-            else {
-                waitFor = CompletableDeferred()
-                inFlight[key] = waitFor
+            join?.let { j ->
+                try {
+                    return j.await()
+                } catch (e: LeaderGone) {
+                    continue // its caller left; this one fetches
+                }
+            }
+            val lead = mine!!
+            var got: Loaded? = null
+            try {
+                val r = withContext(huginnIoDispatcher) { fetchWithRetries(fetchBytes) }
+                got = r
+                return r.bitmap
+            } finally {
+                // On EVERY exit, cancellation included - this block is the fix.
+                withContext(NonCancellable) {
+                    lock.withLock {
+                        if (inFlight[key] === lead) inFlight.remove(key)
+                        if (got?.remember == true) remember(key, got!!.bitmap)
+                    }
+                    val done = got
+                    if (done == null) lead.completeExceptionally(LeaderGone()) else lead.complete(done.bitmap)
+                }
             }
         }
-        join?.let { return it.await() }
-        val bitmap = withContext(huginnIoDispatcher) {
-            val bytes = runCatching { fetchBytes() }.getOrNull()
-            if (bytes == null || bytes.isEmpty()) null
-            else runCatching { decoder.decode(bytes) }.getOrNull()
-        }
-        lock.withLock {
-            val e = Entry(bitmap)
-            cache[key] = e
-            spent += e.cost
-            inFlight.remove(key)
-            // Evict oldest-touched until back under budget; never evict what was
-            // just inserted (a single oversized decode still renders once).
-            val it = cache.entries.iterator()
-            while (spent > budgetBytes && it.hasNext()) {
-                val oldest = it.next()
-                if (oldest.key == key) continue
-                spent -= oldest.value.cost
-                it.remove()
-            }
-        }
-        waitFor?.complete(bitmap)
-        return bitmap
     }
+
+    /** The fetch and decode, re-asked after a transient failure. Never throws but for cancellation. */
+    private suspend fun fetchWithRetries(fetchBytes: suspend () -> ByteArray): Loaded {
+        var attempt = 0
+        while (true) {
+            val bytes = try {
+                fetchBytes()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                if (permanent(e)) return Loaded(null, remember = true)
+                if (attempt >= retryDelaysMs.size) return Loaded(null, remember = false)
+                delay(retryDelaysMs[attempt++])
+                continue
+            }
+            if (bytes.isEmpty()) return Loaded(null, remember = true)
+            // Bytes that will not decode will not decode next time either.
+            return Loaded(runCatching { decoder.decode(bytes) }.getOrNull(), remember = true)
+        }
+    }
+
+    private fun remember(key: String, bitmap: ImageBitmap?) {
+        val e = Entry(bitmap)
+        cache[key] = e
+        spent += e.cost
+        // Evict oldest-touched until back under budget; never evict what was
+        // just inserted (a single oversized decode still renders once).
+        val it = cache.entries.iterator()
+        while (spent > budgetBytes && it.hasNext()) {
+            val oldest = it.next()
+            if (oldest.key == key) continue
+            spent -= oldest.value.cost
+            it.remove()
+        }
+    }
+
+    private class Loaded(val bitmap: ImageBitmap?, val remember: Boolean)
+
+    /** Completes a waiter whose leader's caller was cancelled: the waiter fetches itself. */
+    private class LeaderGone : Exception()
 
     companion object {
         const val DEFAULT_BUDGET_BYTES: Long = 48L * 1024 * 1024
@@ -196,6 +261,17 @@ class AttachmentImageLoader(
          * routes sharing one LRU; nothing may collide across them.
          */
         private const val ICON_KEY = "icon\u0000"
+
+        /**
+         * An answer that will not change on asking again: gone (404/410), refused
+         * (401/403 - a re-pair changes that, and the app restarts its client then),
+         * or not an image (400/415). Anything else - a timeout, offline, a 5xx or a
+         * 502 from the core's proxy - is a moment, not a fact about the file.
+         */
+        internal fun permanent(e: Throwable): Boolean =
+            (e as? HuginnClient.HuginnException)?.code in PERMANENT_CODES
+
+        private val PERMANENT_CODES = setOf(400, 401, 403, 404, 410, 415)
     }
 }
 

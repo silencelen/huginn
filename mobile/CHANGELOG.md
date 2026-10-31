@@ -8,6 +8,11 @@
 - The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
 
 ### Fixed
+- A photo attached to a message now shows on every device, not only the one that sent it. A photo
+  whose download was interrupted (its row scrolled away or was replaced as the message was delivered)
+  left that photo stuck as "photo attached" until the app restarted, and a passing network error was
+  remembered as if the file were gone.
+- Every photo in a message shows, not only the first; one still loading keeps its place.
 - A project member's name is no longer pushed out of its row by a long status, and a lead reads
   "lead", not "lead (lead)".
 - A page in the Pages list is deleted from a trash icon rather than a "Delete" word on every row,

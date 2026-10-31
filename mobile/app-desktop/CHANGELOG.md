@@ -8,6 +8,11 @@
 - The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
 
 ### Fixed
+- A photo attached to a message now shows on every device, not only the one that sent it. A photo
+  whose download was interrupted (its row scrolled away or was replaced as the message was delivered)
+  left that photo stuck as "photo attached" until the app restarted, and a passing network error was
+  remembered as if the file were gone.
+- Every photo in a message shows, not only the first; one still loading keeps its place.
 - Linux: the app comes back by itself after installing an update. The relaunch now runs as its own
   user service instead of a child of the app, and leaves a log (`huginn-relaunch.log`) beside the
   app's own.

@@ -1,6 +1,10 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.App
+import com.silencelen.huginn.data.HuginnClient
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -176,7 +180,7 @@ class AttachmentImagesTest {
     fun `a fetch failure is cached as a miss, not retried every recomposition`() = runBlocking {
         var fetches = 0
         val loader = AttachmentImageLoader(
-            fetch = { fetches++; throw RuntimeException("404") },
+            fetch = { fetches++; throw HuginnClient.HuginnException(404, "gone") },
             decoder = SkiaImageBytesDecoder(),
         )
         assertNull(loader.load("/uploads/gone.png"))
@@ -252,7 +256,7 @@ class AttachmentImagesTest {
         val failing = AttachmentImageLoader(
             fetch = { error("not the uploads route") },
             decoder = SkiaImageBytesDecoder(),
-            fetchPath = { _, _ -> misses++; throw RuntimeException("403") },
+            fetchPath = { _, _ -> misses++; throw HuginnClient.HuginnException(403, "refused") },
         )
         assertNull(failing.loadPath("/etc/nope.png"))
         assertNull(failing.loadPath("/etc/nope.png"))
@@ -406,7 +410,7 @@ class AttachmentImagesTest {
         val loader = AttachmentImageLoader(
             fetch = { error("not the uploads route") },
             decoder = SkiaImageBytesDecoder(),
-            fetchIcon = { fetches++; throw RuntimeException("404") },
+            fetchIcon = { fetches++; throw HuginnClient.HuginnException(404, "no icon") },
         )
         assertNull(loader.loadIcon("bursar", iconAt = 1))
         assertNull(loader.loadIcon("bursar", iconAt = 1))
@@ -441,5 +445,61 @@ class AttachmentImagesTest {
         loader.loadPath("/atlas")
         loader.loadIcon("atlas", iconAt = 1)
         assertEquals(listOf("upload:atlas", "path:/atlas", "icon:atlas"), hits)
+    }
+
+    // ------------------------------------------- the "photo attached" bug (2026-10-30)
+
+    @Test
+    fun `a transient failure is not remembered, so the next load fetches again`() = runBlocking {
+        var fetches = 0
+        val png = pngBytes(4, 4)
+        val loader = AttachmentImageLoader(
+            fetch = { if (fetches++ == 0) throw HuginnClient.HuginnException(502, "the core's proxy hiccuped") else png },
+            decoder = SkiaImageBytesDecoder(),
+            retryDelaysMs = emptyList(),
+        )
+        assertNull(loader.load("/uploads/up-1.jpg"), "the 502 itself is a miss")
+        assertNotNull(loader.load("/uploads/up-1.jpg"), "but not a remembered one")
+        assertEquals(2, fetches)
+    }
+
+    @Test
+    fun `a transient failure is retried within the same load`() = runBlocking {
+        var fetches = 0
+        val png = pngBytes(4, 4)
+        val loader = AttachmentImageLoader(
+            fetch = { if (fetches++ == 0) throw java.io.IOException("timeout") else png },
+            decoder = SkiaImageBytesDecoder(),
+            retryDelaysMs = listOf(10),
+        )
+        assertNotNull(loader.load("/uploads/up-2.jpg"))
+        assertEquals(2, fetches)
+    }
+
+    /**
+     * The hang: a fetch cancelled mid-flight (its row left the screen) left its
+     * in-flight entry behind and never completed it, so every later load of that
+     * photo waited forever and the bubble kept its "photo attached" pill.
+     */
+    @Test
+    fun `a load cancelled mid-fetch hands the fetch to whoever is waiting, and nobody hangs`() = runBlocking {
+        val png = pngBytes(4, 4)
+        val started = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        var fetches = 0
+        val loader = AttachmentImageLoader(
+            fetch = { fetches++; started.complete(Unit); gate.await(); png },
+            decoder = SkiaImageBytesDecoder(),
+        )
+        val leader = launch { loader.load("/uploads/up-3.jpg") }
+        started.await()
+        val waiter = async { loader.load("/uploads/up-3.jpg") }
+        kotlinx.coroutines.yield()
+        leader.cancel()
+        gate.complete(Unit)
+        val got = withTimeout(5_000) { waiter.await() }
+        assertNotNull(got, "the waiter fetched for itself once the leader left")
+        assertNotNull(withTimeout(5_000) { loader.load("/uploads/up-3.jpg") }, "and a later load is not stuck either")
+        assertTrue(fetches in 1..2, "fetches=$fetches")
     }
 }
