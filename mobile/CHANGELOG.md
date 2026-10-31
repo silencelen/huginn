@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## Unreleased
+## 3.15.0 — 2026-10-30
 
 ### Added
 - Files Claude sends you show in the conversation: an image inline (tap for full size), any other file

@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## Unreleased
+## 2.9.0
 
 ### Added
 - Files Claude sends you show in the conversation: an image inline (click for full size), any other

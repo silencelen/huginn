@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## 3.16.0 — Unreleased
+## 3.16.0 — 2026-10-30
 
 ### Added
 - Claude can send you files. A `send_file` tool (huginn's own MCP server, given to every chat and
