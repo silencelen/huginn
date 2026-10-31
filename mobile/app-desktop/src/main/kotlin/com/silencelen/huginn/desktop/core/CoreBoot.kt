@@ -3,6 +3,7 @@ package com.silencelen.huginn.desktop.core
 import com.silencelen.huginn.data.PinnedRoute
 import com.silencelen.huginn.data.RouteKind
 import com.silencelen.huginn.update.Semver
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URI
@@ -62,11 +63,27 @@ object CoreBoot {
         if (System.getenv("HUGINN_DESKTOP_DIRECT") == "1") return Outcome.Direct("HUGINN_DESKTOP_DIRECT=1 keeps this app on its own link")
         val socket = CorePaths.socket() ?: return Outcome.Direct("this system has no place for huginn core's socket")
         val ops = opsFor(socket)
+        // Wait out a core restart only where one is expected - an app with no token
+        // of its own has no other link, and an installed service is coming back -
+        // so a machine that simply has no core starts at once, as before.
+        val waitMs = if (own.token.isBlank() || CoreSetup.serviceInstalled()) CORE_RESTART_WAIT_MS else 0L
         return runBlocking {
-            withTimeoutOrNull(timeoutMs) { decide(ops, own, clearOwnCredentials) }
-                ?: Outcome.Direct("huginn core did not answer within ${timeoutMs / 1000} s")
+            withTimeoutOrNull(timeoutMs + waitMs) { decide(ops, own, waitMs, clearOwnCredentials) }
+                ?: Outcome.Direct("huginn core did not answer within ${(timeoutMs + waitMs) / 1000} s")
         }
     }
+
+    /**
+     * How long a start waits for a core that is restarting. ⚠ THE UPDATE GAP
+     * (2026-10-30): the new app's `self-install` restarts the core, which is gone
+     * for up to ~16 s (its own shutdown, then systemd's RestartSec). A start in
+     * that gap decided "not running" at once, took its own link - and, holding no
+     * token since the hand-over, was dead for the whole run.
+     */
+    const val CORE_RESTART_WAIT_MS: Long = 30_000
+
+    /** How often a waiting start looks for the core again. */
+    private const val CORE_POLL_MS: Long = 250
 
     /** [Ops] over the core at [socket]. */
     internal fun opsFor(socket: Path): Ops {
@@ -81,9 +98,31 @@ object CoreBoot {
         }
     }
 
-    suspend fun decide(core: Ops, own: OwnLink, clearOwnCredentials: () -> Unit): Outcome {
-        if (!core.present()) return Outcome.Direct("huginn core is not running")
-        val st = runCatching { core.status() }.getOrElse { return Outcome.Direct("huginn core did not answer: ${it.message}") }
+    /**
+     * @param waitForCoreMs how long a core that is not there yet - or whose socket
+     *   is up but not answering, mid-restart - is looked for again before this run
+     *   goes its own way. Zero decides on the first look.
+     */
+    suspend fun decide(core: Ops, own: OwnLink, waitForCoreMs: Long = 0, clearOwnCredentials: () -> Unit): Outcome {
+        val deadline = System.currentTimeMillis() + waitForCoreMs
+        var st: CoreStatus? = null
+        var lastError: String? = null
+        while (true) {
+            if (core.present()) {
+                runCatching { core.status() }
+                    .onSuccess { st = it }
+                    .onFailure { lastError = it.message }
+            }
+            if (st != null || System.currentTimeMillis() >= deadline) break
+            delay(CORE_POLL_MS)
+        }
+        val status = st ?: return Outcome.Direct(
+            if (!core.present()) "huginn core is not running" else "huginn core did not answer: $lastError",
+        )
+        return decideWith(core, own, clearOwnCredentials, status)
+    }
+
+    private suspend fun decideWith(core: Ops, own: OwnLink, clearOwnCredentials: () -> Unit, st: CoreStatus): Outcome {
         if (Semver.parse(st.version) == null || Semver.isNewer(MIN_CORE, st.version)) {
             return Outcome.Direct("huginn core ${st.version.ifBlank { "(unknown)" }} is older than $MIN_CORE: huginn update brings it up to date")
         }

@@ -389,22 +389,55 @@ object PortableInstall {
         "i=0; while kill -0 \"\$1\" 2>/dev/null && [ \$i -lt 300 ]; do sleep 0.1; i=\$((i+1)); done; " +
             "sleep 0.3; exec \"\$2\""
 
+    /** What the relaunched app needs from this session, passed to its unit by name (`--setenv=NAME` copies our value). */
+    internal val RELAUNCH_ENV = listOf(
+        "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP",
+        "XDG_SESSION_DESKTOP", "DBUS_SESSION_BUS_ADDRESS", "PATH", "LANG", "HUGINN_DESKTOP_DIRECT",
+    )
+
+    /** [RELAUNCH_SCRIPT] with its output appended to the file in `$3`, and a first line saying what it waits for. */
+    internal const val LOGGED_RELAUNCH_SCRIPT: String =
+        "exec >>\"\$3\" 2>&1; echo \"\$(date -Is) relaunch: waiting for pid \$1, then \$2\"; " + RELAUNCH_SCRIPT
+
     /**
-     * Starts the waiter detached (`setsid`: its own session, so it is not killed
-     * with this process's group or terminal) and returns whether it started. The
+     * Starts the waiter detached and says how, or null when nothing started. The
      * caller quits next; the waiter outlives us by design.
+     *
+     * ⚠ FIRST AS ITS OWN `systemd --user` UNIT (2026-10-30). A `setsid` child is
+     * still inside the app's cgroup - on a uwsm/Hyprland desktop, the launcher's
+     * `app-…-gtk-launch-….scope` - and on the owner's Arch laptop every update
+     * quit the app with the waiter gone along with it: the scope was empty the
+     * moment the app was, and nothing came back (2.6→2.7 and 2.7→2.8 alike). What
+     * removed it was never proven; a transient user unit is outside the app's
+     * process tree and cgroup altogether, and the journal records it. `setsid`
+     * stays as the fallback for a system without a user manager.
+     *
+     * @param log where the waiter writes what it did (start, wait, exec), so a
+     *   relaunch that does not happen leaves evidence; null discards it.
      */
-    fun relaunchAfterExit(launcher: File, pid: Long = ProcessHandle.current().pid()): Boolean {
-        fun start(vararg cmd: String) = ProcessBuilder(*cmd)
+    fun relaunchAfterExit(launcher: File, pid: Long = ProcessHandle.current().pid(), log: File? = null): String? {
+        fun start(vararg cmd: String): Process = ProcessBuilder(*cmd)
             .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
-        val args = arrayOf("sh", "-c", RELAUNCH_SCRIPT, "huginn-relaunch", pid.toString(), launcher.path)
-        return runCatching { start("setsid", *args); true }
+        val args = arrayOf("sh", "-c", if (log == null) RELAUNCH_SCRIPT else LOGGED_RELAUNCH_SCRIPT,
+            "huginn-relaunch", pid.toString(), launcher.path, log?.path ?: "/dev/null")
+        // systemd-run returns once the unit is queued: exit 0 is "it is running
+        // outside us", anything else falls through to setsid.
+        val unit = runCatching {
+            // The unit gets the user MANAGER's environment, not ours: carry the
+            // session's display and bus across, or a desktop that never exported
+            // them there would relaunch the app with nowhere to draw.
+            val carried = RELAUNCH_ENV.filter { !System.getenv(it).isNullOrEmpty() }.map { "--setenv=$it" }
+            val p = start("systemd-run", "--user", "--collect", "--quiet", "--unit=huginn-desktop-relaunch-$pid", *carried.toTypedArray(), *args)
+            p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0
+        }.getOrDefault(false)
+        if (unit) return "systemd-run --user (huginn-desktop-relaunch-$pid)"
+        return runCatching { start("setsid", *args); "setsid" }
             // No setsid (a very minimal container): a plain child still survives
             // the JVM's exit on Linux; it merely shares our session.
-            .recoverCatching { start(*args); true }
-            .getOrDefault(false)
+            .recoverCatching { start(*args); "a plain child" }
+            .getOrNull()
     }
 }

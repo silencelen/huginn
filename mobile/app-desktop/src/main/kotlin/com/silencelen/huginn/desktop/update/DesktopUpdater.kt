@@ -92,7 +92,14 @@ class DesktopUpdater(
     private val portableApply: (root: File, tarball: File, version: String, running: File?) -> Result<File> =
         { r, t, v, run -> PortableInstall.apply(r, t, v, run) },
     /** Starts the new version once this process has gone. Injected for the same reason as [launcher]. */
-    private val relauncher: (File) -> Boolean = { PortableInstall.relaunchAfterExit(it) },
+    private val relauncher: (File) -> Boolean = { launcher ->
+        val how = PortableInstall.relaunchAfterExit(
+            launcher,
+            log = File(com.silencelen.huginn.desktop.DesktopSettings.defaultFile().parentFile, "huginn-relaunch.log"),
+        )
+        if (how != null) com.silencelen.huginn.desktop.diag.AppLog.info("update", "installed; relaunch armed via $how")
+        how != null
+    },
 ) {
 
     /** The manifest key this install looks up — see [UpdatePlatform.forInstall]. */

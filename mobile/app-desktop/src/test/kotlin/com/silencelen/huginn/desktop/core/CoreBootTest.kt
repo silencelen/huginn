@@ -21,11 +21,14 @@ class CoreBootTest {
         var st: CoreStatus = CoreStatus(version = "2.5.1", paired = true, url = "https://192.168.10.20:8787", pins = listOf("aa11")),
         var reachable: Boolean = true,
         var pairFails: Boolean = false,
+        /** Looks the core is absent for, then present: a restart in progress. */
+        val absentFor: Int = 0,
     ) : CoreBoot.Ops {
         val paired = mutableListOf<Pair<String, String>>()
         val added = mutableListOf<String>()
         override val socket: Path = Path.of("/run/user/1000/huginn/core.sock")
-        override fun present() = present
+        var looks = 0
+        override fun present(): Boolean { looks++; return present && looks > absentFor }
         override suspend fun status() = st
         override suspend fun pair(url: String, token: String) {
             if (pairFails) error("the token was refused")
@@ -97,5 +100,26 @@ class CoreBootTest {
         assertIs<CoreBoot.Outcome.Direct>(o)
         assertFalse(cleared)
         assertTrue(core.added.isEmpty() && core.paired.isEmpty())
+    }
+
+    /**
+     * ⚠ THE UPDATE GAP (2026-10-30, a Linux portable update): the new app restarts
+     * the core, which is gone for ~16 s. A start inside the gap went its own way at
+     * once and, with no token of its own, was dead for the run.
+     */
+    @Test
+    fun `a start inside a core restart waits for it rather than going its own way`() {
+        val core = FakeCore(absentFor = 3)
+        val out = runBlocking { CoreBoot.decide(core, own(token = ""), waitForCoreMs = 5_000) {} }
+        assertIs<CoreBoot.Outcome.ViaCore>(out)
+        assertTrue(core.looks > 3, "it looked again until the core was back")
+    }
+
+    @Test
+    fun `with no wait asked for, a missing core is still decided on the first look`() {
+        val core = FakeCore(absentFor = 3)
+        val out = runBlocking { CoreBoot.decide(core, own(), waitForCoreMs = 0) {} }
+        assertIs<CoreBoot.Outcome.Direct>(out)
+        assertEquals(2, core.looks, "one look to decide, one to say why")
     }
 }

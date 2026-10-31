@@ -177,9 +177,18 @@ func startAndWait(cur coreSnapshot) (coreSnapshot, bool) {
 	if runtime.GOOS == "windows" {
 		wait = 20 * time.Second
 	}
+	// Linux: start the unit at once rather than sit out its RestartSec. The old
+	// core is gone by now, and every second without a socket is a second in which
+	// a desktop starting up finds no core (2026-10-30: the new desktop restarts the
+	// core on its first start, and a launch in that gap came up unlinked).
+	kick := runtime.GOOS == "linux" && serviceInstalled(stableBinary())
 	st, up := waitCore(wait, func(s coreSnapshot, up bool) bool {
 		if up && s.Version == version.Version {
 			return true
+		}
+		if kick && !up && time.Since(lastRun) >= 2*time.Second {
+			lastRun = time.Now()
+			exec.Command("systemctl", "--user", "start", service.UnitName).Run()
 		}
 		if runtime.GOOS == "windows" && !up && time.Since(lastRun) >= 5*time.Second {
 			lastRun = time.Now()

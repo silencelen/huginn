@@ -372,6 +372,22 @@ class PortableApplyTest {
         assertTrue(System.nanoTime() - armedAt >= 900_000_000L)
         d.deleteRecursively()
     }
+
+    @Test
+    fun `the logged waiter relaunches the same way and leaves a line saying what it waited for`() {
+        val d = tmp()
+        val stamp = File(d, "started")
+        val log = File(d, "relaunch.log")
+        val launcher = File(d, "launch").apply { writeText("#!/bin/sh\necho launched; touch '${stamp.path}'\n"); setExecutable(true) }
+        val old = ProcessBuilder("sleep", "0.5").start()
+        val waiter = ProcessBuilder("sh", "-c", PortableInstall.LOGGED_RELAUNCH_SCRIPT, "t", old.pid().toString(), launcher.path, log.path).start()
+        assertTrue(waiter.waitFor(10, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(stamp.exists(), "never relaunched")
+        val text = log.readText()
+        assertTrue("waiting for pid ${old.pid()}, then ${launcher.path}" in text, text)
+        assertTrue("launched" in text, "the relaunched program's own output lands in the log too: $text")
+        d.deleteRecursively()
+    }
 }
 
 /** The updater's portable lane end to end, with GitHub and the apply faked. */

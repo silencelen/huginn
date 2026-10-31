@@ -8,6 +8,12 @@
 - The Screen tab's dot no longer shows while the question card is up in the Conversation tab.
 
 ### Fixed
+- Linux: the app comes back by itself after installing an update. The relaunch now runs as its own
+  user service instead of a child of the app, and leaves a log (`huginn-relaunch.log`) beside the
+  app's own.
+- The app no longer comes up unlinked from huginn core when it starts while the core is restarting
+  (as it does right after an update): it waits for the core instead of falling back to a link of its
+  own that it no longer has a token for.
 - The update card's buttons move to the next line when the list pane is narrow, instead of squeezing
   "Don't remind me" and "Later" into a column of letters.
 - In a narrow list pane: a session's "ctx" badge is no longer cut off by its title, the Sessions
