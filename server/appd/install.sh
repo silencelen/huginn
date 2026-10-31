@@ -125,8 +125,11 @@ node "$DEST/install-hooks.js" --claude-defaults
 node "$DEST/install-hooks.js" --allow-send-file
 if command -v claude >/dev/null 2>&1; then
   claude mcp remove -s user huginn >/dev/null 2>&1 || true
-  if claude mcp add -s user -e "HUGINN_APPD_DATA=${DATA_DIR:-/var/lib/huginn-appd}" \
-       huginn -- "$(command -v node)" "$DEST/mcp/huginn-mcp.js" >/dev/null 2>&1; then
+  # The NAME before -e: `--env` takes any number of values, so a name after it is
+  # read as one more KEY=value and refused ("Invalid environment variable format:
+  # huginn") - which is how 3.16.0 shipped, registering nothing.
+  if claude mcp add -s user huginn -e "HUGINN_APPD_DATA=${DATA_DIR:-/var/lib/huginn-appd}" \
+       -- "$(command -v node)" "$DEST/mcp/huginn-mcp.js" >/dev/null 2>&1; then
     say "registered huginn's MCP server (send_file) for Claude Code sessions"
   else
     say "WARNING: could not register huginn's MCP server with claude; sessions will not have send_file (chats still do)"

@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.16.1 — 2026-10-30
+
+### Fixed
+- Installing registers the send_file tool for the server's Claude Code sessions. 3.16.0 passed the
+  server name after the environment option, which the Claude CLI read as one more variable and
+  refused, so sessions never got the tool (chats did).
+
 ## 3.16.0 — 2026-10-30
 
 ### Added

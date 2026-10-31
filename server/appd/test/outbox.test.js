@@ -127,3 +127,14 @@ test('the MCP server speaks the protocol: initialize, list, a send, and a refusa
     assert.equal(unknown.error.code, -32601);
   } finally { s.close(); }
 });
+
+// install.sh registers the MCP server for sessions with `claude mcp add`. Its
+// `-e/--env` is variadic, so the NAME must come before it: 3.16.0 put it after,
+// the CLI read `huginn` as one more KEY=value, refused, and no session ever got
+// send_file. Pinned on the script's own line.
+test('install.sh names the MCP server before the variadic -e', () => {
+  const sh = fs.readFileSync(path.join(__dirname, '..', 'install.sh'), 'utf8');
+  const add = sh.split('\n').find((l) => /claude mcp add\b/.test(l));
+  assert.ok(add, 'install.sh registers the server');
+  assert.match(add, /claude mcp add -s user huginn -e /);
+});
