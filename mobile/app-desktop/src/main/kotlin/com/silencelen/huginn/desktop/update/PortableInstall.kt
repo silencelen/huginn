@@ -300,9 +300,16 @@ object PortableInstall {
             val currentLink = File(root, "current").toPath()
             val before = currentTarget(root)
             if (dest.exists()) {
+                // Already installed - `current` points at it (an earlier attempt that
+                // got this far before the app quit): the install is done, so hand
+                // back its launcher and let the relaunch happen. Before 2.9.1 this was
+                // an error the person could do nothing about.
+                if (before?.canonicalFile == dest.canonicalFile && running?.canonicalFile != dest.canonicalFile) {
+                    return@runCatching File(currentLink.toFile(), LinuxInstall.LAUNCHER_REL)
+                }
                 // A leftover from an attempt that died between the rename and the
-                // swap. Never the live one: that is refused rather than replaced.
-                if (before?.canonicalFile == dest.canonicalFile || running?.canonicalFile == dest.canonicalFile) {
+                // swap. Never the running one: that is refused rather than replaced.
+                if (running?.canonicalFile == dest.canonicalFile) {
                     throw IllegalStateException("$version is already the installed version")
                 }
                 dest.deleteRecursively()

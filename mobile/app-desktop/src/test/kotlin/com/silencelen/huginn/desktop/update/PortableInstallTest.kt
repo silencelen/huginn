@@ -315,6 +315,20 @@ class PortableApplyTest {
     }
 
     @Test
+    fun `a version already in place is installed, not an error, unless it is the one running`() {
+        // 2026-10-31: a second Install click found 2.9.0 already swapped in and
+        // reported "already the installed version" - for an install that had worked.
+        val r = layout("1.0.0")
+        PortableInstall.apply(r, tarball(TestTar.release("1.1.0")), "1.1.0", running = File(r, "versions/1.0.0")).getOrThrow()
+        val again = PortableInstall.apply(r, tarball(TestTar.release("1.1.0")), "1.1.0", running = File(r, "versions/1.0.0"))
+        assertEquals(File(r, "current/bin/huginn-desktop-kt").path, again.getOrThrow().path)
+        assertEquals("versions/1.1.0", currentName(r))
+        val self = PortableInstall.apply(r, tarball(TestTar.release("1.1.0")), "1.1.0", running = File(r, "versions/1.1.0"))
+        assertTrue(self.isFailure, "the running version is still never replaced")
+        r.parentFile.deleteRecursively()
+    }
+
+    @Test
     fun `the running version is never pruned even when it is not current`() {
         val r = layout("1.0.0")
         PortableInstall.apply(r, tarball(TestTar.release("1.1.0")), "1.1.0", running = File(r, "versions/1.0.0")).getOrThrow()
@@ -436,6 +450,31 @@ class PortableUpdaterTest {
         assertTrue(installThenQuit(install = u::install, quit = {}))
         assertEquals(listOf("/r|huginn-desktop-kt-1.1.0-linux-x64.tar.gz|1.1.0|/r/versions/1.0.0"), applied)
         assertEquals(listOf(File("/r/current/bin/huginn-desktop-kt")), relaunched)
+    }
+
+    @Test
+    fun `a second install while one is running is refused, and the flag says which version`() = runTest {
+        val payload = TestTar.release("1.1.0")
+        val (feed, http) = setup(payload, "linux-x64-portable", "huginn-desktop-kt-1.1.0-linux-x64.tar.gz")
+        var seenDuring: String? = null
+        lateinit var u: DesktopUpdater
+        var applies = 0
+        u = DesktopUpdater(
+            "1.0.0", "linux-x64", feed, http, "desktop-v", cache(), isWindows = false,
+            linux = LinuxInstall.Mode(LinuxInstall.Kind.PORTABLE, File("/r"), File("/r/versions/1.0.0")),
+            portableApply = { _, _, _, _ ->
+                applies++
+                seenDuring = u.installing.value
+                assertFalse(u.install(), "a click while the first install runs does nothing")
+                Result.success(File("/r/current/bin/huginn-desktop-kt"))
+            },
+            relauncher = { true },
+        )
+        u.check()
+        assertTrue(u.install())
+        assertEquals("1.1.0", seenDuring)
+        assertEquals(1, applies)
+        assertEquals("1.1.0", u.installing.value, "left set: the app is quitting")
     }
 
     @Test

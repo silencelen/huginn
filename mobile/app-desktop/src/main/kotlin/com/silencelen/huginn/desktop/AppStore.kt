@@ -341,6 +341,22 @@ class AppStore(
     fun requestQuit() { _quitRequested.value = true }
 
     /**
+     * "Install and restart", OFF the window's thread. It used to run in the click
+     * handler, and a portable install unpacks the whole app before it returns: the
+     * window froze with no sign of life, and a second click queued a second install
+     * (2026-10-31). Now the click returns at once, [DesktopUpdater.installing]
+     * draws the overlay while the work runs, and the app quits when the install
+     * took - or, when it did not, opens the Updates page, where the reason is.
+     */
+    fun installUpdate(openUpdatesOnFailure: Boolean = true) {
+        if (updater.installing.value != null) return
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val quit = com.silencelen.huginn.desktop.update.installThenQuit(install = updater::install, quit = ::requestQuit)
+            if (!quit && openUpdatesOnFailure) openSettings("updates")
+        }
+    }
+
+    /**
      * The keyboard cheat sheet, asked for from somewhere other than F1.
      *
      * Settings' *Appearance & behaviour* has a row into it, and the sheet is an

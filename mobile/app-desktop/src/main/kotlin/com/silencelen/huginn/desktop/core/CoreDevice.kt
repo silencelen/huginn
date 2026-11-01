@@ -104,6 +104,15 @@ class CoreDevice internal constructor(
     @Volatile private var client: CoreClient? = null
     private var job: Job? = null
 
+    private val _installingCore = MutableStateFlow<String?>(null)
+
+    /**
+     * The core version being put in place at this start - an update brought a
+     * newer one, and installing it restarts the core this app talks through - or
+     * null. The gate screen says "Finishing the update" while it is set.
+     */
+    val installingCore: StateFlow<String?> = _installingCore.asStateFlow()
+
     private val _gate = MutableStateFlow(CoreGate.CHECKING)
     /** See [CoreGate]. A core that drops for a restart (an update) keeps READY for [GATE_GRACE_MS]. */
     val gate: StateFlow<CoreGate> = _gate.asStateFlow()
@@ -136,7 +145,11 @@ class CoreDevice internal constructor(
             // D9: the core that ships inside this app is put in place at once,
             // silently — copying a binary into the per-user layout needs no
             // decision. Starting it at BOOT is the person's choice ([setUp]).
-            CoreSetup.ensureInstalled()
+            try {
+                CoreSetup.ensureInstalled { v -> _installingCore.value = v }
+            } finally {
+                _installingCore.value = null
+            }
             while (isActive) {
                 val c = clientFor()
                 client = c

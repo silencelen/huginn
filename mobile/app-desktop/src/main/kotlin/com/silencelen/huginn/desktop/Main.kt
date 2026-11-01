@@ -1,5 +1,6 @@
 package com.silencelen.huginn.desktop
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.flow.first
@@ -943,7 +944,11 @@ fun main(args: Array<String>) {
                     // The same verb the row menus carry, for the palette's
                     // "Open <session> in terminal" on the session that is open.
                     val terminalVerb = rememberTerminalVerb(store)
-                    Shell(store)
+                    androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                        Shell(store)
+                        // Over everything, the core gate included, until the app quits.
+                        com.silencelen.huginn.desktop.ui.InstallingOverlay(store.updater.installing.collectAsState().value)
+                    }
 
                     if (paletteOpen.value) {
                         CommandPalette(

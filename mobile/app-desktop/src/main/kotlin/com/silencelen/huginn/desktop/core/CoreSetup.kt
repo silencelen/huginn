@@ -97,13 +97,17 @@ internal object CoreSetup {
      * executable bit on app-resources (measured: 0644 inside the app image), and
      * a file in an app bundle is the wrong thing to make executable anyway.
      */
-    suspend fun ensureInstalled(): Result<Path> = withContext(Dispatchers.IO) {
+    suspend fun ensureInstalled(onInstalling: (String) -> Unit = {}): Result<Path> = withContext(Dispatchers.IO) {
         runCatching {
             val found = bundledBinary()
             installedBinary()?.let { inst ->
                 if (found == null || !bundledIsNewer(installedVersion(inst))) return@runCatching inst
             }
             val bundled = found ?: error("this build carries no huginn core — install it with `huginn core install`")
+            // Said BEFORE the self-install, which restarts a running core and waits
+            // for it: the window shows "Finishing the update" for that time rather
+            // than an unexplained "Connecting…" (2026-10-31).
+            onInstalling(BuildInfo.VERSION)
             val tmp = Files.createTempFile("huginn-core-", if (windows) ".exe" else "")
             try {
                 Files.copy(bundled, tmp, StandardCopyOption.REPLACE_EXISTING)

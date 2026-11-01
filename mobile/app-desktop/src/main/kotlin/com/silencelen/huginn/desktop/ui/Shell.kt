@@ -1120,11 +1120,7 @@ private fun UpdateNotice(store: AppStore, ready: UpdateState.Ready, copy: (Strin
         installable = ready.installable,
         hint = ready.hint,
         command = command,
-        onInstall = {
-            if (!installThenQuit(install = store.updater::install, quit = store::requestQuit)) {
-                store.openSettings("updates")
-            }
-        },
+        onInstall = { store.installUpdate() },
         onCopyCommand = { command?.let(copy) },
         onLater = { store.updateLater(ready.version) },
         onSilence = { store.updateSilence(ready.version) },

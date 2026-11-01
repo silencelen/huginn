@@ -943,9 +943,10 @@ fun ColumnScope.UpdatesPage(store: AppStore, mark: String?) {
             // since it is a child of this JVM. So we leave, it installs, and its
             // finish page brings the app back. [installThenQuit] holds the rule
             // that this only happens when the launch really took.
+            val installing by store.updater.installing.collectAsState()
             Button(
-                enabled = ready.installable,
-                onClick = { installThenQuit(install = store.updater::install, quit = store::requestQuit) },
+                enabled = ready.installable && installing == null,
+                onClick = { store.installUpdate(openUpdatesOnFailure = false) },
             ) { Text("Install and restart") }
         }
     }

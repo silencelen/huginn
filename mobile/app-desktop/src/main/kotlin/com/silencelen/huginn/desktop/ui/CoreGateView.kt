@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -13,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.desktop.AppStore
 import com.silencelen.huginn.desktop.core.CoreGate
@@ -25,6 +28,7 @@ import com.silencelen.huginn.desktop.core.CoreGate
 @Composable
 fun CoreGateView(store: AppStore, gate: CoreGate) {
     val setup by store.coreDevice.setup.collectAsState()
+    val installingCore by store.coreDevice.installingCore.collectAsState()
     val windows = (System.getProperty("os.name") ?: "").startsWith("Windows")
     Column(
         Modifier.fillMaxSize().padding(32.dp),
@@ -34,7 +38,22 @@ fun CoreGateView(store: AppStore, gate: CoreGate) {
         Column(Modifier.widthIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             when (gate) {
                 CoreGate.CHECKING, CoreGate.READY -> {
-                    Text("Connecting to huginn core…", style = MaterialTheme.typography.titleMedium)
+                    // ⚠ AN UPDATE'S FIRST START (2026-10-31): the new app puts its
+                    // own core in place, which restarts the core it talks through
+                    // and waits for it - several seconds a bare "Connecting…" left
+                    // unexplained, and the owner closed the window mid-way.
+                    val v = installingCore
+                    Text(
+                        if (v != null) "Finishing the update" else "Connecting to huginn core…",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (v != null) {
+                        Text(
+                            "Restarting huginn core onto $v. This takes a few seconds; the window opens by itself.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    LinearProgressIndicator(Modifier.fillMaxWidth().testTag(CORE_GATE_PROGRESS_TAG))
                 }
                 CoreGate.NOT_SET_UP -> {
                     Text("Set up huginn core", style = MaterialTheme.typography.titleMedium)
@@ -66,3 +85,5 @@ fun CoreGateView(store: AppStore, gate: CoreGate) {
         }
     }
 }
+
+const val CORE_GATE_PROGRESS_TAG: String = "coreGate.progress"

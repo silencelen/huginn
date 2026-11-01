@@ -110,6 +110,17 @@ class DesktopUpdater(
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
+    private val _installing = MutableStateFlow<String?>(null)
+
+    /**
+     * The version being installed, from the click until the app quits (or the
+     * install fails). The window draws its "Installing…" overlay from it, and it
+     * is the guard against a second click: on a portable install the unpack takes
+     * seconds, and a second click while it ran found the version already in place
+     * and reported it as an error (2026-10-31).
+     */
+    val installing: StateFlow<String?> = _installing.asStateFlow()
+
     /** For the Settings screen: what this build believes it is. */
     val installedVersion: String get() = currentVersion
 
@@ -251,6 +262,17 @@ class DesktopUpdater(
     fun install(): Boolean {
         val ready = _state.value as? UpdateState.Ready ?: return false
         if (!ready.installable) return false
+        synchronized(this) {
+            if (_installing.value != null) return false
+            _installing.value = ready.version
+        }
+        // Left set on success: the app is quitting, and the overlay stays up until it does.
+        val ok = runCatching { installReady(ready) }.getOrDefault(false)
+        if (!ok) _installing.value = null
+        return ok
+    }
+
+    private fun installReady(ready: UpdateState.Ready): Boolean {
         // Re-verified at the moment of execution, not merely when it landed. The
         // file has been sitting in a world-readable cache since the download, and
         // the check that matters is the one taken closest to the exec.
