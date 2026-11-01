@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## 2.9.1
+
+### Changed
+- Install and restart shows an "Installing" screen with a progress bar until the app closes, and
+  ignores a second click, instead of freezing the window while the update unpacks.
+- The first start after an update says "Finishing the update" while huginn core restarts onto the new
+  version, with a progress bar, instead of an unexplained "Connecting to huginn core…".
+
+### Fixed
+- Installing an update that is already in place counts as installed, not an error.
+
 ## 2.9.0
 
 ### Added

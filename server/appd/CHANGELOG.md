@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.16.3 — 2026-10-31
+
+### Security
+- An image a session's answer names is served from that session's folder only when the folder is a
+  real project folder: never when the session runs at `/` or in a system folder, and never a hidden
+  file or folder under it (such as `.ssh` or `.cache`), even through a link.
+
 ## 3.16.2 — 2026-10-31
 
 ### Fixed
