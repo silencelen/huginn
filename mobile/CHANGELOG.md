@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.16.0 — 2026-11-02
 
 ### Added
 - New session takes a starting directory, with a dropdown of the directories recent sessions used;

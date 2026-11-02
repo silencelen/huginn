@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## [Unreleased]
+## 2.10.0
 
 ### Added
 - New session takes a starting directory, with a Recent dropdown of the directories recent sessions
