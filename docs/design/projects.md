@@ -50,7 +50,7 @@ removed members directly since the lead last wrote.
 a rev that is not the change on offer, for the spawn route's reason: a notification that sat on a lock
 screen while the lead revised again must not approve the revision the owner never saw. The rev alone
 cannot do that — it is `manifest.rev + 1` for every proposal until one is applied, so two blocks
-written in a row share it. `token` is a digest (sha256, 16 hex) of the canonical `{added, removed,
+written in a row share it. `token` is a digest (the whole sha256, 64 hex) of the canonical `{added, removed,
 changed, summary}`, computed at detection and again by the route from the change it is about to
 apply; a mismatch is `409` with the current project, and the push's fingerprint carries it so a
 rewritten block is a new card. `decline-change` takes the token optionally and refuses a stale one
