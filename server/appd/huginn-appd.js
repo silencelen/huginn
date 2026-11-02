@@ -2886,7 +2886,10 @@ function heldResult(name, text, held, fields) {
   if (held.blockedBy === 'shell') {
     return {
       ok: false, code: 409, held,
-      message: held.shellMode
+      message: held.foreign
+        ? 'the prompt holds text that is not the command, so the Enter was NOT pressed and nothing ran. '
+          + 'Clear the prompt from the Screen tab, then send the command again.'
+        : held.shellMode
         ? "this session's prompt is in shell mode (!), where Enter would have run the message as a "
           + 'shell command, so it was NOT sent. It is sitting in the prompt: clear it from the Screen tab.'
         : held.shellExpected
@@ -2912,14 +2915,27 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
    * `<bash-stdout>`). So the `!` goes in as a KEYSTROKE first, on its own, and
    * only once the box is seen in shell mode does the command follow as an
    * ordinary paste; every refusal below then accepts the mode the daemon put the
-   * box in (typing.enterRefusal `shell`). A box already in shell mode — the
-   * owner left a `!` there — is used as it is. A pane with no composer, or one
-   * that does not switch, runs nothing: nothing was pasted and a 409 says so.
+   * box in (typing.enterRefusal `shell`). An EMPTY box already in shell mode —
+   * the owner left a bare `!` there — is used as it is. A pane with no composer,
+   * or one that does not switch, runs nothing: nothing was pasted and a 409
+   * says so.
+   *
+   * ⚠ AND THE BOX MUST BE EMPTY, IN EITHER MODE (security scan 2026-11-02, F2).
+   * The emptiness check used to sit under "not yet in shell mode" only, so a box
+   * in shell mode that already held text — a `!`-headed message a start_session
+   * request left parked there, a draft the owner began — took the command
+   * pasted BEHIND that text, and the Enter ran the two as one line. Now any text
+   * in the box, whatever put the box in its mode, refuses the send before
+   * anything is typed; the look before the Enter (typing.enterRefusal `foreign`)
+   * is the second lock on the same door.
    */
   if (shell && submit) {
     const now = await capturePaneLines(name);
     if (!now || !typing.composerDrawn(now)) {
       return { ok: false, code: 409, message: 'claude is not running in this session — a shell command needs its prompt' };
+    }
+    if (!typed && (typing.composerText(now, { dropGhost: true }) || '') !== '') {
+      return { ok: false, code: 409, message: 'the prompt already holds text — clear it from the Screen tab, then send the command again' };
     }
     if (!typing.composerShellMode(now)) {
       if (typed) {
@@ -2928,9 +2944,6 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
         log(`typing: ${name}: a held shell command's box is no longer in shell mode; not pressing Enter`);
         notePasteOutcome(name, text, false);
         return { ok: true, how: 'enter', settled: false, settleMs: 0, submitted: false, recovered: false };
-      }
-      if ((typing.composerText(now, { dropGhost: true }) || '') !== '') {
-        return { ok: false, code: 409, message: 'the prompt already holds text, so a shell command cannot be typed into it — clear it from the Screen tab first' };
       }
       const bang = await run('tmux', ['send-keys', '-t', target, '-l', '--', '!']);
       if (bang.err) return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: bang.stderr };
@@ -8045,28 +8058,13 @@ async function applyPendingChange(project) {
   };
 }
 
-/** The change, as a notification with the two bounded actions and no others. */
+/**
+ * The change, as a notification that OPENS the project and offers no verb
+ * (projects.changePush, pure, for the shape; security scan 2026-11-02, F1).
+ */
 function notifyChange(project) {
-  const pc = project.pendingChange || {};
-  const bits = [];
-  if ((pc.added || []).length) bits.push(`add ${pc.added.map((x) => x.role).join(', ')}`);
-  if ((pc.removed || []).length) bits.push(`remove ${pc.removed.map((x) => x.role).join(', ')}`);
-  if ((pc.changed || []).length) bits.push(`re-role ${pc.changed.map((x) => x.role).join(', ')}`);
-  deliverPush({
-    kind: 'project_change',
-    key: `project:${project.id}`,
-    subject: project.id,
-    title: `${project.name} — roster change proposed`,
-    text: `${bits.join('; ')}. ${pc.summary || ''}`.trim(),
-    options: ['Approve', 'Decline'],
-    // `rev` and `token` are what approve-change takes (the token binds the tap
-    // to the words on this card — a rewritten block keeps the rev and moves the
-    // token); `changeRev` stays for the first clients.
-    payload: { projectId: project.id, rev: pc.rev || 0, changeRev: pc.rev || 0, token: pc.token || '' },
-    // The token is in the fingerprint so a rewritten proposal is a NEW
-    // notification, never a silent update of the one the owner is reading.
-    fingerprint: `${project.id}:change:${pc.rev || 0}:${pc.token || ''}`,
-  }).catch((e) => log(`project ${project.slug}: change push failed: ${e.message}`));
+  deliverPush(projectsLib.changePush(project))
+    .catch((e) => log(`project ${project.slug}: change push failed: ${e.message}`));
 }
 
 /** The proposal, as a notification with the two bounded actions and no others. */
@@ -10256,6 +10254,18 @@ async function answerSessionQuestion(requester, q, decision) {
     sessionreq.answer(STATE_DIR, requester, req.id, { started: false, reason });
     log(`questions: ${who} <- start_session declined (${req.directory})`);
     return { status: 200, body: { ok: true, via: 'daemon', started: false } };
+  }
+  // ⚠ THE PROMPT MAY NOT START WITH `!` (sessionreq.promptProblem; security
+  // scan 2026-11-02, F2): pasted, it would put the new box into shell mode and
+  // sit there, and the owner's next shell command would run appended to it.
+  // The tool refuses such a request before parking it; a request parked by any
+  // other path is answered here, started:false, with the same reason — and the
+  // card is cleared, because no name the owner could choose would make it safe.
+  const bang = sessionreq.promptProblem(req.prompt);
+  if (bang) {
+    sessionreq.answer(STATE_DIR, requester, req.id, { started: false, reason: bang });
+    log(`questions: ${who} <- start_session refused: ${bang}`);
+    return { status: 409, body: { ok: false, via: 'daemon', started: false, reason: bang, error: bang } };
   }
   const name = decision.name || req.name || await suggestSessionName(req.directory);
   const made = await createSession({ name, cwd: req.directory });

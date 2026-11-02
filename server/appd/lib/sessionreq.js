@@ -32,6 +32,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const typing = require('./typing');
 
 const START_DIRNAME = '.start';
 const EXPIRE_MS = 60 * 60 * 1000;             // one hour: the tool's own deadline
@@ -41,6 +42,8 @@ const DIR_MAX = 4096;
 const NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$/;   // the create route's grammar (huginn-appd NAME_RE)
 const SESSION_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,49}$/; // a tmux name as the routes accept it
 const CHAT_ID_RE = /^[0-9a-f-]{36}$/;
+/** The one reason an opening prompt is refused for its CONTENT (promptProblem). */
+const PROMPT_BANG_REASON = 'the opening prompt may not start with !';
 /** The tool's full name as Claude Code reports it: server `huginn`, tool `start_session`. */
 const START_SESSION_TOOL = 'mcp__huginn__start_session';
 
@@ -77,12 +80,35 @@ function argsProblem(args) {
   if (!path.isAbsolute(directory)) return 'directory must be an absolute path on this server';
   if (typeof prompt !== 'string' || !prompt.trim()) return 'prompt is required: what the new session should start on';
   if (prompt.length > PROMPT_MAX) return `prompt is at most ${PROMPT_MAX} characters`;
+  const bang = promptProblem(prompt);
+  if (bang) return bang;
   if (name !== undefined && name !== null) {
     if (typeof name !== 'string' || !name.trim()) return 'name, when given, is a session name';
     if (name.includes('.')) return 'a session name cannot contain a "."';
     if (!NAME_RE.test(name.trim())) return 'name: letters, digits, underscore and dash, up to 50 characters';
   }
   return null;
+}
+
+/**
+ * ⚠ AN OPENING PROMPT MAY NOT START WITH `!` (security scan 2026-11-02, F2).
+ *
+ * The daemon pastes the prompt into the new session's box as its first message.
+ * A bracketed paste that begins with `!` puts Claude Code's box into SHELL MODE
+ * and holds the rest (measured 2.1.316), where the look before the Enter
+ * refuses to press — so the Claude-written text sits, unsent, in a shell-mode
+ * box, and the owner's next shell command would have been appended to it and
+ * run with it. Judged on the text AS IT WILL BE TYPED (`typing.sendable`): a
+ * word joiner or any other invisible character in front of the `!` is
+ * stripped before the paste, so it must not hide the `!` from this check.
+ *
+ * Checked twice on purpose: by the tool before the request is parked, and by
+ * the daemon when the owner approves — a request parked by anything but the
+ * tool gets the same answer.
+ */
+function promptProblem(prompt) {
+  if (typeof prompt !== 'string') return null;
+  return /^\s*!/.test(typing.sendable(prompt)) ? PROMPT_BANG_REASON : null;
 }
 
 let seq = 0;
@@ -265,7 +291,7 @@ function sweepExpired(stateDir, { now = Date.now() } = {}) {
 }
 
 module.exports = {
-  START_DIRNAME, START_SESSION_TOOL, EXPIRE_MS, ID_RE, PROMPT_MAX,
-  validRequester, requestDir, argsProblem, park, liveRequests, answer, withdraw, claimAnswer,
+  START_DIRNAME, START_SESSION_TOOL, EXPIRE_MS, ID_RE, PROMPT_MAX, PROMPT_BANG_REASON,
+  validRequester, requestDir, argsProblem, promptProblem, park, liveRequests, answer, withdraw, claimAnswer,
   awaitAnswer, sweepExpired,
 };

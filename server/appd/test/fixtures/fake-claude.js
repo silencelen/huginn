@@ -74,6 +74,7 @@
  *                                       Backspace on the empty box leaves it. A
  *                                       paste that STARTS with `!` enters it too.
  *              HG_FAKE_CLAUDE_TYPED     text the composer already holds when it
+ *                                       paints (a `!` at its head: shell mode, holding the rest);
  *                                       paints — a person who started typing while
  *                                       the paste was being swallowed. Recovery
  *                                       must not re-paste over it, so the daemon's
@@ -222,7 +223,13 @@ setTimeout(() => {
     // Somebody was typing while the paste went nowhere. Whatever is in the box
     // at paint time is THEIRS, and a recovery that pastes over it turns a lost
     // message into a mangled one.
-    else if (TYPED) buf = TYPED;
+    else if (TYPED) {
+      buf = TYPED;
+      // A box whose text begins with `!` IS in shell mode holding the rest —
+      // the same rule the data handler applies to a typed or pasted `!` — so
+      // a test can stand up a pane with a `!`-headed message parked in it.
+      if (buf.startsWith('!')) { shellMode = true; buf = buf.slice(1); }
+    }
     render();
   }, BANNER_MS);
 }, BOOT_MS);

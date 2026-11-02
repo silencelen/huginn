@@ -1313,6 +1313,10 @@ function boxIsOurs(composerHolds, text) {
  *   {blockedBy:'shell',        a `shell` send found the box OUT of shell mode:
  *    shellExpected:true}       the Enter would hand the command to Claude as a
  *                              prompt, so nothing is pressed
+ *   {blockedBy:'shell',        a `shell` send found the box in shell mode but
+ *    shellMode:true,           holding something OTHER than exactly our command
+ *    foreign:true}             (text planted there before the paste): the Enter
+ *                              would run the two as one line, so nothing is pressed
  *   {blockedBy:'modal'}        a composer was drawn before the paste and none is
  *                              now — something with no caret of its own replaced
  *                              it, and an Enter there answers whatever it is
@@ -1354,6 +1358,17 @@ function enterRefusal(lines, text, { hadComposer = false, shell = false } = {}) 
   }
   if (hadComposer && c === null) {
     return { blockedBy: 'modal', why: 'the composer was replaced by something with no caret' };
+  }
+  // ⚠ A SHELL ENTRY PRESSES ENTER ONLY ONTO EXACTLY ITS OWN COMMAND (security
+  // scan 2026-11-02, F2). Everything above let a shell send through on "the box
+  // is in shell mode", whoever's text was in it — and a box can hold text that
+  // is not ours: a `!`-headed message a prompt-injected start_session left
+  // parked there, a draft the owner began. Pasted behind it and Entered, the
+  // owner's `git status` ran as `<planted>git status`. So a box in shell mode
+  // that is not explained by our command is refused, and the command stays
+  // where it is for the Screen tab to clear.
+  if (shell && inShellMode) {
+    return { blockedBy: 'shell', shellMode: true, foreign: true, why: 'the prompt holds text that is not the command, so the Enter was not pressed' };
   }
   return leftShellMode;
 }
@@ -1855,7 +1870,12 @@ function submitRefusal({ submit = true, composer = false, shell = false, shellMo
   // mode and holds the rest), where its Enter runs the rest as a command — or,
   // caught by the look before the Enter, sits there unsent with no clear word
   // why. Refused before anything is typed, with the way to mean it.
-  if (composer && !shellEntry && /^!/.test(String(text || ''))) {
+  //
+  // ⚠ JUDGED ON THE TEXT AS IT WILL BE TYPED (`sendable`), not as it arrived
+  // (security scan 2026-11-02, F2): a word joiner or any other invisible
+  // character in front of the `!` is stripped before the paste, so the raw text
+  // did not start with `!` while the pasted bytes did.
+  if (composer && !shellEntry && /^!/.test(sendable(String(text || '')))) {
     return 'a message that starts with "!" puts Claude Code\'s prompt into shell mode, where Enter runs '
       + 'it as a shell command, so it was not typed. Send it as a shell command to run it, or reword it.';
   }
