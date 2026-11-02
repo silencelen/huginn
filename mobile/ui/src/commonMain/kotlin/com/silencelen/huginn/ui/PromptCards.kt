@@ -18,12 +18,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,7 +50,10 @@ import com.silencelen.huginn.data.PlanPending
 import com.silencelen.huginn.data.PromptOption
 import com.silencelen.huginn.data.QuestionAnswers
 import com.silencelen.huginn.data.SessionQuestion
+import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import com.silencelen.huginn.ui.theme.StateKind
+import com.silencelen.huginn.ui.theme.stateColor
 import kotlinx.serialization.json.JsonObject
 
 // ⚠ WHO DRAWS THESE CARDS, AS OF 2026-09-15 (owner decision 23).
@@ -585,6 +590,14 @@ fun QuestionCard(
  * and the prompt's size is said beside Start. The prompt the daemon SENDS is
  * untouched — this answer carries no prompt; only what is drawn is transformed.
  *
+ * ⚠ AND START WAITS FOR THE END OF THE PROMPT (third scan 2026-11-02, F1). The
+ * block is capped at [SESSION_PROMPT_FOLD_HEIGHT] and scrolls; sixty blank lines
+ * or two thousand no-break spaces put the real instruction below the fold with
+ * nothing on screen to say so, and Start was live. Now the block says "↓ more"
+ * until it is scrolled to its end, and Start is disabled — with the reason beside
+ * it — until it has been ([WrappedMonoBlock]'s `onAtEnd`, latched per question).
+ * The display copy also folds those blank lines into one line that says how many.
+ *
  * A create refusal (the name is taken, the directory is gone) comes back as
  * [note] with the question still waiting, so the card stays up and the name
  * can be changed and Start pressed again. Nothing is started until Start.
@@ -622,15 +635,21 @@ private fun SessionQuestionCard(
                 modifier = Modifier.padding(top = 2.dp).testTag("question.session.meta"))
         }
         val prompt = req?.prompt?.takeIf { it.isNotBlank() }
+        // The prompt block has been scrolled to its end (or fits): Start's gate.
+        // Latched for this question, so a scroll back up does not disarm Start.
+        // ⚠ FALSE UNTIL THE BLOCK HAS MEASURED, not true: fail closed.
+        var promptRead by remember(question.id, prompt) { mutableStateOf(prompt == null) }
         if (prompt != null) {
             Spacer(Modifier.height(6.dp))
             Text("The first message it would get", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             // Every character, in a block that WRAPS: scrolls down inside its cap,
             // never sideways, never clipped to a line count. The person is
-            // approving these words, so none may sit past the edge.
+            // approving these words, so none may sit past the edge — or below
+            // the fold without Start waiting for them.
             Box(Modifier.testTag("question.session.prompt")) {
-                WrappedMonoBlock(PromptDisplay.visible(prompt), maxHeight = SESSION_PROMPT_FOLD_HEIGHT)
+                WrappedMonoBlock(PromptDisplay.visible(prompt), maxHeight = SESSION_PROMPT_FOLD_HEIGHT,
+                    tag = "question.session.prompt", onAtEnd = { if (it) promptRead = true })
             }
         }
         OutlinedTextField(
@@ -644,22 +663,34 @@ private fun SessionQuestionCard(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
                 onClick = { onAnswer(QuestionAnswers.sessionBody(allow = true, name = draft.name)) },
-                enabled = !answering, modifier = Modifier.testTag("question.session.start"),
+                enabled = !answering && promptRead, modifier = Modifier.testTag("question.session.start"),
             ) { Text("Start") }
             OutlinedButton(
                 onClick = { onDraft(draft.copy(noOpen = !draft.noOpen)) },
                 enabled = !answering, modifier = Modifier.testTag("question.session.decline"),
             ) { Text("Decline") }
             // The size of what Start sends, beside Start: a prompt padded to
-            // hide something is at least visibly long.
+            // hide something is at least visibly long — and, until the block has
+            // been scrolled to its end, why Start is not yet live.
             if (prompt != null) {
-                Text(
-                    PromptDisplay.countsLine(prompt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).testTag("question.session.counts"),
-                )
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        PromptDisplay.countsLine(prompt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("question.session.counts"),
+                    )
+                    if (!promptRead) {
+                        Text(
+                            PromptDisplay.SCROLL_FIRST,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = stateColor(StateKind.NEEDS_YOU),
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("question.session.scroll"),
+                        )
+                    }
+                }
             }
         }
         if (draft.noOpen) {
@@ -877,16 +908,64 @@ private fun PreviewBlock(spec: AskQuestionSpec, index: Int?) {
  * character inside the card's width. For text a person is approving — nothing
  * can be pushed past the right edge. [MonoBlock] is for diffs and previews,
  * where re-flowing would lie about the shape.
+ *
+ * ⚠ AND IT SAYS WHEN THERE IS MORE BELOW (third scan 2026-11-02, F1). A capped
+ * block with no scrollbar — the desktop draws none, the phone's fades at once —
+ * looked complete when it was not, and the tail of a padded prompt sat under the
+ * fold. While the content is taller than [maxHeight] and not scrolled to its end
+ * a hairline and "↓ more" close the block ([PromptBlock.moreBelow]); [onAtEnd]
+ * reports whether the end is on screen ([PromptBlock.atEnd]: scrolled to the
+ * max, or the content fits — and FALSE until the block has measured), so the
+ * card can hold its button until it is. [tag] names the scroll node `<tag>.scroll`
+ * and the cue `<tag>.more` for the tests.
  */
 @Composable
-internal fun WrappedMonoBlock(text: String, maxHeight: Dp) {
+internal fun WrappedMonoBlock(text: String, maxHeight: Dp, tag: String? = null, onAtEnd: (Boolean) -> Unit = {}) {
+    val scroll = rememberScrollState()
+    val atEnd = PromptBlock.atEnd(scroll.value, scroll.maxValue)
+    LaunchedEffect(atEnd) { onAtEnd(atEnd) }
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
         modifier = Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState()).padding(8.dp)) {
-            Text(text, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                softWrap = true, modifier = Modifier.fillMaxWidth())
+        Column(Modifier.fillMaxWidth()) {
+            Box(
+                Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(scroll).padding(8.dp)
+                    .then(if (tag != null) Modifier.testTag("$tag.scroll") else Modifier),
+            ) {
+                Text(text, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    softWrap = true, modifier = Modifier.fillMaxWidth())
+            }
+            if (PromptBlock.moreBelow(scroll.value, scroll.maxValue)) {
+                HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
+                Text(
+                    PromptBlock.MORE,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        .then(if (tag != null) Modifier.testTag("$tag.more") else Modifier),
+                )
+            }
         }
     }
+}
+
+/**
+ * The two decisions a [WrappedMonoBlock] makes from its [androidx.compose.foundation.ScrollState],
+ * as functions so they can be asserted without a composition.
+ *
+ * ⚠ `maxValue` IS `Int.MAX_VALUE` UNTIL THE BLOCK HAS MEASURED (see
+ * [EdgeFade.edgeFades]). The fade treats that as "nothing known, fade nothing";
+ * this is a gate on Start and Approve, so it treats it the other way: not at
+ * the end until the measure says so.
+ */
+object PromptBlock {
+    /** The cue under a block with more below the fold. */
+    const val MORE: String = "↓ more"
+
+    /** The end of the content is on screen: scrolled to the max, or the content fits. Never before the measure. */
+    fun atEnd(value: Int, maxValue: Int): Boolean = maxValue != Int.MAX_VALUE && (maxValue <= 0 || value >= maxValue)
+
+    /** There is content below the fold: measured, taller than the cap, and not scrolled to its end. */
+    fun moreBelow(value: Int, maxValue: Int): Boolean = maxValue != Int.MAX_VALUE && maxValue > 0 && value < maxValue
 }
 
 /** A folded monospace block: capped height, scrolls both ways, never wraps a diff. */

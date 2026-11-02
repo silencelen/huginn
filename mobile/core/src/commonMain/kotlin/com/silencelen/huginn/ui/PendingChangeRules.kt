@@ -36,6 +36,9 @@ object PendingChangeRules {
     /** Why Approve is disabled when the card has no text to show for a role. */
     const val UNSHOWN_TEXT: String = "This change carries a task the card cannot show, so it cannot be approved here."
 
+    /** Why Approve is disabled while a text block on the card has not been scrolled to its end. */
+    const val SCROLL_FIRST: String = PromptDisplay.SCROLL_FIRST
+
     /** The headline when the lead wrote no summary. */
     fun headline(change: ProjectPendingChange): String =
         change.summary?.trim()?.takeIf { it.isNotEmpty() } ?: "The lead proposes a change to the roster."
@@ -121,16 +124,25 @@ object PendingChangeRules {
             }
         }
 
+    /** The roles whose text the card draws in a block — the blocks Approve waits on. */
+    fun textRoles(change: ProjectPendingChange): List<String> =
+        sections(change).flatMap { s -> s.rows.filter { it.text != null }.map { it.role } }
+
     /**
      * Why the change cannot be approved from a card, or null when it can.
      *
      * Approve types text into every added and re-roled member; a card that has no
      * text to show for one of them is a surface that cannot show what it would
-     * approve, and the brief's rule is that no such surface offers Approve.
+     * approve, and the brief's rule is that no such surface offers Approve. And
+     * a card whose text blocks have not all been scrolled to their end
+     * ([scrolledToEnd] false) has not shown what it would approve either (third
+     * scan 2026-11-02, F1): a task padded with blank lines or no-break spaces
+     * kept its real words below the block's fold.
      */
-    fun approvable(change: ProjectPendingChange): String? {
+    fun approvable(change: ProjectPendingChange, scrolledToEnd: Boolean = true): String? {
         val blank = { s: String? -> s == null || s.isBlank() }
         if (change.added.any { blank(it.firstPrompt) } || change.changed.any { blank(it.firstPrompt) }) return UNSHOWN_TEXT
+        if (!scrolledToEnd) return SCROLL_FIRST
         return null
     }
 

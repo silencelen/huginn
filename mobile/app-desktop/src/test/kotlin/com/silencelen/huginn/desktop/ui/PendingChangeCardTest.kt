@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.PendingAdded
@@ -109,6 +111,62 @@ class PendingChangeCardTest {
         onNodeWithTag("change.unshown", useUnmergedTree = true).assertTextContains("cannot show", substring = true)
         onNodeWithTag("change.decline", useUnmergedTree = true).assertIsEnabled()
         assertEquals(emptyList(), approved)
+    }
+
+    @Test
+    fun `a long re-role task - Approve is disabled with the scroll reason until its block is scrolled to the end (F1, third scan 2026-11-02)`() = runComposeUiTest {
+        // ⚠ THE FAIL-FIRST. The block was capped at 160dp with no scrollbar and no
+        // cue; the task's last line sat below the fold and Approve was live.
+        val task = (1..300).joinToString("\n") { "step $it: tidy the README" } + "\nrm -rf /srv/work/lora"
+        val long = ProjectPendingChange(rev = 6, token = "t6", changed = listOf(PendingChanged("firmware", task)))
+        val approved = mutableListOf<Int>()
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(600.dp)) {
+                    PendingChangeCard(change = long, onApprove = { rev, _ -> approved += rev }, onDecline = {})
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("change.approve", useUnmergedTree = true).assertIsNotEnabled()
+        onNodeWithTag("change.unshown", useUnmergedTree = true).assertTextContains("scroll", substring = true, ignoreCase = true)
+        onNodeWithTag("change.text.firmware.more", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("change.counts.firmware", useUnmergedTree = true).assertTextContains("301 lines", substring = true)
+        onNodeWithTag("change.decline", useUnmergedTree = true).assertIsEnabled()
+        onNodeWithTag("change.text.firmware.scroll", useUnmergedTree = true).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 1_000_000f) }
+        waitForIdle()
+        onNodeWithTag("change.text.firmware.more", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("change.unshown", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("change.approve", useUnmergedTree = true).assertIsEnabled()
+        onNodeWithTag("change.approve", useUnmergedTree = true).performClick()
+        waitForIdle()
+        assertEquals(listOf(6), approved)
+    }
+
+    @Test
+    fun `every block on the card must be read - a second long block keeps Approve off until it too is scrolled`() = runComposeUiTest {
+        val task = (1..120).joinToString("\n") { "step $it" }
+        val two = ProjectPendingChange(
+            rev = 7, token = "t7",
+            added = listOf(PendingAdded(role = "web", firstPrompt = "Build the dashboard.\n" + "\n".repeat(70) + "rm -rf /srv/web", mode = "auto")),
+            changed = listOf(PendingChanged("firmware", task)),
+        )
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(600.dp)) {
+                    PendingChangeCard(change = two, onApprove = { _, _ -> }, onDecline = {})
+                }
+            }
+        }
+        waitForIdle()
+        // The padded prompt folds to three lines and fits; the 120-line task does not.
+        onNodeWithText("Build the dashboard.\n⋯ 70 blank lines ⋯\nrm -rf /srv/web", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("change.text.web.more", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("change.text.firmware.more", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("change.approve", useUnmergedTree = true).assertIsNotEnabled()
+        onNodeWithTag("change.text.firmware.scroll", useUnmergedTree = true).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 1_000_000f) }
+        waitForIdle()
+        onNodeWithTag("change.approve", useUnmergedTree = true).assertIsEnabled()
     }
 
     @Test

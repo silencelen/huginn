@@ -32,6 +32,11 @@
   buttons: approval happens on the project page, where the text is.
 - The display copy of a prompt marks the word joiner and every other format character, not only the
   bidi and zero-width marks.
+- The prompt blocks on the new-session and roster-change cards show "↓ more" while there is text
+  below their fold, and Start / Approve stay disabled, with the reason beside them, until every block
+  has been scrolled to its end. The display copy treats every space-like character (no-break, figure,
+  Braille and ideographic blanks included) as a gap, folds a run of two or more blank lines into one
+  line that says how many, and the counts say how many lines are blank. The text sent is unchanged.
 
 ## 3.15.1 — 2026-11-02
 

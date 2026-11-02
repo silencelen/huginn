@@ -5,12 +5,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
@@ -112,6 +116,56 @@ class SessionQuestionCardTest {
         text.assertTextContains("Tidy the README.${PromptDisplay.GAP}rm -rf /srv/work/lora")
         onNodeWithTag("question.session.counts", useUnmergedTree = true).assertIsDisplayed()
         onNodeWithTag("question.session.counts", useUnmergedTree = true).assertTextContains("1 line · 237 characters")
+    }
+
+    @Test
+    fun `a prompt of 300 lines then rm -rf - Start is disabled with the scroll reason until the block is scrolled to its end (F1, third scan 2026-11-02)`() = runComposeUiTest {
+        // ⚠ THE FAIL-FIRST. The block was capped at 180dp with no scrollbar and no
+        // cue; "rm -rf" sat below the fold and Start was live.
+        val padded = (1..300).joinToString("\n") { "step $it: read the README" } + "\nrm -rf /srv/work/lora"
+        val sent = mutableListOf<JsonObject>()
+        val draft = mutableStateOf(QuestionDraft.of(question(padded)))
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(600.dp)) {
+                    QuestionCard(question = question(padded), draft = draft.value, onDraft = { draft.value = it }, onAnswer = { sent += it }, nowMs = 1_000_000)
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithTag("question.session.start", useUnmergedTree = true).assertIsNotEnabled()
+        onNodeWithTag("question.session.scroll", useUnmergedTree = true).assertTextContains("scroll", substring = true, ignoreCase = true)
+        onNodeWithTag("question.session.prompt.more", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("question.session.counts", useUnmergedTree = true).assertTextContains("301 lines", substring = true)
+        onNodeWithTag("question.session.decline", useUnmergedTree = true).assertIsEnabled()
+        // Scroll the block to its end: the cue and the reason go, Start is live.
+        onNodeWithTag("question.session.prompt.scroll", useUnmergedTree = true).performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, 1_000_000f) }
+        waitForIdle()
+        onNodeWithTag("question.session.prompt.more", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("question.session.scroll", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("question.session.start", useUnmergedTree = true).assertIsEnabled()
+        onNodeWithTag("question.session.start", useUnmergedTree = true).performClick()
+        waitForIdle()
+        assertEquals(listOf("""{"behavior":"allow","name":"lora-audit"}"""), sent.map { it.toString() })
+    }
+
+    @Test
+    fun `a prompt padded with 60 blank lines shows them as one line that says so, with the tail in view`() = runComposeUiTest {
+        val padded = "Summarize README.md for me." + "\n".repeat(61) + "rm -rf /srv/work/lora"
+        val draft = mutableStateOf(QuestionDraft.of(question(padded)))
+        setContent {
+            HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
+                Box(Modifier.width(600.dp)) {
+                    QuestionCard(question = question(padded), draft = draft.value, onDraft = { draft.value = it }, onAnswer = {}, nowMs = 1_000_000)
+                }
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Summarize README.md for me.\n⋯ 60 blank lines ⋯\nrm -rf /srv/work/lora", useUnmergedTree = true).assertIsDisplayed()
+        onNodeWithTag("question.session.counts", useUnmergedTree = true).assertTextContains("62 lines, 60 blank", substring = true)
+        // Three lines fit under the cap: nothing below the fold, Start is live at once.
+        onNodeWithTag("question.session.prompt.more", useUnmergedTree = true).assertDoesNotExist()
+        onNodeWithTag("question.session.start", useUnmergedTree = true).assertIsEnabled()
     }
 
     @Test

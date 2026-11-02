@@ -82,6 +82,66 @@ class PromptDisplayTest {
     }
 
     @Test
+    fun `no-break, figure and Braille blanks are gaps too, so a run of them cannot wrap into blank lines (F1, third scan 2026-11-02)`() {
+        // 2,000 no-break spaces wrapped into a dozen blank lines inside the capped
+        // block, and "rm -rf" sat below the fold with no scrollbar.
+        val nbsp = "Summarize README.md." + "\u00A0".repeat(2000) + "rm -rf /srv/x"
+        assertEquals("Summarize README.md.${PromptDisplay.GAP}rm -rf /srv/x", PromptDisplay.visible(nbsp))
+        assertEquals("a${PromptDisplay.GAP}b", PromptDisplay.visible("a\u2007\u2007\u2007b"), "FIGURE SPACE")
+        assertEquals("a${PromptDisplay.GAP}b", PromptDisplay.visible("a\u2800\u2800\u2800b"), "BRAILLE PATTERN BLANK, a symbol by category")
+        assertEquals("a${PromptDisplay.GAP}b", PromptDisplay.visible("a\u202F\u3000\u2003b"), "narrow no-break, ideographic and em space, mixed")
+        assertEquals("a${PromptDisplay.GAP}b", PromptDisplay.visible("a \u00A0\tb"), "mixed with a space and a tab, one run")
+        assertEquals("a\u00A0b", PromptDisplay.visible("a\u00A0b"), "one no-break space is kept, like one space")
+        assertEquals("a⟨U+000D⟩b", PromptDisplay.visible("a\rb"), "controls that are whitespace by category are still marked")
+    }
+
+    @Test
+    fun `a run of blank lines is one line that says how many - one blank line is kept (F1, third scan 2026-11-02)`() {
+        // Sixty newlines pushed "rm -rf" below the block's 180dp fold.
+        val padded = "Summarize README.md." + "\n".repeat(51) + "rm -rf /srv/x"
+        assertEquals("Summarize README.md.\n⋯ 50 blank lines ⋯\nrm -rf /srv/x", PromptDisplay.visible(padded))
+        assertEquals(3, PromptDisplay.visible(padded).lines().size, "three lines on the card for a 52-line prompt")
+        assertEquals("a\n\nb", PromptDisplay.visible("a\n\nb"), "two newlines — one blank line, a paragraph break — are kept")
+        assertEquals("a\n⋯ 2 blank lines ⋯\nb", PromptDisplay.visible("a\n\n\nb"), "three newlines are two blank lines: the mark")
+        assertEquals("a\n\nb", PromptDisplay.visible("a\n\u00A0\u00A0\nb"), "a line of blanks is a blank line")
+        assertEquals("a\n⋯ 2 blank lines ⋯\nb", PromptDisplay.visible("a\n   \n\u2800\nb"), "blank-only lines join the run whatever they are made of")
+        assertEquals("⋯ 3 blank lines ⋯\nx", PromptDisplay.visible("\n\n\nx"), "at the start")
+        assertEquals("x\n⋯ 2 blank lines ⋯\n", PromptDisplay.visible("x\n\n\n"), "at the end: the trailing newline ends the last line, the two before it are blank")
+        assertEquals("x\n", PromptDisplay.visible("x\n"), "a trailing newline is kept")
+        assertEquals("a\n⟨U+200B⟩\nb", PromptDisplay.visible("a\n\u200B\nb"), "a line holding a hidden character is not blank: it is marked")
+        assertEquals("a\n\nb\n⋯ 2 blank lines ⋯\nc", PromptDisplay.visible("a\n\nb\n\n\nc"), "each run on its own")
+    }
+
+    // ---- NEW API (isGap, blankLinesMark, Counts.blank, lineCount): below this line only ----
+
+    @Test
+    fun `isGap - every space-like character, never a newline, a control or a format character`() {
+        for (c in listOf(' ', '\t', '\u00A0', '\u2007', '\u202F', '\u2800', '\u3000', '\u2002', '\u2009', '\u205F', '\u1680')) {
+            assertTrue(PromptDisplay.isGap(c), "gap U+${c.code.toString(16)}")
+        }
+        assertFalse(PromptDisplay.isGap('\n'), "a newline is the line structure, not a gap")
+        assertFalse(PromptDisplay.isGap('\r'), "a carriage return is spelled out, not swallowed into a gap")
+        assertFalse(PromptDisplay.isGap('\u000B'))
+        assertFalse(PromptDisplay.isGap('\u200B'), "a zero-width space is a FORMAT character: marked, not a gap")
+        assertFalse(PromptDisplay.isGap('\u180E'), "the Mongolian vowel separator is a FORMAT character too")
+        assertFalse(PromptDisplay.isGap('x'))
+        assertEquals("⋯ 50 blank lines ⋯", PromptDisplay.blankLinesMark(50))
+    }
+
+    @Test
+    fun `the counts say how many of the lines are blank, and lineCount follows the display's line rule`() {
+        val padded = "Summarize README.md." + "\n".repeat(51) + "rm -rf /srv/x"
+        assertEquals(PromptDisplay.Counts(52, 20 + 51 + 13, 50), PromptDisplay.counts(padded))
+        assertEquals("52 lines, 50 blank · 84 characters", PromptDisplay.countsLine(padded))
+        assertEquals(52, PromptDisplay.lineCount(padded))
+        assertEquals(PromptDisplay.Counts(3, 4, 1), PromptDisplay.counts("a\n\nb"), "the paragraph break is counted as a blank line")
+        assertEquals("3 lines, 1 blank · 4 characters", PromptDisplay.countsLine("a\n\nb"))
+        assertEquals(PromptDisplay.Counts(2, 4, 1), PromptDisplay.counts("a\n\u00A0\u00A0"), "a line of no-break spaces is blank")
+        assertEquals(0, PromptDisplay.counts("Audit the LoRa node firmware.\nStart with power.").blank)
+        assertEquals(1, PromptDisplay.lineCount("a\n"), "the trailing newline ends the line")
+    }
+
+    @Test
     fun `the counts are of the prompt as SENT, not the display copy`() {
         val hidden = "Tidy the README." + " ".repeat(200) + "rm -rf /srv/work/lora"
         assertEquals(PromptDisplay.Counts(1, 237), PromptDisplay.counts(hidden), "the 200 spaces are counted even though the copy shows one gap")

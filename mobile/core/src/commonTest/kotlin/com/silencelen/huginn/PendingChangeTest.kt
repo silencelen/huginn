@@ -118,6 +118,20 @@ class PendingChangeTest {
     }
 
     @Test
+    fun `a change whose text blocks have not all been scrolled to their end is not approvable yet (F1, third scan 2026-11-02)`() {
+        val c = change()
+        assertEquals(PendingChangeRules.SCROLL_FIRST, PendingChangeRules.approvable(c, scrolledToEnd = false))
+        assertEquals("Scroll to the end of the prompt first.", PendingChangeRules.SCROLL_FIRST)
+        assertNull(PendingChangeRules.approvable(c, scrolledToEnd = true))
+        // The unshown text wins: a card with nothing to scroll cannot be approved whatever was scrolled.
+        val noTask = ProjectPendingChange(rev = 1, changed = listOf(com.silencelen.huginn.data.PendingChanged("fw", null)))
+        assertEquals(PendingChangeRules.UNSHOWN_TEXT, PendingChangeRules.approvable(noTask, scrolledToEnd = false))
+        // The blocks Approve waits on: every role with text, in card order; a removed role has none.
+        assertEquals(listOf("tester", "firmware"), PendingChangeRules.textRoles(c))
+        assertEquals(emptyList(), PendingChangeRules.textRoles(ProjectPendingChange(rev = 1, removed = listOf(com.silencelen.huginn.data.PendingRemoved("docs")))))
+    }
+
+    @Test
     fun `an empty section is left out and a missing summary gets the stock headline`() {
         val c = ProjectPendingChange(rev = 1, removed = listOf(com.silencelen.huginn.data.PendingRemoved("docs")))
         assertEquals(listOf("Removed (asked to wrap up)", "  docs"), PendingChangeRules.lines(c))
