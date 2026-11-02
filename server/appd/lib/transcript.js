@@ -373,9 +373,10 @@ function describeMachineText(s) {
  * attributes the locally-run command to the human who typed it
  * (origin.kind 'human'), and is shown rather than dropped when it is not.
  */
-function contextBreakdownBody(s) {
+function contextBreakdownBody(s, { meta = true } = {}) {
   const out = innerText(s, '<local-command-stdout>', '</local-command-stdout>');
   if (out === null) {
+    if (!meta) return null;
     // ⚠ THE MARKDOWN TWIN (Claude Code 2.1.316, 2026-11-02): `/context` is now
     // recorded TWICE - the terminal table above, and right after it an isMeta
     // user record with no wrapper at all, the same figures as a Markdown table
@@ -1541,7 +1542,9 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         // so the gate below (which spares human text) let it through to a bubble —
         // a page-long table the owner appeared to have sent; unattributed, it was
         // dropped and the owner saw nothing. Fold it like the compaction summary.
-        const ctxBreakdown = contextBreakdownBody(t);
+        // The Markdown twin folds only when Claude Code wrote it (isMeta, no
+        // origin): a peer's message starting with the same heading is a message.
+        const ctxBreakdown = contextBreakdownBody(t, { meta: d.isMeta === true && !d.origin });
         if (ctxBreakdown !== null) {
           const ref = { seq }; pushContextCard(out, ref, ts, sidechain, ctxBreakdown); seq = ref.seq;
           continue;

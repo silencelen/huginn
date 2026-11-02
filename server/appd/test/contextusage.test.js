@@ -231,7 +231,7 @@ test('every shape Claude Code has written /context in is a context record', () =
   const legacy = breakdownFromRecord(table);
   assert.ok(legacy && legacy.categories.length > 0, '2.1.306: system/local_command');
   // 2.1.310: the same stdout wrapper, in a user record with text blocks.
-  const asUser = { type: 'user', timestamp: table.timestamp, uuid: 'u1', message: { role: 'user', content: [{ type: 'text', text: table.content }] } };
+  const asUser = { type: 'user', isMeta: true, timestamp: table.timestamp, uuid: 'u1', message: { role: 'user', content: [{ type: 'text', text: table.content }] } };
   assert.ok(isContextRecord(asUser), 'the card stopped refreshing because this shape was refused');
   assert.deepEqual(breakdownFromRecord(asUser).categories, legacy.categories);
   // 2.1.316: the isMeta Markdown twin.
@@ -239,7 +239,13 @@ test('every shape Claude Code has written /context in is a context record', () =
   const md = breakdownFromRecord(twin);
   assert.equal(md.percent, 72); assert.equal(md.asOf, Date.parse('2026-11-02T01:12:14.196Z'));
   // Not a context record: the command's own bookkeeping, a plain message, a tool result.
-  assert.equal(isContextRecord({ type: 'user', message: { content: '## Context Usage is what I want to talk about' } }), true, 'a human writing that exact heading is the one false positive accepted');
+  // Only Claude Code's own records (isMeta, no origin) count: a person typing the
+  // heading, a peer session's message, or a `!` command's output never do
+  // (security scan 2026-11-02, F1).
+  assert.equal(isContextRecord({ type: 'user', message: { content: '## Context Usage is what I want to talk about' } }), false);
+  assert.equal(isContextRecord({ type: 'user', isMeta: true, origin: { kind: 'peer', name: 'alex' }, message: { content: MD } }), false, 'a peer message is never the table');
+  assert.equal(isContextRecord({ type: 'user', isMeta: true, message: { content: 'said first\n' + MD } }), false, 'the heading must be the first thing in the record');
+  assert.equal(isContextRecord({ type: 'user', isMeta: true, message: { content: 'x <local-command-stdout>Context Usage</local-command-stdout>' } }), false, 'and so must the wrapper');
   assert.equal(isContextRecord({ type: 'user', message: { content: 'how full is the context?' } }), false);
   assert.equal(isContextRecord({ type: 'user', message: { content: [{ type: 'tool_result', content: '## Context Usage' }] } }), false);
 });
@@ -259,4 +265,14 @@ test('scanForward finds the Markdown twin, which has no stdout tag', () => {
   assert.equal(r.record.uuid, 'twin');
   assert.equal(require('../lib/contextusage').breakdownFromRecord(r.record).percent, 72);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a planted row of 20,000 pipes costs its length, not seconds', () => {
+  const { parseContextMarkdown } = require('../lib/contextusage');
+  const planted = '## Context Usage\n\n### Estimated usage by category\n\n' + '|'.repeat(20_000) + 'x\n| Messages | 1k | 1% |';
+  const t0 = process.hrtime.bigint();
+  const p = parseContextMarkdown(planted);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 100, `took ${ms.toFixed(0)} ms`);
+  assert.deepEqual(p.categories.map((c) => c.id), ['messages'], 'the long line is skipped, the real row read');
 });

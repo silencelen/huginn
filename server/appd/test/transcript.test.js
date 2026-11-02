@@ -128,6 +128,10 @@ test('the /context Markdown twin folds into the ONE context card, never a bubble
   // The twin alone (a window that starts after the system record) still folds.
   const alone = writeFixture([{ type: 'user', timestamp: T, isMeta: true, message: { role: 'user', content: MD } }]);
   assert.deepStrictEqual(readTranscript(alone).events.map((e) => [e.kind, e.fold]), [['system', 'context']]);
+  // But the same text from a PERSON or a PEER is a message, not the card: only
+  // Claude Code's own isMeta record is (security scan 2026-11-02, F1).
+  const typed = writeFixture([{ type: 'user', timestamp: T, message: { role: 'user', content: MD } }]);
+  assert.deepStrictEqual(readTranscript(typed).events.map((e) => e.kind), ['user']);
 });
 
 test("Claude Code's note after a limit reset is never a message from the owner", () => {

@@ -76,9 +76,20 @@ const LIST_ROW_RE = /^[├└│]\s*(.+?)(?::\s*~?(\S+?)\s*tokens?)?\s*$/;
 const MODEL_ID_RE = /^[a-z][a-z0-9][a-z0-9._[\]-]*$/;
 
 // The Markdown twin's rows: `| System prompt | 2.9k | 0.3% |`, `| mcp__x | srv | 152 |`.
-const MD_ROW_RE = /^\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|$/;
-const MD_TOKENS_RE = /^\*\*Tokens:\*\*\s*(\S+?)\s*\/\s*(\S+?)\s*(?:tokens)?\s*\((\d+(?:\.\d+)?)%\)/;
-const MD_MODEL_RE = /^\*\*Model:\*\*\s*(.+?)\s*$/;
+// Split on `|`, not matched with lazy groups: a row regex of four `(.+?)` between
+// separators backtracked in cubic time on a long run of `|` with no closing one
+// (security scan 2026-11-02, F1), and a user record a peer wrote could carry one.
+function mdRow(line) {
+  if (line.length < 5 || line[0] !== '|' || line[line.length - 1] !== '|') return null;
+  const cells = line.slice(1, -1).split('|').map((c) => c.trim());
+  return cells.length === 3 ? cells : null;
+}
+// No line longer than this is looked at by any regex below: a genuine row is
+// under a hundred characters, and a bound here is what keeps a planted record
+// from costing more than its length.
+const MD_LINE_MAX = 512;
+const MD_TOKENS_RE = /^\*\*Tokens:\*\*\s*(\S{1,20})\s*\/\s*(\S{1,20})\s*(?:tokens)?\s*\((\d+(?:\.\d+)?)%\)/;
+const MD_MODEL_RE = /^\*\*Model:\*\*\s*(.{1,120}?)\s*$/;
 
 /**
  * The Markdown table Claude Code 2.1.316 writes as `/context`'s second record
@@ -86,7 +97,7 @@ const MD_MODEL_RE = /^\*\*Model:\*\*\s*(.+?)\s*$/;
  * the same shape as the terminal table. Null when `text` is not that table.
  */
 function parseContextMarkdown(text) {
-  const lines = String(text || '').split('\n').map((l) => l.trim());
+  const lines = String(text || '').split('\n').map((l) => (l.length > MD_LINE_MAX ? '' : l.trim()));
   if (!/^## Context Usage\b/.test(lines[0] || '')) return null;
   const out = {
     model: { display: null, id: null }, totalTokens: null, maxTokens: null, percent: null,
@@ -109,8 +120,9 @@ function parseContextMarkdown(text) {
       if (t) { out.totalTokens = parseTokens(t[1]); out.maxTokens = parseTokens(t[2]); out.percent = Number(t[3]); sawTable = true; }
       continue;
     }
-    const row = MD_ROW_RE.exec(line);
-    if (!row || /^-+$/.test(row[1]) || /^(Category|Tool|Skill|Type)$/i.test(row[1])) continue;
+    const cells = mdRow(line);
+    if (!cells || /^-+$/.test(cells[0]) || /^(Category|Tool|Skill|Type)$/i.test(cells[0])) continue;
+    const row = [line, ...cells];
     if (section === 'categories') {
       const pct = /^(\d+(?:\.\d+)?)%$/.exec(row[3]);
       if (!pct) continue;
@@ -240,9 +252,19 @@ function recordText(d) {
 function contextTableText(d) {
   if (!d || (d.type !== 'system' && d.type !== 'user')) return null;
   const text = recordText(d);
+  if (d.type === 'user') {
+    // ⚠ ONLY WHAT CLAUDE CODE ITSELF WROTE (security scan 2026-11-02, F1). A
+    // user record is also where a peer session's message and a `!` command's
+    // output land, verbatim; neither may pose as the table. Claude Code's own
+    // records of the command are `isMeta` with no `origin`, and the text IS the
+    // wrapper or the heading from its first character, not somewhere inside.
+    if (d.isMeta !== true || d.origin) return null;
+    const t = text.trimStart();
+    if (t.startsWith(STDOUT_OPEN)) { const out = commandStdout(t); return out !== null && out.includes('Context Usage') ? out : null; }
+    return /^## Context Usage\b/.test(t) ? t.trim() : null;
+  }
   const out = commandStdout(text);
   if (out !== null) return out.includes('Context Usage') ? out : null;
-  if (d.type === 'user' && /^\s*## Context Usage\b/.test(text)) return text.trim();
   return null;
 }
 
