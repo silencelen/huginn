@@ -8059,7 +8059,8 @@ function notifyChange(project) {
     title: `${project.name} — roster change proposed`,
     text: `${bits.join('; ')}. ${pc.summary || ''}`.trim(),
     options: ['Approve', 'Decline'],
-    payload: { projectId: project.id, changeRev: pc.rev || 0 },
+    // `rev` is what approve-change takes; `changeRev` stays for the first clients.
+    payload: { projectId: project.id, rev: pc.rev || 0, changeRev: pc.rev || 0 },
     fingerprint: `${project.id}:change:${pc.rev || 0}`,
   }).catch((e) => log(`project ${project.slug}: change push failed: ${e.message}`));
 }
