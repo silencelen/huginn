@@ -114,7 +114,7 @@ test('the MCP server speaks the protocol: initialize, list, a send, and a refusa
     assert.ok(init.result.capabilities.tools);
     s.notify('notifications/initialized');
     const list = await s.call('tools/list', {});
-    assert.deepEqual(list.result.tools.map((t) => t.name), ['send_file']);
+    assert.deepEqual(list.result.tools.map((t) => t.name), ['send_file', 'start_session']);
     const f = path.join(src, 'notes.txt'); fs.writeFileSync(f, 'hello');
     const sent = await s.call('tools/call', { name: 'send_file', arguments: { path: f } });
     assert.ok(!sent.result.isError, JSON.stringify(sent.result));

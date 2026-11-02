@@ -205,6 +205,18 @@ multi-question or multi-select ask or a plan) and from the pane otherwise, with 
 rows filtered out; `/answer` with a registry fingerprint resolves through that request's hook,
 and a pane fingerprint keeps today's path.
 
+### huginn's MCP server and the start_session request
+
+`mcp/huginn-mcp.js` is a stdio MCP server Claude Code runs as a child of the session's `claude` (or
+of a chat's `claude -p`, through `--mcp-config`). Its `start_session` tool blocks inside a
+`tools/call` for up to an hour: Claude Code keeps the call open (measured 2.1.316: a `claude -p`
+run waited for the owner's answer and reported the tool's JSON verbatim), and
+`notifications/cancelled` ends the wait. The request parks as `.start/session/<tmux name>/<id>.json`
+or `.start/chat/<chat id>/<id>.json` beside the `.perm/` requests; the daemon's registry turns it
+into a question of kind `session` (`lib/sessionreq.js`, `lib/questions.js`). The server learns its
+tmux session from `TMUX_PANE` (`tmux display-message -p -t $TMUX_PANE '#S'`), which a session hosted
+in a background PTY may lack — such a call answers `started: false` rather than asking nobody.
+
 ### The headroom gate
 
 `huginn-headroom-gate` delays agent spawns while the daemon has armed a usage sentinel in
@@ -427,12 +439,32 @@ What it reads off the screen:
 | The usage-credits consent dialog | `consentRecommended` | A prompt card with a recommended row |
 | The `/model` picker and the `Switch model?` confirmation | `parseModelPicker`, `LADDER_*_RE` in `huginn-appd.js` | The headroom ladder's session-only switch |
 | The composer (`❯` between `─` rules) and a settled paste | `composerDrawn`, `pasteLanded` and others in `lib/typing.js` | The send queue |
-| The composer in shell mode (`!` where the `❯` was; Enter runs the box as a command) | `composerShellMode` | Nothing is submitted into it (409) |
+| The composer in shell mode (`!` where the `❯` was; Enter runs the box as a command) | `composerShellMode` | Nothing is submitted into it (409) — except a send with `shell: true`, which puts it there itself (below) |
 | Spinner, progress rows, `N/M agents done` | `parseSpinner`, `parseStatusExtras` | Working status in the apps |
 | Mode hint (`⏵⏵ accept edits on`, `⏸ plan mode on`) | `MODE_HINT_RE`, `parseStatusLine` | Live mode |
 | A status line `[<session>] <model> · ctx <N>% · <branch>` | `parseStatusLine` | Live model, context percentage, branch, where no status-line record exists |
 | `Fast mode disabled · …`, `Fast mode unavailable…`, `Fast mode requires usage credits…`, `auto mode unavailable while fast mode is on` | `fastModeUnavailable` | `fast.available` and `fast.reason` |
 | The sign-in pane | `extractLoginUrl`, `loginPaneState` | Sign-in from the apps |
+
+### Shell mode (`!`)
+
+Measured on Claude Code 2.1.316 (2026-11-02), in a throwaway tmux session:
+
+- `tmux send-keys -l '!'` into the **empty** composer switches it into shell mode: the `❯` is drawn
+  as `!` + NBSP, the footer reads `! for shell mode`. A bracketed paste that *starts* with `!` into
+  an empty box does the same and holds the rest of the paste as the command.
+- Enter runs the box as a shell command in the session's directory; the transcript gets `user`
+  records with `<bash-input>` and `<bash-stdout>` / `<bash-stderr>`, and a model turn follows
+  (the output is handed to Claude).
+- `C-u` clears the box but keeps the mode; Backspace on the empty box leaves it. A newline in the
+  box is an Enter, so a shell command is one line.
+
+The send route's `shell: true` (feature 10) relies on exactly this: `sendTextToPane` types the `!` as
+its own keystroke, waits for `composerShellMode` to read true, pastes the command, and the
+`submitRefusal` / `enterRefusal` gates accept shell mode for that entry (`shellEntry`, `shell`). A
+plain message that begins with `!` is refused before anything is typed, because the paste alone would
+switch the mode. Fixture: `test/fixtures/fake-claude.js` models the mode (`HG_FAKE_CLAUDE_SHELL_OUT`).
+Tests: `typing-shell-mode.test.js`, `routes-send-guards.test.js`.
 
 The context window, model and effort come from the status-line record (see
 [The status line](#the-status-line)) wherever one exists; the `parseStatusLine` scrape is the

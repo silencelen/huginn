@@ -11,8 +11,15 @@
 // AskUserQuestion / ExitPlanMode sidecars huginn-claude-title writes, into the
 // list the apps show and answer:
 //
-//   Q = { id, kind: "ask"|"permission"|"plan", toolName, agentId?, agentType?,
+//   Q = { id, kind: "ask"|"permission"|"plan"|"session", toolName, agentId?, agentType?,
 //         mcpServer?, input, suggestions?, fingerprint, since, bound, fallback }
+//
+// A fourth kind, `session`, is not a hook request at all: Claude asked for a NEW
+// session through huginn's own `start_session` tool (mcp/huginn-mcp.js), which
+// parked `{directory, prompt, name}` under `.start/` (lib/sessionreq.js) and is
+// blocking on the answer. It carries `requester` (which session or chat asked)
+// and `expiresAt`; the answer is `{behavior: "allow", name?}` or
+// `{behavior: "deny", message?}`, and the daemon — not a hook — acts on it.
 //
 // A request is LIVE while its hook is waiting (the file exists and the pid is
 // alive — lib/permhook.liveRequests). On top of that:
@@ -100,8 +107,13 @@ function mcpServerOf(tool, recorded) {
  * @param paneIdle  true when the pane shows Claude Code's composer and no dialog;
  *                  false when a dialog (or anything else) is up; null when unknown
  */
-function buildQuestions({ requests = [], askInput = null, plan = null, now = Date.now(), paneIdle = null } = {}) {
+function buildQuestions({ requests = [], askInput = null, plan = null, now = Date.now(), paneIdle = null, sessionRequests = [] } = {}) {
   const out = [];
+  for (const r of sessionRequests) {
+    if (!r || typeof r.directory !== 'string' || typeof r.prompt !== 'string') continue;
+    if (Number(r.expiresAt) && now >= Number(r.expiresAt)) continue;       // names nothing after expiry
+    out.push(sessionQuestion(r));
+  }
   let planHook = null;
   for (const r of requests) {
     if (!r || typeof r.tool !== 'string') continue;
@@ -159,6 +171,36 @@ function toQuestion(r, kind) {
   };
 }
 
+/**
+ * A parked start_session request as a question (lib/sessionreq.js record). The
+ * input is exactly what the card must show: the directory, the opening prompt
+ * verbatim, and the name asked for (or null — the daemon picks one from the
+ * directory, and the answer may say another).
+ */
+function sessionQuestion(r) {
+  const input = { directory: r.directory, prompt: r.prompt, name: typeof r.name === 'string' ? r.name : null };
+  const req = isObj(r.requester) ? r.requester : {};
+  return {
+    id: r.id,
+    kind: 'session',
+    toolName: 'start_session',
+    agentId: null, agentType: null,
+    mcpServer: 'huginn',
+    input,
+    suggestions: null,
+    fingerprint: fingerprintFor('session', 'start_session', input),
+    since: Number(r.ts) || 0,
+    bound: true,
+    fallback: null,
+    requester: {
+      sessionName: req.kind === 'session' ? req.id : null,
+      chatId: req.kind === 'chat' ? req.id : null,
+    },
+    expiresAt: Number(r.expiresAt) || null,
+    hookId: r.id,
+  };
+}
+
 /** What the apps are sent: the hook's file id stays server-side. */
 function publicQuestion(q) {
   const { hookId, ...pub } = q;   // eslint-disable-line no-unused-vars
@@ -190,11 +232,15 @@ const bad = (error) => ({ ok: false, status: 400, error });
  *             person's words and lets the turn go on; none interrupts, like the TUI's No)
  * Plan:       { behavior: "allow", mode?: "manual"|"auto" } | { behavior: "deny", message }
  *             -> { plan: {approve} } or { plan: {feedback} }; the daemon drives the keys / the hook
+ * Session:    { behavior: "allow", name?: string } | { behavior: "deny", message? }
+ *             -> { session: {approve: true, name} } or { session: {approve: false, message} };
+ *             the daemon creates the session and queues the prompt, or declines
  */
 function decisionFor(q, body) {
   if (!q || !isObj(body)) return bad('a JSON object body is required');
   if (q.kind === 'ask') return askDecision(q, body);
   if (q.kind === 'plan') return planAnswer(body);
+  if (q.kind === 'session') return sessionAnswer(body);
   return permissionDecision(q, body);
 }
 
@@ -287,6 +333,26 @@ function planAnswer(body) {
   return bad('behavior must be "allow" or "deny"');
 }
 
+function sessionAnswer(body) {
+  if (body.behavior === 'allow') {
+    let name = null;
+    if (body.name !== undefined && body.name !== null) {
+      if (typeof body.name !== 'string' || !body.name.trim()) return bad('name, when given, is a session name');
+      if (body.name.includes('.')) return bad('a session name cannot contain a "."');
+      if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,49}$/.test(body.name.trim())) {
+        return bad('invalid session name: letters, digits, underscore and dash, up to 50 characters');
+      }
+      name = body.name.trim().toLowerCase();
+    }
+    return { ok: true, session: { approve: true, name } };
+  }
+  if (body.behavior === 'deny') {
+    const msg = typeof body.message === 'string' ? body.message.trim().slice(0, TEXT_MAX) : '';
+    return { ok: true, session: { approve: false, message: msg || null } };
+  }
+  return bad('behavior must be "allow" or "deny"');
+}
+
 // ---- the plan dialog on the pane --------------------------------------------
 
 /** Is this pane prompt the ExitPlanMode approval dialog, in either of its shapes? */
@@ -334,6 +400,7 @@ function notificationButtons(q) {
     return s.options.map((o, i) => ({ number: i + 1, label: String(o && o.label || '') }));
   }
   if (q.kind === 'permission') return [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }];
+  if (q.kind === 'session') return [{ number: 1, label: 'Start' }, { number: 2, label: 'Decline' }];
   return [];
 }
 
@@ -353,6 +420,11 @@ function describe(q) {
     return specs[0] && typeof specs[0].question === 'string' ? specs[0].question : 'Claude is asking a question';
   }
   if (q.kind === 'plan') return 'Plan ready — approve to continue';
+  if (q.kind === 'session') {
+    const who = q.requester && q.requester.sessionName ? `session ${q.requester.sessionName}`
+      : q.requester && q.requester.chatId ? 'a chat' : 'Claude';
+    return `${who} asks to start a session in ${String(q.input && q.input.directory || '').slice(0, 160)}`;
+  }
   const i = q.input || {};
   const detail = typeof i.command === 'string' ? i.command
     : typeof i.file_path === 'string' ? i.file_path
@@ -364,7 +436,7 @@ function describe(q) {
 }
 
 module.exports = {
-  buildQuestions, publicQuestion, digest, decisionFor, fingerprintFor, canon, deepEqual, kindOf,
+  buildQuestions, sessionQuestion, publicQuestion, digest, decisionFor, fingerprintFor, canon, deepEqual, kindOf,
   isPlanPrompt, planApproveRow, planFeedbackRow, notificationButtons, buttonAnswer, describe,
   STALE_AFTER_MS, DEFAULT_DENY,
 };

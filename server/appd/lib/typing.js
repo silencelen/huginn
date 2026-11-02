@@ -1309,6 +1309,10 @@ function boxIsOurs(composerHolds, text) {
  *   {blockedBy:'shell',        the box is in shell mode (a `!` typed before the
  *    shellMode:true}           paste, or a paste that starts with one), where the
  *                              Enter runs the box as a command: nothing is pressed
+ *                              — unless `shell` says this send is such a command
+ *   {blockedBy:'shell',        a `shell` send found the box OUT of shell mode:
+ *    shellExpected:true}       the Enter would hand the command to Claude as a
+ *                              prompt, so nothing is pressed
  *   {blockedBy:'modal'}        a composer was drawn before the paste and none is
  *                              now — something with no caret of its own replaced
  *                              it, and an Enter there answers whatever it is
@@ -1317,7 +1321,7 @@ function boxIsOurs(composerHolds, text) {
  * to look like a dialog: `1. fix the backup` / `2. rerun` in a box with no status
  * line under it reads as a selector run to `detectPrompt`, and must still go.
  */
-function enterRefusal(lines, text, { hadComposer = false } = {}) {
+function enterRefusal(lines, text, { hadComposer = false, shell = false } = {}) {
   if (lines == null) return null;    // nothing could be read: the blind rule, as before
   const arr = Array.isArray(lines) ? lines : String(lines).split('\n');
   const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
@@ -1328,11 +1332,22 @@ function enterRefusal(lines, text, { hadComposer = false } = {}) {
   }
   // Before "the box holds our message", which shell mode does too: there the
   // Enter is a command, whoever's text it is.
-  if (shellModeBox(plain, last)) {
+  //
+  // UNLESS THIS SEND IS A SHELL COMMAND ON PURPOSE (`shell`, the route's
+  // `shell: true`): then the box in shell mode is exactly what the daemon put
+  // there (the `!` it typed first), and the Enter runs the owner's own command
+  // — that is the feature. The opposite surprise is refused instead: a box that
+  // LEFT shell mode between the paste and the Enter would send the command to
+  // Claude as a prompt.
+  const inShellMode = shellModeBox(plain, last);
+  if (inShellMode && !shell) {
     return { blockedBy: 'shell', shellMode: true, why: 'the prompt is in shell mode (!), where Enter runs it as a command' };
   }
+  const leftShellMode = shell && !inShellMode
+    ? { blockedBy: 'shell', shellMode: false, shellExpected: true, why: 'the prompt left shell mode before the Enter, so the command was not run' }
+    : null;
   const c = composerText(arr);
-  if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return null;
+  if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return leftShellMode;
   const why = paneReadyForInput(arr).why;
   if (paneBlocks(why)) {
     return { blockedBy: why === 'trust' ? 'trust' : 'modal', why: 'a dialog opened before the Enter' };
@@ -1340,7 +1355,7 @@ function enterRefusal(lines, text, { hadComposer = false } = {}) {
   if (hadComposer && c === null) {
     return { blockedBy: 'modal', why: 'the composer was replaced by something with no caret' };
   }
-  return null;
+  return leftShellMode;
 }
 
 /**
@@ -1824,12 +1839,25 @@ function humanAttentionHold({ state, composerEmpty = null, waitedMs = 0,
  * tab types into whatever is there and sends its Enter as a raw key), and raw
  * keys have never come through the queue at all.
  */
-function submitRefusal({ submit = true, composer = false, shell = false, shellMode = false } = {}) {
+function submitRefusal({ submit = true, composer = false, shell = false, shellMode = false, shellEntry = false, text = '' } = {}) {
   if (!submit) return null;
-  if (shellMode) {
+  // `shellEntry`: this send IS a shell-mode command (`shell: true` on the
+  // route), so a box already in shell mode is where it belongs; the daemon
+  // types the `!` itself when the box is not. A real shell prompt (claude gone)
+  // is still refused below — `!` is Claude Code's mode, not bash's.
+  if (shellMode && !shellEntry) {
     return "this session's prompt is in shell mode (it starts with !), where Enter runs it as a "
       + 'shell command, so the message was not typed. Leave shell mode in the Screen tab '
       + '(Backspace on the empty prompt), then send it again.';
+  }
+  // A MESSAGE that starts with `!` would put the empty box into shell mode by
+  // itself (measured 2.1.316: a bracketed paste beginning with `!` switches the
+  // mode and holds the rest), where its Enter runs the rest as a command — or,
+  // caught by the look before the Enter, sits there unsent with no clear word
+  // why. Refused before anything is typed, with the way to mean it.
+  if (composer && !shellEntry && /^!/.test(String(text || ''))) {
+    return 'a message that starts with "!" puts Claude Code\'s prompt into shell mode, where Enter runs '
+      + 'it as a shell command, so it was not typed. Send it as a shell command to run it, or reword it.';
   }
   if (composer || !shell) return null;
   return 'claude is not running in this session — it dropped to a shell, so the message '

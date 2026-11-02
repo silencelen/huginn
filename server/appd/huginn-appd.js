@@ -137,6 +137,9 @@ const UPLOAD_MAX_BYTES = 128 * 1024 * 1024;
 // manager's vocabulary.
 const { uploadExtFor, isReadable, contentTypeForUpload, createUploadPruner } = require('./lib/uploads');
 const outboxLib = require('./lib/outbox');
+// start_session requests: Claude asks for a new session, the owner approves it
+// on a card (lib/sessionreq.js); the question kind `session` in lib/questions.js.
+const sessionreq = require('./lib/sessionreq');
 // Serving a HOST file the assistant named by path — the resolver behind
 // GET /v1/files/image. Kept out of here because it is all rules and no HTTP,
 // and because a containment check that cannot be unit-tested is a containment
@@ -299,23 +302,31 @@ const TOOLS = {
   //
   // send_file is granted to both, like a read: it copies a file the chat can
   // already Read into the outbox, for the person's own apps (lib/outbox.js).
-  ask: ['Skill', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, ...EXTRA_TOOLS].join(' '),
-  act: ['Skill', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, ...EXTRA_TOOLS].join(' '),
+  //
+  // start_session too: it only ASKS. The request parks on the chat's card and
+  // nothing starts until the owner approves it there (lib/sessionreq.js).
+  ask: ['Skill', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, sessionreq.START_SESSION_TOOL, ...EXTRA_TOOLS].join(' '),
+  act: ['Skill', 'Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', outboxLib.SEND_FILE_TOOL, sessionreq.START_SESSION_TOOL, ...EXTRA_TOOLS].join(' '),
 };
 
 /**
  * huginn's own MCP server (mcp/huginn-mcp.js) as `--mcp-config` JSON: the tools
- * Claude has for reaching the person - send_file so far. Passed to every chat run,
- * so a chat has it whether or not the host's Claude Code registered it.
+ * Claude has for reaching the person - send_file and start_session. Passed to
+ * every chat run, so a chat has it whether or not the host's Claude Code
+ * registered it. The chat's id rides the env so a start_session request parks
+ * under THIS chat (lib/sessionreq.js) and shows on its card; the state dir goes
+ * with it so the server and the daemon agree on where that is.
  */
-function huginnMcpConfig() {
+function huginnMcpConfig(chatId = null) {
+  const env = { HUGINN_APPD_DATA: DATA_DIR, HUGINN_APPD_STATE_DIR: STATE_DIR };
+  if (chatId) env.HUGINN_CHAT_ID = String(chatId);
   return JSON.stringify({
     mcpServers: {
       huginn: {
         type: 'stdio',
         command: process.execPath,
         args: [path.join(__dirname, 'mcp', 'huginn-mcp.js')],
-        env: { HUGINN_APPD_DATA: DATA_DIR },
+        env,
       },
     },
   });
@@ -2751,6 +2762,9 @@ function lastPastedText(name) {
  * FALSE: a paste has to say it is a message before it may claim the box. See
  * `lastPasted` — the default used to be the other way round and that is H1.
  */
+/** How long a `!` keystroke is given to switch the composer into shell mode. */
+const SHELL_MODE_WAIT_MS = Number(process.env.HUGINN_APPD_SHELL_MODE_WAIT_MS || 1500);
+
 async function pasteOnce(name, text, { remember = false } = {}) {
   const target = `=${name}:`;
   // Every paste path — a message, its re-paste, a live-view text op — goes
@@ -2848,9 +2862,9 @@ async function recoverLostPaste(name, text, settle, before) {
  * @returns {{held?: object, failed?: object}} `held` when no Enter was pressed
  *          and why; `failed` is a result to hand straight back (tmux refused)
  */
-async function enterAfterLook(name, text, { hadComposer = false } = {}) {
+async function enterAfterLook(name, text, { hadComposer = false, shell = false } = {}) {
   const lines = await capturePaneLines(name);
-  const held = typing.enterRefusal(lines, text, { hadComposer });
+  const held = typing.enterRefusal(lines, text, { hadComposer, shell });
   if (held) {
     log(typing.enterHeldLogLine(name, held, lines));
     return { held };
@@ -2875,15 +2889,63 @@ function heldResult(name, text, held, fields) {
       message: held.shellMode
         ? "this session's prompt is in shell mode (!), where Enter would have run the message as a "
           + 'shell command, so it was NOT sent. It is sitting in the prompt: clear it from the Screen tab.'
-        : 'claude stopped running in this session while the message was being typed — it is '
-          + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
+        : held.shellExpected
+          ? 'the prompt left shell mode before the command could be run, so it was NOT run. '
+            + 'It is sitting in the prompt: clear it from the Screen tab and send it again.'
+          : 'claude stopped running in this session while the message was being typed — it is '
+            + 'sitting at a shell prompt, and it was NOT run. Use the Screen tab to clear it.',
     };
   }
   return { ok: true, ...fields, submitted: false, held };
 }
 
-async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false } = {}) {
+async function sendTextToPane(name, text, { submit = true, boxHolds = null, typed = false, shell = false } = {}) {
   const target = `=${name}:`;
+  /**
+   * A SHELL-MODE COMMAND, ON PURPOSE (`shell`, the route's `shell: true`).
+   *
+   * Claude Code's `!` is its bash mode: a `!` typed into an EMPTY box turns the
+   * `❯` into `!`, the footer into `! for shell mode`, and Enter runs the box as
+   * a shell command in the session's directory, whose output then opens a turn
+   * (measured on 2.1.316: `send-keys -l '!'` enters it, a bracketed paste then
+   * fills it, Enter runs it; the transcript records `<bash-input>` and
+   * `<bash-stdout>`). So the `!` goes in as a KEYSTROKE first, on its own, and
+   * only once the box is seen in shell mode does the command follow as an
+   * ordinary paste; every refusal below then accepts the mode the daemon put the
+   * box in (typing.enterRefusal `shell`). A box already in shell mode — the
+   * owner left a `!` there — is used as it is. A pane with no composer, or one
+   * that does not switch, runs nothing: nothing was pasted and a 409 says so.
+   */
+  if (shell && submit) {
+    const now = await capturePaneLines(name);
+    if (!now || !typing.composerDrawn(now)) {
+      return { ok: false, code: 409, message: 'claude is not running in this session — a shell command needs its prompt' };
+    }
+    if (!typing.composerShellMode(now)) {
+      if (typed) {
+        // Held after its paste, and the box left shell mode meanwhile: the
+        // command in it is no longer ours to run.
+        log(`typing: ${name}: a held shell command's box is no longer in shell mode; not pressing Enter`);
+        notePasteOutcome(name, text, false);
+        return { ok: true, how: 'enter', settled: false, settleMs: 0, submitted: false, recovered: false };
+      }
+      if ((typing.composerText(now, { dropGhost: true }) || '') !== '') {
+        return { ok: false, code: 409, message: 'the prompt already holds text, so a shell command cannot be typed into it — clear it from the Screen tab first' };
+      }
+      const bang = await run('tmux', ['send-keys', '-t', target, '-l', '--', '!']);
+      if (bang.err) return { ok: false, code: 503, message: 'could not reach the pane buffer', stderr: bang.stderr };
+      const by = Date.now() + SHELL_MODE_WAIT_MS;
+      let entered = false;
+      while (Date.now() < by) {
+        await sleep(50);
+        const look = await capturePaneLines(name);
+        if (look && typing.composerShellMode(look)) { entered = true; break; }
+      }
+      if (!entered) {
+        return { ok: false, code: 409, message: 'the prompt did not enter shell mode after the "!", so the command was not typed' };
+      }
+    }
+  }
   // The spelling that is actually pasted, so the settle and confirm checks below
   // compare against the bytes the pane received (2026-10-02, see pasteSafe). A
   // message also loses what Claude Code would refuse to submit with it in
@@ -2909,7 +2971,7 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
   if (submit && (typed || typing.boxHoldsExactly(boxHolds, text))) {
     log(`typing: ${name}: the message is already sitting in the composer; pressing Enter `
       + 'instead of pasting a second copy');
-    const press = await enterAfterLook(name, text, { hadComposer: true });
+    const press = await enterAfterLook(name, text, { hadComposer: true, shell });
     if (press.failed) return press.failed;
     if (press.held) {
       return heldResult(name, text, press.held, { how: 'enter', settled: true, settleMs: 0, recovered: false });
@@ -2950,7 +3012,7 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
     await sleep(PASTE_BEAT_MS);
     // `before` showing a composer is what lets the look tell "a dialog with no
     // caret replaced the box" from "this pane never had a box".
-    const pressed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+    const pressed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null, shell });
     if (pressed.failed) return pressed.failed;
     if (pressed.held) {
       return heldResult(name, text, pressed.held,
@@ -2979,7 +3041,7 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
     await sleep(SUBMIT_BEAT_MS);
   }
   if (!submit) return { ok: true, how: 'send-keys' };
-  const keyed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null });
+  const keyed = await enterAfterLook(name, text, { hadComposer: typing.composerText(before) !== null, shell });
   if (keyed.failed) return keyed.failed;
   if (keyed.held) return heldResult(name, text, keyed.held, { how: 'send-keys' });
   return { ok: true, how: 'send-keys' };
@@ -3942,6 +4004,7 @@ async function pumpQueue(name) {
         const refusal = typeof entry.run === 'function' ? null
           : typing.submitRefusal({
             submit: entry.submit, composer: gate.composer, shell: gate.shell, shellMode: gate.shellMode,
+            shellEntry: !!entry.shell, text: entry.text,
           });
         if (refusal) {
           // ⚠ NOT DELIVERED, AND SAID SO. The pane is a root shell and the Enter
@@ -3952,7 +4015,7 @@ async function pumpQueue(name) {
         } else if (typeof entry.run === 'function') r = await entry.run();
         else {
           r = await sendTextToPane(name, entry.text, {
-            submit: entry.submit, boxHolds: gate.composerHolds, typed: !!entry.typedInBox,
+            submit: entry.submit, boxHolds: gate.composerHolds, typed: !!entry.typedInBox, shell: !!entry.shell,
           });
         }
       } catch (e) {
@@ -4097,6 +4160,9 @@ function enqueueSend(name, text, opts = {}) {
     // submitting (its Enter arrives as its own key op), every other caller
     // means "send this".
     submit: opts.submit !== false,
+    // A shell-mode command (`shell: true` on the send route): typed behind a `!`
+    // keystroke, and the shell-mode gate accepts the submit for THIS entry only.
+    shell: opts.shell === true,
     transcript: file,
     transcriptAt: at,
     // Which session this was sent to: tmux's birth time for the session holding
@@ -4454,6 +4520,9 @@ async function softEndTick() {
 // whether alerts are enabled. The state-file fs.watch also calls softEndTick for
 // sub-second response (wired where alertTick is).
 setInterval(() => { softEndTick().catch(() => { }); }, 10_000).unref();
+// Expired start_session requests (an hour old) name nothing on any card already
+// (lib/sessionreq.liveRequests); this removes their files.
+setInterval(() => { try { sessionreq.sweepExpired(STATE_DIR); } catch { /* best effort */ } }, 10 * 60_000).unref();
 
 /**
  * Releases EVERY window left at a manual size, across all sessions. Runs at
@@ -4767,6 +4836,16 @@ function questionsFor(name, lines = null) {
     askInput: askOk ? askRaw.input : null,
     plan: planOk ? parsePlanSidecar(planRaw) : null,
     paneIdle: paneIdleFor(lines),
+    // And what this session's Claude asked huginn for: a new session (kind
+    // `session`, lib/sessionreq.js), parked by the start_session tool.
+    sessionRequests: sessionreq.liveRequests(STATE_DIR, { kind: 'session', id: name }),
+  });
+}
+
+/** A chat's questions: only start_session requests — a `claude -p` run draws no dialog. */
+function chatQuestionsFor(chatId) {
+  return questionsLib.buildQuestions({
+    sessionRequests: sessionreq.liveRequests(STATE_DIR, { kind: 'chat', id: chatId }),
   });
 }
 
@@ -5188,6 +5267,9 @@ class Run {
     this.proc = null;
     this.assistantText = '';    // text accumulated for the current turn
     this.done = false;
+    // The start_session watch (watchChatQuestions): a timer and the last digest.
+    this.questionTimer = null;
+    this.questionDigest = '';
   }
   emit(event, data) {
     const item = { seq: ++this.seq, event, data };
@@ -5210,12 +5292,33 @@ class Run {
   }
   finish() {
     this.done = true;
+    if (this.questionTimer) { clearInterval(this.questionTimer); this.questionTimer = null; }
     for (const res of this.subscribers) { try { res.end(); } catch { } }
     this.subscribers.clear();
     // Only its OWN slot: by the time a stale run finishes, the chat may already
     // hold the next run (started from the queue), which this must not orphan.
     if (activeRuns.get(this.chatId) === this) activeRuns.delete(this.chatId);
   }
+}
+
+/**
+ * While a chat's run is alive, tell its stream when a start_session request
+ * parks or clears: the tool writes a file, which nothing here sees unless it
+ * looks. One readdir a second per active run, an SSE `questions` event — the
+ * same list `GET /v1/chats/<id>/questions` serves — when the digest changes.
+ */
+function watchChatQuestions(run_) {
+  const tick = () => {
+    if (run_.done) return;
+    let list;
+    try { list = chatQuestionsFor(run_.chatId); } catch { return; }
+    const d = questionsLib.digest(list);
+    if (d === run_.questionDigest) return;
+    run_.questionDigest = d;
+    run_.emit('questions', { questions: list.map(questionsLib.publicQuestion) });
+  };
+  run_.questionTimer = setInterval(tick, 1000);
+  if (typeof run_.questionTimer.unref === 'function') run_.questionTimer.unref();
 }
 
 function toolInputDigest(input) {
@@ -5261,7 +5364,7 @@ function startRun(meta, userText) {
   if (meta.claudeSessionId) args.push('--resume', meta.claudeSessionId);
   const persona = personaFile();
   if (persona) args.push('--append-system-prompt-file', persona);
-  args.push('--mcp-config', huginnMcpConfig());
+  args.push('--mcp-config', huginnMcpConfig(chatId));
   args.push('--allowedTools', TOOLS[meta.mode] || TOOLS.ask);
   const denied = DISALLOWED[meta.mode] ?? DISALLOWED.ask;
   if (denied) args.push('--disallowedTools', denied);
@@ -5270,6 +5373,7 @@ function startRun(meta, userText) {
   // What we ASKED for, so the result can say whether that is what answered.
   run_.askedModel = meta.model || downgrade || null;
   activeRuns.set(chatId, run_);
+  watchChatQuestions(run_);
   if (downgrade) {
     updateMeta(chatId, (m) => { m.ranOn = `${downgrade} (Fable limit)`; });
     log(`chat ${chatId} launched on ${downgrade}: the Fable week is out of room`);
@@ -10046,6 +10150,7 @@ async function answerQuestion(name, q, body) {
   const d = questionsLib.decisionFor(q, body);
   if (!d.ok) return { status: d.status || 400, body: { ok: false, error: d.error } };
   if (q.kind === 'plan') return answerPlanQuestion(name, q, d.plan);
+  if (q.kind === 'session') return answerSessionQuestion({ kind: 'session', id: name }, q, d.session);
   let req = null;
   try { req = permhook.liveRequests(STATE_DIR, name).find((r) => r.id === q.hookId) || null; } catch { req = null; }
   if (req) {
@@ -10106,6 +10211,61 @@ async function keysFallback(name, q, decision) {
   if (!r.ok) return { status: r.status, body: r.body };
   log(`questions: ${name} <- ${q.kind} ${q.toolName} via keys (${row.label.slice(0, 60)})`);
   return { status: 200, body: { ok: true, via: 'keys' } };
+}
+
+/**
+ * A session name for a start_session request that named none: the directory's
+ * basename in the create route's grammar, with a numeric suffix if that name is
+ * taken. `session` when the basename yields nothing usable.
+ */
+async function suggestSessionName(directory) {
+  let base = path.basename(String(directory || '')).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  if (!base || !canonName(base)) base = 'session';
+  if (!(await sessionExists(base, null, { fresh: true }))) return base;
+  for (let n = 2; n < 100; n++) {
+    const cand = `${base}-${n}`;
+    if (!(await sessionExists(cand, null, { fresh: true }))) return cand;
+  }
+  return `${base}-${Date.now() % 100000}`;
+}
+
+/**
+ * Answer a start_session request (kind `session`, lib/sessionreq.js). This is
+ * the one kind no hook answers: the daemon itself MAKES the session the way the
+ * create route does (createSession: the directory must exist, the name must be
+ * free), queues the request's prompt to it through the ordinary send queue (so
+ * the launching hold applies and the message lands once the composer is up),
+ * and only then writes the tool its answer — `{started: true, name, cwd}`. A
+ * decline writes `{started: false, reason: "declined"}`; the prompt is never
+ * sent anywhere. A create that fails answers the card with the create route's
+ * own status and leaves the request parked, so the owner can try another name
+ * or decline it. Returns { status, body } for the route.
+ */
+async function answerSessionQuestion(requester, q, decision) {
+  const req = sessionreq.liveRequests(STATE_DIR, requester).find((r) => r.id === q.hookId) || null;
+  if (!req) return { status: 409, body: { ok: false, reason: 'gone', error: 'that request is no longer waiting' } };
+  const who = requester.kind === 'session' ? `session ${requester.id}` : `chat ${requester.id}`;
+  if (!decision.approve) {
+    const reason = decision.message ? `declined: ${decision.message}` : 'declined';
+    sessionreq.answer(STATE_DIR, requester, req.id, { started: false, reason });
+    log(`questions: ${who} <- start_session declined (${req.directory})`);
+    return { status: 200, body: { ok: true, via: 'daemon', started: false } };
+  }
+  const name = decision.name || req.name || await suggestSessionName(req.directory);
+  const made = await createSession({ name, cwd: req.directory });
+  if (!made.ok) {
+    log(`questions: ${who} <- start_session approved but the session could not be made: ${made.error}`);
+    return { status: made.status, body: { ok: false, error: made.error, question: questionsLib.publicQuestion(q) } };
+  }
+  // The opening prompt, through the queue like any message: held while the new
+  // pane boots (launchingAt), pasted once the composer paints.
+  const sent = await enqueueSend(made.name, req.prompt, { origin: 'client', submit: true });
+  sessionreq.answer(STATE_DIR, requester, req.id, { started: true, name: made.name, cwd: made.cwd });
+  log(`questions: ${who} <- start_session approved: ${made.name} in ${made.cwd} (prompt ${sent.delivered ? 'delivered' : 'queued'})`);
+  return {
+    status: 200,
+    body: { ok: true, via: 'daemon', started: true, name: made.name, cwd: made.cwd, delivered: !!sent.delivered, queued: sent.queued },
+  };
 }
 
 /**
@@ -13988,6 +14148,24 @@ async function handleRequest(req, res) {
       const body = await readJsonBody(req, 512 * 1024);
       let typedKeys = typeof body.text === 'string' ? body.text : '';
       if (typedKeys.length > typing.SESSION_TEXT_MAX) return sendErr(res, 400, 'text too long');
+      /**
+       * `shell: true`: the text is a command for Claude Code's bash mode (`!`),
+       * on purpose. The daemon types the `!` itself, then the command, then
+       * Enter, and the shell-mode gate accepts the submit for this one entry
+       * (sendTextToPane, typing.submitRefusal `shellEntry`). Without the flag a
+       * message in a box that is in shell mode — or one that begins with `!`,
+       * which puts an empty box there itself — is still refused with the 409.
+       * One line only: in bash mode a newline is an Enter. A leading `!` in the
+       * text is the client sending the message as typed; it is dropped, since
+       * the daemon types its own.
+       */
+      const shell = body.shell === true;
+      if (shell) {
+        if ('scratchpadId' in body && body.scratchpadId !== null) return sendErr(res, 400, 'a shell command takes no scratchpad');
+        typedKeys = typedKeys.replace(/^!/, '').trim();
+        if (!typedKeys) return sendErr(res, 400, 'a shell command needs text');
+        if (/[\r\n]/.test(typedKeys)) return sendErr(res, 400, 'a shell command is one line');
+      }
       // Validate the key names BEFORE anything is typed. They used to be checked
       // after the text had already landed in the pane, so a bad key name gave a
       // 400 for a send that had half happened.
@@ -14043,7 +14221,7 @@ async function handleRequest(req, res) {
        * an empty box, where it stamped the live-view mark and the draft guard
        * then held the page for a draft nobody was typing.
        */
-      const rawKeys = keys.filter((k) => !(k === 'Enter' && typedKeys.length > 0));
+      const rawKeys = keys.filter((k) => !(k === 'Enter' && (typedKeys.length > 0 || shell)));
       /**
        * ⚠ RAW KEYS ARE NEVER REFUSED FOR A MODAL, and there is no gate here.
        *
@@ -14122,7 +14300,7 @@ async function handleRequest(req, res) {
          * a composer send means "submit this message", and pressing it again
          * after the paste has already submitted would send an empty second one.
          */
-        const wantsEnter = keys.includes('Enter');
+        const wantsEnter = keys.includes('Enter') || shell;   // a shell command is always run
         /**
          * ⚠ THE SAME MESSAGE, PRESSED AGAIN WHILE THE FIRST IS STILL WAITING.
          *
@@ -14173,7 +14351,7 @@ async function handleRequest(req, res) {
             intoDraft: null, duplicate: true,
           });
         }
-        const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter });
+        const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter, shell });
         if (out.result && !out.result.ok) {
           return sendErr(res, out.result.code || 500, out.result.message);
         }
@@ -16639,6 +16817,33 @@ async function handleRequest(req, res) {
       if (!meta) return sendErr(res, 404, 'no such chat');
       meta.running = activeRuns.has(id);
 
+      // What this chat's Claude is asking huginn for: start_session requests
+      // (kind `session`), the one question a `claude -p` run can raise. Same
+      // shape and answer body as a session's registry; `GET` the list, `POST`
+      // an answer by id with its fingerprint. The chat detail carries the list
+      // too, and a running chat's stream emits `questions` when it changes.
+      if (req.method === 'GET' && sub === '/questions') {
+        return sendJson(res, 200, { questions: chatQuestionsFor(id).map(questionsLib.publicQuestion) });
+      }
+      if ((m = sub.match(/^\/questions\/([A-Za-z0-9_.-]{1,80})$/)) && req.method === 'POST') {
+        const qid = m[1];
+        const body = await readJsonBody(req);
+        if (typeof body.fingerprint !== 'string' || body.fingerprint === '') {
+          return sendErr(res, 400, 'fingerprint required');
+        }
+        const q = chatQuestionsFor(id).find((x) => x.id === qid);
+        if (!q) return sendJson(res, 409, { ok: false, reason: 'gone', error: 'that question is no longer waiting' });
+        if (q.fingerprint !== body.fingerprint) {
+          return sendJson(res, 409, {
+            ok: false, reason: 'changed', error: 'the question changed since it was offered',
+            question: questionsLib.publicQuestion(q),
+          });
+        }
+        const d = questionsLib.decisionFor(q, body);
+        if (!d.ok) return sendJson(res, d.status || 400, { ok: false, error: d.error });
+        const r = await answerSessionQuestion({ kind: 'chat', id }, q, d.session);
+        return sendJson(res, r.status, r.body);
+      }
       if (req.method === 'GET' && sub === '') {
         const run_ = activeRuns.get(id);
         return sendJson(res, 200, {
@@ -16646,6 +16851,7 @@ async function handleRequest(req, res) {
           hostName: hostNameFor(meta.host),
           pending: (meta.pending || []).length,
           messages: loadMsgs(id),
+          questions: chatQuestionsFor(id).map(questionsLib.publicQuestion),
           // partial text of an in-flight turn so a cold open shows progress
           partialText: run_ ? run_.assistantText : null,
           // WHERE that partial text ends in the event stream. The client seeds its

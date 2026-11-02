@@ -26,6 +26,16 @@ version number collided. Entries below are reconstructed from the shipping commi
   `PATCH .../members/<role>` with `{description}` gives a member a new task;
   `DELETE .../members/<role>?end=1` asks it to wrap up and end (`end=now` is refused). Without `end`
   the delete stays the record-only drop it was.
+- Claude can ask for a new session: the `start_session` tool (directory, prompt, optional name) parks
+  a request that shows as a question of kind `session` on the asking session's card
+  (`GET /v1/sessions/<name>/questions`) or chat (`GET /v1/chats/<id>/questions`, `questions` on the
+  chat and its stream), with who asked. Approving it through the question route creates the session
+  in that directory and queues the prompt; declining tells the tool so. The tool blocks until the
+  answer and returns only what the server did; a request expires after an hour.
+- Shell-mode sends: `POST /v1/sessions/<name>/keys` takes `shell: true` to run the text as a Claude
+  Code `!` command — the server types the `!`, the command and Enter. Without it a message that starts
+  with `!` is refused before anything is typed, as a send into a prompt already in shell mode is.
+- `install.sh` also allows the `start_session` tool for sessions (`install-hooks.js --allow-send-file`).
 
 ## 3.16.4 — 2026-11-02
 
