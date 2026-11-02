@@ -2995,14 +2995,19 @@ data class ProjectRow(
 
 /**
  * A roster change the lead proposed by writing its manifest block again, diffed
- * by the daemon against the running members. [rev] is what `approve-change`
- * quotes back, so a card left open while the lead revised cannot approve a
- * roster nobody read. [problem] is set when the change cannot be applied as
- * proposed (the member cap); the daemon's approve answers 409 with it.
+ * by the daemon against the running members. [rev] and [token] are what
+ * `approve-change` quotes back. The rev tells a card from one drawn before a
+ * change was applied; the TOKEN — the daemon's digest of the added, removed and
+ * re-roled lists and the summary — binds the tap to these words: a block the
+ * lead rewrote after the card was drawn keeps the rev and moves the token, and
+ * the daemon answers 409 with the change actually on offer. [problem] is set
+ * when the change cannot be applied as proposed (the member cap); the daemon's
+ * approve answers 409 with it.
  */
 @Serializable
 data class ProjectPendingChange(
     val rev: Int = 0,
+    val token: String = "",
     val summary: String? = null,
     val added: List<PendingAdded> = emptyList(),
     val removed: List<PendingRemoved> = emptyList(),

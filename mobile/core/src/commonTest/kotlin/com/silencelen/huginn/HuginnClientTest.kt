@@ -1234,26 +1234,29 @@ class HuginnClientTest {
     }
 
     @Test
-    fun `approveChange quotes the rev and reads a stale 409 as the current project`() = runTest {
-        val out = ok("""{"ok":true,"project":{"id":"p1","name":"LoRa","pendingChange":null}}""").approveChange("p1", 3)
+    fun `approveChange quotes the rev AND the content token, and reads a stale 409 as the current project`() = runTest {
+        val out = ok("""{"ok":true,"project":{"id":"p1","name":"LoRa","pendingChange":null}}""").approveChange("p1", 3, "0123456789abcdef")
         assertEquals("/v1/projects/p1/approve-change", seen.last().url.encodedPath)
-        assertEquals("""{"rev":3}""", lastBody())
+        assertEquals("""{"rev":3,"token":"0123456789abcdef"}""", lastBody(), "the token binds the tap to the words on the card")
         assertTrue(out.ok)
         assertEquals("p1", out.project?.id)
 
         val stale = client {
-            respond("""{"error":"rev 3 is not the change on offer","project":{"id":"p1","pendingChange":{"rev":4,"summary":"newer"}}}""", HttpStatusCode.Conflict)
-        }.approveChange("p1", 3)
+            respond("""{"error":"the proposal changed since you saw it","project":{"id":"p1","pendingChange":{"rev":3,"token":"fedcba9876543210","summary":"newer"}}}""", HttpStatusCode.Conflict)
+        }.approveChange("p1", 3, "0123456789abcdef")
         assertFalse(stale.ok)
-        assertEquals("rev 3 is not the change on offer", stale.refusal)
-        assertEquals(4, stale.project?.pendingChange?.rev, "the card redraws around the change actually on offer")
+        assertEquals("the proposal changed since you saw it", stale.refusal)
+        assertEquals("fedcba9876543210", stale.project?.pendingChange?.token, "the card redraws around the change actually on offer")
     }
 
     @Test
-    fun `declineChange posts to the decline route`() = runTest {
-        ok("""{"ok":true}""").declineChange("p1")
+    fun `declineChange posts to the decline route, with the token when the card has one`() = runTest {
+        ok("""{"ok":true}""").declineChange("p1", "0123456789abcdef")
         assertEquals("/v1/projects/p1/decline-change", seen.last().url.encodedPath)
         assertEquals(io.ktor.http.HttpMethod.Post, seen.last().method)
+        assertEquals("""{"token":"0123456789abcdef"}""", lastBody())
+        ok("""{"ok":true}""").declineChange("p1")
+        assertEquals("/v1/projects/p1/decline-change", seen.last().url.encodedPath)
     }
 
     @Test

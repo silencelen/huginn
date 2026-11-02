@@ -1922,8 +1922,8 @@ fun HuginnApp(
                 // it is fresher than the list's).
                 pendingChange = (projectDetail?.takeIf { it.project.id == id }?.row
                     ?: projects.firstOrNull { it.id == id })?.pendingChange,
-                onApproveChange = { rev -> vm.approveChange(id, rev) },
-                onDeclineChange = { vm.declineChange(id) },
+                onApproveChange = { rev, token -> vm.approveChange(id, rev, token) },
+                onDeclineChange = { token -> vm.declineChange(id, token) },
                 onSpawn = { rev -> vm.spawnProject(id, rev) },
                 onDiscard = { vm.discardProposal(id) },
                 onSaveManifest = { m ->

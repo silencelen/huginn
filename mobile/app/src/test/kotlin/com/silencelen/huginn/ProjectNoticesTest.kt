@@ -136,7 +136,7 @@ class ProjectNoticesTest {
             title = "",
             text = "",
             subject = null,
-            payload = """{"projectId":"p1","rev":"3","name":"LoRa","summary":"Add a tester"}""",
+            payload = """{"projectId":"p1","rev":"3","token":"9f2c4e1a7b3d5f60","name":"LoRa","summary":"Add a tester"}""",
         )
         assertNotNull(n)
         assertEquals("project:p1", n!!.key)
@@ -146,6 +146,12 @@ class ProjectNoticesTest {
         assertEquals(listOf("Approve", "Decline"), n.actions.map { it.label })
         assertEquals(listOf("approve-change", "decline-change"), n.actions.map { it.verb })
         assertEquals("the rev rides both buttons", listOf(3, 3), n.actions.map { it.manifestRev })
+        // The CONTENT token rides both too: a block the lead rewrote after this
+        // notification was drawn keeps the rev and moves the token, and the
+        // daemon refuses the stale one instead of applying words nobody read.
+        assertEquals(listOf("9f2c4e1a7b3d5f60", "9f2c4e1a7b3d5f60"), n.actions.map { it.token })
+        val noToken = ProjectNotices.fromPush(kind = ProjectNotices.KIND_CHANGE, title = "", text = "", subject = null, payload = """{"projectId":"p1","rev":"3"}""")
+        assertEquals("no token is sent as none, never guessed", listOf("", ""), noToken!!.actions.map { it.token })
         // The post has no reply box and no pane answers, like a proposal's.
         val args = ProjectNotices.postArgs(n)
         assertNull(args.replyChat)

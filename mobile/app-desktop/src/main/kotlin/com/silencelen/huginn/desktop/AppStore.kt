@@ -1247,14 +1247,15 @@ class AppStore(
             ?: "that change was refused"
 
     /**
-     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV, NOT THE PLAN: a
-     * stale rev answers 409 with the current project, and the row is redrawn
-     * from it so the card shows the change actually on offer. The refusal goes
-     * to [projectRefusal] verbatim, like a spawn's.
+     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV AND THE TOKEN, NOT
+     * THE PLAN: a stale rev or a token that is not the change on offer answers
+     * 409 with the current project, and the row is redrawn from it so the card
+     * shows the change actually on offer. The refusal goes to [projectRefusal]
+     * verbatim, like a spawn's.
      */
-    suspend fun approveChange(id: String, rev: Int) {
+    suspend fun approveChange(id: String, rev: Int, token: String) {
         _projectRefusal.value = null
-        runCatching { client.approveChange(id, rev) }
+        runCatching { client.approveChange(id, rev, token) }
             .onSuccess { outcome ->
                 if (!outcome.ok) _projectRefusal.value = outcome.refusal
                 outcome.project?.let { adoptRow(it) }
@@ -1266,10 +1267,10 @@ class AppStore(
             .onFailure { _projectRefusal.value = refusalTextFor(it) }
     }
 
-    /** Drop the pending roster change and tell the lead. */
-    suspend fun declineChange(id: String) {
+    /** Drop the pending roster change (the one the card shows, by token) and tell the lead. */
+    suspend fun declineChange(id: String, token: String) {
         _projectRefusal.value = null
-        runCatching { client.declineChange(id) }
+        runCatching { client.declineChange(id, token.takeIf { it.isNotBlank() }) }
             .onSuccess { refreshProjects() }
             .onFailure { _projectRefusal.value = refusalTextFor(it) }
     }

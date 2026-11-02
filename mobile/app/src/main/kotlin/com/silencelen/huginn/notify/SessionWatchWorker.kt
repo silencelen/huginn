@@ -441,6 +441,7 @@ class SessionWatchWorker(
                     putExtra(ProjectActionReceiver.EXTRA_PROJECT, a.projectId)
                     putExtra(ProjectActionReceiver.EXTRA_VERB, a.verb)
                     putExtra(ProjectActionReceiver.EXTRA_MANIFEST_REV, a.manifestRev)
+                    putExtra(ProjectActionReceiver.EXTRA_TOKEN, a.token)
                     putExtra(ProjectActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
                 }
                 builder.addAction(

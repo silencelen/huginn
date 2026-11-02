@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 class PendingChangeCardTest {
     private val change = ProjectPendingChange(
         rev = 3,
+        token = "9f2c4e1a7b3d5f60",
         summary = "Add a tester, drop the docs role",
         added = listOf(PendingAdded(role = "tester", firstPrompt = "Write the bench tests.\nStart with the radio.", model = "sonnet")),
         removed = listOf(PendingRemoved("docs")),
@@ -35,13 +36,13 @@ class PendingChangeCardTest {
     )
 
     @Test
-    fun `the card lists the roles and Approve sends the rev, Decline fires`() = runComposeUiTest {
-        val approved = mutableListOf<Int>()
-        var declined = 0
+    fun `the card lists the roles and Approve sends the rev AND the content token, Decline sends the token`() = runComposeUiTest {
+        val approved = mutableListOf<Pair<Int, String>>()
+        val declined = mutableListOf<String>()
         setContent {
             HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
                 Box(Modifier.width(600.dp)) {
-                    PendingChangeCard(change = change, onApprove = { approved += it }, onDecline = { declined++ }, refusal = "rev 3 moved")
+                    PendingChangeCard(change = change, onApprove = { rev, token -> approved += rev to token }, onDecline = { declined += it }, refusal = "rev 3 moved")
                 }
             }
         }
@@ -55,8 +56,8 @@ class PendingChangeCardTest {
         onNodeWithTag("change.approve", useUnmergedTree = true).performClick()
         onNodeWithTag("change.decline", useUnmergedTree = true).performClick()
         waitForIdle()
-        assertEquals(listOf(3), approved, "Approve quotes the change's rev, not a guess")
-        assertEquals(1, declined)
+        assertEquals(listOf(3 to "9f2c4e1a7b3d5f60"), approved, "Approve quotes the change's rev and the token of exactly these words, not a guess")
+        assertEquals(listOf("9f2c4e1a7b3d5f60"), declined, "Decline names the change it declines")
     }
 
     @Test
@@ -64,7 +65,7 @@ class PendingChangeCardTest {
         setContent {
             HuginnTheme(darkTheme = true, monoStyle = MonoStyleDesktop, rootSurface = true) {
                 Box(Modifier.width(600.dp)) {
-                    PendingChangeCard(change = change, onApprove = {}, onDecline = {}, busy = true)
+                    PendingChangeCard(change = change, onApprove = { _, _ -> }, onDecline = {}, busy = true)
                 }
             }
         }

@@ -364,13 +364,14 @@ fun ProjectsDetail(store: AppStore) {
                 }
             },
             // The lead's ROSTER CHANGE for a running project (appd 3.17), under
-            // the manifest. Approve quotes the rev; a stale one redraws the row.
+            // the manifest. Approve quotes the rev and the content token; a stale
+            // one redraws the row.
             change = row.pendingChange?.let { c ->
                 {
                     PendingChangeCard(
                         change = c,
-                        onApprove = { rev -> scope.launch { store.approveChange(row.id, rev) } },
-                        onDecline = { scope.launch { store.declineChange(row.id) } },
+                        onApprove = { rev, token -> scope.launch { store.approveChange(row.id, rev, token) } },
+                        onDecline = { token -> scope.launch { store.declineChange(row.id, token) } },
                         refusal = refusal,
                     )
                 }

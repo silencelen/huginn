@@ -45,7 +45,7 @@ object ProjectNotices {
     /** Turn the proposal down; the manifest is kept. `POST …/discard`. */
     const val VERB_DISCARD: String = "discard"
 
-    /** Carry out the roster change at its rev. `POST …/approve-change {rev}`. */
+    /** Carry out the roster change at its rev and content token. `POST …/approve-change {rev, token}`. */
     const val VERB_APPROVE_CHANGE: String = "approve-change"
 
     /** Drop the roster change and tell the lead. `POST …/decline-change`. */
@@ -67,12 +67,16 @@ object ProjectNotices {
      * screen while the lead revises its plan, and the daemon refuses a spawn
      * quoting a rev that has moved. A button that silently created a cluster
      * nobody read the plan for is exactly what the rev guard exists to stop.
+     * [token] is a roster change's CONTENT token (the daemon's digest of the
+     * words on the card): a rewritten block keeps the rev and moves the token,
+     * and the daemon refuses the stale one. Empty for a proposal's buttons.
      */
     data class Action(
         val label: String,
         val verb: String,
         val projectId: String,
         val manifestRev: Int,
+        val token: String = "",
     )
 
     /**
@@ -163,13 +167,17 @@ object ProjectNotices {
         val name = p["name"]?.takeIf { it.isNotBlank() }
         val summary = p["summary"]?.takeIf { it.isNotBlank() }
         if (kind == KIND_CHANGE) {
+            // The content token rides both buttons. An unreadable one becomes "",
+            // which the daemon refuses (400) — never an approval of whatever the
+            // lead has written since.
+            val token = p["token"]?.trim().orEmpty()
             return Notice(
                 key = keyFor(id),
                 title = title.ifBlank { if (name != null) "$name proposes a roster change" else "A project proposes a roster change" },
                 text = text.ifBlank { summary ?: "The lead wants to add, remove or re-role members." },
                 projectId = id,
                 manifestRev = rev,
-                actions = changeActionsFor(id, rev),
+                actions = changeActionsFor(id, rev, token),
             )
         }
         return Notice(
@@ -197,9 +205,9 @@ object ProjectNotices {
     )
 
     /** Approve and Decline for a roster change — two buttons, a list literal, no third. */
-    fun changeActionsFor(projectId: String, rev: Int): List<Action> = listOf(
-        Action(LABEL_APPROVE, VERB_APPROVE_CHANGE, projectId, rev),
-        Action(LABEL_DECLINE, VERB_DECLINE_CHANGE, projectId, rev),
+    fun changeActionsFor(projectId: String, rev: Int, token: String): List<Action> = listOf(
+        Action(LABEL_APPROVE, VERB_APPROVE_CHANGE, projectId, rev, token),
+        Action(LABEL_DECLINE, VERB_DECLINE_CHANGE, projectId, rev, token),
     )
 
     fun postArgs(n: Notice): PostArgs = PostArgs(

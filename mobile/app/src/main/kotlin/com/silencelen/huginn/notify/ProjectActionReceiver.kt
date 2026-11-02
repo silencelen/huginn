@@ -38,6 +38,9 @@ class ProjectActionReceiver : BroadcastReceiver() {
         val verb = intent.getStringExtra(EXTRA_VERB) ?: return
         if (verb !in ProjectNotices.VERBS) return
         val rev = intent.getIntExtra(EXTRA_MANIFEST_REV, 0)
+        // A roster change's content token; missing becomes "", which the daemon
+        // refuses rather than approving whatever the lead wrote since.
+        val token = intent.getStringExtra(EXTRA_TOKEN).orEmpty()
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
 
         val app = context.applicationContext
@@ -52,7 +55,7 @@ class ProjectActionReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                withTimeoutOrNull(30_000) { send(app, projectId, verb, rev) }
+                withTimeoutOrNull(30_000) { send(app, projectId, verb, rev, token) }
                     ?: post(app, projectId, "huginn did not respond in time. The proposal is still waiting.")
             } catch (e: Exception) {
                 post(app, projectId, e.message ?: "Something went wrong.")
@@ -62,7 +65,7 @@ class ProjectActionReceiver : BroadcastReceiver() {
         }
     }
 
-    private suspend fun send(app: Context, projectId: String, verb: String, rev: Int) {
+    private suspend fun send(app: Context, projectId: String, verb: String, rev: Int, token: String) {
         val settings = SettingsStore(app)
         val bearer = settings.token.first()
         if (bearer.isBlank()) return
@@ -81,7 +84,7 @@ class ProjectActionReceiver : BroadcastReceiver() {
                 }
                 .onFailure { post(app, projectId, refusalOf(it)) }
 
-            ProjectNotices.VERB_APPROVE_CHANGE -> runCatching { client.approveChange(projectId, rev) }
+            ProjectNotices.VERB_APPROVE_CHANGE -> runCatching { client.approveChange(projectId, rev, token) }
                 .onSuccess { outcome ->
                     val refusal = outcome.refusal
                     if (refusal != null) post(app, projectId, refusal, title = "Not approved")
@@ -89,7 +92,7 @@ class ProjectActionReceiver : BroadcastReceiver() {
                 }
                 .onFailure { post(app, projectId, refusalOf(it)) }
 
-            ProjectNotices.VERB_DECLINE_CHANGE -> runCatching { client.declineChange(projectId) }
+            ProjectNotices.VERB_DECLINE_CHANGE -> runCatching { client.declineChange(projectId, token.takeIf { it.isNotBlank() }) }
                 .onSuccess {
                     post(app, projectId, "The roster change was declined. The lead has been told.", title = "Declined")
                 }
@@ -140,6 +143,7 @@ class ProjectActionReceiver : BroadcastReceiver() {
         const val EXTRA_PROJECT = "project"
         const val EXTRA_VERB = "verb"
         const val EXTRA_MANIFEST_REV = "manifestRev"
+        const val EXTRA_TOKEN = "token"
         const val EXTRA_NOTIFICATION_ID = "notificationId"
 
         /**

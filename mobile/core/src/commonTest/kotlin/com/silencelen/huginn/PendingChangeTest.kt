@@ -24,7 +24,7 @@ class PendingChangeTest {
     private val rowWire = """
         {"projects":[{"id":"p1","name":"LoRa","slug":"lora","kind":"hardware","status":"active","cwd":"/srv/lora",
           "memberCount":3,"alive":3,"busy":1,"waiting":0,"manifestRev":2,"spawnedRev":2,"rev":7,
-          "pendingChange":{"rev":3,"summary":"Add a tester, drop the docs role",
+          "pendingChange":{"rev":3,"token":"9f2c4e1a7b3d5f60","summary":"Add a tester, drop the docs role",
             "added":[{"role":"tester","firstPrompt":"Write the bench tests.\nStart with the radio.","cwd":null,"model":"sonnet","effort":"high","mode":"act"}],
             "removed":[{"role":"docs"}],
             "changed":[{"role":"firmware","firstPrompt":"Switch to the power budget."}],
@@ -37,6 +37,7 @@ class PendingChangeTest {
     fun `a row decodes its pending change whole`() {
         val c = assertNotNull(json.decodeFromString<ProjectList>(rowWire).projects[0].pendingChange)
         assertEquals(3, c.rev)
+        assertEquals("9f2c4e1a7b3d5f60", c.token, "the content token Approve hands back")
         assertEquals("Add a tester, drop the docs role", c.summary)
         assertEquals("tester", c.added.single().role)
         assertEquals("sonnet", c.added.single().model)

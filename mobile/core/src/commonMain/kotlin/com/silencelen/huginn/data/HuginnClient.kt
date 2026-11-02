@@ -2559,12 +2559,13 @@ class HuginnClient(
 
     /**
      * Carry out the roster change the lead proposed: `POST …/approve-change
-     * {rev}`. THE REV, NOT THE PLAN: a card left open while the lead revised
-     * cannot approve the revision — the daemon answers 409 `{error, project}`
-     * and the card redraws from the project it was handed.
+     * {rev, token}`. THE REV AND THE TOKEN, NOT THE PLAN: the token is the
+     * daemon's digest of the words on the card, so a card left open while the
+     * lead rewrote its block cannot approve the rewrite — the daemon answers 409
+     * `{error, project}` and the card redraws from the project it was handed.
      */
-    suspend fun approveChange(id: String, rev: Int): ChangeOutcome {
-        val body = buildJsonObject { put("rev", JsonPrimitive(rev)) }
+    suspend fun approveChange(id: String, rev: Int, token: String): ChangeOutcome {
+        val body = buildJsonObject { put("rev", JsonPrimitive(rev)); put("token", JsonPrimitive(token)) }
         val resp = http().request { build("/v1/projects/${seg(id)}/approve-change", HttpMethod.Post, Tier.NORMAL, body) }
         val text = resp.bodyAsText()
         if (resp.status.value == 409) {
@@ -2575,9 +2576,15 @@ class HuginnClient(
         return ChangeOutcome(null, runCatching { decode<ChangeRefusal>(text).project }.getOrNull())
     }
 
-    /** Drop the pending roster change and tell the lead: `POST …/decline-change`. */
-    suspend fun declineChange(id: String) {
-        post("/v1/projects/${seg(id)}/decline-change")
+    /**
+     * Drop the pending roster change and tell the lead: `POST …/decline-change
+     * {token}`. The token says which change is being declined; the daemon
+     * refuses (409) one that is not the change on offer, so a stale card does not
+     * decline a proposal nobody read. Null sends no token (an older card).
+     */
+    suspend fun declineChange(id: String, token: String? = null) {
+        val body = token?.let { t -> buildJsonObject { put("token", JsonPrimitive(t)) } }
+        post("/v1/projects/${seg(id)}/decline-change", body = body)
     }
 
     /** The daemon's own sentence out of an error body, or a plain fallback. */

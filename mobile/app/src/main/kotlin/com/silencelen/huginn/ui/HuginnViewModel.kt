@@ -2960,16 +2960,17 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV, NOT THE PLAN: a
-     * stale rev answers 409 with the current project, and the row is redrawn
-     * from it. The refusal lands on the card verbatim, like a spawn's.
+     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV AND THE TOKEN, NOT
+     * THE PLAN: a stale rev or a token that is not the change on offer answers
+     * 409 with the current project, and the row is redrawn from it. The refusal
+     * lands on the card verbatim, like a spawn's.
      */
-    fun approveChange(id: String, rev: Int) {
+    fun approveChange(id: String, rev: Int, token: String) {
         viewModelScope.launch {
             awaitReady()
             _projectBusy.value = true
             _projectRefusal.value = null
-            runCatching { client.approveChange(id, rev) }
+            runCatching { client.approveChange(id, rev, token) }
                 .onSuccess { outcome ->
                     if (!outcome.ok) _projectRefusal.value = outcome.refusal
                     else _toast.value = "Roster change approved"
@@ -2985,13 +2986,13 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Drop the pending roster change and tell the lead. */
-    fun declineChange(id: String) {
+    /** Drop the pending roster change (the one the card shows, by token) and tell the lead. */
+    fun declineChange(id: String, token: String) {
         viewModelScope.launch {
             awaitReady()
             _projectBusy.value = true
             _projectRefusal.value = null
-            runCatching { client.declineChange(id) }
+            runCatching { client.declineChange(id, token.takeIf { it.isNotBlank() }) }
                 .onSuccess { _toast.value = "Roster change declined"; openProject(id); refreshProjects() }
                 .onFailure { _projectRefusal.value = errText(it) }
             _projectBusy.value = false

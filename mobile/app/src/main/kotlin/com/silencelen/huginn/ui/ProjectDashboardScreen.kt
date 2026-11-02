@@ -53,8 +53,8 @@ fun ProjectDashboardScreen(
     membership: ProjectMemberActions? = null,
     /** The lead's ROSTER CHANGE for a running project (appd 3.17), from the row. */
     pendingChange: com.silencelen.huginn.data.ProjectPendingChange? = null,
-    onApproveChange: (rev: Int) -> Unit = {},
-    onDeclineChange: () -> Unit = {},
+    onApproveChange: (rev: Int, token: String) -> Unit = { _, _ -> },
+    onDeclineChange: (token: String) -> Unit = {},
 ) {
     var editing by remember { mutableStateOf<ProjectManifest?>(null) }
     val project = detail?.project

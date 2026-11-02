@@ -38,15 +38,17 @@ import com.silencelen.huginn.ui.theme.stateColor
  * ones. [problem] (the member cap) is the daemon's own sentence; Approve would
  * answer 409 with it, so it is said up front in the warning ink.
  *
- * ⚠ THE REV TRAVELS WITH APPROVE. A card left open while the lead revised cannot
- * approve the revision; the daemon answers 409 with the current project and the
- * shells redraw this card from it. The refusal lands here, verbatim.
+ * ⚠ THE REV AND THE CONTENT TOKEN TRAVEL WITH APPROVE (and the token with
+ * Decline). The token is the daemon's digest of exactly what this card lists,
+ * so a card left open while the lead rewrote its block cannot approve the
+ * rewrite; the daemon answers 409 with the current project and the shells
+ * redraw this card from it. The refusal lands here, verbatim.
  */
 @Composable
 fun PendingChangeCard(
     change: ProjectPendingChange,
-    onApprove: (rev: Int) -> Unit,
-    onDecline: () -> Unit,
+    onApprove: (rev: Int, token: String) -> Unit,
+    onDecline: (token: String) -> Unit,
     modifier: Modifier = Modifier,
     /** Set while an approve or decline is in flight, so neither verb can be pressed twice. */
     busy: Boolean = false,
@@ -132,13 +134,13 @@ fun PendingChangeCard(
             )
             Row(horizontalArrangement = Arrangement.Start) {
                 TextButton(
-                    onClick = { onApprove(change.rev) },
+                    onClick = { onApprove(change.rev, change.token) },
                     enabled = !busy,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     modifier = Modifier.testTag("change.approve"),
                 ) { Text(PendingChangeRules.APPROVE) }
                 TextButton(
-                    onClick = onDecline,
+                    onClick = { onDecline(change.token) },
                     enabled = !busy,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                     modifier = Modifier.testTag("change.decline"),
