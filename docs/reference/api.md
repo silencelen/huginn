@@ -279,7 +279,8 @@ the roster change the lead proposed for a running project, waiting for Approve o
 ```
 pendingChange: {
   rev: int,                    // the manifest rev this becomes when approved; pass it to approve-change
-  token: string,               // 16 hex, a digest of {added, removed, changed, summary}; pass it to approve-change.
+  token: string,               // 64 hex (a whole sha256) of {added, removed, changed, summary}; pass it to approve-change.
+                               // Opaque: compare it, never assume its length.
                                // The rev is the same for every proposal until one is applied; the token changes
                                // whenever the words on the card do, so a stale card cannot approve a rewritten block
   summary: string | null,      // the lead's one line

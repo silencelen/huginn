@@ -305,7 +305,7 @@ test('a block written AFTER the spawn becomes pendingChange, and the project sta
   assert.equal('active', b.project.status, 'not re-proposed: a change to a running cluster, not a second one');
   const pc = b.row.pendingChange;
   assert.equal(2, pc.rev, 'the rev the manifest will have once applied');
-  assert.match(pc.token, /^[0-9a-f]{16}$/, 'the content token the card hands back to approve');
+  assert.match(pc.token, /^[0-9a-f]{64}$/, 'the content token the card hands back to approve: the whole sha256');
   assert.equal(projectsLib.changeToken(pc), pc.token, 'and it IS the digest of what the row shows');
   tokenA = pc.token;
   assert.equal('swap docs for web, widen fw', pc.summary);
@@ -358,7 +358,7 @@ test('a block REWRITTEN after the card was drawn keeps the rev, moves the token,
   const pc = b.row.pendingChange;
   assert.equal(2, pc.rev, 'the SAME rev: it cannot tell B from A');
   tokenB = pc.token;
-  assert.match(tokenB, /^[0-9a-f]{16}$/);
+  assert.match(tokenB, /^[0-9a-f]{64}$/);
   assert.equal(WEB_PROMPT_B, pc.added[0].firstPrompt, 'the row now shows B — a new card');
 
   const docsBefore = readOr(outFor(`${SLUG}-docs`));

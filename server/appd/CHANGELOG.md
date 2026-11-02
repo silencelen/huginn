@@ -60,6 +60,9 @@ version number collided. Entries below are reconstructed from the shipping commi
   character (a word joiner) in front of the `!` no longer hides it. An opening prompt for
   `start_session` may not start with `!`: the tool refuses it, and a parked request that does is
   answered `started: false` at approve time.
+- The roster-change content `token` is the whole SHA-256 (64 hex), not its first 64 bits, so a lead
+  that writes both proposals cannot make two of them share a token and carry an approval from one to
+  the other. Clients treat the token as opaque.
 
 ## 3.16.4 — 2026-11-02
 

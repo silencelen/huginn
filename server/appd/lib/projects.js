@@ -705,10 +705,17 @@ function canonicalJson(value) {
 }
 
 /**
- * The CONTENT TOKEN of a pending change: the first 16 hex of a sha256 over the
+ * The CONTENT TOKEN of a pending change: the FULL sha256 (64 hex) over the
  * canonical JSON of what the card shows — `added`, `removed`, `changed` and
  * `summary`. Same words, same token; one role, one prompt or one word of the
  * summary different, a different token.
+ *
+ * ⚠ THE WHOLE DIGEST, NOT A PREFIX (security scan 2026-11-02, F2 of the third
+ * scan). The lead writes BOTH the proposal the owner reads and any rewrite of it,
+ * so with a 64-bit prefix a birthday search (~2^32 hashes, offline) found two
+ * blocks — a harmless A and a hostile B — with the same token, and B written
+ * after the card was drawn was approved by the tap meant for A. Clients treat
+ * the token as an opaque string; nothing may assume its length.
  *
  * ⚠ THIS, NOT THE REV, IS WHAT BINDS AN APPROVE TO WHAT THE OWNER READ. `rev` is
  * `manifest.rev + 1` for EVERY proposal until one is applied, so a lead that
@@ -723,7 +730,7 @@ function changeToken(pc) {
     changed: (pc && pc.changed) || [],
     summary: (pc && pc.summary) ?? null,
   });
-  return crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+  return crypto.createHash('sha256').update(body).digest('hex');
 }
 
 /**

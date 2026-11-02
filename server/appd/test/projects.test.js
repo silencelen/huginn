@@ -656,7 +656,8 @@ test('the content token binds a card to its words: same change same token, a rew
   // checked, and the owner's tap on the first card applied the second block.
   const p = { members: [member('docs', 'a'), member('fw', 'b')], manifest: { rev: 3, sessions: [] } };
   const a = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] }), 1700);
-  assert.match(a.token, /^[0-9a-f]{16}$/, 'sixteen hex: the first 64 bits of a sha256');
+  assert.match(a.token, /^[0-9a-f]{64}$/, 'sixty-four hex: the WHOLE sha256, not a prefix (scan 2026-11-02 #3, F2)');
+  assert.equal(64, a.token.length, 'a 64-bit prefix let a lead that writes both proposals collide them');
 
   // Stable: the same words again, read at another time, are the same token.
   const again = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] }), 1900);
