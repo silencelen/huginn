@@ -37,6 +37,15 @@ version number collided. Entries below are reconstructed from the shipping commi
   with `!` is refused before anything is typed, as a send into a prompt already in shell mode is.
 - `install.sh` also allows the `start_session` tool for sessions (`install-hooks.js --allow-send-file`).
 
+### Security
+- An approve is bound to the roster change the owner saw. `pendingChange` carries a content `token`
+  (a digest of the added, removed and re-roled roles and the summary), the `project_change` push
+  carries it and its fingerprint includes it, and `POST .../approve-change` requires `{rev, token}`:
+  a token that is not the change now waiting is refused (`409` with the current project) and nothing
+  is spawned, re-roled or ended. `decline-change` refuses a stale `token` the same way. Before this,
+  a lead block rewritten after the card was drawn kept the rev and was applied by the tap meant for
+  the earlier block.
+
 ## 3.16.4 — 2026-11-02
 
 ### Changed

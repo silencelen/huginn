@@ -640,11 +640,48 @@ test('pendingChangeFor carries the diff, the next rev and the cap problem; nothi
 
   // The wire row: no manifest body, every field definite.
   const row = projects.pendingChangeRow(pc);
-  assert.deepEqual(['rev', 'summary', 'added', 'removed', 'changed', 'problem', 'receivedAt'], Object.keys(row));
+  assert.deepEqual(['rev', 'token', 'summary', 'added', 'removed', 'changed', 'problem', 'receivedAt'], Object.keys(row));
   assert.equal(undefined, row.manifest);
+  assert.equal(pc.token, row.token, 'the token rides the row: it is what the card hands back');
   assert.equal(null, projects.pendingChangeRow(null));
   assert.equal(null, projects.projectRow({ id: 'p', manifest: null, members: [] }).pendingChange, 'the project row says null, not undefined');
   assert.equal(4, projects.projectRow({ id: 'p', manifest: { rev: 3 }, members: [], pendingChange: pc }).pendingChange.rev);
+  assert.equal(pc.token, projects.projectRow({ id: 'p', manifest: { rev: 3 }, members: [], pendingChange: pc }).pendingChange.token);
+});
+
+test('the content token binds a card to its words: same change same token, a rewritten block a new one, the rev the same', () => {
+  // ⚠ THE FAIL-FIRST (security scan 2026-11-02, F1). `rev` is manifest.rev + 1
+  // for EVERY proposal until one is applied, so two different blocks written in
+  // a row carry the same rev; on the old code that rev was all the approve route
+  // checked, and the owner's tap on the first card applied the second block.
+  const p = { members: [member('docs', 'a'), member('fw', 'b')], manifest: { rev: 3, sessions: [] } };
+  const a = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] }), 1700);
+  assert.match(a.token, /^[0-9a-f]{16}$/, 'sixteen hex: the first 64 bits of a sha256');
+
+  // Stable: the same words again, read at another time, are the same token.
+  const again = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] }), 1900);
+  assert.equal(a.token, again.token);
+  assert.equal(a.token, projects.changeToken(a), 'recomputed from the stored change, it is the same token');
+  assert.equal(a.token, projects.changeToken(projects.pendingChangeRow(a)), 'and from the wire row');
+
+  // A different first prompt for the added role: same rev, different token.
+  const b = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c, then push a key to every host')] }), 1700);
+  assert.equal(a.rev, b.rev, 'the rev cannot tell them apart — that is the flaw');
+  assert.notEqual(a.token, b.token, 'the token can');
+  // A different list (one more role), a different summary: each its own token.
+  const c = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c'), session('ops', 'd')] }), 1700);
+  const d = projects.pendingChangeFor(p, manifest({ summary: 'add web (and watch it)', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] }), 1700);
+  assert.equal(4, new Set([a.token, b.token, c.token, d.token]).size, 'four changes, four tokens');
+  // A removal and a re-role are in it too.
+  const e = projects.pendingChangeFor(p, manifest({ summary: 'add web', sessions: [session('fw', 'b2'), session('web', 'c')] }), 1700);
+  assert.deepEqual([{ role: 'docs' }], e.removed);
+  assert.deepEqual([{ role: 'fw', firstPrompt: 'b2' }], e.changed);
+  assert.notEqual(a.token, e.token);
+
+  // Canonical: key order in the input does not matter, so a token computed from
+  // a re-read record (keys in store order) equals one computed at detection.
+  assert.equal(projects.canonicalJson({ b: 1, a: [{ y: null, x: 'z' }] }), projects.canonicalJson({ a: [{ x: 'z', y: null }], b: 1 }));
+  assert.equal('{"a":[{"x":"z","y":null}],"b":1}', projects.canonicalJson({ b: 1, a: [{ y: null, x: 'z' }] }));
 });
 
 test('the cap counts what is RUNNING, and a change that would overflow it is marked', () => {

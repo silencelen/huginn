@@ -8059,9 +8059,13 @@ function notifyChange(project) {
     title: `${project.name} — roster change proposed`,
     text: `${bits.join('; ')}. ${pc.summary || ''}`.trim(),
     options: ['Approve', 'Decline'],
-    // `rev` is what approve-change takes; `changeRev` stays for the first clients.
-    payload: { projectId: project.id, rev: pc.rev || 0, changeRev: pc.rev || 0 },
-    fingerprint: `${project.id}:change:${pc.rev || 0}`,
+    // `rev` and `token` are what approve-change takes (the token binds the tap
+    // to the words on this card — a rewritten block keeps the rev and moves the
+    // token); `changeRev` stays for the first clients.
+    payload: { projectId: project.id, rev: pc.rev || 0, changeRev: pc.rev || 0, token: pc.token || '' },
+    // The token is in the fingerprint so a rewritten proposal is a NEW
+    // notification, never a silent update of the one the owner is reading.
+    fingerprint: `${project.id}:change:${pc.rev || 0}:${pc.token || ''}`,
   }).catch((e) => log(`project ${project.slug}: change push failed: ${e.message}`));
 }
 
@@ -8189,8 +8193,9 @@ function leadTurnText(project) {
  * approve no change is noise with a button on it.
  *
  * The last tagged block wins here too: a pending change is REPLACED by a newer
- * block, and its rev moves, so a card drawn for the old one cannot approve the
- * new one (the approve route checks the rev).
+ * block. Its rev does NOT move (every proposal is `manifest.rev + 1` until one
+ * is applied) — its content token does, and that is what the approve route
+ * checks, so a card drawn for the old one cannot approve the new one.
  */
 function detectRosterChange(project) {
   const text = leadTurnText(project);
@@ -8217,7 +8222,7 @@ function detectRosterChange(project) {
   });
   if (!saved) return project;
   if (isNew && pc) {
-    log(`project ${saved.slug}: roster change proposed (rev ${pc.rev}): +${pc.added.length} -${pc.removed.length} ~${pc.changed.length}`
+    log(`project ${saved.slug}: roster change proposed (rev ${pc.rev}, ${pc.token}): +${pc.added.length} -${pc.removed.length} ~${pc.changed.length}`
       + `${pc.problem ? ` — ${pc.problem}` : ''}`);
     notifyChange(saved);
   } else if (isNew) {
@@ -16243,27 +16248,43 @@ async function handleRequest(req, res) {
       /**
        * Carry out the roster change the lead proposed for a LIVE project.
        *
-       * `rev` is the pending change's rev, required for the spawn route's
-       * reason: a card that sat on a lock screen while the lead revised again
-       * must not approve the revision the owner never saw. Additions are refused
-       * into a red window exactly as a first spawn is; a change with nothing to
-       * add is not held by the arbiter, because winding members down and
-       * re-roling them costs no new session.
+       * `rev` and `token` are the pending change's, both required. The rev tells
+       * this card from one drawn before a change was applied (the spawn route's
+       * reason). ⚠ THE TOKEN IS WHAT BINDS THE TAP TO THE WORDS: `rev` is
+       * `manifest.rev + 1` for every proposal until one is applied, so a lead
+       * that rewrites its block after the card was drawn keeps the rev — only
+       * the content token (`projectsLib.changeToken`) moves. It is recomputed
+       * here from the change about to be applied, never trusted from the record,
+       * and a mismatch is a 409 with the current project so the card redraws
+       * around what is actually on offer. Additions are refused into a red
+       * window exactly as a first spawn is; a change with nothing to add is not
+       * held by the arbiter, because winding members down and re-roling them
+       * costs no new session.
        */
       if (req.method === 'POST' && sub === '/approve-change') {
         const body = await readJsonBody(req);
         const fresh = loadProject(projectId);
         if (!fresh) return sendErr(res, 404, 'no such project');
         // Read the lead's tail once more: a block written since the card was
-        // drawn moves the rev, and the check below is what catches it.
+        // drawn replaces the pending change, and the checks below are what
+        // catch it.
         const project = fresh.status === 'active' ? detectRosterChange(fresh) : fresh;
         const pc = project.pendingChange;
         if (!pc) return sendErr(res, 409, 'this project has no roster change waiting');
         const wantRev = Number(body.rev);
         if (!Number.isInteger(wantRev)) return sendErr(res, 400, 'rev is required — it is the change the card was drawn for');
+        if (typeof body.token !== 'string' || !body.token) {
+          return sendErr(res, 400, 'token is required — it is the content of the change the card was drawn for');
+        }
         if (wantRev !== (Number(pc.rev) || 0)) {
           return sendJson(res, 409, {
             error: 'the proposed change has moved on since that card was drawn',
+            project: projectsLib.publicProject(project),
+          });
+        }
+        if (body.token !== projectsLib.changeToken(pc)) {
+          return sendJson(res, 409, {
+            error: 'the proposal changed since you saw it',
             project: projectsLib.publicProject(project),
           });
         }
@@ -16281,10 +16302,25 @@ async function handleRequest(req, res) {
         return sendJson(res, 200, { ...out, project: projectsLib.publicProject(out.project) });
       }
 
+      /**
+       * Drop the pending change and tell the lead. `token` is optional here —
+       * declining nothing the owner read costs nothing — but when a card sends
+       * it, a token that is not the current change's is refused the same way
+       * approve refuses it, so the card redraws instead of declining a proposal
+       * the owner has not seen.
+       */
       if (req.method === 'POST' && sub === '/decline-change') {
-        const project = loadProject(projectId);
-        if (!project) return sendErr(res, 404, 'no such project');
+        const body = await readJsonBody(req);
+        const fresh = loadProject(projectId);
+        if (!fresh) return sendErr(res, 404, 'no such project');
+        const project = fresh.status === 'active' ? detectRosterChange(fresh) : fresh;
         if (!project.pendingChange) return sendErr(res, 409, 'this project has no roster change waiting');
+        if (body.token != null && body.token !== '' && body.token !== projectsLib.changeToken(project.pendingChange)) {
+          return sendJson(res, 409, {
+            error: 'the proposal changed since you saw it',
+            project: projectsLib.publicProject(project),
+          });
+        }
         // `manifest.seen` already holds the declined block, so the reader does
         // not propose it again from the transcript tail; the lead is told,
         // because otherwise it waits forever for an answer that is not coming.

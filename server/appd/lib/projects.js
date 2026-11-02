@@ -33,6 +33,7 @@
 // join below goes tmux name -> claudeSessionId (from the title-hook state file)
 // -> native row BY `sessionId`, and never touches that field. [joinMembers]
 
+const crypto = require('node:crypto');
 const { SESSION_TEXT_MAX } = require('./typing');
 const { ACTIVE_S } = require('./agents');
 
@@ -638,20 +639,58 @@ function memberCapProblem(project, adding = 1) {
 }
 
 /**
+ * JSON with every object's keys in sorted order, so two equal values always
+ * spell the same — what [changeToken] digests.
+ */
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(',')}}`;
+  }
+  return value === undefined ? 'null' : JSON.stringify(value);
+}
+
+/**
+ * The CONTENT TOKEN of a pending change: the first 16 hex of a sha256 over the
+ * canonical JSON of what the card shows — `added`, `removed`, `changed` and
+ * `summary`. Same words, same token; one role, one prompt or one word of the
+ * summary different, a different token.
+ *
+ * ⚠ THIS, NOT THE REV, IS WHAT BINDS AN APPROVE TO WHAT THE OWNER READ. `rev` is
+ * `manifest.rev + 1` for EVERY proposal until one is applied, so a lead that
+ * rewrites its block after the card was drawn keeps the rev; only the token
+ * moves. The approve route recomputes this from the change it is about to apply
+ * and refuses when the card's token differs.
+ */
+function changeToken(pc) {
+  const body = canonicalJson({
+    added: (pc && pc.added) || [],
+    removed: (pc && pc.removed) || [],
+    changed: (pc && pc.changed) || [],
+    summary: (pc && pc.summary) ?? null,
+  });
+  return crypto.createHash('sha256').update(body).digest('hex').slice(0, 16);
+}
+
+/**
  * The pending change as the record stores it and the wire carries it, or null
  * when the proposal changes nothing.
  *
- * `rev` is the revision the manifest will have once applied — what the
- * approve route is handed back, so a card drawn before the lead revised again
- * cannot approve the revision the owner never saw (the spawn route's rule).
+ * `rev` is the revision the manifest will have once applied — the SAME for every
+ * proposal until one is applied, so it tells a card from an applied change but
+ * not from a rewritten proposal. `token` ([changeToken]) is what does that: the
+ * approve route takes both, and a block the lead rewrote after the card was
+ * drawn cannot be approved from that card.
  */
 function pendingChangeFor(project, manifest, now = Math.floor(Date.now() / 1000)) {
   const diff = manifestDiff(liveRoster(project), manifest && manifest.sessions);
   if (diffIsEmpty(diff)) return null;
   const cap = memberCapProblem(project, diff.added.length - diff.removed.length);
+  const summary = (manifest && manifest.summary) || null;
   return {
     rev: ((project.manifest && Number(project.manifest.rev)) || 0) + 1,
-    summary: (manifest && manifest.summary) || null,
+    token: changeToken({ added: diff.added, removed: diff.removed, changed: diff.changed, summary }),
+    summary,
     added: diff.added,
     removed: diff.removed,
     changed: diff.changed,
@@ -669,6 +708,7 @@ function pendingChangeRow(pc) {
   if (!pc || typeof pc !== 'object') return null;
   return {
     rev: Number(pc.rev) || 0,
+    token: typeof pc.token === 'string' ? pc.token : changeToken(pc),
     summary: pc.summary ?? null,
     added: Array.isArray(pc.added) ? pc.added : [],
     removed: Array.isArray(pc.removed) ? pc.removed : [],
@@ -1158,7 +1198,7 @@ module.exports = {
   leadPersona, memberPersona,
   briefFrame, firstPromptFrame, spawnedFrame, peerMessageFrame,
   changeAppliedFrame, changeDeclinedFrame, reroleFrame,
-  liveRoster, manifestDiff, diffIsEmpty, memberCapProblem, pendingChangeFor, pendingChangeRow,
+  liveRoster, manifestDiff, diffIsEmpty, memberCapProblem, pendingChangeFor, pendingChangeRow, changeToken, canonicalJson,
   memberList, membershipIndex, sessionProjectTag, joinMembers, reconcilePlan,
   aggregateDashboard, rollupMembers, rollupMembersAsync, dashboardMemberRow,
   memberRow, projectRow, publicProject, sortProjects,

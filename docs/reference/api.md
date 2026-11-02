@@ -266,8 +266,8 @@ and whose requests it surfaces to you:
 | GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
 | POST | `/v1/projects/<id>/discard` | Send a proposal back to the lead. |
-| POST | `/v1/projects/<id>/approve-change` | `{rev}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. `409` with the current project when `rev` is not the change on offer. |
-| POST | `/v1/projects/<id>/decline-change` | Drop the pending roster change and tell the lead. |
+| POST | `/v1/projects/<id>/approve-change` | `{rev, token}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. Both fields are required (`400` without). `409` with the current project when `rev` is not the change on offer, or when `token` is not the token of the change now waiting — the lead rewrote its block after the card was drawn; redraw from the project returned. |
+| POST | `/v1/projects/<id>/decline-change` | `{token?}`: drop the pending roster change and tell the lead. With a `token` that is not the current change's, `409` with the current project, as approve. |
 | POST | `/v1/projects/<id>/message` | `{from, to, text}`: pass a message from one member to another. |
 | POST | `/v1/projects/<id>/members` | `{name?, role}`: add a running session as a member (a record edit; nothing is launched). `{role, description, spawn: true, cwd?, model?, effort?}`: create a NEW member in a running project, the way an approved manifest does; `description` is its whole first message. Both respect the member limit. |
 | PATCH | `/v1/projects/<id>/members/<role>` | `{description}`: give a member a new task; it is typed into the member, framed as owner-approved. The role word itself cannot change while the session runs (`409`). |
@@ -279,6 +279,9 @@ the roster change the lead proposed for a running project, waiting for Approve o
 ```
 pendingChange: {
   rev: int,                    // the manifest rev this becomes when approved; pass it to approve-change
+  token: string,               // 16 hex, a digest of {added, removed, changed, summary}; pass it to approve-change.
+                               // The rev is the same for every proposal until one is applied; the token changes
+                               // whenever the words on the card do, so a stale card cannot approve a rewritten block
   summary: string | null,      // the lead's one line
   added:   [ {role, firstPrompt, cwd, model, effort, mode} ],   // spawned on approve
   removed: [ {role} ],                                          // asked to wrap up on approve
@@ -344,4 +347,4 @@ core. They are not meant for scripts.
 
 ### Push: `project_change`
 
-Sent when a lead proposes a roster change. `payload: {projectId, rev}` (`changeRev` duplicates `rev`); buttons `Approve` → `POST /v1/projects/<id>/approve-change {rev}`, `Decline` → `POST /v1/projects/<id>/decline-change`.
+Sent when a lead proposes a roster change. `payload: {projectId, rev, token}` (`changeRev` duplicates `rev`); buttons `Approve` → `POST /v1/projects/<id>/approve-change {rev, token}`, `Decline` → `POST /v1/projects/<id>/decline-change {token}`. The `fingerprint` carries the token, so a proposal the lead rewrote is a new notification, not an update of the one being read.
