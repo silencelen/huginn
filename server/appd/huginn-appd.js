@@ -1494,6 +1494,95 @@ function saveRegistry(sessions) {
   } catch (e) { log(`session registry: save failed: ${e.message}`); }
 }
 
+/**
+ * Where a new session may start (2026-11-02): an absolute path to a directory
+ * that exists on this server, or the server's default. Checked here and not in
+ * the client, since a client cannot see this disk; said back as the 400 so the
+ * dialog can show it. A path is never created.
+ */
+function startDirProblem(cwd) {
+  if (cwd === undefined || cwd === null || cwd === '') return null;
+  if (typeof cwd !== 'string' || cwd.includes('\0')) return 'cwd must be a path';
+  if (!path.isAbsolute(cwd)) return 'the starting directory must be an absolute path';
+  let st;
+  try { st = fs.statSync(cwd); } catch { return `no such directory on this server: ${cwd}`; }
+  if (!st.isDirectory()) return `not a directory: ${cwd}`;
+  return null;
+}
+
+/**
+ * Makes a tmux session running claude, as the create route always has - lifted
+ * out of the route (2026-11-02) so a request Claude parks (start_session) can
+ * make one the same way after the owner approves it. The directory is
+ * [startDirProblem]-checked; the default is this server's WORKDIR.
+ *
+ * @returns {{ok:true, name, cwd} | {ok:false, status, error}}
+ */
+async function createSession({ name: rawName, cwd: rawCwd } = {}) {
+  const bad = nameProblem(rawName);
+  if (bad) return { ok: false, status: 400, error: bad };
+  const name = canonName(rawName);
+  const cwdBad = startDirProblem(rawCwd);
+  if (cwdBad) return { ok: false, status: 400, error: cwdBad };
+  const cwd = rawCwd ? path.resolve(rawCwd) : WORKDIR;
+  // Fresh: a name check before creating must not trust a shared answer.
+  if (await sessionExists(name, null, { fresh: true })) return { ok: false, status: 409, error: `session '${name}' already exists` };
+  // Whatever the last holder of this name left behind goes now, before the new
+  // session can be observed. The born-time guard would reject it anyway, but
+  // deleting it here closes the window rather than papering over it.
+  clearSessionState(name);
+  // Before the session exists, never after: the server's cgroup is decided by
+  // whoever starts it, and that is a one-time choice per server lifetime.
+  await ensureTmuxServer();
+  // Same shape as cc: open in the directory, claude first, fall through to a shell.
+  // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
+  // call that makes it. The old shape asked afterwards with
+  // `display-message -t '=<name>:'`, which cannot resolve a name tmux
+  // rewrote and answers empty at exit 0; the `|| name` fallback then echoed
+  // the phantom back in the 201 (#103/#106).
+  const { err, stderr, stdout } = await run('tmux',
+    ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', tmuxDir(cwd), 'claude; exec "$SHELL" -l']);
+  if (err) return { ok: false, status: 500, error: `tmux: ${stderr.trim() || err.message}` };
+  const created = await tmuxNameReadback(name, stdout);
+  if (!created) return { ok: false, status: 500, error: 'tmux made the session but will not say what it called it' };
+  // On the restore list from birth. The claudeSessionId is not known yet — the
+  // title hook writes it once Claude boots — so the reconcile timer fills it in;
+  // until then a reboot would bring this session back as a fresh `claude`, which
+  // is still the create route's own default and better than losing the name.
+  registryAdd(created, { cwd });
+  // ⚠ AND MARKED AS STILL COMING UP. This 201 is the client's cue to show a
+  // composer, and a message typed into it arrives while the pane is still
+  // empty — `claude` needs about two more seconds to paint anything that
+  // reads stdin, and a paste before that is lost whole, Enter included. The
+  // send queue holds those until the composer appears; see `launchingAt`.
+  markLaunching(created);
+  return { ok: true, name: created, cwd };
+}
+
+/** The directories recent sessions ran in - registry then archive, newest first, existing only, at most 12. */
+function recentDirs() {
+  const seen = new Set();
+  const out = [];
+  const add = (d) => {
+    if (typeof d !== 'string' || !path.isAbsolute(d) || seen.has(d) || out.length >= 12) return;
+    seen.add(d);
+    try { if (fs.statSync(d).isDirectory()) out.push(d); } catch { /* gone */ }
+  };
+  add(WORKDIR);
+  const reg = Object.values(loadRegistry()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  for (const r of reg) add(r.cwd);
+  try {
+    const dir = path.join(DATA_DIR, 'archive');
+    const rows = [];
+    for (const id of fs.readdirSync(dir)) {
+      try { rows.push(JSON.parse(fs.readFileSync(path.join(dir, id, 'record.json'), 'utf8'))); } catch { /* not a record */ }
+    }
+    rows.sort((a, b) => Number(b.archivedAt || 0) - Number(a.archivedAt || 0));
+    for (const r of rows) add(r.cwd);
+  } catch { /* no archive yet */ }
+  return out;
+}
+
 function registryAdd(name, fields) {
   if (!name || sessreg.isReserved(name)) return;
   const s = loadRegistry();
@@ -13023,43 +13112,16 @@ async function handleRequest(req, res) {
 
     if (req.method === 'POST' && p === '/v1/sessions') {
       const body = await readJsonBody(req);
-      const bad = nameProblem(body.name);
-      if (bad) return sendErr(res, 400, bad);
-      const name = canonName(body.name);
-      // Fresh: a name check before creating must not trust a shared answer.
-      if (await sessionExists(name, null, { fresh: true })) return sendErr(res, 409, `session '${name}' already exists`);
-      // Whatever the last holder of this name left behind goes now, before the new
-      // session can be observed. The born-time guard would reject it anyway, but
-      // deleting it here closes the window rather than papering over it.
-      clearSessionState(name);
-      // Before the session exists, never after: the server's cgroup is decided by
-      // whoever starts it, and that is a one-time choice per server lifetime.
-      await ensureTmuxServer();
-      // Same shape as cc: open in WORKDIR, claude first, fall through to a shell.
-      // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
-      // call that makes it. The old shape asked afterwards with
-      // `display-message -t '=<name>:'`, which cannot resolve a name tmux
-      // rewrote and answers empty at exit 0; the `|| name` fallback then echoed
-      // the phantom back in the 201 (#103/#106).
-      const { err, stderr, stdout } = await run('tmux',
-        ['new-session', '-d', '-P', '-F', '#S', '-s', name, '-c', tmuxDir(WORKDIR), 'claude; exec "$SHELL" -l']);
-      if (err) return sendErr(res, 500, `tmux: ${stderr.trim() || err.message}`);
-      const created = await tmuxNameReadback(name, stdout);
-      if (!created) {
-        return sendErr(res, 500, 'tmux made the session but will not say what it called it');
-      }
-      // On the restore list from birth. The claudeSessionId is not known yet — the
-      // title hook writes it once Claude boots — so the reconcile timer fills it in;
-      // until then a reboot would bring this session back as a fresh `claude`, which
-      // is still the create route's own default and better than losing the name.
-      registryAdd(created, { cwd: WORKDIR });
-      // ⚠ AND MARKED AS STILL COMING UP. This 201 is the client's cue to show a
-      // composer, and a message typed into it arrives while the pane is still
-      // empty — `claude` needs about two more seconds to paint anything that
-      // reads stdin, and a paste before that is lost whole, Enter included. The
-      // send queue holds those until the composer appears; see `launchingAt`.
-      markLaunching(created);
-      return sendJson(res, 201, { ok: true, name: created });
+      const made = await createSession({ name: body.name, cwd: body.cwd });
+      if (!made.ok) return sendErr(res, made.status, made.error);
+      return sendJson(res, 201, { ok: true, name: made.name, cwd: made.cwd });
+    }
+
+    // --- the directories recent sessions started in, for the create dialog's
+    // picker (2026-11-02): this server's default first, then the live registry's
+    // and the archive's, newest first, only those that still exist.
+    if (req.method === 'GET' && p === '/v1/sessions/recent-dirs') {
+      return sendJson(res, 200, { dirs: recentDirs(), default: WORKDIR });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})$/)) && req.method === 'DELETE') {

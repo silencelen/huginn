@@ -152,7 +152,7 @@ All routes need the token except `GET /v1/challenge`.
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/sessions` | Sessions and their states. `?preview=1` adds titles and activity previews. |
-| POST | `/v1/sessions` | `{name}`: create a session running Claude Code. |
+| POST | `/v1/sessions` | `{name, cwd?}`: create a session running Claude Code, in `cwd` (an existing directory on the server) or the server default. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
 | POST | `/v1/sessions/<name>/rename` | `{name}`: rename it. Queued messages move with it; `409` if one is still being typed after 15 seconds. |
 | GET | `/v1/sessions/<name>/screen` | The terminal screen. `?cols=&rows=` report your size; `?live=1` also resizes the pane for you (one client at a time holds this lease); `?history=` adds scrollback; `?hash=&wait=` long-polls. |
@@ -211,6 +211,7 @@ See [Security](../security.md#chats-ask-and-act) for what each mode may do.
 | Method | Path | What it does |
 |---|---|---|
 | POST | `/v1/uploads` | The raw file as the body (not multipart), with its `Content-Type`; `?name=` gives the original name. Up to 128 MB. Returns `{ok, path, bytes, ext, readable}`; name `path` in a message so Claude Code can open the file. |
+| GET | `/v1/sessions/recent-dirs` | The directories recent sessions started in (the server default first), for the create dialog. |
 | GET | `/v1/uploads/<name>` | An uploaded file. |
 | GET | `/v1/outbox/<id>` | A file Claude sent with its `send_file` tool, by the id on the transcript's `tool` event (`file.id`). Images come back inline as their image type; anything else as `application/octet-stream`, `Content-Disposition: attachment`. Only ids the server minted are served. |
 | GET | `/v1/files/image` | `?path=<path>[&session=<name>]`: an image on the server that a transcript names, from the uploads, the scratchpads, Claude Code's scratch folder, or the named session's working folder. |

@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- A session can be created in a directory of your choice: `POST /v1/sessions` takes `cwd`, which
+  must be an existing directory on the server, else the create is refused with the reason.
+  `GET /v1/sessions/recent-dirs` lists the directories recent sessions used, for the dialog.
+
 ## 3.16.4 — 2026-11-02
 
 ### Changed
