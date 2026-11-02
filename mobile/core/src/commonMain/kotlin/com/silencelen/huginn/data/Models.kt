@@ -212,6 +212,17 @@ data class CreatedSession(
 @Serializable
 data class SessionList(val sessions: List<Session> = emptyList())
 
+/**
+ * `GET /v1/sessions/recent-dirs`: the directories recent sessions started in,
+ * the server default first, for the New Session dialog's dropdown. [default] is
+ * what an empty "Starting directory" means.
+ */
+@Serializable
+data class RecentDirs(
+    val dirs: List<String> = emptyList(),
+    val default: String? = null,
+)
+
 /** A Claude Code choice prompt, lifted off the pane so it can become buttons. */
 @Serializable
 data class PromptOption(
@@ -1037,6 +1048,12 @@ data class ChatDetail(
     val seq: Long? = null,
     /** Fast mode for this chat's runs: null = the host default (appd 3.14.0). */
     val fast: Boolean? = null,
+    /**
+     * What this chat's Claude is asking: only `session` requests (a chat run
+     * draws no dialogs), in a session's `GET /questions` shape. Empty on a
+     * daemon older than 3.17 and when nothing is waiting.
+     */
+    val questions: List<SessionQuestion> = emptyList(),
 )
 
 @Serializable
@@ -1051,6 +1068,8 @@ sealed interface ChatEvent {
     data class Tool(val name: String, val input: String?) : ChatEvent
     data class Result(val ok: Boolean, val durationMs: Long?, val costUsd: Double?) : ChatEvent
     data class Failure(val text: String) : ChatEvent
+    /** The chat's question list changed while the run is alive (`questions` frame, appd 3.17). */
+    data class Questions(val questions: List<SessionQuestion>) : ChatEvent
     data object Done : ChatEvent
 }
 
@@ -2965,6 +2984,71 @@ data class ProjectRow(
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
     val rev: Int = 0,
+    /**
+     * The roster change the lead proposed for a RUNNING project, waiting for
+     * Approve or Decline; null when none is. Appd 3.17. On the row (and the
+     * detail's `row`) rather than the record, so the list can mark it without a
+     * GET per project.
+     */
+    val pendingChange: ProjectPendingChange? = null,
+)
+
+/**
+ * A roster change the lead proposed by writing its manifest block again, diffed
+ * by the daemon against the running members. [rev] is what `approve-change`
+ * quotes back, so a card left open while the lead revised cannot approve a
+ * roster nobody read. [problem] is set when the change cannot be applied as
+ * proposed (the member cap); the daemon's approve answers 409 with it.
+ */
+@Serializable
+data class ProjectPendingChange(
+    val rev: Int = 0,
+    val summary: String? = null,
+    val added: List<PendingAdded> = emptyList(),
+    val removed: List<PendingRemoved> = emptyList(),
+    val changed: List<PendingChanged> = emptyList(),
+    val problem: String? = null,
+    /** Unix seconds. */
+    val receivedAt: Long? = null,
+)
+
+/** A role the change would spawn, with the whole first message it would get. */
+@Serializable
+data class PendingAdded(
+    val role: String = "",
+    val firstPrompt: String? = null,
+    val cwd: String? = null,
+    val model: String? = null,
+    val effort: String? = null,
+    val mode: String? = null,
+)
+
+/** A role the change would ask to wrap up (the soft-end, never a kill). */
+@Serializable
+data class PendingRemoved(val role: String = "")
+
+/** A role the change would hand a new task. */
+@Serializable
+data class PendingChanged(val role: String = "", val firstPrompt: String? = null)
+
+/**
+ * `POST /v1/projects/:id/approve-change` — what happened, or the daemon's
+ * refusal. A stale [rev] answers 409 carrying the CURRENT project, so the card
+ * redraws from [project] (decoded as a row: it carries `pendingChange` when the
+ * daemon put one there) rather than approving a roster that moved.
+ */
+data class ChangeOutcome(
+    val refusal: String?,
+    val project: ProjectRow? = null,
+) {
+    val ok: Boolean get() = refusal == null
+}
+
+/** The `{error, project}` shape a stale approve-change answers with. */
+@Serializable
+data class ChangeRefusal(
+    val error: String? = null,
+    val project: ProjectRow? = null,
 )
 
 /**

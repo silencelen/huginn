@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontFamily
@@ -550,6 +551,8 @@ fun QuestionCard(
     onDraft: (QuestionDraft) -> Unit = {},
     onAnswer: (JsonObject) -> Unit,
     onOpenScreen: (() -> Unit)? = null,
+    /** The clock, for a session request's expiry line; 0 draws no expiry. */
+    nowMs: Long = 0L,
 ) {
     // Controlled when the shell hoists a draft (the phone keeps it in the view
     // model, so a half answer outlives the card leaving the tree); otherwise a
@@ -560,9 +563,100 @@ fun QuestionCard(
     when {
         question.isAsk -> AskQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer)
         question.isPlan -> PlanQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer, onOpenScreen)
+        question.isSession -> SessionQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer, nowMs)
         else -> PermissionQuestionCard(question, answering, note, compact, maxHeight, cur, set, onAnswer)
     }
 }
+
+/**
+ * Claude asked for a NEW SESSION (`start_session`, appd 3.17): where it would
+ * run, the prompt it would be given VERBATIM (scrolling inside the card's cap,
+ * never summarised — the person is approving exactly these words), the name
+ * Claude suggested (editable; blank leaves the choice to the daemon), who asked
+ * and when the request lapses. Start answers `allow` with the name as edited;
+ * Decline opens the same "tell Claude why" line a permission's No has.
+ *
+ * A create refusal (the name is taken, the directory is gone) comes back as
+ * [note] with the question still waiting, so the card stays up and the name
+ * can be changed and Start pressed again. Nothing is started until Start.
+ */
+@Composable
+private fun SessionQuestionCard(
+    question: SessionQuestion,
+    answering: Boolean,
+    note: String?,
+    compact: Boolean,
+    maxHeight: Dp,
+    draft: QuestionDraft,
+    onDraft: (QuestionDraft) -> Unit,
+    onAnswer: (JsonObject) -> Unit,
+    nowMs: Long,
+) {
+    val metrics = promptCardMetrics(compact)
+    val req = question.sessionRequest()
+    CardShell(metrics, maxHeight) {
+        HeaderChip("New session", question.agentType)
+        Text(question.headline(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("question.session.headline"))
+        req?.directory?.takeIf { it.isNotBlank() }?.let {
+            Text(
+                it, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp).testTag("question.session.directory"),
+            )
+        }
+        val meta = listOfNotNull(
+            question.requesterWords(),
+            if (nowMs > 0) question.expiryWords(nowMs) else null,
+        ).joinToString("  ·  ")
+        if (meta.isNotEmpty()) {
+            Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp).testTag("question.session.meta"))
+        }
+        val prompt = req?.prompt?.takeIf { it.isNotBlank() }
+        if (prompt != null) {
+            Spacer(Modifier.height(6.dp))
+            Text("The first message it would get", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // VERBATIM, in the mono block: scrolls inside its cap, never clipped
+            // to a line count, never re-flowed. The person is approving these words.
+            Box(Modifier.testTag("question.session.prompt")) { MonoBlock(prompt, maxHeight = SESSION_PROMPT_FOLD_HEIGHT) }
+        }
+        OutlinedTextField(
+            value = draft.name, onValueChange = { onDraft(draft.copy(name = it)) },
+            label = { Text("Session name") },
+            placeholder = { Text("Leave empty to name it after the directory") },
+            enabled = !answering, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.name"),
+        )
+        Spacer(Modifier.height(6.dp))
+        OptionLayout(wrap = true) {
+            Button(
+                onClick = { onAnswer(QuestionAnswers.sessionBody(allow = true, name = draft.name)) },
+                enabled = !answering, modifier = Modifier.testTag("question.session.start"),
+            ) { Text("Start") }
+            OutlinedButton(
+                onClick = { onDraft(draft.copy(noOpen = !draft.noOpen)) },
+                enabled = !answering, modifier = Modifier.testTag("question.session.decline"),
+            ) { Text("Decline") }
+        }
+        if (draft.noOpen) {
+            OutlinedTextField(
+                value = draft.words, onValueChange = { onDraft(draft.copy(words = it)) },
+                placeholder = { Text("Tell Claude why (optional)") },
+                enabled = !answering, minLines = 1, maxLines = 4,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.words"),
+            )
+            Button(
+                onClick = { onAnswer(QuestionAnswers.sessionBody(allow = false, message = draft.words)) },
+                enabled = !answering, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.decline.send"),
+            ) { Text(if (draft.words.isBlank()) "Decline" else "Decline, and tell Claude") }
+        }
+        NoteLine(note)
+    }
+}
+
+/** How tall a session request's prompt may draw before it scrolls inside the card. */
+val SESSION_PROMPT_FOLD_HEIGHT: Dp = 180.dp
 
 /**
  * An AskUserQuestion, one question at a time ([AskStepper]): a single choice

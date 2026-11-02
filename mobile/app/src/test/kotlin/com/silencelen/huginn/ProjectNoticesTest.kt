@@ -71,7 +71,7 @@ class ProjectNoticesTest {
         assertFalse("and never a verb", hostile.actions.any { it.verb.contains("edit", ignoreCase = true) })
         // The bounded set itself, so a third verb cannot be added without this
         // test being edited on purpose.
-        assertEquals(setOf("spawn", "discard"), ProjectNotices.VERBS)
+        assertEquals(setOf("spawn", "discard", "approve-change", "decline-change"), ProjectNotices.VERBS)
     }
 
     /**
@@ -127,5 +127,29 @@ class ProjectNoticesTest {
         )!!
         assertTrue(silent.title.contains("Sensor board"))
         assertTrue(silent.text.isNotBlank())
+    }
+
+    @Test
+    fun `a roster change carries Approve and Decline with the change's rev`() {
+        val n = ProjectNotices.fromPush(
+            kind = ProjectNotices.KIND_CHANGE,
+            title = "",
+            text = "",
+            subject = null,
+            payload = """{"projectId":"p1","rev":"3","name":"LoRa","summary":"Add a tester"}""",
+        )
+        assertNotNull(n)
+        assertEquals("project:p1", n!!.key)
+        assertEquals("LoRa proposes a roster change", n.title)
+        assertEquals("Add a tester", n.text)
+        assertEquals(3, n.manifestRev)
+        assertEquals(listOf("Approve", "Decline"), n.actions.map { it.label })
+        assertEquals(listOf("approve-change", "decline-change"), n.actions.map { it.verb })
+        assertEquals("the rev rides both buttons", listOf(3, 3), n.actions.map { it.manifestRev })
+        // The post has no reply box and no pane answers, like a proposal's.
+        val args = ProjectNotices.postArgs(n)
+        assertNull(args.replyChat)
+        assertNull(args.session)
+        assertEquals(2, args.projectActions.size)
     }
 }

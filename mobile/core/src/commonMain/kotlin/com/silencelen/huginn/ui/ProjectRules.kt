@@ -456,6 +456,11 @@ object ProjectRules {
      * different amount of help.
      */
     fun memberWords(member: ProjectMemberState): String = when {
+        // Asked to wrap up (DELETE …/members/:role?end=1, or an approved roster
+        // change) and still running: the daemon keeps the row with `endedAt` set
+        // until the session is gone. "ended" would be a lie for a session that is
+        // still committing.
+        PendingChangeRules.windingDown(member) -> "winding down"
         ended(member) -> "ended"
         gone(member) -> "not running"
         else -> when (stateWord(member)) {

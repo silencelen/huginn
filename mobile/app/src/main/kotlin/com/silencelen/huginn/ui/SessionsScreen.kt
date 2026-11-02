@@ -109,9 +109,24 @@ fun SessionsScreen(
     projectCount: Int = 0,
     /** The way to the whole tree. Null hides it — see projectEntries. */
     onOpenProjects: (() -> Unit)? = null,
+    /** The recents for the "Starting directory" dropdown (appd 3.17); null draws the field alone. */
+    recentDirs: com.silencelen.huginn.data.RecentDirs? = null,
+    /** Asked when the New session dialog opens, so the dropdown is fresh. */
+    onLoadRecentDirs: () -> Unit = {},
+    /**
+     * Create with a directory. [onCreate] is the older two-argument shape and is
+     * kept for callers that have no directory to pass; when this is set it wins.
+     * The dialog stays up until `onDone(null)`; a daemon refusal (the directory
+     * is not on the server) arrives as `onDone(reason)` and is shown in place.
+     */
+    onCreateIn: ((name: String, cwd: String?, onDone: (String?) -> Unit) -> Unit)? = null,
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
+    var newDir by remember { mutableStateOf("") }
+    var newDirPicking by remember { mutableStateOf(false) }
+    var createError by remember { mutableStateOf<String?>(null) }
+    var creating by remember { mutableStateOf(false) }
     var confirmKill by remember { mutableStateOf<String?>(null) }
     var confirmSoftEnd by remember { mutableStateOf<String?>(null) }
     var confirmArchive by remember { mutableStateOf<String?>(null) }
@@ -230,12 +245,12 @@ fun SessionsScreen(
 
         if (twoPane) {
             FloatingActionButton(
-                onClick = { newName = ""; showNew = true },
+                onClick = { newName = ""; newDir = ""; createError = null; onLoadRecentDirs(); showNew = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
             ) { Icon(Icons.Filled.Add, contentDescription = "New session") }
         } else {
             ExtendedFloatingActionButton(
-                onClick = { newName = ""; showNew = true },
+                onClick = { newName = ""; newDir = ""; createError = null; onLoadRecentDirs(); showNew = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("New session") },
@@ -256,12 +271,28 @@ fun SessionsScreen(
         // it is typed, so a refusal arrives here rather than as a 400 after the
         // dialog has closed.
         val problem = SessionNameRules.nameProblem(newName).takeIf { newName.isNotBlank() }
+        // The directory rule is `:core`'s too (StartDirRules): blank is the
+        // server default, anything else must be absolute; whether it EXISTS is
+        // the daemon's 400, shown here while the dialog stays up.
+        val dirProblem = StartDirRules.cwdProblem(newDir)
+        val dirChoices = StartDirRules.choices(recentDirs, newDir)
         HouseDialog(
             title = "New session",
             onDismiss = { showNew = false },
             confirmLabel = "Create",
-            onConfirm = { showNew = false; onCreate(newName) },
-            confirmEnabled = newName.isNotBlank() && problem == null,
+            onConfirm = {
+                val createIn = onCreateIn
+                if (createIn == null) {
+                    showNew = false; onCreate(newName)
+                } else {
+                    creating = true; createError = null
+                    createIn(newName, StartDirRules.cwdOrNull(newDir)) { err ->
+                        creating = false
+                        if (err == null) showNew = false else createError = err
+                    }
+                }
+            },
+            confirmEnabled = newName.isNotBlank() && problem == null && dirProblem == null && !creating,
             text = {
                 Column {
                     OutlinedTextField(
@@ -277,6 +308,33 @@ fun SessionsScreen(
                         problem ?: "${SessionNameRules.HINT} Opens Claude Code on the host.",
                         style = MaterialTheme.typography.bodySmall,
                         color = if (problem != null) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Box {
+                        OutlinedTextField(
+                            value = newDir,
+                            onValueChange = { newDir = it; createError = null },
+                            singleLine = true,
+                            label = { Text(StartDirRules.LABEL) },
+                            placeholder = { Text(recentDirs?.default ?: "/path/on/the/server") },
+                            isError = dirProblem != null || createError != null,
+                            trailingIcon = if (dirChoices.isEmpty()) null else ({
+                                TextButton(onClick = { newDirPicking = true }) { Text("Recent") }
+                            }),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        HouseMenu(
+                            expanded = newDirPicking,
+                            onDismiss = { newDirPicking = false },
+                            items = dirChoices.map { d -> HouseMenuItem(d) { newDir = d; createError = null } },
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        createError ?: dirProblem ?: StartDirRules.hint(recentDirs),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (createError != null || dirProblem != null) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }

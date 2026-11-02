@@ -1246,6 +1246,83 @@ class AppStore(
             ?: t.message?.takeIf { it.isNotBlank() }
             ?: "that change was refused"
 
+    /**
+     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV, NOT THE PLAN: a
+     * stale rev answers 409 with the current project, and the row is redrawn
+     * from it so the card shows the change actually on offer. The refusal goes
+     * to [projectRefusal] verbatim, like a spawn's.
+     */
+    suspend fun approveChange(id: String, rev: Int) {
+        _projectRefusal.value = null
+        runCatching { client.approveChange(id, rev) }
+            .onSuccess { outcome ->
+                if (!outcome.ok) _projectRefusal.value = outcome.refusal
+                outcome.project?.let { adoptRow(it) }
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+                refreshSessions()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** Drop the pending roster change and tell the lead. */
+    suspend fun declineChange(id: String) {
+        _projectRefusal.value = null
+        runCatching { client.declineChange(id) }
+            .onSuccess { refreshProjects() }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** A project row the daemon handed back (a stale approve's 409), put in the tree's place for it. */
+    private fun adoptRow(row: ProjectRow) {
+        if (row.id.isEmpty()) return
+        _projects.value = _projects.value.map { if (it.id == row.id) row else it }
+    }
+
+    /**
+     * Create a NEW member in a running project (`POST …/members {spawn: true}`).
+     * The 409s (the cap, the headroom STOP) are answers and land in
+     * [projectRefusal]; so do the thrown 400s, in the daemon's words.
+     */
+    suspend fun addMember(id: String, role: String, description: String, model: String?, effort: String?, cwd: String?) {
+        _projectRefusal.value = null
+        runCatching { client.addMember(id, role, description, model, effort, cwd) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+                refreshSessions()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** Give a member a new task (`PATCH …/members/:role {description}`). */
+    suspend fun reroleMember(id: String, role: String, description: String) {
+        _projectRefusal.value = null
+        runCatching { client.reroleMember(id, role, description) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
+    /** ASK a member to wrap up and end (`DELETE …/members/:role?end=1`): the soft-end, never a kill. */
+    suspend fun endMember(id: String, role: String) {
+        _projectRefusal.value = null
+        runCatching { client.endMember(id, role) }
+            .onSuccess { outcome ->
+                if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                refreshProjects()
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+            .onFailure { _projectRefusal.value = refusalTextFor(it) }
+    }
+
     /** Turn the proposal down. The manifest is kept at its rev; only the status moves. */
     suspend fun discardProposal(id: String) {
         runCatching { client.discardProposal(id) }

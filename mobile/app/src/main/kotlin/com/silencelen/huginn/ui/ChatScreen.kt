@@ -116,6 +116,14 @@ fun ChatScreen(
     // ------------------------------------------------- selection (3.0.2)
     /** The host's quick-action wording; null narrows the bar to Quote. */
     quickActions: com.silencelen.huginn.data.QuickActions? = null,
+    /** What this chat's Claude is asking (appd 3.17: `session` requests). */
+    questions: List<com.silencelen.huginn.data.SessionQuestion> = emptyList(),
+    questionDrafts: Map<String, QuestionDraft> = emptyMap(),
+    onQuestionDraft: (String, QuestionDraft) -> Unit = { _, _ -> },
+    onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
+    /** The daemon's refusal of the last answer, drawn under the card. */
+    questionNote: String? = null,
+    questionAnswering: Boolean = false,
     /** A long-press verb was picked, with the row's whole text. */
     onSelectionAction: (SelectionAction, String) -> Unit = { _, _ -> },
 ) {
@@ -286,6 +294,25 @@ fun ChatScreen(
         // ellipsise against unless it is given one.
         if (suggestions.isNotEmpty() && !streaming && !sending && draft.isBlank()) {
             SuggestionChips(suggestions, onPick = onDraft)
+        }
+
+        // Claude asked for a NEW SESSION. A chat has no pane to steer to, so the
+        // compact card is the answerable surface, pinned above the composer like
+        // a session's and scrolling inside a cap for the same reason.
+        val cardQuestion = PromptGate.cardQuestion(questions)
+        if (cardQuestion != null) {
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                QuestionCard(
+                    question = cardQuestion,
+                    answering = questionAnswering,
+                    note = questionNote,
+                    maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
+                    draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
+                    onDraft = { onQuestionDraft(cardQuestion.id, it) },
+                    onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
+                    nowMs = System.currentTimeMillis(),
+                )
+            }
         }
 
         // The long-press verbs, ABOVE the composer so the text stays visible while

@@ -1,5 +1,9 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.StartDirRules
+import com.silencelen.huginn.ui.system.HouseMenu
+import com.silencelen.huginn.ui.system.HouseMenuItem
+import androidx.compose.ui.platform.testTag
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -745,19 +749,39 @@ fun Shell(store: AppStore) {
             }
 
             if (namingSession) {
+                // The recents for the directory dropdown, read when the dialog
+                // opens. A daemon without the route (older than 3.17) 404s: no
+                // dropdown, the field still works.
+                var recent by remember { mutableStateOf<com.silencelen.huginn.data.RecentDirs?>(null) }
+                var createError by remember { mutableStateOf<String?>(null) }
+                var creating by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { recent = runCatching { store.client.recentDirs() }.getOrNull() }
                 NewSessionDialog(
                     taken = sessions.map { it.name }.toSet(),
+                    recent = recent,
+                    serverError = createError,
+                    busy = creating,
                     onDismiss = { namingSession = false },
-                    onConfirm = { name ->
-                        namingSession = false
-                        act {
+                    onConfirm = { name, cwd ->
+                        creating = true
+                        createError = null
+                        scope.launch {
                             // Open what tmux CALLED it. The host reads the name back
                             // rather than echoing the request, because tmux rewrites
                             // a '.' to '_' and still succeeds — opening the requested
                             // name would 404 on everything after it.
-                            val made = store.client.createSession(name)
-                            store.refreshSessions()
-                            store.openSession(made)
+                            //
+                            // THE DIALOG STAYS UP ON A REFUSAL: a directory that is
+                            // not on the server comes back 400 with the reason, and
+                            // the person fixes the path rather than retyping the name.
+                            runCatching { store.client.createSession(name, cwd) }
+                                .onSuccess { made ->
+                                    namingSession = false
+                                    store.refreshSessions()
+                                    store.openSession(made)
+                                }
+                                .onFailure { createError = it.message ?: "could not create the session" }
+                            creating = false
                         }
                     },
                 )
@@ -1600,16 +1624,28 @@ sealed interface ConfirmTarget {
  * rather than after a round trip that comes back 409.
  */
 @Composable
-private fun NewSessionDialog(
+internal fun NewSessionDialog(
     taken: Set<String>,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
+    onConfirm: (name: String, cwd: String?) -> Unit,
+    /** The recents for the directory dropdown; null draws the field alone. */
+    recent: com.silencelen.huginn.data.RecentDirs? = null,
+    /** The daemon's refusal (a 400: the directory is not on the server), verbatim. */
+    serverError: String? = null,
+    busy: Boolean = false,
 ) {
     var text by remember { mutableStateOf("") }
+    var dir by remember { mutableStateOf("") }
+    var picking by remember { mutableStateOf(false) }
     val canon = text.trim().lowercase()
     val wellFormed = canon.matches(SESSION_NAME)
     val clash = wellFormed && canon in taken
-    val ok = wellFormed && !clash
+    // The directory rule is `:core`'s (StartDirRules): blank is the server
+    // default, anything else must be absolute. Whether it EXISTS is the daemon's
+    // fact and arrives as [serverError].
+    val dirProblem = StartDirRules.cwdProblem(dir)
+    val ok = wellFormed && !clash && dirProblem == null && !busy
+    val choices = StartDirRules.choices(recent, dir)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New session", style = MaterialTheme.typography.titleSmall) },
@@ -1617,7 +1653,7 @@ private fun NewSessionDialog(
             Column {
                 DialogField(
                     value = text,
-                    ok = ok || text.isEmpty(),
+                    ok = (wellFormed && !clash) || text.isEmpty(),
                     label = "Session name",
                     placeholder = "e.g. jotter",
                 ) { text = it }
@@ -1631,10 +1667,38 @@ private fun NewSessionDialog(
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = Space.unit),
                 )
+                Spacer(Modifier.height(Space.unit * 2))
+                Box {
+                    OutlinedTextField(
+                        value = dir,
+                        onValueChange = { dir = it },
+                        singleLine = true,
+                        isError = dirProblem != null || serverError != null,
+                        label = { Text(StartDirRules.LABEL, style = DeskType.rowMeta) },
+                        placeholder = { Text(recent?.default ?: "/path/on/the/server", style = MaterialTheme.typography.bodyMedium) },
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        trailingIcon = if (choices.isEmpty()) null else ({
+                            TextButton(onClick = { picking = true }) { Text("Recent", style = DeskType.rowMeta) }
+                        }),
+                        modifier = Modifier.fillMaxWidth().testTag("newsession.dir"),
+                    )
+                    HouseMenu(
+                        expanded = picking,
+                        onDismiss = { picking = false },
+                        items = choices.map { d -> HouseMenuItem(d) { dir = d } },
+                    )
+                }
+                Text(
+                    serverError ?: dirProblem ?: StartDirRules.hint(recent),
+                    style = DeskType.rowMeta,
+                    color = if (serverError != null || dirProblem != null) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = Space.unit).testTag("newsession.dir.hint"),
+                )
             }
         },
         confirmButton = {
-            TextButton(enabled = ok, onClick = { onConfirm(canon) }) { Text("Create") }
+            TextButton(enabled = ok, onClick = { onConfirm(canon, StartDirRules.cwdOrNull(dir)) }) { Text("Create") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
