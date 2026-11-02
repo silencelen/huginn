@@ -1924,8 +1924,19 @@ function dropReason(entry, ctx = {}) {
  * had nothing. Whatever else changes, a message leaving the queue undelivered
  * says so on disk.
  */
-function dropLogLine(name, entry = {}, reason = 'unknown') {
-  return `typing: dropped ${entry.origin || 'unknown'}/${entry.kind || 'text'} for ${name}: ${reason}`;
+function dropLogLine(name, entry = {}, reason = 'unknown', gate = null) {
+  const line = `typing: dropped ${entry.origin || 'unknown'}/${entry.kind || 'text'} for ${name}: ${reason}`;
+  if (!gate || reason !== 'timeout') return line;
+  // ⚠ WHICH GATE HELD IT. A line that said only "timeout" could not tell a
+  // session that was genuinely mid-turn from one sitting idle at its prompt
+  // whose boundary this reader could not see (2026-11-02: the same ladder on
+  // one session queued and dropped every half hour all evening, cause unknown).
+  // The last gate reading goes on the line, so the next such evening is a grep.
+  const bits = [`idle=${gate.idle === true}`, `tail=${gate.lastKind || 'none'}`];
+  if (gate.paneWhy) bits.push(`pane=${gate.paneWhy}`);
+  if (gate.shellMode) bits.push('shellMode');
+  if (gate.starting) bits.push('starting');
+  return `${line} (last gate: ${bits.join(' ')})`;
 }
 
 /** What `typingState.lastError` says about a drop. Never silent — that is the point. */

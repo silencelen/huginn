@@ -3648,7 +3648,7 @@ async function pumpQueue(name) {
         // stopped expecting an answer from — which is how 43 dropped messages
         // left no trace anywhere. A message leaving this queue undelivered says
         // so in the journal, in one grep-able shape, every time.
-        log(typing.dropLogLine(name, entry, reason));
+        log(typing.dropLogLine(name, entry, reason, gate));
         log(`typing: ${name}: ${q.lastError}`);
         if (entry.typedInBox) {
           log(`typing: ${name}: the dropped message was typed before a dialog opened and is still `

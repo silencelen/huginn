@@ -1615,3 +1615,15 @@ test('scanForHuman steps over a line longer than one read, then still sees the p
   for (let i = 0; i < 20 && !saw; i++) saw = t.scanForHuman(cursor, read, 1024);
   assert.equal(saw, true);
 });
+
+// 2026-11-02: a timeout drop says what the gate last saw, so an idle session
+// whose boundary the reader could not see is told apart from one mid-turn.
+test('a timeout drop line carries the last gate reading; other drops do not', () => {
+  const typing = require('../lib/typing');
+  const entry = { origin: 'headroom', kind: 'model' };
+  const gate = { idle: false, lastKind: 'user', paneWhy: 'composer', shellMode: false, starting: false };
+  assert.equal(typing.dropLogLine('alex', entry, 'timeout', gate),
+    'typing: dropped headroom/model for alex: timeout (last gate: idle=false tail=user pane=composer)');
+  assert.equal(typing.dropLogLine('alex', entry, 'human', gate), 'typing: dropped headroom/model for alex: human');
+  assert.equal(typing.dropLogLine('alex', entry, 'timeout'), 'typing: dropped headroom/model for alex: timeout');
+});
