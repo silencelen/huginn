@@ -19,6 +19,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const typing = require('../lib/typing');
 
 require('./retry-fetch');
 const TMUX_SOCK = `huginn-test-${process.pid}`;
@@ -246,4 +247,56 @@ test('with nothing in the way the page goes at once, submitted by its one Enter'
   const sent = await until('the page to be submitted', () => readOr(out));
   assert.match(sent, /^\[Scratchpad "Notes" at \S+\.md — read it before acting on this message\.\]\n$/,
     'the page reference was submitted once, on its own line');
+});
+
+// ---- shell mode ON PURPOSE: `shell: true` ------------------------------------
+//
+// The stand-in models Claude Code 2.1.316's bash mode (fixtures/fake-claude.js,
+// HG_FAKE_CLAUDE_SHELL_OUT): a `!` into the empty box switches the caret to `!`
+// and the footer to `! for shell mode`; Enter then runs the box, recorded as
+// `!<command>`. Measured on the real binary the same day: `send-keys -l '!'`
+// enters the mode, a bracketed paste fills it, Enter runs it.
+
+test('a send with shell:true types the `!`, the command and Enter, and the command runs', async () => {
+  const { name, out } = composerSession('shell-on-purpose');
+  await until('the composer', () => /❯/.test(capture(name)));
+  const r = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'echo R2ST-SHELL', shell: true, keys: ['Enter'] }),
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.delivered, true, JSON.stringify(r.body));
+  const ran = await until('the command to run', () => readOr(`${out}.shell`));
+  assert.equal(ran, '!echo R2ST-SHELL\n', 'the pane got `!` + the command + Enter, once');
+  assert.equal(readOr(out), '', 'nothing was sent to Claude as a message');
+  await until('the box back in prompt mode', () => {
+    const lines = capture(name).split('\n');
+    return typing.composerDrawn(lines) && !typing.composerShellMode(lines);
+  });
+  // A client that sends the message as typed, `!` included: the daemon types its own `!`.
+  const typedBang = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: '!echo R2ST-BANG', shell: true, keys: ['Enter'] }),
+  });
+  assert.equal(typedBang.status, 200, JSON.stringify(typedBang.body));
+  await until('the second command', () => /R2ST-BANG/.test(readOr(`${out}.shell`)));
+  assert.equal(readOr(`${out}.shell`), '!echo R2ST-SHELL\n!echo R2ST-BANG\n', 'one `!`, not two');
+  // A shell command is one line, and never a page.
+  const multi = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ text: 'ls\nrm -rf x', shell: true, keys: ['Enter'] }) });
+  assert.equal(multi.status, 400); assert.match(multi.body.error, /one line/);
+  const empty = await api(`/v1/sessions/${name}/keys`, { method: 'POST', body: JSON.stringify({ text: '!', shell: true, keys: ['Enter'] }) });
+  assert.equal(empty.status, 400); assert.match(empty.body.error, /needs text/);
+});
+
+test('without the flag a message that starts with `!` is still refused: the box went into shell mode and nothing ran', async () => {
+  const { name, out } = composerSession('shell-accident');
+  await until('the composer', () => /❯/.test(capture(name)));
+  const r = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: '!echo R2ST-ACCIDENT', keys: ['Enter'] }),
+  });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.match(r.body.error, /shell mode/);
+  assert.match(r.body.error, /Send it as a shell command/, 'and says how to mean it');
+  await wait(500);
+  assert.equal(readOr(`${out}.shell`), '', 'nothing ran');
+  assert.equal(readOr(out), '', 'nothing was sent as a message either');
+  assert.doesNotMatch(capture(name), /for shell mode/, 'nothing was typed: the box is still in prompt mode');
 });

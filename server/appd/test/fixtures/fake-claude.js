@@ -65,6 +65,14 @@
  *                                       the unmarked startup rule refuses to hold,
  *                                       so it is how a test can ask whether the
  *                                       MARK is doing the holding.
+ *              HG_FAKE_CLAUDE_SHELL_OUT file to append SHELL-MODE commands to (as
+ *                                       `!<command>`), beside <out>. Shell mode is
+ *                                       modelled after 2.1.316: a `!` typed into an
+ *                                       EMPTY box switches to it (the caret becomes
+ *                                       `!` + NBSP, the footer `! for shell mode`),
+ *                                       Enter runs the box and leaves the mode,
+ *                                       Backspace on the empty box leaves it. A
+ *                                       paste that STARTS with `!` enters it too.
  *              HG_FAKE_CLAUDE_TYPED     text the composer already holds when it
  *                                       paints — a person who started typing while
  *                                       the paste was being swallowed. Recovery
@@ -91,12 +99,21 @@ const TYPED = process.env.HG_FAKE_CLAUDE_TYPED || '';
  * draft, which is how `composerHoldsDraft` came to hold sends over one.
  */
 const GHOST = process.env.HG_FAKE_CLAUDE_GHOST || '';
+const SHELL_OUT = process.env.HG_FAKE_CLAUDE_SHELL_OUT || `${OUT}.shell`;
+let shellMode = false;
 
 /** The box, with the status lines UNDER it — the shape that matters. */
 const RULE = '─'.repeat(70);
 function drawComposer(typed = '') {
   // A suggestion only ever shows in an empty box, and the first keystroke ends it.
   const body = typed || (GHOST ? `\u001B[2m${GHOST}\u001B[0m` : '');
+  if (shellMode) {
+    // The real caret is `!` + NBSP in its own colour; the footer changes with it.
+    process.stdout.write(`${RULE}\n!\u00A0${typed}\n${RULE}\n`
+      + '  [fake] Fable 5.1 · ctx 4%\n'
+      + '  ! for shell mode\n');
+    return;
+  }
   process.stdout.write(`${RULE}\n❯ ${body}\n${RULE}\n`
     + '  [fake] Fable 5.1 · ctx 4%\n'
     + '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n');
@@ -140,6 +157,19 @@ process.stdin.on('data', (d) => {
     return;
   }
   buf += d;
+  // Shell mode, as 2.1.316 does it: a `!` as the FIRST byte of an empty box
+  // (typed, or at the head of a paste) is the mode, not text; Backspace on the
+  // empty box leaves the mode.
+  if (!shellMode && clean(buf).startsWith('!')) {
+    shellMode = true;
+    buf = clean(buf).slice(1);
+  }
+  if (shellMode && /\u007f$/.test(buf)) {
+    buf = buf.slice(0, -1);
+    if (!clean(buf)) { shellMode = false; buf = ''; }
+    render();
+    return;
+  }
   // ⚠ CTRL-U CLEARS THE BOX, because a test needs a way to be the PERSON who
   // gives their draft back. The real TUI kills the line on C-u like every other
   // readline-shaped composer; without it a draft put here with
@@ -157,6 +187,13 @@ process.stdin.on('data', (d) => {
     const line = clean(buf.slice(0, i));
     buf = buf.slice(i + 1);
     if (!line.trim()) continue;
+    if (shellMode) {
+      // The command runs (recorded, not executed here) and the box leaves the mode.
+      fs.appendFileSync(SHELL_OUT, `!${line}\n`);
+      process.stdout.write(`\n! ${line}\n  ⎿  (ran)\n`);
+      shellMode = false;
+      continue;
+    }
     fs.appendFileSync(OUT, `${line}\n`);
     // What a submitted message looks like in the pane: it leaves the composer,
     // is echoed above it, and the box redraws empty underneath.

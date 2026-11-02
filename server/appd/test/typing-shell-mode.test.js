@@ -88,3 +88,44 @@ test('a box in prompt mode, and a `!` row that is not the box, are untouched', (
   // A `!` row under a rule with no closing rule under it is not a box.
   assert.equal(t.composerShellMode(['● ok', R80, '! git status']), false);
 });
+
+// ---- shell mode ON PURPOSE: the send route's `shell: true` --------------------
+
+test('a shell entry is the one send the shell-mode gate lets through, and only there', () => {
+  const inShell = [...history(16), ...shellBox('git status')];
+  const gate = { submit: true, composer: t.composerDrawn(inShell), shell: t.shellPrompt(inShell), shellMode: t.composerShellMode(inShell) };
+  assert.match(String(t.submitRefusal(gate)), /shell mode/, 'a plain message is still refused');
+  assert.equal(t.submitRefusal({ ...gate, shellEntry: true }), null, 'a shell command belongs in shell mode');
+  // A box in PROMPT mode takes a shell entry too: the daemon types the `!` itself.
+  const prompt = [...history(4), ...promptBox()];
+  assert.equal(t.submitRefusal({ submit: true, composer: true, shell: false, shellMode: t.composerShellMode(prompt), shellEntry: true }), null);
+  // But a real shell prompt — claude gone — is not Claude Code's bash mode.
+  assert.match(String(t.submitRefusal({ submit: true, composer: false, shell: true, shellMode: false, shellEntry: true })), /not running/);
+});
+
+test('the look before the Enter: a shell entry presses into shell mode and refuses a box that left it', () => {
+  const cmd = 'git status';
+  const inShell = [...history(16), ...shellBox(cmd)];
+  assert.equal(t.enterRefusal(inShell, cmd, { hadComposer: true, shell: true }), null, 'our command, in the mode we put the box in');
+  assert.equal(t.enterRefusal(inShell, cmd, { hadComposer: true })?.blockedBy, 'shell', 'without the flag, as before');
+  const leftIt = [...history(16), ...promptBox(cmd)];
+  const held = t.enterRefusal(leftIt, cmd, { hadComposer: true, shell: true });
+  assert.equal(held && held.blockedBy, 'shell');
+  assert.equal(held.shellExpected, true);
+  assert.equal(held.shellMode, false);
+  // A dialog that opened in between still holds a shell entry, like any send.
+  const dialog = [...history(16), 'Do you want to proceed?', '', '❯ 1. Yes', '  2. No', '', 'Enter to select · Esc to cancel'];
+  assert.equal(t.enterRefusal(dialog, cmd, { hadComposer: true, shell: true })?.blockedBy, 'modal');
+  // Claude gone under the paste: refused for a shell entry too.
+  assert.equal(t.enterRefusal([...history(4), 'root@host:~/app# '], cmd, { hadComposer: true, shell: true })?.blockedBy, 'shell');
+});
+
+test('a message that starts with `!` is refused before it is typed, unless it is a shell entry', () => {
+  const prompt = [...history(4), ...promptBox()];
+  const gate = { submit: true, composer: t.composerDrawn(prompt), shell: false, shellMode: t.composerShellMode(prompt) };
+  assert.match(String(t.submitRefusal({ ...gate, text: '!important: hold the deploy' })), /shell mode.*Send it as a shell command/);
+  assert.equal(t.submitRefusal({ ...gate, text: 'important! hold the deploy' }), null, 'a `!` elsewhere is just punctuation');
+  assert.equal(t.submitRefusal({ ...gate, text: '!git status', shellEntry: true }), null, 'a shell entry means it');
+  assert.equal(t.submitRefusal({ ...gate, submit: false, text: '!x' }), null, 'live-view typing is the person\'s');
+  assert.equal(t.submitRefusal({ submit: true, composer: false, shell: false, text: '!x' }), null, 'no composer: nothing to say, as before');
+});
