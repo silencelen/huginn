@@ -9,6 +9,14 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Changed
+- `GET /v1/usage` is computed from the server's own incremental reading of the transcripts (a per-day ledger under `usage/`, fed by sweeps that read only new bytes) and carries `source: "huginn"`; ccusage runs once a week, at the lowest CPU and I/O priority, and its totals are kept beside the ledger's as `correlation` (`HUGINN_USAGE_CCUSAGE=0` turns it off).
+
+### Fixed
+- The Usage tab showed an error or a timeout when the transcript tree was large: ccusage walked every transcript on each request.
+
 ## 3.16.3 — 2026-10-31
 
 ### Security

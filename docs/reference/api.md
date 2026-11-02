@@ -140,7 +140,7 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/accounts/<slug>/refresh` | Refresh a saved login's credentials now. |
 | DELETE | `/v1/accounts/<slug>` | Forget a saved login. |
 | GET | `/v1/plan` | Plan usage: the numbers Claude Code's `/usage` shows. |
-| GET | `/v1/usage` | Token and cost summary for today and the last 7 days. |
+| GET | `/v1/usage` | Token and cost summary for today and the last 7 days, from the daemon's own ledger of the transcripts (`source: "huginn"`; cost at list rates, `costIsEstimate`). `correlation` is the latest weekly ccusage comparison, or null. |
 | GET | `/v1/headroom` | The whole usage picture: every account's limits, what is stalled or held, and why. Timestamps in milliseconds. |
 | PATCH | `/v1/headroom/settings` | Thresholds, model order, default model, auto-resume and account switching. |
 | GET, POST | `/v1/autoswitch` | Deprecated alias for the account-switching part of `/v1/headroom/settings`. |

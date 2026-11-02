@@ -63,6 +63,7 @@ const crypto = require('node:crypto');
 //   routes-challenge    11650 + pid%25   -> 11650-11674
 //   routes-paste-delivery 11675 + pid%25 -> 11675-11699
 //   routes-outbox       11800 + pid%50   -> 11800-11849
+//   routes-usage        11850 + pid%50   -> 11850-11899
 //
 // Also spoken for, outside this directory: scripts/test-llm-shim.js holds
 // 18790-18799, and scripts/test-client.sh's stub daemons hold 18787 (headroom)
