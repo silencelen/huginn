@@ -15,6 +15,17 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A session can be created in a directory of your choice: `POST /v1/sessions` takes `cwd`, which
   must be an existing directory on the server, else the create is refused with the reason.
   `GET /v1/sessions/recent-dirs` lists the directories recent sessions used, for the dialog.
+- A running project's roster can change. The lead writes its manifest block again and the
+  difference against the running members becomes `pendingChange` on the project (added, removed,
+  re-roled roles, with a rev); `POST /v1/projects/<id>/approve-change` with `{rev}` spawns the
+  added roles, asks the removed ones to wrap up (the soft-end, never a kill) and types the re-roled
+  ones their new task, `POST .../decline-change` drops it; the lead is told either way. Only the
+  lead's own transcript is read, and only a block carrying the project's tag counts.
+- The owner edits members directly: `POST /v1/projects/<id>/members` with
+  `{role, description, spawn: true}` creates a new member in a running project;
+  `PATCH .../members/<role>` with `{description}` gives a member a new task;
+  `DELETE .../members/<role>?end=1` asks it to wrap up and end (`end=now` is refused). Without `end`
+  the delete stays the record-only drop it was.
 
 ## 3.16.4 — 2026-11-02
 

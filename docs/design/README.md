@@ -38,6 +38,7 @@ such as D1 or Q4 are local to the record they appear in.
 | [The console](console.md) | Implemented in core 2.3.0 | The full-screen terminal interface that bare `huginn` opens, built into the core binary. |
 | [The desktop app through huginn core](desktop-via-core.md) | Implemented in core 2.5.0 and 2.5.1, desktop 2.5.1 | The desktop app stops holding the server token and sends every request through huginn core, which gains a transparent proxy and a route book. |
 | [The local AI tier](local-tier.md) | Implemented in appd 2.73.0 to 2.75.0 and CLI 0.11.0 to 1.1.0; experimental | Serving local models from a client computer to the server, behind a `generate` policy rung that never substitutes one engine for another. |
+| [Projects](projects.md) | Implemented in appd 3.4.0 onwards | A cluster of sessions with roles: the lead proposes through a tagged manifest, the owner approves, and a running roster can be changed by the lead's proposal or the owner's hand. |
 
 ### Archive
 

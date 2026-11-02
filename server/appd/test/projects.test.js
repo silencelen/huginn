@@ -571,3 +571,120 @@ test('the lead is told where the owner approves, in words, before the block', ()
   assert.match(text, /huginn projects spawn stick/);
   assert.match(projects.MANIFEST_CONTRACT, /huginn projects spawn <slug>/);
 });
+
+// ------------------------------------------------------ the roster change
+//
+// A manifest written AFTER the spawn is the roster the lead wants now; the
+// difference between it and the running members is the proposal. Pure here;
+// the daemon's half (detectRosterChange, the approve/decline routes) is
+// routes-projects-change.test.js.
+
+const member = (role, firstPrompt, over = {}) => ({
+  role, name: `stick-${role}`, claudeName: `stick/${role}`, firstPrompt, cwd: CWD, model: null, effort: null, mode: null,
+  spawnedAt: 1, endedAt: null, ...over,
+});
+const session = (role, firstPrompt, over = {}) => ({ role, firstPrompt, cwd: null, model: null, effort: null, mode: null, ...over });
+
+test('manifestDiff: two manifests in, added / removed / changed out', () => {
+  const roster = [member('docs', 'write the README'), member('fw', 'bring up the radio'), member('pcb', 'route the board')];
+  const d = projects.manifestDiff(roster, [
+    session('docs', 'write the README'),               // kept as is
+    session('fw', 'bring up the radio AND the GPS'),   // same role, new task
+    session('web', 'build the dashboard', { model: 'sonnet' }),  // new
+    // pcb is gone
+  ]);
+  assert.deepEqual([{ role: 'web', firstPrompt: 'build the dashboard', cwd: null, model: 'sonnet', effort: null, mode: null }], d.added);
+  assert.deepEqual([{ role: 'pcb' }], d.removed);
+  assert.deepEqual([{ role: 'fw', firstPrompt: 'bring up the radio AND the GPS' }], d.changed);
+  assert.equal(false, projects.diffIsEmpty(d));
+
+  // The lead re-stating its roster is the common case and changes nothing.
+  assert.equal(true, projects.diffIsEmpty(projects.manifestDiff(roster,
+    [session('docs', 'write the README'), session('fw', 'bring up the radio'), session('pcb', 'route the board')])));
+  // ⚠ ONLY THE PROMPT RE-ROLES: a moved cwd, model or effort on a running role is
+  // not a change this daemon can carry out without restarting a session.
+  assert.equal(true, projects.diffIsEmpty(projects.manifestDiff(roster,
+    [session('docs', 'write the README', { model: 'haiku', cwd: `${CWD}/docs` }),
+      session('fw', 'bring up the radio'), session('pcb', 'route the board')])));
+});
+
+test('manifestDiff: a member already winding down is not in the roster, and the lead is in neither list', () => {
+  const p = { members: [member('docs', 'a'), member('old', 'b', { endedAt: 5 })], lead: { role: 'lead', name: 'stick-lead' } };
+  assert.deepEqual(['docs'], projects.liveRoster(p).map((m) => m.role), 'ended members are not seats');
+  // A proposal naming `lead` never parses (roleProblem) — so it cannot remove or
+  // re-role the lead through the reader. Asserted at the grammar AND at the diff,
+  // because the diff is also fed by the owner's routes.
+  assert.equal(null, projects.parseManifest(block(TAG, manifest({
+    sessions: [session('lead', 'be the lead'), session('docs', 'a')],
+  })), TAG, { cwd: CWD }), 'a revision that names the lead is refused at parse time');
+  const d = projects.manifestDiff([{ role: 'lead', name: 'stick-lead', firstPrompt: null }, member('docs', 'a')],
+    [{ role: 'lead', firstPrompt: 'x' }]);
+  assert.deepEqual([], d.added, 'the lead is never added');
+  assert.deepEqual([{ role: 'docs' }], d.removed, 'and never removed — only docs is');
+  assert.deepEqual([], d.changed, 'and never re-roled');
+});
+
+test('pendingChangeFor carries the diff, the next rev and the cap problem; nothing-to-do is null', () => {
+  const p = { members: [member('docs', 'a'), member('fw', 'b')], manifest: { rev: 3, sessions: [] } };
+  const m = manifest({ summary: 'add web', sessions: [session('docs', 'a'), session('fw', 'b'), session('web', 'c')] });
+  const pc = projects.pendingChangeFor(p, m, 1700);
+  assert.equal(4, pc.rev, 'the rev the manifest will have once applied — what the approve is handed back');
+  assert.equal('add web', pc.summary);
+  assert.deepEqual(['web'], pc.added.map((x) => x.role));
+  assert.deepEqual([], pc.removed);
+  assert.equal(null, pc.problem);
+  assert.equal(1700, pc.receivedAt);
+  assert.deepEqual(m.sessions, pc.manifest.sessions, 'the whole manifest rides along, so approve can adopt it');
+  assert.equal(null, projects.pendingChangeFor(p, manifest({ sessions: [session('docs', 'a'), session('fw', 'b')] })),
+    'a block that changes nothing is not a proposal');
+
+  // The wire row: no manifest body, every field definite.
+  const row = projects.pendingChangeRow(pc);
+  assert.deepEqual(['rev', 'summary', 'added', 'removed', 'changed', 'problem', 'receivedAt'], Object.keys(row));
+  assert.equal(undefined, row.manifest);
+  assert.equal(null, projects.pendingChangeRow(null));
+  assert.equal(null, projects.projectRow({ id: 'p', manifest: null, members: [] }).pendingChange, 'the project row says null, not undefined');
+  assert.equal(4, projects.projectRow({ id: 'p', manifest: { rev: 3 }, members: [], pendingChange: pc }).pendingChange.rev);
+});
+
+test('the cap counts what is RUNNING, and a change that would overflow it is marked', () => {
+  const full = { members: Array.from({ length: projects.MAX_MEMBERS }, (_, i) => member(`r${i}`, `t${i}`)), manifest: { rev: 1 } };
+  assert.match(projects.memberCapProblem(full, 1), /limit is 12/);
+  assert.equal(null, projects.memberCapProblem(full, 0));
+  // One winding down frees a seat: holding it would refuse the very replacement
+  // the owner approved.
+  full.members[0].endedAt = 9;
+  assert.equal(null, projects.memberCapProblem(full, 1));
+  assert.match(projects.memberCapProblem(full, 2), /limit is 12/);
+  // Through pendingChangeFor: swapping one for one is fine, a net add past 12 is not.
+  const eleven = full.members.filter((m) => !m.endedAt);
+  const keep = eleven.map((m) => session(m.role, m.firstPrompt));
+  assert.equal(null, projects.pendingChangeFor(full, manifest({ sessions: [...keep, session('new', 'x')] })).problem);
+  const over = { members: eleven.concat(member('r12', 't12')), manifest: { rev: 1 } };
+  const twoMore = projects.pendingChangeFor(over, manifest({ sessions: [...keep, session('r12', 't12'), session('n1', 'x')] }));
+  // 12 running + 1 added - 0 removed = 13: still a proposal (the owner sees it) but
+  // marked, and the approve route refuses on the mark.
+  assert.match(twoMore.problem, /13 sessions/);
+});
+
+test('the lead\'s contract says a block after the spawn is a change proposal, and what each difference does', () => {
+  const text = projects.leadPersona({ name: 'Stick', kind: 'software', slug: 'stick', manifest: { tag: TAG } });
+  assert.match(text, /AFTER THE SPAWN, A NEW BLOCK IS A CHANGE PROPOSAL/);
+  assert.match(text, /is ADDED/);
+  assert.match(text, /is REMOVED \(asked to wrap up and end — never\nkilled\)/);
+  assert.match(text, /is RE-ROLED/);
+  assert.match(text, /Always list every role you want to KEEP/);
+});
+
+test('the change frames: the lead hears names, a member hears its new task framed as owner-approved', () => {
+  const p = { name: 'Stick', slug: 'stick', manifest: { rev: 4 } };
+  const f = projects.changeAppliedFrame(p, { spawned: ['stick/web'], ended: ['stick/pcb'], reroled: ['stick/fw'] });
+  assert.match(f, /^\[Huginn\] Roster change rev 4 approved: /);
+  assert.match(f, /spawned stick\/web; re-roled stick\/fw; asked stick\/pcb to wrap up and end/);
+  assert.match(projects.changeAppliedFrame(p, {}), /nothing to do/);
+  assert.match(projects.changeAppliedFrame(p, { failed: [{ role: 'x', reason: 'duplicate session: stick-x' }] }),
+    /could not spawn x \(duplicate session: stick-x\)/);
+  assert.match(projects.changeDeclinedFrame(), /^\[Huginn\] The roster change was declined/);
+  const r = projects.reroleFrame(p, 'fw', 'bring up the GPS');
+  assert.match(r, /^\[Huginn project "Stick" — new task for role fw, approved by the owner\]\nbring up the GPS$/);
+});

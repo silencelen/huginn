@@ -247,9 +247,31 @@ See [Security](../security.md#chats-ask-and-act) for what each mode may do.
 | GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
 | POST | `/v1/projects/<id>/discard` | Send a proposal back to the lead. |
+| POST | `/v1/projects/<id>/approve-change` | `{rev}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. `409` with the current project when `rev` is not the change on offer. |
+| POST | `/v1/projects/<id>/decline-change` | Drop the pending roster change and tell the lead. |
 | POST | `/v1/projects/<id>/message` | `{from, to, text}`: pass a message from one member to another. |
-| POST | `/v1/projects/<id>/members` | `{name?, role}`: add a session as a member. |
-| DELETE | `/v1/projects/<id>/members/<role>` | Remove a member. |
+| POST | `/v1/projects/<id>/members` | `{name?, role}`: add a running session as a member (a record edit; nothing is launched). `{role, description, spawn: true, cwd?, model?, effort?}`: create a NEW member in a running project, the way an approved manifest does; `description` is its whole first message. Both respect the member limit. |
+| PATCH | `/v1/projects/<id>/members/<role>` | `{description}`: give a member a new task; it is typed into the member, framed as owner-approved. The role word itself cannot change while the session runs (`409`). |
+| DELETE | `/v1/projects/<id>/members/<role>` | Remove a member from the record; the session keeps running. With `?end=1` (or `{end: true}`) the member is asked to wrap up and end (the soft-end) and stays in the record, with `endedAt` set, until its session is gone. `end=now` is refused: a member is never ended outright. |
+
+A project row (`GET /v1/projects`, and `row` in the detail) carries `pendingChange`: `null`, or
+the roster change the lead proposed for a running project, waiting for Approve or Decline:
+
+```
+pendingChange: {
+  rev: int,                    // the manifest rev this becomes when approved; pass it to approve-change
+  summary: string | null,      // the lead's one line
+  added:   [ {role, firstPrompt, cwd, model, effort, mode} ],   // spawned on approve
+  removed: [ {role} ],                                          // asked to wrap up on approve
+  changed: [ {role, firstPrompt} ],                             // told the new task on approve
+  problem: string | null,      // set when the change cannot be applied as proposed (the member limit); approve answers 409 with it
+  receivedAt: unix seconds
+}
+```
+
+The lead proposes a change by writing its manifest block again, describing the roster it now
+wants; the daemon diffs it against the running members. A block that changes nothing proposes
+nothing. The project's `status` stays `active` while a change waits.
 
 ### Devices
 
