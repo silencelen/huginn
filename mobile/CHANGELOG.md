@@ -15,7 +15,7 @@
 - Projects: a roster change the lead proposes for a running project shows as a card with the added,
   removed and re-roled roles, Approve and Decline; members can be added (role, task, optional model,
   effort, directory), re-roled, or asked to wrap up, and one asked reads "winding down". The
-  `project_change` push carries Approve and Decline.
+  `project_change` push opens the project.
 
 ### Security
 - Approve and Decline on a roster change, on the card and on the notification, send the change's
@@ -25,6 +25,13 @@
   bidi characters, collapses a run of three or more spaces to a visible gap, and says the prompt's
   lines and characters beside Start, so no part of a Claude-written prompt can sit off-screen. The
   prompt sent is unchanged.
+- The roster-change card shows, for every added role, its mode, directory, model and the whole first
+  prompt, and for every re-roled role the whole new task — the same wrapped block as the new-session
+  card, with hidden characters spelled out and the size as sent, nothing clipped to a line. Approve is
+  disabled when the card has no text to show for a role. The `project_change` notification carries no
+  buttons: approval happens on the project page, where the text is.
+- The display copy of a prompt marks the word joiner and every other format character, not only the
+  bidi and zero-width marks.
 
 ## 3.15.1 — 2026-11-02
 

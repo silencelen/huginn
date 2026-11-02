@@ -24,6 +24,12 @@
   bidi characters, collapses a run of three or more spaces to a visible gap, and says the prompt's
   lines and characters beside Start, so no part of a Claude-written prompt can sit off-screen. The
   prompt sent is unchanged.
+- The roster-change card shows, for every added role, its mode, directory, model and the whole first
+  prompt, and for every re-roled role the whole new task — the same wrapped block as the new-session
+  card, with hidden characters spelled out and the size as sent, nothing clipped to a line. Approve is
+  disabled when the card has no text to show for a role.
+- The display copy of a prompt marks the word joiner and every other format character, not only the
+  bidi and zero-width marks.
 
 ## 2.9.2
 
