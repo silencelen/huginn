@@ -34,7 +34,7 @@ const {
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity, unwrapPasted, lastWorkAt, transcriptHead } = require('./lib/transcript');
 const tlsLib = require('./lib/tls');
-const { summarizeUsage } = require('./lib/usage');
+const usageLedgerLib = require('./lib/usageledger');
 const { normalizePlan } = require('./lib/plan');
 // The brand state table (server/lib/state-table.json, generated into lib/): every
 // Telegram message leads with one of its glyphs, never an emoji (BRAND.md s. 8).
@@ -8101,46 +8101,132 @@ async function fetchPlan() {
   }
 }
 
-// ccusage walks every transcript on disk and takes ~20-30 s even for one day,
-// so it is computed in the background and served from cache. The phone gets an
-// immediate answer that says how old it is, rather than a 30 s spinner.
-const usageCache = { at: 0, data: null, running: false, error: null, failedAt: 0 };
-const USAGE_TTL_MS = 10 * 60 * 1000;
-// After a failure, wait before trying again: a 30 s job re-triggered by every
-// poll would pin a core for nothing.
-const USAGE_RETRY_MS = 2 * 60 * 1000;
+// ---------------------------------------------------------------- usage
+//
+// The Usage tab used to be `ccusage daily --json`, run on request. ccusage walks
+// EVERY transcript under ~/.claude/projects for every answer; on a server where
+// that tree is gigabytes it ran past its timeout, saturated the disk, and the tab
+// showed an error. The figures now come from the daemon's own ledger
+// (lib/usageledger), fed incrementally: a sweep stats the tree and reads only the
+// bytes that are new. ccusage is kept for ONE job — a weekly, low-priority run
+// whose totals are written beside the ledger's so the two can be compared over
+// time — and is never run for a request.
+const USAGE_DIR = path.join(DATA_DIR, 'usage');
+const USAGE_LEDGER_FILE = path.join(USAGE_DIR, 'ledger.json');
+/** A request older than this triggers a background sweep; the answer never waits for it. */
+const USAGE_SWEEP_TTL_MS = 60_000;
+/** The first sweep after a start fills in the week; later sweeps read only what changed. */
+const USAGE_BACKFILL_MS = 7 * 86_400_000;
+const USAGE_CORRELATION_TICK_MS = 10 * 60 * 1000;
+const USAGE_CCUSAGE_TIMEOUT_MS = 20 * 60 * 1000;
+const USAGE_CCUSAGE_ENABLED = process.env.HUGINN_USAGE_CCUSAGE !== '0';
+
+const usageState = {
+  ledger: null, sweptAt: 0, running: false, error: null, sweep: null, backfilled: false,
+  correlation: null, correlating: false,
+};
 
 function ymd(d) {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 }
 
-async function computeUsage() {
-  if (usageCache.running) return;
-  usageCache.running = true;
+function usageLedger() {
+  if (!usageState.ledger) usageState.ledger = usageLedgerLib.load(USAGE_LEDGER_FILE);
+  return usageState.ledger;
+}
+
+function usageRoots() {
+  return [archiveLib.projectsRoot(CLAUDE_DIR)];
+}
+
+/** One sweep of the transcript trees into the ledger, then the ledger to disk. Never two at once. */
+async function sweepUsage(reason = 'request') {
+  if (usageState.running) return;
+  usageState.running = true;
   try {
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 6 * 86_400_000);
-    const { err, stdout, stderr } = await run(
-      'ccusage', ['daily', '--json', '-s', ymd(weekAgo), '-u', ymd(now)],
-      { timeout: 180_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, HOME: process.env.HOME || '/root' } },
-    );
-    if (err) {
-      usageCache.error = (stderr || err.message || 'ccusage failed').trim().slice(0, 200);
-      usageCache.failedAt = Date.now();
-      return;
+    const ledger = usageLedger();
+    const backfillMs = usageState.backfilled ? 0 : USAGE_BACKFILL_MS;
+    const r = await usageLedgerLib.sweep(ledger, usageRoots(), { backfillMs });
+    usageState.backfilled = true;
+    usageState.sweptAt = Date.now();
+    usageState.error = null;
+    usageState.sweep = r;
+    usageLedgerLib.save(USAGE_LEDGER_FILE, ledger);
+    if (reason !== 'request' || r.scanned) {
+      log(`usage: ${reason} sweep read ${r.scanned}/${r.files} transcripts, ${r.bytesRead} B, ${r.counted} messages in ${r.ms} ms`);
     }
-    const parsed = JSON.parse(stdout);
-    usageCache.data = summarizeUsage(parsed, ymd(now));
-    usageCache.at = Date.now();
-    usageCache.error = null;
-    log(`usage refreshed (${usageCache.data.daily.length} days)`);
   } catch (e) {
-    usageCache.error = String(e.message || e).slice(0, 200);
-    usageCache.failedAt = Date.now();
+    usageState.error = String((e && e.message) || e).slice(0, 200);
+    log(`usage: sweep failed: ${usageState.error}`);
   } finally {
-    usageCache.running = false;
+    usageState.running = false;
   }
 }
+
+/** The newest ccusage-<date>.json beside the ledger, or null before the first weekly run. */
+function loadUsageCorrelation() {
+  try {
+    const names = fs.readdirSync(USAGE_DIR).filter((n) => /^ccusage-\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort();
+    if (!names.length) return null;
+    return JSON.parse(fs.readFileSync(path.join(USAGE_DIR, names[names.length - 1]), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The weekly correlation: ccusage at the lowest CPU and I/O priority, with a long
+ * timeout, over the same seven days the ledger serves — written as
+ * usage/ccusage-<date>.json = {at, days, ledger, driftPercent}. Sundays from
+ * 05:00 host time, once; HUGINN_USAGE_CCUSAGE=0 turns it off.
+ */
+async function correlateUsage() {
+  if (usageState.correlating) return;
+  usageState.correlating = true;
+  try {
+    const now = new Date();
+    const today = usageLedgerLib.localDay(now);
+    const dates = usageLedgerLib.dayWindow(today, 7);
+    const weekAgo = new Date(now.getTime() - 6 * 86_400_000);
+    // The ledger first, so both sides describe the same moment.
+    await sweepUsage('correlation');
+    const { err, stdout, stderr } = await run(
+      'nice', ['-n', '19', 'ionice', '-c', '3', 'ccusage', 'daily', '--json', '-s', ymd(weekAgo), '-u', ymd(now)],
+      { timeout: USAGE_CCUSAGE_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, HOME: process.env.HOME || '/root' } },
+    );
+    if (err) throw new Error((stderr || err.message || 'ccusage failed').trim().slice(0, 200));
+    const parsed = JSON.parse(stdout);
+    const rec = usageLedgerLib.correlate(usageLedger(), parsed, dates, Date.now());
+    fs.mkdirSync(USAGE_DIR, { recursive: true });
+    const file = path.join(USAGE_DIR, `ccusage-${today}.json`);
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(rec, null, 1), { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+    usageState.correlation = rec;
+    const drift = Object.entries(rec.driftPercent).filter(([, v]) => v != null).map(([d, v]) => `${d}:${v}%`).join(' ');
+    log(`usage: weekly ccusage correlation written (${drift || 'no overlap'})`);
+  } catch (e) {
+    log(`usage: weekly ccusage correlation failed: ${String((e && e.message) || e).slice(0, 200)}`);
+  } finally {
+    usageState.correlating = false;
+  }
+}
+
+function usageCorrelationTick() {
+  if (!USAGE_CCUSAGE_ENABLED) return;
+  if (usageState.correlation === null) usageState.correlation = loadUsageCorrelation();
+  const lastAt = (usageState.correlation && usageState.correlation.at) || 0;
+  if (usageLedgerLib.correlationDue(Date.now(), lastAt)) correlateUsage().catch(() => { });
+}
+
+// The first sweep fills in the week from the transcripts that changed in it, a
+// moment after start so it never competes with the restore above; after that a
+// request older than the TTL triggers one, and the weekly job runs its own.
+setTimeout(() => { sweepUsage('startup').catch(() => { }); }, 20_000).unref();
+setTimeout(() => {
+  usageState.correlation = loadUsageCorrelation();
+  usageCorrelationTick();
+  setInterval(usageCorrelationTick, USAGE_CORRELATION_TICK_MS).unref();
+}, 90_000).unref();
 
 // ---------------------------------------------------------------- status
 
@@ -12905,19 +12991,21 @@ async function handleRequest(req, res) {
 
     // --- usage
     if (req.method === 'GET' && p === '/v1/usage') {
-      const stale = Date.now() - usageCache.at > USAGE_TTL_MS;
-      const backingOff = usageCache.error && Date.now() - usageCache.failedAt < USAGE_RETRY_MS;
-      if ((stale || !usageCache.data) && !usageCache.running && !backingOff) computeUsage();
+      const stale = Date.now() - usageState.sweptAt > USAGE_SWEEP_TTL_MS;
+      if (stale && !usageState.running) sweepUsage('request').catch(() => { });
+      const ledger = usageLedger();
       return sendJson(res, 200, {
-        data: usageCache.data,
-        computedAt: usageCache.at || null,
+        data: usageLedgerLib.summarize(ledger),
+        computedAt: usageState.sweptAt || null,
         stale,
-        refreshing: usageCache.running,
-        error: usageCache.error,
+        refreshing: usageState.running,
+        error: usageState.error,
         // Tokens come straight from the transcripts and are exact; the dollar
-        // figures are ccusage's list-price estimate and run high for a Max
+        // figures are priced at list rates (lib/pricing) and run high for a Max
         // subscription, so the app must not present them as a bill.
         costIsEstimate: true,
+        source: 'huginn',
+        correlation: usageState.correlation,
       });
     }
 

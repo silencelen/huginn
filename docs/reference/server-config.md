@@ -130,6 +130,7 @@ not affected: they run in their own unit, `huginn-tmux.service`.
 | `HUGINN_APPD_SOFT_END_PHRASE` | `Finish outstanding items, commit your work, and prepare to end the session.` | What a soft end types into the session. |
 | `HUGINN_APPD_SOFT_END_AUTO` | on | After a soft end, end the session once it settles. `0`: type the phrase only. |
 | `HUGINN_APPD_UPLOAD_KEEP_DAYS` | `7` | Days to keep uploads that are not images. Images are never pruned; chat history shows them. |
+| `HUGINN_USAGE_CCUSAGE` | on | Once a week (Sunday from 05:00 host time) run `ccusage` at the lowest CPU and I/O priority and keep its totals beside the daemon's own usage ledger for comparison (`usage/ccusage-<date>.json`, `correlation` on `/v1/usage`). `0`: never run it. The Usage figures themselves never depend on it. |
 | `HUGINN_APPD_EXTRA_TOOLS` | unset | Extra Claude Code tools for every chat and round, in both ask and act mode, and for `huginn -p`/`-y`. Space-separated, for example an MCP server's tools: `mcp__memory`. |
 | `HUGINN_APPD_PERSONA_FILE` | `/etc/huginn/persona.md` | Text appended to the system prompt of chats, rounds and `huginn -p`/`-y`. No file, no persona. |
 | `HUGINN_APPD_TELEGRAM_SCRIPT` | unset | Optional alert relay. The daemon runs `bash <script> --message <text> --source huginn-app`; the script delivers the text wherever you like and exits 0. |
