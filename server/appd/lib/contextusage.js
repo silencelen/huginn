@@ -75,6 +75,57 @@ const AUTOCOMPACT_RE = /^Auto-compact window:\s*(\S+?)\s*tokens?\b\s*(.*)$/i;
 const LIST_ROW_RE = /^[├└│]\s*(.+?)(?::\s*~?(\S+?)\s*tokens?)?\s*$/;
 const MODEL_ID_RE = /^[a-z][a-z0-9][a-z0-9._[\]-]*$/;
 
+// The Markdown twin's rows: `| System prompt | 2.9k | 0.3% |`, `| mcp__x | srv | 152 |`.
+const MD_ROW_RE = /^\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|$/;
+const MD_TOKENS_RE = /^\*\*Tokens:\*\*\s*(\S+?)\s*\/\s*(\S+?)\s*(?:tokens)?\s*\((\d+(?:\.\d+)?)%\)/;
+const MD_MODEL_RE = /^\*\*Model:\*\*\s*(.+?)\s*$/;
+
+/**
+ * The Markdown table Claude Code 2.1.316 writes as `/context`'s second record
+ * (an isMeta user record starting "## Context Usage", 2026-11-02), parsed into
+ * the same shape as the terminal table. Null when `text` is not that table.
+ */
+function parseContextMarkdown(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim());
+  if (!/^## Context Usage\b/.test(lines[0] || '')) return null;
+  const out = {
+    model: { display: null, id: null }, totalTokens: null, maxTokens: null, percent: null,
+    categories: [], autocompactWindow: null, autocompactSource: null, mcpTools: [], mcpAvailable: [], skills: [],
+  };
+  let section = 'head';
+  let sawTable = false;
+  for (const line of lines) {
+    if (!line) continue;
+    if (/^###\s+Estimated usage by category/i.test(line)) { section = 'categories'; continue; }
+    if (/^###\s+MCP tools/i.test(line)) { section = 'mcp'; continue; }
+    if (/^###\s+Skills/i.test(line)) { section = 'skills'; continue; }
+    if (/^###\s+/.test(line)) { section = 'other'; continue; }
+    const ac = AUTOCOMPACT_RE.exec(line.replace(/\*\*/g, ''));
+    if (ac) { out.autocompactWindow = parseTokens(ac[1]); out.autocompactSource = ac[2].replace(/^\(|\)$/g, '').trim() || null; continue; }
+    if (section === 'head') {
+      const m = MD_MODEL_RE.exec(line);
+      if (m) { out.model.id = m[1]; out.model.display = m[1]; continue; }
+      const t = MD_TOKENS_RE.exec(line);
+      if (t) { out.totalTokens = parseTokens(t[1]); out.maxTokens = parseTokens(t[2]); out.percent = Number(t[3]); sawTable = true; }
+      continue;
+    }
+    const row = MD_ROW_RE.exec(line);
+    if (!row || /^-+$/.test(row[1]) || /^(Category|Tool|Skill|Type)$/i.test(row[1])) continue;
+    if (section === 'categories') {
+      const pct = /^(\d+(?:\.\d+)?)%$/.exec(row[3]);
+      if (!pct) continue;
+      const id = categoryId(row[1]);
+      out.categories.push({ id, name: row[1], tokens: parseTokens(row[2]), percent: Number(pct[1]), kind: kindOf(id === 'free_space' ? '⛶' : /buffer/.test(id) ? '⛝' : '', id) });
+      sawTable = true;
+    } else if (section === 'mcp') {
+      out.mcpTools.push({ name: row[1], tokens: parseTokens(row[3].replace(/^~/, '')) });
+    } else if (section === 'skills') {
+      out.skills.push({ name: row[1], tokens: parseTokens(row[3].replace(/^~/, '')) });
+    }
+  }
+  return sawTable ? out : null;
+}
+
 /**
  * The table, parsed. Null when the text is not a `/context` table at all (no
  * header and no category row).
@@ -164,10 +215,39 @@ function commandStdout(content) {
 }
 
 /** Is this transcript record the one that holds a `/context` table? */
+/**
+ * The text a record carries: `content` on a system record, `message.content`
+ * (a string, or text blocks) on a user record.
+ */
+function recordText(d) {
+  if (!d) return '';
+  if (typeof d.content === 'string') return d.content;
+  const c = d.message && d.message.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) return c.filter((b) => b && b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n');
+  return '';
+}
+
+/**
+ * The `/context` table's text out of a record, whichever of the THREE shapes
+ * Claude Code has used, or null:
+ *  - 2.1.306: `system`/`local_command`, the terminal table in `<local-command-stdout>`;
+ *  - 2.1.310: the same wrapper in a `user` record (this is why the card stopped
+ *    refreshing - only the first shape was accepted, 2026-11-02);
+ *  - 2.1.316: the system record again, PLUS an isMeta `user` record holding the
+ *    Markdown twin ("## Context Usage"), which carries the same figures.
+ */
+function contextTableText(d) {
+  if (!d || (d.type !== 'system' && d.type !== 'user')) return null;
+  const text = recordText(d);
+  const out = commandStdout(text);
+  if (out !== null) return out.includes('Context Usage') ? out : null;
+  if (d.type === 'user' && /^\s*## Context Usage\b/.test(text)) return text.trim();
+  return null;
+}
+
 function isContextRecord(d) {
-  if (!d || d.type !== 'system' || d.subtype !== 'local_command' || typeof d.content !== 'string') return false;
-  const out = commandStdout(d.content);
-  return out !== null && out.includes('Context Usage');
+  return contextTableText(d) !== null;
 }
 
 /**
@@ -178,8 +258,9 @@ function isContextRecord(d) {
  *     mcpTools: [{name, tokens}], mcpAvailable: [name], skills: [{name, tokens}] }
  */
 function breakdownFromRecord(d) {
-  if (!isContextRecord(d)) return null;
-  const parsed = parseContextUsage(commandStdout(d.content));
+  const text = contextTableText(d);
+  if (text === null) return null;
+  const parsed = /^## Context Usage\b/.test(text) ? parseContextMarkdown(text) : parseContextUsage(text);
   if (!parsed) return null;
   const asOf = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN;
   return {
@@ -199,6 +280,7 @@ function breakdownFromRecord(d) {
 // up to a megabyte each included, is passed over on the raw bytes.
 
 const STDOUT_TAG = Buffer.from(STDOUT_OPEN);
+const MD_TAG = Buffer.from('## Context Usage');
 const CONTEXT_MARK = Buffer.from('Context Usage');
 const COLD_LOOKBACK = 4 * 1024 * 1024;
 const SCAN_CHUNK = 1024 * 1024;
@@ -236,7 +318,8 @@ function scanForward(file, from, to, { aligned = true } = {}) {
         scannedTo = pos - chunk.length + at;
         if (skipFirst) { skipFirst = false; continue; }
         const line = chunk.subarray(lineStart, nl);
-        if (line.length < 64 || line.indexOf(STDOUT_TAG) === -1 || line.indexOf(CONTEXT_MARK) === -1) continue;
+        if (line.length < 64 || line.indexOf(CONTEXT_MARK) === -1) continue;
+        if (line.indexOf(STDOUT_TAG) === -1 && line.indexOf(MD_TAG) === -1) continue;
         let d;
         try { d = JSON.parse(line.toString('utf8')); } catch { continue; }
         if (isContextRecord(d)) record = d;
@@ -250,6 +333,7 @@ function scanForward(file, from, to, { aligned = true } = {}) {
 }
 
 module.exports = {
+  parseContextMarkdown, contextTableText, recordText,
   parseTokens, categoryId, parseContextUsage, commandStdout, isContextRecord, breakdownFromRecord,
   coldStart, scanForward, COLD_LOOKBACK, CATEGORY_IDS,
 };

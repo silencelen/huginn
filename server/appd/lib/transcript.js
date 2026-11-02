@@ -234,7 +234,11 @@ function machineText(s) {
   // this app's own attachment markers ("[Attached image at …]") are bracketed
   // too and ARE the user's message, so a blanket rule would silently swallow
   // every photo and file the owner sends.
-  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+|\[Your previous response)/.test(s);
+  // "[Earlier usage-limit notes no longer apply. Continue working normally.
+  // Don't mention this to the user.]" is Claude Code's note to the MODEL after
+  // a rate-limit window reset (an isMeta user record, 2026-11-02): rendered as a
+  // bubble it read as the owner telling Claude to keep quiet.
+  return /^\s*(<(task-notification|system-reminder|command-name|command-message|command-args|local-command)|\[SYSTEM NOTIFICATION|\[Image: original \d+x\d+|\[Your previous response|\[Earlier usage-limit notes)/.test(s);
 }
 
 // ---- tags, found in one pass -------------------------------------------------
@@ -349,6 +353,10 @@ function describeMachineText(s) {
   // A nudge aimed at the model after an empty turn; nothing for a reader to do.
   if (/^\s*\[Your previous response/.test(s)) return null;
 
+  // Claude Code's note to the model after a limit reset: the session's own
+  // headroom card says the window reset; this adds nothing a reader can act on.
+  if (/^\s*\[Earlier usage-limit notes/.test(s)) return null;
+
   if (/<task-notification/.test(s) || /^\s*\[SYSTEM NOTIFICATION/.test(s)) {
     // The summary is written for exactly this purpose; use it.
     const sum = innerText(s, '<summary>', '</summary>');
@@ -367,9 +375,32 @@ function describeMachineText(s) {
  */
 function contextBreakdownBody(s) {
   const out = innerText(s, '<local-command-stdout>', '</local-command-stdout>');
-  if (out === null) return null;
+  if (out === null) {
+    // ⚠ THE MARKDOWN TWIN (Claude Code 2.1.316, 2026-11-02): `/context` is now
+    // recorded TWICE - the terminal table above, and right after it an isMeta
+    // user record with no wrapper at all, the same figures as a Markdown table
+    // starting "## Context Usage". With no rule for it, that 9 KB table
+    // rendered as a message the owner had sent. It is the same card.
+    const md = String(s || '').trim();
+    return /^## Context Usage\b/.test(md) ? md : null;
+  }
   const body = stripAnsiText(out).trim();
   return /^Context Usage\b/.test(body) ? body : null;
+}
+
+/**
+ * Pushes the `/context` card, or - when the previous event IS that card (the
+ * terminal copy and its Markdown twin arrive back to back) - gives the card the
+ * Markdown body instead of drawing it twice. The Markdown is the better read.
+ */
+function pushContextCard(out, seqRef, ts, sidechain, body) {
+  const last = out.events[out.events.length - 1];
+  if (last && last.fold === 'context' && last.kind === 'system') {
+    last.body = clip(body, FOLD_MAX);
+    return;
+  }
+  seqRef.seq += 1;
+  out.events.push({ seq: seqRef.seq, kind: 'system', ts, sidechain, text: 'Context usage', body: clip(body, FOLD_MAX), fold: 'context' });
 }
 
 /**
@@ -781,6 +812,7 @@ function humanRemainder(s) {
   // user record of its own) showed under every attached photo (2026-10-31).
   t = stripBracketNotes(t, '[Image: original ', /\d+x\d+/y);
   t = stripBracketNotes(t, '[Your previous response', null);
+  t = stripBracketNotes(t, '[Earlier usage-limit notes', null);
   // Stray tags. Only text up to the last `>` can hold one, and an opening past
   // it would scan to the end of the string for a `>` that is not there.
   const gt = t.lastIndexOf('>');
@@ -1511,7 +1543,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         // dropped and the owner saw nothing. Fold it like the compaction summary.
         const ctxBreakdown = contextBreakdownBody(t);
         if (ctxBreakdown !== null) {
-          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: 'Context usage', body: clip(ctxBreakdown, FOLD_MAX), fold: 'context' });
+          const ref = { seq }; pushContextCard(out, ref, ts, sidechain, ctxBreakdown); seq = ref.seq;
           continue;
         }
         // Recorded as typed: no heuristic gets to overrule that. Without it a
@@ -1681,7 +1713,7 @@ function readTranscript(path, { offset = null, limit = 400, until = null, peerId
         // than being dropped (contextBreakdownBody), matching the user-record path.
         const ctxBreakdown = contextBreakdownBody(t);
         if (ctxBreakdown !== null) {
-          out.events.push({ seq: ++seq, kind: 'system', ts, sidechain, text: 'Context usage', body: clip(ctxBreakdown, FOLD_MAX), fold: 'context' });
+          const ref = { seq }; pushContextCard(out, ref, ts, sidechain, ctxBreakdown); seq = ref.seq;
           continue;
         }
         if (d.subtype === 'local_command' || machineText(t)) {

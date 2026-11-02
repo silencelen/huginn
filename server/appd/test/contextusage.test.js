@@ -197,3 +197,66 @@ test('a cold start mid-file drops the fragment before its first newline', () => 
 test('scanForward on a file that is not there is empty, not a throw', () => {
   assert.deepEqual(cu.scanForward('/nonexistent/t.jsonl', 0, 10), { record: null, scannedTo: 0 });
 });
+
+// ---- Claude Code 2.1.316's Markdown twin, and the 2.1.310 user-record shape (2026-11-02)
+
+const MD = [
+  '## Context Usage', '', '**Model:** claude-opus-5-5  ', '**Tokens:** 720.8k / 1m (72%)', '',
+  '### Estimated usage by category', '', '| Category | Tokens | Percentage |', '|----------|--------|------------|',
+  '| System prompt | 2.9k | 0.3% |', '| System tools | 18.2k | 1.8% |', '| MCP tools (deferred) | 33.1k | 3.3% |',
+  '| Memory files | 17.5k | 1.8% |', '| Messages | 672k | 67.2% |', '| Free space | 246.2k | 24.6% |', '| Autocompact buffer | 33k | 3.3% |', '',
+  '### MCP Tools', '', '| Tool | Server | Tokens |', '|------|--------|--------|', '| mcp__example__query | example | 616 |', '| mcp__example__list | example | 1.5k |', '',
+  '### Memory Files', '', '| Type | Path | Tokens |', '|------|------|--------|', '| Project | /home/me/project/CLAUDE.md | 5.4k |', '',
+  '### Skills', '', '| Skill | Source | Tokens |', '|-------|--------|--------|', '| code-review | Built-in | ~400 |', '| deploy | Project | ~120 |',
+].join('\n');
+
+test('the Markdown twin parses to the same shape as the terminal table', () => {
+  const { parseContextMarkdown } = require('../lib/contextusage');
+  const p = parseContextMarkdown(MD);
+  assert.ok(p);
+  assert.equal(p.totalTokens, 720800); assert.equal(p.maxTokens, 1000000); assert.equal(p.percent, 72);
+  assert.equal(p.model.id, 'claude-opus-5-5');
+  assert.deepEqual(p.categories.map((c) => [c.id, c.tokens, c.percent, c.kind]), [
+    ['system_prompt', 2900, 0.3, 'used'], ['system_tools', 18200, 1.8, 'used'], ['mcp_tools_deferred', 33100, 3.3, 'deferred'],
+    ['memory_files', 17500, 1.8, 'used'], ['messages', 672000, 67.2, 'used'], ['free_space', 246200, 24.6, 'free'], ['autocompact_buffer', 33000, 3.3, 'buffer'],
+  ]);
+  assert.deepEqual(p.mcpTools, [{ name: 'mcp__example__query', tokens: 616 }, { name: 'mcp__example__list', tokens: 1500 }]);
+  assert.deepEqual(p.skills, [{ name: 'code-review', tokens: 400 }, { name: 'deploy', tokens: 120 }]);
+  assert.equal(parseContextMarkdown('## Something else\n| a | b | c |'), null);
+});
+
+test('every shape Claude Code has written /context in is a context record', () => {
+  const { breakdownFromRecord, isContextRecord } = require('../lib/contextusage');
+  const table = records().find((d) => d.type === 'system' && d.subtype === 'local_command' && d.content.includes('Context Usage'));
+  const legacy = breakdownFromRecord(table);
+  assert.ok(legacy && legacy.categories.length > 0, '2.1.306: system/local_command');
+  // 2.1.310: the same stdout wrapper, in a user record with text blocks.
+  const asUser = { type: 'user', timestamp: table.timestamp, uuid: 'u1', message: { role: 'user', content: [{ type: 'text', text: table.content }] } };
+  assert.ok(isContextRecord(asUser), 'the card stopped refreshing because this shape was refused');
+  assert.deepEqual(breakdownFromRecord(asUser).categories, legacy.categories);
+  // 2.1.316: the isMeta Markdown twin.
+  const twin = { type: 'user', isMeta: true, timestamp: '2026-11-02T01:12:14.196Z', uuid: 'u2', message: { role: 'user', content: MD } };
+  const md = breakdownFromRecord(twin);
+  assert.equal(md.percent, 72); assert.equal(md.asOf, Date.parse('2026-11-02T01:12:14.196Z'));
+  // Not a context record: the command's own bookkeeping, a plain message, a tool result.
+  assert.equal(isContextRecord({ type: 'user', message: { content: '## Context Usage is what I want to talk about' } }), true, 'a human writing that exact heading is the one false positive accepted');
+  assert.equal(isContextRecord({ type: 'user', message: { content: 'how full is the context?' } }), false);
+  assert.equal(isContextRecord({ type: 'user', message: { content: [{ type: 'tool_result', content: '## Context Usage' }] } }), false);
+});
+
+test('scanForward finds the Markdown twin, which has no stdout tag', () => {
+  const { scanForward } = require('../lib/contextusage');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctx-md-'));
+  const file = path.join(dir, 't.jsonl');
+  const lines = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'hello there, how full are we?' } }),
+    JSON.stringify({ type: 'user', isMeta: true, uuid: 'twin', timestamp: '2026-11-02T01:12:14.196Z', message: { role: 'user', content: MD } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'about 72%' }] } }),
+  ];
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  const r = scanForward(file, 0, fs.statSync(file).size);
+  assert.ok(r.record, 'found');
+  assert.equal(r.record.uuid, 'twin');
+  assert.equal(require('../lib/contextusage').breakdownFromRecord(r.record).percent, 72);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

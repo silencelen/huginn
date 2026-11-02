@@ -110,6 +110,37 @@ test("Claude Code's caption after reading an image is never a message from the o
   assert.strictEqual(events[0].text, 'what does the label on the left say?', 'words typed beside it still show');
 });
 
+test('the /context Markdown twin folds into the ONE context card, never a bubble', () => {
+  // Claude Code 2.1.316 (2026-11-02): the terminal table (system/local_command),
+  // then an isMeta user record of the same figures as Markdown. The reader had
+  // no rule for the second and drew a 9 KB message the owner had "sent".
+  const MD = '## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 720.8k / 1m (72%)\n\n### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|---|---|---|\n| Messages | 672k | 67.2% |';
+  const p = writeFixture([
+    { type: 'system', subtype: 'local_command', timestamp: T, content: '<local-command-stdout>\u001b[1mContext Usage\u001b[22m\n⛁ Messages: 672k tokens (67.2%)</local-command-stdout>' },
+    { type: 'user', timestamp: T, isMeta: true, message: { role: 'user', content: MD } },
+    { type: 'user', timestamp: T, message: { role: 'user', content: 'thanks, now compact' } },
+  ]);
+  const events = readTranscript(p).events;
+  assert.deepStrictEqual(events.map((e) => e.kind), ['system', 'user'], 'one card, then the owner');
+  assert.strictEqual(events[0].fold, 'context');
+  assert.ok(events[0].body.startsWith('## Context Usage'), 'the card carries the Markdown, the better read');
+  assert.strictEqual(events[1].text, 'thanks, now compact');
+  // The twin alone (a window that starts after the system record) still folds.
+  const alone = writeFixture([{ type: 'user', timestamp: T, isMeta: true, message: { role: 'user', content: MD } }]);
+  assert.deepStrictEqual(readTranscript(alone).events.map((e) => [e.kind, e.fold]), [['system', 'context']]);
+});
+
+test("Claude Code's note after a limit reset is never a message from the owner", () => {
+  const NOTE = "[Earlier usage-limit notes no longer apply. Continue working normally. Don't mention this to the user.]";
+  const p = writeFixture([
+    { type: 'user', timestamp: T, isMeta: true, message: { role: 'user', content: NOTE } },
+    { type: 'user', timestamp: T, message: { role: 'user', content: `${NOTE}\ncarry on with the migration` } },
+  ]);
+  const events = readTranscript(p).events;
+  assert.deepStrictEqual(events.map((e) => e.kind), ['user']);
+  assert.strictEqual(events[0].text, 'carry on with the migration');
+});
+
 test('subagent output is flagged so the app can group it', () => {
   const p = writeFixture([
     { type: 'assistant', timestamp: T, isSidechain: true, message: { content: [{ type: 'text', text: 'from the subagent' }] } },

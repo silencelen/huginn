@@ -54,6 +54,7 @@ function oldHuman(s) {
     // WAS the bug (the caption rendered as a message the owner sent).
     .replace(/\[Image: original \d+x\d+[^\]]*\]/g, '')
     .replace(/\[Your previous response[^\]]*\]/g, '')
+    .replace(/\[Earlier usage-limit notes[^\]]*\]/g, '')
     .replace(/<\/?(task-notification|system-reminder)[^>]*>/g, '')
     .trim();
   return stripped.length >= 12 ? stripped : '';
@@ -159,7 +160,7 @@ test('thousands of unclosed openings cost milliseconds', () => {
   for (const tag of ['<system-reminder>', '<task-notification>', '<command-name>', '<local-command-stdout>',
     '<task-notification', '<cross-session-message ', '<agent-message ',
     // 3.16.2's bracket notes, closed nowhere: a [^\]]* regex rescans from each.
-    '[Image: original 1x1, displayed at ', '[Your previous response ']) {
+    '[Image: original 1x1, displayed at ', '[Your previous response ', '[Earlier usage-limit notes ']) {
     const s = many(tag, 20_000);
     const ms = timed(() => {
       t.humanRemainder(s);
