@@ -7745,9 +7745,41 @@ function memberDirProblem(dir, root) {
  */
 async function spawnProject(project) {
   const manifest = project.manifest;
+  const { spawned, failed } = await spawnMembers(project, (manifest.sessions || []).slice(0, projectsLib.MAX_MEMBERS));
+
+  const saved = updateProject(project.id, (p) => {
+    // Nothing spawned leaves the card standing: the owner's approval has not
+    // been carried out and the plan is still the plan.
+    if (spawned.length) p.status = 'active';
+    if (p.manifest) p.manifest.spawnedRev = p.manifest.rev || 0;
+  }) || project;
+
+  if (spawned.length && project.lead) {
+    // Typed, not sent as a peer message — appd must never appear in the peer
+    // registry as something with authority over these sessions.
+    enqueueSend(project.lead.name, projectsLib.spawnedFrame(project, spawned.map((m) => m.claudeName)), {
+      automated: true, origin: 'project', kind: 'spawned',
+    }).catch(() => { });
+  }
+  log(`project ${project.slug}: spawned ${spawned.length}, failed ${failed.length}`);
+  return {
+    ok: failed.length === 0 && spawned.length > 0,
+    spawned: spawned.map(projectsLib.memberRow),
+    failed,
+    project: saved,
+  };
+}
+
+/**
+ * The spawn loop itself: one member per session spec, each written to the
+ * record before the next is attempted. Shared by the first spawn, an approved
+ * roster change and the owner's direct add, so "spawned exactly as the initial
+ * spawn does" is true by construction rather than by copy.
+ */
+async function spawnMembers(project, sessions) {
   const spawned = [];
   const failed = [];
-  for (const s of (manifest.sessions || []).slice(0, projectsLib.MAX_MEMBERS)) {
+  for (const s of sessions || []) {
     const tmuxName = projectsLib.tmuxNameFor(project.slug, s.role);
     const claudeName = projectsLib.claudeNameFor(project.slug, s.role);
     const cwd = s.cwd || project.cwd;
@@ -7798,28 +7830,134 @@ async function spawnProject(project) {
       automated: true, origin: 'project', kind: 'firstPrompt',
     }).catch((e) => log(`project ${project.slug}: ${s.role} first prompt failed: ${e.message}`));
   }
+  return { spawned, failed };
+}
+
+/**
+ * Ask ONE member to wrap up and end — the soft-end, and never anything harder.
+ *
+ * The owner's rule (2026-11-02): a member leaving a live project is asked to
+ * finish, commit and prepare to end; the auto-end takes it once it settles.
+ * Nothing on this path calls hardEndSession. The same three steps the graceful
+ * delete makes: the pane refusal `/soft-end` makes first (a dialog is never
+ * typed at), then the ordinary send queue, then the arming from the SETTLE.
+ *
+ * Returns `{ok:true}` when the phrase was accepted for delivery, or
+ * `{ok:false, why}` — a member mid-dialog, or a phrase that could not land.
+ * The record is the caller's to update: a member refused here is still in the
+ * project, because it is still running and nobody has asked it to stop.
+ */
+async function softEndMember(project, member) {
+  if (!(await sessionExists(member.name))) return { ok: false, why: 'the session is not running' };
+  const blocked = await dialogRefusal(member.name);
+  if (blocked) {
+    log(`project ${project.slug}: ${member.name} not wound down — ${blocked}`);
+    return { ok: false, why: blocked };
+  }
+  const out = await enqueueSend(member.name, SOFT_END_PHRASE, {
+    origin: 'soft-end',
+    submit: true,
+    bareCaret: true,   // waits for an empty box, like /soft-end (see the pump)
+    onSettle: (v) => armSoftEndFromSettle(member.name, v, `project ${project.slug}`),
+  });
+  if (out.result && !out.result.ok) {
+    return { ok: false, why: out.result.message || 'the wrap-up phrase could not be delivered' };
+  }
+  log(`project ${project.slug}: ${member.name} (${member.role}) asked to wrap up`);
+  return { ok: true };
+}
+
+/**
+ * Carry out the roster change the owner approved, in the order that leaves the
+ * fewest loose ends if one step fails: re-roles (a typed line), then the
+ * additions (so the lead hears about them in the same frame), then the
+ * removals. Every outcome is reported, none stops the rest — the spawn loop's
+ * own rule, for the same reason.
+ */
+async function applyPendingChange(project) {
+  const pc = project.pendingChange;
+  const now = Math.floor(Date.now() / 1000);
+
+  const reroled = [];
+  for (const c of pc.changed || []) {
+    const member = (project.members || []).find((m) => m.role === c.role && !m.endedAt);
+    if (!member) continue;
+    updateProject(project.id, (p) => {
+      const m = (p.members || []).find((x) => x.role === c.role);
+      if (m) m.firstPrompt = c.firstPrompt;
+    });
+    enqueueSend(member.name, projectsLib.reroleFrame(project, c.role, c.firstPrompt), {
+      automated: true, origin: 'project', kind: 'rerole',
+    }).catch((e) => log(`project ${project.slug}: ${c.role} re-role failed: ${e.message}`));
+    reroled.push(member.claudeName);
+  }
+
+  const { spawned, failed } = await spawnMembers(project, pc.added || []);
+
+  const ended = [];
+  const refused = [];
+  for (const r of pc.removed || []) {
+    const member = (project.members || []).find((m) => m.role === r.role && !m.endedAt);
+    if (!member) continue;
+    const out = await softEndMember(project, member);
+    if (!out.ok) { refused.push({ role: r.role, name: member.name, claudeName: member.claudeName, reason: out.why }); continue; }
+    // Stamped ended, kept in the record: the session is still there until it
+    // settles, and the dashboard says "winding down" rather than losing it.
+    updateProject(project.id, (p) => {
+      const m = (p.members || []).find((x) => x.role === r.role);
+      if (m) m.endedAt = now;
+    });
+    ended.push(member.claudeName);
+  }
 
   const saved = updateProject(project.id, (p) => {
-    // Nothing spawned leaves the card standing: the owner's approval has not
-    // been carried out and the plan is still the plan.
-    if (spawned.length) p.status = 'active';
-    if (p.manifest) p.manifest.spawnedRev = p.manifest.rev || 0;
+    p.manifest = {
+      ...p.manifest,
+      ...(pc.manifest || {}),
+      rev: pc.rev,
+      spawnedRev: pc.rev,
+      receivedAt: pc.receivedAt || now,
+      // What the lead last wrote is now the manifest; nothing to re-detect.
+      seen: pc.manifest ? pc.manifest.sessions : p.manifest.sessions,
+    };
+    p.pendingChange = null;
   }) || project;
 
-  if (spawned.length && project.lead) {
-    // Typed, not sent as a peer message — appd must never appear in the peer
-    // registry as something with authority over these sessions.
-    enqueueSend(project.lead.name, projectsLib.spawnedFrame(project, spawned.map((m) => m.claudeName)), {
-      automated: true, origin: 'project', kind: 'spawned',
-    }).catch(() => { });
+  if (project.lead) {
+    enqueueSend(project.lead.name, projectsLib.changeAppliedFrame(saved, {
+      spawned: spawned.map((m) => m.claudeName), ended, reroled, failed, refused,
+    }), { automated: true, origin: 'project', kind: 'changeApplied' }).catch(() => { });
   }
-  log(`project ${project.slug}: spawned ${spawned.length}, failed ${failed.length}`);
+  log(`project ${project.slug}: change rev ${pc.rev} applied — spawned ${spawned.length}, `
+    + `re-roled ${reroled.length}, winding down ${ended.length}, failed ${failed.length}, refused ${refused.length}`);
   return {
-    ok: failed.length === 0 && spawned.length > 0,
+    ok: failed.length === 0 && refused.length === 0,
     spawned: spawned.map(projectsLib.memberRow),
     failed,
+    ended,
+    refused,
+    reroled,
     project: saved,
   };
+}
+
+/** The change, as a notification with the two bounded actions and no others. */
+function notifyChange(project) {
+  const pc = project.pendingChange || {};
+  const bits = [];
+  if ((pc.added || []).length) bits.push(`add ${pc.added.map((x) => x.role).join(', ')}`);
+  if ((pc.removed || []).length) bits.push(`remove ${pc.removed.map((x) => x.role).join(', ')}`);
+  if ((pc.changed || []).length) bits.push(`re-role ${pc.changed.map((x) => x.role).join(', ')}`);
+  deliverPush({
+    kind: 'project_change',
+    key: `project:${project.id}`,
+    subject: project.id,
+    title: `${project.name} — roster change proposed`,
+    text: `${bits.join('; ')}. ${pc.summary || ''}`.trim(),
+    options: ['Approve', 'Decline'],
+    payload: { projectId: project.id, changeRev: pc.rev || 0 },
+    fingerprint: `${project.id}:change:${pc.rev || 0}`,
+  }).catch((e) => log(`project ${project.slug}: change push failed: ${e.message}`));
 }
 
 /** The proposal, as a notification with the two bounded actions and no others. */
@@ -7851,25 +7989,26 @@ function notifyProposal(project) {
  * the lead is waiting for an answer. It costs one transcript TAIL of 40 events
  * and it is idempotent: a block already adopted does not move the rev.
  *
- * Gated on drafting|proposed. A project whose members are already running is not
- * re-proposed by a lead that mentions its own plan again — `active -> proposed`
- * is not a legal move, and spawning a second cluster because the lead recapped
- * would be the worst possible reading of a recap.
+ * Gated on drafting|proposed for the FIRST spawn. A project whose members are
+ * already running is not re-proposed by a lead that mentions its own plan again
+ * — `active -> proposed` is not a legal move, and spawning a second cluster
+ * because the lead recapped would be the worst possible reading of a recap.
+ * For an ACTIVE project a new tagged block is read as a ROSTER CHANGE instead
+ * ([detectRosterChange]): the difference between it and the running members,
+ * parked on the record as `pendingChange` for the owner to approve or decline.
+ *
+ * ⚠ THE AUTHORSHIP CHECK IS THE SAME IN BOTH MODES, and it is the whole
+ * security story: the ONLY transcript read is the lead's own (its state file,
+ * else its session id), and the ONLY block acted on carries the tag that lives
+ * in the lead's system prompt. A member cannot propose — its transcript is never
+ * read here and its persona never had the tag. The owner's direct edits go
+ * through the token-guarded routes and never through this reader.
  */
 function detectManifest(project) {
   if (!project || !project.lead || !project.manifest || !project.manifest.tag) return project;
+  if (project.status === 'active') return detectRosterChange(project);
   if (project.status !== 'drafting' && project.status !== 'proposed') return project;
-  const st = readSessionState(project.lead.name);
-  const file = (st && st.transcript)
-    || (project.lead.sessionId ? findTranscriptFile(project.lead.sessionId) : null);
-  if (!file) return project;
-  let text = '';
-  try {
-    const t = readTranscript(file, { limit: 40 });
-    text = (t.events || [])
-      .filter((e) => e.kind === 'assistant' && !e.sidechain && typeof e.text === 'string')
-      .map((e) => e.text).join('\n');
-  } catch { return project; }
+  const text = leadTurnText(project);
   if (!text) return project;
 
   const tag = project.manifest.tag;
@@ -7902,6 +8041,82 @@ function detectManifest(project) {
   if (isNew) {
     log(`project ${saved.slug}: manifest rev ${saved.manifest.rev} (${saved.manifest.sessions.length} session(s))`);
     notifyProposal(saved);
+  }
+  if (untagged && !before.untaggedSeen) {
+    log(`project ${saved.slug}: the lead wrote an UNTAGGED project block — reported, not acted on`);
+  }
+  return saved;
+}
+
+/**
+ * The lead's recent assistant text — the ONLY transcript a proposal is ever read
+ * from. Its state file names the transcript; the stored session id is the
+ * fallback. Forty events, main thread only (a subagent's text is not the lead
+ * speaking). Empty when nothing can be read.
+ */
+function leadTurnText(project) {
+  const st = readSessionState(project.lead.name);
+  const file = (st && st.transcript)
+    || (project.lead.sessionId ? findTranscriptFile(project.lead.sessionId) : null);
+  if (!file) return '';
+  try {
+    const t = readTranscript(file, { limit: 40 });
+    return (t.events || [])
+      .filter((e) => e.kind === 'assistant' && !e.sidechain && typeof e.text === 'string')
+      .map((e) => e.text).join('\n');
+  } catch { return ''; }
+}
+
+/**
+ * Read the lead's last turn of an ACTIVE project and park a roster change if a
+ * new tagged block is there.
+ *
+ * "New" is judged against `manifest.seen` — the last block this reader
+ * considered (the spawned manifest's sessions until the lead writes another) —
+ * and never against the roster, so a block that was declined, or one whose
+ * difference was already applied, does not come back as a fresh card on every
+ * GET while it sits in the transcript tail. The DIFF, on the other hand, is
+ * always against the members RUNNING NOW: the owner may have added or removed
+ * members directly since, and the proposal is about the roster as it stands.
+ *
+ * ⚠ A BLOCK THAT CHANGES NOTHING IS REMEMBERED AND NOT PROPOSED. The lead
+ * recapping its own roster is the common case; a card asking the owner to
+ * approve no change is noise with a button on it.
+ *
+ * The last tagged block wins here too: a pending change is REPLACED by a newer
+ * block, and its rev moves, so a card drawn for the old one cannot approve the
+ * new one (the approve route checks the rev).
+ */
+function detectRosterChange(project) {
+  const text = leadTurnText(project);
+  if (!text) return project;
+  const tag = project.manifest.tag;
+  const parsed = projectsLib.parseManifest(text, tag, { cwd: project.cwd });
+  const untagged = projectsLib.untaggedManifest(text, tag);
+  const before = project.manifest;
+  const seen = Array.isArray(before.seen) ? before.seen : (before.sessions || []);
+  const isNew = parsed && JSON.stringify(seen) !== JSON.stringify(parsed.sessions);
+  if (!isNew && !(untagged && !before.untaggedSeen)) return project;
+
+  const now = Math.floor(Date.now() / 1000);
+  let pc = null;
+  if (isNew) pc = projectsLib.pendingChangeFor(project, parsed, now);
+  const saved = updateProject(project.id, (p) => {
+    if (isNew) {
+      p.manifest.seen = parsed.sessions;
+      // A block that changes nothing also withdraws an earlier pending change:
+      // the lead has said "the roster as it is", and that is the last word.
+      p.pendingChange = pc;
+    }
+    if (untagged) p.manifest.untaggedSeen = true;
+  });
+  if (!saved) return project;
+  if (isNew && pc) {
+    log(`project ${saved.slug}: roster change proposed (rev ${pc.rev}): +${pc.added.length} -${pc.removed.length} ~${pc.changed.length}`
+      + `${pc.problem ? ` — ${pc.problem}` : ''}`);
+    notifyChange(saved);
+  } else if (isNew) {
+    log(`project ${saved.slug}: the lead re-stated the roster; nothing to propose`);
   }
   if (untagged && !before.untaggedSeen) {
     log(`project ${saved.slug}: the lead wrote an UNTAGGED project block — reported, not acted on`);
@@ -15510,8 +15725,50 @@ async function handleRequest(req, res) {
         const badRole = projectsLib.roleProblem(body.role, taken);
         if (badRole) return sendErr(res, 400, badRole);
         const role = String(body.role).trim();
-        if ((project.members || []).length >= projectsLib.MAX_MEMBERS) {
-          return sendErr(res, 409, `that is the ${projectsLib.MAX_MEMBERS}-session limit for one project`);
+        const cap = projectsLib.memberCapProblem(project, 1);
+        if (cap) return sendErr(res, 409, cap);
+
+        /**
+         * THE OWNER'S DIRECT ADD: `{role, description, spawn:true}` creates a
+         * NEW member, the way an approved manifest does — same validator (the
+         * manifest parser, so a role or a cwd the lead could not have proposed
+         * cannot be typed into existence either), same launcher, same first
+         * prompt frame. The lead is told the name, as after a spawn. Adopt,
+         * below, stays what it was: a record edit for a session that exists.
+         */
+        if (body.spawn === true) {
+          const description = typeof body.description === 'string' ? body.description
+            : typeof body.firstPrompt === 'string' ? body.firstPrompt : '';
+          if (!description.trim()) return sendErr(res, 400, 'a spawned member needs a description — it is the whole first message it gets');
+          if (project.status !== 'active') {
+            return sendErr(res, 409, `this project is ${project.status} — members are added to a running project`);
+          }
+          const spec = projectsLib.parseManifest(
+            `\`\`\`huginn-project owner\n${JSON.stringify({
+              summary: 'owner add', sessions: [{ role, firstPrompt: description, cwd: body.cwd ?? null, model: body.model ?? null, effort: body.effort ?? null, mode: body.mode ?? null }],
+            })}\n\`\`\``,
+            'owner', { cwd: project.cwd },
+          );
+          if (!spec) return sendErr(res, 400, 'that member is not valid — check the role, the description and the directory');
+          let stop = null;
+          try { stop = sentinelsLib.state(HEADROOM_DIR).STOP; } catch { /* no dir yet: nothing armed */ }
+          if (stop) {
+            return sendErr(res, 409, `there is no room on this account right now (${stop.reason || 'usage stop'}) — add it when the window resets`);
+          }
+          const { spawned, failed } = await spawnMembers(project, spec.sessions);
+          const saved = loadProject(projectId) || project;
+          if (!spawned.length) {
+            return sendJson(res, 409, { error: (failed[0] && failed[0].reason) || 'the member could not be created', failed });
+          }
+          if (project.lead) {
+            enqueueSend(project.lead.name, projectsLib.spawnedFrame(project, spawned.map((x) => x.claudeName)), {
+              automated: true, origin: 'project', kind: 'spawned',
+            }).catch(() => { });
+          }
+          log(`project ${project.slug}: owner added ${spawned[0].name} (${role})`);
+          return sendJson(res, 201, {
+            ok: true, spawned: true, member: projectsLib.memberRow(spawned[0]), project: projectsLib.publicProject(saved),
+          });
         }
         // `name` is the TMUX session being adopted. Absent, it is the name this
         // project would have given the role — so adopting a member that was
@@ -15556,6 +15813,43 @@ async function handleRequest(req, res) {
         }
         const member = (project.members || []).find((x) => x.role === roleInPath);
         if (!member) return sendErr(res, 404, `this project has no ${roleInPath} session`);
+
+        /**
+         * `?end=1` (or `{end:true}`): the OWNER'S DIRECT REMOVE of a running
+         * member. The member is asked to wrap up (softEndMember — the soft-end,
+         * and never a kill: owner decision 2026-11-02) and stays in the record,
+         * stamped `endedAt`, until its session is gone and the reconcile drops
+         * it. `end=now` is refused on purpose: there is no hard end for a
+         * member here; `DELETE /v1/projects/:id` with `end:"now"` is the only
+         * route that kills project sessions, and it says so in its name.
+         * Without `end`, this is the record-only drop it has always been.
+         */
+        let endBody = {};
+        try { endBody = await readJsonBody(req); } catch { /* no body */ }
+        const endQ = u.searchParams.get('end');
+        const wantEnd = endQ === '1' || endQ === 'true' || endQ === 'graceful' || endBody.end === true || endBody.end === 'graceful';
+        if (endQ === 'now' || endBody.end === 'now') {
+          return sendErr(res, 400, 'a member is never ended outright — ask it to wrap up (end=1), or end the whole project');
+        }
+        if (wantEnd) {
+          if (member.endedAt) return sendErr(res, 409, `${member.claudeName} has already been asked to wrap up`);
+          const out = await softEndMember(project, member);
+          if (!out.ok) return sendJson(res, 409, { error: out.why, reason: 'not-ended' });
+          const saved = updateProject(projectId, (proj) => {
+            const x = (proj.members || []).find((y) => y.role === roleInPath);
+            if (x) x.endedAt = Math.floor(Date.now() / 1000);
+          });
+          if (!saved) return sendErr(res, 404, 'no such project');
+          if (project.lead) {
+            enqueueSend(project.lead.name,
+              `[Huginn] The owner asked ${member.claudeName} to wrap up and end; it is leaving the project.`,
+              { automated: true, origin: 'project', kind: 'memberEnding' }).catch(() => { });
+          }
+          return sendJson(res, 200, {
+            ok: true, dropped: member, ended: true, project: projectsLib.publicProject(saved),
+          });
+        }
+
         const saved = updateProject(projectId, (proj) => {
           proj.members = (proj.members || []).filter((x) => x.role !== roleInPath);
         });
@@ -15575,10 +15869,49 @@ async function handleRequest(req, res) {
         });
       }
 
+      /**
+       * THE OWNER'S DIRECT RE-ROLE: `{description}` becomes the member's task
+       * text and is typed into its composer, framed as owner-approved. The role
+       * WORD is not renameable here — it is the tmux name and the `--name` peer
+       * address every other member already holds for this session, baked in at
+       * launch — so a body carrying `role` is refused with the way out.
+       */
+      if (req.method === 'PATCH' && roleInPath) {
+        if (roleInPath === projectsLib.LEAD_ROLE) return sendErr(res, 409, 'the lead has no role text to change — re-brief the project instead');
+        const body = await readJsonBody(req);
+        const member = (project.members || []).find((x) => x.role === roleInPath);
+        if (!member) return sendErr(res, 404, `this project has no ${roleInPath} session`);
+        if (member.endedAt) return sendErr(res, 409, `${member.claudeName} has been asked to wrap up`);
+        if (body.role != null && String(body.role) !== roleInPath) {
+          return sendErr(res, 409, 'a role cannot be renamed while its session runs — its peer name was fixed at launch; '
+            + 'remove the member and add one under the new role');
+        }
+        const description = typeof body.description === 'string' ? body.description.trim()
+          : typeof body.firstPrompt === 'string' ? body.firstPrompt.trim() : '';
+        if (!description) return sendErr(res, 400, 'description is required — it is the member\'s new task');
+        if (description.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, `a description is at most ${projectsLib.MAX_PROMPT} characters`);
+        if (!(await sessionExists(member.name))) return sendErr(res, 409, `${member.claudeName} is not running`);
+        const saved = updateProject(projectId, (proj) => {
+          const x = (proj.members || []).find((y) => y.role === roleInPath);
+          if (x) x.firstPrompt = description;
+        });
+        if (!saved) return sendErr(res, 404, 'no such project');
+        const r = await enqueueSend(member.name, projectsLib.reroleFrame(project, roleInPath, description), {
+          automated: true, origin: 'project', kind: 'rerole',
+        });
+        log(`project ${project.slug}: owner re-roled ${member.name} (${roleInPath})`);
+        return sendJson(res, 200, {
+          ok: true,
+          member: projectsLib.memberRow((saved.members || []).find((x) => x.role === roleInPath) || member),
+          delivered: !!r.delivered, queued: r.queued ?? 0, blockedBy: r.blockedBy || null,
+          project: projectsLib.publicProject(saved),
+        });
+      }
+
       return sendErr(res, 404, 'no such project route');
     }
 
-    if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z]+)?$/))) {
+    if ((m = p.match(/^\/v1\/projects\/([0-9a-f-]{36})(\/[a-z-]+)?$/))) {
       const projectId = m[1];
       const sub = m[2] || '';
       const stored = loadProject(projectId);
@@ -15725,6 +16058,63 @@ async function handleRequest(req, res) {
             '[Huginn] The proposal was discarded; the owner may send a revised brief.',
             { automated: true, origin: 'project', kind: 'discard' }).catch(() => { });
         }
+        return sendJson(res, 200, projectsLib.publicProject(saved));
+      }
+
+      /**
+       * Carry out the roster change the lead proposed for a LIVE project.
+       *
+       * `rev` is the pending change's rev, required for the spawn route's
+       * reason: a card that sat on a lock screen while the lead revised again
+       * must not approve the revision the owner never saw. Additions are refused
+       * into a red window exactly as a first spawn is; a change with nothing to
+       * add is not held by the arbiter, because winding members down and
+       * re-roling them costs no new session.
+       */
+      if (req.method === 'POST' && sub === '/approve-change') {
+        const body = await readJsonBody(req);
+        const fresh = loadProject(projectId);
+        if (!fresh) return sendErr(res, 404, 'no such project');
+        // Read the lead's tail once more: a block written since the card was
+        // drawn moves the rev, and the check below is what catches it.
+        const project = fresh.status === 'active' ? detectRosterChange(fresh) : fresh;
+        const pc = project.pendingChange;
+        if (!pc) return sendErr(res, 409, 'this project has no roster change waiting');
+        const wantRev = Number(body.rev);
+        if (!Number.isInteger(wantRev)) return sendErr(res, 400, 'rev is required — it is the change the card was drawn for');
+        if (wantRev !== (Number(pc.rev) || 0)) {
+          return sendJson(res, 409, {
+            error: 'the proposed change has moved on since that card was drawn',
+            project: projectsLib.publicProject(project),
+          });
+        }
+        if (pc.problem) return sendErr(res, 409, pc.problem);
+        if (project.status !== 'active') return sendErr(res, 409, `this project is ${project.status}, not active`);
+        if ((pc.added || []).length) {
+          let stop = null;
+          try { stop = sentinelsLib.state(HEADROOM_DIR).STOP; } catch { /* no dir yet: nothing armed */ }
+          if (stop) {
+            return sendErr(res, 409, `there is no room on this account right now (${stop.reason || 'usage stop'}) `
+              + '— approve when the window resets');
+          }
+        }
+        const out = await applyPendingChange(project);
+        return sendJson(res, 200, { ...out, project: projectsLib.publicProject(out.project) });
+      }
+
+      if (req.method === 'POST' && sub === '/decline-change') {
+        const project = loadProject(projectId);
+        if (!project) return sendErr(res, 404, 'no such project');
+        if (!project.pendingChange) return sendErr(res, 409, 'this project has no roster change waiting');
+        // `manifest.seen` already holds the declined block, so the reader does
+        // not propose it again from the transcript tail; the lead is told,
+        // because otherwise it waits forever for an answer that is not coming.
+        const saved = updateProject(projectId, (proj) => { proj.pendingChange = null; });
+        if (project.lead) {
+          enqueueSend(project.lead.name, projectsLib.changeDeclinedFrame(),
+            { automated: true, origin: 'project', kind: 'changeDeclined' }).catch(() => { });
+        }
+        log(`project ${project.slug}: roster change rev ${project.pendingChange.rev} declined`);
         return sendJson(res, 200, projectsLib.publicProject(saved));
       }
 
