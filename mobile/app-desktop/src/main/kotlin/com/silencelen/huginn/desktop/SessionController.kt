@@ -1076,8 +1076,8 @@ class SessionController(
      * store — a page holds more than a pane accepts in one paste, and a run with
      * the file can re-read it as it changes.
      */
-    fun sendLine(text: String, thenEnter: Boolean = true, scratchpadId: String? = null) {
-        scope.launch { sendLineNow(text, thenEnter, scratchpadId) }
+    fun sendLine(text: String, thenEnter: Boolean = true, scratchpadId: String? = null, shell: Boolean = false) {
+        scope.launch { sendLineNow(text, thenEnter, scratchpadId, shell) }
     }
 
     /**
@@ -1085,7 +1085,18 @@ class SessionController(
      * needs the answer: its field was emptied on press, and a network refusal
      * with no answer left the text (and the attached page) existing nowhere.
      */
-    suspend fun sendLineNow(text: String, thenEnter: Boolean = true, scratchpadId: String? = null): Boolean {
+    suspend fun sendLineNow(
+        text: String,
+        thenEnter: Boolean = true,
+        scratchpadId: String? = null,
+        /**
+         * A Claude Code shell-mode (`!`) command, decided by `ShellMode` at the
+         * composer: the daemon types the `!`, the command and Enter itself (appd
+         * 3.17). Its 400 (a multi-line command) and the 409 a bare `!` message
+         * gets without the flag both land in [screenError], in the daemon's words.
+         */
+        shell: Boolean = false,
+    ): Boolean {
         _echo.value = LocalEcho.otherKey(_echo.value)
         return runCatching {
             client.sendKeys(
@@ -1093,6 +1104,7 @@ class SessionController(
                 text = text,
                 keys = if (thenEnter) listOf("Enter") else emptyList(),
                 scratchpadId = scratchpadId,
+                shell = shell,
             )
         }
             .onSuccess { noteSend(it) }

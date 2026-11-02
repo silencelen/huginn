@@ -51,6 +51,10 @@ fun ProjectDashboardScreen(
     refusal: String? = null,
     /** Adopt and drop. Null draws no membership controls — see [ProjectMemberActions]. */
     membership: ProjectMemberActions? = null,
+    /** The lead's ROSTER CHANGE for a running project (appd 3.17), from the row. */
+    pendingChange: com.silencelen.huginn.data.ProjectPendingChange? = null,
+    onApproveChange: (rev: Int) -> Unit = {},
+    onDeclineChange: () -> Unit = {},
 ) {
     var editing by remember { mutableStateOf<ProjectManifest?>(null) }
     val project = detail?.project
@@ -61,6 +65,17 @@ fun ProjectDashboardScreen(
         nowMs = nowMs,
         onOpenMember = onOpenMember,
         modifier = Modifier.fillMaxSize(),
+        change = pendingChange?.let { c ->
+            {
+                PendingChangeCard(
+                    change = c,
+                    busy = busy,
+                    refusal = refusal,
+                    onApprove = onApproveChange,
+                    onDecline = onDeclineChange,
+                )
+            }
+        },
         manifest = if (manifest != null && ProjectRules.hasProposal(project)) ({
             ManifestCard(
                 manifest = manifest,

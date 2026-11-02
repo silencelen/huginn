@@ -795,6 +795,10 @@ private fun SessionConversation(
             onSend = { if (canSend) onSendText(draft, true) },
             placeholder = "Reply in $name",
             canSend = canSend,
+            // A `!command` runs in the pane's shell, not in Claude (`:core`
+            // ShellMode): the field takes the attention tint and a line says so.
+            // The view model sends the flag from the same rule.
+            shellMode = ShellMode.isShellCommand(draft),
             // Esc is how you stop Claude at the keyboard; with nothing typed that is
             // the action this composer should offer.
             stopInstead = working && draft.isBlank(),

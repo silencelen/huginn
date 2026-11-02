@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +77,8 @@ fun ProjectDashboardView(
     modifier: Modifier = Modifier,
     /** Drawn under the header when the lead has proposed a cluster. */
     manifest: (@Composable () -> Unit)? = null,
+    /** Drawn under the manifest when the lead proposed a ROSTER CHANGE ([PendingChangeCard]). */
+    change: (@Composable () -> Unit)? = null,
     /**
      * Adopt and drop, wired. NULL draws no membership controls at all, which is
      * what both shells did before the routes existed and is still the right
@@ -128,6 +131,10 @@ fun ProjectDashboardView(
             it()
             Spacer(Modifier.height(10.dp))
         }
+        change?.let {
+            it()
+            Spacer(Modifier.height(10.dp))
+        }
         Text(
             "Members",
             style = MaterialTheme.typography.labelLarge,
@@ -148,7 +155,10 @@ fun ProjectDashboardView(
             DashboardMemberRow(m, nowMs, onOpen = { onOpenMember(m) }, membership = membership)
         }
         HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
-        membership?.let { AdoptMemberRow(it, members) }
+        membership?.let {
+            if (it.onAddMember != null) AddMemberRow(it, members)
+            AdoptMemberRow(it, members)
+        }
         Spacer(Modifier.height(12.dp))
     }
 }
@@ -177,7 +187,125 @@ class ProjectMemberActions(
     /** The daemon's own sentence for a refusal. Shown verbatim, never summarised. */
     val refusal: String? = null,
     val clearRefusal: () -> Unit = {},
+    /**
+     * Create a NEW member in the running project (`POST …/members {spawn: true}`,
+     * appd 3.17): role, description (its whole first message), optional model,
+     * effort and directory. Null draws no "Add member" sheet — a daemon without
+     * the route still gets the adopt row.
+     */
+    val onAddMember: ((role: String, description: String, model: String?, effort: String?, cwd: String?) -> Unit)? = null,
+    /** Give a member a new task (`PATCH …/members/:role {description}`). */
+    val onRerole: ((member: ProjectDashboardMember, description: String) -> Unit)? = null,
+    /**
+     * ASK a member to wrap up and end (`DELETE …/members/:role?end=1`): the
+     * soft-end, never a kill. The row stays, marked "winding down", until the
+     * session is gone.
+     */
+    val onEnd: ((ProjectDashboardMember) -> Unit)? = null,
 )
+
+/** ⚠ SAYS WHAT IT DOES: a request to finish, not a kill. */
+const val PROJECT_END_VERB: String = "Ask to wrap up"
+
+const val PROJECT_END_NOTE: String = "Asked to finish and end; the row stays until it has."
+
+const val PROJECT_REROLE_VERB: String = "Re-role"
+
+/**
+ * "Add member": a NEW session in the running project, the way an approved
+ * manifest makes one. The role grammar and the cap are [ProjectRules]' — the
+ * daemon's rules, not a second copy — and the form refuses before it closes,
+ * like the adopt row under it. Model and effort are the manifest's words.
+ */
+@Composable
+private fun AddMemberRow(actions: ProjectMemberActions, members: List<ProjectDashboardMember>) {
+    val onAdd = actions.onAddMember ?: return
+    var open by remember { mutableStateOf(false) }
+    var role by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf<String?>(null) }
+    var effort by remember { mutableStateOf<String?>(null) }
+    var cwd by remember { mutableStateOf("") }
+    val taken = remember(members) { members.map { it.role } }
+    val problem = when {
+        !open -> null
+        else -> ProjectRules.roleProblem(role, taken)
+            ?: ProjectRules.capProblem(members.size, 1)
+            ?: description.trim().takeIf { it.isEmpty() }?.let { "Say what the member should do: that is its whole first message." }
+            ?: cwd.trim().takeIf { it.isNotEmpty() }?.let { ProjectRules.cwdProblem(it) }
+    }
+
+    Column(Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 6.dp)) {
+        TextButton(
+            onClick = {
+                open = !open
+                if (!open) { role = ""; description = ""; model = null; effort = null; cwd = "" }
+                actions.clearRefusal()
+            },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier.testTag("member.add.toggle"),
+        ) { Text(if (open) "Cancel" else "Add member") }
+        if (open) {
+            OutlinedTextField(
+                value = role, onValueChange = { role = it },
+                label = { Text("Role") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("member.add.role"),
+            )
+            OutlinedTextField(
+                value = description, onValueChange = { description = it },
+                label = { Text("What it should do") },
+                minLines = 2, maxLines = 6,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("member.add.description"),
+            )
+            WordChips("Model", MEMBER_MODELS, model) { model = it }
+            WordChips("Effort", MEMBER_EFFORTS, effort) { effort = it }
+            OutlinedTextField(
+                value = cwd, onValueChange = { cwd = it },
+                label = { Text("Directory (optional, inside the project)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            )
+            Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        onAdd(role.trim(), description.trim(), model, effort, cwd.trim().takeIf { it.isNotEmpty() })
+                        open = false; role = ""; description = ""; model = null; effort = null; cwd = ""
+                    },
+                    enabled = problem == null && !actions.busy,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.testTag("member.add.send"),
+                ) { Text("Add and start") }
+            }
+            (problem ?: actions.refusal)?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 2.dp))
+            }
+        }
+    }
+}
+
+/** A row of word chips: the manifest's own vocabulary, one picked or none. */
+@Composable
+private fun WordChips(label: String, words: List<String>, picked: String?, onPick: (String?) -> Unit) {
+    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        words.forEach { w ->
+            TextButton(
+                onClick = { onPick(if (picked == w) null else w) },
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            ) {
+                Text(
+                    w, style = MaterialTheme.typography.labelSmall,
+                    fontWeight = if (picked == w) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (picked == w) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/** The manifest's model and effort words, as `ManifestSession` documents them. */
+val MEMBER_MODELS: List<String> = listOf("fable", "opus", "sonnet", "haiku")
+val MEMBER_EFFORTS: List<String> = listOf("low", "medium", "high", "xhigh", "max")
 
 /**
  * "Add member": pick a session that is already running, give it a role.
@@ -215,7 +343,7 @@ private fun AdoptMemberRow(actions: ProjectMemberActions, members: List<ProjectD
                     actions.clearRefusal()
                 },
                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-            ) { Text(if (open) "Cancel" else "Add member") }
+            ) { Text(if (open) "Cancel" else if (actions.onAddMember != null) "Adopt a running session" else "Add member") }
         }
         if (open) {
             // ⚠ A PICKER, NOT A FREE-TEXT FIELD. The daemon adopts a session BY
@@ -346,6 +474,50 @@ private fun DashboardMemberRow(
                 // already reading about that member. The lead cannot be dropped
                 // at all — see [ProjectRules.canDrop].
                 if (membership != null && ProjectRules.canDrop(member)) {
+                    // Re-role: a new task, typed into the member as owner-approved.
+                    val onRerole = membership.onRerole
+                    if (onRerole != null && !ProjectRules.ended(member)) {
+                        var reroling by remember(member.name) { mutableStateOf(false) }
+                        var task by remember(member.name) { mutableStateOf("") }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { reroling = !reroling },
+                                enabled = !membership.busy,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("member.rerole.${member.role}"),
+                            ) { Text(if (reroling) "Cancel" else PROJECT_REROLE_VERB) }
+                        }
+                        if (reroling) {
+                            OutlinedTextField(
+                                value = task, onValueChange = { task = it },
+                                label = { Text("New task for ${member.role}") },
+                                minLines = 2, maxLines = 6,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            TextButton(
+                                onClick = { onRerole(member, task.trim()); reroling = false; task = "" },
+                                enabled = task.isNotBlank() && !membership.busy,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            ) { Text("Send the new task") }
+                        }
+                    }
+                    // Ask to wrap up: the soft-end, said as such. Hidden once asked.
+                    val onEnd = membership.onEnd
+                    if (onEnd != null && !ProjectRules.ended(member)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { onEnd(member) },
+                                enabled = !membership.busy,
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier.testTag("member.end.${member.role}"),
+                            ) { Text(PROJECT_END_VERB) }
+                            Text(
+                                PROJECT_END_NOTE,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(
                             onClick = { membership.onDrop(member) },

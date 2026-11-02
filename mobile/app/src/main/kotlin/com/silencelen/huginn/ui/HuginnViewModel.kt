@@ -2959,6 +2959,99 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Carry out the lead's ROSTER CHANGE (appd 3.17). THE REV, NOT THE PLAN: a
+     * stale rev answers 409 with the current project, and the row is redrawn
+     * from it. The refusal lands on the card verbatim, like a spawn's.
+     */
+    fun approveChange(id: String, rev: Int) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.approveChange(id, rev) }
+                .onSuccess { outcome ->
+                    if (!outcome.ok) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "Roster change approved"
+                    outcome.project?.let { row ->
+                        _projects.value = _projects.value.map { if (it.id == row.id) row else it }
+                    }
+                    openProject(id)
+                    refreshProjects()
+                    refreshSessions()
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** Drop the pending roster change and tell the lead. */
+    fun declineChange(id: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.declineChange(id) }
+                .onSuccess { _toast.value = "Roster change declined"; openProject(id); refreshProjects() }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** Create a NEW member in a running project (`POST …/members {spawn: true}`). */
+    fun addMember(id: String, role: String, description: String, model: String?, effort: String?, cwd: String?) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.addMember(id, role, description, model, effort, cwd) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "Started $role"
+                    openProject(id)
+                    refreshProjects()
+                    refreshSessions()
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** Give a member a new task (`PATCH …/members/:role {description}`). */
+    fun reroleMember(id: String, role: String, description: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.reroleMember(id, role, description) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "$role has its new task"
+                    openProject(id)
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
+    /** ASK a member to wrap up and end (`DELETE …/members/:role?end=1`): the soft-end, never a kill. */
+    fun endMember(id: String, role: String) {
+        viewModelScope.launch {
+            awaitReady()
+            _projectBusy.value = true
+            _projectRefusal.value = null
+            runCatching { client.endMember(id, role) }
+                .onSuccess { outcome ->
+                    if (outcome.refusal != null) _projectRefusal.value = outcome.refusal
+                    else _toast.value = "$role was asked to wrap up"
+                    openProject(id)
+                    refreshProjects()
+                }
+                .onFailure { _projectRefusal.value = errText(it) }
+            _projectBusy.value = false
+        }
+    }
+
     /** DROP a member. ⚠ THE SESSION KEEPS RUNNING — see the client. */
     fun dropMember(id: String, role: String) {
         viewModelScope.launch {
@@ -3375,19 +3468,38 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------- sessions
 
-    fun createSession(name: String, onCreated: (String) -> Unit) {
+    fun createSession(name: String, onCreated: (String) -> Unit) =
+        createSession(name, cwd = null, onCreated = onCreated, onFailed = { _toast.value = it })
+
+    /**
+     * Create a session, in [cwd] when one is given (appd 3.17) or the server
+     * default. A refusal — the directory is not on the server — goes to
+     * [onFailed] in the daemon's words, so the dialog can show it in place
+     * rather than closing and toasting.
+     */
+    fun createSession(name: String, cwd: String?, onCreated: (String) -> Unit, onFailed: (String) -> Unit) {
         val canon = name.trim().lowercase()
         if (!canon.matches(SESSION_NAME)) {
-            _toast.value = SESSION_NAME_HELP
+            onFailed(SESSION_NAME_HELP)
             return
         }
         viewModelScope.launch {
-            runCatching { client.createSession(canon) }
+            runCatching { client.createSession(canon, cwd) }
                 // Open what tmux CALLED it, not what was asked for. The two can
                 // differ and the host now reports which; opening the requested
                 // name would 404 on everything done after it.
                 .onSuccess { made -> refreshSessions(); onCreated(made.ifBlank { canon }) }
-                .onFailure { _toast.value = errText(it) }
+                .onFailure { onFailed(errText(it)) }
+        }
+    }
+
+    /** The recents for the New session dialog's directory dropdown; null on a daemon without the route. */
+    private val _recentDirs = MutableStateFlow<com.silencelen.huginn.data.RecentDirs?>(null)
+    val recentDirs: StateFlow<com.silencelen.huginn.data.RecentDirs?> = _recentDirs.asStateFlow()
+
+    fun loadRecentDirs() {
+        viewModelScope.launch {
+            _recentDirs.value = runCatching { client.recentDirs() }.getOrNull()
         }
     }
 
@@ -4074,8 +4186,12 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         // composeMessage is :core's — the same join the desktop makes. It used to
         // be a hand-rolled "\n\n" here and again in sendNow, which is how the
         // marker join came to have three implementations and one separator rule.
-        val taken = slots.take(sessionDraftKey(name))
-        @Suppress("NAME_SHADOWING") val text = composeMessage(text, taken.markers)
+        // A `!command` runs in the pane's shell (`:core` ShellMode): it carries
+        // nothing but itself — no attachment markers, no page — and the send
+        // flags it so the daemon types the `!` itself (appd 3.17).
+        val shell = com.silencelen.huginn.ui.ShellMode.isShellCommand(text)
+        val taken = if (shell) TakeResult(emptyList()) else slots.take(sessionDraftKey(name))
+        @Suppress("NAME_SHADOWING") val text = if (shell) text else composeMessage(text, taken.markers)
         // Sent WITHOUT the ones that failed, and they are named: refusing to send
         // because one upload of five failed costs the typed message too.
         AttachBatch.failureLine(taken.failed, taken.markers.size + taken.failed.size)
@@ -4097,7 +4213,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                     name,
                     text = text,
                     keys = if (thenEnter) listOf("Enter") else emptyList(),
-                    scratchpadId = padId,
+                    scratchpadId = if (shell) null else padId,
+                    shell = shell,
                 )
             }.onSuccess { result ->
                 // A send into a BUSY session is queued and delivered at the next
@@ -4552,9 +4669,64 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     private var openChatId: String? = null
 
+    /**
+     * What the open chat's Claude is asking (appd 3.17): `session` requests,
+     * seeded from the chat's record, kept current by the stream's `questions`
+     * frames and re-read when a run ends.
+     */
+    private val _chatQuestions = MutableStateFlow<List<com.silencelen.huginn.data.SessionQuestion>>(emptyList())
+    val chatQuestions: StateFlow<List<com.silencelen.huginn.data.SessionQuestion>> = _chatQuestions.asStateFlow()
+    private val _chatQuestionNote = MutableStateFlow<String?>(null)
+    val chatQuestionNote: StateFlow<String?> = _chatQuestionNote.asStateFlow()
+    private val _chatQuestionAnswering = MutableStateFlow(false)
+    val chatQuestionAnswering: StateFlow<Boolean> = _chatQuestionAnswering.asStateFlow()
+
+    /**
+     * Answers one of the chat's questions through `POST /v1/chats/:id/questions/:qid`
+     * with its fingerprint. A session request's create refusal comes back with
+     * the question still waiting: the card stays, the note says why, the name
+     * can be changed and Start pressed again. On a start, the sessions list is
+     * refreshed so the new session shows at once.
+     */
+    fun answerChatQuestion(id: String, q: com.silencelen.huginn.data.SessionQuestion, body: kotlinx.serialization.json.JsonObject) {
+        val fp = q.fingerprint
+        if (fp.isNullOrEmpty()) { _toast.value = "This request carries no fingerprint, so it cannot be answered safely from here."; return }
+        if (_chatQuestionAnswering.value) return
+        _chatQuestionAnswering.value = true
+        _chatQuestionNote.value = null
+        viewModelScope.launch {
+            runCatching { client.answerChatQuestion(id, q.id, body, fp) }
+                .onSuccess { r ->
+                    val waiting = r.question
+                    when {
+                        r.ok -> {
+                            clearQuestionDraft(q.id)
+                            _chatQuestions.value = _chatQuestions.value.filterNot { it.id == q.id }
+                            if (r.started == true) { refreshSessions(); _toast.value = "Started ${r.name ?: "the session"}" }
+                        }
+                        waiting != null -> {
+                            _chatQuestions.value = _chatQuestions.value.map { if (it.id == q.id) waiting else it }
+                            _chatQuestionNote.value = r.error ?: "The session could not be created."
+                        }
+                        else -> {
+                            if (r.reason == "gone" || r.reason == "changed") {
+                                clearQuestionDraft(q.id)
+                                _chatQuestions.value = _chatQuestions.value.filterNot { it.id == q.id }
+                            }
+                            _chatQuestionNote.value = r.error ?: "The request moved on."
+                        }
+                    }
+                }
+                .onFailure { _chatQuestionNote.value = errText(it) }
+            _chatQuestionAnswering.value = false
+        }
+    }
+
     fun openChat(id: String) {
         openChatId = id
         _chatPage.value = null
+        _chatQuestions.value = emptyList()
+        _chatQuestionNote.value = null
         _streamingText.value = null
         _activeTool.value = null
         _chatError.value = null
@@ -4574,6 +4746,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 _chatFast.value = meta?.fast
                 _chatTitle.value = meta?.title
                 _chatSealed.value = meta?.closed == true
+                _chatQuestions.value = meta?.questions.orEmpty()
                 attachIfRunning(id, meta)
             },
             // A chat that has never run has no transcript yet; that is not an error.
@@ -4923,6 +5096,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         _activeTool.value = null
                         loadChatTranscript(id)
                     }
+                    is ChatEvent.Questions -> _chatQuestions.value = ev.questions
                     is ChatEvent.Result -> {
                         _streamingText.value = null
                         loadChatTranscript(id)
@@ -4956,6 +5130,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         _activeTool.value = null
                         loadChatTranscript(id)
                         refreshChats()
+                        // A request parked at the very end of a run has no stream
+                        // frame left to ride; the chat's own list is the truth.
+                        launch { runCatching { client.chatQuestions(id) }.onSuccess { _chatQuestions.value = it } }
                     }
                 }
             }

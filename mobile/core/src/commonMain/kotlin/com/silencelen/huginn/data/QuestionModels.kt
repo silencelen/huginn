@@ -22,9 +22,15 @@ import kotlinx.serialization.json.jsonPrimitive
  * request's identity (its kind, tool and exact input) and travels with the answer
  * so the daemon can refuse one meant for a request that has since changed.
  *
- * @property kind `ask` (AskUserQuestion), `permission` (any other tool), `plan` (ExitPlanMode).
+ * @property kind `ask` (AskUserQuestion), `permission` (any other tool), `plan` (ExitPlanMode),
+ *   `session` (Claude's own `start_session` tool asking for a new session; appd 3.17).
  * @property input the tool's exact input: `{questions: [...]}` for an ask, the
- *   tool's own fields for a permission, `{plan, planFilePath}` for a plan.
+ *   tool's own fields for a permission, `{plan, planFilePath}` for a plan,
+ *   `{directory, prompt, name}` for a session request.
+ * @property requester who asked a session request: the session's name, or the
+ *   chat's id, whichever it came from. Null on every other kind.
+ * @property expiresAt when a session request is withdrawn by the daemon (ms), an
+ *   hour after it was asked. Null on every other kind.
  * @property suggestions the CLI's own permission suggestions, what "Always allow"
  *   would write; passed back verbatim, never composed here.
  * @property bound answerable from the card (through the hook, or the keys for a
@@ -44,10 +50,44 @@ data class SessionQuestion(
     val since: Long = 0,
     val bound: Boolean = false,
     val fallback: String? = null,
+    val requester: QuestionRequester? = null,
+    val expiresAt: Long? = null,
 ) {
     val isAsk: Boolean get() = kind == KIND_ASK
     val isPermission: Boolean get() = kind == KIND_PERMISSION
     val isPlan: Boolean get() = kind == KIND_PLAN
+    val isSession: Boolean get() = kind == KIND_SESSION
+
+    /** The session request, typed; null for anything else or a malformed input. */
+    fun sessionRequest(): SessionRequestSpec? {
+        if (!isSession) return null
+        val input = input ?: return null
+        return runCatching { QuestionJson.decodeFromJsonElement(SessionRequestSpec.serializer(), input) }.getOrNull()
+    }
+
+    /**
+     * Who asked a session request, in words: "asked by <session>", "asked from a
+     * chat", or null when the daemon did not say. The chat id is not shown — it
+     * is an opaque key and a reader cannot act on it from here.
+     */
+    fun requesterWords(): String? {
+        val r = requester ?: return null
+        r.sessionName?.takeIf { it.isNotBlank() }?.let { return "asked by $it" }
+        if (!r.chatId.isNullOrBlank()) return "asked from a chat"
+        return null
+    }
+
+    /** "expires in 42m" / "expires in 1h" / "expired", or null without a deadline. */
+    fun expiryWords(nowMs: Long): String? {
+        val at = expiresAt ?: return null
+        val s = (at - nowMs) / 1000
+        return when {
+            s <= 0 -> "expired"
+            s < 60 -> "expires in under a minute"
+            s < 3600 -> "expires in ${s / 60}m"
+            else -> "expires in ${s / 3600}h"
+        }
+    }
 
     /** The questions of an ask, typed; empty for anything else or a malformed input. */
     fun askQuestions(): List<AskQuestionSpec> {
@@ -69,6 +109,8 @@ data class SessionQuestion(
     fun headline(): String = when {
         isAsk -> askQuestions().firstOrNull()?.question ?: "Claude is asking a question"
         isPlan -> "Plan ready — approve to continue"
+        isSession -> sessionRequest()?.directory?.takeIf { it.isNotBlank() }
+            ?.let { "Claude wants to start a session in $it" } ?: "Claude wants to start a session"
         else -> {
             val detail = permissionDetail()
             val head = mcpServer?.let { "$it · ${toolName.removePrefix("mcp__${it}__")}" } ?: toolName
@@ -106,6 +148,7 @@ data class SessionQuestion(
         const val KIND_ASK = "ask"
         const val KIND_PERMISSION = "permission"
         const val KIND_PLAN = "plan"
+        const val KIND_SESSION = "session"
         const val DETAIL_CLIP = 2000
     }
 }
@@ -117,6 +160,25 @@ private val QuestionJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 @Serializable
 private data class AskInputSpec(val questions: List<AskQuestionSpec> = emptyList())
+
+/**
+ * A `start_session` request's input, as the tool was called: where the new
+ * session should run, the WHOLE first prompt it would be given, and the name
+ * Claude suggested — null when it left the choice to the person.
+ */
+@Serializable
+data class SessionRequestSpec(
+    val directory: String = "",
+    val prompt: String = "",
+    val name: String? = null,
+)
+
+/** Who parked a session request: a session by name, or a chat by id. */
+@Serializable
+data class QuestionRequester(
+    val sessionName: String? = null,
+    val chatId: String? = null,
+)
 
 /**
  * One question of an AskUserQuestion, as the tool was called (Claude Code
@@ -168,15 +230,30 @@ sealed class AnswerValue {
 @Serializable
 data class SessionQuestions(val questions: List<SessionQuestion> = emptyList())
 
-/** What `POST /v1/sessions/:name/questions/:id` reports back; a 409 decodes here too. */
+/**
+ * What `POST /v1/sessions/:name/questions/:id` (and a chat's `/questions/:qid`)
+ * reports back; a 409 decodes here too, and so does a session request's create
+ * refusal (400/409 with [question] still waiting).
+ */
 @Serializable
 data class QuestionAnswerResult(
     val ok: Boolean = false,
-    /** `hook` when Claude Code's own hook took the decision, `keys` when the pane was typed into. */
+    /** `hook` when Claude Code's own hook took the decision, `keys` when the pane was typed into, `daemon` for a session request. */
     val via: String? = null,
     /** `gone`, `changed` or `unbound` on a refusal; ordinary, never retried. */
     val reason: String? = null,
     val error: String? = null,
+    /** A session request: whether the session was created. Null on every other kind. */
+    val started: Boolean? = null,
+    /** The name the created session actually got. */
+    val name: String? = null,
+    val cwd: String? = null,
+    /**
+     * A session request whose create was refused (the name is taken, the
+     * directory is gone) comes back WITH the still-waiting question, so the card
+     * stays up, shows [error], and can be answered again with another name.
+     */
+    val question: SessionQuestion? = null,
 )
 
 /**
@@ -244,6 +321,18 @@ object QuestionAnswers {
             put("message", JsonPrimitive(words))
         }
     }
+
+    /**
+     * A session request: Start, with the name the person settled on (blank or
+     * null means "the one Claude suggested, else the directory's"); or Decline
+     * with the optional words, which the tool reads back as `declined: <words>`.
+     */
+    fun sessionBody(allow: Boolean, name: String? = null, message: String? = null): JsonObject =
+        buildJsonObject {
+            put("behavior", JsonPrimitive(if (allow) "allow" else "deny"))
+            if (allow) name?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", JsonPrimitive(it)) }
+            if (!allow) message?.trim()?.takeIf { it.isNotEmpty() }?.let { put("message", JsonPrimitive(it)) }
+        }
 
     /** True when every question of an ask has an answer, so the stepper may submit. */
     fun complete(question: SessionQuestion, answers: Map<String, AnswerValue>): Boolean =

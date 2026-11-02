@@ -992,19 +992,45 @@ class HuginnClient(
      * the result rather than throwing, like [answerPrompt]'s; every other status
      * throws as usual.
      */
-    suspend fun answerQuestion(session: String, id: String, body: JsonObject, fingerprint: String): QuestionAnswerResult {
+    suspend fun answerQuestion(session: String, id: String, body: JsonObject, fingerprint: String): QuestionAnswerResult =
+        answerAt("/v1/sessions/${seg(session)}/questions/${seg(id)}", body, fingerprint)
+
+    /**
+     * Answers one of a CHAT's questions (only `session` requests arrive there):
+     * `POST /v1/chats/:id/questions/:qid`, the same body and the same answers as
+     * a session's, fingerprint included (appd 3.17).
+     */
+    suspend fun answerChatQuestion(chatId: String, id: String, body: JsonObject, fingerprint: String): QuestionAnswerResult =
+        answerAt("/v1/chats/${seg(chatId)}/questions/${seg(id)}", body, fingerprint)
+
+    /** `GET /v1/chats/:id/questions`: the chat's waiting `session` requests. */
+    suspend fun chatQuestions(chatId: String): List<SessionQuestion> =
+        decode<SessionQuestions>(call("/v1/chats/${seg(chatId)}/questions")).questions
+
+    /**
+     * The one answer route. A 409 (`gone`, `changed`, `unbound`) decodes into the
+     * result rather than throwing; so does a session request's create refusal —
+     * a 400 or 409 carrying `{error, question}`, where the question is STILL
+     * WAITING and the card keeps itself up to try another name. Any other
+     * status, and a body that is not the result's shape, throws as usual.
+     */
+    private suspend fun answerAt(path: String, body: JsonObject, fingerprint: String): QuestionAnswerResult {
         val full = buildJsonObject {
             body.forEach { (k, v) -> put(k, v) }
             put("fingerprint", JsonPrimitive(fingerprint))
         }
-        val resp = http().request {
-            build("/v1/sessions/${seg(session)}/questions/${seg(id)}", HttpMethod.Post, Tier.NORMAL, full)
-        }
+        val resp = http().request { build(path, HttpMethod.Post, Tier.NORMAL, full) }
         val text = resp.bodyAsText()
-        if (resp.status.isSuccess() || resp.status.value == 409) {
-            runCatching { decode<QuestionAnswerResult>(text) }.getOrNull()?.let { return it }
+        val code = resp.status.value
+        if (resp.status.isSuccess() || code == 409 || code == 400) {
+            val decoded = runCatching { decode<QuestionAnswerResult>(text) }.getOrNull()
+            if (decoded != null) {
+                // A create refusal has no `reason` and no `ok`; its `question`
+                // is the fact that keeps the card up.
+                if (resp.status.isSuccess() || decoded.reason != null || decoded.question != null) return decoded
+            }
         }
-        throw errorFrom(resp.status.value, text)
+        throw errorFrom(code, text)
     }
 
     suspend fun autoswitch(): Autoswitch = decode(call("/v1/autoswitch"))
@@ -1208,8 +1234,22 @@ class HuginnClient(
      * client does next, which is why the host reads the name back from tmux
      * instead of echoing the request.
      */
-    suspend fun createSession(name: String): String =
-        decode<CreatedSession>(post("/v1/sessions", body = jsonBody("name" to name))).name
+    suspend fun createSession(name: String, cwd: String? = null): String {
+        val body = buildJsonObject {
+            put("name", JsonPrimitive(name))
+            // OMITTED, NOT SENT EMPTY: an absent `cwd` is the server default; a
+            // blank one would be a path that does not exist and a 400.
+            cwd?.trim()?.takeIf { it.isNotEmpty() }?.let { put("cwd", JsonPrimitive(it)) }
+        }
+        return decode<CreatedSession>(post("/v1/sessions", body = body)).name
+    }
+
+    /**
+     * The directories recent sessions started in, the server default first, for
+     * the New Session dialog. A daemon older than 3.17 has no route: the 404
+     * arrives as a [HuginnException] and the dialog draws no dropdown.
+     */
+    suspend fun recentDirs(): RecentDirs = decode(call("/v1/sessions/recent-dirs"))
 
     suspend fun killSession(name: String) {
         call("/v1/sessions/${seg(name)}", HttpMethod.Delete)
@@ -1670,11 +1710,20 @@ class HuginnClient(
         text: String? = null,
         keys: List<String> = emptyList(),
         scratchpadId: String? = null,
+        /**
+         * Run [text] as a Claude Code shell-mode (`!`) command, on purpose (appd
+         * 3.17): the server types the `!`, the command and Enter itself. One line,
+         * no scratchpad, Enter implied — [com.silencelen.huginn.ui.ShellMode] is
+         * the rule that decides it. Sent only when true, so an older daemon sees
+         * the body it always saw.
+         */
+        shell: Boolean = false,
     ): SendKeysResult {
         val payload = buildJsonObject {
             if (text != null) put("text", JsonPrimitive(text))
-            if (keys.isNotEmpty()) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
-            scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
+            if (keys.isNotEmpty() && !shell) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+            if (!shell) scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
+            if (shell) put("shell", JsonPrimitive(true))
         }
         return decode(post("/v1/sessions/${seg(name)}/keys", body = payload))
     }
@@ -2195,6 +2244,10 @@ class HuginnClient(
                 costUsd = str("costUsd")?.toDoubleOrNull(),
             )
             "error" -> ChatEvent.Failure(str("text") ?: "error")
+            "questions" -> ChatEvent.Questions(
+                runCatching { obj?.let { json.decodeFromJsonElement(SessionQuestions.serializer(), it).questions } }
+                    .getOrNull().orEmpty(),
+            )
             "done" -> ChatEvent.Done
             else -> null
         }
@@ -2436,6 +2489,95 @@ class HuginnClient(
         if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
         val body = decode<ProjectMemberDropped>(text)
         return MemberOutcome(body.dropped, body.project, null)
+    }
+
+    /**
+     * ASK a member to wrap up and end: `DELETE …/members/:role?end=1`. ⚠ `end=1`
+     * IS THE WHOLE DIFFERENCE from [dropMember]: without it the delete is the
+     * record-only drop and the session keeps running, unadopted. The member stays
+     * in the record with `endedAt` set ("winding down") until its session is gone.
+     * `end=now` is never sent: a member is never ended outright from here.
+     */
+    suspend fun endMember(id: String, role: String): MemberOutcome {
+        val resp = http().request {
+            build("/v1/projects/${seg(id)}/members/${seg(role)}?end=1", HttpMethod.Delete, Tier.NORMAL, null)
+        }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val body = decode<ProjectMemberDropped>(text)
+        return MemberOutcome(body.dropped, body.project, null)
+    }
+
+    /**
+     * Create a NEW member in a running project, the way an approved manifest
+     * does: `POST …/members {role, description, spawn: true, cwd?, model?,
+     * effort?}`. [description] is the member's whole first message. The optional
+     * fields are OMITTED when blank, never sent empty. A 409 (the cap, the
+     * headroom STOP) is an answer, like [adoptMember]'s.
+     */
+    suspend fun addMember(
+        id: String,
+        role: String,
+        description: String,
+        model: String? = null,
+        effort: String? = null,
+        cwd: String? = null,
+    ): MemberOutcome {
+        val body = buildJsonObject {
+            put("role", JsonPrimitive(role))
+            put("description", JsonPrimitive(description))
+            put("spawn", JsonPrimitive(true))
+            model?.trim()?.takeIf { it.isNotEmpty() }?.let { put("model", JsonPrimitive(it)) }
+            effort?.trim()?.takeIf { it.isNotEmpty() }?.let { put("effort", JsonPrimitive(it)) }
+            cwd?.trim()?.takeIf { it.isNotEmpty() }?.let { put("cwd", JsonPrimitive(it)) }
+        }
+        val resp = http().request { build("/v1/projects/${seg(id)}/members", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val added = decode<ProjectMemberAdded>(text)
+        return MemberOutcome(added.member, added.project, null)
+    }
+
+    /**
+     * Give a member a new task: `PATCH …/members/:role {description}`. The words
+     * are typed into the member, framed as owner-approved. The role word itself
+     * cannot change while the session runs (409, an answer).
+     */
+    suspend fun reroleMember(id: String, role: String, description: String): MemberOutcome {
+        val body = buildJsonObject { put("description", JsonPrimitive(description)) }
+        val resp = http().request {
+            build("/v1/projects/${seg(id)}/members/${seg(role)}", HttpMethod.Patch, Tier.NORMAL, body)
+        }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) return MemberOutcome(null, null, refusalOf(text))
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        val added = runCatching { decode<ProjectMemberAdded>(text) }.getOrNull()
+        return MemberOutcome(added?.member, added?.project, null)
+    }
+
+    /**
+     * Carry out the roster change the lead proposed: `POST …/approve-change
+     * {rev}`. THE REV, NOT THE PLAN: a card left open while the lead revised
+     * cannot approve the revision — the daemon answers 409 `{error, project}`
+     * and the card redraws from the project it was handed.
+     */
+    suspend fun approveChange(id: String, rev: Int): ChangeOutcome {
+        val body = buildJsonObject { put("rev", JsonPrimitive(rev)) }
+        val resp = http().request { build("/v1/projects/${seg(id)}/approve-change", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val refusal = runCatching { decode<ChangeRefusal>(text) }.getOrNull()
+            return ChangeOutcome(refusal?.error?.takeIf { it.isNotBlank() } ?: "that change is no longer on offer", refusal?.project)
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return ChangeOutcome(null, runCatching { decode<ChangeRefusal>(text).project }.getOrNull())
+    }
+
+    /** Drop the pending roster change and tell the lead: `POST …/decline-change`. */
+    suspend fun declineChange(id: String) {
+        post("/v1/projects/${seg(id)}/decline-change")
     }
 
     /** The daemon's own sentence out of an error body, or a plain fallback. */

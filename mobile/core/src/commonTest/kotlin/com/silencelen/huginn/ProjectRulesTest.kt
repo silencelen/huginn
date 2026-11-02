@@ -325,10 +325,16 @@ class ProjectRulesTest {
     @Test
     fun `an ended member has no mark at all, and neither has one that is simply gone`() {
         // Not idle — gone. A grey dot beside a live grey dot says the wrong thing.
-        val over = live("docs", status = "idle", ended = true)
+        val over = live("docs", status = "idle", ended = true, alive = false, present = false)
         assertTrue(ProjectRules.ended(over))
         assertNull(ProjectRules.stateWord(over))
         assertEquals("ended", ProjectRules.memberWords(over))
+
+        // ⚠ ENDED BUT STILL THERE IS "WINDING DOWN" (appd 3.17): a member asked
+        // to wrap up keeps `endedAt` while its session commits and exits.
+        val winding = live("docs", status = "idle", ended = true)
+        assertNull(ProjectRules.stateWord(winding))
+        assertEquals("winding down", ProjectRules.memberWords(winding))
 
         // ⚠ AND `alive:false` WITH NO TMUX SESSION IS NOT `idle`. joinMembers
         // reports exactly this for a member whose pane has disappeared.

@@ -53,6 +53,7 @@ import com.silencelen.huginn.desktop.ui.common.rememberTerminalVerb
 import com.silencelen.huginn.ui.CreateProjectSheet
 import com.silencelen.huginn.ui.ManifestCard
 import com.silencelen.huginn.ui.PROJECTS_BLURB
+import com.silencelen.huginn.ui.PendingChangeCard
 import com.silencelen.huginn.ui.ProjectDashboardView
 import com.silencelen.huginn.ui.ProjectMemberActions
 import com.silencelen.huginn.ui.ProjectRules
@@ -362,14 +363,32 @@ fun ProjectsDetail(store: AppStore) {
                     )
                 }
             },
-            // Adopt and drop. Both edit the RECORD only: nothing is launched,
-            // nothing is ended — see ProjectMemberActions.
+            // The lead's ROSTER CHANGE for a running project (appd 3.17), under
+            // the manifest. Approve quotes the rev; a stale one redraws the row.
+            change = row.pendingChange?.let { c ->
+                {
+                    PendingChangeCard(
+                        change = c,
+                        onApprove = { rev -> scope.launch { store.approveChange(row.id, rev) } },
+                        onDecline = { scope.launch { store.declineChange(row.id) } },
+                        refusal = refusal,
+                    )
+                }
+            },
+            // Adopt and drop edit the RECORD only; add, re-role and "ask to wrap
+            // up" reach the sessions (spawn, a typed task, the soft-end) — see
+            // ProjectMemberActions for which is which.
             membership = ProjectMemberActions(
                 liveSessions = sessions.map { it.name },
                 onAdopt = { role, name -> scope.launch { store.adoptMember(row.id, role, name) } },
                 onDrop = { m -> scope.launch { store.dropMember(row.id, m.role) } },
                 refusal = refusal,
                 clearRefusal = { store.clearProjectRefusal() },
+                onAddMember = { role, description, model, effort, cwd ->
+                    scope.launch { store.addMember(row.id, role, description, model, effort, cwd) }
+                },
+                onRerole = { m, description -> scope.launch { store.reroleMember(row.id, m.role, description) } },
+                onEnd = { m -> scope.launch { store.endMember(row.id, m.role) } },
             ),
         )
     }

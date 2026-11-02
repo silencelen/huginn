@@ -1146,6 +1146,154 @@ class HuginnClientTest {
         assertEquals(why.replace("\\\"", "\""), thrown.message)
         assertTrue(thrown.message!!.contains("Drop it from the project first"), thrown.message!!)
     }
+
+    // ---------------------------------------------- appd 3.17: the client side
+
+    @Test
+    fun `createSession sends cwd only when one was given`() = runTest {
+        ok("""{"ok":true,"name":"lora"}""").createSession("lora")
+        assertEquals("""{"name":"lora"}""", lastBody(), "no cwd: the body an older daemon always saw")
+        ok("""{"ok":true,"name":"lora"}""").createSession("lora", cwd = " /srv/work ")
+        assertEquals("""{"name":"lora","cwd":"/srv/work"}""", lastBody())
+        ok("""{"ok":true,"name":"lora"}""").createSession("lora", cwd = "   ")
+        assertEquals("""{"name":"lora"}""", lastBody(), "blank is OMITTED, never sent as an empty path")
+    }
+
+    @Test
+    fun `a create refused for its directory throws the daemon's reason`() = runTest {
+        val e = assertFailsWith<HuginnClient.HuginnException> {
+            client { respond("""{"error":"cwd does not exist: /nope"}""", HttpStatusCode.BadRequest) }
+                .createSession("lora", cwd = "/nope")
+        }
+        assertEquals(400, e.code)
+        assertEquals("cwd does not exist: /nope", e.message)
+    }
+
+    @Test
+    fun `recentDirs reads the list and the default`() = runTest {
+        val r = ok("""{"dirs":["/srv","/srv/a"],"default":"/srv"}""").recentDirs()
+        assertEquals("/v1/sessions/recent-dirs", seen.last().url.encodedPath)
+        assertEquals(listOf("/srv", "/srv/a"), r.dirs)
+        assertEquals("/srv", r.default)
+    }
+
+    @Test
+    fun `a shell send carries shell true, no keys and no scratchpad`() = runTest {
+        ok("""{"ok":true}""").sendKeys("s1", text = "!ls -la", keys = listOf("Enter"), scratchpadId = "pad-1", shell = true)
+        assertEquals("""{"text":"!ls -la","shell":true}""", lastBody(), "Enter is implied and a page cannot ride a shell command")
+        ok("""{"ok":true}""").sendKeys("s1", text = "hello", keys = listOf("Enter"))
+        assertEquals("""{"text":"hello","keys":["Enter"]}""", lastBody(), "without the flag the body is unchanged")
+    }
+
+    @Test
+    fun `a bang message sent without the flag surfaces the daemon's 409`() = runTest {
+        val e = assertFailsWith<HuginnClient.HuginnException> {
+            client { respond("""{"error":"Send it as a shell command, or drop the leading !"}""", HttpStatusCode.Conflict) }
+                .sendKeys("s1", text = "!ls", keys = listOf("Enter"))
+        }
+        assertEquals(409, e.code)
+        assertEquals("Send it as a shell command, or drop the leading !", e.message)
+    }
+
+    @Test
+    fun `a chat question is answered on the chat route with the fingerprint`() = runTest {
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("behavior", kotlinx.serialization.json.JsonPrimitive("allow"))
+            put("name", kotlinx.serialization.json.JsonPrimitive("lora-2"))
+        }
+        val r = ok("""{"ok":true,"via":"daemon","started":true,"name":"lora-2","cwd":"/srv"}""")
+            .answerChatQuestion("c-9", "sq-1", body, "fp-1")
+        assertEquals("/v1/chats/c-9/questions/sq-1", seen.last().url.encodedPath)
+        assertEquals("""{"behavior":"allow","name":"lora-2","fingerprint":"fp-1"}""", lastBody())
+        assertTrue(r.ok)
+        assertEquals(true, r.started)
+        assertEquals("lora-2", r.name)
+    }
+
+    @Test
+    fun `a create refusal on the answer route is an answer that keeps the question`() = runTest {
+        val refused = """{"error":"a session called lora already exists","question":{"id":"sq-1","kind":"session",""" +
+            """"toolName":"start_session","input":{"directory":"/srv","prompt":"go","name":"lora"},"fingerprint":"fp-1","since":1,"bound":true}}"""
+        val body = kotlinx.serialization.json.buildJsonObject { put("behavior", kotlinx.serialization.json.JsonPrimitive("allow")) }
+        val r = client { respond(refused, HttpStatusCode.BadRequest) }.answerQuestion("s1", "sq-1", body, "fp-1")
+        assertFalse(r.ok)
+        assertEquals("a session called lora already exists", r.error)
+        assertEquals("sq-1", r.question?.id, "the card stays up and can try another name")
+        // A plain 400 with no question is still a throw, as before.
+        assertFailsWith<HuginnClient.HuginnException> {
+            client { respond("""{"error":"bad body"}""", HttpStatusCode.BadRequest) }.answerQuestion("s1", "sq-1", body, "fp-1")
+        }
+    }
+
+    @Test
+    fun `chatQuestions reads the chat's list`() = runTest {
+        val qs = ok("""{"questions":[{"id":"sq-1","kind":"session","toolName":"start_session","fingerprint":"fp","since":1,"bound":true}]}""")
+            .chatQuestions("c-9")
+        assertEquals("/v1/chats/c-9/questions", seen.last().url.encodedPath)
+        assertEquals("sq-1", qs.single().id)
+    }
+
+    @Test
+    fun `approveChange quotes the rev and reads a stale 409 as the current project`() = runTest {
+        val out = ok("""{"ok":true,"project":{"id":"p1","name":"LoRa","pendingChange":null}}""").approveChange("p1", 3)
+        assertEquals("/v1/projects/p1/approve-change", seen.last().url.encodedPath)
+        assertEquals("""{"rev":3}""", lastBody())
+        assertTrue(out.ok)
+        assertEquals("p1", out.project?.id)
+
+        val stale = client {
+            respond("""{"error":"rev 3 is not the change on offer","project":{"id":"p1","pendingChange":{"rev":4,"summary":"newer"}}}""", HttpStatusCode.Conflict)
+        }.approveChange("p1", 3)
+        assertFalse(stale.ok)
+        assertEquals("rev 3 is not the change on offer", stale.refusal)
+        assertEquals(4, stale.project?.pendingChange?.rev, "the card redraws around the change actually on offer")
+    }
+
+    @Test
+    fun `declineChange posts to the decline route`() = runTest {
+        ok("""{"ok":true}""").declineChange("p1")
+        assertEquals("/v1/projects/p1/decline-change", seen.last().url.encodedPath)
+        assertEquals(io.ktor.http.HttpMethod.Post, seen.last().method)
+    }
+
+    @Test
+    fun `addMember spawns with the description and omits the blanks`() = runTest {
+        client { respond("""{"ok":true,"member":{"role":"tester"}}""", HttpStatusCode.Created) }
+            .addMember("p1", "tester", "Write the bench tests.", model = "sonnet", effort = " ", cwd = null)
+        assertEquals("/v1/projects/p1/members", seen.last().url.encodedPath)
+        assertEquals("""{"role":"tester","description":"Write the bench tests.","spawn":true,"model":"sonnet"}""", lastBody())
+    }
+
+    @Test
+    fun `reroleMember patches the description`() = runTest {
+        ok("""{"ok":true}""").reroleMember("p1", "firmware", "Switch to the power budget.")
+        assertEquals("/v1/projects/p1/members/firmware", seen.last().url.encodedPath)
+        assertEquals(io.ktor.http.HttpMethod.Patch, seen.last().method)
+        assertEquals("""{"description":"Switch to the power budget."}""", lastBody())
+    }
+
+    @Test
+    fun `endMember sends end=1, which is the whole difference from a drop`() = runTest {
+        val out = ok("""{"ok":true,"dropped":{"role":"docs","endedAt":5},"ended":false}""").endMember("p1", "docs")
+        assertEquals(io.ktor.http.HttpMethod.Delete, seen.last().method)
+        assertEquals("/v1/projects/p1/members/docs", seen.last().url.encodedPath)
+        assertEquals("end=1", seen.last().url.encodedQuery)
+        assertEquals("docs", out.member?.role)
+        ok("""{"ok":true}""").dropMember("p1", "docs")
+        assertEquals("", seen.last().url.encodedQuery, "a plain drop still sends nothing")
+    }
+
+    @Test
+    fun `a chat stream's questions frame decodes into the event`() = runTest {
+        val frames = "event: questions\ndata: {\"questions\":[{\"id\":\"sq-1\",\"kind\":\"session\",\"toolName\":\"start_session\",\"fingerprint\":\"fp\",\"since\":1,\"bound\":true}]}\n\n" +
+            "event: done\ndata: {}\n\n"
+        val events = mutableListOf<com.silencelen.huginn.data.ChatEvent>()
+        client { respond(frames, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/event-stream")) }
+            .streamChat("c-9").collect { events += it }
+        val q = events.filterIsInstance<com.silencelen.huginn.data.ChatEvent.Questions>().single()
+        assertEquals("sq-1", q.questions.single().id)
+    }
+
 }
 
 /**
@@ -1245,4 +1393,5 @@ class DaemonProbeTest {
         assertFalse(probe.proven)
         assertEquals(HuginnClient.NO_ROUTE, HuginnClient.probeWords(probe))
     }
+
 }

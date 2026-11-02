@@ -6,6 +6,10 @@ import com.silencelen.huginn.data.ChatFast
 import com.silencelen.huginn.data.ChatEvent
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ModelChoice
+import com.silencelen.huginn.data.SessionQuestion
+import com.silencelen.huginn.ui.QuestionDraft
+import com.silencelen.huginn.ui.QuestionDraftBook
+import kotlinx.serialization.json.JsonObject
 import com.silencelen.huginn.ui.ModelLabels
 import com.silencelen.huginn.data.TranscriptPage
 import com.silencelen.huginn.ui.SuggestionCue
@@ -49,7 +53,79 @@ class ChatController(
      * bubble with busy() latched instead.
      */
     private val onRefusedSend: (String) -> Unit = {},
+    /**
+     * A session request was approved and the daemon created the session: the
+     * shell refreshes its sessions list so the new one shows at once.
+     */
+    private val onSessionStarted: (name: String?) -> Unit = {},
+    private val questionDraftBook: QuestionDraftBook = QuestionDraftBook(),
 ) {
+
+    /**
+     * What this chat's Claude is asking (appd 3.17): only `session` requests —
+     * a chat run draws no dialogs. Seeded from the chat's record at open, kept
+     * current by the stream's `questions` frames while a run is alive, and
+     * re-read when a run ends.
+     */
+    private val _questions = MutableStateFlow<List<SessionQuestion>>(emptyList())
+    val questions: StateFlow<List<SessionQuestion>> = _questions.asStateFlow()
+
+    private val _answering = MutableStateFlow(false)
+    val answering: StateFlow<Boolean> = _answering.asStateFlow()
+
+    /** The daemon's refusal of the last answer (a create's 400, a 409), under the card. */
+    private val _answerNote = MutableStateFlow<String?>(null)
+    val answerNote: StateFlow<String?> = _answerNote.asStateFlow()
+
+    val questionDrafts: StateFlow<Map<String, QuestionDraft>> = questionDraftBook.drafts
+    fun setQuestionDraft(id: String, draft: QuestionDraft) = questionDraftBook.set(id, draft)
+
+    /**
+     * Answers one of the chat's questions through `POST /v1/chats/:id/questions/:qid`
+     * with its fingerprint. A session request's create refusal comes back with
+     * the question still waiting: the card stays, the note says why, the name can
+     * be changed and Start pressed again. `gone`/`changed` drop the card.
+     */
+    fun answerQuestion(q: SessionQuestion, body: JsonObject) {
+        val fp = q.fingerprint
+        if (fp.isNullOrEmpty()) {
+            _answerNote.value = "This request carries no fingerprint, so it cannot be answered safely from here."
+            return
+        }
+        if (_answering.value) return
+        _answering.value = true
+        _answerNote.value = null
+        scope.launch {
+            runCatching { client.answerChatQuestion(chatId, q.id, body, fp) }
+                .onSuccess { r ->
+                    when {
+                        r.ok -> {
+                            questionDraftBook.clear(q.id)
+                            _questions.value = _questions.value.filterNot { it.id == q.id }
+                            if (r.started == true) onSessionStarted(r.name)
+                            refresh()
+                        }
+                        r.question != null -> {
+                            // Still waiting: the create was refused for this name or
+                            // directory. Redraw from the daemon's copy of the request.
+                            // (Hoisted to a local: no smart cast across modules.)
+                            val waiting: SessionQuestion = r.question ?: q
+                            _questions.value = _questions.value.map { if (it.id == q.id) waiting else it }
+                            _answerNote.value = r.error ?: "The session could not be created."
+                        }
+                        else -> {
+                            if (r.reason == "gone" || r.reason == "changed") {
+                                questionDraftBook.clear(q.id)
+                                _questions.value = _questions.value.filterNot { it.id == q.id }
+                            }
+                            _answerNote.value = r.error ?: "The request moved on."
+                        }
+                    }
+                }
+                .onFailure { e -> _answerNote.value = e.message ?: "Could not answer." }
+            _answering.value = false
+        }
+    }
 
     private val _detail = MutableStateFlow<ChatDetail?>(null)
     val detail: StateFlow<ChatDetail?> = _detail.asStateFlow()
@@ -160,6 +236,7 @@ class ChatController(
         runCatching { client.chat(chatId) }
             .onSuccess {
                 _detail.value = it
+                _questions.value = it.questions
                 _running.value = it.running
             }
             .onFailure { _notice.value = it.message ?: "could not read this chat" }
@@ -417,6 +494,7 @@ class ChatController(
             is ChatEvent.ToolStart -> _activity.value = ev.name
             is ChatEvent.Tool -> { _activity.value = null; loadTranscript() }
             is ChatEvent.Result -> { _activity.value = null; loadTranscript() }
+            is ChatEvent.Questions -> _questions.value = ev.questions
             is ChatEvent.Failure -> {
                 _notice.value = ev.text
                 _activity.value = null

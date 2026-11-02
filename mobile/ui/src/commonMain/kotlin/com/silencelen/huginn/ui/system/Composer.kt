@@ -42,6 +42,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.material3.TextFieldColors
+import androidx.compose.ui.platform.testTag
+import com.silencelen.huginn.ui.ShellMode
+import com.silencelen.huginn.ui.theme.StateKind
+import com.silencelen.huginn.ui.theme.stateColor
 
 /**
  * One line the composer has to say about the message being written: the send
@@ -100,6 +105,12 @@ fun Composer(
     stopLabel: String = "Stop",
     sendAlongsideStop: Boolean = false,
     notice: ComposerNotice? = null,
+    /**
+     * The text is a Claude Code shell command (`ShellMode.isShellCommand`): the
+     * field takes the house attention tint and a one-line hint says what Send
+     * will do. The caller decides; this only draws it.
+     */
+    shellMode: Boolean = false,
     maxLines: Int = 6,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
@@ -115,6 +126,7 @@ fun Composer(
         Column {
             header()
             notice?.let { ComposerNoticeLine(it) }
+            if (shellMode) ShellModeHint()
             extras?.let { row ->
                 Row(
                     Modifier.fillMaxWidth().padding(start = Scale.s12, end = Scale.s8, top = Scale.s4),
@@ -175,7 +187,11 @@ fun Composer(
                             container = {
                                 OutlinedTextFieldDefaults.Container(
                                     enabled = enabled,
-                                    isError = false,
+                                    // The shell tint rides Material's error slot,
+                                    // coloured from StateColors below — the one
+                                    // place a state becomes a colour.
+                                    isError = shellMode,
+                                    colors = shellFieldColors(),
                                     interactionSource = interaction,
                                     shape = RoundedCornerShape(Scale.s20),
                                 )
@@ -195,6 +211,39 @@ fun Composer(
             }
         }
     }
+}
+
+/**
+ * The composer's shell-mode line: [ShellMode.HINT] in the attention/error ink.
+ * Drawn by both shells' session composers (the phone's through [Composer], the
+ * desktop's beside its own field), so the words and the colour are one.
+ */
+@Composable
+fun ShellModeHint(modifier: Modifier = Modifier) {
+    Text(
+        ShellMode.HINT,
+        style = MaterialTheme.typography.labelSmall,
+        color = stateColor(StateKind.ERROR),
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.fillMaxWidth().padding(start = 14.dp, end = Scale.s4, top = Scale.s4).testTag("composer.shell.hint"),
+    )
+}
+
+/**
+ * The outlined field's colours with the error slot painted from StateColors, so
+ * `isError = true` reads as the house tint rather than Material's default red.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun shellFieldColors(): TextFieldColors {
+    val tint = stateColor(StateKind.ERROR)
+    return OutlinedTextFieldDefaults.colors(
+        errorBorderColor = tint,
+        errorCursorColor = tint,
+        errorLabelColor = tint,
+        errorTextColor = MaterialTheme.colorScheme.onSurface,
+    )
 }
 
 /** The one filled button on the screen. Circle, primary, the outlined Send glyph. */

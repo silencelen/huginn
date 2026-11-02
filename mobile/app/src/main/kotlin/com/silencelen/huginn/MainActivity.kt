@@ -867,6 +867,10 @@ fun HuginnApp(
     val archiveRead by vm.archiveRead.collectAsState()
     val rounds by vm.rounds.collectAsState()
     val questionDrafts by vm.questionDrafts.collectAsState()
+    val recentDirs by vm.recentDirs.collectAsState()
+    val chatQuestions by vm.chatQuestions.collectAsState()
+    val chatQuestionNote by vm.chatQuestionNote.collectAsState()
+    val chatQuestionAnswering by vm.chatQuestionAnswering.collectAsState()
     val fastAsked by vm.fastAsked.collectAsState()
     val pads by vm.scratchpads.collectAsState()
     // Null until the probe answers. Every scratchpad control is hidden on false —
@@ -1516,6 +1520,14 @@ fun HuginnApp(
                 padRefId = padRefs[com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id)],
                 onPadRef = { vm.setPadRef(com.silencelen.huginn.ui.ScratchpadRules.chatRefKey(id), it) },
                 quickActions = status?.quickActions,
+                // Claude asked for a NEW SESSION from this chat (appd 3.17): the
+                // card is answerable here, there being no pane to steer to.
+                questions = chatQuestions,
+                questionDrafts = questionDrafts,
+                onQuestionDraft = { qid, d -> vm.setQuestionDraft(qid, d) },
+                onAnswerQuestion = { q, body -> vm.answerChatQuestion(id, q, body) },
+                questionNote = chatQuestionNote,
+                questionAnswering = chatQuestionAnswering,
                 onSelectionAction = { action, text ->
                     vm.runSelectionAction(
                         action = action,
@@ -1568,6 +1580,21 @@ fun HuginnApp(
                         sessionTab = sessionTabOnOpen(sessionTab, brandNew = true)
                         dest = Dest.SessionView(it)
                     }
+                },
+                // With a starting directory (appd 3.17). The dialog stays up on a
+                // refusal and shows the daemon's reason; it closes on success.
+                recentDirs = recentDirs,
+                onLoadRecentDirs = { vm.loadRecentDirs() },
+                onCreateIn = { name, cwd, done ->
+                    vm.createSession(
+                        name, cwd,
+                        onCreated = {
+                            done(null)
+                            sessionTab = sessionTabOnOpen(sessionTab, brandNew = true)
+                            dest = Dest.SessionView(it)
+                        },
+                        onFailed = { done(it) },
+                    )
                 },
                 onKill = { vm.killSession(it) },
                 onSoftEnd = { vm.softEndSession(it) },
@@ -1874,7 +1901,7 @@ fun HuginnApp(
                 onOpenMember = { m -> dest = Dest.SessionView(m.name) },
                 // Adopt and drop. Both are edits to the RECORD: nothing is
                 // launched and nothing is ended — see ProjectMemberActions.
-                membership = remember(id, sessions) {
+                membership = remember(id, sessions, projectBusy, projectRefusal) {
                     com.silencelen.huginn.ui.ProjectMemberActions(
                         liveSessions = sessions.map { it.name },
                         onAdopt = { role, name -> vm.adoptMember(id, role, name) },
@@ -1882,8 +1909,21 @@ fun HuginnApp(
                         busy = projectBusy,
                         refusal = projectRefusal,
                         clearRefusal = { vm.clearProjectRefusal() },
+                        // Add, re-role and "ask to wrap up" reach the sessions
+                        // (appd 3.17) — spawn, a typed task, the soft-end.
+                        onAddMember = { role, description, model, effort, cwd ->
+                            vm.addMember(id, role, description, model, effort, cwd)
+                        },
+                        onRerole = { m, description -> vm.reroleMember(id, m.role, description) },
+                        onEnd = { m -> vm.endMember(id, m.role) },
                     )
                 },
+                // The lead's ROSTER CHANGE, from the row (the detail's `row` when
+                // it is fresher than the list's).
+                pendingChange = (projectDetail?.takeIf { it.project.id == id }?.row
+                    ?: projects.firstOrNull { it.id == id })?.pendingChange,
+                onApproveChange = { rev -> vm.approveChange(id, rev) },
+                onDeclineChange = { vm.declineChange(id) },
                 onSpawn = { rev -> vm.spawnProject(id, rev) },
                 onDiscard = { vm.discardProposal(id) },
                 onSaveManifest = { m ->

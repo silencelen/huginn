@@ -32,8 +32,14 @@ data class QuestionDraft(
     val otherOpen: Boolean = false,
     /** A permission's / plan's "tell Claude…" box is open. */
     val noOpen: Boolean = false,
-    /** A permission's deny message, or a plan's feedback words. */
+    /** A permission's deny message, a plan's feedback words, or a session request's decline reason. */
     val words: String = "",
+    /**
+     * A session request's name field: seeded with the name Claude suggested (or
+     * blank when it left the choice open) and edited in place. Blank at Start
+     * means "the request's own name, else the directory's" — the daemon's rule.
+     */
+    val name: String = "",
 ) {
     /**
      * Answer the current ask question and move on, clearing the per-step scratch
@@ -56,7 +62,10 @@ data class QuestionDraft(
         copy(stepper = stepper.back(), typed = "", otherOpen = false)
 
     companion object {
-        fun of(q: SessionQuestion): QuestionDraft = QuestionDraft(stepper = AskStepper.of(q))
+        fun of(q: SessionQuestion): QuestionDraft = QuestionDraft(
+            stepper = AskStepper.of(q),
+            name = q.sessionRequest()?.name.orEmpty(),
+        )
     }
 }
 

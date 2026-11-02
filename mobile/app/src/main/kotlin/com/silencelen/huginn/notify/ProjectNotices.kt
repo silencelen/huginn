@@ -36,18 +36,29 @@ object ProjectNotices {
     /** The push kind the daemon sends when a lead's tagged manifest lands. */
     const val KIND_PROPOSED: String = "project_proposed"
 
+    /** The push kind for a ROSTER CHANGE the lead proposed for a running project (appd 3.17). */
+    const val KIND_CHANGE: String = "project_change"
+
     /** Create the members the owner just looked at. `POST …/spawn`. */
     const val VERB_SPAWN: String = "spawn"
 
     /** Turn the proposal down; the manifest is kept. `POST …/discard`. */
     const val VERB_DISCARD: String = "discard"
 
+    /** Carry out the roster change at its rev. `POST …/approve-change {rev}`. */
+    const val VERB_APPROVE_CHANGE: String = "approve-change"
+
+    /** Drop the roster change and tell the lead. `POST …/decline-change`. */
+    const val VERB_DECLINE_CHANGE: String = "decline-change"
+
     /** The bounded verbs, and there are no others. Notably there is no `edit`. */
-    val VERBS: Set<String> get() = setOf(VERB_SPAWN, VERB_DISCARD)
+    val VERBS: Set<String> get() = setOf(VERB_SPAWN, VERB_DISCARD, VERB_APPROVE_CHANGE, VERB_DECLINE_CHANGE)
 
     /** The fixed labels. Not overridable from the wire — see the header. */
     const val LABEL_SPAWN: String = "Spawn"
     const val LABEL_DISCARD: String = "Discard"
+    const val LABEL_APPROVE: String = "Approve"
+    const val LABEL_DECLINE: String = "Decline"
 
     /**
      * A button.
@@ -135,7 +146,7 @@ object ProjectNotices {
         /** The daemon's `payload` field, a JSON object as a string. */
         payload: String? = null,
     ): Notice? {
-        if (kind != KIND_PROPOSED) return null
+        if (kind != KIND_PROPOSED && kind != KIND_CHANGE) return null
         val p = parsePayload(payload)
         // `payload.projectId` first: `subject` is the generic field every push
         // carries, and the payload is the one the daemon fills on purpose.
@@ -146,9 +157,21 @@ object ProjectNotices {
         // FCM data is string-to-string, so a number arrives as its own text. An
         // unreadable rev becomes 0, which the daemon refuses — far better than
         // guessing a rev and spawning a plan nobody read.
-        val rev = p["manifestRev"]?.trim()?.toIntOrNull() ?: 0
+        // A roster change's rev is `pendingChange.rev` on the wire; the payload
+        // key is read as `rev`, then `manifestRev`, since the two are one counter.
+        val rev = (p["rev"] ?: p["manifestRev"])?.trim()?.toIntOrNull() ?: 0
         val name = p["name"]?.takeIf { it.isNotBlank() }
         val summary = p["summary"]?.takeIf { it.isNotBlank() }
+        if (kind == KIND_CHANGE) {
+            return Notice(
+                key = keyFor(id),
+                title = title.ifBlank { if (name != null) "$name proposes a roster change" else "A project proposes a roster change" },
+                text = text.ifBlank { summary ?: "The lead wants to add, remove or re-role members." },
+                projectId = id,
+                manifestRev = rev,
+                actions = changeActionsFor(id, rev),
+            )
+        }
         return Notice(
             key = keyFor(id),
             title = title.ifBlank { if (name != null) "$name has a proposal" else "A project has a proposal" },
@@ -171,6 +194,12 @@ object ProjectNotices {
     fun actionsFor(projectId: String, manifestRev: Int): List<Action> = listOf(
         Action(LABEL_SPAWN, VERB_SPAWN, projectId, manifestRev),
         Action(LABEL_DISCARD, VERB_DISCARD, projectId, manifestRev),
+    )
+
+    /** Approve and Decline for a roster change — two buttons, a list literal, no third. */
+    fun changeActionsFor(projectId: String, rev: Int): List<Action> = listOf(
+        Action(LABEL_APPROVE, VERB_APPROVE_CHANGE, projectId, rev),
+        Action(LABEL_DECLINE, VERB_DECLINE_CHANGE, projectId, rev),
     )
 
     fun postArgs(n: Notice): PostArgs = PostArgs(

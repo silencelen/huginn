@@ -1,5 +1,22 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Added
+- New session takes a starting directory, with a dropdown of the directories recent sessions used;
+  empty means the server default. A directory the server does not have is refused in the dialog with
+  the reason.
+- Claude can ask for a new session (its `start_session` tool): the card shows the directory, the
+  prompt as written, who asked and when the request lapses, with the suggested name editable; Start
+  creates it and the sessions list refreshes, Decline tells Claude why. Chats draw the card too.
+- A message starting with `!` in a session runs as a Claude Code shell command: the box takes the
+  attention tint with a one-line hint and the send is flagged, so the server types the `!` itself.
+  The server's refusals (a multi-line command, a `!` message sent as text) are shown.
+- Projects: a roster change the lead proposes for a running project shows as a card with the added,
+  removed and re-roled roles, Approve and Decline; members can be added (role, task, optional model,
+  effort, directory), re-roled, or asked to wrap up, and one asked reads "winding down". The
+  `project_change` push carries Approve and Decline.
+
 ## 3.15.1 — 2026-11-02
 
 ### Fixed

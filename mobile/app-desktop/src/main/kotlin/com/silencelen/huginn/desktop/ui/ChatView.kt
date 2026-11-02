@@ -1,5 +1,8 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.PromptGate
+import com.silencelen.huginn.ui.QuestionCard
+import com.silencelen.huginn.ui.QuestionDraft
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -148,7 +151,9 @@ fun ChatView(
 ) {
     val scope = rememberCoroutineScope()
     val controller = remember(chatId) {
-        ChatController(client, chatId, scope, onRefusedSend = { text ->
+        ChatController(client, chatId, scope, questionDraftBook = store?.questionDrafts ?: com.silencelen.huginn.ui.QuestionDraftBook(),
+            onSessionStarted = { store?.let { st -> scope.launch { st.refreshSessions() } } },
+            onRefusedSend = { text ->
             // A refused send costs nothing typed: the message returns to the
             // composer it was cleared from a moment earlier.
             store?.drafts?.set(DraftBook.chatKey(chatId), text)
@@ -447,6 +452,29 @@ fun ChatView(
             // session pane's, and the pages panel narrows this column too.
             // The affordance is inside SuggestionChips now — see EdgeFade.
             SuggestionChips(suggestions, onPick = setDraft)
+        }
+
+        // Claude asked for a NEW SESSION (appd 3.17). A chat has no pane to steer
+        // to, so the compact card is the answerable surface, pinned above the
+        // composer like a session's. The clock is for the expiry line.
+        val questions by controller.questions.collectAsState()
+        val cardQuestion = PromptGate.cardQuestion(questions)
+        if (cardQuestion != null) {
+            val answering by controller.answering.collectAsState()
+            val answerNote by controller.answerNote.collectAsState()
+            val questionDrafts by controller.questionDrafts.collectAsState()
+            BoxWithConstraints(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                QuestionCard(
+                    question = cardQuestion,
+                    answering = answering,
+                    note = answerNote,
+                    maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
+                    draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
+                    onDraft = { controller.setQuestionDraft(cardQuestion.id, it) },
+                    onAnswer = { body -> controller.answerQuestion(cardQuestion, body) },
+                    nowMs = System.currentTimeMillis(),
+                )
+            }
         }
 
         HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)

@@ -1,5 +1,8 @@
 package com.silencelen.huginn.desktop.ui
 
+import com.silencelen.huginn.ui.ShellMode
+import com.silencelen.huginn.ui.system.ShellModeHint
+import com.silencelen.huginn.ui.system.shellFieldColors
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -1479,6 +1482,10 @@ private fun Composer(
 
     // Per item: four uploads and one refusal still have three things to say.
     val canSend = draft.isNotBlank() || pending.any { it.status != AttachStatus.FAILED }
+    // A `!command` runs in the pane's shell, not in Claude (`:core` ShellMode):
+    // the field takes the attention tint, a line says so, and the send carries
+    // `shell: true` so the daemon types the `!` itself. Decided once, here.
+    val shell = ShellMode.isShellCommand(draft)
 
     // Sent-history recall. Suppressed while the Screen tab has live keyboard on:
     // there every keystroke, arrows included, belongs to the pane. The composer
@@ -1505,7 +1512,10 @@ private fun Composer(
                     // PANE_SEPARATOR between the markers TOO, not only between the
                     // text and the first one: this line is typed into a pane where
                     // a newline is the submit key.
-                    val full = composeMessage(body, taken.markers, PANE_SEPARATOR)
+                    // A shell command carries nothing but itself: no attachment
+                    // markers, no page — the daemon refuses a scratchpad with
+                    // `shell`, and a file path appended to `!ls` is not a command.
+                    val full = if (shell) body else composeMessage(body, taken.markers, PANE_SEPARATOR)
                     // Cancellation is cooperative, so a scope killed while take()
                     // was returning would otherwise reach a sendLine that never
                     // runs and still count as sent.
@@ -1513,7 +1523,7 @@ private fun Composer(
                     // Awaited, not fired-and-forgotten: the box was emptied on
                     // press, so a refusal with no answer left the text (and the
                     // attached page) existing nowhere.
-                    posted = if (full.isNotEmpty()) controller.sendLineNow(full, scratchpadId = padId) else true
+                    posted = if (full.isNotEmpty()) controller.sendLineNow(full, scratchpadId = if (shell) null else padId, shell = shell) else true
                 } finally {
                     // take() parks for the whole upload on a scope that dies with
                     // this view, so leaving the session mid-upload cancels the
@@ -1614,6 +1624,7 @@ private fun Composer(
             wrapUpNotice != null -> onDismissWrapUpNotice
             else -> null
         }
+        if (shell) ShellModeHint(Modifier.padding(bottom = 6.dp))
         noticeText?.let { text ->
             val dismiss = noticeDismiss
             Row(
@@ -1739,6 +1750,9 @@ private fun Composer(
                     )
                 },
                 textStyle = MaterialTheme.typography.bodyMedium,
+                // The shell tint: Material's error slot, painted from StateColors.
+                isError = shell,
+                colors = shellFieldColors(),
                 // The house field (ui/system/Composer.kt): the 20 dp outlined box.
                 shape = RoundedCornerShape(Scale.s20),
             )
