@@ -6,7 +6,6 @@ import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectList
 import com.silencelen.huginn.data.SpawnResult
-import com.silencelen.huginn.ui.DashboardCursor
 import com.silencelen.huginn.ui.ProjectRules
 import com.silencelen.huginn.ui.appEntries
 import com.silencelen.huginn.ui.projectEntries
@@ -79,52 +78,6 @@ class ProjectsPhoneTest {
         )
         assertNull("absent is null, never an empty list", client.projects())
         assertNull("and only after BOTH names have 404ed", client.apps())
-    }
-
-    // -------------------------------------------------------- the poll gate
-
-    /**
-     * ⚠⚠ A DASHBOARD TICK IS NOT FREE AT EITHER END.
-     *
-     * The daemon sums up to twelve session overviews to answer it; the client
-     * then redraws a table of twelve rows of numbers. `generatedAt` is the
-     * daemon's own "this is when I answered", so an answer carrying the stamp
-     * already on screen is the same answer — and publishing it recomposes the
-     * whole screen to draw identical figures, every five seconds, for as long as
-     * anybody reads it.
-     */
-    @Test
-    fun `the dashboard poll skips an answer whose generatedAt has not moved`() {
-        val cursor = DashboardCursor()
-        val first = ProjectDashboard(generatedAt = 1_789_460_000)
-        assertTrue("the first answer is always new", cursor.accept(first))
-        assertFalse("the same stamp is the same answer", cursor.accept(ProjectDashboard(generatedAt = 1_789_460_000)))
-        assertFalse(cursor.accept(ProjectDashboard(generatedAt = 1_789_460_000)))
-        assertTrue("a moved stamp is work", cursor.accept(ProjectDashboard(generatedAt = 1_789_460_005)))
-        // Nothing to publish is not the same as nothing new.
-        assertFalse(cursor.accept(null))
-    }
-
-    /**
-     * ⚠ ZERO IS NOT A STAMP. A daemon that did not fill the field leaves 0, and
-     * reading that as "unchanged" would freeze the screen on its first answer for
-     * the rest of the session.
-     */
-    @Test
-    fun `an unstamped dashboard always lands`() {
-        val cursor = DashboardCursor()
-        assertTrue(cursor.accept(ProjectDashboard(generatedAt = 0)))
-        assertTrue(cursor.accept(ProjectDashboard(generatedAt = 0)))
-    }
-
-    /** A different project starts again: its stamps are not this one's. */
-    @Test
-    fun `resetting forgets the stamp`() {
-        val cursor = DashboardCursor()
-        assertTrue(cursor.accept(ProjectDashboard(generatedAt = 7)))
-        assertFalse(cursor.accept(ProjectDashboard(generatedAt = 7)))
-        cursor.reset()
-        assertTrue(cursor.accept(ProjectDashboard(generatedAt = 7)))
     }
 
     // ------------------------------------------------------- the refusals

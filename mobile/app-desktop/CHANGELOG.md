@@ -1,5 +1,16 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Fixed
+- The update notice shows above whichever list the window opens on (Chats, Sessions, Projects or
+  Pages), not only Chats and Sessions, and stays up while the four-hourly re-check runs instead of
+  blinking out until it finishes.
+- Opening a project shows its last dashboard at once and fetches the new one immediately, instead of
+  "Nothing to show yet." until the next poll.
+- A project's "x of y working" line is counted from the member rows shown under it, so the header
+  and the rows agree.
+
 ## 2.9.1
 
 ### Changed

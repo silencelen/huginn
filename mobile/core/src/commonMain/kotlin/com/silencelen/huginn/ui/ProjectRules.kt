@@ -590,6 +590,28 @@ object ProjectRules {
 
     fun rollupWords(members: List<ProjectMemberState>): String = rollupWords(rollup(members))
 
+    /**
+     * The line over a member list: counted from the MEMBERS THE SCREEN SHOWS when
+     * it has them, else the daemon's own counts on the row.
+     *
+     * ⚠ THE HEADER AND THE ROWS UNDER IT MUST AGREE. The row's counts arrive on
+     * the list poll and the members on their own fetch, so the two were read at
+     * different moments; a header saying "1 of 3 working" over three rows drawn
+     * busy was the result (owner, 2026-11-01). Whichever list the rows are drawn
+     * from is the one the sentence is counted from. A null or empty list is
+     * "not loaded yet", and then the row's counts are all there is.
+     */
+    fun rollupWords(row: ProjectRow, members: List<ProjectMemberState>?): String =
+        if (members.isNullOrEmpty()) rollupWords(row) else rollupWords(members)
+
+    /**
+     * Whose members a list tick fetches: every project folded open, plus the one
+     * whose dashboard is on screen. One GET each, none while nothing is open.
+     * Shared so the phone and the desktop poll the same set.
+     */
+    fun membersWanted(expanded: Set<String>, open: String?): List<String> =
+        (expanded + listOfNotNull(open)).toList()
+
     /** The lead's own line, when there is one. Null when no lead has registered. */
     fun leadWords(row: ProjectRow): String? =
         row.lead?.claudeName?.takeIf { it.isNotBlank() }?.let { "led by $it" }

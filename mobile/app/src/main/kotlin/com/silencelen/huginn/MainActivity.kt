@@ -110,6 +110,7 @@ import com.silencelen.huginn.ui.EndVerbs
 import com.silencelen.huginn.ui.VerbTone
 import com.silencelen.huginn.ui.LiveInput
 import com.silencelen.huginn.ui.ChatsScreen
+import com.silencelen.huginn.ui.UpdateNoticePhone
 import com.silencelen.huginn.ui.DevicesScreen
 import com.silencelen.huginn.ui.groupByMachine
 import com.silencelen.huginn.ui.RoundEditScreen
@@ -897,6 +898,8 @@ fun HuginnApp(
     val projectsAvailable by vm.projectsAvailable.collectAsState()
     val projectsDir by vm.projectsDir.collectAsState()
     val projectMembers by vm.projectMembers.collectAsState()
+    val projectsExpanded by vm.projectsExpanded.collectAsState()
+    val updateNotice by vm.updateNotice.collectAsState()
     val projectDetail by vm.projectDetail.collectAsState()
     val projectDashboard by vm.projectDashboard.collectAsState()
     val projectRefusal by vm.projectRefusal.collectAsState()
@@ -1394,6 +1397,9 @@ fun HuginnApp(
                 onOpenSettings = { dest = Dest.Settings },
                 newChatRequest = newChatAsk,
                 listState = chatsListState,
+                // A found or fetched update, at the top of the list where the
+                // reader already looks — not only in Settings > Updates.
+                header = updateNotice?.let { n -> { UpdateNoticePhone(vm, n) } },
             )
         }
         // Its own destination now, not a strip on top of the chat list. A Round is
@@ -1825,7 +1831,11 @@ fun HuginnApp(
                 nowMs = nowMs,
                 onOpenProject = { row -> vm.openProject(row.id); dest = Dest.Project(row.id) },
                 onOpenMember = { live -> dest = Dest.SessionView(live.name) },
-                onExpand = { id -> vm.fetchProjectMembers(id) },
+                // The fold lives in the view model: the list poll re-fetches the
+                // members of every open row each tick, so the header and the
+                // rows under it are read at the same moment.
+                expanded = projectsExpanded,
+                onToggle = { id -> vm.toggleProject(id) },
                 // ⚠ D-8. Winding a cluster down lived only behind the dashboard's
                 // top-bar menu — two taps in, and inside the project. The row gets
                 // the same door; the dialog is the one this screen already raises.
@@ -1996,6 +2006,12 @@ fun HuginnApp(
                 onStopOrDispose { vm.stopScratchpadsPolling(PAD_WATCH_EDITOR) }
             }
             ScratchpadEditorView(
+                // The one pane that handled no insets: the root Scaffold passes
+                // none through (contentWindowInsets zero, every screen pays its
+                // own), so the editor sat under the keyboard with the caret out
+                // of sight. Same modifier every other screen uses; the wide
+                // layout reuses this lambda, so it is covered too.
+                modifier = Modifier.imeAndSystemNavPadding(),
                 pad = openPad?.takeIf { it.id == id },
                 pads = pads,
                 state = padSaveState,

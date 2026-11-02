@@ -203,7 +203,7 @@ private fun ProjectRowItem(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    projectSubtitle(project, nowMs),
+                    projectSubtitle(project, nowMs, members),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -334,14 +334,16 @@ fun memberLabel(member: ProjectMemberState): String {
  * asked. The directory comes second and only when there is one — an absent fact
  * is absent, not an empty slot between two dots (the device line's rule).
  *
- * ⚠ THE COUNTS COME OFF THE ROW, NOT OUT OF A MEMBER LIST. The daemon summed
- * them across three registries this client cannot read, and a client that
- * recomputed them from whatever membership it happened to be holding would
- * disagree with its own tree.
+ * ⚠ THE COUNTS ARE THE MEMBER ROWS' OWN once the disclosure has loaded them
+ * ([ProjectRules.rollupWords] with members): the row's counts arrive on the list
+ * poll and the members on their own fetch, and a line that was summed at a
+ * different moment from the rows under it disagreed with its own tree — "1 of 3
+ * working" over three rows drawn busy. Until the members load, the daemon's
+ * counts on the row are all there is.
  */
-fun projectSubtitle(project: ProjectRow, nowMs: Long): String {
+fun projectSubtitle(project: ProjectRow, nowMs: Long, members: List<ProjectLive>? = null): String {
     val bits = mutableListOf<String>()
-    bits += ProjectRules.rollupWords(project)
+    bits += ProjectRules.rollupWords(project, members)
     if (ProjectRules.hasProposal(project)) {
         ProjectRules.manifestSummary(project)?.let { bits += it }
     }

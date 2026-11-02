@@ -41,6 +41,11 @@ import com.silencelen.huginn.update.UpdateReminder
  * @param installable whether this client can apply the file itself. When it
  *   cannot, [hint] says what to do instead and [command] (the command inside
  *   it, [UpdateReminder.commandOf]) gets a Copy button in place of Install.
+ * @param installLabel the Install button's words. The desktop's one step is
+ *   "Install and restart"; the phone's first step is a download it names with its
+ *   size, because nothing is fetched there until the owner asks.
+ * @param installEnabled false while the step is already under way (the phone's
+ *   download), so the button says so instead of queueing a second one.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -55,6 +60,8 @@ fun UpdateNoticeCard(
     onLater: () -> Unit,
     onSilence: () -> Unit,
     modifier: Modifier = Modifier,
+    installLabel: String = "Install and restart",
+    installEnabled: Boolean = true,
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
@@ -91,8 +98,8 @@ fun UpdateNoticeCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             ) {
                 when {
-                    installable -> Button(onClick = onInstall, modifier = Modifier.testTag("$TAG.install")) {
-                        OneLine("Install and restart")
+                    installable -> Button(onClick = onInstall, enabled = installEnabled, modifier = Modifier.testTag("$TAG.install")) {
+                        OneLine(installLabel)
                     }
                     command != null -> TextButton(onClick = onCopyCommand, modifier = Modifier.testTag("$TAG.copy")) {
                         OneLine("Copy command")

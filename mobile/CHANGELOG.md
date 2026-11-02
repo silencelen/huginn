@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Fixed
+- An available update is announced on the chats list when the app opens, with Download, Later and
+  Don't remind me, instead of only in Settings > Updates. The launch check only looks; nothing is
+  downloaded or installed without a tap.
+- Opening a project shows its last dashboard at once while the new one is fetched, instead of
+  "Nothing to show yet." until the next poll.
+- The Pages editor moves up for the keyboard instead of staying under it.
+- A project's "x of y working" line is counted from the member rows shown under it, and open rows'
+  members refresh with every list poll, so the header and the rows agree.
+
 ## 3.15.0 — 2026-10-30
 
 ### Added

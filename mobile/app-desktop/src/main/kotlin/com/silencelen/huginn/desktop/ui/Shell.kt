@@ -480,112 +480,118 @@ fun Shell(store: AppStore) {
                                     .requiredWidth(paneWidth.dp)
                                     .fillMaxHeight(),
                             ) {
-                                when (view) {
-                                    View.CHATS -> Column(Modifier.fillMaxSize()) {
-                                        // A verified update, above the offer below in the
-                                        // same slot and shape: the one card a reader sees
-                                        // first is the one that is about to restart the app.
+                                Column(Modifier.fillMaxSize()) {
+                                    // A verified update, ONCE, above whichever list is open —
+                                    // chats, sessions, projects or pages. It was drawn inside the
+                                    // chat and session branches only, so a window that reopened on
+                                    // Projects or Pages showed no notice at all (owner, 2026-11-01).
+                                    // Above the first-run offer below in the same slot and shape: the
+                                    // one card a reader sees first is the one about to restart the app.
+                                    if (view in UPDATE_NOTICE_VIEWS) {
                                         updateNotice?.let { ready -> UpdateNotice(store, ready) { copy(it) } }
-                                        // First-launch offer, once and dismissible: the
-                                        // machine may be able to SERVE, and the only
-                                        // door was a Settings section nobody is told
-                                        // about. Gone forever on either button, and
-                                        // never shown once anything already serves.
-                                        //
-                                        // ⚠ "Set up" NOW DEEP-LINKS INTO THE FLOW at
-                                        // its local-AI step, rather than dropping the
-                                        // reader at the top of Settings and leaving
-                                        // them to find the section — which is what it
-                                        // did, and is why this card was the closest
-                                        // thing to a first-run flow that never became
-                                        // one. Two doors onto one flow, not two paths.
-                                        val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
-                                        if (!offerSeen && devices.none { it.scope == "generate" }) {
-                                            Surface(
-                                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                                            ) {
-                                                Column(Modifier.padding(12.dp)) {
-                                                    Text("Serve local AI from this computer", style = MaterialTheme.typography.labelLarge)
-                                                    Text(
-                                                        "This machine may be able to run small AI models and offer them " +
-                                                            "in huginn's chat menus — private, on your own hardware. " +
-                                                            "Setting up shows the exact plan before anything downloads.",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    )
-                                                    Row(
-                                                        horizontalArrangement = Arrangement.End,
-                                                        modifier = Modifier.fillMaxWidth(),
+                                    }
+                                    Box(Modifier.weight(1f)) {
+                                        when (view) {
+                                            View.CHATS -> Column(Modifier.fillMaxSize()) {
+                                                // First-launch offer, once and dismissible: the
+                                                // machine may be able to SERVE, and the only
+                                                // door was a Settings section nobody is told
+                                                // about. Gone forever on either button, and
+                                                // never shown once anything already serves.
+                                                //
+                                                // ⚠ "Set up" NOW DEEP-LINKS INTO THE FLOW at
+                                                // its local-AI step, rather than dropping the
+                                                // reader at the top of Settings and leaving
+                                                // them to find the section — which is what it
+                                                // did, and is why this card was the closest
+                                                // thing to a first-run flow that never became
+                                                // one. Two doors onto one flow, not two paths.
+                                                val offerSeen by store.settings.localOfferSeen.collectAsState(initial = true)
+                                                if (!offerSeen && devices.none { it.scope == "generate" }) {
+                                                    Surface(
+                                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                                                     ) {
-                                                        TextButton(onClick = {
-                                                            act { store.settings.setLocalOfferSeen() }
-                                                            SetupHost.ifReady { it.openAt(SetupStep.LOCAL_AI) }
-                                                        }) { Text("Set up") }
-                                                        TextButton(onClick = {
-                                                            act { store.settings.setLocalOfferSeen() }
-                                                        }) { Text("Not now") }
+                                                        Column(Modifier.padding(12.dp)) {
+                                                            Text("Serve local AI from this computer", style = MaterialTheme.typography.labelLarge)
+                                                            Text(
+                                                                "This machine may be able to run small AI models and offer them " +
+                                                                    "in huginn's chat menus — private, on your own hardware. " +
+                                                                    "Setting up shows the exact plan before anything downloads.",
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                            )
+                                                            Row(
+                                                                horizontalArrangement = Arrangement.End,
+                                                                modifier = Modifier.fillMaxWidth(),
+                                                            ) {
+                                                                TextButton(onClick = {
+                                                                    act { store.settings.setLocalOfferSeen() }
+                                                                    SetupHost.ifReady { it.openAt(SetupStep.LOCAL_AI) }
+                                                                }) { Text("Set up") }
+                                                                TextButton(onClick = {
+                                                                    act { store.settings.setLocalOfferSeen() }
+                                                                }) { Text("Not now") }
+                                                            }
+                                                        }
                                                     }
                                                 }
+                                                Box(Modifier.weight(1f)) {
+                                                    ChatsList(
+                                                        chats = chats,
+                                                        loaded = loaded,
+                                                        activeId = chatId,
+                                                        selection = chatSel,
+                                                        onSelect = { chatSel = it },
+                                                        onOpen = { store.openChat(it) },
+                                                        onNew = { mode ->
+                                                            act {
+                                                                val made = store.client.createChat(mode)
+                                                                store.openChat(made.id)
+                                                                store.refreshChats()
+                                                            }
+                                                        },
+                                                        onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
+                                                            { act { store.startLocalChat() } }
+                                                        } else {
+                                                            null
+                                                        },
+                                                        verbs = chatVerbs,
+                                                        rows = chatRows,
+                                                    )
+                                                }
                                             }
-                                        }
-                                        Box(Modifier.weight(1f)) {
-                                            ChatsList(
-                                                chats = chats,
-                                                loaded = loaded,
-                                                activeId = chatId,
-                                                selection = chatSel,
-                                                onSelect = { chatSel = it },
-                                                onOpen = { store.openChat(it) },
-                                                onNew = { mode ->
-                                                    act {
-                                                        val made = store.client.createChat(mode)
-                                                        store.openChat(made.id)
-                                                        store.refreshChats()
-                                                    }
-                                                },
-                                                onNewLocal = if (devices.any { it.scope == "generate" && it.online }) {
-                                                    { act { store.startLocalChat() } }
-                                                } else {
-                                                    null
-                                                },
-                                                verbs = chatVerbs,
-                                                rows = chatRows,
-                                            )
-                                        }
-                                    }
-                                    View.SCRATCHPADS -> ScratchpadsList(store)
-                                    View.PROJECTS -> ProjectsList(store)
-                                    View.SETTINGS -> SettingsNavPane(store, settingsPane)
-                                    // The same card as the chat list's, in the same
-                                    // place: whichever list is open says it.
-                                    View.SESSIONS -> Column(Modifier.fillMaxSize()) {
-                                        updateNotice?.let { ready -> UpdateNotice(store, ready) { copy(it) } }
-                                        Box(Modifier.weight(1f)) {
-                                            SessionsList(
-                                                sessions = listedSessions,
-                                                inProjects = sessionSplit.inProjects.size,
-                                                projectCount = projects.size,
-                                                onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
-                                                loaded = sessionsLoaded,
-                                                activeName = sessionName,
-                                                selection = sessionSel,
-                                                onSelect = { sessionSel = it },
-                                                onOpen = { if (sessionAddressable(it)) store.openSession(it) },
-                                                onNew = { namingSession = true },
-                                                verbs = sessionVerbs,
-                                                archives = if (archiveAvailable == true) archives else emptyList(),
-                                                archiveAvailable = archiveAvailable,
-                                                onRevive = { row -> act { store.reviveArchive(row) } },
-                                                onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { copy(it) } },
-                                                onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
-                                                // READ it without bringing it back: the
-                                                // detail pane, read only, no decision made.
-                                                onViewArchive = { store.openArchive(it) },
-                                            )
+                                            View.SCRATCHPADS -> ScratchpadsList(store)
+                                            View.PROJECTS -> ProjectsList(store)
+                                            View.SETTINGS -> SettingsNavPane(store, settingsPane)
+                                            View.SESSIONS -> Column(Modifier.fillMaxSize()) {
+                                                Box(Modifier.weight(1f)) {
+                                                    SessionsList(
+                                                        sessions = listedSessions,
+                                                        inProjects = sessionSplit.inProjects.size,
+                                                        projectCount = projects.size,
+                                                        onOpenProjects = if (View.PROJECTS in offered) ({ store.openView(View.PROJECTS) }) else null,
+                                                        loaded = sessionsLoaded,
+                                                        activeName = sessionName,
+                                                        selection = sessionSel,
+                                                        onSelect = { sessionSel = it },
+                                                        onOpen = { if (sessionAddressable(it)) store.openSession(it) },
+                                                        onNew = { namingSession = true },
+                                                        verbs = sessionVerbs,
+                                                        archives = if (archiveAvailable == true) archives else emptyList(),
+                                                        archiveAvailable = archiveAvailable,
+                                                        onRevive = { row -> act { store.reviveArchive(row) } },
+                                                        onCopyResume = { row -> ArchiveRules.resumeCommandOf(row)?.let { copy(it) } },
+                                                        onForgetArchive = { confirming = ConfirmTarget.ForgetArchive(it) },
+                                                        // READ it without bringing it back: the
+                                                        // detail pane, read only, no decision made.
+                                                        onViewArchive = { store.openArchive(it) },
+                                                    )
+                                                }
+                                            }
+                                            else -> Unit
                                         }
                                     }
-                                    else -> Unit
                                 }
                             }
                         }
@@ -1101,6 +1107,9 @@ private fun NavRail(
         ) { onSelect(View.SETTINGS) }
     }
 }
+
+/** The list views that announce a parked update with [UpdateNotice]: every list a window can reopen on. */
+internal val UPDATE_NOTICE_VIEWS: Set<View> = setOf(View.CHATS, View.SESSIONS, View.PROJECTS, View.SCRATCHPADS)
 
 /**
  * The shared [UpdateNoticeCard] wired to this app: Install hands the parked file

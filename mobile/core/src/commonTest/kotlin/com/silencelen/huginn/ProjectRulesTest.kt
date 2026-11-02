@@ -447,6 +447,37 @@ class ProjectRulesTest {
         assertEquals(3, ProjectRules.rollup(rows).members)
     }
 
+    /**
+     * ⚠ THE HEADER AND THE ROWS UNDER IT MUST AGREE. The row's counts come off
+     * the list poll and the members off their own fetch; when the two were read
+     * at different moments the header said "1 of 3 working" over three rows
+     * drawn busy. Whichever members the screen shows are what the line counts.
+     */
+    @Test
+    fun `the line over a member list is counted from those members, and from the row only until they load`() {
+        val stale = row(members = 3, alive = 3, busy = 1, waiting = 1)
+        val shown = listOf(
+            live("lead", status = "busy", lead = true),
+            live("db", status = "busy"),
+            live("web", status = "busy"),
+            live("api", status = "busy"),
+        )
+        assertEquals("3 of 3 working", ProjectRules.rollupWords(stale, shown))
+        assertEquals(ProjectRules.rollupWords(shown), ProjectRules.rollupWords(stale, shown), "the same sentence the rows add up to")
+        // Not loaded yet: the daemon's counts are all there is.
+        assertEquals("1 of 3 working · 1 needs you", ProjectRules.rollupWords(stale, null))
+        assertEquals("1 of 3 working · 1 needs you", ProjectRules.rollupWords(stale, emptyList()))
+    }
+
+    @Test
+    fun `a list tick fetches the members of every open disclosure plus the open dashboard, once each`() {
+        assertEquals(listOf<String>(), ProjectRules.membersWanted(emptySet(), null))
+        assertEquals(listOf("a", "b"), ProjectRules.membersWanted(linkedSetOf("a", "b"), null).sorted())
+        assertEquals(listOf("a", "c"), ProjectRules.membersWanted(setOf("a"), "c").sorted())
+        // The open project is also folded open: one request, not two.
+        assertEquals(listOf("a"), ProjectRules.membersWanted(setOf("a"), "a"))
+    }
+
     // --------------------------------------------------------- the manifest
 
     @Test
