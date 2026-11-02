@@ -84,20 +84,6 @@ class ProjectActionReceiver : BroadcastReceiver() {
                 }
                 .onFailure { post(app, projectId, refusalOf(it)) }
 
-            ProjectNotices.VERB_APPROVE_CHANGE -> runCatching { client.approveChange(projectId, rev, token) }
-                .onSuccess { outcome ->
-                    val refusal = outcome.refusal
-                    if (refusal != null) post(app, projectId, refusal, title = "Not approved")
-                    else post(app, projectId, "The roster change is being carried out. The lead has been told.", title = "Approved")
-                }
-                .onFailure { post(app, projectId, refusalOf(it)) }
-
-            ProjectNotices.VERB_DECLINE_CHANGE -> runCatching { client.declineChange(projectId, token.takeIf { it.isNotBlank() }) }
-                .onSuccess {
-                    post(app, projectId, "The roster change was declined. The lead has been told.", title = "Declined")
-                }
-                .onFailure { post(app, projectId, refusalOf(it)) }
-
             ProjectNotices.VERB_SPAWN -> runCatching { client.spawnProject(projectId, rev) }
                 .onSuccess { outcome ->
                     // A refusal stopped everything before a session was made, and

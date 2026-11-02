@@ -71,7 +71,7 @@ class ProjectNoticesTest {
         assertFalse("and never a verb", hostile.actions.any { it.verb.contains("edit", ignoreCase = true) })
         // The bounded set itself, so a third verb cannot be added without this
         // test being edited on purpose.
-        assertEquals(setOf("spawn", "discard", "approve-change", "decline-change"), ProjectNotices.VERBS)
+        assertEquals(setOf("spawn", "discard"), ProjectNotices.VERBS)
     }
 
     /**
@@ -130,7 +130,10 @@ class ProjectNoticesTest {
     }
 
     @Test
-    fun `a roster change carries Approve and Decline with the change's rev`() {
+    fun `a roster change carries NO buttons - the tap opens the project where the text is shown (F1, 2026-11-02)`() {
+        // Approve from the shade approved the lead's task text, which Approve
+        // types into members, without showing a word of it. The notice now
+        // opens the project page, where the card shows the whole text.
         val n = ProjectNotices.fromPush(
             kind = ProjectNotices.KIND_CHANGE,
             title = "",
@@ -141,21 +144,28 @@ class ProjectNoticesTest {
         assertNotNull(n)
         assertEquals("project:p1", n!!.key)
         assertEquals("LoRa proposes a roster change", n.title)
-        assertEquals("Add a tester", n.text)
+        assertEquals("Add a tester Open the project to read the full change and approve it.", n.text)
         assertEquals(3, n.manifestRev)
-        assertEquals(listOf("Approve", "Decline"), n.actions.map { it.label })
-        assertEquals(listOf("approve-change", "decline-change"), n.actions.map { it.verb })
-        assertEquals("the rev rides both buttons", listOf(3, 3), n.actions.map { it.manifestRev })
-        // The CONTENT token rides both too: a block the lead rewrote after this
-        // notification was drawn keeps the rev and moves the token, and the
-        // daemon refuses the stale one instead of applying words nobody read.
-        assertEquals(listOf("9f2c4e1a7b3d5f60", "9f2c4e1a7b3d5f60"), n.actions.map { it.token })
-        val noToken = ProjectNotices.fromPush(kind = ProjectNotices.KIND_CHANGE, title = "", text = "", subject = null, payload = """{"projectId":"p1","rev":"3"}""")
-        assertEquals("no token is sent as none, never guessed", listOf("", ""), noToken!!.actions.map { it.token })
-        // The post has no reply box and no pane answers, like a proposal's.
+        assertEquals("no Approve, no Decline, nothing", emptyList<ProjectNotices.Action>(), n.actions)
+        // However the wire asks: a daemon `options` naming buttons draws none.
+        val hostile = ProjectNotices.fromPush(
+            kind = ProjectNotices.KIND_CHANGE, title = "", text = "", subject = null,
+            payload = """{"projectId":"p1","rev":"3","token":"abcd","options":["Approve","Decline"]}""",
+        )
+        assertEquals(emptyList<ProjectNotices.Action>(), hostile!!.actions)
+        assertFalse("no verb could approve a change from the shade", ProjectNotices.VERBS.any { it.contains("change") })
+        // The daemon's own words are kept when it sent them.
+        val worded = ProjectNotices.fromPush(
+            kind = ProjectNotices.KIND_CHANGE, title = "LoRa — roster change proposed",
+            text = "add tester. Open the project to read the full change and approve it.", subject = "p1", payload = null,
+        )
+        assertEquals("LoRa — roster change proposed", worded!!.title)
+        assertEquals("add tester. Open the project to read the full change and approve it.", worded.text)
+        // The post opens the PROJECT, with no reply box, no pane answers and no buttons.
         val args = ProjectNotices.postArgs(n)
         assertNull(args.replyChat)
         assertNull(args.session)
-        assertEquals(2, args.projectActions.size)
+        assertEquals("p1", args.project)
+        assertEquals(0, args.projectActions.size)
     }
 }

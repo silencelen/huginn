@@ -40,18 +40,29 @@ object PromptDisplay {
 
     /**
      * A character that draws nothing of its own and can move, erase or reverse
-     * what is around it: the C0 controls (except newline and tab, which lay
-     * text out), DEL, the zero-width and bidi marks, the bidi embeddings,
-     * overrides and isolates, and the byte-order mark.
+     * what is around it — or simply hide in front of one that matters: the C0
+     * controls (except newline and tab, which lay text out), DEL, every Unicode
+     * FORMAT character (the zero-width and bidi marks, the bidi embeddings,
+     * overrides and isolates, the soft hyphen, the word joiner U+2060 and the
+     * invisible operators beside it, the deprecated format controls U+206A–206F,
+     * the byte-order mark, the interlinear annotation marks), and the blank
+     * fillers that are letters by category but draw as nothing (the Hangul
+     * fillers, the combining grapheme joiner).
+     *
+     * ⚠ The FORMAT category, not a hand list (security scan 2026-11-02, F2): a
+     * word joiner in front of a `!` was invisible here while the daemon strips it
+     * before the paste, so the card showed a prompt that did not start with `!`
+     * and the pasted bytes did. The daemon's own list (typing.js
+     * ALWAYS_REMOVED_RE) is the set this must cover; the category is a superset.
      */
     fun isHidden(ch: Char): Boolean {
         val c = ch.code
         return (c < 0x20 && ch != '\n' && ch != '\t') ||
             c == 0x7F ||
-            (c in 0x200B..0x200F) ||
-            (c in 0x202A..0x202E) ||
-            (c in 0x2066..0x2069) ||
-            c == 0xFEFF
+            (c in 0x80..0x9F) ||
+            ch.category == CharCategory.FORMAT ||
+            c == 0x034F || c == 0x115F || c == 0x1160 || c == 0x3164 || c == 0xFFA0 ||
+            (c in 0xFFF0..0xFFF8)
     }
 
     /** `⟨U+202E⟩` — the code point, spelled, where the character was. */

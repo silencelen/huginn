@@ -879,7 +879,7 @@ private fun PreviewBlock(spec: AskQuestionSpec, index: Int?) {
  * where re-flowing would lie about the shape.
  */
 @Composable
-private fun WrappedMonoBlock(text: String, maxHeight: Dp) {
+internal fun WrappedMonoBlock(text: String, maxHeight: Dp) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
         modifier = Modifier.fillMaxWidth()) {
         Box(Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState()).padding(8.dp)) {
