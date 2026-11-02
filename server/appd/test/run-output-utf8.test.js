@@ -68,6 +68,10 @@ function runWith(env) {
       // passes its --mcp-config, which the stand-in child ignores.
       outboxLib: require('../lib/outbox'),
       huginnMcpConfig: () => '{"mcpServers":{}}',
+      // start_session (3.17.0): TOOLS names its tool too, and a run watches for
+      // its parked requests, which the stand-in child never makes.
+      sessionreq: require('../lib/sessionreq'),
+      watchChatQuestions: () => {},
       ranOnLabel: () => null,
       WORKDIR: tmp,
       // The stand-in runs where `claude` would, with the argv startRun built.

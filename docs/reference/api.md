@@ -158,10 +158,10 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/sessions/<name>/screen` | The terminal screen. `?cols=&rows=` report your size; `?live=1` also resizes the pane for you (one client at a time holds this lease); `?history=` adds scrollback; `?hash=&wait=` long-polls. |
 | DELETE | `/v1/sessions/<name>/size` | Release your screen-size lease. |
 | GET | `/v1/sessions/<name>/transcript` | The conversation as structured events. `?offset=` continues from a position. A `system` event with a `body` is a headline over a longer text: `fold: "peer"` is a message from another session or a subagent's report, `fold: "compact"` is the summary written after a compaction. A `tool` event from the `send_file` tool carries `file: {id, name, mime, size, image, caption}`, fetched from `/v1/outbox/<id>`. |
-| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?}`: type into the session. `text` alone fills the prompt without sending; add `keys: ["Enter"]` to send. Allowed keys: `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `DC`, `IC`, arrows, `Home`, `End`, `PPage`, `NPage`, `C-a` to `C-z`, `M-a` to `M-z`, `F1` to `F12`. |
+| POST | `/v1/sessions/<name>/keys` | `{text?, keys?, scratchpadId?, shell?}`: type into the session. `text` alone fills the prompt without sending; add `keys: ["Enter"]` to send. `shell: true` runs `text` as a Claude Code **shell-mode** (`!`) command, on purpose: the server types the `!` itself, then the command, then Enter, and accepts the shell-mode submit for that one send; `text` is one line (a leading `!` is dropped), `scratchpadId` is not allowed with it, and the Enter is implied. Without the flag a message that starts with `!`, or a send into a prompt already in shell mode, is refused with `409` and nothing is typed. Allowed keys: `Enter`, `Escape`, `Tab`, `BTab`, `Space`, `BSpace`, `DC`, `IC`, arrows, `Home`, `End`, `PPage`, `NPage`, `C-a` to `C-z`, `M-a` to `M-z`, `F1` to `F12`. |
 | GET | `/v1/sessions/<name>/typing` | What is waiting to be typed into the session, and what holds it. |
-| GET | `/v1/sessions/<name>/questions` | What the session is asking, as requests: `{questions: [{id, kind, toolName, agentId?, agentType?, mcpServer?, input, suggestions?, fingerprint, since, bound, fallback}]}`. `kind` is `ask` (an AskUserQuestion: `input.questions`), `permission` (any other tool: `input` is the tool's own input, `suggestions` what "always allow" would grant) or `plan` (`input.plan`, `input.planFilePath`). `bound` means answerable through the route below; `fallback: "screen"` otherwise. The same list rides `/screen` as `questions`. |
-| POST | `/v1/sessions/<name>/questions/<id>` | Answer one request, with its `fingerprint` (required). An ask: `{answers: {"<question text>": string \| string[]}, annotations?, response?}` with every question answered (a list only for a multi-select). A permission: `{behavior: "allow", updatedPermissions?}` (entries from `suggestions` only) or `{behavior: "deny", message?}`. A plan: `{behavior: "allow", mode?: "auto"}` or `{behavior: "deny", message}`. `200 {ok, via: "hook" \| "keys"}`; `409 {reason: "gone" \| "changed" \| "unbound"}`. |
+| GET | `/v1/sessions/<name>/questions` | What the session is asking, as requests: `{questions: [{id, kind, toolName, agentId?, agentType?, mcpServer?, input, suggestions?, fingerprint, since, bound, fallback}]}`. `kind` is `ask` (an AskUserQuestion: `input.questions`), `permission` (any other tool: `input` is the tool's own input, `suggestions` what "always allow" would grant), `plan` (`input.plan`, `input.planFilePath`) or `session` (Claude asked for a new session with its `start_session` tool: `input: {directory, prompt, name}` — `name` null when it left the choice to you — plus `requester: {sessionName, chatId}` saying who asked and `expiresAt` (ms), an hour after it was asked; after that it is gone). `bound` means answerable through the route below; `fallback: "screen"` otherwise. The same list rides `/screen` as `questions`. |
+| POST | `/v1/sessions/<name>/questions/<id>` | Answer one request, with its `fingerprint` (required). An ask: `{answers: {"<question text>": string \| string[]}, annotations?, response?}` with every question answered (a list only for a multi-select). A permission: `{behavior: "allow", updatedPermissions?}` (entries from `suggestions` only) or `{behavior: "deny", message?}`. A plan: `{behavior: "allow", mode?: "auto"}` or `{behavior: "deny", message}`. A session request: `{behavior: "allow", name?}` creates the session in `input.directory` (named `name`, else the request's name, else after the directory) and queues `input.prompt` to it through the send queue, answering `200 {ok, via: "daemon", started: true, name, cwd, delivered, queued}` — or the create's own `400`/`409` with `error` and the still-waiting `question`, so you can answer again with another `name` or decline; `{behavior: "deny", message?}` answers `200 {ok, via: "daemon", started: false}` and the prompt goes nowhere. Otherwise `200 {ok, via: "hook" \| "keys"}`; `409 {reason: "gone" \| "changed" \| "unbound"}`. |
 | POST | `/v1/sessions/<name>/answer` | `{option, fingerprint}`, or `{options: [...], fingerprint}` for a multiple choice: answer the question on screen by its row number. With a question's `fingerprint` from the registry the answer goes through that request's hook; with the pane's it types the row. `409` (`gone`, `changed`, `undetected`) if that question is gone. |
 | POST | `/v1/sessions/<name>/soft-end` | `{phrase?, auto?, force?}`: ask Claude Code to wrap up, then end the session once it settles. |
 | POST | `/v1/sessions/<name>/compact` | Ask the session to compact its context. |
@@ -195,16 +195,35 @@ else from a status line drawn in the `[name] Model · ctx N%` shape.
 |---|---|---|
 | GET | `/v1/chats` | Chats, newest first. |
 | POST | `/v1/chats` | `{mode: "ask" \| "act", model?, effort?, fast?, title?, host?}`: create a chat; `host` is a device id to run it on instead of the server; `fast` (`true`, `false` or `null`, the default) pins fast mode for its runs, passed to Claude Code as `--settings '{"fastMode":…}'`; `null` leaves the host default (`PATCH /v1/settings/claude`). Returns the chat with its `id` (`201`). |
-| GET | `/v1/chats/<id>` | The chat, its transcript and any text still arriving. |
+| GET | `/v1/chats/<id>` | The chat, its transcript and any text still arriving, and `questions`: what its Claude is asking you (only `session` requests — a chat run draws no dialogs), in the shape of a session's `GET /questions`. |
 | PATCH | `/v1/chats/<id>` | `{title?, model?, effort?, fast?, mode?}`: rename it, or change what the next turn runs with. |
 | DELETE | `/v1/chats/<id>` | Delete it. Refused while a run is active. With `?ifEmpty=1`, deletes it only if nothing was ever sent in it and answers `409` otherwise; the clients send this when the person leaves an empty chat. |
 | POST | `/v1/chats/<id>/messages` | `{text, scratchpadId?}`: send a message. `?stream=1` streams the run; otherwise `202`. A message sent while a run is active is queued. |
-| GET | `/v1/chats/<id>/stream` | `?since=<id>`: reattach to a running run. |
+| GET | `/v1/chats/<id>/stream` | `?since=<id>`: reattach to a running run. Besides the turn's events, a `questions` event (`{questions: [...]}`) whenever the chat's question list changes while the run is alive. |
+| GET | `/v1/chats/<id>/questions` | `{questions: [...]}`: the chat's waiting `session` requests, as above. |
+| POST | `/v1/chats/<id>/questions/<qid>` | Answer one, with its `fingerprint`: the same body and answers as a session's `POST /questions/<id>` for kind `session`. |
 | POST | `/v1/chats/<id>/cancel` | Stop the run. |
 | GET | `/v1/chats/<id>/transcript` | The chat as structured events, like a session's. |
 | GET | `/v1/chats/<id>/suggestions` | Suggested next messages. |
 
 See [Security](../security.md#chats-ask-and-act) for what each mode may do.
+
+#### Claude's own tools
+
+Chats and sessions have huginn's MCP server (`huginn`), two tools whose results the server reads back
+and whose requests it surfaces to you:
+
+- `send_file(path, caption?)` copies a file into the outbox (`GET /v1/outbox/<id>`); the transcript's
+  `tool` event carries `file`.
+- `start_session(directory, prompt, name?)` **asks** you for a new session. The call parks a request
+  that appears as a question of kind `session` on the asking session's card
+  (`GET /v1/sessions/<name>/questions`) or chat (`GET /v1/chats/<id>/questions`), with the directory,
+  the prompt verbatim and the name, and blocks until you answer or an hour passes. The tool returns
+  exactly what the server did: `{"started": true, "name", "cwd"}` after the session was created and
+  the prompt queued to it, else `{"started": false, "reason"}` (`declined` / `declined: <your words>`,
+  `expired`, `cancelled`, `withdrawn`, or why it could not be made). Nothing is started, and the
+  prompt is sent nowhere, unless you approve. The `directory` must be an absolute path to an existing
+  directory on the server (checked when the tool is called and again when you approve).
 
 ### Files
 

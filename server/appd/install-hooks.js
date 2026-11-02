@@ -178,8 +178,12 @@ function parseArgs(argv) {
   return opts;
 }
 
-/** The tool --allow-send-file lets run without a prompt (mcp/huginn-mcp.js). */
+/** The tools --allow-send-file lets run without a prompt (mcp/huginn-mcp.js). */
 const SEND_FILE_TOOL = 'mcp__huginn__send_file';
+// start_session only ASKS the owner (its own card approves the session), so a
+// permission dialog on the tool call itself would be the same question twice.
+const START_SESSION_TOOL = 'mcp__huginn__start_session';
+const HUGINN_TOOLS = [SEND_FILE_TOOL, START_SESSION_TOOL];
 
 /**
  * --allow-send-file: appends the send_file tool to `permissions.allow` when it is
@@ -190,20 +194,23 @@ const SEND_FILE_TOOL = 'mcp__huginn__send_file';
  * exactly as it is - reported, not repaired.
  */
 function applySendFileAllow(settings) {
-  const key = `permissions.allow:${SEND_FILE_TOOL}`;
-  const perms = settings.permissions;
-  if (perms !== undefined && (perms === null || typeof perms !== 'object' || Array.isArray(perms))) {
-    return { settings, changes: [{ key: 'permissions (not an object)', action: 'kept' }] };
+  if (!settings.permissions || typeof settings.permissions !== 'object' || Array.isArray(settings.permissions)) {
+    if (settings.permissions !== undefined) return { settings, changes: [{ key: 'permissions (not an object)', action: 'kept' }] };
+    settings.permissions = {};
   }
-  if (perms === undefined) settings.permissions = {};
   const allow = settings.permissions.allow;
   if (allow !== undefined && !Array.isArray(allow)) {
     return { settings, changes: [{ key: 'permissions.allow (not a list)', action: 'kept' }] };
   }
   if (allow === undefined) settings.permissions.allow = [];
-  if (settings.permissions.allow.includes(SEND_FILE_TOOL)) return { settings, changes: [{ key, action: 'kept' }] };
-  settings.permissions.allow.push(SEND_FILE_TOOL);
-  return { settings, changes: [{ key, action: 'added' }] };
+  const changes = [];
+  for (const tool of HUGINN_TOOLS) {
+    const key = `permissions.allow:${tool}`;
+    if (settings.permissions.allow.includes(tool)) { changes.push({ key, action: 'kept' }); continue; }
+    settings.permissions.allow.push(tool);
+    changes.push({ key, action: 'added' });
+  }
+  return { settings, changes };
 }
 
 /** The settings --claude-defaults adds, each only where the key is absent or null. */
@@ -484,5 +491,5 @@ if (require.main === module) process.exit(main(process.argv.slice(2)));
 
 module.exports = {
   DEFAULT_SCRIPT, TIMEOUT_S, ENTRIES, SCRIPT_SPECS, specFor, mergeHooks, parseArgs, main, isOurCommand,
-  commandFor, scriptOf, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV, applyClaudeDefaults, applySendFileAllow, SEND_FILE_TOOL,
+  commandFor, scriptOf, CLAUDE_DEFAULTS, FEEDBACK_DEFAULTS, FEEDBACK_ENV, applyClaudeDefaults, applySendFileAllow, SEND_FILE_TOOL, START_SESSION_TOOL, HUGINN_TOOLS,
 };

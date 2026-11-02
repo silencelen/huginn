@@ -15,6 +15,16 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A session can be created in a directory of your choice: `POST /v1/sessions` takes `cwd`, which
   must be an existing directory on the server, else the create is refused with the reason.
   `GET /v1/sessions/recent-dirs` lists the directories recent sessions used, for the dialog.
+- Claude can ask for a new session: the `start_session` tool (directory, prompt, optional name) parks
+  a request that shows as a question of kind `session` on the asking session's card
+  (`GET /v1/sessions/<name>/questions`) or chat (`GET /v1/chats/<id>/questions`, `questions` on the
+  chat and its stream), with who asked. Approving it through the question route creates the session
+  in that directory and queues the prompt; declining tells the tool so. The tool blocks until the
+  answer and returns only what the server did; a request expires after an hour.
+- Shell-mode sends: `POST /v1/sessions/<name>/keys` takes `shell: true` to run the text as a Claude
+  Code `!` command — the server types the `!`, the command and Enter. Without it a message that starts
+  with `!` is refused before anything is typed, as a send into a prompt already in shell mode is.
+- `install.sh` also allows the `start_session` tool for sessions (`install-hooks.js --allow-send-file`).
 
 ## 3.16.4 — 2026-11-02
 

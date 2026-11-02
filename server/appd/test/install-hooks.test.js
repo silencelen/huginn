@@ -549,17 +549,26 @@ test('an upgrade rewrites a hook timeout that changed between versions, and says
   assert.match(stdout, /repaired PermissionRequest/);
 });
 
-// --allow-send-file: the one permission rule huginn's send_file tool needs.
-test('--allow-send-file appends the rule once, keeps everything else, and leaves a bad shape alone', () => {
-  const { applySendFileAllow, SEND_FILE_TOOL } = require('../install-hooks');
+// --allow-send-file: the permission rules huginn's own tools need — send_file,
+// and start_session, whose only act is to ask the owner on a card.
+test('--allow-send-file appends the rules once, keeps everything else, and leaves a bad shape alone', () => {
+  const { applySendFileAllow, SEND_FILE_TOOL, START_SESSION_TOOL, HUGINN_TOOLS } = require('../install-hooks');
   assert.equal(SEND_FILE_TOOL, require('../lib/outbox').SEND_FILE_TOOL, 'one name for the tool');
+  assert.equal(START_SESSION_TOOL, require('../lib/sessionreq').START_SESSION_TOOL, 'one name for the tool');
+  assert.deepEqual(HUGINN_TOOLS, [SEND_FILE_TOOL, START_SESSION_TOOL]);
   const s = { permissions: { allow: ['Bash(ls:*)'], deny: ['mcp__huginn__send_file'] }, model: 'opus' };
-  assert.deepEqual(applySendFileAllow(s).changes, [{ key: `permissions.allow:${SEND_FILE_TOOL}`, action: 'added' }]);
-  assert.deepEqual(s, { permissions: { allow: ['Bash(ls:*)', SEND_FILE_TOOL], deny: ['mcp__huginn__send_file'] }, model: 'opus' });
-  assert.equal(applySendFileAllow(s).changes[0].action, 'kept', 'a second run changes nothing');
+  assert.deepEqual(applySendFileAllow(s).changes, [
+    { key: `permissions.allow:${SEND_FILE_TOOL}`, action: 'added' },
+    { key: `permissions.allow:${START_SESSION_TOOL}`, action: 'added' },
+  ]);
+  assert.deepEqual(s, { permissions: { allow: ['Bash(ls:*)', SEND_FILE_TOOL, START_SESSION_TOOL], deny: ['mcp__huginn__send_file'] }, model: 'opus' });
+  assert.ok(applySendFileAllow(s).changes.every((c) => c.action === 'kept'), 'a second run changes nothing');
+  // A host set up before start_session existed gets only the rule it lacks.
+  const older = { permissions: { allow: [SEND_FILE_TOOL] } };
+  assert.deepEqual(applySendFileAllow(older).changes.map((c) => c.action), ['kept', 'added']);
   const empty = {};
   applySendFileAllow(empty);
-  assert.deepEqual(empty, { permissions: { allow: [SEND_FILE_TOOL] } });
+  assert.deepEqual(empty, { permissions: { allow: [SEND_FILE_TOOL, START_SESSION_TOOL] } });
   const odd = { permissions: { allow: 'Bash' } };
   assert.equal(applySendFileAllow(odd).changes[0].action, 'kept');
   assert.deepEqual(odd, { permissions: { allow: 'Bash' } }, 'reported, not repaired');
@@ -571,6 +580,6 @@ test('--allow-send-file writes through main and refuses to be combined', () => {
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ hooks: {} }));
   assert.equal(main(['--allow-send-file', '--settings', file]), 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow, ['mcp__huginn__send_file']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow, ['mcp__huginn__send_file', 'mcp__huginn__start_session']);
   assert.throws(() => parseArgs(['--allow-send-file', '--uninstall']), /runs on its own/);
 });
