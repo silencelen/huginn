@@ -570,11 +570,20 @@ fun QuestionCard(
 
 /**
  * Claude asked for a NEW SESSION (`start_session`, appd 3.17): where it would
- * run, the prompt it would be given VERBATIM (scrolling inside the card's cap,
- * never summarised — the person is approving exactly these words), the name
- * Claude suggested (editable; blank leaves the choice to the daemon), who asked
- * and when the request lapses. Start answers `allow` with the name as edited;
- * Decline opens the same "tell Claude why" line a permission's No has.
+ * run, the prompt it would be given (every character, scrolling inside the
+ * card's cap, never summarised — the person is approving exactly these words),
+ * the name Claude suggested (editable; blank leaves the choice to the daemon),
+ * who asked and when the request lapses. Start answers `allow` with the name as
+ * edited; Decline opens the same "tell Claude why" line a permission's No has.
+ *
+ * ⚠ THE PROMPT IS SHOWN AS [PromptDisplay.visible] AND WRAPPED (security scan
+ * 2026-11-02, F2). The prompt is Claude's words, and Claude may be prompt-
+ * injected; the tap on Start is the only gate. A block that scrolled sideways
+ * let 300 spaces push the real instruction off the right edge, where nobody
+ * read it. So the block wraps inside the card and scrolls only down, control
+ * and bidi characters are spelled out, a run of whitespace is one visible gap,
+ * and the prompt's size is said beside Start. The prompt the daemon SENDS is
+ * untouched — this answer carries no prompt; only what is drawn is transformed.
  *
  * A create refusal (the name is taken, the directory is gone) comes back as
  * [note] with the question still waiting, so the card stays up and the name
@@ -617,9 +626,12 @@ private fun SessionQuestionCard(
             Spacer(Modifier.height(6.dp))
             Text("The first message it would get", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            // VERBATIM, in the mono block: scrolls inside its cap, never clipped
-            // to a line count, never re-flowed. The person is approving these words.
-            Box(Modifier.testTag("question.session.prompt")) { MonoBlock(prompt, maxHeight = SESSION_PROMPT_FOLD_HEIGHT) }
+            // Every character, in a block that WRAPS: scrolls down inside its cap,
+            // never sideways, never clipped to a line count. The person is
+            // approving these words, so none may sit past the edge.
+            Box(Modifier.testTag("question.session.prompt")) {
+                WrappedMonoBlock(PromptDisplay.visible(prompt), maxHeight = SESSION_PROMPT_FOLD_HEIGHT)
+            }
         }
         OutlinedTextField(
             value = draft.name, onValueChange = { onDraft(draft.copy(name = it)) },
@@ -629,7 +641,7 @@ private fun SessionQuestionCard(
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.name"),
         )
         Spacer(Modifier.height(6.dp))
-        OptionLayout(wrap = true) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
                 onClick = { onAnswer(QuestionAnswers.sessionBody(allow = true, name = draft.name)) },
                 enabled = !answering, modifier = Modifier.testTag("question.session.start"),
@@ -638,6 +650,17 @@ private fun SessionQuestionCard(
                 onClick = { onDraft(draft.copy(noOpen = !draft.noOpen)) },
                 enabled = !answering, modifier = Modifier.testTag("question.session.decline"),
             ) { Text("Decline") }
+            // The size of what Start sends, beside Start: a prompt padded to
+            // hide something is at least visibly long.
+            if (prompt != null) {
+                Text(
+                    PromptDisplay.countsLine(prompt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).testTag("question.session.counts"),
+                )
+            }
         }
         if (draft.noOpen) {
             OutlinedTextField(
@@ -846,6 +869,23 @@ private fun PreviewBlock(spec: AskQuestionSpec, index: Int?) {
             }
         }
         if (open) MonoBlock(preview)
+    }
+}
+
+/**
+ * A folded monospace block that WRAPS: capped height, scrolls down only, every
+ * character inside the card's width. For text a person is approving — nothing
+ * can be pushed past the right edge. [MonoBlock] is for diffs and previews,
+ * where re-flowing would lie about the shape.
+ */
+@Composable
+private fun WrappedMonoBlock(text: String, maxHeight: Dp) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp),
+        modifier = Modifier.fillMaxWidth()) {
+        Box(Modifier.fillMaxWidth().heightIn(max = maxHeight).verticalScroll(rememberScrollState()).padding(8.dp)) {
+            Text(text, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                softWrap = true, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
 

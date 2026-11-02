@@ -17,6 +17,15 @@
   effort, directory), re-roled, or asked to wrap up, and one asked reads "winding down". The
   `project_change` push carries Approve and Decline.
 
+### Security
+- Approve and Decline on a roster change, on the card and on the notification, send the change's
+  content token with the rev, so a proposal the lead rewrote after the card was drawn is refused and
+  redrawn rather than approved.
+- The new-session card wraps the prompt inside the card (no sideways scroll), spells out control and
+  bidi characters, collapses a run of three or more spaces to a visible gap, and says the prompt's
+  lines and characters beside Start, so no part of a Claude-written prompt can sit off-screen. The
+  prompt sent is unchanged.
+
 ## 3.15.1 — 2026-11-02
 
 ### Fixed
