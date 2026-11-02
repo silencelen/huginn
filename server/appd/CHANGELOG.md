@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.17.0 — 2026-11-02
 
 ### Added
 - A session can be created in a directory of your choice: `POST /v1/sessions` takes `cwd`, which
