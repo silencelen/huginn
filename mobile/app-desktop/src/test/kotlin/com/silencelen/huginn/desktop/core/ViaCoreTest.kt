@@ -128,7 +128,15 @@ class ViaCoreTest {
             }
             redirectErrorStream(true); redirectOutput(tmp.resolve("core.log").toFile())
         }.start()
-        repeat(100) { if (Files.exists(sock)) return; Thread.sleep(50) }
+        // 30 s, not 5: on a loaded build host (other sessions' Gradle runs) a cold
+        // core took longer than 5 s to open its socket and failed a release gate
+        // (2026-11-01). A core that EXITS is still reported at once.
+        val started = core!!
+        repeat(600) {
+            if (Files.exists(sock)) return
+            if (!started.isAlive) fail("the core exited (${started.exitValue()}) before opening its socket: " + tmp.resolve("core.log").toFile().readText())
+            Thread.sleep(50)
+        }
         fail("the core never opened its socket: " + tmp.resolve("core.log").toFile().readText())
     }
 
