@@ -71,6 +71,9 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import com.silencelen.huginn.desktop.update.UpdateState
 import com.silencelen.huginn.update.UpdateReminder
+import com.silencelen.huginn.ui.DashboardBook
+import com.silencelen.huginn.desktop.update.parkedThrough
+import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -119,12 +122,7 @@ enum class View {
  * And it never goes BACKWARDS: an answer older than the one on screen is a poll
  * that overtook its predecessor, not news.
  */
-fun dashboardMoved(held: ProjectDashboard?, fresh: ProjectDashboard): Boolean {
-    if (held == null) return true
-    if (held.project?.id != fresh.project?.id) return true
-    if (fresh.generatedAt <= 0L || held.generatedAt <= 0L) return true
-    return fresh.generatedAt > held.generatedAt
-}
+fun dashboardMoved(held: ProjectDashboard?, fresh: ProjectDashboard): Boolean = DashboardBook.moved(held, fresh)
 
 /**
  * App-level state: navigation, the two lists, the status snapshot, and the watch
@@ -148,6 +146,15 @@ class AppStore(
      * route book (Settings > Host shows it).
      */
     val link: CoreBoot.Outcome = CoreBoot.Outcome.Direct("not decided (a test)"),
+    /**
+     * The self-updater. Deliberately NOT handed [settings]' base URL: it pulls
+     * from the pinned public GitHub repo (GithubReleases.REPO), because these
+     * builds are unsigned and whoever controls the feed controls what runs on
+     * this machine — so the source is a compile-time constant, never a setting.
+     * It downloads and verifies (sha256); INSTALLING is a button, never a
+     * background decision. A parameter only so a test can drive its state.
+     */
+    val updater: DesktopUpdater = DesktopUpdater(),
 ) {
     /**
      * The core carries the traffic - from the start (the link above), or from the
@@ -274,16 +281,6 @@ class AppStore(
         },
     )
 
-    /**
-     * The self-updater. Deliberately NOT handed [settings]' base URL: it pulls
-     * from the pinned public GitHub repo (GithubReleases.REPO), because these
-     * builds are unsigned and whoever controls the feed controls what runs on
-     * this machine — so the source is a compile-time constant, never a setting.
-     * It downloads and verifies (sha256); INSTALLING is a button, never a
-     * background decision.
-     */
-    val updater = DesktopUpdater()
-
     // ------------------------------------------------------------ update notice
     //
     // The updater parks a verified file and stops; these decide who is TOLD.
@@ -304,11 +301,26 @@ class AppStore(
     /** Settings > Updates: reminders back on for whatever is parked. */
     fun updateUnsilence() = settings.setUpdateSilencedVersion(null)
 
+    /**
+     * The parked update as the announcing surfaces see it: the last
+     * [UpdateState.Ready], KEPT THROUGH A RE-CHECK ([parkedThrough]).
+     *
+     * ⚠ THE UPDATER READS `Checking` EVERY FOUR HOURS, and for as long as GitHub
+     * takes to answer. Read straight off `updater.state`, the card and the rail
+     * dot vanished on every tick and came back when the pass settled — a notice
+     * that blinks out is one the reader learns to doubt (owner, 2026-11-01). The
+     * pass itself keeps the parked file (`DesktopUpdater.check` re-settles it),
+     * so the surfaces keep the version until the pass says otherwise.
+     */
+    private val updateParked: StateFlow<UpdateState.Ready?> = updater.state
+        .runningFold(null as UpdateState.Ready?) { held, state -> parkedThrough(held, state) }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
     /** The verified update the lists announce with a card (UpdateReminder.show), or null. */
     val updateNotice: StateFlow<UpdateState.Ready?> = combine(
-        updater.state, _updateLater, settings.updateSilencedVersion, settings.updateNotify,
-    ) { state, later, silenced, notify ->
-        (state as? UpdateState.Ready)?.takeIf { UpdateReminder.show(it.version, later, silenced, notify) }
+        updateParked, _updateLater, settings.updateSilencedVersion, settings.updateNotify,
+    ) { parked, later, silenced, notify ->
+        parked?.takeIf { UpdateReminder.show(it.version, later, silenced, notify) }
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -317,9 +329,9 @@ class AppStore(
      * take them down.
      */
     val updateMark: StateFlow<UpdateState.Ready?> = combine(
-        updater.state, settings.updateSilencedVersion, settings.updateNotify,
-    ) { state, silenced, notify ->
-        (state as? UpdateState.Ready)?.takeIf { UpdateReminder.mark(it.version, silenced, notify) }
+        updateParked, settings.updateSilencedVersion, settings.updateNotify,
+    ) { parked, silenced, notify ->
+        parked?.takeIf { UpdateReminder.mark(it.version, silenced, notify) }
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
@@ -981,8 +993,22 @@ class AppStore(
     private val _project = MutableStateFlow<Project?>(null)
     val project: StateFlow<Project?> = _project.asStateFlow()
 
+    /**
+     * The rollup drawn in the detail pane: the open project's, from [dashboards].
+     *
+     * Null only for a project that has never answered. A walk into a project
+     * draws what it last said at once and the refetch replaces it when it lands —
+     * it used to be nulled on every walk and the pane read "Nothing to show yet."
+     * until the next five-second tick (owner, 2026-11-01).
+     */
     private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
     val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
+
+    /** The last rollup each project answered with — see [DashboardBook]. */
+    private val dashboards = DashboardBook()
+
+    /** Set by [start]: the one place a walk may ask the daemon at once (tests never start). */
+    @Volatile private var started = false
 
     /**
      * The daemon's last refusal about the open project, shown VERBATIM.
@@ -1002,17 +1028,25 @@ class AppStore(
     /** Open a project's dashboard. Clears any member the pane was showing. */
     fun openProject(id: String?) {
         _view.value = View.PROJECTS
-        if (_projectId.value != id) {
-            // The held rollup belongs to the project that is leaving. Kept, it
-            // would draw the previous cluster's numbers under the new one's name
-            // for a whole poll — and `adoptDashboard` would then be comparing
-            // stamps across two different projects.
-            _projectDashboard.value = null
+        val moved = _projectId.value != id
+        if (moved) {
+            // The rollup on screen belongs to the project that is leaving. What
+            // the NEW one last said is drawn in its place at once — null only
+            // when it has never answered — rather than nothing for a whole poll.
+            _projectDashboard.value = dashboards.held(id)
             _project.value = null
             _projectRefusal.value = null
         }
         _projectId.value = id
         _projectMember.value = null
+        // And asked NOW, not at the next tick: the poll is five seconds apart
+        // and a reader who clicked is looking at the pane during all of them.
+        if (moved && id != null && started) {
+            scope.launch {
+                refreshProjectMembers()
+                refreshProjectDashboard()
+            }
+        }
     }
 
     /** Show one member's ordinary session detail, without leaving Projects. */
@@ -1049,6 +1083,7 @@ class AppStore(
                 val alive = list.projects.map { it.id }.toSet()
                 _projectsExpanded.value = _projectsExpanded.value.filterTo(mutableSetOf()) { it in alive }
                 _projectMembers.value = _projectMembers.value.filterKeys { it in alive }
+                dashboards.retain(alive)
                 if (_projectId.value != null && _projectId.value !in alive) openProject(null)
             }
     }
@@ -1063,7 +1098,7 @@ class AppStore(
      * asking for exactly the requests they get.
      */
     suspend fun refreshProjectMembers() {
-        val wanted = (_projectsExpanded.value + listOfNotNull(_projectId.value)).toList()
+        val wanted = ProjectRules.membersWanted(_projectsExpanded.value, _projectId.value)
         if (wanted.isEmpty()) return
         val fetched = mutableMapOf<String, List<ProjectLive>>()
         for (id in wanted) {
@@ -1093,7 +1128,11 @@ class AppStore(
     suspend fun refreshProjectDashboard(fetch: suspend (String) -> ProjectDashboard = { client.projectDashboard(it) }) {
         val id = _projectId.value ?: return
         runCatching { fetch(id) }.onSuccess { d ->
-            if (id == _projectId.value && (d.project?.id ?: id) == id) adoptDashboard(d)
+            if ((d.project?.id ?: id) != id) return@onSuccess
+            // Kept for the project it is ABOUT even when the reader has walked
+            // on: that is what the walk back draws at once.
+            val taken = dashboards.adopt(id, d)
+            if (taken && id == _projectId.value) _projectDashboard.value = d
         }
     }
 
@@ -1109,7 +1148,8 @@ class AppStore(
      * @return whether the screen took it.
      */
     internal fun adoptDashboard(fresh: ProjectDashboard): Boolean {
-        if (!dashboardMoved(_projectDashboard.value, fresh)) return false
+        val id = _projectId.value ?: fresh.project?.id ?: return false
+        if (!dashboards.adopt(id, fresh)) return false
         _projectDashboard.value = fresh
         return true
     }
@@ -2364,6 +2404,7 @@ class AppStore(
      * composition; each loop lives as long as [scope].
      */
     fun start() {
+        started = true
         scope.launch { drafts.load() }
         scope.launch { sentHistory.load() }
         scope.launch { resolveRoute() }

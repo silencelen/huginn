@@ -220,6 +220,36 @@ class ProjectsViewsTest {
         assertEquals("Status page flap · 1 of 2 working · 1 needs you · as of 10m ago", dashboardCaption(d, nowMs))
     }
 
+    /**
+     * ⚠ THE HEADER IS COUNTED FROM THE ROWS UNDER IT. The daemon's list-side
+     * counts on the row and the member list were summed at different moments, and
+     * the header said "1 of 3 working" over three rows drawn busy (owner,
+     * 2026-11-01). Whatever the rows add up to is what the line says; the row's
+     * counts are the fallback while the member list is empty.
+     */
+    @Test
+    fun `the heading and the member rows under it agree, whatever the row's counts say`() {
+        val d = ProjectDashboard(
+            project = row(members = 3, alive = 3, busy = 1, waiting = 1),
+            generatedAt = 0,
+            members = listOf(dashMember("db", "busy"), dashMember("web", "busy"), dashMember("api", "busy")),
+        )
+        assertEquals("Status page flap · 3 of 3 working", dashboardCaption(d, nowMs))
+        assertEquals(ProjectRules.rollupWords(d.members), "3 of 3 working", "the rows' own sum")
+    }
+
+    @Test
+    fun `the list row's line is counted from its loaded members, and from the row until then`() {
+        val stale = row(members = 3, alive = 3, busy = 1, waiting = 1, cwd = "")
+        fun live(role: String) = com.silencelen.huginn.data.ProjectLive(
+            role = role, name = "statusflap-$role", claudeName = "statusflap/$role",
+            present = true, alive = true, status = "busy", state = "busy",
+        )
+        assertEquals("1 of 3 working · 1 needs you", projectSubtitle(stale, nowMs))
+        assertEquals("1 of 3 working · 1 needs you", projectSubtitle(stale, nowMs, members = null), "not loaded yet")
+        assertEquals("3 of 3 working", projectSubtitle(stale, nowMs, members = listOf(live("db"), live("web"), live("api"))))
+    }
+
     @Test
     fun `a member's line says what it is doing and what is waiting on it`() {
         assertEquals("working · 10m ago", memberSubtitle(dashMember("db", "busy"), nowMs))

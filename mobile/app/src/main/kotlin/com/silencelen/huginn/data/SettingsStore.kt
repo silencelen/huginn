@@ -194,6 +194,7 @@ class SettingsStore(private val context: Context) : HuginnSettings {
         private val TLS_PINS = stringPreferencesKey("tls_pins")
         private val FONT_SCALE = floatPreferencesKey("terminal_font_sp")
         private val NOTIFY = booleanPreferencesKey("notify_attention")
+        private val UPDATE_SILENCED = stringPreferencesKey("update_silenced_version")
         private val NOTIFIED = stringSetPreferencesKey("notified_sessions")
         private val RUNNING_CHATS = stringSetPreferencesKey("running_chats")
         private val WATCH = booleanPreferencesKey("watch_continuously")
@@ -431,6 +432,14 @@ class SettingsStore(private val context: Context) : HuginnSettings {
 
     override val notifyEnabled: Flow<Boolean> = prefs.map { it[NOTIFY] ?: true }
 
+    /**
+     * The update version answered with "Don't remind me" on the chats list's
+     * notice card, or null. Persisted and exact: the next release is a new
+     * decision (`UpdateReminder.silencedVersion`). Later is this run's and lives
+     * in the view model.
+     */
+    val updateSilencedVersion: Flow<String?> = prefs.map { it[UPDATE_SILENCED]?.takeIf { v -> v.isNotBlank() } }
+
     /** Continuous watching via the foreground service, rather than a 15-minute poll. */
     override val watchEnabled: Flow<Boolean> = prefs.map { it[WATCH] ?: false }
 
@@ -509,6 +518,10 @@ class SettingsStore(private val context: Context) : HuginnSettings {
 
     override suspend fun setNotifyEnabled(value: Boolean) {
         context.dataStore.edit { it[NOTIFY] = value }
+    }
+
+    suspend fun setUpdateSilencedVersion(value: String?) {
+        context.dataStore.edit { if (value.isNullOrBlank()) it.remove(UPDATE_SILENCED) else it[UPDATE_SILENCED] = value }
     }
 
     override suspend fun setNotifiedSessions(value: Set<String>) {

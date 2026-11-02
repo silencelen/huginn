@@ -55,6 +55,22 @@ sealed interface UpdateState {
 }
 
 /**
+ * What the announcing surfaces (the list card, the rail dot, the tray row) hold
+ * after the updater moves to [state], given what they [held].
+ *
+ * A re-check reads [UpdateState.Checking] for as long as GitHub takes to answer,
+ * every four hours; the parked file is still on disk and `check()` re-settles it
+ * when the pass ends. So Checking KEEPS the held version. Everything else is the
+ * pass's own verdict and replaces it: a new Ready, or nothing (up to date, an
+ * error, a download of something newer, idle).
+ */
+fun parkedThrough(held: UpdateState.Ready?, state: UpdateState): UpdateState.Ready? = when (state) {
+    is UpdateState.Ready -> state
+    UpdateState.Checking -> held
+    else -> null
+}
+
+/**
  * Checks the pinned public GitHub repo on launch and every four hours, downloads
  * a newer build, verifies the hash the release manifest carries, and stops.
  *

@@ -76,6 +76,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.first
@@ -582,6 +583,42 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun downloadUpdate() { viewModelScope.launch { updater.download() } }
     fun installUpdate() {
         if (!updater.install()) _toast.value = "Could not start the installer"
+    }
+
+    // ------------------------------------------------------------ update notice
+    //
+    // The card at the top of the chats list. The rule is `UpdateReminder` in
+    // :core, read through `phoneUpdateNotice`; these are its inputs: the updater's
+    // state, "Later" (this run only, so it lives here and nowhere on disk) and the
+    // persisted "Don't remind me" version. The check itself is made ONCE at
+    // launch (`UpdateLaunchCheck`, below in init) and never downloads.
+
+    private val launchCheck = com.silencelen.huginn.update.UpdateLaunchCheck()
+    private val _updateLater = MutableStateFlow<String?>(null)
+    private val _updateSilenced = MutableStateFlow<String?>(null)
+
+    /** What the chats list announces, or null — see [com.silencelen.huginn.update.phoneUpdateNotice]. */
+    val updateNotice: StateFlow<com.silencelen.huginn.update.PhoneUpdateNotice?> = combine(
+        updater.state, _updateLater, _updateSilenced,
+    ) { state, later, silenced -> com.silencelen.huginn.update.phoneUpdateNotice(state, later, silenced) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** "Later": this version stays off the card until the app is next launched. */
+    fun updateLater(version: String) { _updateLater.value = version }
+
+    /** "Don't remind me": this version stays off the card until a newer one is found. */
+    fun updateSilence(version: String) {
+        _updateSilenced.value = version
+        viewModelScope.launch { settings.setUpdateSilencedVersion(version) }
+    }
+
+    /** The notice card's button: the step the updater is at — download, or install. */
+    fun updateNoticeAct(notice: com.silencelen.huginn.update.PhoneUpdateNotice) {
+        when (notice.action) {
+            is com.silencelen.huginn.update.PhoneUpdateNotice.Action.Download -> downloadUpdate()
+            is com.silencelen.huginn.update.PhoneUpdateNotice.Action.Downloading -> Unit
+            com.silencelen.huginn.update.PhoneUpdateNotice.Action.Install -> installUpdate()
+        }
     }
 
     // ---- shared UI state
@@ -1229,6 +1266,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             _health.value = readHealth()
             _appLock.value = settings.appLock.first()
             _listCollapsed.value = settings.listCollapsed.first()
+            _updateSilenced.value = settings.updateSilencedVersion.first()
             _routeBook.value = settings.routeBook.first()
             // ⚠ BEFORE THE FIRST resolveRoute BELOW. With an empty map every cold
             // start skips the hysteresis and takes the first address that answers
@@ -1254,6 +1292,10 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 HuginnMessagingService.syncToken(getApplication())
                 if (_watchEnabled.value) WatchService.start(getApplication())
             }
+            // Once, check only: a found release shows on the chats list; the
+            // download and the install stay the owner's taps. Not gated on a
+            // token — the release feed is GitHub, not the daemon.
+            launch { launchCheck.runOnce { updater.check() } }
         }
     }
 
@@ -2540,8 +2582,39 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _projectDetail = MutableStateFlow<ProjectDetail?>(null)
     val projectDetail: StateFlow<ProjectDetail?> = _projectDetail.asStateFlow()
 
+    /**
+     * The rollup the dashboard screen draws: the open project's, from [dashboards].
+     * Null only for a project that has never answered — a walk back into one
+     * draws what it last said at once, and the refetch replaces it when it lands.
+     * It used to be nulled on every open and the screen read "Nothing to show
+     * yet." until the next five-second tick (owner, 2026-11-01).
+     */
     private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
     val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
+
+    /** The last rollup each project answered with — see [DashboardBook]. */
+    private val dashboards = DashboardBook()
+
+    /** The project the dashboard screen is showing, by id; what the list tick also fetches members for. */
+    private var dashboardId: String? = null
+
+    /**
+     * The project rows folded open in the list. Held HERE, not in the screen,
+     * because the list poll re-fetches the members of every open one each tick
+     * ([refreshProjectMembers]): the rows' counts and the member rows under them
+     * used to be read at different moments — members once, on open; counts every
+     * ten seconds — and disagreed (owner, 2026-11-01).
+     */
+    private val _projectsExpanded = MutableStateFlow<Set<String>>(emptySet())
+    val projectsExpanded: StateFlow<Set<String>> = _projectsExpanded.asStateFlow()
+
+    /** Fold a row open or shut; opening fetches its members at once. */
+    fun toggleProject(id: String) {
+        val open = _projectsExpanded.value
+        val opening = id !in open
+        _projectsExpanded.value = if (opening) open + id else open - id
+        if (opening) fetchProjectMembers(id)
+    }
 
     /**
      * The daemon's last refusal about a project, VERBATIM.
@@ -2604,7 +2677,30 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 // longer draws.
                 val live = list.projects.map { it.id }.toSet()
                 _projectMembers.value = _projectMembers.value.filterKeys { it in live }
+                _projectsExpanded.value = _projectsExpanded.value.filterTo(mutableSetOf()) { it in live }
+                dashboards.retain(live)
             }
+    }
+
+    /**
+     * The members of the projects folded open, plus the one whose dashboard is
+     * on screen — the desktop's `refreshProjectMembers`, same set
+     * ([ProjectRules.membersWanted]). One GET each, every list tick, so the
+     * member rows move with the counts over them.
+     */
+    private suspend fun refreshProjectMembers() {
+        val wanted = ProjectRules.membersWanted(_projectsExpanded.value, dashboardId)
+        if (wanted.isEmpty()) return
+        val fetched = mutableMapOf<String, List<ProjectLive>>()
+        for (id in wanted) {
+            runCatching { client.project(id) }.onSuccess { d ->
+                fetched[id] = d.live
+                if (_projectDetail.value?.project?.id == id) _projectDetail.value = d
+            }
+        }
+        // MERGED, not replaced: a project whose fetch failed this pass keeps the
+        // membership it had rather than collapsing to "not loaded yet".
+        if (fetched.isNotEmpty()) _projectMembers.value = _projectMembers.value + fetched
     }
 
     private suspend fun landApps() {
@@ -2634,6 +2730,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             awaitReady()
             while (isActive) {
                 landProjects()
+                refreshProjectMembers()
                 delay(10_000)
             }
         }
@@ -2696,13 +2793,18 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun startDashboardPolling(id: String) {
         dashboardJob?.cancel()
-        val cursor = DashboardCursor()
-        _projectDashboard.value = null
+        dashboardId = id
+        // What this project last said, drawn at once; null only when it never has.
+        _projectDashboard.value = dashboards.held(id)
         dashboardJob = viewModelScope.launch {
             awaitReady()
             while (isActive) {
                 runCatching { client.projectDashboard(id) }
-                    .onSuccess { if (cursor.accept(it)) _projectDashboard.value = it }
+                    .onSuccess { d ->
+                        if ((d.project?.id ?: id) == id && dashboards.adopt(id, d) && dashboardId == id) {
+                            _projectDashboard.value = d
+                        }
+                    }
                 delay(5_000)
             }
         }
@@ -2711,6 +2813,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun stopDashboardPolling() {
         dashboardJob?.cancel()
         dashboardJob = null
+        dashboardId = null
     }
 
     /**

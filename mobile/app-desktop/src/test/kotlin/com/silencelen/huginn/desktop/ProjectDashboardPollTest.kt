@@ -127,4 +127,35 @@ class ProjectDashboardPollTest {
         // and `dashboardMoved` would be comparing stamps across two projects.
         assertEquals(null, s.projectDashboard.value, "the previous cluster's rollup does not follow you")
     }
+
+    /**
+     * ⚠ "NOTHING TO SHOW YET." FOR FIVE SECONDS ON A CLUSTER DRAWN A MOMENT AGO
+     * (owner, 2026-11-01). The walk used to null the rollup and wait for the
+     * next poll tick. Each project's last answer is kept, so walking back draws
+     * it at once, and the refetch replaces it only when it has moved.
+     */
+    @Test
+    fun `reopening a project keeps the rollup it had until the new one lands`() {
+        val s = store()
+        s.openProject("a")
+        val a1 = dashboard(id = "a", at = 500, per10m = 1_000)
+        assertTrue(s.adoptDashboard(a1))
+        s.openProject("b")
+        assertTrue(s.adoptDashboard(dashboard(id = "b", at = 500)))
+        assertEquals("b", s.projectDashboard.value?.project?.id)
+
+        s.openProject("a")
+        assertSame(a1, s.projectDashboard.value, "what a last said is drawn at once, not null for a tick")
+
+        // The re-sent rollup changes nothing; a moved one replaces it.
+        assertFalse(s.adoptDashboard(dashboard(id = "a", at = 500, per10m = 1_000)))
+        assertSame(a1, s.projectDashboard.value)
+        val a2 = dashboard(id = "a", at = 510, per10m = 2_000)
+        assertTrue(s.adoptDashboard(a2))
+        assertSame(a2, s.projectDashboard.value)
+        // And b still has its own.
+        s.openProject("b")
+        assertEquals("b", s.projectDashboard.value?.project?.id)
+        assertEquals(500L, s.projectDashboard.value?.generatedAt)
+    }
 }

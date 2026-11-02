@@ -370,9 +370,13 @@ private fun DashboardMemberRow(
  * The dashboard's one-line heading: the project's name and the rollup.
  *
  * The rollup is the same sentence the list row carries, deliberately: a person
- * arriving here from that row should recognise the line they tapped. It is taken
- * off the dashboard's own [ProjectDashboard.project] row, which is the DAEMON'S
- * count — never recomputed from the member list beside it.
+ * arriving here from that row should recognise the line they tapped.
+ *
+ * ⚠ COUNTED FROM THE MEMBER ROWS DRAWN UNDER IT ([ProjectRules.rollupWords] with
+ * members). It used to be taken off the dashboard's own [ProjectDashboard.project]
+ * row — the daemon's list-side counts — and the header then said "1 of 3
+ * working" over three rows drawn busy, because the two were summed at different
+ * moments. The row's counts are used only while the member list is empty.
  *
  * ⚠ THE CLOCK IS `generatedAt`. It is when this poll was answered, which is the
  * only honest thing to say about a rollup of twelve transcripts.
@@ -381,7 +385,7 @@ fun dashboardCaption(dashboard: ProjectDashboard, nowMs: Long): String {
     val row = dashboard.project
     val bits = mutableListOf<String>()
     row?.let { ProjectRules.label(it) }?.takeIf { it.isNotEmpty() }?.let { bits += it }
-    bits += if (row != null) ProjectRules.rollupWords(row) else ProjectRules.rollupWords(dashboard.members)
+    bits += if (row != null) ProjectRules.rollupWords(row, dashboard.members) else ProjectRules.rollupWords(dashboard.members)
     agoWords(dashboard.generatedAt, nowMs).takeIf { it.isNotBlank() }?.let { bits += "as of $it" }
     return bits.joinToString(" · ")
 }

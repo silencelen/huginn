@@ -38,8 +38,9 @@ import com.silencelen.huginn.ui.theme.verbInk
  * ⚠ THE TREE DOES NOT FETCH. `ProjectsListView` takes `members` as a map the
  * SHELL fills, because membership comes from a per-project GET and a composable
  * that issued one per row would put twelve requests on screen at a scroll. So
- * opening a disclosure is a request here — [onExpand] — and a project whose
- * members have not arrived draws "Reading the cluster…" rather than "no members".
+ * opening a disclosure is a request on the view model's side — [onToggle] — and
+ * a project whose members have not arrived draws "Reading the cluster…" rather
+ * than "no members".
  */
 @Composable
 fun ProjectsScreen(
@@ -48,8 +49,14 @@ fun ProjectsScreen(
     nowMs: Long,
     onOpenProject: (ProjectRow) -> Unit,
     onOpenMember: (ProjectLive) -> Unit,
-    /** Asked to fetch a project's members when its disclosure opens. */
-    onExpand: (String) -> Unit,
+    /**
+     * The rows folded open, and the fold. HELD BY THE VIEW MODEL, not here: the
+     * list poll re-fetches the members of every open row each tick, so the set
+     * must be where the poll can read it. Opening fetches at once too, on the view
+     * model's side, which is why there is no separate fetch callback any more.
+     */
+    expanded: Set<String>,
+    onToggle: (String) -> Unit,
     onCreate: (name: String, kind: String, brief: String, cwd: String?) -> Unit,
     creating: Boolean = false,
     /** The daemon's last refusal, shown under the sheet's fields, verbatim. */
@@ -67,9 +74,6 @@ fun ProjectsScreen(
      */
     onEndProject: ((ProjectRow) -> Unit)? = null,
 ) {
-    // Survives a fold, like every other screen state here: unfolding the phone
-    // must not collapse a cluster somebody had just opened.
-    var expanded by rememberSaveable { mutableStateOf(setOf<String>()) }
     var sheet by rememberSaveable { mutableStateOf(false) }
 
     // Pushed destination, no bar beneath it: the system navigation inset is this
@@ -81,14 +85,7 @@ fun ProjectsScreen(
             nowMs = nowMs,
             expanded = expanded,
             members = members,
-            onToggle = { id ->
-                val open = id in expanded
-                expanded = if (open) expanded - id else expanded + id
-                // Fetched on OPEN only, and every time: a cluster's membership is
-                // the thing that moves, and a map filled once would show a member
-                // that ended an hour ago as busy.
-                if (!open) onExpand(id)
-            },
+            onToggle = onToggle,
             onOpenProject = onOpenProject,
             onOpenMember = { _, live -> onOpenMember(live) },
             onCreate = null,

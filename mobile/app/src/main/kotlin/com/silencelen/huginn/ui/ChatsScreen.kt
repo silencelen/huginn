@@ -104,6 +104,12 @@ fun ChatsScreen(
      * shell owns it, and [ChatListScroll] decides when it is thrown away.
      */
     listState: LazyListState = rememberLazyListState(),
+    /**
+     * Drawn above the list (and above the empty state): the update notice card.
+     * A slot rather than the card itself so this screen knows nothing about
+     * updaters; null draws nothing.
+     */
+    header: (@Composable () -> Unit)? = null,
 ) {
     var showNew by remember { mutableStateOf(false) }
     // Null = this host. Reset whenever the dialog opens, so a machine picked once
@@ -112,48 +118,51 @@ fun ChatsScreen(
     LaunchedEffect(newChatRequest) { if (newChatRequest > 0) showNew = true }
     LaunchedEffect(showNew) { if (showNew) { newHost = null; onOpenNewChat() } }
 
-    Box(Modifier.fillMaxSize()) {
-        if (chats.isEmpty() && !loading) {
-            Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
-                if (connected == false) {
-                    EmptyState(
-                        "Not connected",
-                        "Add the server URL and token in Settings, then pull to refresh.",
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        TextButton(onClick = onOpenSettings) { Text("Open Settings") }
+    Column(Modifier.fillMaxSize()) {
+        header?.invoke()
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            if (chats.isEmpty() && !loading) {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+                    if (connected == false) {
+                        EmptyState(
+                            "Not connected",
+                            "Add the server URL and token in Settings, then pull to refresh.",
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            TextButton(onClick = onOpenSettings) { Text("Open Settings") }
+                        }
+                    } else {
+                        EmptyState("No chats yet", "Start one and huginn answers from the host.")
                     }
-                } else {
-                    EmptyState("No chats yet", "Start one and huginn answers from the host.")
+                }
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    state = listState,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
+                ) {
+                    items(chats, key = { it.id }) { chat ->
+                        ChatRow(
+                            chat,
+                            selected = chat.id == selectedId,
+                            onOpen = { onOpen(chat.id) },
+                            onDelete = { onDelete(chat.id) },
+                        )
+                        HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
+                    }
                 }
             }
-        } else {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                state = listState,
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = LIST_FAB_CLEARANCE),
-            ) {
-                items(chats, key = { it.id }) { chat ->
-                    ChatRow(
-                        chat,
-                        selected = chat.id == selectedId,
-                        onOpen = { onOpen(chat.id) },
-                        onDelete = { onDelete(chat.id) },
-                    )
-                    HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
-                }
-            }
-        }
 
-        ExtendedFloatingActionButton(
-            onClick = { showNew = true },
-            // ⚠ THE TOKEN, NOT A THIRD COPY OF THE NUMBER (P-37). The list's
-            // bottom clearance is DERIVED from this inset; a hand-written 16 here
-            // is the shape the clearance bug had in the first place.
-            modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
-            icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-            text = { Text("New chat") },
-        )
+            ExtendedFloatingActionButton(
+                onClick = { showNew = true },
+                // ⚠ THE TOKEN, NOT A THIRD COPY OF THE NUMBER (P-37). The list's
+                // bottom clearance is DERIVED from this inset; a hand-written 16 here
+                // is the shape the clearance bug had in the first place.
+                modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("New chat") },
+            )
+        }
     }
 
     if (showNew) {

@@ -293,35 +293,3 @@ fun manifestEditable(rows: List<ManifestSession>): Boolean {
         ProjectRules.roleProblem(s.role, others) == null && s.firstPrompt.isNotBlank()
     }
 }
-
-// ------------------------------------------------------------- the poll gate
-
-/**
- * What a dashboard poll is allowed to be a no-op.
- *
- * ⚠⚠ A DASHBOARD TICK IS NOT FREE ON THE HOST, AND IT IS NOT FREE HERE EITHER.
- * The daemon sums up to twelve session overviews to answer this, and the client
- * then redraws a table of twelve rows of numbers. `generatedAt` is the daemon's
- * own stamp for "this is when I answered", so an answer carrying the stamp we
- * already hold is the same answer — publishing it recomposes the whole screen to
- * draw identical figures, five seconds apart, for as long as the screen is open.
- *
- * ⚠ ZERO IS NOT A STAMP. A daemon that did not fill the field leaves 0, and
- * treating 0 as "unchanged" would freeze the screen on its first answer forever.
- * So 0 always passes.
- */
-class DashboardCursor {
-    private var seen: Long = -1L
-
-    /** True when this answer is new work. False means: keep what is on screen. */
-    fun accept(next: ProjectDashboard?): Boolean {
-        if (next == null) return false
-        val at = next.generatedAt
-        if (at > 0 && at == seen) return false
-        seen = at
-        return true
-    }
-
-    /** Forgets the stamp, so the next answer always lands. Used when the project changes. */
-    fun reset() { seen = -1L }
-}
