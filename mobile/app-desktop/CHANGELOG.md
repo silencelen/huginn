@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## [Unreleased]
+## 2.9.2
 
 ### Fixed
 - The update notice shows above whichever list the window opens on (Chats, Sessions, Projects or

@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.15.1 — 2026-11-02
 
 ### Fixed
 - An available update is announced on the chats list when the app opens, with Download, Later and

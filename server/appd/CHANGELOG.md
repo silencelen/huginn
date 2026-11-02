@@ -9,12 +9,19 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.16.4 — 2026-11-02
 
 ### Changed
 - `GET /v1/usage` is computed from the server's own incremental reading of the transcripts (a per-day ledger under `usage/`, fed by sweeps that read only new bytes) and carries `source: "huginn"`; ccusage runs once a week, at the lowest CPU and I/O priority, and its totals are kept beside the ledger's as `correlation` (`HUGINN_USAGE_CCUSAGE=0` turns it off).
 
 ### Fixed
+- The `/context` result no longer appears in the Conversation tab as a 9 KB "## Context Usage" message
+  from you: Claude Code 2.1.316 records it twice, and the second copy is now folded into the same
+  context card, which also refreshes from every record shape Claude Code has used for it.
+- Claude Code's note after a usage-limit reset ("[Earlier usage-limit notes no longer apply…]") is
+  no longer shown as a message from you.
+- When an automated send is dropped after waiting ten minutes for a turn boundary, the log now says
+  what the gate last saw, so the cause can be read rather than guessed.
 - The Usage tab showed an error or a timeout when the transcript tree was large: ccusage walked every transcript on each request.
 
 ## 3.16.3 — 2026-10-31
