@@ -33,10 +33,16 @@ for f in "$@"; do
   [ -f "$f" ] || { echo "REFUSING: $f does not exist" >&2; exit 1; }
   out="$f.signed.tmp"; rm -f "$out"; ok=""
   for ts in "${TSA[@]}"; do
-    if osslsigncode sign -h sha256 -certs "$CRT" -ac "$CA" -key "$KEY" \
-         -n "${HUGINN_SIGN_DESC:-huginn}" -i "${HUGINN_SIGN_URL:-https://github.com/silencelen/huginn}" \
-         -ts "$ts" -in "$f" -out "$out" >/dev/null 2>&1; then ok=1; break; fi
-    rm -f "$out"; echo "  timestamp server $ts failed, trying the next" >&2
+    # osslsigncode 2.8 crashes (rc 139) when the timestamp request itself
+    # fails, so a DNS or network blip looks like a dead server: three tries
+    # a few seconds apart before moving to the next one.
+    for try in 1 2 3; do
+      if osslsigncode sign -h sha256 -certs "$CRT" -ac "$CA" -key "$KEY" \
+           -n "${HUGINN_SIGN_DESC:-huginn}" -i "${HUGINN_SIGN_URL:-https://github.com/silencelen/huginn}" \
+           -ts "$ts" -in "$f" -out "$out" >/dev/null 2>&1; then ok=1; break 2; fi
+      rm -f "$out"; [ "$try" = 3 ] || sleep 3
+    done
+    echo "  timestamp server $ts failed, trying the next" >&2
   done
   [ -n "$ok" ] || { echo "REFUSING: could not sign $f (every timestamp server failed)" >&2; exit 1; }
   # Verify against the CA BEFORE the swap: a bad signature must never replace
