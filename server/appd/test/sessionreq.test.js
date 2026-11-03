@@ -50,6 +50,19 @@ test('an opening prompt that starts with `!` is refused, judged on the text as i
   assert.equal(sr.argsProblem({ directory: '/srv/x', prompt: 'important! hold the deploy' }), null);
 });
 
+test('the content token is the full sha256 over {directory, prompt, name}: same content same token, any change a new one (F1, 2026-11-03)', () => {
+  const base = { directory: '/srv/example', prompt: 'summarise the deploy notes', name: null };
+  const t = sr.contentToken(base);
+  assert.match(t, /^[0-9a-f]{64}$/, 'the whole sha256, 64 hex — not a 48-bit prefix');
+  assert.equal(t, sr.contentToken({ ...base }), 'same content, same token');
+  assert.notEqual(t, sr.contentToken({ ...base, prompt: 'summarise the deploy notes ' }), 'one changed character of the prompt, a different token');
+  assert.notEqual(t, sr.contentToken({ ...base, directory: '/srv/other' }), 'the directory is part of it');
+  assert.notEqual(t, sr.contentToken({ ...base, name: 'deploy' }), 'the name is part of it');
+  // The question echoes exactly this token as its fingerprint.
+  const [question] = q.buildQuestions({ sessionRequests: [{ id: '1-1', ts: 1, expiresAt: Date.now() + 1000, directory: base.directory, prompt: base.prompt, name: base.name, requester: SESSION }] });
+  assert.equal(question.fingerprint, t);
+});
+
 test('a parked request is live for its requester only, and becomes a `session` question with everything the card shows', () => {
   const state = tmpdir();
   const rec = sr.park(state, SESSION, ARGS, { now: 1_800_000_000_000 });
@@ -71,7 +84,10 @@ test('a parked request is live for its requester only, and becomes a `session` q
   assert.deepEqual(question.requester, { sessionName: 'planner', chatId: null });
   assert.equal(question.expiresAt, rec.expiresAt);
   assert.equal(question.bound, true);
-  assert.equal(question.fingerprint, q.fingerprintFor('session', 'start_session', question.input));
+  // ⚠ The session fingerprint is the FULL sha256 content token, not the 12-hex
+  // truncated digest the other kinds use (fifth security scan 2026-11-03, F1).
+  assert.match(question.fingerprint, /^[0-9a-f]{64}$/, 'a session fingerprint is the full sha256 content token');
+  assert.equal(question.fingerprint, sr.contentToken(question.input));
   assert.equal(question.hookId, rec.id);
   assert.equal('hookId' in q.publicQuestion(question), false);
   assert.ok('requester' in q.publicQuestion(question), 'who asked travels to the card');

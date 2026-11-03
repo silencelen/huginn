@@ -10270,6 +10270,16 @@ async function answerSessionQuestion(requester, q, decision) {
     log(`questions: ${who} <- start_session refused: ${bang}`);
     return { status: 409, body: { ok: false, via: 'daemon', started: false, reason: bang, error: bang } };
   }
+  // ⚠ DO NOT ACT ON A BLIND RE-READ (fifth security scan 2026-11-03, F1,
+  // CWE-328). The card bound the owner's Start to the content token it showed
+  // (q.fingerprint, which the route already matched against the card's). Recompute
+  // that token from the file as it is NOW and refuse if it moved — so a request
+  // rewritten under the card, between the route's check and this read, cannot ride
+  // the approval into a session with directory and prompt the owner never saw.
+  if (sessionreq.contentToken(req) !== q.fingerprint) {
+    log(`questions: ${who} <- start_session refused: the request changed under the card`);
+    return { status: 409, body: { ok: false, reason: 'changed', error: 'the request changed since it was offered' } };
+  }
   const name = decision.name || req.name || await suggestSessionName(req.directory);
   const made = await createSession({ name, cwd: req.directory });
   if (!made.ok) {

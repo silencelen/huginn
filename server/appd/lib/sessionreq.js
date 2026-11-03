@@ -32,7 +32,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const typing = require('./typing');
+const projects = require('./projects');
 
 const START_DIRNAME = '.start';
 const EXPIRE_MS = 60 * 60 * 1000;             // one hour: the tool's own deadline
@@ -109,6 +111,31 @@ function argsProblem(args) {
 function promptProblem(prompt) {
   if (typeof prompt !== 'string') return null;
   return /^\s*!/.test(typing.sendable(prompt)) ? PROMPT_BANG_REASON : null;
+}
+
+/**
+ * The CONTENT TOKEN that binds a start_session card to the request it shows: the
+ * FULL sha256 (64 hex) over the canonical JSON of {directory, prompt, name} — the
+ * three things the card displays and the daemon acts on.
+ *
+ * ⚠ THE WHOLE DIGEST, NOT A 48-BIT PREFIX (fifth security scan 2026-11-03, F1,
+ * CWE-328). The requester writes both the request the owner reads and any rewrite
+ * of the same file, so the earlier 12-hex (48-bit) fingerprint let a birthday
+ * search (~2^24 offline) find a harmless request and a hostile one that share it,
+ * carrying the owner's Start to text they never saw. A full sha256 makes that
+ * collision infeasible; the answer path also recomputes this from the file read at
+ * answer time and refuses when it moved. Same content, same token; one word of the
+ * directory, prompt or name different, a different token. Clients treat it as an
+ * opaque string — nothing may assume its length. The roster-change token
+ * (projects.changeToken) is the same construction for the same reason.
+ */
+function contentToken({ directory, prompt, name } = {}) {
+  const body = projects.canonicalJson({
+    directory: String(directory),
+    prompt: String(prompt),
+    name: typeof name === 'string' ? name : null,
+  });
+  return crypto.createHash('sha256').update(body).digest('hex');
 }
 
 let seq = 0;
@@ -292,6 +319,6 @@ function sweepExpired(stateDir, { now = Date.now() } = {}) {
 
 module.exports = {
   START_DIRNAME, START_SESSION_TOOL, EXPIRE_MS, ID_RE, PROMPT_MAX, PROMPT_BANG_REASON,
-  validRequester, requestDir, argsProblem, promptProblem, park, liveRequests, answer, withdraw, claimAnswer,
+  validRequester, requestDir, argsProblem, promptProblem, contentToken, park, liveRequests, answer, withdraw, claimAnswer,
   awaitAnswer, sweepExpired,
 };

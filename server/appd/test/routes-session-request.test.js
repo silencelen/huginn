@@ -299,3 +299,60 @@ test("a chat's request shows on the chat and is approved there; an unnamed reque
     } finally { s2.close(); }
   } finally { s.close(); }
 });
+
+test('a request rewritten under the card is not started by the owner\'s stale approval (F1, fifth scan 2026-11-03, CWE-328)', async () => {
+  // The attack the full-sha256 content token closes: the requester writes the
+  // file the owner's Start re-reads. The owner's app drew the card for a harmless
+  // request A; the file is then rewritten in place, keeping the id, to a different
+  // request B. A and B here are a real SHA-1[:12] collision for the OLD 48-bit
+  // fingerprint (directory `/tmp/huginn-sreq-collide`, name null) — so on the old
+  // code the route's truncated-fingerprint check passed and B's session started
+  // under the tap meant for A. With the full sha256 token the rewrite is caught:
+  // 409 `changed`, and nothing is created. (The directory is real so the old code
+  // would actually have started B — that is what makes this fail on the old code.)
+  const COLLIDE_DIR = '/tmp/huginn-sreq-collide';
+  const PROMPT_A = 'Summarize the notes in this directory #9293822';
+  const PROMPT_B = 'Summarize the notes in this directory #19999504';
+  const OLD_FP = '6a909539a87e';   // sha1[:12] of both A and B for this directory/name
+  fs.mkdirSync(COLLIDE_DIR, { recursive: true });
+  try {
+    const asker = askerSession('rewrite');
+    const requester = { kind: 'session', id: asker };
+    const rec = sr.park(stateDir, requester, { directory: COLLIDE_DIR, prompt: PROMPT_A });
+    const file = path.join(sr.requestDir(stateDir, requester), `${rec.id}.json`);
+    // Sanity: A and B really do collide on the old 48-bit fingerprint but not on
+    // the full content token, so the only thing that saves us is the full width.
+    assert.equal(crypto.createHash('sha1').update(JSON.stringify(['session', 'start_session', { directory: COLLIDE_DIR, name: null, prompt: PROMPT_A }])).digest('hex').slice(0, 12), OLD_FP);
+    assert.equal(crypto.createHash('sha1').update(JSON.stringify(['session', 'start_session', { directory: COLLIDE_DIR, name: null, prompt: PROMPT_B }])).digest('hex').slice(0, 12), OLD_FP);
+    assert.notEqual(sr.contentToken({ directory: COLLIDE_DIR, prompt: PROMPT_A, name: null }), sr.contentToken({ directory: COLLIDE_DIR, prompt: PROMPT_B, name: null }));
+
+    // The card the owner reads: request A, with its (full-sha256) fingerprint.
+    const q = await until('the card for A', async () => ((await api(`/v1/sessions/${asker}/questions`)).body.questions || []).find((x) => x.kind === 'session'));
+    assert.equal(q.input.prompt, PROMPT_A);
+    const approvedFp = q.fingerprint;   // what tapping Start sends
+
+    // The file is rewritten in place to B, keeping the id, between card and tap.
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), prompt: PROMPT_B }));
+
+    // The owner's Start carries A's fingerprint. On the old 48-bit code this
+    // matched B and started it; now it is refused and nothing is created.
+    const blocked = await api(`/v1/sessions/${asker}/questions/${q.id}`, { method: 'POST', body: JSON.stringify({ behavior: 'allow', start: true, id: q.id, fingerprint: approvedFp }) });
+    assert.equal(blocked.status, 409, JSON.stringify(blocked.body));
+    assert.equal(blocked.body.reason, 'changed');
+    assert.ok(!blocked.body.started, 'nothing was started under the stale approval');
+    assert.equal(sessionAlive('huginn-sreq-collide'), false, 'no session was created with B');
+    // The request is still parked and the tool has no answer yet.
+    assert.ok(((await api(`/v1/sessions/${asker}/questions`)).body.questions || []).some((x) => x.id === q.id), 'still waiting');
+    assert.equal(sr.claimAnswer(stateDir, requester, rec.id), null, 'the tool was not answered');
+
+    // Approving the request as it actually is now (B, from a fresh card) works.
+    const q2 = await until('a fresh card for B', async () => ((await api(`/v1/sessions/${asker}/questions`)).body.questions || []).find((x) => x.kind === 'session' && x.input.prompt === PROMPT_B));
+    assert.notEqual(q2.fingerprint, approvedFp, 'the fresh card carries B\'s token, not A\'s');
+    const ok = await api(`/v1/sessions/${asker}/questions/${q2.id}`, { method: 'POST', body: JSON.stringify({ behavior: 'allow', start: true, id: q2.id, fingerprint: q2.fingerprint }) });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.started, true);
+    assert.ok(sessionAlive('huginn-sreq-collide'), 'the session the owner now sees does start');
+  } finally {
+    fs.rmSync(COLLIDE_DIR, { recursive: true, force: true });
+  }
+});

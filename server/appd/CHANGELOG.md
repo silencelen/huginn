@@ -72,6 +72,13 @@ version number collided. Entries below are reconstructed from the shipping commi
   (`options: []`): the notification opens the session, where the card shows the whole prompt.
   Before this, a bare allow created the session and pasted the Claude-written prompt past every
   defence the card has.
+- A session request's `fingerprint` is the whole SHA-256 (64 hex) over `{directory, prompt, name}`,
+  not a 48-bit truncated digest, so the requester — which writes the file the owner's Start re-reads —
+  cannot make a harmless request and a hostile one share a fingerprint and carry the approval from one
+  to the other. The approve path also recomputes the token from the file at answer time and refuses
+  (`409 {reason: "changed"}`) when it moved, rather than acting on a blind re-read. Clients treat the
+  fingerprint as opaque. Before this a birthday search could start a session with a directory and
+  prompt the owner never saw.
 
 ## 3.16.4 — 2026-11-02
 

@@ -49,6 +49,7 @@
 // only breaks ties on the legacy `/answer` route.
 
 const { createHash } = require('crypto');
+const sessionreq = require('./sessionreq');
 
 const STALE_AFTER_MS = 2000;          // a pane-backed request this old with an idle composer was answered by hand
 const PLAN_TTL_MS = 24 * 60 * 60 * 1000;
@@ -188,7 +189,11 @@ function sessionQuestion(r) {
     mcpServer: 'huginn',
     input,
     suggestions: null,
-    fingerprint: fingerprintFor('session', 'start_session', input),
+    // ⚠ A FULL sha256 CONTENT TOKEN, not the 12-hex truncated digest the other
+    // kinds use (fifth security scan 2026-11-03, F1, CWE-328): the requester
+    // writes the file the owner's Start re-reads, so the binding must survive a
+    // birthday search. sessionreq.contentToken over {directory, prompt, name}.
+    fingerprint: sessionreq.contentToken(input),
     since: Number(r.ts) || 0,
     bound: true,
     fallback: null,
