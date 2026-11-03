@@ -326,11 +326,22 @@ object QuestionAnswers {
      * A session request: Start, with the name the person settled on (blank or
      * null means "the one Claude suggested, else the directory's"); or Decline
      * with the optional words, which the tool reads back as `declined: <words>`.
+     *
+     * ⚠ START CARRIES `start: true` AND THE QUESTION'S ID (fourth security scan
+     * 2026-11-03, F1). The daemon (appd 3.17) accepts a session start ONLY in
+     * this shape: it is what proves the answer came from the card that showed
+     * the whole prompt, and not from a generic permission card, a notification
+     * button or the row-number route. A bare `{behavior:"allow"}` is refused
+     * `409 unsupported` and the request stays on the card. Decline is unchanged.
      */
-    fun sessionBody(allow: Boolean, name: String? = null, message: String? = null): JsonObject =
+    fun sessionBody(question: SessionQuestion, allow: Boolean, name: String? = null, message: String? = null): JsonObject =
         buildJsonObject {
             put("behavior", JsonPrimitive(if (allow) "allow" else "deny"))
-            if (allow) name?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", JsonPrimitive(it)) }
+            if (allow) {
+                put("start", JsonPrimitive(true))
+                put("id", JsonPrimitive(question.id))
+                name?.trim()?.takeIf { it.isNotEmpty() }?.let { put("name", JsonPrimitive(it)) }
+            }
             if (!allow) message?.trim()?.takeIf { it.isNotEmpty() }?.let { put("message", JsonPrimitive(it)) }
         }
 

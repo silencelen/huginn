@@ -77,16 +77,25 @@ class SessionQuestionTest {
     }
 
     @Test
-    fun `Start sends allow with the edited name, and a blank name is omitted`() {
-        assertEquals("""{"behavior":"allow","name":"lora-2"}""", QuestionAnswers.sessionBody(allow = true, name = " lora-2 ").toString())
-        assertEquals("""{"behavior":"allow"}""", QuestionAnswers.sessionBody(allow = true, name = "  ").toString())
+    fun `Start sends allow with start true and the question id, then the edited name, and a blank name is omitted`() {
+        // ⚠ THE FAIL-FIRST (fourth security scan 2026-11-03, F1): the daemon
+        // refuses a session start without `start: true` and the echoed id —
+        // the shape that only this card sends — so a bare allow is no longer
+        // an approval of a prompt the person may not have seen whole.
+        assertEquals("""{"behavior":"allow","start":true,"id":"sq-1","name":"lora-2"}""", QuestionAnswers.sessionBody(q(), allow = true, name = " lora-2 ").toString())
+        assertEquals("""{"behavior":"allow","start":true,"id":"sq-1"}""", QuestionAnswers.sessionBody(q(), allow = true, name = "  ").toString())
+        val other = json.decodeFromString<SessionQuestions>(
+            """{"questions":[{"id":"sq-7","kind":"session","toolName":"start_session",
+                "input":{"directory":"/srv","prompt":"go","name":null},"fingerprint":"fp","since":1,"bound":true}]}""",
+        ).questions[0]
+        assertEquals("""{"behavior":"allow","start":true,"id":"sq-7"}""", QuestionAnswers.sessionBody(other, allow = true).toString(), "the id is the question's own")
     }
 
     @Test
-    fun `Decline sends deny with the words only when there are any`() {
-        assertEquals("""{"behavior":"deny","message":"not now"}""", QuestionAnswers.sessionBody(allow = false, message = "not now").toString())
-        assertEquals("""{"behavior":"deny"}""", QuestionAnswers.sessionBody(allow = false, message = "").toString())
-        assertEquals("""{"behavior":"deny"}""", QuestionAnswers.sessionBody(allow = false, name = "ignored").toString(), "a name rides only an allow")
+    fun `Decline sends deny with the words only when there are any and nothing of the start shape`() {
+        assertEquals("""{"behavior":"deny","message":"not now"}""", QuestionAnswers.sessionBody(q(), allow = false, message = "not now").toString())
+        assertEquals("""{"behavior":"deny"}""", QuestionAnswers.sessionBody(q(), allow = false, message = "").toString())
+        assertEquals("""{"behavior":"deny"}""", QuestionAnswers.sessionBody(q(), allow = false, name = "ignored").toString(), "a name rides only an allow")
     }
 
     @Test

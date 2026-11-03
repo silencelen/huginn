@@ -35,6 +35,10 @@
   has been scrolled to its end. The display copy treats every space-like character (no-break, figure,
   Braille and ideographic blanks included) as a gap, folds a run of two or more blank lines into one
   line that says how many, and the counts say how many lines are blank. The text sent is unchanged.
+- Start on the new-session card sends `start: true` with the question's id, the shape the server
+  now requires before it creates anything; an answer without it is refused with "update the app"
+  and the request stays on the card. A toast about a waiting session request has no Start or Decline
+  button: it opens the session, where the card shows the whole prompt.
 
 ## 2.9.2
 

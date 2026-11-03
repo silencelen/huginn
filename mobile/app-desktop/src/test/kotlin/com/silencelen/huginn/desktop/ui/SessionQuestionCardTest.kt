@@ -35,7 +35,7 @@ import kotlin.test.assertTrue
 
 /**
  * The `session` question card (appd 3.17): what a reader sees, and what Start
- * sends. The card is `:ui`'s and both shells draw it; this is the desktop's
+ * sends (`start: true` with the id: the daemon starts nothing without them). The card is `:ui`'s and both shells draw it; this is the desktop's
  * window on it.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -87,7 +87,9 @@ class SessionQuestionCardTest {
         waitForIdle()
         onNodeWithTag("question.session.start", useUnmergedTree = true).performClick()
         waitForIdle()
-        assertEquals(listOf("""{"behavior":"allow","name":"lora-2"}"""), sent.map { it.toString() })
+        // `start: true` and the id: the shape only this card sends, which the daemon
+        // requires before it starts anything (fourth scan 2026-11-03, F1).
+        assertEquals(listOf("""{"behavior":"allow","start":true,"id":"sq-1","name":"lora-2"}"""), sent.map { it.toString() })
     }
 
     @Test
@@ -146,7 +148,7 @@ class SessionQuestionCardTest {
         onNodeWithTag("question.session.start", useUnmergedTree = true).assertIsEnabled()
         onNodeWithTag("question.session.start", useUnmergedTree = true).performClick()
         waitForIdle()
-        assertEquals(listOf("""{"behavior":"allow","name":"lora-audit"}"""), sent.map { it.toString() })
+        assertEquals(listOf("""{"behavior":"allow","start":true,"id":"sq-1","name":"lora-audit"}"""), sent.map { it.toString() })
     }
 
     @Test

@@ -578,8 +578,10 @@ fun QuestionCard(
  * run, the prompt it would be given (every character, scrolling inside the
  * card's cap, never summarised — the person is approving exactly these words),
  * the name Claude suggested (editable; blank leaves the choice to the daemon),
- * who asked and when the request lapses. Start answers `allow` with the name as
- * edited; Decline opens the same "tell Claude why" line a permission's No has.
+ * who asked and when the request lapses. Start answers `allow` with `start: true`,
+ * the question's id and the name as edited — the shape only this card sends, which
+ * is the daemon's proof the whole prompt was shown (fourth scan 2026-11-03, F1);
+ * Decline opens the same "tell Claude why" line a permission's No has.
  *
  * ⚠ THE PROMPT IS SHOWN AS [PromptDisplay.visible] AND WRAPPED (security scan
  * 2026-11-02, F2). The prompt is Claude's words, and Claude may be prompt-
@@ -662,7 +664,7 @@ private fun SessionQuestionCard(
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(
-                onClick = { onAnswer(QuestionAnswers.sessionBody(allow = true, name = draft.name)) },
+                onClick = { onAnswer(QuestionAnswers.sessionBody(question, allow = true, name = draft.name)) },
                 enabled = !answering && promptRead, modifier = Modifier.testTag("question.session.start"),
             ) { Text("Start") }
             OutlinedButton(
@@ -701,7 +703,7 @@ private fun SessionQuestionCard(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.words"),
             )
             Button(
-                onClick = { onAnswer(QuestionAnswers.sessionBody(allow = false, message = draft.words)) },
+                onClick = { onAnswer(QuestionAnswers.sessionBody(question, allow = false, message = draft.words)) },
                 enabled = !answering, modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("question.session.decline.send"),
             ) { Text(if (draft.words.isBlank()) "Decline" else "Decline, and tell Claude") }
         }
