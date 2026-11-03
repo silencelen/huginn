@@ -63,6 +63,15 @@ version number collided. Entries below are reconstructed from the shipping commi
 - The roster-change content `token` is the whole SHA-256 (64 hex), not its first 64 bits, so a lead
   that writes both proposals cannot make two of them share a token and carry an approval from one to
   the other. Clients treat the token as opaque.
+- A session request (kind `session`) is started only by the session card's answer:
+  `{behavior: "allow", start: true, id: <the question's id>}`. The permission shape
+  `{behavior: "allow"}` — what an older client's generic card, a notification button or the
+  row-number route sends — is refused `409 {reason: "unsupported"}` on the session and chat routes,
+  and the request stays waiting, neither started nor declined. `POST .../answer` refuses a session
+  request by row the same way, and a `session_attention` push for one carries no buttons
+  (`options: []`): the notification opens the session, where the card shows the whole prompt.
+  Before this, a bare allow created the session and pasted the Claude-written prompt past every
+  defence the card has.
 
 ## 3.16.4 — 2026-11-02
 

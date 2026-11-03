@@ -232,15 +232,18 @@ const bad = (error) => ({ ok: false, status: 400, error });
  *             person's words and lets the turn go on; none interrupts, like the TUI's No)
  * Plan:       { behavior: "allow", mode?: "manual"|"auto" } | { behavior: "deny", message }
  *             -> { plan: {approve} } or { plan: {feedback} }; the daemon drives the keys / the hook
- * Session:    { behavior: "allow", name?: string } | { behavior: "deny", message? }
+ * Session:    { behavior: "allow", start: true, id: <the question's id>, name?: string }
+ *             | { behavior: "deny", message? }
  *             -> { session: {approve: true, name} } or { session: {approve: false, message} };
- *             the daemon creates the session and queues the prompt, or declines
+ *             the daemon creates the session and queues the prompt, or declines.
+ *             An allow without `start: true` and the echoed id is refused
+ *             { ok: false, status: 409, reason: "unsupported" } (see sessionAnswer)
  */
 function decisionFor(q, body) {
   if (!q || !isObj(body)) return bad('a JSON object body is required');
   if (q.kind === 'ask') return askDecision(q, body);
   if (q.kind === 'plan') return planAnswer(body);
-  if (q.kind === 'session') return sessionAnswer(body);
+  if (q.kind === 'session') return sessionAnswer(q, body);
   return permissionDecision(q, body);
 }
 
@@ -333,8 +336,25 @@ function planAnswer(body) {
   return bad('behavior must be "allow" or "deny"');
 }
 
-function sessionAnswer(body) {
+/**
+ * ⚠ AN ALLOW IS ACCEPTED ONLY FROM THE SESSION CARD (fourth security scan
+ * 2026-11-03, F1). The card wraps the prompt, spells out its hidden characters
+ * and keeps Start dark until the block has been scrolled to its end — and every
+ * one of those defences lives in the card. A client that never drew it (an
+ * older app's generic permission card, a push button, the row-number route)
+ * sends the permission shape, `{behavior:"allow"}`, and that used to start the
+ * session and paste the Claude-written prompt. So a start is `{behavior:"allow",
+ * start:true, id:<this question's id>}`: `start:true` is a field only the card
+ * sends, and the echoed id ties the tap to the request it read. Anything else
+ * is refused `409 unsupported` and the request STAYS PARKED — not declined (the
+ * owner never said no), not started.
+ */
+const SESSION_CARD_REQUIRED = 'this request needs the session card — update the app';
+const unsupported = () => ({ ok: false, status: 409, reason: 'unsupported', error: SESSION_CARD_REQUIRED });
+
+function sessionAnswer(q, body) {
   if (body.behavior === 'allow') {
+    if (body.start !== true || typeof body.id !== 'string' || body.id !== q.id) return unsupported();
     let name = null;
     if (body.name !== undefined && body.name !== null) {
       if (typeof body.name !== 'string' || !body.name.trim()) return bad('name, when given, is a session name');
@@ -400,7 +420,9 @@ function notificationButtons(q) {
     return s.options.map((o, i) => ({ number: i + 1, label: String(o && o.label || '') }));
   }
   if (q.kind === 'permission') return [{ number: 1, label: 'Yes' }, { number: 2, label: 'No' }];
-  if (q.kind === 'session') return [{ number: 1, label: 'Start' }, { number: 2, label: 'Decline' }];
+  // ⚠ NONE FOR A SESSION REQUEST (fourth security scan 2026-11-03, F1), as for
+  // a roster change: a button cannot show the prompt Start would paste, so the
+  // notification only opens the session or chat, where the card is.
   return [];
 }
 
@@ -438,5 +460,5 @@ function describe(q) {
 module.exports = {
   buildQuestions, sessionQuestion, publicQuestion, digest, decisionFor, fingerprintFor, canon, deepEqual, kindOf,
   isPlanPrompt, planApproveRow, planFeedbackRow, notificationButtons, buttonAnswer, describe,
-  STALE_AFTER_MS, DEFAULT_DENY,
+  STALE_AFTER_MS, DEFAULT_DENY, SESSION_CARD_REQUIRED,
 };

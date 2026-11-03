@@ -76,9 +76,11 @@ test('a parked request is live for its requester only, and becomes a `session` q
   assert.equal('hookId' in q.publicQuestion(question), false);
   assert.ok('requester' in q.publicQuestion(question), 'who asked travels to the card');
   assert.match(q.describe(question), /session planner asks to start a session in \/srv\/example/);
-  assert.deepEqual(q.notificationButtons(question).map((b) => b.label), ['Start', 'Decline']);
-  assert.deepEqual(q.buttonAnswer(question, 1), { behavior: 'allow' });
-  assert.deepEqual(q.buttonAnswer(question, 2), { behavior: 'deny' });
+  // No push buttons and no row answers (fourth security scan 2026-11-03, F1):
+  // a notification cannot show the prompt, so it only opens the session.
+  assert.deepEqual(q.notificationButtons(question), []);
+  assert.equal(q.buttonAnswer(question, 1), null);
+  assert.equal(q.buttonAnswer(question, 2), null);
 
   const chatRec = sr.park(state, CHAT, { directory: '/srv/example', prompt: 'p' });
   const [cq] = q.buildQuestions({ sessionRequests: sr.liveRequests(state, CHAT) });
@@ -148,12 +150,15 @@ test("the asker's wait resolves with the answer, or expired / withdrawn / cancel
   assert.deepEqual(sr.liveRequests(state, SESSION), []);
 });
 
-test('the answer body of a session question: allow with an optional name, deny with optional words', () => {
+test('the answer body of a session question: the card\'s allow (start:true + the id) with an optional name, deny with optional words', () => {
   const sq = q.sessionQuestion({ id: '1-1', ts: 1, expiresAt: 2, directory: '/srv/x', prompt: 'p', name: null, requester: SESSION });
-  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow' }), { ok: true, session: { approve: true, name: null } });
-  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', name: ' Notes-2 ' }), { ok: true, session: { approve: true, name: 'notes-2' } });
-  assert.match(q.decisionFor(sq, { behavior: 'allow', name: 'a.b' }).error, /"\."/);
-  assert.match(q.decisionFor(sq, { behavior: 'allow', name: 7 }).error, /session name/);
+  // The permission shape is refused (fourth security scan 2026-11-03, F1): questions.test.js has the cases.
+  assert.equal(q.decisionFor(sq, { behavior: 'allow' }).reason, 'unsupported');
+  const card = { behavior: 'allow', start: true, id: '1-1' };
+  assert.deepEqual(q.decisionFor(sq, card), { ok: true, session: { approve: true, name: null } });
+  assert.deepEqual(q.decisionFor(sq, { ...card, name: ' Notes-2 ' }), { ok: true, session: { approve: true, name: 'notes-2' } });
+  assert.match(q.decisionFor(sq, { ...card, name: 'a.b' }).error, /"\."/);
+  assert.match(q.decisionFor(sq, { ...card, name: 7 }).error, /session name/);
   assert.deepEqual(q.decisionFor(sq, { behavior: 'deny' }), { ok: true, session: { approve: false, message: null } });
   assert.deepEqual(q.decisionFor(sq, { behavior: 'deny', message: ' not now ' }), { ok: true, session: { approve: false, message: 'not now' } });
   assert.match(q.decisionFor(sq, { behavior: 'maybe' }).error, /allow.*deny/);

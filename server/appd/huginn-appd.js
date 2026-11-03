@@ -10152,7 +10152,10 @@ async function freshPrompt(name) {
  */
 async function answerQuestion(name, q, body) {
   const d = questionsLib.decisionFor(q, body);
-  if (!d.ok) return { status: d.status || 400, body: { ok: false, error: d.error } };
+  // `reason` rides a refusal that has one (`unsupported`: a session request's
+  // allow without the card's fields) so the client can say what to do; the
+  // request stays parked either way.
+  if (!d.ok) return { status: d.status || 400, body: { ok: false, error: d.error, ...(d.reason ? { reason: d.reason } : {}) } };
   if (q.kind === 'plan') return answerPlanQuestion(name, q, d.plan);
   if (q.kind === 'session') return answerSessionQuestion({ kind: 'session', id: name }, q, d.session);
   let req = null;
@@ -14595,6 +14598,14 @@ async function handleRequest(req, res) {
             .filter((q) => q.kind !== 'plan' && q.fingerprint === body.fingerprint);
           if (hits.length === 1) {
             const q = hits[0];
+            // ⚠ A SESSION REQUEST IS NEVER ANSWERED BY ROW NUMBER (fourth
+            // security scan 2026-11-03, F1): a digit cannot have read the
+            // prompt Start would paste. Only the card answers it, by id, with
+            // the fields only the card sends (lib/questions.sessionAnswer).
+            // Refused, not declined: the request stays parked for the card.
+            if (q.kind === 'session') {
+              return sendJson(res, 409, { ok: false, reason: 'unsupported', error: questionsLib.SESSION_CARD_REQUIRED });
+            }
             const choice = questionsLib.buttonAnswer(q, option);
             if (!choice) {
               return sendJson(res, 409, {
@@ -16887,7 +16898,7 @@ async function handleRequest(req, res) {
           });
         }
         const d = questionsLib.decisionFor(q, body);
-        if (!d.ok) return sendJson(res, d.status || 400, { ok: false, error: d.error });
+        if (!d.ok) return sendJson(res, d.status || 400, { ok: false, error: d.error, ...(d.reason ? { reason: d.reason } : {}) });
         const r = await answerSessionQuestion({ kind: 'chat', id }, q, d.session);
         return sendJson(res, r.status, r.body);
       }

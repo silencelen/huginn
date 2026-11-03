@@ -223,6 +223,45 @@ test('notification buttons: a single single-select question\'s exact labels, Yes
   assert.deepEqual(q.notificationButtons(plan), [], 'a plan is read before it is approved');
 });
 
+// ---- a session request's answer is the card's alone (fourth security scan 2026-11-03, F1) --
+
+const SREQ = { v: 1, id: 'sq-1', pid: 1, ts: NOW - 5000, expiresAt: NOW + 3_600_000, kind: 'session',
+  requester: { kind: 'session', id: 'planner' }, directory: '/srv/work/lora', prompt: 'Audit the firmware.', name: 'lora-audit' };
+const sessionQ = (over) => q.buildQuestions({ sessionRequests: [{ ...SREQ, ...over }], now: NOW })[0];
+
+test('a session request: a bare permission-style allow is refused 409 unsupported; only the card\'s shape starts it', () => {
+  const sq = sessionQ();
+  assert.equal(sq.kind, 'session');
+  // ⚠ THE FAIL-FIRST. An older app's generic permission card, a push button and
+  // the row-number route all send exactly this, and it used to start the session
+  // and paste the Claude-written prompt without the card's defences.
+  const bare = q.decisionFor(sq, { behavior: 'allow' });
+  assert.deepEqual(bare, { ok: false, status: 409, reason: 'unsupported', error: q.SESSION_CARD_REQUIRED });
+  assert.equal('session' in bare, false, 'no decision: nothing to approve with');
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', name: 'lora-2' }), bare, 'a name does not make it the card');
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: true }), bare, 'start without the id');
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: true, id: 'sq-2' }), bare, 'the wrong id');
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: 'true', id: 'sq-1' }), bare, 'start must be the boolean true');
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: 1, id: 'sq-1' }), bare);
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', id: 'sq-1' }), bare, 'the id without start');
+  // The card: start:true and the question's own id echoed.
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: true, id: 'sq-1' }), { ok: true, session: { approve: true, name: null } });
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'allow', start: true, id: 'sq-1', name: ' Lora-2 ' }), { ok: true, session: { approve: true, name: 'lora-2' } });
+  assert.equal(q.decisionFor(sq, { behavior: 'allow', start: true, id: 'sq-1', name: 'a.b' }).status, 400, 'the name rules still apply');
+  // Decline needs nothing the card has: an older client may still say no.
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'deny' }), { ok: true, session: { approve: false, message: null } });
+  assert.deepEqual(q.decisionFor(sq, { behavior: 'deny', message: ' not now ' }), { ok: true, session: { approve: false, message: 'not now' } });
+  assert.equal(q.decisionFor(sq, { behavior: 'maybe' }).status, 400);
+});
+
+test('a session request offers no notification buttons: the push only opens the session, like a roster change', () => {
+  const sq = sessionQ();
+  assert.deepEqual(q.notificationButtons(sq), [], 'no Start, no Decline: a button cannot show the prompt');
+  assert.equal(q.buttonAnswer(sq, 1), null, 'row 1 is not Start');
+  assert.equal(q.buttonAnswer(sq, 2), null, 'row 2 is not Decline');
+  assert.equal(q.describe(sq), 'session planner asks to start a session in /srv/work/lora');
+});
+
 test('describe: what is asked, in one line', () => {
   assert.equal(q.describe(permQ()), 'Bash: touch x');
   assert.equal(q.describe(q.buildQuestions({ requests: [req({ id: 'e', tool: 'Edit', input: { file_path: '/srv/a.txt', old_string: 'x', new_string: 'y' } })], now: NOW })[0]), 'Edit: /srv/a.txt');
