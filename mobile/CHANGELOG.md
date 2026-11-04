@@ -1,5 +1,15 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Fixed
+- With the keyboard open, a session's or a chat's conversation is laid out above it. The question
+  or new-session card is capped from the room left above the keyboard and the composer, a focused
+  field in the card (Other…, Tell Claude why) comes into view with its button under it, and the
+  composer is never squeezed.
+- The project page moves up for the keyboard: Re-role's and Add member's fields and their buttons
+  stay in view, and the last row clears the navigation bar.
+
 ## 3.16.0 — 2026-11-02
 
 ### Added

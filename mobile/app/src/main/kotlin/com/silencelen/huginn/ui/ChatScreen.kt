@@ -184,7 +184,12 @@ fun ChatScreen(
         )
     }
 
-    Column(Modifier.fillMaxSize()) {
+    // ⚠⚠ THE COLUMN PAYS THE KEYBOARD, not the composer row (2026-11-03): paid
+    // on the row, a session-request card capped from the column's full height
+    // and the keyboard's padding overflowed it together, and "Decline, and tell
+    // Claude" was laid out under the keyboard, where a tap typed a letter
+    // instead. See `keyboardPadding` and ComposerStack.
+    Column(Modifier.fillMaxSize().keyboardPadding()) {
         // Model and effort apply to the next turn; a run already in flight keeps
         // what it started with, because the flags are fixed when it spawns.
         ChatOptionsBar(
@@ -300,80 +305,94 @@ fun ChatScreen(
         // compact card is the answerable surface, pinned above the composer like
         // a session's and scrolling inside a cap for the same reason.
         val cardQuestion = PromptGate.cardQuestion(questions)
-        if (cardQuestion != null) {
-            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                QuestionCard(
-                    question = cardQuestion,
-                    answering = questionAnswering,
-                    note = questionNote,
-                    maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
-                    draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
-                    onDraft = { onQuestionDraft(cardQuestion.id, it) },
-                    onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
-                    nowMs = System.currentTimeMillis(),
+        // ⚠⚠ MEASURED FROM THE BOTTOM UP (ComposerStack), as on a session: the
+        // composer first, then the verbs bar, then the card inside what is left.
+        ComposerStack(
+            card = {
+                if (cardQuestion != null) {
+                    // The stack hands this box the card's whole cap (CardRoom).
+                    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                        // "Tell Claude why" comes into view with "Decline, and
+                        // tell Claude" under it (FieldInView).
+                        RoomBelowFocused {
+                            QuestionCard(
+                                question = cardQuestion,
+                                answering = questionAnswering,
+                                note = questionNote,
+                                maxHeight = if (constraints.hasBoundedHeight) this@BoxWithConstraints.maxHeight
+                                else androidx.compose.ui.unit.Dp.Unspecified,
+                                draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
+                                onDraft = { onQuestionDraft(cardQuestion.id, it) },
+                                onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
+                                nowMs = System.currentTimeMillis(),
+                            )
+                        }
+                    }
+                }
+            },
+            // The long-press verbs, ABOVE the composer so the text stays visible while
+            // the verb is chosen. Nothing here sends — every one of them stages.
+            bar = {
+                SelectionActionBar(
+                    mode = selection,
+                    actions = quickActions,
+                    // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
+                    // one word and handed the bar the WHOLE row, so `pong-` lit and
+                    // `> pong-one` staged; on a paragraph, one word lit and the whole
+                    // block quoted. When the platform is holding a selection its text
+                    // wins; with none — the plain long-press — the row is still the scope.
+                    onAct = { action, text ->
+                        onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
+                        selection = SelectionMode.NONE
+                        selectionReset.bump()
+                    },
+                    onCopy = {
+                        onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
+                        selection = SelectionMode.NONE
+                        selectionReset.bump()
+                    },
+                    // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
+                    // take the app's bar down and leave the word highlighted, both amber
+                    // handles on screen and Android's own Copy / Select all popup floating
+                    // over the conversation; only tapping empty space cleared it.
+                    // `cancelled()` takes down the popup, and the bump re-keys the
+                    // SelectionContainer, which is the only way a caller can drop a
+                    // selection Compose keeps in an internal manager.
+                    onDismiss = {
+                        selection = SelectionMode.NONE
+                        textToolbarGate.cancelled()
+                        selectionReset.bump()
+                    },
                 )
-            }
-        }
-
-        // The long-press verbs, ABOVE the composer so the text stays visible while
-        // the verb is chosen. Nothing here sends — every one of them stages.
-        SelectionActionBar(
-            mode = selection,
-            actions = quickActions,
-            // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
-            // one word and handed the bar the WHOLE row, so `pong-` lit and
-            // `> pong-one` staged; on a paragraph, one word lit and the whole
-            // block quoted. When the platform is holding a selection its text
-            // wins; with none — the plain long-press — the row is still the scope.
-            onAct = { action, text ->
-                onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
-                selection = SelectionMode.NONE
-                selectionReset.bump()
             },
-            onCopy = {
-                onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
-                selection = SelectionMode.NONE
-                selectionReset.bump()
+            composer = {
+                Composer(
+                    sealedRun = sealedRun,
+                    onContinueRound = onContinueRound,
+                    pads = pads,
+                    padRefId = padRefId,
+                    onPadRef = onPadRef,
+                    draft = draft,
+                    onDraft = onDraft,
+                    sending = sending,
+                    mode = mode,
+                    micGranted = voiceReady,
+                    onRequestMic = onVoicePermission,
+                    onVoiceOpen = { voiceOpen = true },
+                    attachments = attachments,
+                    onAttach = onAttach,
+                    onAttachFile = onAttachFile,
+                    onRemoveAttachment = onRemoveAttachment,
+                    onPasteImage = onPasteImage,
+                    onSend = {
+                        val t = draft.trim()
+                        // A photo alone is a complete message: "what is this?" is implied
+                        // by having attached it, and the send path builds the marker text.
+                        if (t.isNotEmpty() || attachments.any { it.state != AttachChipState.FAILED }) onSend(t)
+                    },
+                    onCancel = onCancel,
+                )
             },
-            // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
-            // take the app's bar down and leave the word highlighted, both amber
-            // handles on screen and Android's own Copy / Select all popup floating
-            // over the conversation; only tapping empty space cleared it.
-            // `cancelled()` takes down the popup, and the bump re-keys the
-            // SelectionContainer, which is the only way a caller can drop a
-            // selection Compose keeps in an internal manager.
-            onDismiss = {
-                selection = SelectionMode.NONE
-                textToolbarGate.cancelled()
-                selectionReset.bump()
-            },
-        )
-
-        Composer(
-            sealedRun = sealedRun,
-            onContinueRound = onContinueRound,
-            pads = pads,
-            padRefId = padRefId,
-            onPadRef = onPadRef,
-            draft = draft,
-            onDraft = onDraft,
-            sending = sending,
-            mode = mode,
-            micGranted = voiceReady,
-            onRequestMic = onVoicePermission,
-            onVoiceOpen = { voiceOpen = true },
-            attachments = attachments,
-            onAttach = onAttach,
-            onAttachFile = onAttachFile,
-            onRemoveAttachment = onRemoveAttachment,
-            onPasteImage = onPasteImage,
-            onSend = {
-                val t = draft.trim()
-                // A photo alone is a complete message: "what is this?" is implied
-                // by having attached it, and the send path builds the marker text.
-                if (t.isNotEmpty() || attachments.any { it.state != AttachChipState.FAILED }) onSend(t)
-            },
-            onCancel = onCancel,
         )
     }
 }
@@ -479,7 +498,9 @@ private fun Composer(
         // Nothing typed: the useful action on a running turn is to stop it.
         stopInstead = sending && draft.isBlank(),
         onStop = onCancel,
-        rowModifier = Modifier.imeAndSystemNavPadding(),
+        // The NAVIGATION BAR only: the chat's column pays the keyboard
+        // (keyboardPadding), and its inset covers the bar while it is up.
+        rowModifier = Modifier.systemNavPadding(),
         header = {
             // Above the box rather than inside the row: the reference is a fact about
             // the message being written, and the row below is already four controls
