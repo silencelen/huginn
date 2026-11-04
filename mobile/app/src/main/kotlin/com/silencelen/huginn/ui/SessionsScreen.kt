@@ -123,7 +123,10 @@ fun SessionsScreen(
 ) {
     var showNew by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
-    var newDir by remember { mutableStateOf("") }
+    // A TextFieldValue, not a String: a path picked from Recent has to land with
+    // the cursor at its END, so the field shows the tail (StartDirField).
+    var newDirField by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
+    val newDir = newDirField.text
     var newDirPicking by remember { mutableStateOf(false) }
     var createError by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
@@ -245,12 +248,12 @@ fun SessionsScreen(
 
         if (twoPane) {
             FloatingActionButton(
-                onClick = { newName = ""; newDir = ""; createError = null; onLoadRecentDirs(); showNew = true },
+                onClick = { newName = ""; newDirField = StartDirField.picked(""); createError = null; onLoadRecentDirs(); showNew = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
             ) { Icon(Icons.Filled.Add, contentDescription = "New session") }
         } else {
             ExtendedFloatingActionButton(
-                onClick = { newName = ""; newDir = ""; createError = null; onLoadRecentDirs(); showNew = true },
+                onClick = { newName = ""; newDirField = StartDirField.picked(""); createError = null; onLoadRecentDirs(); showNew = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(FAB_INSET),
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("New session") },
@@ -276,6 +279,19 @@ fun SessionsScreen(
         // the daemon's 400, shown here while the dialog stays up.
         val dirProblem = StartDirRules.cwdProblem(newDir)
         val dirChoices = StartDirRules.choices(recentDirs, newDir)
+        // Each Recent row cut in the MIDDLE to what the menu row holds (the
+        // desktop's DirLabel, measured, not counted), so two long paths that
+        // differ at the end still read differently.
+        val dirMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+        val dirStyle = MaterialTheme.typography.bodyMedium
+        val dirLabelPx = with(androidx.compose.ui.platform.LocalDensity.current) { StartDirField.RECENT_LABEL_WIDTH.roundToPx() }
+        val dirLabels = remember(dirChoices, dirStyle, dirLabelPx, dirMeasurer) {
+            dirChoices.map { d ->
+                StartDirRules.DirLabel.fit(d) { s ->
+                    dirMeasurer.measure(s, dirStyle, softWrap = false, maxLines = 1).size.width <= dirLabelPx
+                }
+            }
+        }
         HouseDialog(
             title = "New session",
             onDismiss = { showNew = false },
@@ -313,9 +329,17 @@ fun SessionsScreen(
                     Spacer(Modifier.height(12.dp))
                     Box {
                         OutlinedTextField(
-                            value = newDir,
-                            onValueChange = { newDir = it; createError = null },
-                            singleLine = true,
+                            value = newDirField,
+                            onValueChange = { newDirField = StartDirField.oneLine(it); createError = null },
+                            // ⚠ TWO LINES, so a long path shows WHOLE: one line put
+                            // `/root/projects/huginn-e2e/al` on screen and hid the
+                            // tail that names the directory. Still one line of TEXT
+                            // (oneLine), and Done rather than a return key.
+                            singleLine = false,
+                            maxLines = 2,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                imeAction = androidx.compose.ui.text.input.ImeAction.Done,
+                            ),
                             label = { Text(StartDirRules.LABEL) },
                             placeholder = { Text(recentDirs?.default ?: "/path/on/the/server") },
                             isError = dirProblem != null || createError != null,
@@ -327,7 +351,9 @@ fun SessionsScreen(
                         HouseMenu(
                             expanded = newDirPicking,
                             onDismiss = { newDirPicking = false },
-                            items = dirChoices.map { d -> HouseMenuItem(d) { newDir = d; createError = null } },
+                            items = dirChoices.mapIndexed { i, d ->
+                                HouseMenuItem(dirLabels.getOrElse(i) { d }) { newDirField = StartDirField.picked(d); createError = null }
+                            },
                         )
                     }
                     Spacer(Modifier.height(8.dp))

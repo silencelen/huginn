@@ -17,6 +17,8 @@
   stay in view, and the last row clears the navigation bar.
 - An open project page shows a roster change that arrives while it is open: its poll, Refresh and
   the `project_change` push re-read the project.
+- New session: a long starting directory shows its end. The field wraps to two lines, a path picked
+  from Recent lands with the cursor at its end, and Recent rows are shortened in the middle.
 
 ## 3.16.0 — 2026-11-02
 
