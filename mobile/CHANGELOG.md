@@ -19,6 +19,22 @@
   the `project_change` push re-read the project.
 - New session: a long starting directory shows its end. The field wraps to two lines, a path picked
   from Recent lands with the cursor at its end, and Recent rows are shortened in the middle.
+- A message typed as `! command` (a space after the `!`) runs as a shell command: the box takes the
+  shell tint and hint and the send is flagged, instead of being refused by the server. A `!` with
+  nothing after it stays a message.
+- A shell command is sent with its Enter, so it runs at once instead of waiting as unsent text.
+- A shell command and its output show as what they are: the command as `! command` in the shell
+  tint, the output as a monospace block with errors in the error colour and "no output" when there
+  was none, instead of raw `<bash-input>` and `<bash-stdout>` tags. Long output is folded to its
+  first lines until opened.
+- Markdown keeps underscores inside words (`mcp__server__tool`, `snake_case`) instead of turning
+  them into italics, while `_emphasis_` and `__strong__` still work.
+- Code inside bold or italic text (`` **`file.png`** ``) is drawn as code, without its backticks.
+- The closed `/context` card shows the total (`45k / 1m tokens · 4%`) instead of repeating its
+  heading; other folded cards preview their first line without Markdown marks.
+- An answered question shows each answer under its question's header, one line each and cut at a
+  word, instead of the result's text cut mid-word. An answer that arrives after its question was
+  drawn completes the question's card, and a refused question says "Not answered".
 
 ## 3.16.0 — 2026-11-02
 

@@ -84,9 +84,12 @@ fun ProjectsListView(
     /**
      * Whether THIS view owns the scroll. Same rule and same reason as
      * [AppsView]: the phone hosts this column in a `Box(fillMaxSize())` and
-     * nothing else there scrolls, so every project past the fold is unreachable;
-     * the desktop's pane already scrolls around it and a second one nested inside
-     * swallows the gesture instead of throwing.
+     * nothing else there scrolls, so every project past the fold is unreachable.
+     * The desktop leaves it false because its `ProjectsList` scrolls this column
+     * itself (through [modifier], under its own pinned header and with the pane
+     * scrollbar) — a second scroll nested inside would swallow the wheel. It once
+     * left it false with NO scroll anywhere, and an expanded tree ran off the
+     * window with nothing to reach the projects below (desktop 2.10.0).
      */
     scroll: Boolean = false,
     /**
