@@ -1177,10 +1177,31 @@ class HuginnClientTest {
         assertEquals("/srv", r.default)
     }
 
+    /**
+     * ⚠ THE ENTER RIDES WITH THE FLAG (2026-11-03). The body used to drop `keys`
+     * for a shell send ("Enter implied"), and the daemon reads text that arrives
+     * WITHOUT an Enter as somebody typing in the live view: it stamped the
+     * session and the draft guard held the command five seconds ("Queued ·
+     * unsent text in the live view"). The daemon presses the Enter itself either
+     * way, so sending it costs nothing and says what the send is.
+     */
     @Test
-    fun `a shell send carries shell true, no keys and no scratchpad`() = runTest {
+    fun `a shell send carries shell true and Enter, and no scratchpad`() = runTest {
         ok("""{"ok":true}""").sendKeys("s1", text = "!ls -la", keys = listOf("Enter"), scratchpadId = "pad-1", shell = true)
-        assertEquals("""{"text":"!ls -la","shell":true}""", lastBody(), "Enter is implied and a page cannot ride a shell command")
+        assertEquals(
+            """{"text":"!ls -la","keys":["Enter"],"shell":true}""", lastBody(),
+            "a composer send, and a page cannot ride a shell command",
+        )
+        ok("""{"ok":true}""").sendKeys("s1", text = "! echo spaced", shell = true)
+        assertEquals(
+            """{"text":"! echo spaced","keys":["Enter"],"shell":true}""", lastBody(),
+            "a shell command is always run, so the Enter is sent even when the caller named none",
+        )
+        ok("""{"ok":true}""").sendKeys("s1", text = "!make", keys = listOf("Escape", "Enter"), shell = true)
+        assertEquals(
+            """{"text":"!make","keys":["Enter"],"shell":true}""", lastBody(),
+            "nothing but the Enter rides a shell command",
+        )
         ok("""{"ok":true}""").sendKeys("s1", text = "hello", keys = listOf("Enter"))
         assertEquals("""{"text":"hello","keys":["Enter"]}""", lastBody(), "without the flag the body is unchanged")
     }

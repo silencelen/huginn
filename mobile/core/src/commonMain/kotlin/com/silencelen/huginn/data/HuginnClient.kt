@@ -1713,15 +1713,24 @@ class HuginnClient(
         /**
          * Run [text] as a Claude Code shell-mode (`!`) command, on purpose (appd
          * 3.17): the server types the `!`, the command and Enter itself. One line,
-         * no scratchpad, Enter implied — [com.silencelen.huginn.ui.ShellMode] is
-         * the rule that decides it. Sent only when true, so an older daemon sees
-         * the body it always saw.
+         * no scratchpad — [com.silencelen.huginn.ui.ShellMode] is the rule that
+         * decides it. The flag is sent only when true, so an older daemon sees the
+         * body it always saw.
+         *
+         * ⚠ AND THE ENTER GOES WITH IT, whatever [keys] says (2026-11-03). This
+         * dropped `keys` for a shell send ("Enter implied"), and the daemon reads
+         * text that arrives WITHOUT an Enter as somebody typing in the live view:
+         * it stamped the session and the draft guard held the command for five
+         * seconds ("Queued · unsent text in the live view"). A shell command is
+         * always run, so its body is always a composer send: text plus `Enter`,
+         * and no other key.
          */
         shell: Boolean = false,
     ): SendKeysResult {
+        val sent = if (shell) listOf("Enter") else keys
         val payload = buildJsonObject {
             if (text != null) put("text", JsonPrimitive(text))
-            if (keys.isNotEmpty() && !shell) put("keys", JsonArray(keys.map { JsonPrimitive(it) }))
+            if (sent.isNotEmpty()) put("keys", JsonArray(sent.map { JsonPrimitive(it) }))
             if (!shell) scratchpadId?.let { put("scratchpadId", JsonPrimitive(it)) }
             if (shell) put("shell", JsonPrimitive(true))
         }
