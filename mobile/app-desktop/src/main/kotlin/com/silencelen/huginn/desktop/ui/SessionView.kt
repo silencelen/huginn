@@ -196,6 +196,9 @@ fun SessionView(store: AppStore, name: String) {
         SessionController(
             store.client, name, store.presence, store.paneLease, store.metaSaver, store.scope,
             questionDraftBook = store.questionDrafts,
+            // This session's row says whether its Claude is up, which is what
+            // tells "no transcript yet" from "a plain shell" (TranscriptRetry).
+            sessions = store.sessions,
         )
     }
     val draftKey = DraftBook.sessionKey(name)

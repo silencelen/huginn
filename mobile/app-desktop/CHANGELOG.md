@@ -5,6 +5,9 @@
 ### Fixed
 - The Projects list scrolls when its projects and members run past the bottom of the window, with a
   scrollbar, and its header and "+ New" stay at the top.
+- A new session's conversation appears within a few seconds of its first prompt instead of up to a
+  minute later: while Claude Code is running in a session with no transcript yet, the app asks again
+  every 2.5 s. A plain shell is still asked less and less often.
 
 ## 2.10.0
 

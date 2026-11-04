@@ -6,6 +6,7 @@ import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PaneLease
 import com.silencelen.huginn.data.PanePrompt
 import com.silencelen.huginn.data.Screen
+import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.SessionGraph
 import com.silencelen.huginn.data.SessionMeta
 import com.silencelen.huginn.data.SessionMetaSaver
@@ -105,6 +106,13 @@ class SessionController(
      * switches to another session. A test that builds a bare controller gets its own.
      */
     private val questionDraftBook: QuestionDraftBook = QuestionDraftBook(),
+    /**
+     * The app's sessions list ([AppStore.sessions]), read for THIS session's row:
+     * whether Claude Code is up in the pane decides how soon a transcript that is
+     * not there yet is asked for again ([TranscriptRetry]). A test that builds a
+     * bare controller gets an empty list, which is the ladder as before.
+     */
+    private val sessions: StateFlow<List<Session>> = MutableStateFlow(emptyList()),
 ) {
 
     /**
@@ -586,11 +594,39 @@ class SessionController(
             var failures = 0
             while (currentCoroutineContext().isActive) {
                 failures = if (pollMainOnce()) 0 else failures + 1
-                // A session that never prompted Claude 409s forever. At the flat
-                // tick that is ~24 daemon errors a minute for as long as this view
-                // stays open, which is this client hammering its own host.
-                delay(Backoff.transcript(failures))
+                awaitNextRead(failures)
             }
+        }
+    }
+
+    /** The HTTP status the last failed read was answered with; null after one that landed. */
+    @Volatile
+    private var lastReadCode: Int? = null
+
+    private fun ownRow(): Session? = sessions.value.firstOrNull { it.name == name }
+
+    /**
+     * The wait between two reads of the tail.
+     *
+     * A plain shell 409s forever, and at the flat tick that is ~24 daemon errors
+     * a minute for as long as this view stays open — this client hammering its own
+     * host — so a failing read climbs [Backoff.transcript]'s ladder. ⚠ BUT A NEW
+     * SESSION 409s TOO, until its first prompt, and on the ladder its conversation
+     * appeared about 70 s after the daemon had it (2026-11-03). [TranscriptRetry]
+     * tells the two apart from the sessions list: a session whose Claude is up is
+     * asked again at the healthy tick, and a laddered wait ends the moment the list
+     * says Claude has come up.
+     */
+    private suspend fun awaitNextRead(failures: Int) {
+        val row = ownRow()
+        val wait = TranscriptRetry.delayMs(failures, lastReadCode, row)
+        if (wait <= Backoff.TRANSCRIPT_MS) {
+            delay(wait)
+            return
+        }
+        withTimeoutOrNull(wait) {
+            sessions.map { rows -> rows.firstOrNull { it.name == name } }
+                .first { TranscriptRetry.wakes(row, it) }
         }
     }
 
@@ -606,6 +642,7 @@ class SessionController(
     internal suspend fun pollMainOnce(): Boolean {
         var ok = false
         val read = runCatching { client.sessionTranscript(name, transcriptOffset) }
+        lastReadCode = (read.exceptionOrNull() as? HuginnClient.HuginnException)?.code
         read
             .onSuccess { page ->
                 ok = true
