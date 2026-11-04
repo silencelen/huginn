@@ -3,8 +3,14 @@ package com.silencelen.huginn
 import com.silencelen.huginn.ui.MdBlock
 import com.silencelen.huginn.ui.Markdown
 import com.silencelen.huginn.ui.tailRevision
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.Test
 
@@ -93,6 +99,100 @@ class MarkdownTest {
     }
 
     /**
+     * ⚠ VERBATIM FROM THE /context TABLE (2026-11-03, both apps): an MCP tool's
+     * name is `mcp__<server>__<tool>`, and it rendered as
+     * "mcp_*mempalace*mempalacekg_timeline" — the underscores eaten and the
+     * middle in italics. Only the OPENER was checked for a letter before it, so
+     * the second `_` of every `__` opened emphasis. CommonMark: a `_` run that
+     * sits between two alphanumerics can neither open nor close.
+     */
+    @Test
+    fun `intraword underscores and double underscores stay literal`() {
+        for (name in listOf(
+            "mcp__mempalace__mempalace_kg_timeline",
+            "mcp__claude_ai_Claude_Docs__batch",
+            "a__b__c",
+            "x_1_y and z__2__w",
+        )) {
+            val s = Markdown.inline(name)
+            assertEquals(name, s.text, "every underscore of $name is a character")
+            assertTrue(s.spanStyles.isEmpty(), "nothing in $name is emphasis: ${s.spanStyles}")
+        }
+        // The table row it came from: a cell is inline-parsed like prose.
+        val t = Markdown.parse("| Tool | Tokens |\n|---|---|\n| mcp__mempalace__mempalace_kg_timeline | 152 |")
+            .single() as MdBlock.Table
+        assertEquals("mcp__mempalace__mempalace_kg_timeline", t.rows[1][0].text)
+        // ...while `*` keeps working intraword: CommonMark holds back only `_`.
+        val star = Markdown.inline("foo*bar*baz and un**frigging**believable")
+        assertEquals("foobarbaz and unfriggingbelievable", star.text)
+        assertTrue(italicOver(star, "bar"))
+        assertTrue(boldOver(star, "frigging"))
+    }
+
+    @Test
+    fun `underscore emphasis and strong still work at word boundaries`() {
+        val em = Markdown.inline("this is _emphasis_ here")
+        assertEquals("this is emphasis here", em.text)
+        assertTrue(italicOver(em, "emphasis"))
+        val strong = Markdown.inline("and __strong__ too")
+        assertEquals("and strong too", strong.text)
+        assertTrue(boldOver(strong, "strong"))
+        assertEquals("(underlined)", Markdown.inline("(_underlined_)").text, "punctuation is a boundary")
+    }
+
+    /**
+     * ⚠ BOTH APPS DREW `**\`hi.png\`**` AS BOLD WITH THE BACKTICKS IN IT: the
+     * bold branch appended its inner text raw, so nothing inside a strong or an
+     * emphasis span was parsed at all.
+     */
+    @Test
+    fun `a code span nests inside bold and emphasis`() {
+        val s = Markdown.inline("**`hi.png`**")
+        assertEquals("hi.png", s.text, "the backticks are markers, not text")
+        assertTrue(boldOver(s, "hi.png"))
+        assertTrue(monoOver(s, "hi.png"))
+        val e = Markdown.inline("saved *`out/report.md`* and **see `ls -la` first**")
+        assertEquals("saved out/report.md and see ls -la first", e.text)
+        assertTrue(italicOver(e, "out/report.md"))
+        assertTrue(monoOver(e, "out/report.md"))
+        assertTrue(boldOver(e, "see ls -la first"))
+        assertTrue(monoOver(e, "ls -la"))
+        assertFalse(monoOver(e, "see "), "only the span is code")
+    }
+
+    @Test
+    fun `emphasis nests inside strong`() {
+        val s = Markdown.inline("**a *b* c**")
+        assertEquals("a b c", s.text)
+        assertTrue(boldOver(s, "a b c"))
+        assertTrue(italicOver(s, "b"))
+        assertFalse(italicOver(s, "a "))
+        val both = Markdown.inline("***both***")
+        assertEquals("both", both.text)
+        assertTrue(boldOver(both, "both"))
+        assertTrue(italicOver(both, "both"))
+    }
+
+    @Test
+    fun `a double backtick span may hold a backtick, and nothing inside a span is markup`() {
+        assertEquals("use a`b here", Markdown.inline("use ``a`b`` here").text)
+        assertEquals("``unclosed", Markdown.inline("``unclosed").text)
+        val s = Markdown.inline("run `a_b * c **d**` now")
+        assertEquals("run a_b * c **d** now", s.text)
+        assertEquals(1, s.spanStyles.size, "the code span is the only style: ${s.spanStyles}")
+    }
+
+    private fun covering(s: AnnotatedString, piece: String): List<SpanStyle> {
+        val at = s.text.indexOf(piece)
+        assertTrue(at >= 0, "'$piece' is not in '${s.text}'")
+        return s.spanStyles.filter { it.start <= at && it.end >= at + piece.length }.map { it.item }
+    }
+
+    private fun boldOver(s: AnnotatedString, piece: String) = covering(s, piece).any { it.fontWeight == FontWeight.Bold }
+    private fun italicOver(s: AnnotatedString, piece: String) = covering(s, piece).any { it.fontStyle == FontStyle.Italic }
+    private fun monoOver(s: AnnotatedString, piece: String) = covering(s, piece).any { it.fontFamily == FontFamily.Monospace }
+
+    /**
      * WAS `a link keeps its label and appends the url only when it adds
      * something`, and the parens URL was pinned here since the renderer had no
      * way to make a label clickable. It has one now (decision 44), so the URL
@@ -103,6 +203,22 @@ class MarkdownTest {
     fun `a link keeps its label and nothing else`() {
         assertEquals("docs", Markdown.inline("[docs](https://x.test/a)").text)
         assertEquals("https://x.test", Markdown.inline("[https://x.test](https://x.test)").text)
+    }
+
+    /**
+     * A link's words are inline markdown like any others — the same nesting fix
+     * as a code span in bold — but a link inside a link is never made: the label
+     * of `[https://x.test](https://x.test)` is not a second, auto-linked URL.
+     */
+    @Test
+    fun `a link's words are inline markdown, and never a second link`() {
+        val s = Markdown.inline("see [**the** `runbook`](https://x.test/r) now")
+        assertEquals("see the runbook now", s.text)
+        assertTrue(boldOver(s, "the"))
+        assertTrue(monoOver(s, "runbook"))
+        val link = s.getLinkAnnotations(0, s.length).single()
+        assertEquals("the runbook", s.text.substring(link.start, link.end))
+        assertEquals(1, Markdown.inline("[https://x.test](https://x.test)").getLinkAnnotations(0, 14).size)
     }
 
     @Test
