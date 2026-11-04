@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.17.1 — 2026-11-04
 
 ### Added
 - A chat waiting on its `start_session` request sends a `chat_attention` push (subject the chat id,

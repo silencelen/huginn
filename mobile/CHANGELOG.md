@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.16.1 — 2026-11-04
 
 ### Added
 - A chat whose Claude is waiting on a new-session approval notifies under Needs you (the
