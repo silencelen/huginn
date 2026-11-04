@@ -1248,6 +1248,11 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        // A project push re-reads the project the page has open (ProjectPushes):
+        // a roster change that lands while the page is up has to appear on it.
+        viewModelScope.launch {
+            com.silencelen.huginn.notify.ProjectPushes.changed.collect { id -> onProjectPushed(id) }
+        }
         viewModelScope.launch {
             baseUrlNow = settings.baseUrl.first()
             tokenNow = settings.token.first()
@@ -2088,6 +2093,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             // runs once per connection, which is exactly the cadence feature
             // detection wants. A 404 at either turns every way in off.
             landProjects()
+            // ...and the project page's own row, when one is open: Refresh there
+            // has to bring up a roster change that arrived after it opened.
+            dashboardId?.let { landOpenProject(it) }
             landApps()
             // The Claude-settings probe rides the same once-per-connection refresh
             // (appd 3.14.0); a 404 turns the one row and the chats' fast option off.
@@ -2780,10 +2788,37 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Re-read the OPEN project's record and row — what its roster-change card is
+     * drawn from — and land it only if the page is still on that project.
+     *
+     * ⚠⚠ THE DASHBOARD ROUTE DOES NOT CARRY THE ROSTER CHANGE. The page polled
+     * only that route, and the card is read off the project's ROW, which nothing
+     * re-read while the page was up: a change the lead proposed with the page
+     * open never appeared on it (Fold, 2026-11-03). Called from the page's poll,
+     * from Refresh and from a project push ([onProjectPushed]). The flows dedupe
+     * by equality, so an unchanged answer redraws nothing.
+     */
+    private suspend fun landOpenProject(id: String) {
+        runCatching { client.project(id) }
+            .onSuccess { d -> if (dashboardId == id && d.project.id == id) landDetail(d) }
+    }
+
+    /** A push said project [id] changed: the open page re-reads it now, not on its next visit. */
+    private fun onProjectPushed(id: String) {
+        if (dashboardId != id) return
+        viewModelScope.launch {
+            awaitReady()
+            landOpenProject(id)
+            landProjects()
+        }
+    }
+
     private var dashboardJob: Job? = null
 
     /**
-     * The dashboard, while it is on screen.
+     * The dashboard, while it is on screen — and the project's own row with it
+     * ([landOpenProject]), which is where a roster change arrives.
      *
      * ⚠ THE ANSWER IS ONLY PUBLISHED WHEN IT IS NEW. The daemon sums up to twelve
      * session overviews per tick and stamps the answer with `generatedAt`; an
@@ -2805,6 +2840,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                             _projectDashboard.value = d
                         }
                     }
+                landOpenProject(id)
                 delay(5_000)
             }
         }

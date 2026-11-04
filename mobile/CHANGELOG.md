@@ -9,6 +9,8 @@
   composer is never squeezed.
 - The project page moves up for the keyboard: Re-role's and Add member's fields and their buttons
   stay in view, and the last row clears the navigation bar.
+- An open project page shows a roster change that arrives while it is open: its poll, Refresh and
+  the `project_change` push re-read the project.
 
 ## 3.16.0 — 2026-11-02
 

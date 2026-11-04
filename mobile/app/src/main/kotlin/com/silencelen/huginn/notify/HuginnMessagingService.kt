@@ -156,6 +156,9 @@ class HuginnMessagingService : FirebaseMessagingService() {
                 projectActions = a.projectActions,
             ) }
         }
+        // ...and the project page, if it has that project open, re-reads it now:
+        // a roster change that only reached the shade was the 2026-11-03 bug.
+        ProjectPushes.projectOf(kind, subject, data["payload"])?.let { ProjectPushes.announce(it) }
 
         val redundant = proposal != null || headroom != null || kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
