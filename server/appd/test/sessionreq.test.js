@@ -121,6 +121,29 @@ test('a request names nothing after an hour, or once its process is gone, and th
   assert.deepEqual(fs.readdirSync(path.join(state, '.start', 'session', 'planner')), []);
 });
 
+test('every requester with a live request, from one look at the kind (2026-11-03)', () => {
+  // What the session list and the alert watcher read: who is waiting on a
+  // start_session request right now, rather than one card's requests.
+  const state = tmpdir();
+  const now = 1_800_000_000_000;
+  assert.equal(sr.liveByRequester(state, 'session', { now }).size, 0, 'nothing ever asked: an empty answer, no throw');
+  const first = sr.park(state, SESSION, ARGS, { now });
+  const second = sr.park(state, SESSION, { ...ARGS, name: 'again' }, { now: now + 5 });
+  sr.park(state, { kind: 'session', id: 'quiet' }, ARGS, { now });
+  sr.answer(state, { kind: 'session', id: 'quiet' }, sr.liveRequests(state, { kind: 'session', id: 'quiet' }, { now })[0].id,
+    { started: false, reason: 'declined' });
+  const chat = sr.park(state, CHAT, ARGS, { now });
+  fs.mkdirSync(path.join(state, '.start', 'session', '..bad'), { recursive: true });   // never a requester
+  const sessions = sr.liveByRequester(state, 'session', { now: now + 10 });
+  assert.deepEqual([...sessions.keys()], ['planner'], 'an answered requester and a bad name are not waiting');
+  assert.deepEqual(sessions.get('planner').map((r) => r.id), [first.id, second.id], 'oldest first');
+  assert.deepEqual([...sr.liveByRequester(state, 'chat', { now }).keys()], [CHAT.id]);
+  assert.equal(sr.liveByRequester(state, 'chat', { now }).get(CHAT.id)[0].id, chat.id);
+  assert.equal(sr.liveByRequester(state, 'session', { now: now + sr.EXPIRE_MS + 10 }).size, 0, 'expired: nobody');
+  assert.equal(sr.liveByRequester(state, 'session', { now, alive: () => false }).size, 0, 'asker gone: nobody');
+  assert.equal(sr.liveByRequester(state, 'job', { now }).size, 0, 'only the two kinds');
+});
+
 test('an answer lands before the request goes, is claimed once, and only a well-formed result is written', () => {
   const state = tmpdir();
   const rec = sr.park(state, SESSION, ARGS);

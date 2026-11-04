@@ -1827,6 +1827,16 @@ async function listSessions({ preview = false, shared = false } = {}) {
     log(`sessions: ${hidden.join(', ')} still in tmux but archived; listed under /v1/archive instead`);
   }
 
+  // A session waiting on its own start_session request needs you: the row, the
+  // watch digest and the alerts built from this list say `attention` until the
+  // request is answered or expires (startRequestSince — and why the send gate,
+  // which reads readSessionState, does not). After the archive filter, which
+  // reads `stateSince` as the run's own.
+  for (const r of rows) {
+    const asked = startRequestSince(r.name, r.state);
+    if (asked != null) { r.state = 'attention'; r.stateSince = Math.floor(asked / 1000); }
+  }
+
   if (preview) {
     // Background work rides along so the LIST can say a session is not stalled:
     // that complaint came from exactly this surface. One ps snapshot serves all
@@ -4729,6 +4739,34 @@ function withPendingQuestion(name, st) {
 }
 
 /**
+ * When this session's Claude parked the start_session request it is blocked
+ * on (lib/sessionreq.js) — the oldest live one's ts in ms — or null. Asked only
+ * of a `running` word, the one the flat file says while the tool call waits.
+ *
+ * ⚠ THE NOTIFICATION LAYER'S `attention`, AND NOBODY ELSE'S (2026-11-03). A
+ * request waits up to an hour inside an MCP call, and the state file says
+ * `running` the whole time: alerts fire on a session's TRANSITION into
+ * `attention`, so three requests on one night reached no phone and no desktop,
+ * and the api reference's "session_attention push built from a question of kind
+ * session" was never sent. The session list, the watch digest (and with it the
+ * stream's `state` frames the desktop notifies from) and decideAlerts read
+ * `attention` through this — listSessions applies it to every row, and the state
+ * watcher compares bursts against the same word.
+ *
+ * NOT folded into withPendingQuestion, because readSessionState is also the send
+ * gate's door: there `attention` holds a person's message for a dialog, and none
+ * is drawn — Claude is mid tool call, and a message waits for the turn the way
+ * it always has. The question card, the push text (describe) and its empty
+ * button list come from the registry, as for every other question.
+ */
+function startRequestSince(name, word) {
+  if (word !== 'running') return null;
+  let reqs;
+  try { reqs = sessionreq.liveRequests(STATE_DIR, { kind: 'session', id: name }); } catch { return null; }
+  return reqs.length ? reqs[0].ts : null;
+}
+
+/**
  * When a parked PERMISSION prompt (a Bash, Edit, MCP dialog — anything but the
  * sidecar-backed AskUserQuestion / ExitPlanMode) has been waiting on its hook —
  * its ts in seconds, or null. The same fact the sidecars give the main thread's
@@ -5136,6 +5174,33 @@ function chatStates() {
       // that merely existed before anyone happened to be looking.
       createdAt: Number(m.createdAt) || 0,
     });
+  }
+  return out;
+}
+
+/**
+ * The chats whose run is waiting on a start_session request it parked, for the
+ * alert watcher: chat id -> {title, asks: [{id, text, fingerprint}]}, each live
+ * request described the way its card is (lib/questions describe).
+ *
+ * ⚠ A CHAT HAD NO WAY TO SAY "NEEDS YOU" (2026-11-03). The watcher's chat rule
+ * is a run finishing; a run blocked in start_session is just running, for up to
+ * the hour the request lives, and the request expired with nobody told. Read
+ * HERE and not in chatStates, because chatStates feeds the watch digest that
+ * parked phones hash: a request is news for a push, not a reason to wake every
+ * watcher. Every chat directory counts, a Round's run included: it asks the same
+ * way, and its Round reports only once the run has ended.
+ */
+function chatAsksNow() {
+  const out = Object.create(null);
+  let live;
+  try { live = sessionreq.liveByRequester(STATE_DIR, 'chat'); } catch { return out; }
+  for (const [chatId, reqs] of live) {
+    const asks = questionsLib.buildQuestions({ sessionRequests: reqs })
+      .map((q) => ({ id: q.id, text: questionsLib.describe(q), fingerprint: q.fingerprint }));
+    if (!asks.length) continue;
+    const meta = loadMeta(chatId);
+    out[chatId] = { title: (meta && meta.title) || null, asks };
   }
   return out;
 }
@@ -12374,7 +12439,9 @@ async function alertTickInner(st) {
   // Name-keyed, so prototype-less for the same reason as lib/watch's digest (#35).
   const sessionsAttached = Object.create(null);
   for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
-  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats };
+  // The start_session requests chats are waiting on (chatAsksNow): a new one is a
+  // chat_attention push, once per request.
+  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats, chatAsks: chatAsksNow() };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
@@ -12489,7 +12556,12 @@ async function alertTickInner(st) {
   if (undelivered.length) {
     const prevObs = st.prev || {};
     for (const a of undelivered) {
-      if (a.kind === 'chat_finished') {
+      if (a.kind === 'chat_attention') {
+        // The request leaves this observation, so the next tick sees it arrive
+        // again and re-decides it; the chat's other requests stay as seen.
+        const cur = observation.chatAsks[a.subject];
+        if (cur) cur.asks = cur.asks.filter((x) => x.id !== a.requestId);
+      } else if (a.kind === 'chat_finished') {
         const before = (prevObs.chats || {})[a.subject];
         const cur = observation.chats[a.subject];
         if (before) observation.chats[a.subject] = before;
@@ -12598,7 +12670,13 @@ function startStateWatch() {
         // (lib/statewatch).
         if (stateWatch.verdict({
           names,
-          stateOf: (name) => (readSessionState(name) || {}).state ?? null,
+          // The word the last tick saw, read the way the tick reads it: a session
+          // blocked on a start_session request was observed as `attention`, and
+          // comparing that with the file's `running` would tick on every rewrite.
+          stateOf: (name) => {
+            const word = (readSessionState(name) || {}).state ?? null;
+            return startRequestSince(name, word) != null ? 'attention' : word;
+          },
           seen: lastAlertStates,
           isSession: (name) => NAME_RE.test(name),
           now: Date.now(),

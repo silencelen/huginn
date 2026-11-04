@@ -151,7 +151,7 @@ All routes need the token except `GET /v1/challenge`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/v1/sessions` | Sessions and their states. `?preview=1` adds titles and activity previews. |
+| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. `?preview=1` adds titles and activity previews. |
 | GET | `/v1/sessions/recent-dirs` | The directories recent sessions started in (the server default first), for the create dialog. |
 | POST | `/v1/sessions` | `{name, cwd?}`: create a session running Claude Code, in `cwd` (an existing directory on the server) or the server default. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
@@ -224,7 +224,10 @@ and whose requests it surfaces to you:
   the prompt queued to it, else `{"started": false, "reason"}` (`declined` / `declined: <your words>`,
   `expired`, `cancelled`, `withdrawn`, or why it could not be made). Nothing is started, and the
   prompt is sent nowhere, unless you approve. The `directory` must be an absolute path to an existing
-  directory on the server (checked when the tool is called and again when you approve).
+  directory on the server (checked when the tool is called and again when you approve). While a
+  request waits you are told once: the asking session reads `attention` (a `session_attention`
+  push), and a chat gets a `chat_attention` push (see
+  [Push: a waiting session request](#push-a-waiting-session-request)).
 
 ### Files
 
@@ -348,7 +351,9 @@ core. They are not meant for scripts.
 
 ### Push: a waiting session request
 
-A `session_attention` push built from a question of kind `session` carries **no buttons**: `options` is empty, as for `project_change` below, and the text names the directory and who asked. The prompt Start would paste fits only on the card, so the notification opens the session (or chat) and the card answers. A client must not draw Start or Decline from this push, whatever `options` a daemon sends; `POST .../answer` refuses a session request by row anyway.
+A session waiting on its own `start_session` request reads `attention` while the request waits, so it gets the ordinary `session_attention` push, once, and a `session_resolved` when the request is answered or expires. Built from a question of kind `session`, that push carries **no buttons**: `options` is empty, as for `project_change` below, and the text names the directory and who asked (`session <name> asks to start a session in <directory>`). The prompt Start would paste fits only on the card, so the notification opens the session and the card answers. A client must not draw Start or Decline from this push, whatever `options` a daemon sends; `POST .../answer` refuses a session request by row anyway.
+
+A chat has no `attention` state, so a request from a chat is its own push, `chat_attention`: `subject` is the chat id, `title` is `<chat title> needs you` (`A chat needs you` for an untitled chat), `text` the request's line (`a chat asks to start a session in <directory>`), `fingerprint` the request's content token, and `options` empty. It is sent once per request, through the same channels as `chat_finished` (Telegram carries it too when push reaches no device), and nothing is sent when the request is answered or expires. Like the session push it has **no buttons**: it opens the chat, whose card (`GET /v1/chats/<id>/questions`) answers.
 
 ### Push: `project_change`
 

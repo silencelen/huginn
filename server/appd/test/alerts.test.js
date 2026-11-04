@@ -600,3 +600,52 @@ test('observations that predate the attachment field still alert', () => {
   );
   assert.deepStrictEqual(alerts.map((x) => x.kind), ['session_finished']);
 });
+
+// --------------------------------------- a chat waiting on a start_session request
+//
+// 2026-11-03: a chat whose run asked for a new session was simply `running` for
+// the hour the request lived, and the watcher's chat rule is a run FINISHING, so
+// three requests on one night reached nobody and expired unseen.
+
+const { GLYPH } = require('../lib/state-table');
+const CHAT_ID = '11111111-2222-4333-8444-555555555555';
+const asks = (title, ...ids) => ({
+  title,
+  asks: ids.map((id) => ({ id, text: `a chat asks to start a session in /srv/${id}`, fingerprint: `token-${id}` })),
+});
+const waiting = (chatAsks) => ({ sessions: {}, chats: {}, chatAsks });
+
+test('a chat waiting on a start_session request alerts once per request, buttonless', () => {
+  const first = decideAlerts(waiting({}), waiting({ [CHAT_ID]: asks('deploy notes', 'r1') }), {}, NOW);
+  assert.deepStrictEqual(first.alerts.map((x) => x.kind), ['chat_attention']);
+  const a = first.alerts[0];
+  assert.strictEqual(a.subject, CHAT_ID, 'the chat it opens');
+  assert.strictEqual(a.title, 'deploy notes needs you');
+  assert.strictEqual(a.text, 'a chat asks to start a session in /srv/r1', "the request's own describe() line");
+  assert.deepStrictEqual(a.options, [], 'no Start or Decline: only the card shows what Start would paste');
+  assert.strictEqual(a.fingerprint, 'token-r1');
+  assert.strictEqual(a.requestId, 'r1');
+  // Still waiting on the next tick: nothing new to say.
+  assert.deepStrictEqual(decideAlerts(waiting({ [CHAT_ID]: asks('deploy notes', 'r1') }),
+    waiting({ [CHAT_ID]: asks('deploy notes', 'r1') }), first.sentUpdates, NOW + 10_000).alerts, []);
+  // A second request from the same chat is its own news, inside the repeat window too.
+  const second = decideAlerts(waiting({ [CHAT_ID]: asks('deploy notes', 'r1') }),
+    waiting({ [CHAT_ID]: asks('deploy notes', 'r1', 'r2') }), first.sentUpdates, NOW + 20_000);
+  assert.deepStrictEqual(second.alerts.map((x) => x.requestId), ['r2']);
+  // Answered or expired: it goes quietly.
+  assert.deepStrictEqual(decideAlerts(waiting({ [CHAT_ID]: asks('t', 'r1', 'r2') }), waiting({}), {}, NOW).alerts, []);
+});
+
+test('a chat request alert: its title without one, the first look, an old observation, a redelivery', () => {
+  assert.strictEqual(decideAlerts(waiting({}), waiting({ [CHAT_ID]: asks(null, 'r3') }), {}, NOW).alerts[0].title,
+    'A chat needs you');
+  assert.deepStrictEqual(decideAlerts(null, waiting({ [CHAT_ID]: asks('t', 'r4') }), {}, NOW).alerts, [],
+    'the first observation never alerts, here as everywhere');
+  assert.strictEqual(decideAlerts({ sessions: {}, chats: {} }, waiting({ [CHAT_ID]: asks('t', 'r5') }), {}, NOW).alerts.length, 1,
+    'an observation saved before the rule carries no requests: one already waiting is announced once');
+  assert.deepStrictEqual(decideAlerts(waiting({}), waiting({ [CHAT_ID]: asks('t', 'r1') }),
+    { [`chat-ask:${CHAT_ID}:r1`]: NOW - 1000 }, NOW).alerts, [], 'the same request said again is suppressed by its key');
+  const tg = telegramText(decideAlerts(waiting({}), waiting({ [CHAT_ID]: asks('deploy notes', 'r6') }), {}, NOW).alerts[0]);
+  assert.strictEqual(tg, `${GLYPH.needsYou} deploy notes needs you\na chat asks to start a session in /srv/r6`,
+    'Telegram: the needs-you glyph and a statement');
+});

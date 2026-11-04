@@ -31,6 +31,7 @@ function watcher() {
     log: () => {},
     listSessions: async () => [],
     chatStates: () => world.chats,
+    chatAsksNow: () => ({}),                          // no chat is waiting on a start_session request
     headroomFacts: () => ({}),
     digest,
     decideAlerts: alertsLib.decideAlerts,

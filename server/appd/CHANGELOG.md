@@ -11,6 +11,11 @@ version number collided. Entries below are reconstructed from the shipping commi
 
 ## [Unreleased]
 
+### Added
+- A chat waiting on its `start_session` request sends a `chat_attention` push (subject the chat id,
+  title `<chat title> needs you`, the request's line as text, no buttons), once per request; Telegram
+  carries it when no push is delivered.
+
 ### Changed
 - A `shell: true` send takes no key but its Enter: any other key in `keys` is refused with `400`.
 
@@ -23,6 +28,9 @@ version number collided. Entries below are reconstructed from the shipping commi
   longer reads as dim, and the shell-mode `!`, drawn dim while Claude is working, is still found.
 - A `shell: true` send without `keys`, as the apps send it, was taken for typing in the live view and
   held for 5 s as unsent text; it is a submit and goes at once.
+- A session waiting on its own `start_session` request reads `attention` in `GET /v1/sessions`,
+  `/v1/watch` and the alerts, so it sends the `session_attention` push; the request could wait an
+  hour and expire with nobody told. The send queue still treats the session as working.
 
 ## 3.17.0 — 2026-11-02
 

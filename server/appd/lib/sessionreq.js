@@ -211,6 +211,26 @@ function liveRequests(stateDir, requester, { alive = pidAlive, now = Date.now() 
 }
 
 /**
+ * Every requester of one kind (`session` or `chat`) with a live request: id ->
+ * its live requests, oldest first (liveRequests). One readdir of
+ * `.start/<kind>/`, then liveRequests per entry, so a host where nothing ever
+ * asked pays a single ENOENT. For the readers that need the whole picture at
+ * once — the session list and the alert watcher — rather than one card's. Never
+ * throws.
+ */
+function liveByRequester(stateDir, kind, opts = {}) {
+  const out = new Map();
+  if (kind !== 'session' && kind !== 'chat') return out;
+  let ids;
+  try { ids = fs.readdirSync(path.join(stateDir, START_DIRNAME, kind)); } catch { return out; }
+  for (const id of ids) {
+    const reqs = liveRequests(stateDir, { kind, id }, opts);
+    if (reqs.length) out.set(id, reqs);
+  }
+  return out;
+}
+
+/**
  * Answer a request: the result the tool will return, exactly. `{started: true,
  * name, cwd}` after the daemon made the session, `{started: false, reason}`
  * otherwise. The answer lands first, then the request goes, so the card drops
@@ -319,6 +339,6 @@ function sweepExpired(stateDir, { now = Date.now() } = {}) {
 
 module.exports = {
   START_DIRNAME, START_SESSION_TOOL, EXPIRE_MS, ID_RE, PROMPT_MAX, PROMPT_BANG_REASON,
-  validRequester, requestDir, argsProblem, promptProblem, contentToken, park, liveRequests, answer, withdraw, claimAnswer,
-  awaitAnswer, sweepExpired,
+  validRequester, requestDir, argsProblem, promptProblem, contentToken, park, liveRequests, liveByRequester, answer,
+  withdraw, claimAnswer, awaitAnswer, sweepExpired,
 };
