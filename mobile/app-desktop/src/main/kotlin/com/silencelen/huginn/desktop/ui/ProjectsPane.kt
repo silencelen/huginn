@@ -175,8 +175,8 @@ fun ProjectsList(store: AppStore) {
     // ⚠⚠ THE TREE DID NOT SCROLL (owner, 2026-11-03): "the projects list isn't
     // scrollable and should be when it goes off the space vertically… when I have
     // projects expanded I have to minimise them to reach projects lower in the
-    // list." `ProjectsListView` owns a scroll only when asked (`scroll = true`, the
-    // phone's), its KDoc said this pane already scrolled around it, and nothing
+    // list." `ProjectsListView` owns a scroll only when its `scroll` flag is set (the
+    // phone sets it), its KDoc said this pane already scrolled around it, and nothing
     // did: `Shell` hosts this in a plain weighted `Box`. Five projects folded open
     // ran off the bottom of the window and the wheel did nothing.
     //

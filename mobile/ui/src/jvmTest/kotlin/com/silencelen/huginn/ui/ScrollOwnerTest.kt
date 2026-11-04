@@ -16,11 +16,13 @@ import kotlin.test.assertTrue
  * is not there. The same shape on `ProjectsListView` cuts off every
  * project past the fold.
  *
- * ⚠ AND EXACTLY ONCE IS THE OTHER HALF. The desktop wraps both views in
- * `ReadingPane`, which is itself a `verticalScroll` — so the shared view may not
- * scroll unconditionally. It takes `scroll`, each shell answers it once, and a
- * nested scroll (which on Compose swallows the gesture rather than throwing) is
- * what this gate is watching for.
+ * ⚠ AND EXACTLY ONCE IS THE OTHER HALF. The desktop scrolls both views itself —
+ * Apps inside `ReadingPane`, which is a `verticalScroll`, and the Projects tree
+ * through the pane's own scroll under its pinned header (desktop 2.10.1; before
+ * that NOTHING scrolled it and an expanded tree ran off the window) — so the
+ * shared view may not scroll unconditionally. It takes `scroll`, each shell
+ * answers it once, and a nested scroll (which on Compose swallows the gesture
+ * rather than throwing) is what this gate is watching for.
  *
  * WHY A SOURCE GREP: there is no compose-ui-test in any of these modules and the
  * failure is a gesture that goes nowhere — see [DisclosureHeightOnlyTest], which
