@@ -1580,8 +1580,10 @@ function recentDirs() {
     try { if (fs.statSync(d).isDirectory()) out.push(d); } catch { /* gone */ }
   };
   add(WORKDIR);
-  const reg = Object.values(loadRegistry()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  for (const r of reg) add(r.cwd);
+  // Newest session first by when it was CREATED (sessreg.newestFirst): the
+  // reconcile pass re-stamps every entry's updatedAt, so that field orders
+  // nothing, and with it the newest directory came last or was cut by the cap.
+  for (const r of sessreg.newestFirst(loadRegistry())) add(r.cwd);
   try {
     const dir = path.join(DATA_DIR, 'archive');
     const rows = [];

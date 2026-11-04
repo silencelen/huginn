@@ -31,6 +31,8 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A session waiting on its own `start_session` request reads `attention` in `GET /v1/sessions`,
   `/v1/watch` and the alerts, so it sends the `session_attention` push; the request could wait an
   hour and expire with nobody told. The send queue still treats the session as working.
+- `GET /v1/sessions/recent-dirs` lists the newest session's directory first, by when it was created;
+  the registry's `updatedAt` is the same for every live entry, so the newest came last or was cut.
 
 ## 3.17.0 — 2026-11-02
 
