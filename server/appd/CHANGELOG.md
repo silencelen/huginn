@@ -9,6 +9,31 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- A chat waiting on its `start_session` request sends a `chat_attention` push (subject the chat id,
+  title `<chat title> needs you`, the request's line as text, no buttons), once per request; Telegram
+  carries it when no push is delivered.
+
+### Changed
+- A `shell: true` send takes no key but its Enter: any other key in `keys` is refused with `400`.
+
+### Fixed
+- `shell: true` sends were refused (`409`, "the prompt already holds text") whenever Claude Code showed
+  its dim suggested reply in the empty prompt. The empty-prompt check and the look before the Enter
+  read the prompt without dim ghost text now, so neither a suggestion nor the rest of an earlier
+  command that shell mode draws after the typed one blocks a command; typed text still refuses.
+- Dim text next to a colour is read correctly: a truecolor or 256-colour code (`38;2;…`, `38;5;2`) no
+  longer reads as dim, and the shell-mode `!`, drawn dim while Claude is working, is still found.
+- A `shell: true` send without `keys`, as the apps send it, was taken for typing in the live view and
+  held for 5 s as unsent text; it is a submit and goes at once.
+- A session waiting on its own `start_session` request reads `attention` in `GET /v1/sessions`,
+  `/v1/watch` and the alerts, so it sends the `session_attention` push; the request could wait an
+  hour and expire with nobody told. The send queue still treats the session as working.
+- `GET /v1/sessions/recent-dirs` lists the newest session's directory first, by when it was created;
+  the registry's `updatedAt` is the same for every live entry, so the newest came last or was cut.
+
 ## 3.17.0 — 2026-11-02
 
 ### Added

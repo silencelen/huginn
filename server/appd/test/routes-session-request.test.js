@@ -29,7 +29,13 @@ const TMUX_SOCK = `huginn-test-${process.pid}`;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const PFX = `sreq${process.pid}`;
 
-let tmp, stateDir, token, daemon, projectDir;
+let tmp, stateDir, token, daemon, projectDir, relayDir;
+/**
+ * A stand-in for the Telegram relay: each alert's text lands in its own file
+ * under relay/, which is how a test sees what the alert watcher decided. The
+ * daemon's own shim sources it with `--message <text>` as `$1 $2`.
+ */
+const RELAY = '#!/usr/bin/env bash\nn="$RELAY_TEST_DIR/$(date +%s%N)-$$"\nprintf \'%s\' "$2" > "$n.part" && mv "$n.part" "$n.msg"\n';
 function sh(cmd, args) { if (cmd === 'tmux') args = ['-L', TMUX_SOCK, ...args]; return execFileSync(cmd, args, { encoding: 'utf8' }); }
 async function api(pathname, init = {}) {
   const res = await fetch(BASE + pathname, { ...init, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...(init.headers || {}) } });
@@ -83,8 +89,10 @@ const sentTo = (name) => { try { return fs.readFileSync(path.join(tmp, 'out', `$
 
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'appd-sreq-'));
-  for (const d of ['state', 'data', 'bin', 'project', 'out']) fs.mkdirSync(path.join(tmp, d));
+  for (const d of ['state', 'data', 'bin', 'project', 'out', 'relay']) fs.mkdirSync(path.join(tmp, d));
   stateDir = path.join(tmp, 'state');
+  relayDir = path.join(tmp, 'relay');
+  fs.writeFileSync(path.join(tmp, 'relay.sh'), RELAY, { mode: 0o755 });
   projectDir = fs.realpathSync(path.join(tmp, 'project'));
   token = crypto.randomBytes(32).toString('hex');
   fs.writeFileSync(path.join(tmp, 'token'), token, { mode: 0o600 });
@@ -105,6 +113,8 @@ before(async () => {
       HUGINN_APPD_TOKEN_FILE: path.join(tmp, 'token'), HUGINN_APPD_STATE_DIR: stateDir,
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK, HUGINN_APPD_WORKDIR: tmp,
       HUGINN_FCM_KEY: path.join(tmp, 'no-fcm-key.json'),
+      // The relay is this file's stand-in (alerts stay off until a test turns them on).
+      HUGINN_APPD_TELEGRAM_SCRIPT: path.join(tmp, 'relay.sh'), RELAY_TEST_DIR: path.join(tmp, 'relay'),
     },
     stdio: 'ignore',
   });
@@ -355,4 +365,86 @@ test('a request rewritten under the card is not started by the owner\'s stale ap
   } finally {
     fs.rmSync(COLLIDE_DIR, { recursive: true, force: true });
   }
+});
+
+// ---- who is told that a request is waiting (2026-11-03) ----------------------
+//
+// Three requests on one night (two sessions, one chat) reached no phone and no
+// desktop: the asking session's state file says `running` while it waits in the
+// tool call, alerts fire only on a transition INTO `attention`, and a chat had
+// no attention alert at all. A request waits up to an hour, then expires unseen.
+
+const { GLYPH } = require('../lib/state-table');
+const relayMessages = () => {
+  try {
+    return fs.readdirSync(relayDir).filter((f) => f.endsWith('.msg')).sort()
+      .map((f) => fs.readFileSync(path.join(relayDir, f), 'utf8'));
+  } catch { return []; }
+};
+const alertState = () => { try { return JSON.parse(fs.readFileSync(path.join(tmp, 'data', 'alerts.json'), 'utf8')); } catch { return {}; } };
+let nudges = 0;
+/** A state file for no session at all: the alert watcher's cue to tick now rather than at its 10 s poll. */
+function nudgeAlerts() {
+  fs.writeFileSync(path.join(stateDir, `${PFX}-nudge${++nudges}`), JSON.stringify({ state: 'idle', ts: Date.now() }));
+}
+
+test('a session waiting on its own request reads `attention` to the list, the watch and the alerts — and not to the send gate', async () => {
+  const asker = askerSession('waits');
+  const row = async () => ((await api('/v1/sessions')).body.sessions || []).find((x) => x.name === asker);
+  assert.equal((await row()).state, 'running', 'precondition: the hook says running');
+  const on = await api('/v1/alerts', { method: 'POST', body: JSON.stringify({ enabled: true, mode: 'always' }) });
+  assert.equal(on.status, 200, JSON.stringify(on.body));
+  // Switching alerts on forgets the last observation: let the watcher take its baseline first.
+  nudgeAlerts();
+  await until('the baseline observation', () => (alertState().prev?.sessions || {})[asker] === 'running');
+
+  const rec = sr.park(stateDir, { kind: 'session', id: asker }, { directory: projectDir, prompt: 'R3 open the deploy notes' });
+  assert.equal((await row()).state, 'attention', 'the session list says it needs you');
+  assert.ok(Math.abs((await row()).stateSince - Math.floor(rec.ts / 1000)) <= 1, 'since the request was parked');
+  const watch = await api('/v1/watch');
+  assert.equal(watch.status, 200);
+  assert.equal(watch.body.sessions[asker], 'attention', 'and so does the digest a watching client notifies from');
+  nudgeAlerts();
+  const said = `${GLYPH.needsYou} ${asker} needs you\nAsked: session ${asker} asks to start a session in ${projectDir}`;
+  await until('the session_attention alert, from the registry', () => relayMessages().includes(said));
+
+  // The send gate reads the hook's own word: a message is not held as if a dialog were up.
+  const sent = await api(`/v1/sessions/${asker}/keys`, { method: 'POST', body: JSON.stringify({ text: 'R3 carry on meanwhile', keys: ['Enter'] }) });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(sent.body.blockedBy, null, JSON.stringify(sent.body));
+  assert.equal(sent.body.delivered, true, JSON.stringify(sent.body));
+  const compact = await api(`/v1/sessions/${asker}/compact`, { method: 'POST' });
+  assert.doesNotMatch(String(compact.body && compact.body.error), /answer the waiting question first/, 'nor refused for one');
+
+  // Answered: back to the hook's word everywhere, and nothing more is said.
+  const q = ((await api(`/v1/sessions/${asker}/questions`)).body.questions || []).find((x) => x.id === rec.id);
+  const no = await api(`/v1/sessions/${asker}/questions/${q.id}`, { method: 'POST', body: JSON.stringify({ behavior: 'deny', fingerprint: q.fingerprint }) });
+  assert.equal(no.status, 200, JSON.stringify(no.body));
+  assert.equal((await row()).state, 'running');
+  assert.equal((await api('/v1/watch')).body.sessions[asker], 'running');
+  const seenAt = alertState().prevAt;
+  nudgeAlerts();
+  await until('a later tick', () => alertState().prevAt > seenAt);
+  assert.equal(relayMessages().filter((m) => m === said).length, 1, 'said once');
+});
+
+test('a chat waiting on a start_session request is told once, as chat_attention', async () => {
+  const made = await api('/v1/chats', { method: 'POST', body: JSON.stringify({ mode: 'ask', title: 'deploy notes' }) });
+  assert.equal(made.status, 201, JSON.stringify(made.body));
+  const chatId = made.body.id;
+  if (!alertState().enabled) {
+    await api('/v1/alerts', { method: 'POST', body: JSON.stringify({ enabled: true, mode: 'always' }) });
+  }
+  nudgeAlerts();
+  await until('an observation that knows the chat', () => !!(alertState().prev?.chats || {})[chatId]);
+  const requester = { kind: 'chat', id: chatId };
+  const rec = sr.park(stateDir, requester, { directory: projectDir, prompt: 'R3 a session for the notes' });
+  nudgeAlerts();
+  const said = `${GLYPH.needsYou} deploy notes needs you\na chat asks to start a session in ${projectDir}`;
+  await until('the chat_attention alert', () => relayMessages().includes(said));
+  const seenAt = alertState().prevAt;
+  nudgeAlerts();
+  await until('a later tick that still sees it waiting', () => alertState().prevAt > seenAt);
+  assert.equal(relayMessages().filter((m) => m === said).length, 1, 'once per request, however many ticks see it waiting');
+  sr.withdraw(stateDir, requester, rec.id);
 });

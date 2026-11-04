@@ -1580,8 +1580,10 @@ function recentDirs() {
     try { if (fs.statSync(d).isDirectory()) out.push(d); } catch { /* gone */ }
   };
   add(WORKDIR);
-  const reg = Object.values(loadRegistry()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  for (const r of reg) add(r.cwd);
+  // Newest session first by when it was CREATED (sessreg.newestFirst): the
+  // reconcile pass re-stamps every entry's updatedAt, so that field orders
+  // nothing, and with it the newest directory came last or was cut by the cap.
+  for (const r of sessreg.newestFirst(loadRegistry())) add(r.cwd);
   try {
     const dir = path.join(DATA_DIR, 'archive');
     const rows = [];
@@ -1825,6 +1827,16 @@ async function listSessions({ preview = false, shared = false } = {}) {
   if (hidden.length) {
     rows = rows.filter((r) => !archivedRun(r));
     log(`sessions: ${hidden.join(', ')} still in tmux but archived; listed under /v1/archive instead`);
+  }
+
+  // A session waiting on its own start_session request needs you: the row, the
+  // watch digest and the alerts built from this list say `attention` until the
+  // request is answered or expires (startRequestSince — and why the send gate,
+  // which reads readSessionState, does not). After the archive filter, which
+  // reads `stateSince` as the run's own.
+  for (const r of rows) {
+    const asked = startRequestSince(r.name, r.state);
+    if (asked != null) { r.state = 'attention'; r.stateSince = Math.floor(asked / 1000); }
   }
 
   if (preview) {
@@ -2621,9 +2633,15 @@ function armSoftEndFromSettle(name, v, what = 'soft-end') {
  * only for text that fits one command line. Anything longer is a 503 rather
  * than a message delivered in visibly mangled pieces.
  */
-/** One plain capture of a pane, as lines, or null when tmux cannot answer. */
-async function capturePaneLines(name) {
-  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+/**
+ * One capture of a pane, as lines, or null when tmux cannot answer. Plain by
+ * default; `escapes` keeps the attributes (`-e`), which is the only way to tell
+ * Claude Code's dim ghost text from text that is really in the box
+ * (typing.stripGhost). Every reader in lib/typing strips ANSI for itself, so
+ * either kind reads the same everywhere a ghost does not matter.
+ */
+async function capturePaneLines(name, { escapes = false } = {}) {
+  const cap = await run('tmux', ['capture-pane', '-p', ...(escapes ? ['-e'] : []), '-t', `=${name}:`]);
   if (cap.err) return null;
   return cap.stdout.replace(/\n$/, '').split('\n');
 }
@@ -2863,7 +2881,11 @@ async function recoverLostPaste(name, text, settle, before) {
  *          and why; `failed` is a result to hand straight back (tmux refused)
  */
 async function enterAfterLook(name, text, { hadComposer = false, shell = false } = {}) {
-  const lines = await capturePaneLines(name);
+  // A shell entry's look keeps the escapes: in shell mode Claude Code draws the
+  // rest of an earlier command dim after ours, and only an `-e` capture tells
+  // that ghost from text somebody put in the box (typing.enterRefusal). Every
+  // other send keeps the plain capture it has always had.
+  const lines = await capturePaneLines(name, { escapes: shell });
   const held = typing.enterRefusal(lines, text, { hadComposer, shell });
   if (held) {
     log(typing.enterHeldLogLine(name, held, lines));
@@ -2928,9 +2950,18 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
    * in the box, whatever put the box in its mode, refuses the send before
    * anything is typed; the look before the Enter (typing.enterRefusal `foreign`)
    * is the second lock on the same door.
+   *
+   * ⚠ BUT A GHOST IS NOT TEXT IN THE BOX (2026-11-03). After most replies
+   * Claude Code draws its suggested next prompt, dim, in the EMPTY box
+   * (`\x1b[39m❯\xa0\x1b[2myes, run it in the background\x1b[0m`), and this check
+   * read a PLAIN capture — no escapes, so `dropGhost` had nothing to drop and the
+   * suggestion was "text": every `!` command sent after such a reply was refused
+   * with this 409 and never ran. Both looks here keep the escapes now, so a dim
+   * suggestion (or the `!` caret, drawn dim while Claude is working) reads as
+   * what it is, and text somebody typed — never drawn dim — still refuses.
    */
   if (shell && submit) {
-    const now = await capturePaneLines(name);
+    const now = await capturePaneLines(name, { escapes: true });
     if (!now || !typing.composerDrawn(now)) {
       return { ok: false, code: 409, message: 'claude is not running in this session — a shell command needs its prompt' };
     }
@@ -2951,7 +2982,9 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
       let entered = false;
       while (Date.now() < by) {
         await sleep(50);
-        const look = await capturePaneLines(name);
+        // composerShellMode reads the `!` row with every escape stripped and
+        // nothing dropped, so the caret counts however it is drawn.
+        const look = await capturePaneLines(name, { escapes: true });
         if (look && typing.composerShellMode(look)) { entered = true; break; }
       }
       if (!entered) {
@@ -4708,6 +4741,34 @@ function withPendingQuestion(name, st) {
 }
 
 /**
+ * When this session's Claude parked the start_session request it is blocked
+ * on (lib/sessionreq.js) — the oldest live one's ts in ms — or null. Asked only
+ * of a `running` word, the one the flat file says while the tool call waits.
+ *
+ * ⚠ THE NOTIFICATION LAYER'S `attention`, AND NOBODY ELSE'S (2026-11-03). A
+ * request waits up to an hour inside an MCP call, and the state file says
+ * `running` the whole time: alerts fire on a session's TRANSITION into
+ * `attention`, so three requests on one night reached no phone and no desktop,
+ * and the api reference's "session_attention push built from a question of kind
+ * session" was never sent. The session list, the watch digest (and with it the
+ * stream's `state` frames the desktop notifies from) and decideAlerts read
+ * `attention` through this — listSessions applies it to every row, and the state
+ * watcher compares bursts against the same word.
+ *
+ * NOT folded into withPendingQuestion, because readSessionState is also the send
+ * gate's door: there `attention` holds a person's message for a dialog, and none
+ * is drawn — Claude is mid tool call, and a message waits for the turn the way
+ * it always has. The question card, the push text (describe) and its empty
+ * button list come from the registry, as for every other question.
+ */
+function startRequestSince(name, word) {
+  if (word !== 'running') return null;
+  let reqs;
+  try { reqs = sessionreq.liveRequests(STATE_DIR, { kind: 'session', id: name }); } catch { return null; }
+  return reqs.length ? reqs[0].ts : null;
+}
+
+/**
  * When a parked PERMISSION prompt (a Bash, Edit, MCP dialog — anything but the
  * sidecar-backed AskUserQuestion / ExitPlanMode) has been waiting on its hook —
  * its ts in seconds, or null. The same fact the sidecars give the main thread's
@@ -5115,6 +5176,33 @@ function chatStates() {
       // that merely existed before anyone happened to be looking.
       createdAt: Number(m.createdAt) || 0,
     });
+  }
+  return out;
+}
+
+/**
+ * The chats whose run is waiting on a start_session request it parked, for the
+ * alert watcher: chat id -> {title, asks: [{id, text, fingerprint}]}, each live
+ * request described the way its card is (lib/questions describe).
+ *
+ * ⚠ A CHAT HAD NO WAY TO SAY "NEEDS YOU" (2026-11-03). The watcher's chat rule
+ * is a run finishing; a run blocked in start_session is just running, for up to
+ * the hour the request lives, and the request expired with nobody told. Read
+ * HERE and not in chatStates, because chatStates feeds the watch digest that
+ * parked phones hash: a request is news for a push, not a reason to wake every
+ * watcher. Every chat directory counts, a Round's run included: it asks the same
+ * way, and its Round reports only once the run has ended.
+ */
+function chatAsksNow() {
+  const out = Object.create(null);
+  let live;
+  try { live = sessionreq.liveByRequester(STATE_DIR, 'chat'); } catch { return out; }
+  for (const [chatId, reqs] of live) {
+    const asks = questionsLib.buildQuestions({ sessionRequests: reqs })
+      .map((q) => ({ id: q.id, text: questionsLib.describe(q), fingerprint: q.fingerprint }));
+    if (!asks.length) continue;
+    const meta = loadMeta(chatId);
+    out[chatId] = { title: (meta && meta.title) || null, asks };
   }
   return out;
 }
@@ -12353,7 +12441,9 @@ async function alertTickInner(st) {
   // Name-keyed, so prototype-less for the same reason as lib/watch's digest (#35).
   const sessionsAttached = Object.create(null);
   for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
-  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats };
+  // The start_session requests chats are waiting on (chatAsksNow): a new one is a
+  // chat_attention push, once per request.
+  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats, chatAsks: chatAsksNow() };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
@@ -12468,7 +12558,12 @@ async function alertTickInner(st) {
   if (undelivered.length) {
     const prevObs = st.prev || {};
     for (const a of undelivered) {
-      if (a.kind === 'chat_finished') {
+      if (a.kind === 'chat_attention') {
+        // The request leaves this observation, so the next tick sees it arrive
+        // again and re-decides it; the chat's other requests stay as seen.
+        const cur = observation.chatAsks[a.subject];
+        if (cur) cur.asks = cur.asks.filter((x) => x.id !== a.requestId);
+      } else if (a.kind === 'chat_finished') {
         const before = (prevObs.chats || {})[a.subject];
         const cur = observation.chats[a.subject];
         if (before) observation.chats[a.subject] = before;
@@ -12577,7 +12672,13 @@ function startStateWatch() {
         // (lib/statewatch).
         if (stateWatch.verdict({
           names,
-          stateOf: (name) => (readSessionState(name) || {}).state ?? null,
+          // The word the last tick saw, read the way the tick reads it: a session
+          // blocked on a start_session request was observed as `attention`, and
+          // comparing that with the file's `running` would tick on every rewrite.
+          stateOf: (name) => {
+            const word = (readSessionState(name) || {}).state ?? null;
+            return startRequestSince(name, word) != null ? 'attention' : word;
+          },
           seen: lastAlertStates,
           isSession: (name) => NAME_RE.test(name),
           now: Date.now(),
@@ -14201,6 +14302,10 @@ async function handleRequest(req, res) {
       const keys = Array.isArray(body.keys) ? body.keys : [];
       if (keys.length > 32) return sendErr(res, 400, 'too many keys');
       for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
+      // A shell command is typed and run by the daemon, Enter included, so the
+      // only key it may carry is that Enter: an Escape or an arrow pressed beside
+      // it would land in the middle of the `!`, the paste and the look.
+      if (shell && keys.some((k) => k !== 'Enter')) return sendErr(res, 400, 'a shell command takes no keys but its Enter');
       /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
@@ -14276,8 +14381,16 @@ async function handleRequest(req, res) {
        * composer send (text AND Enter) is the thing being guarded and must never
        * mark the session on its own behalf. Stamped before anything is queued so
        * a keypress that arrives while a send waits keeps holding it.
+       *
+       * ⚠ A SHELL COMMAND IS A COMPOSER SEND, WITH OR WITHOUT `keys` (2026-11-03).
+       * Its Enter is implied, and the apps (3.16.0, desktop 2.10.0) send
+       * `{text, shell: true}` with no keys at all — text without an Enter, which
+       * is exactly what this read as live-view typing. So every `!` command
+       * stamped its own session and the draft guard then held it for
+       * LIVE_KEYS_QUIET_MS behind "unsent text in the live view", with an empty
+       * box. A shell send never stamps.
        */
-      if (rawKeys.length > 0 || (typedKeys.length > 0 && !keys.includes('Enter'))) {
+      if (!shell && (rawKeys.length > 0 || (typedKeys.length > 0 && !keys.includes('Enter')))) {
         markLiveKeys(name);
       }
       let queued = 0;

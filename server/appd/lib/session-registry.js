@@ -123,6 +123,27 @@ function restorePlan(registry, liveNames) {
 }
 
 /**
+ * The registry's entries, newest session first: by `createdAt`, then
+ * `updatedAt`, then the later-recorded entry first.
+ *
+ * ⚠ NOT BY `updatedAt` ALONE (2026-11-03). mergeLive stamps EVERY live entry's
+ * updatedAt on each reconcile pass, so on a host whose reconcile has run they
+ * all share one value (27 entries at the same second, measured) and a sort on
+ * it changes nothing: the create dialog's "recent" directories came out in the
+ * order the entries were first written — the newest session's directory last,
+ * and past the list's cap, gone. `createdAt` is kept through every merge.
+ */
+function newestFirst(registry) {
+  return Object.values(registry || {})
+    .map((entry, at) => ({ entry, at }))
+    .filter(({ entry }) => entry && typeof entry === 'object')
+    .sort((a, b) => (Number(b.entry.createdAt) || 0) - (Number(a.entry.createdAt) || 0)
+      || (Number(b.entry.updatedAt) || 0) - (Number(a.entry.updatedAt) || 0)
+      || b.at - a.at)
+    .map(({ entry }) => entry);
+}
+
+/**
  * The shell command a restored tmux session runs. Resumes by id when we have a
  * valid one AND its transcript is still on disk; otherwise a plain `claude`, which
  * is the create route's own default — a named session back in the right place is
@@ -140,4 +161,4 @@ function resumeCommand(entry, hasTranscript) {
   return { canResume, command: `${launch}; exec "$SHELL" -l` };
 }
 
-module.exports = { mergeLive, pruneDead, restorePlan, resumeCommand, isReserved, RESERVED, UUID_RE };
+module.exports = { mergeLive, pruneDead, restorePlan, newestFirst, resumeCommand, isReserved, RESERVED, UUID_RE };

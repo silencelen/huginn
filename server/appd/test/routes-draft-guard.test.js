@@ -514,3 +514,42 @@ test('a pane with no composer at all is never held by this rule', async () => {
   await wait(300);
   assert.equal(readOr(out), 'straight through\n');
 });
+
+// ------------------------------------------- C. a shell command is a composer send
+
+test('a shell command sent with no keys is a submit: it goes at once and stamps no live-view typing (2026-11-03)', async () => {
+  // ⚠ THE APPS SEND `{text, shell: true}` AND NO KEYS (app 3.16.0, desktop
+  // 2.10.0): the Enter is implied. The route read text without an Enter as the
+  // Screen tab typing, stamped the session, and the draft guard then held every
+  // `!` command for the 5 s quiet over an EMPTY box — the journal said "holding a
+  // send — there is unsent text in the live view | composer:" and "free again
+  // after 5063ms", the desktop "Queued · unsent text in the live view".
+  const name = await startPane('shell-nokeys');
+  const t0 = Date.now();
+  const { status, body } = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'echo R3-NOKEYS', shell: true }),
+  });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.blockedBy, null, JSON.stringify(body));
+  assert.equal(body.delivered, true, 'delivered in the answer to its own POST, not after a hold');
+  assert.ok(Date.now() - t0 < 4_000, `it was not held (took ${Date.now() - t0}ms)`);
+  for (let i = 0; i < 40 && !readOr(`${outFor(name)}.shell`); i++) await wait(100);
+  assert.equal(readOr(`${outFor(name)}.shell`), '!echo R3-NOKEYS\n', 'and it ran, once');
+  // Nothing stamped the session as being typed into: a message right behind it
+  // goes straight in, where a stamp seconds old would hold it as a draft.
+  const next = await send(name, 'the next message, straight behind it');
+  assert.equal(next.body.delivered, true, JSON.stringify(next.body));
+  assert.equal(next.body.blockedBy, null, JSON.stringify(next.body));
+  assert.doesNotMatch(readOr(daemonLog), new RegExp(`${name}: holding a send`), 'no hold, so no hold line');
+  // The only key a shell command takes is its Enter.
+  const esc = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'ls', shell: true, keys: ['Escape'] }),
+  });
+  assert.equal(esc.status, 400, JSON.stringify(esc.body));
+  assert.match(esc.body.error, /no keys but its Enter/);
+  const withEnter = await api(`/v1/sessions/${name}/keys`, {
+    method: 'POST', body: JSON.stringify({ text: 'echo R3-ENTER', shell: true, keys: ['Enter'] }),
+  });
+  assert.equal(withEnter.status, 200, JSON.stringify(withEnter.body));
+  assert.equal(withEnter.body.delivered, true, 'the shape new clients send goes the same way');
+});

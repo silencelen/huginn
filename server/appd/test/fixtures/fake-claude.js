@@ -101,6 +101,22 @@ const TYPED = process.env.HG_FAKE_CLAUDE_TYPED || '';
  */
 const GHOST = process.env.HG_FAKE_CLAUDE_GHOST || '';
 const SHELL_OUT = process.env.HG_FAKE_CLAUDE_SHELL_OUT || `${OUT}.shell`;
+/**
+ * Three more ways the real 2.1.316 TUI draws its box, read from its bundle and
+ * from tmux 3.6b's own `capture-pane -e` (2026-11-03):
+ *   HG_FAKE_CLAUDE_BUSY=1          both carets dim, as while Claude is working
+ *                                  (`dimColor: isLoading` on the `❯` and the `!`)
+ *   HG_FAKE_CLAUDE_SHELL_GHOST=cmd in shell mode, the rest of an earlier command
+ *                                  that starts with what is in the box (two
+ *                                  characters or more), dim after it: the history
+ *                                  completion. The Enter runs only what was typed.
+ *   HG_FAKE_CLAUDE_TRUECOLOR=1     the `!` caret in its bashBorder colour as a
+ *                                  truecolor cell, `\x1b[38;2;253;93;177m`, the way
+ *                                  a pane drawn in truecolor captures it
+ */
+const BUSY = process.env.HG_FAKE_CLAUDE_BUSY === '1';
+const SHELL_GHOST = process.env.HG_FAKE_CLAUDE_SHELL_GHOST || '';
+const TRUECOLOR = process.env.HG_FAKE_CLAUDE_TRUECOLOR === '1';
 let shellMode = false;
 
 /** The box, with the status lines UNDER it — the shape that matters. */
@@ -108,14 +124,18 @@ const RULE = '─'.repeat(70);
 function drawComposer(typed = '') {
   // A suggestion only ever shows in an empty box, and the first keystroke ends it.
   const body = typed || (GHOST ? `\u001B[2m${GHOST}\u001B[0m` : '');
+  const [dimOn, dimOff] = BUSY ? ['\x1b[2m', '\x1b[22m'] : ['', ''];
   if (shellMode) {
     // The real caret is `!` + NBSP in its own colour; the footer changes with it.
-    process.stdout.write(`${RULE}\n!\u00A0${typed}\n${RULE}\n`
+    const caret = TRUECOLOR ? '\x1b[38;2;253;93;177m!\xa0\x1b[39m' : '!\xa0';
+    const rest = SHELL_GHOST && typed.length >= 2 && SHELL_GHOST !== typed && SHELL_GHOST.startsWith(typed)
+      ? `\x1b[2m${SHELL_GHOST.slice(typed.length)}\x1b[0m` : '';
+    process.stdout.write(`${RULE}\n${dimOn}${caret}${dimOff}${typed}${rest}\n${RULE}\n`
       + '  [fake] Fable 5.1 · ctx 4%\n'
       + '  ! for shell mode\n');
     return;
   }
-  process.stdout.write(`${RULE}\n❯ ${body}\n${RULE}\n`
+  process.stdout.write(`${RULE}\n${dimOn}❯${dimOff} ${body}\n${RULE}\n`
     + '  [fake] Fable 5.1 · ctx 4%\n'
     + '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n');
 }

@@ -21,6 +21,7 @@ const ALERT_GLYPH = {
   session_finished: GLYPH.ok,
   session_resolved: GLYPH.running,
   chat_finished: GLYPH.ok,
+  chat_attention: GLYPH.needsYou,
 };
 
 /** Minimum gap before the same subject may alert again. */
@@ -79,7 +80,8 @@ function humanDuration(ms) {
 /**
  * Diffs two observations and returns the alerts worth sending.
  *
- * @param prev  previous {sessions:{name:state}, chats:{id:{running,title}}}
+ * @param prev  previous {sessions:{name:state}, chats:{id:{running,title}},
+ *              chatAsks?:{id:{title, asks:[{id, text, fingerprint}]}}}
  * @param next  current, same shape
  * @param sent  {key: timestampMs} of what has already been said
  * @param now   ms
@@ -247,6 +249,35 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
         });
         sentUpdates[key] = now;
       }
+    }
+  }
+
+  // A chat whose run is waiting on a start_session request (2026-11-03). A chat
+  // has no `attention` state for the session rule above to see — its run is
+  // simply running while the tool call waits, up to the hour the request lives —
+  // so a request is its own edge: one alert per request id the previous
+  // observation did not hold. Never repeated while it waits, and nothing is sent
+  // when it goes. No buttons: Start would paste a prompt only the card shows.
+  // An observation from before this rule carries no `chatAsks`, so a request
+  // already waiting at an upgrade is announced once, which nobody had done.
+  for (const [id, cur] of Object.entries(next.chatAsks || {})) {
+    const had = (prev.chatAsks || {})[id];
+    const seen = new Set((had && Array.isArray(had.asks) ? had.asks : []).map((x) => x && x.id));
+    for (const ask of (cur && Array.isArray(cur.asks) ? cur.asks : [])) {
+      if (!ask || !ask.id || seen.has(ask.id)) continue;
+      const key = `chat-ask:${id}:${ask.id}`;
+      if (!fresh(key)) continue;
+      alerts.push({
+        key,
+        kind: 'chat_attention',
+        subject: id,
+        title: `${String(cur.title || 'A chat').slice(0, 60)} needs you`,
+        text: ask.text || 'Claude is waiting for an answer.',
+        options: [],
+        fingerprint: ask.fingerprint || '',
+        requestId: ask.id,
+      });
+      sentUpdates[key] = now;
     }
   }
 

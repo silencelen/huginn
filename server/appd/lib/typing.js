@@ -744,6 +744,18 @@ const SUBMIT_CONFIRM_POLL_MS = 100;
  * silently, which is worse than the bug it fixes. Whitespace is kept for the
  * same structural reason; `squashPane` removes it from the comparison anyway.
  *
+ * ⚠ AND CLAUDE CODE DOES DIM ITS CARETS: BOTH OF THEM, WHILE IT IS WORKING
+ * (read from the 2.1.316 bundle, 2026-11-03: the prompt char is drawn
+ * `dimColor: isLoading`, and the shell-mode one `{color: "bashBorder",
+ * dimColor: isLoading, children: "!\xA0"}`). The `❯` was kept already; the `!`
+ * was not, so a box in shell mode read while Claude was busy lost its caret
+ * here, `composerBox` could not find it, and the composer was read off whatever
+ * `❯` row sat higher up. So a `!` that is the FIRST thing on its row — column 0,
+ * where the shell-mode caret is drawn and a ghost never starts — is kept too.
+ *
+ * The SGR parameters are read by `sgrDim`, which skips a colour's operands: a
+ * truecolor foreground is `38;2;R;G;B`, and its `2` is not the dim attribute.
+ *
  * A capture taken WITHOUT `-e` carries no escapes at all, so this is a no-op on
  * one — every existing caller and fixture reads exactly as it did.
  */
@@ -758,21 +770,47 @@ function stripGhost(line) {
     if (s[i] === ESC && s[i + 1] === '[') {
       let j = i + 2;
       while (j < s.length && !(s[j] >= '@' && s[j] <= '~')) j++;
-      if (j < s.length && s[j] === 'm') {
-        for (const part of s.slice(i + 2, j).split(';')) {
-          const n = Number(part === '' ? '0' : part);
-          if (n === 2) dim = true;
-          else if (n === 0 || n === 22) dim = false;
-        }
-      }
+      if (j < s.length && s[j] === 'm') dim = sgrDim(s.slice(i + 2, j), dim);
       i = j < s.length ? j + 1 : s.length;
       continue;
     }
     const ch = s[i];
-    if (!dim || ch === '❯' || /\s/.test(ch)) out += ch;
+    if (!dim || ch === '❯' || /\s/.test(ch) || (ch === '!' && out === '')) out += ch;
     i++;
   }
   return out;
+}
+
+/**
+ * Whether text is dim after one SGR sequence (its parameters, `params`), given
+ * whether it was dim before.
+ *
+ * ⚠ A COLOUR'S OPERANDS ARE NOT ATTRIBUTES (2026-11-03). tmux 3.6b writes a
+ * truecolor cell as `\x1b[38;2;253;93;177m` and a 256-colour one as
+ * `\x1b[38;5;2m` (captured on a private socket), and the old reading took every
+ * parameter on its own: the truecolor selector `2`, or colour index 2, turned
+ * dim ON, and the `\x1b[39m` that follows a coloured caret never turned it off.
+ * On a host whose panes draw in truecolor, the shell-mode caret's `bashBorder`
+ * colour made everything typed after it read as a ghost — an EMPTY box to the
+ * check that a shell command may only go into an empty one. So 38/48/58 take
+ * their operands with them (`5;n`, `2;r;g;b`), and a colon-form parameter
+ * (`38:2::r:g:b`, `4:3`) is one parameter, never the dim attribute.
+ */
+function sgrDim(params, dim) {
+  const parts = String(params).split(';');
+  for (let k = 0; k < parts.length; k++) {
+    const part = parts[k];
+    if (part.includes(':')) continue;
+    const n = Number(part === '' ? '0' : part);
+    if (n === 38 || n === 48 || n === 58) {
+      const mode = Number(parts[k + 1]);
+      k += mode === 5 ? 2 : mode === 2 ? 4 : 0;
+      continue;
+    }
+    if (n === 2) dim = true;
+    else if (n === 0 || n === 22) dim = false;
+  }
+  return dim;
 }
 
 /**
@@ -1350,7 +1388,14 @@ function enterRefusal(lines, text, { hadComposer = false, shell = false } = {}) 
   const leftShellMode = shell && !inShellMode
     ? { blockedBy: 'shell', shellMode: false, shellExpected: true, why: 'the prompt left shell mode before the Enter, so the command was not run' }
     : null;
-  const c = composerText(arr);
+  // ⚠ GHOST-FREE (2026-11-03). In shell mode Claude Code 2.1.316 draws the rest
+  // of a command run before, dim, after what is in the box (its history
+  // completion: `git status` typed, ` --short` offered), and the Enter runs only
+  // what was typed. Read with that ghost in it, our own command looked like
+  // somebody else's text and the `foreign` refusal below kept it from running.
+  // The shell path hands this an `-e` capture so the ghost can be told apart; a
+  // plain capture carries no escapes, and reads exactly as it did.
+  const c = composerText(arr, { dropGhost: true });
   if (c !== null && boxIsOurs(c, text) && !dialogUnderBox(plain, last)) return leftShellMode;
   const why = paneReadyForInput(arr).why;
   if (paneBlocks(why)) {
