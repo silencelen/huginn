@@ -1,5 +1,25 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Added
+- A chat whose Claude is waiting on a new-session approval notifies under Needs you (the
+  `chat_attention` push). A tap opens that chat; there is no reply box and no button. Nothing is
+  posted while that chat is on screen, and the notice comes down when the chat is opened or
+  finishes.
+
+### Fixed
+- With the keyboard open, a session's or a chat's conversation is laid out above it. The question
+  or new-session card is capped from the room left above the keyboard and the composer, a focused
+  field in the card (Other…, Tell Claude why) comes into view with its button under it, and the
+  composer is never squeezed.
+- The project page moves up for the keyboard: Re-role's and Add member's fields and their buttons
+  stay in view, and the last row clears the navigation bar.
+- An open project page shows a roster change that arrives while it is open: its poll, Refresh and
+  the `project_change` push re-read the project.
+- New session: a long starting directory shows its end. The field wraps to two lines, a path picked
+  from Recent lands with the cursor at its end, and Recent rows are shortened in the middle.
+
 ## 3.16.0 — 2026-11-02
 
 ### Added

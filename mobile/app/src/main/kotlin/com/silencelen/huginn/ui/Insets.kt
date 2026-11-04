@@ -31,7 +31,8 @@ import androidx.compose.ui.Modifier
  * WHY NOT `navigationBarsPadding()` DIRECTLY: it is the same call, and that is
  * the point. Named here, "does this screen owe the system bars anything" has one
  * spelling to grep for and one place to change when an OEM puts the bar
- * somewhere new.
+ * somewhere new. The keyboard is the same: [keyboardPadding] for a column,
+ * [imeAndSystemNavPadding] for a single surface.
  */
 
 /**
@@ -72,6 +73,31 @@ fun Modifier.systemNavPadding(): Modifier = this.windowInsetsPadding(systemNavIn
  * navigation padding after it adds only what the keyboard did not already
  * cover — which is zero while the keyboard is up and the full bar when it is
  * down. Written the other way round the two stack into a band of dead space.
+ *
+ * For ONE surface that is the whole screen (a scroll container, an editor).
+ * A column that ends in a composer and carries a card above it pays the
+ * keyboard on the column instead — see [keyboardPadding].
  */
 @Composable
 fun Modifier.imeAndSystemNavPadding(): Modifier = this.imePadding().systemNavPadding()
+
+/**
+ * Keeps a whole COLUMN above the soft keyboard: the keyboard and nothing else.
+ *
+ * ⚠⚠ THE KEYBOARD WAS PAID BY THE LAST ROW, AND A COLUMN MEASURES THAT ROW
+ * LAST. The conversation paid it on the composer row alone
+ * ([imeAndSystemNavPadding]), while the question card above the composer was
+ * capped from the column's FULL height — so with the keyboard up the card's cap
+ * and the composer's keyboard padding together overflowed the column, and its
+ * bottom was laid out under the keyboard: an "Other…" field, its Answer button
+ * and the composer itself, with typed text landing in a field nobody could see
+ * (Fold cover screen, 2026-11-03). Paid on the column, the column ENDS at the
+ * keyboard, and everything in it is measured from the room that is really there.
+ *
+ * Pair it with [systemNavPadding] on the bottom row, never with
+ * [imeAndSystemNavPadding]: this CONSUMES the keyboard's inset, and while the
+ * keyboard is up its inset already covers the navigation bar, so the row pays
+ * the bar only while the keyboard is down. No doubled band, and no gap when it
+ * closes.
+ */
+fun Modifier.keyboardPadding(): Modifier = this.imePadding()

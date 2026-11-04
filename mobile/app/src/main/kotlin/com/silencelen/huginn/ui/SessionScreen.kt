@@ -504,7 +504,12 @@ private fun SessionConversation(
     val stripLoadingHistory = if (onAgent) loadingAgentHistory else loadingHistory
     val onLoadOlder = if (onAgent) onLoadEarlierAgent else onLoadEarlier
 
-    Column(Modifier.fillMaxSize()) {
+    // ⚠⚠ THE COLUMN PAYS THE KEYBOARD, not the composer row (2026-11-03). Paid
+    // on the row, the card above was capped from the column's full height and
+    // the two overflowed it: with an "Other…" field focused, the field, its
+    // Answer button and the composer were all laid out under the keyboard and
+    // typing went in blind. See `keyboardPadding` and ComposerStack below.
+    Column(Modifier.fillMaxSize().keyboardPadding()) {
         // What the session is doing RIGHT NOW, folded into the secondary row at the top. The
         // transcript stays silent until whole blocks complete, so without this the
         // conversation looked dead exactly when the most was happening — right
@@ -725,131 +730,151 @@ private fun SessionConversation(
         // re-opened): Claude Code 2.1.306 answers a parked request whole through
         // its own hook, so the compact card finishes every shape the daemon's
         // registry binds — on this face only, never over the Screen tab.
-        if (cardQuestion != null) {
-            // The card scrolls inside a height cap so a tall question's lower
-            // options and its OWN answer buttons stay reachable (owner, 2026-10-26).
-            // BoxWithConstraints hands it the room this pinned region has; 0.7 keeps
-            // the transcript a sliver and leaves the composer its place.
-            BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-                QuestionCard(
-                    question = cardQuestion,
-                    maxHeight = this@BoxWithConstraints.maxHeight * 0.7f,
-                    draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
-                    onDraft = { onQuestionDraft(cardQuestion.id, it) },
-                    onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
-                    onOpenScreen = onOpenScreen,
-                )
-            }
-        } else {
-            QuestionLinkBar(
-                question = questionText,
-                onOpenScreen = onOpenScreen,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
-
-        // The long-press verbs, ABOVE the composer and below everything else, so
-        // the text being acted on stays visible while the verb is chosen.
-        SelectionActionBar(
-            mode = selection,
-            actions = quickActions,
-            // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
-            // one word and handed the bar the WHOLE row, so `pong-` lit and
-            // `> pong-one` staged; on a paragraph, one word lit and the whole
-            // block quoted. When the platform is holding a selection its text
-            // wins; with none — the plain long-press — the row is still the scope.
-            onAct = { action, text ->
-                onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
-                selection = SelectionMode.NONE
-                selectionReset.bump()
-            },
-            onCopy = {
-                onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
-                selection = SelectionMode.NONE
-                selectionReset.bump()
-            },
-            // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
-            // take the app's bar down and leave the word highlighted, both amber
-            // handles on screen and Android's own Copy / Select all popup floating
-            // over the conversation; only tapping empty space cleared it.
-            // `cancelled()` takes down the popup, and the bump re-keys the
-            // SelectionContainer, which is the only way a caller can drop a
-            // selection Compose keeps in an internal manager.
-            onDismiss = {
-                selection = SelectionMode.NONE
-                textToolbarGate.cancelled()
-                selectionReset.bump()
-            },
-        )
-
+        //
         // A photo alone is a complete message here too; the send path builds the
         // marker text when the draft is blank.
         val canSend = draft.isNotBlank() || attachments.any { it.state != AttachChipState.FAILED }
-        // THE SHARED COMPOSER (ui/system/Composer.kt). The send contract is the one
-        // this screen always had: Send submits the draft with Enter, Interrupt is
-        // Esc and is offered only while working with nothing typed — and a staged
-        // attachment keeps Send reachable beside it.
-        com.silencelen.huginn.ui.system.Composer(
-            value = draft,
-            onValueChange = onDraft,
-            onSend = { if (canSend) onSendText(draft, true) },
-            placeholder = "Reply in $name",
-            canSend = canSend,
-            // A `!command` runs in the pane's shell, not in Claude (`:core`
-            // ShellMode): the field takes the attention tint and a line says so.
-            // The view model sends the flag from the same rule.
-            shellMode = ShellMode.isShellCommand(draft),
-            // Esc is how you stop Claude at the keyboard; with nothing typed that is
-            // the action this composer should offer.
-            stopInstead = working && draft.isBlank(),
-            onStop = onInterrupt,
-            stopLabel = "Interrupt with Esc",
-            sendAlongsideStop = true,
-            // ONE notice line, above the input row because the row owns the keyboard
-            // AND navigation inset — anything after it is laid out under the
-            // keyboard. Most consequential first: the message that went in on top of
-            // somebody's draft (D-7), then the held wrap-up (P-19), then the send
-            // queue. None is a failure, so none is in the error ink; dismissing one
-            // uncovers the next.
-            notice = com.silencelen.huginn.ui.system.firstNotice(
-                draftNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissDraftNotice) },
-                wrapUpNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissWrapUpNotice) },
-                queueNote?.let { com.silencelen.huginn.ui.system.ComposerNotice(it) },
-            ),
-            rowModifier = Modifier.imeAndSystemNavPadding(),
-            header = {
-                // The page a session's Claude will be pointed at. It reaches the pane
-                // as a PATH — a page holds more than a pane accepts in one paste — so
-                // the run reads it rather than being handed it.
-                // ONLY when one is set — the invitation to attach moved into the
-                // attach button's chooser, which is where "attach" already lives.
-                pads.firstOrNull { it.id == padRefId }?.let { chosen ->
-                    ScratchpadRefBadge(
-                        pad = chosen,
-                        pads = pads,
-                        onSelect = onPadRef,
-                        modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+        // ⚠⚠ MEASURED FROM THE BOTTOM UP (ComposerStack): the composer first,
+        // then the verbs bar, then the card inside what is left above them. The
+        // card used to take 0.7 of the column before the composer was measured,
+        // and the composer got the remainder — a sliver with the keyboard up.
+        ComposerStack(
+            card = {
+                if (cardQuestion != null) {
+                    // The card scrolls inside a height cap so a tall question's
+                    // lower options and its OWN answer buttons stay reachable
+                    // (owner, 2026-10-26). The stack hands this box the card's
+                    // whole cap (CardRoom), so the card fills it rather than
+                    // taking a share of it again.
+                    BoxWithConstraints(Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                        // A focused "Other…" field comes into view with its
+                        // Answer button under it, here and when the keyboard
+                        // shrinks the card (FieldInView).
+                        RoomBelowFocused {
+                            QuestionCard(
+                                question = cardQuestion,
+                                maxHeight = if (constraints.hasBoundedHeight) this@BoxWithConstraints.maxHeight
+                                else androidx.compose.ui.unit.Dp.Unspecified,
+                                draft = questionDrafts[cardQuestion.id] ?: QuestionDraft.of(cardQuestion),
+                                onDraft = { onQuestionDraft(cardQuestion.id, it) },
+                                onAnswer = { body -> onAnswerQuestion(cardQuestion, body) },
+                                onOpenScreen = onOpenScreen,
+                            )
+                        }
+                    }
+                } else {
+                    QuestionLinkBar(
+                        question = questionText,
+                        onOpenScreen = onOpenScreen,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                 }
-                AttachChipRow(
-                    attachments,
-                    onRemoveAttachment,
-                    Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
+            },
+            // The long-press verbs, ABOVE the composer and below everything else, so
+            // the text being acted on stays visible while the verb is chosen.
+            bar = {
+                SelectionActionBar(
+                    mode = selection,
+                    actions = quickActions,
+                    // ⚠⚠ P-07. THE VERB ACTS ON WHAT IS HIGHLIGHTED. A long press lights
+                    // one word and handed the bar the WHOLE row, so `pong-` lit and
+                    // `> pong-one` staged; on a paragraph, one word lit and the whole
+                    // block quoted. When the platform is holding a selection its text
+                    // wins; with none — the plain long-press — the row is still the scope.
+                    onAct = { action, text ->
+                        onSelectionAction(action, nativeSelection.read(clipRead, clipWrite, keepOnClipboard = false) ?: text)
+                        selection = SelectionMode.NONE
+                        selectionReset.bump()
+                    },
+                    onCopy = {
+                        onCopy(nativeSelection.read(clipRead, clipWrite, keepOnClipboard = true) ?: it)
+                        selection = SelectionMode.NONE
+                        selectionReset.bump()
+                    },
+                    // ⚠⚠ P-06. THE X NOW CANCELS EVERYTHING THE PRESS STARTED. It used to
+                    // take the app's bar down and leave the word highlighted, both amber
+                    // handles on screen and Android's own Copy / Select all popup floating
+                    // over the conversation; only tapping empty space cleared it.
+                    // `cancelled()` takes down the popup, and the bump re-keys the
+                    // SelectionContainer, which is the only way a caller can drop a
+                    // selection Compose keeps in an internal manager.
+                    onDismiss = {
+                        selection = SelectionMode.NONE
+                        textToolbarGate.cancelled()
+                        selectionReset.bump()
+                    },
                 )
             },
-            leading = {
-                AttachButton(
-                    onPickImages = onAttach,
-                    onPickFiles = onAttachFile,
-                    onPasteImage = onPasteImage,
-                    pads = pads,
-                    padRefId = padRefId,
-                    onPadRef = onPadRef,
-                )
-                DictationMicButton(
-                    micGranted = micGranted,
-                    onRequestMic = onRequestMic,
-                    onText = { heard -> onDraft(appendDictation(draft, heard)) },
+            composer = {
+                // THE SHARED COMPOSER (ui/system/Composer.kt). The send contract is the one
+                // this screen always had: Send submits the draft with Enter, Interrupt is
+                // Esc and is offered only while working with nothing typed — and a staged
+                // attachment keeps Send reachable beside it.
+                com.silencelen.huginn.ui.system.Composer(
+                    value = draft,
+                    onValueChange = onDraft,
+                    onSend = { if (canSend) onSendText(draft, true) },
+                    placeholder = "Reply in $name",
+                    canSend = canSend,
+                    // A `!command` runs in the pane's shell, not in Claude (`:core`
+                    // ShellMode): the field takes the attention tint and a line says so.
+                    // The view model sends the flag from the same rule.
+                    shellMode = ShellMode.isShellCommand(draft),
+                    // Esc is how you stop Claude at the keyboard; with nothing typed that is
+                    // the action this composer should offer.
+                    stopInstead = working && draft.isBlank(),
+                    onStop = onInterrupt,
+                    stopLabel = "Interrupt with Esc",
+                    sendAlongsideStop = true,
+                    // ONE notice line, above the input row because the row owns the
+                    // navigation inset — anything after it is laid out under the bar.
+                    // Most consequential first: the message that went in on top of
+                    // somebody's draft (D-7), then the held wrap-up (P-19), then the send
+                    // queue. None is a failure, so none is in the error ink; dismissing one
+                    // uncovers the next.
+                    notice = com.silencelen.huginn.ui.system.firstNotice(
+                        draftNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissDraftNotice) },
+                        wrapUpNotice?.let { com.silencelen.huginn.ui.system.ComposerNotice(it, onDismissWrapUpNotice) },
+                        queueNote?.let { com.silencelen.huginn.ui.system.ComposerNotice(it) },
+                    ),
+                    // The NAVIGATION BAR only: the column above pays the keyboard
+                    // (keyboardPadding), and its inset covers the bar while it is up.
+                    rowModifier = Modifier.systemNavPadding(),
+                    header = {
+                        // The page a session's Claude will be pointed at. It reaches the pane
+                        // as a PATH — a page holds more than a pane accepts in one paste — so
+                        // the run reads it rather than being handed it.
+                        // ONLY when one is set — the invitation to attach moved into the
+                        // attach button's chooser, which is where "attach" already lives.
+                        pads.firstOrNull { it.id == padRefId }?.let { chosen ->
+                            ScratchpadRefBadge(
+                                pad = chosen,
+                                pads = pads,
+                                onSelect = onPadRef,
+                                modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+                            )
+                        }
+                        AttachChipRow(
+                            attachments,
+                            onRemoveAttachment,
+                            Modifier.padding(start = 14.dp, end = 8.dp, top = 6.dp),
+                        )
+                    },
+                    leading = {
+                        AttachButton(
+                            onPickImages = onAttach,
+                            onPickFiles = onAttachFile,
+                            onPasteImage = onPasteImage,
+                            pads = pads,
+                            padRefId = padRefId,
+                            onPadRef = onPadRef,
+                        )
+                        DictationMicButton(
+                            micGranted = micGranted,
+                            onRequestMic = onRequestMic,
+                            onText = { heard -> onDraft(appendDictation(draft, heard)) },
+                        )
+                    },
                 )
             },
         )

@@ -226,6 +226,16 @@ object WatchNotifier {
 
         val finished = WatchCycle.finishedSince(runsBefore, runsNow, previouslyRunning, running)
 
+        // A chat whose run finished is waiting on nobody: a start_session "needs
+        // you" for it comes down here too, for the finish no push delivered
+        // (ChatAttention). Before the post below, and whether or not it posts.
+        for (id in finished) {
+            runCatching {
+                NotificationManagerCompat.from(context)
+                    .cancel(SessionWatchWorker.notificationIdFor(ChatAttention.keyFor(id)))
+            }
+        }
+
         // Same rule for a chat whose finish the reader is already watching stream in.
         val watchingChat = finished.size == 1 && Foreground.showsChat(finished.first())
         if (finished.isNotEmpty() && !watchingChat) {

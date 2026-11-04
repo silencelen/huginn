@@ -770,11 +770,15 @@ fun HuginnApp(
         // strongest possible form of having seen it; leaving the notification up
         // afterwards would just be a chore handed back to the reader.
         val read = when (val d = dest) {
-            is Dest.Chat -> SessionWatchWorker.notificationIdFor("chat:${d.id}")
-            is Dest.SessionView -> SessionWatchWorker.notificationIdFor(d.name)
-            else -> null
+            // The chat's finished thread, and its "needs you" (ChatAttention):
+            // the card the latter pointed at is on screen now.
+            is Dest.Chat -> listOf("chat:${d.id}", com.silencelen.huginn.notify.ChatAttention.keyFor(d.id))
+            is Dest.SessionView -> listOf(d.name)
+            else -> emptyList()
         }
-        if (read != null) runCatching { NotificationManagerCompat.from(ctx).cancel(read) }
+        for (slot in read) {
+            runCatching { NotificationManagerCompat.from(ctx).cancel(SessionWatchWorker.notificationIdFor(slot)) }
+        }
         onDispose { Foreground.chat = null; Foreground.session = null }
     }
 
@@ -1918,10 +1922,12 @@ fun HuginnApp(
                         onEnd = { m -> vm.endMember(id, m.role) },
                     )
                 },
-                // The lead's ROSTER CHANGE, from the row (the detail's `row` when
-                // it is fresher than the list's).
-                pendingChange = (projectDetail?.takeIf { it.project.id == id }?.row
-                    ?: projects.firstOrNull { it.id == id })?.pendingChange,
+                // The lead's ROSTER CHANGE, from whichever row is NEWER by rev —
+                // the detail's or the list's. The detail's used to win whenever
+                // it existed, so Refresh (which re-reads the list) could not
+                // bring up a change that landed after the page opened.
+                pendingChange = com.silencelen.huginn.notify.ProjectPushes
+                    .openRow(projectDetail, projects, id)?.pendingChange,
                 onApproveChange = { rev, token -> vm.approveChange(id, rev, token) },
                 onDeclineChange = { token -> vm.declineChange(id, token) },
                 onSpawn = { rev -> vm.spawnProject(id, rev) },

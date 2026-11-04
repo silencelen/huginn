@@ -60,34 +60,43 @@ fun ProjectDashboardScreen(
     val project = detail?.project
     val manifest = project?.manifest
 
-    ProjectDashboardView(
-        dashboard = dashboard,
-        nowMs = nowMs,
-        onOpenMember = onOpenMember,
-        modifier = Modifier.fillMaxSize(),
-        change = pendingChange?.let { c ->
-            {
-                PendingChangeCard(
-                    change = c,
+    // ⚠⚠ THE PAGE PAYS THE KEYBOARD AND THE BAR, ON ITS SCROLL (2026-11-03). It
+    // paid neither: Re-role's "New task for <role>" field and "Send the new
+    // task" were laid out under the keyboard, and the page neither shrank nor
+    // scrolled them up, so the task was typed blind (Add member's fields the
+    // same). The modifier lands OUTSIDE the view's own scroll, so the viewport
+    // ends at the keyboard, the last row comes to rest above the bar, and the
+    // focused field is kept in view — with its button under it (FieldInView).
+    RoomBelowFocused {
+        ProjectDashboardView(
+            dashboard = dashboard,
+            nowMs = nowMs,
+            onOpenMember = onOpenMember,
+            modifier = Modifier.fillMaxSize().imeAndSystemNavPadding(),
+            change = pendingChange?.let { c ->
+                {
+                    PendingChangeCard(
+                        change = c,
+                        busy = busy,
+                        refusal = refusal,
+                        onApprove = onApproveChange,
+                        onDecline = onDeclineChange,
+                    )
+                }
+            },
+            manifest = if (manifest != null && ProjectRules.hasProposal(project)) ({
+                ManifestCard(
+                    manifest = manifest,
                     busy = busy,
                     refusal = refusal,
-                    onApprove = onApproveChange,
-                    onDecline = onDeclineChange,
+                    onSpawn = { onSpawn(manifest.rev) },
+                    onEdit = { editing = manifest },
+                    onDiscard = onDiscard,
                 )
-            }
-        },
-        manifest = if (manifest != null && ProjectRules.hasProposal(project)) ({
-            ManifestCard(
-                manifest = manifest,
-                busy = busy,
-                refusal = refusal,
-                onSpawn = { onSpawn(manifest.rev) },
-                onEdit = { editing = manifest },
-                onDiscard = onDiscard,
-            )
-        }) else null,
-        membership = membership,
-    )
+            }) else null,
+            membership = membership,
+        )
+    }
 
     editing?.let { m ->
         ManifestEditDialog(
