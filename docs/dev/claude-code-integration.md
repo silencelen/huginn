@@ -458,13 +458,25 @@ Measured on Claude Code 2.1.316 (2026-11-02), in a throwaway tmux session:
   (the output is handed to Claude).
 - `C-u` clears the box but keeps the mode; Backspace on the empty box leaves it. A newline in the
   box is an Enter, so a shell command is one line.
+- The stdout and stderr in those records are HTML-escaped (`&amp;`, `&lt;`, `&gt;` only); the
+  `<bash-input>` line is not. "(Bash completed with no output)" stands for empty output.
+- Both carets (`❯` and the shell `!`) are drawn dim while Claude works (`dimColor: isLoading`), and
+  the empty box often holds Claude Code's dim SUGGESTED reply. In shell mode the rest of an earlier
+  command that starts with the box text (2+ characters) is drawn dim after it; Enter runs only what
+  was typed. None of the dim text is in the box, so every shell-path read is an `-e` capture with the
+  ghost stripped — a capture without escapes reads the suggestion as somebody's draft, which refused
+  most `!` sends on appd 3.17.0. tmux `-e` truecolour cells are `38;2;R;G;B`: an SGR parser must
+  skip colour operands, or the `2` reads as dim.
 
 The send route's `shell: true` (feature 10) relies on exactly this: `sendTextToPane` types the `!` as
 its own keystroke, waits for `composerShellMode` to read true, pastes the command, and the
 `submitRefusal` / `enterRefusal` gates accept shell mode for that entry (`shellEntry`, `shell`). A
-plain message that begins with `!` is refused before anything is typed, because the paste alone would
-switch the mode. Fixture: `test/fixtures/fake-claude.js` models the mode (`HG_FAKE_CLAUDE_SHELL_OUT`).
-Tests: `typing-shell-mode.test.js`, `routes-send-guards.test.js`.
+shell send is always a submit and never live-view typing, with or without `keys` (a key other than
+`Enter` is refused). A plain message that begins with `!` is refused before anything is typed,
+because the paste alone would switch the mode. Fixture: `test/fixtures/fake-claude.js` models the
+mode (`HG_FAKE_CLAUDE_SHELL_OUT`, and `HG_FAKE_CLAUDE_BUSY`, `HG_FAKE_CLAUDE_SHELL_GHOST`,
+`HG_FAKE_CLAUDE_TRUECOLOR` for the dim carets, the history ghost and truecolour cells). Tests:
+`typing-shell-mode.test.js`, `routes-send-guards.test.js`.
 
 The context window, model and effort come from the status-line record (see
 [The status line](#the-status-line)) wherever one exists; the `parseStatusLine` scrape is the
