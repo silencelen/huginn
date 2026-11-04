@@ -73,6 +73,13 @@ kotlin {
         jvmTest.dependencies {
             implementation(kotlin("test"))
             implementation(compose.desktop.currentOs)
+            // What a reader SEES of a shared row: the shell-mode rows, the
+            // answered question, a folded card's preview (2026-11-03). A source
+            // grep can say a branch exists; only a composition can say the raw
+            // `<bash-input>` tags are gone from the screen. The same artifact
+            // :app-desktop's tests already resolve, so nothing new is fetched.
+            @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
+            implementation(compose.uiTest)
         }
     }
 }

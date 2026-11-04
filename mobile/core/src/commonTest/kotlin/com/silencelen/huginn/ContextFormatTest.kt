@@ -130,4 +130,21 @@ class ContextFormatTest {
         assertEquals("", ContextFormat.asOf(-1L, now))
         assertEquals("", ContextFormat.asOf(ContextBreakdown().asOf, now), "the model's default is no stamp")
     }
+
+    /**
+     * The closed /context card's preview: the total, in the card's own words,
+     * from either shape Claude Code 2.1.316 records (verbatim, shortened).
+     */
+    @Test
+    fun `the context fold previews the table's total`() {
+        val markdown = "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 412.5k / 1m (41%)\n\n" +
+            "### Estimated usage by category\n\n| Category | Tokens | Percentage |\n|---|---|---|\n| Messages | 367.5k | 36.7% |"
+        assertEquals("412.5k / 1m tokens · 41%", ContextFormat.foldPreview(markdown))
+        val terminal = "Context Usage\n⛀ ⛁ ⛁ ⛁ ⛀ ⛶ ⛶   Opus 5.5\n⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   claude-opus-5-5\n" +
+            "⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   45k/1m tokens (4%)\n⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 2.9k tokens (0.3%)"
+        assertEquals("45k / 1m tokens · 4%", ContextFormat.foldPreview(terminal))
+        assertEquals("28.7k / 1m tokens · 3%", ContextFormat.foldPreview("Context Usage\n28.7k/1m tokens (3%)"))
+        assertNull(ContextFormat.foldPreview("## Context Usage\n\nnothing measured yet"))
+        assertNull(ContextFormat.foldPreview("⛁ System prompt: 2.9k tokens (0.3%)"), "a category row is not the total")
+    }
 }

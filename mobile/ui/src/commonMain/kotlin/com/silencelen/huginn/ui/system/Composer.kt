@@ -214,6 +214,15 @@ fun Composer(
 }
 
 /**
+ * The ink of Claude Code's shell mode: the composer's tinted outline and hint,
+ * and the `!` of a shell command drawn back in the conversation. One function,
+ * so the box that sends a command and the row that shows it ran cannot drift
+ * apart. The colour itself comes from StateColors, like every other.
+ */
+@Composable
+fun shellTint(): androidx.compose.ui.graphics.Color = stateColor(StateKind.ERROR)
+
+/**
  * The composer's shell-mode line: [ShellMode.HINT] in the attention/error ink.
  * Drawn by both shells' session composers (the phone's through [Composer], the
  * desktop's beside its own field), so the words and the colour are one.
@@ -223,7 +232,7 @@ fun ShellModeHint(modifier: Modifier = Modifier) {
     Text(
         ShellMode.HINT,
         style = MaterialTheme.typography.labelSmall,
-        color = stateColor(StateKind.ERROR),
+        color = shellTint(),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier.fillMaxWidth().padding(start = 14.dp, end = Scale.s4, top = Scale.s4).testTag("composer.shell.hint"),
@@ -237,7 +246,7 @@ fun ShellModeHint(modifier: Modifier = Modifier) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun shellFieldColors(): TextFieldColors {
-    val tint = stateColor(StateKind.ERROR)
+    val tint = shellTint()
     return OutlinedTextFieldDefaults.colors(
         errorBorderColor = tint,
         errorCursorColor = tint,

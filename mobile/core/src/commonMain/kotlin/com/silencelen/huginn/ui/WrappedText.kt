@@ -105,6 +105,40 @@ object WrappedText {
         body.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(max).orEmpty()
 
     /**
+     * The same, for a block Claude WROTE (a report, a summary, the /context
+     * table): its first line as words — heading marks and inline markers off —
+     * skipping a line that only repeats the card's own [label] and a rule line.
+     *
+     * ⚠ The closed /context card read "Context usage   ## Context Usage"
+     * (2026-11-03): the raw first line of the body was a Markdown heading saying
+     * the label again. A paste keeps [preview]: it is drawn as typed.
+     */
+    fun markdownPreview(body: String, label: String? = null, max: Int = 110): String {
+        val repeat = label?.let { squash(it) }
+        for (raw in body.lineSequence()) {
+            var t = raw.trim().replace(HEADING_MARK, "")
+            // A table row reads as its cells; its `|---|` rule reads as nothing.
+            if (t.startsWith("|")) {
+                val cells = t.trim('|').split('|').map { it.trim() }.filter { it.isNotEmpty() }
+                if (cells.all { TABLE_RULE.matches(it) }) continue
+                t = cells.joinToString(" · ")
+            }
+            val line = Markdown.plainInline(t)
+            if (line.isEmpty() || RULE_LINE.matches(line)) continue
+            if (repeat != null && squash(line) == repeat) continue
+            return line.take(max)
+        }
+        return ""
+    }
+
+    private val HEADING_MARK = Regex("^#{1,6}\\s+")
+    private val RULE_LINE = Regex("^[-*_=\\s]{3,}$")
+    private val TABLE_RULE = Regex("^:?-+:?$")
+
+    /** Lower case, punctuation and spacing off: "Context Usage:" is the label "Context usage". */
+    private fun squash(s: String): String = s.lowercase().filter { it.isLetterOrDigit() }
+
+    /**
      * One wrapped block: where it sits in the message ([range], closer and any
      * trailing newline the pattern took included), its [body] with the newline
      * after the opener and before the closer left out, and the opener's [attrs].
