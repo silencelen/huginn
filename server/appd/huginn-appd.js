@@ -14222,6 +14222,10 @@ async function handleRequest(req, res) {
       const keys = Array.isArray(body.keys) ? body.keys : [];
       if (keys.length > 32) return sendErr(res, 400, 'too many keys');
       for (const k of keys) if (!validKey(k)) return sendErr(res, 400, `key not allowed: ${k}`);
+      // A shell command is typed and run by the daemon, Enter included, so the
+      // only key it may carry is that Enter: an Escape or an arrow pressed beside
+      // it would land in the middle of the `!`, the paste and the look.
+      if (shell && keys.some((k) => k !== 'Enter')) return sendErr(res, 400, 'a shell command takes no keys but its Enter');
       /**
        * A scratchpad reference, as a PATH rather than as the page itself.
        *
@@ -14297,8 +14301,16 @@ async function handleRequest(req, res) {
        * composer send (text AND Enter) is the thing being guarded and must never
        * mark the session on its own behalf. Stamped before anything is queued so
        * a keypress that arrives while a send waits keeps holding it.
+       *
+       * ⚠ A SHELL COMMAND IS A COMPOSER SEND, WITH OR WITHOUT `keys` (2026-11-03).
+       * Its Enter is implied, and the apps (3.16.0, desktop 2.10.0) send
+       * `{text, shell: true}` with no keys at all — text without an Enter, which
+       * is exactly what this read as live-view typing. So every `!` command
+       * stamped its own session and the draft guard then held it for
+       * LIVE_KEYS_QUIET_MS behind "unsent text in the live view", with an empty
+       * box. A shell send never stamps.
        */
-      if (rawKeys.length > 0 || (typedKeys.length > 0 && !keys.includes('Enter'))) {
+      if (!shell && (rawKeys.length > 0 || (typedKeys.length > 0 && !keys.includes('Enter')))) {
         markLiveKeys(name);
       }
       let queued = 0;

@@ -11,6 +11,9 @@ version number collided. Entries below are reconstructed from the shipping commi
 
 ## [Unreleased]
 
+### Changed
+- A `shell: true` send takes no key but its Enter: any other key in `keys` is refused with `400`.
+
 ### Fixed
 - `shell: true` sends were refused (`409`, "the prompt already holds text") whenever Claude Code showed
   its dim suggested reply in the empty prompt. The empty-prompt check and the look before the Enter
@@ -18,6 +21,8 @@ version number collided. Entries below are reconstructed from the shipping commi
   command that shell mode draws after the typed one blocks a command; typed text still refuses.
 - Dim text next to a colour is read correctly: a truecolor or 256-colour code (`38;2;…`, `38;5;2`) no
   longer reads as dim, and the shell-mode `!`, drawn dim while Claude is working, is still found.
+- A `shell: true` send without `keys`, as the apps send it, was taken for typing in the live view and
+  held for 5 s as unsent text; it is a submit and goes at once.
 
 ## 3.17.0 — 2026-11-02
 
