@@ -2,6 +2,7 @@ package com.silencelen.huginn.desktop.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -43,9 +44,11 @@ import com.silencelen.huginn.data.ProjectMemberState
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.data.SpawnOutcome
 import com.silencelen.huginn.desktop.AppStore
+import com.silencelen.huginn.desktop.ui.common.DeskType
 import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.MenuButton
 import com.silencelen.huginn.desktop.ui.common.NothingOpen
+import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
 import com.silencelen.huginn.desktop.ui.common.ProjectVerbs
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.projectMenu
@@ -169,33 +172,58 @@ fun ProjectsList(store: AppStore) {
         openTerminal = rememberTerminalVerb(store),
     )
 
+    // ⚠⚠ THE TREE DID NOT SCROLL (owner, 2026-11-03): "the projects list isn't
+    // scrollable and should be when it goes off the space vertically… when I have
+    // projects expanded I have to minimise them to reach projects lower in the
+    // list." `ProjectsListView` owns a scroll only when asked (`scroll = true`, the
+    // phone's), its KDoc said this pane already scrolled around it, and nothing
+    // did: `Shell` hosts this in a plain weighted `Box`. Five projects folded open
+    // ran off the bottom of the window and the wheel did nothing.
+    //
+    // So the pane scrolls the way Sessions and Chats do: the header pinned (the
+    // house `ListHeader`, so "+ New" stays in reach at any depth), the tree under
+    // it in ONE scroll — the view's own stays off, a second one nested inside
+    // would swallow the wheel — and the house scrollbar on the right edge, because
+    // a tree that runs off the bottom with no mark saying so is the other half of
+    // this bug. `ProjectsPaneScrollTest` scrolls to the last member and drags the thumb.
+    val rows = rememberScrollState()
     Column(Modifier.fillMaxSize()) {
-        ProjectsListView(
-            projects = projects,
-            // Sampled per composition rather than ticked: the list re-polls every
-            // five seconds while it is open, and every time word on it is measured
-            // in minutes. The same reasoning as the Devices pane.
-            nowMs = System.currentTimeMillis(),
-            expanded = expanded,
-            members = members,
-            onToggle = { id ->
-                store.toggleProject(id)
-                // Fetched on the fold rather than waiting out the poll: the
-                // disclosure is the request, and an empty cluster that fills five
-                // seconds later reads as a project with no members.
-                scope.launch { store.refreshProjectMembers() }
-            },
-            onOpenProject = { store.openProject(it.id) },
-            onOpenMember = { project, member ->
-                store.openProject(project.id)
-                store.openProjectMember(member.name)
-            },
-            onCreate = { creating = true },
-            // The additive slot `ProjectsListView` describes: the ITEMS are this
-            // shell's, because the desktop has `ContextMenuItem`s and the phone a
-            // `DropdownMenu`, and a shared list has no business knowing either.
-            rowTrailing = { project -> MenuButton({ projectMenu(project, verbs) }, "Project actions") },
-        )
+        ListHeader("Projects", projects.size, selected = 0, titleYields = true) {
+            TextButton(onClick = { creating = true }) {
+                Text("+ New", style = DeskType.rail, maxLines = 1, softWrap = false)
+            }
+        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            ProjectsListView(
+                projects = projects,
+                // Sampled per composition rather than ticked: the list re-polls every
+                // five seconds while it is open, and every time word on it is measured
+                // in minutes. The same reasoning as the Devices pane.
+                nowMs = System.currentTimeMillis(),
+                expanded = expanded,
+                members = members,
+                onToggle = { id ->
+                    store.toggleProject(id)
+                    // Fetched on the fold rather than waiting out the poll: the
+                    // disclosure is the request, and an empty cluster that fills five
+                    // seconds later reads as a project with no members.
+                    scope.launch { store.refreshProjectMembers() }
+                },
+                onOpenProject = { store.openProject(it.id) },
+                onOpenMember = { project, member ->
+                    store.openProject(project.id)
+                    store.openProjectMember(member.name)
+                },
+                modifier = Modifier.verticalScroll(rows),
+                // The header is the pinned one above.
+                header = null,
+                // The additive slot `ProjectsListView` describes: the ITEMS are this
+                // shell's, because the desktop has `ContextMenuItem`s and the phone a
+                // `DropdownMenu`, and a shared list has no business knowing either.
+                rowTrailing = { project -> MenuButton({ projectMenu(project, verbs) }, "Project actions") },
+            )
+            PaneScrollbar(rows)
+        }
     }
 
     renaming?.let { target ->

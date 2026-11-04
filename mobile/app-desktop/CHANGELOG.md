@@ -1,5 +1,11 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Fixed
+- The Projects list scrolls when its projects and members run past the bottom of the window, with a
+  scrollbar, and its header and "+ New" stay at the top.
+
 ## 2.10.0
 
 ### Added
