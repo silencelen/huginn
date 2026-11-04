@@ -82,6 +82,25 @@ class WrappedTextTest {
         assertTrue(WrappedText.preview("").isEmpty())
     }
 
+    /**
+     * A block Claude wrote previews its first line as WORDS. The closed /context
+     * card read "Context usage   ## Context Usage" (2026-11-03): a heading that
+     * only repeats the label, marks and all.
+     */
+    @Test
+    fun `a markdown preview is words, and never the label again`() {
+        val context = "## Context Usage\n\n**Model:** claude-opus-5-5  \n**Tokens:** 45k / 1m (4%)\n"
+        assertEquals("Model: claude-opus-5-5", WrappedText.markdownPreview(context, label = "Context usage"))
+        assertEquals("Context Usage", WrappedText.markdownPreview(context), "with no label to repeat, the heading is the line")
+        assertEquals("Findings", WrappedText.markdownPreview("### Findings\n\nThree files.", label = "Message from Explore"))
+        assertEquals("Three files changed.", WrappedText.markdownPreview("---\n\n**Three** files changed."), "a rule is not a line")
+        assertEquals("mcp__mempalace__kg_query · 152", WrappedText.markdownPreview("| mcp__mempalace__kg_query | 152 |\n| a | b |"))
+        assertEquals("x".repeat(110), WrappedText.markdownPreview("# " + "x".repeat(300)))
+        assertEquals("", WrappedText.markdownPreview("## Context usage", label = "Context usage"))
+        // A paste is drawn as typed: its preview keeps its marks.
+        assertEquals("## a heading someone pasted", WrappedText.preview("## a heading someone pasted"))
+    }
+
     @Test
     fun `one line is one line`() {
         assertEquals("Pasted text · 1 line", WrappedText.pastedLabel("only\n"))

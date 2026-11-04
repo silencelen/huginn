@@ -74,6 +74,33 @@ object ContextFormat {
 
     data class Row(val category: ContextCategory, val share: Double, val percentWords: String)
 
+    /**
+     * The closed /context card's preview: the table's total, in [totalLine]'s
+     * words — `45k / 1m tokens · 4%` — read from the card's body, or null when
+     * the body carries no total line.
+     *
+     * ⚠ The card read "Context usage   ## Context Usage" (2026-11-03): the
+     * body's first line, raw, which only repeats the label. The figure is the
+     * one line a reader opens the card for. Both shapes Claude Code 2.1.316
+     * records are read, the same way the daemon's `lib/contextusage.js` reads
+     * them: the terminal table's `45k/1m tokens (4%)` after the grid glyphs, and
+     * the Markdown twin's `**Tokens:** 45k / 1m (4%)`.
+     */
+    fun foldPreview(body: String): String? {
+        for (raw in body.lineSequence()) {
+            val line = raw.trim().replace(GRID, "")
+            val m = TOTAL_ROW.matchEntire(line) ?: MD_TOTAL.find(line) ?: continue
+            val (used, window, pct) = m.destructured
+            return "$used / $window tokens · $pct%"
+        }
+        return null
+    }
+
+    /** The glyph grid the terminal table draws beside its rows. */
+    private val GRID = Regex("^[\\s⛁⛀⛶⛝]*")
+    private val TOTAL_ROW = Regex("^(\\S{1,20}?)\\s*/\\s*(\\S{1,20}?)\\s+tokens\\s*\\((\\d+(?:\\.\\d+)?)%\\)$")
+    private val MD_TOTAL = Regex("^\\*\\*Tokens:\\*\\*\\s*(\\S{1,20})\\s*/\\s*(\\S{1,20})\\s*(?:tokens)?\\s*\\((\\d+(?:\\.\\d+)?)%\\)")
+
     /** `as of 14m ago` · `as of just now`; empty when the table has no stamp. */
     fun asOf(asOfMs: Long, nowMs: Long): String =
         if (asOfMs <= 0L) "" else "as of " + TimeWords.agoMs(asOfMs, nowMs)

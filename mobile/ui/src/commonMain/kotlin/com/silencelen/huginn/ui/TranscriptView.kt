@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -13,6 +14,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,11 +54,14 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -66,8 +71,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.TranscriptEvent
 import com.silencelen.huginn.data.RelayProject
+import com.silencelen.huginn.ui.system.shellTint
 import com.silencelen.huginn.ui.theme.LocalHuginnColors
 import com.silencelen.huginn.ui.theme.LocalMonoStyle
+import com.silencelen.huginn.ui.theme.StateKind
+import com.silencelen.huginn.ui.theme.stateColor
 
 /**
  * The two measurements a transcript row cannot decide for itself, handed down by
@@ -186,17 +194,31 @@ val LocalWrapUpPhrase = staticCompositionLocalOf<String?> { null }
  * already holds that rule.
  */
 fun rowSelectionText(ev: TranscriptEvent): String = when (ev.kind) {
-    // The command and its output are one row on screen and one quote off it.
-    "tool", "tool_result" -> listOfNotNull(
+    // An answered question quotes its answers, as the card draws them — never
+    // Claude Code's sentence to the model.
+    "tool", "tool_result" -> answeredQuote(ev) ?: listOfNotNull(
+        // The command and its output are one row on screen and one quote off it.
         ev.text?.takeIf { it.isNotBlank() },
         ev.result?.takeIf { it.isNotBlank() },
     ).joinToString("\n\n")
-    // A quote takes the pasted words, not the tags around them.
-    "user" -> WrappedText.plain(ev.text.orEmpty())
+    // A shell-mode record quotes the command or what it printed, not its tags;
+    // anything else quotes the pasted words, not the tags around them.
+    "user" -> ShellRecords.parse(ev.text)?.let { ShellRecords.plain(it) } ?: WrappedText.plain(ev.text.orEmpty())
     // A folded note quotes what it holds, not its clipped headline.
     "system" -> ev.body?.takeIf { it.isNotBlank() } ?: ev.text.orEmpty()
     else -> ev.text.orEmpty()
 }.trim()
+
+/** An answered question's lines, joined, or null for any other row. */
+private fun answeredQuote(ev: TranscriptEvent): String? {
+    val ask = ev.ask
+    val outcome = when {
+        ev.kind == "tool" && ask != null -> AskAnswers.outcome(ev.result, ask.questions, ev.ok)
+        ev.kind == "tool_result" && AskAnswers.isAnswer(ev.result) -> AskAnswers.outcome(ev.result, emptyList(), ev.ok)
+        else -> null
+    } ?: return null
+    return (listOf(outcome.heading) + outcome.lines).joinToString("\n")
+}
 
 /**
  * Renders one normalized transcript event. Shared by the session view and the
@@ -255,10 +277,19 @@ fun TranscriptEventItem(
             // bubble. On an archived transcript that bubble is the only account
             // of how the session ended. Same class as the relay above and the
             // skill body before it. See [TranscriptVoice].
+            // ⚠⚠ AND A SHELL-MODE COMMAND IS NOT A MESSAGE (2026-11-03). Claude
+            // Code writes `!pwd` as two plain user records of tags — the command
+            // in `<bash-input>`, the output in `<bash-stdout>`/`<bash-stderr>` —
+            // and both shells drew them as bubbles of markup. See [ShellRecords].
             "user" -> if (ev.project != null) ProjectRelayNote(ev) else {
                 val phrase = LocalWrapUpPhrase.current
+                val shell = remember(ev.text) { ShellRecords.parse(ev.text) }
                 if (TranscriptVoice.isWrapUp(ev, phrase)) {
                     SystemNote(TranscriptVoice.wrapUpNote(phrase.orEmpty()))
+                } else if (shell is ShellRecords.Input) {
+                    reveal.Wrap(ev.ts) { ShellCommandRow(shell.command) }
+                } else if (shell is ShellRecords.Output) {
+                    ShellOutputBlock(shell, key = ev.seq)
                 } else {
                     reveal.Wrap(ev.ts) { UserBubble(ev.text.orEmpty(), ev.queued) }
                 }
@@ -277,7 +308,11 @@ fun TranscriptEventItem(
                 ev.file != null -> SentFileCard(ev.file!!)
                 else -> ToolCard(ev)
             }
-            "tool_result" -> ToolResultOrphan(ev)
+            // A question's answer whose question is above the window: still the
+            // answers, not the sentence written for the model. One whose question
+            // IS in the window never gets here — TranscriptGroups puts it back on
+            // the card.
+            "tool_result" -> if (AskAnswers.isAnswer(ev.result)) AnsweredNote(ev) else ToolResultOrphan(ev)
             "command" -> CommandNote(ev.text.orEmpty(), isResult = false)
             "command_result" -> CommandNote(ev.text.orEmpty(), isResult = true)
             // The peer's own name is passed, never parsed out of the text: the
@@ -297,6 +332,10 @@ fun TranscriptEventItem(
                         key = "fold:${ev.seq}:${body.hashCode()}",
                         markdown = true,
                         onCopy = onCopy,
+                        // The /context card previews the total, the one line a
+                        // reader opens it for; its body's first line is a heading
+                        // that repeats the label.
+                        previewLine = if (ev.fold == "context") ContextFormat.foldPreview(body) else null,
                     )
                 } else {
                     SystemNote(systemNoteText(ev.text.orEmpty(), ev.peer?.name))
@@ -527,7 +566,11 @@ private fun UserWords(text: String) {
  * not worth the screen it would take.
  *
  * @param markdown true for text Claude wrote (a report, a summary), false for a
- *   paste, which is whatever the person copied and is drawn as typed.
+ *   paste, which is whatever the person copied and is drawn as typed. A
+ *   Markdown body previews its first line as words ([WrappedText.markdownPreview]);
+ *   it read "## Context Usage" beside the label it repeats (2026-11-03).
+ * @param previewLine the closed card's line when the caller knows better than
+ *   the body's first line — the /context total.
  */
 @Composable
 private fun FoldCard(
@@ -537,9 +580,12 @@ private fun FoldCard(
     key: String,
     markdown: Boolean,
     onCopy: ((String) -> Unit)?,
+    previewLine: String? = null,
 ) {
     var open by rememberSaveable(key) { mutableStateOf(false) }
-    val preview = remember(body) { WrappedText.preview(body) }
+    val preview = remember(body, markdown, label, previewLine) {
+        previewLine ?: if (markdown) WrappedText.markdownPreview(body, label) else WrappedText.preview(body)
+    }
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainer,
@@ -821,15 +867,14 @@ private fun AskCard(ev: TranscriptEvent) {
                     }
                 }
             }
-            // Answered: what came back matters more than what was offered.
-            if (!result.isNullOrBlank()) {
+            // Answered: what came back matters more than what was offered — and
+            // it is read from the answers (AskAnswers), one line each. This used
+            // to print "Answered · " and the first 120 characters of Claude Code's
+            // sentence to the model, cut mid-word (2026-11-03).
+            val outcome = remember(result, ask, ev.ok) { AskAnswers.outcome(result, ask.questions, ev.ok) }
+            if (outcome != null) {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    "Answered · ${answeredSummary(result)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                AnswerLines(outcome)
             } else {
                 Spacer(Modifier.height(6.dp))
                 Text(
@@ -842,12 +887,182 @@ private fun AskCard(ev: TranscriptEvent) {
     }
 }
 
-/** The chosen option, dug out of the result's JSON-ish text; whole text if not. */
-private fun answeredSummary(result: String): String {
-    // Results look like {"questions":[…"answer":"Blue"…]} — the answers are the point.
-    val answers = Regex("\"answer\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
-        .findAll(result).map { it.groupValues[1] }.toList()
-    return if (answers.isNotEmpty()) answers.joinToString("  ·  ") else result.take(120)
+/**
+ * An answered question's heading and its lines, `<header> → <answer>`, each on
+ * ONE line cut at a word ([OneLineWords]). [showHeading] is off where the card
+ * around them already says it.
+ */
+@Composable
+private fun AnswerLines(outcome: AskAnswers.Outcome, showHeading: Boolean = true) {
+    if (showHeading) {
+        Text(
+            outcome.heading,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    val lineStyle = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold)
+    outcome.lines.forEach { line ->
+        Spacer(Modifier.height(2.dp))
+        OneLineWords(line, lineStyle, MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/**
+ * One line of words, cut at a WORD when it is wider than the room it is given
+ * ([WordFit]) — measured, because the Fold's cover screen and a desktop window
+ * fit different amounts of the same line. Compose's own ellipsis cuts at a
+ * character, which is how "they may request c" reached the screen. It stays
+ * as the backstop for a first word wider than the line.
+ */
+@Composable
+private fun OneLineWords(text: String, style: TextStyle, color: Color, modifier: Modifier = Modifier) {
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val room = constraints.maxWidth
+        val bounded = constraints.hasBoundedWidth
+        val shown = remember(text, style, room, bounded) {
+            if (!bounded) text
+            else WordFit.fit(text) { s -> measurer.measure(s, style, maxLines = 1, softWrap = false).size.width <= room }
+        }
+        Text(shown, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * A question's answer whose question has scrolled out of the window: the
+ * answers against the questions they answer, in a card shaped like the one it
+ * would have completed. Claude Code's sentence to the model is never shown.
+ */
+@Composable
+private fun AnsweredNote(ev: TranscriptEvent) {
+    val outcome = remember(ev.result, ev.ok) { AskAnswers.outcome(ev.result, emptyList(), ev.ok) }
+    if (outcome == null) { ToolResultOrphan(ev); return }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.AutoMirrored.Filled.HelpOutline,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    outcome.heading,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (outcome.lines.isNotEmpty()) Spacer(Modifier.height(4.dp))
+            AnswerLines(outcome, showHeading = false)
+        }
+    }
+}
+
+/** How many lines of a command's output show before the fold. */
+private const val SHELL_OUTPUT_LINES = 12
+
+/**
+ * A command run in Claude Code's shell mode ([ShellRecords]), drawn the way the
+ * composer drew it: the `!` in the shell ink ([shellTint]) and the command in
+ * mono, on the reader's side of the conversation — it is what they ran. The
+ * outline is the composer's tinted one, not an accent bar.
+ */
+@Composable
+private fun ShellCommandRow(command: String) {
+    val tint = shellTint()
+    val metrics = LocalTranscriptMetrics.current
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+        // Cap first, fill second: see UserBubble.
+        Box(
+            Modifier
+                .then(
+                    if (metrics.userBubbleMaxWidth == Dp.Unspecified) Modifier
+                    else Modifier.widthIn(max = metrics.userBubbleMaxWidth)
+                )
+                .fillMaxWidth(metrics.userBubbleFraction),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp),
+                border = BorderStroke(1.dp, tint),
+            ) {
+                // A command must not wrap into ambiguity: scroll it instead.
+                Box(Modifier.padding(horizontal = 12.dp, vertical = 8.dp).horizontalScroll(rememberScrollState())) {
+                    Text(
+                        buildAnnotatedString {
+                            withStyle(SpanStyle(color = tint, fontWeight = FontWeight.SemiBold)) { append("! ") }
+                            append(command)
+                        },
+                        style = LocalMonoStyle.current,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        softWrap = false,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What a shell-mode command printed: stdout in mono, stderr under it in the
+ * error ink and only when there is some, a quiet "no output" when there was
+ * nothing, and a long output folded to its first lines until it is opened —
+ * an install log must not bury the conversation it sits in.
+ */
+@Composable
+private fun ShellOutputBlock(out: ShellRecords.Output, key: Int) {
+    if (out.empty) {
+        Text(
+            "no output",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        )
+        return
+    }
+    var open by rememberSaveable(key) { mutableStateOf(false) }
+    val lines = if (open) Int.MAX_VALUE else SHELL_OUTPUT_LINES
+    val stdout = remember(out.stdout, lines) { ShellRecords.fold(out.stdout, lines) }
+    val stderr = remember(out.stderr, lines) { ShellRecords.fold(out.stderr, lines) }
+    val mono = LocalMonoStyle.current
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            if (stdout.shown.isNotEmpty()) {
+                Box(Modifier.horizontalScroll(rememberScrollState())) {
+                    Text(stdout.shown, style = mono, color = MaterialTheme.colorScheme.onSurface, softWrap = false)
+                }
+            }
+            if (stderr.shown.isNotEmpty()) {
+                if (stdout.shown.isNotEmpty()) Spacer(Modifier.height(4.dp))
+                Box(Modifier.horizontalScroll(rememberScrollState())) {
+                    Text(stderr.shown, style = mono, color = stateColor(StateKind.ERROR), softWrap = false)
+                }
+            }
+            val hidden = stdout.hidden + stderr.hidden
+            if (hidden > 0 || open) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (open) "Show less" else "$hidden more line${if (hidden == 1) "" else "s"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { open = !open },
+                )
+            }
+        }
+    }
 }
 
 @Composable

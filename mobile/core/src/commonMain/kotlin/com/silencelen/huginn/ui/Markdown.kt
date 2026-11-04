@@ -336,100 +336,271 @@ object Markdown {
 
     /**
      * Inline spans: `code`, **bold**, *italic*, ~~strike~~ and [text](url).
-     * Scanned in one pass so a marker inside a code span is left alone.
      *
      * A `[label](url)` becomes a REAL link annotation carrying the URL, and the
      * rendered text is the label alone — the appended `" (url)"` this used to
      * write is gone (decision 44). A bare `https://…` in prose is auto-linked in
      * place. Both are subject to [isLinkable]; a refused URL leaves the label as
      * ordinary text rather than hiding it.
+     *
+     * ⚠⚠ EMPHASIS IS COMMONMARK'S DELIMITER RUNS, NOT "FIND THE NEXT MARKER"
+     * (2026-11-03). The old one-pass scanner had two bugs both apps showed:
+     *
+     *  - `mcp__mempalace__mempalace_kg_timeline` in the /context table rendered
+     *    as "mcp_*mempalace*mempalacekg_timeline". Only an opener was checked for
+     *    a letter before it, so the second `_` of every `__` opened emphasis.
+     *  - `**\`hi.png\`**` rendered bold WITH its backticks: a strong span's text
+     *    was appended raw, so nothing nested inside one was parsed.
+     *
+     * So: code spans, links and autolinks are cut out first, as atoms nothing can
+     * reach inside; every run of `*`, `_` or `~~` is then judged by what is on
+     * either side of it (left- and right-flanking), a `_` run between two
+     * alphanumerics can neither open nor close, and runs are paired innermost
+     * first, the nearest opener for each closer — which is what lets a code span,
+     * a link or another emphasis sit inside a strong span. An unmatched run is
+     * shown as written.
      */
     fun inline(src: String, linkStyles: TextLinkStyles? = null): AnnotatedString = buildAnnotatedString {
-        val styles = linkStyles ?: PLAIN_LINK_STYLES
+        appendInline(src, linkStyles ?: PLAIN_LINK_STYLES, links = true)
+    }
+
+    /** One piece of a line, before emphasis is paired. */
+    private sealed interface Tok
+    private class Plain(val text: String) : Tok
+    private class Code(val text: String) : Tok
+
+    /** `[label](url)`: [url] null when the scheme is refused — the label is then plain words. */
+    private class LinkTok(val label: String, val url: String?) : Tok
+    private class AutoLink(val url: String) : Tok
+
+    /**
+     * A run of `*`, `_` or `~~`. [left] is what pairing has not used yet; what
+     * it used as a CLOSER came off its left side and what it used as an OPENER
+     * off its right, so what is left is drawn between the two.
+     */
+    private class Delim(val ch: Char, val len: Int, val canOpen: Boolean, val canClose: Boolean) : Tok {
+        var left = len
+        var closeAt = 0
+        var openAt = 0
+    }
+
+    private class Match(val opener: Delim, val closer: Delim, val use: Int)
+
+    private fun AnnotatedString.Builder.appendInline(src: String, styles: TextLinkStyles, links: Boolean) {
+        val toks = tokenize(src, links)
+        val matches = pairDelimiters(toks)
+        for (t in toks) when (t) {
+            is Plain -> append(t.text)
+            is Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(t.text) }
+            // A link's words are inline markdown too — `[**docs**](…)` is a bold
+            // link — but never a second link: `links = false` inside one.
+            is LinkTok -> if (t.url != null) {
+                withLink(LinkAnnotation.Url(t.url, styles = styles)) { appendInline(t.label, styles, links = false) }
+            } else {
+                appendInline(t.label, styles, links = false)
+            }
+            is AutoLink -> if (isLinkable(t.url)) {
+                withLink(LinkAnnotation.Url(t.url, styles = styles)) { append(t.url) }
+            } else {
+                append(t.url)
+            }
+            is Delim -> {
+                t.closeAt = length
+                repeat(t.left) { append(t.ch) }
+                t.openAt = length
+            }
+        }
+        for (m in matches) {
+            val style = when {
+                m.opener.ch == '~' -> SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+                m.use == 2 -> SpanStyle(fontWeight = FontWeight.Bold)
+                else -> SpanStyle(fontStyle = FontStyle.Italic)
+            }
+            if (m.closer.closeAt > m.opener.openAt) addStyle(style, m.opener.openAt, m.closer.closeAt)
+        }
+    }
+
+    /**
+     * The line as atoms and delimiter runs. Linear: each character is looked at
+     * once, and a code span's search for its closing run gives up for good at
+     * the first run length it has failed to find (a line of unmatched backticks
+     * must not search the rest of the line from every one of them).
+     */
+    private fun tokenize(src: String, links: Boolean): List<Tok> {
+        val out = ArrayList<Tok>()
+        val text = StringBuilder()
+        fun flush() { if (text.isNotEmpty()) { out.add(Plain(text.toString())); text.setLength(0) } }
+        val noCloserFrom = HashMap<Int, Int>()
         var i = 0
         while (i < src.length) {
             val c = src[i]
             when {
                 c == '`' -> {
-                    val end = src.indexOf('`', i + 1)
-                    if (end > i + 1) {
-                        withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) {
-                            append(src.substring(i + 1, end))
-                        }
-                        i = end + 1
-                    } else { append(c); i++ }
+                    val n = runLength(src, i)
+                    val end = codeSpanEnd(src, i + n, n, noCloserFrom)
+                    if (end < 0) { text.append(src.substring(i, i + n)); i += n; continue }
+                    flush()
+                    out.add(Code(codeContent(src.substring(i + n, end))))
+                    i = end + n
                 }
-                c == '*' && src.startsWith("**", i) -> {
-                    val end = src.indexOf("**", i + 2)
-                    if (end > i + 1) {
-                        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                            append(src.substring(i + 2, end))
-                        }
-                        i = end + 2
-                    } else { append(c); i++ }
-                }
-                (c == '*' || c == '_') -> {
-                    val end = src.indexOf(c, i + 1)
-                    // A lone underscore inside a word (snake_case) is not emphasis.
-                    val wordInternal = c == '_' && i > 0 && src[i - 1].isLetterOrDigit()
-                    if (end > i + 1 && !wordInternal) {
-                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                            append(src.substring(i + 1, end))
-                        }
-                        i = end + 1
-                    } else { append(c); i++ }
-                }
-                c == '~' && src.startsWith("~~", i) -> {
-                    val end = src.indexOf("~~", i + 2)
-                    if (end > i + 1) {
-                        withStyle(SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)) {
-                            append(src.substring(i + 2, end))
-                        }
-                        i = end + 2
-                    } else { append(c); i++ }
+                c == '*' || c == '_' || c == '~' -> {
+                    val n = runLength(src, i)
+                    // ~~ only: a single `~` is "about" (`~5 min`) far more often
+                    // than it is strikethrough, and longer runs are fences' business.
+                    if (c == '~' && n != 2) { text.append(src.substring(i, i + n)); i += n; continue }
+                    val prev = if (i == 0) null else src[i - 1]
+                    val next = if (i + n >= src.length) null else src[i + n]
+                    val leftFlanking = next != null && !next.isWhitespace() &&
+                        (!isPunct(next) || prev == null || prev.isWhitespace() || isPunct(prev))
+                    val rightFlanking = prev != null && !prev.isWhitespace() &&
+                        (!isPunct(prev) || next == null || next.isWhitespace() || isPunct(next))
+                    // The underscore rule: `_` between two alphanumerics (snake_case,
+                    // mcp__server__tool) is a character, not a marker.
+                    val canOpen = if (c == '_') leftFlanking && (!rightFlanking || (prev != null && isPunct(prev))) else leftFlanking
+                    val canClose = if (c == '_') rightFlanking && (!leftFlanking || (next != null && isPunct(next))) else rightFlanking
+                    flush()
+                    out.add(Delim(c, n, canOpen, canClose))
+                    i += n
                 }
                 // `![alt](src)` inside a paragraph: left exactly as written. The
                 // block form is handled by [parse]; this branch exists so the `[`
                 // branch below cannot turn half an image into a link.
                 c == '!' && i + 1 < src.length && src[i + 1] == '[' -> {
                     val span = imageSpan(src, i)
-                    if (span > i) { append(src.substring(i, span)); i = span } else { append(c); i++ }
+                    if (span > i) { text.append(src.substring(i, span)); i = span } else { text.append(c); i++ }
                 }
-                c == '[' -> {
+                links && c == '[' -> {
                     val close = src.indexOf(']', i)
-                    if (close > i && close + 1 < src.length && src[close + 1] == '(') {
-                        val paren = destEnd(src, close + 1)
-                        if (paren > close) {
-                            val label = src.substring(i + 1, close)
-                            val url = src.substring(close + 2, paren).trim()
-                            // The label carries the meaning; the URL is the click
-                            // target and the hover/long-press reveal, not prose.
-                            if (isLinkable(url)) {
-                                withLink(LinkAnnotation.Url(url, styles = styles)) { append(label) }
-                            } else {
-                                append(label)
-                            }
-                            i = paren + 1
-                        } else { append(c); i++ }
-                    } else { append(c); i++ }
+                    val paren = if (close > i && close + 1 < src.length && src[close + 1] == '(') destEnd(src, close + 1) else -1
+                    if (paren > close) {
+                        val url = src.substring(close + 2, paren).trim()
+                        flush()
+                        // The label carries the meaning; the URL is the click
+                        // target and the hover/long-press reveal, not prose.
+                        out.add(LinkTok(src.substring(i + 1, close), url.takeIf { isLinkable(it) }))
+                        i = paren + 1
+                    } else { text.append(c); i++ }
                 }
                 // A bare URL in prose. The boundary rules are the whole trick:
                 // a sentence's full stop is not part of the address, and a URL
                 // written inside a parenthetical does not own the closing paren —
                 // but a URL that carries its own balanced parens does.
-                (c == 'h' || c == 'H') && startsUrl(src, i) -> {
+                links && (c == 'h' || c == 'H') && startsUrl(src, i) -> {
                     val end = urlEnd(src, i)
-                    val url = src.substring(i, end)
-                    if (isLinkable(url)) {
-                        withLink(LinkAnnotation.Url(url, styles = styles)) { append(url) }
-                    } else {
-                        append(url)
-                    }
+                    flush()
+                    out.add(AutoLink(src.substring(i, end)))
                     i = end
                 }
-                else -> { append(c); i++ }
+                else -> { text.append(c); i++ }
             }
         }
+        flush()
+        return out
+    }
+
+    private fun runLength(src: String, at: Int): Int {
+        var j = at
+        while (j < src.length && src[j] == src[at]) j++
+        return j - at
+    }
+
+    /** Where the code span opened by a run of [n] backticks ends: the next run of exactly [n], or -1. */
+    private fun codeSpanEnd(src: String, from: Int, n: Int, noCloserFrom: HashMap<Int, Int>): Int {
+        if (from >= (noCloserFrom[n] ?: Int.MAX_VALUE)) return -1
+        var j = src.indexOf('`', from)
+        while (j >= 0) {
+            val m = runLength(src, j)
+            if (m == n) return j
+            j = src.indexOf('`', j + m)
+        }
+        noCloserFrom[n] = minOf(from, noCloserFrom[n] ?: Int.MAX_VALUE)
+        return -1
+    }
+
+    /** CommonMark: line breaks read as spaces, and one space each side comes off when both are there. */
+    private fun codeContent(raw: String): String {
+        val s = raw.replace('\n', ' ')
+        return if (s.length >= 2 && s.first() == ' ' && s.last() == ' ' && s.isNotBlank()) s.substring(1, s.length - 1) else s
+    }
+
+    /** Unicode punctuation and symbols — CommonMark's "punctuation character". */
+    private fun isPunct(c: Char): Boolean = when (c.category) {
+        CharCategory.CONNECTOR_PUNCTUATION, CharCategory.DASH_PUNCTUATION, CharCategory.START_PUNCTUATION,
+        CharCategory.END_PUNCTUATION, CharCategory.INITIAL_QUOTE_PUNCTUATION, CharCategory.FINAL_QUOTE_PUNCTUATION,
+        CharCategory.OTHER_PUNCTUATION, CharCategory.MATH_SYMBOL, CharCategory.CURRENCY_SYMBOL,
+        CharCategory.MODIFIER_SYMBOL, CharCategory.OTHER_SYMBOL -> true
+        else -> false
+    }
+
+    /**
+     * CommonMark's "process emphasis": each closer, left to right, takes the
+     * NEAREST opener of its kind; strong when both sides have two to give;
+     * whatever lay between them can no longer pair with anything outside.
+     *
+     * Linear on the render path, which re-parses a streaming answer on every
+     * delta: the delimiter stack is linked by index, so taking a run out of it
+     * costs nothing, and `openersBottom` remembers, per kind of closer, how far
+     * down a search has already failed — a line of a thousand unmatched `*`
+     * does not search the line a thousand times.
+     */
+    private fun pairDelimiters(toks: List<Tok>): List<Match> {
+        val d = toks.filterIsInstance<Delim>()
+        if (d.size < 2) return emptyList()
+        val end = d.size
+        val prev = IntArray(end) { it - 1 }
+        val next = IntArray(end) { it + 1 }
+        fun unlink(k: Int) {
+            val p = prev[k]
+            val n = next[k]
+            if (p >= 0) next[p] = n
+            if (n < end) prev[n] = p
+        }
+        val matches = ArrayList<Match>()
+        val openersBottom = HashMap<Triple<Char, Boolean, Int>, Int>()
+        var c = 0
+        while (c < end) {
+            val closer = d[c]
+            if (!closer.canClose || closer.left == 0) { c = next[c]; continue }
+            val key = Triple(closer.ch, closer.canOpen, closer.len % 3)
+            val floor = openersBottom[key] ?: -1
+            var o = prev[c]
+            var found = -1
+            while (o > floor) {
+                val op = d[o]
+                if (op.ch == closer.ch && op.canOpen && op.left > 0 && !ruleOfThree(op, closer)) { found = o; break }
+                o = prev[o]
+            }
+            if (found < 0) {
+                openersBottom[key] = prev[c]
+                val after = next[c]
+                // A closer that cannot open is spent; one that can stays, for a later closer.
+                if (!closer.canOpen) unlink(c)
+                c = after
+                continue
+            }
+            val opener = d[found]
+            val use = if (opener.left >= 2 && closer.left >= 2) 2 else 1
+            opener.left -= use
+            closer.left -= use
+            matches.add(Match(opener, closer, use))
+            var k = next[found]
+            while (k != c) { val n = next[k]; unlink(k); k = n }
+            if (opener.left == 0) unlink(found)
+            if (closer.left == 0) { val after = next[c]; unlink(c); c = after }
+        }
+        return matches
+    }
+
+    /**
+     * CommonMark's "rule of 3": when either run could both open and close, the
+     * two lengths may not sum to a multiple of 3 unless both are — which is what
+     * keeps `*foo**bar*` one emphasis rather than three broken ones. `~~` only
+     * ever pairs with `~~`.
+     */
+    private fun ruleOfThree(o: Delim, c: Delim): Boolean {
+        if (o.ch == '~') return o.left < 2 || c.left < 2
+        if (!(o.canClose || c.canOpen)) return false
+        return (o.len + c.len) % 3 == 0 && !(o.len % 3 == 0 && c.len % 3 == 0)
     }
 
     /** End index (exclusive) of a complete `![alt](src)` at [at], or [at] if there is not one. */
