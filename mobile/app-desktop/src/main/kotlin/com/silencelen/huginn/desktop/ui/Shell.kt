@@ -1,8 +1,7 @@
 package com.silencelen.huginn.desktop.ui
 
 import com.silencelen.huginn.ui.StartDirRules
-import com.silencelen.huginn.ui.system.HouseMenu
-import com.silencelen.huginn.ui.system.HouseMenuItem
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -1637,6 +1636,7 @@ internal fun NewSessionDialog(
     var text by remember { mutableStateOf("") }
     var dir by remember { mutableStateOf("") }
     var picking by remember { mutableStateOf(false) }
+    var fieldWidth by remember { mutableStateOf(0) }
     val canon = text.trim().lowercase()
     val wellFormed = canon.matches(SESSION_NAME)
     val clash = wellFormed && canon in taken
@@ -1668,7 +1668,9 @@ internal fun NewSessionDialog(
                     modifier = Modifier.padding(top = Space.unit),
                 )
                 Spacer(Modifier.height(Space.unit * 2))
-                Box {
+                // Measured so the Recent list can be as wide as the field it drops
+                // from: the room a long path gets is the room the field has.
+                Box(Modifier.onSizeChanged { fieldWidth = it.width }) {
                     OutlinedTextField(
                         value = dir,
                         onValueChange = { dir = it },
@@ -1682,10 +1684,14 @@ internal fun NewSessionDialog(
                         }),
                         modifier = Modifier.fillMaxWidth().testTag("newsession.dir"),
                     )
-                    HouseMenu(
+                    // Cut in the MIDDLE, the whole path on hover: two recents under
+                    // one project differ only at their ends (RecentDirsMenu).
+                    RecentDirsMenu(
                         expanded = picking,
+                        dirs = choices,
+                        anchorWidthPx = fieldWidth,
                         onDismiss = { picking = false },
-                        items = choices.map { d -> HouseMenuItem(d) { dir = d } },
+                        onPick = { dir = it },
                     )
                 }
                 Text(

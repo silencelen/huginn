@@ -8,6 +8,9 @@
 - A new session's conversation appears within a few seconds of its first prompt instead of up to a
   minute later: while Claude Code is running in a session with no transcript yet, the app asks again
   every 2.5 s. A plain shell is still asked less and less often.
+- The New session dialog's Recent list is as wide as the directory field and shortens a long path in
+  the middle, keeping its last folders, so two directories under one project no longer read the same;
+  hovering a shortened row shows the whole path.
 
 ## 2.10.0
 
