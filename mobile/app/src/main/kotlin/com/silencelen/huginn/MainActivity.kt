@@ -770,11 +770,15 @@ fun HuginnApp(
         // strongest possible form of having seen it; leaving the notification up
         // afterwards would just be a chore handed back to the reader.
         val read = when (val d = dest) {
-            is Dest.Chat -> SessionWatchWorker.notificationIdFor("chat:${d.id}")
-            is Dest.SessionView -> SessionWatchWorker.notificationIdFor(d.name)
-            else -> null
+            // The chat's finished thread, and its "needs you" (ChatAttention):
+            // the card the latter pointed at is on screen now.
+            is Dest.Chat -> listOf("chat:${d.id}", com.silencelen.huginn.notify.ChatAttention.keyFor(d.id))
+            is Dest.SessionView -> listOf(d.name)
+            else -> emptyList()
         }
-        if (read != null) runCatching { NotificationManagerCompat.from(ctx).cancel(read) }
+        for (slot in read) {
+            runCatching { NotificationManagerCompat.from(ctx).cancel(SessionWatchWorker.notificationIdFor(slot)) }
+        }
         onDispose { Foreground.chat = null; Foreground.session = null }
     }
 

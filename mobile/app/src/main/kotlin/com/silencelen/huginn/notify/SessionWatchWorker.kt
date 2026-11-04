@@ -280,6 +280,9 @@ class SessionWatchWorker(
          * @param key the notification's SLOT, when it is not the session's own.
          *        A headroom ladder notice files under `ladder:<name>` so it
          *        cannot replace a "needs you" that is still waiting.
+         * @param openChat a chat the tap opens WITHOUT a reply box — a chat
+         *        waiting on you ([ChatAttention]). [replyChat] opens one too,
+         *        but brings the box and the "Finished" channel with it.
          */
         fun post(
             context: Context,
@@ -294,6 +297,7 @@ class SessionWatchWorker(
             key: String? = null,
             project: String? = null,
             projectActions: List<ProjectNotices.Action> = emptyList(),
+            openChat: String? = null,
         ) {
             if (!canNotify(context)) return
             // By NATURE, not by type. A session waiting on you is blocking — work has
@@ -305,7 +309,7 @@ class SessionWatchWorker(
             val intent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 if (session != null) putExtra(EXTRA_SESSION, session)
-                if (replyChat != null) putExtra(EXTRA_CHAT, replyChat)
+                (replyChat ?: openChat)?.let { putExtra(EXTRA_CHAT, it) }
                 if (project != null) putExtra(EXTRA_PROJECT, project)
             }
             val pending = PendingIntent.getActivity(
@@ -314,7 +318,7 @@ class SessionWatchWorker(
                 // one shared request code plus FLAG_UPDATE_CURRENT means the newest
                 // notification's extras are handed to every earlier one, so tapping
                 // an older alert opens whatever arrived last.
-                (key ?: session ?: replyChat ?: project)?.hashCode() ?: 0,
+                (key ?: session ?: replyChat ?: openChat ?: project)?.hashCode() ?: 0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )

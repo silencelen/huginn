@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- A chat whose Claude is waiting on a new-session approval notifies under Needs you (the
+  `chat_attention` push). A tap opens that chat; there is no reply box and no button. Nothing is
+  posted while that chat is on screen, and the notice comes down when the chat is opened or
+  finishes.
+
 ### Fixed
 - With the keyboard open, a session's or a chat's conversation is laid out above it. The question
   or new-session card is capped from the room left above the keyboard and the composer, a focused

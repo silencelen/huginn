@@ -160,7 +160,36 @@ class HuginnMessagingService : FirebaseMessagingService() {
         // a roster change that only reached the shade was the 2026-11-03 bug.
         ProjectPushes.projectOf(kind, subject, data["payload"])?.let { ProjectPushes.announce(it) }
 
-        val redundant = proposal != null || headroom != null || kind == "session_resolved" || when (kind) {
+        // A chat's Claude is waiting on a start_session approval: "needs you",
+        // a tap opens THAT chat, no reply box and no buttons — the card in the
+        // chat is where the prompt is shown. Nothing while that chat is on
+        // screen. See [ChatAttention].
+        val chatAsk = ChatAttention.fromPush(kind, data["title"].orEmpty(), text, subject)
+        if (chatAsk != null && ChatAttention.shows(chatAsk)) {
+            val a = ChatAttention.postArgs(chatAsk)
+            posts += { SessionWatchWorker.post(
+                applicationContext,
+                a.title,
+                a.text,
+                a.session,
+                answers = a.answers,
+                fingerprint = a.fingerprint,
+                replyChat = a.replyChat,
+                isResult = a.isResult,
+                key = a.key,
+                openChat = a.openChat,
+            ) }
+        }
+        // A chat that finished is waiting on nobody: its "needs you" comes down,
+        // whether or not the finish itself is posted below.
+        ChatAttention.withdraws(kind, subject)?.let { slot ->
+            runCatching {
+                NotificationManagerCompat.from(applicationContext)
+                    .cancel(SessionWatchWorker.notificationIdFor(slot))
+            }
+        }
+
+        val redundant = proposal != null || headroom != null || chatAsk != null || kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
             "session_attention", "session_finished" -> Foreground.showsSession(subject)
             else -> false
