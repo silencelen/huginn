@@ -9,6 +9,16 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Fixed
+- `shell: true` sends were refused (`409`, "the prompt already holds text") whenever Claude Code showed
+  its dim suggested reply in the empty prompt. The empty-prompt check and the look before the Enter
+  read the prompt without dim ghost text now, so neither a suggestion nor the rest of an earlier
+  command that shell mode draws after the typed one blocks a command; typed text still refuses.
+- Dim text next to a colour is read correctly: a truecolor or 256-colour code (`38;2;…`, `38;5;2`) no
+  longer reads as dim, and the shell-mode `!`, drawn dim while Claude is working, is still found.
+
 ## 3.17.0 — 2026-11-02
 
 ### Added

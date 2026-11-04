@@ -2621,9 +2621,15 @@ function armSoftEndFromSettle(name, v, what = 'soft-end') {
  * only for text that fits one command line. Anything longer is a 503 rather
  * than a message delivered in visibly mangled pieces.
  */
-/** One plain capture of a pane, as lines, or null when tmux cannot answer. */
-async function capturePaneLines(name) {
-  const cap = await run('tmux', ['capture-pane', '-p', '-t', `=${name}:`]);
+/**
+ * One capture of a pane, as lines, or null when tmux cannot answer. Plain by
+ * default; `escapes` keeps the attributes (`-e`), which is the only way to tell
+ * Claude Code's dim ghost text from text that is really in the box
+ * (typing.stripGhost). Every reader in lib/typing strips ANSI for itself, so
+ * either kind reads the same everywhere a ghost does not matter.
+ */
+async function capturePaneLines(name, { escapes = false } = {}) {
+  const cap = await run('tmux', ['capture-pane', '-p', ...(escapes ? ['-e'] : []), '-t', `=${name}:`]);
   if (cap.err) return null;
   return cap.stdout.replace(/\n$/, '').split('\n');
 }
@@ -2863,7 +2869,11 @@ async function recoverLostPaste(name, text, settle, before) {
  *          and why; `failed` is a result to hand straight back (tmux refused)
  */
 async function enterAfterLook(name, text, { hadComposer = false, shell = false } = {}) {
-  const lines = await capturePaneLines(name);
+  // A shell entry's look keeps the escapes: in shell mode Claude Code draws the
+  // rest of an earlier command dim after ours, and only an `-e` capture tells
+  // that ghost from text somebody put in the box (typing.enterRefusal). Every
+  // other send keeps the plain capture it has always had.
+  const lines = await capturePaneLines(name, { escapes: shell });
   const held = typing.enterRefusal(lines, text, { hadComposer, shell });
   if (held) {
     log(typing.enterHeldLogLine(name, held, lines));
@@ -2928,9 +2938,18 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
    * in the box, whatever put the box in its mode, refuses the send before
    * anything is typed; the look before the Enter (typing.enterRefusal `foreign`)
    * is the second lock on the same door.
+   *
+   * ⚠ BUT A GHOST IS NOT TEXT IN THE BOX (2026-11-03). After most replies
+   * Claude Code draws its suggested next prompt, dim, in the EMPTY box
+   * (`\x1b[39m❯\xa0\x1b[2myes, run it in the background\x1b[0m`), and this check
+   * read a PLAIN capture — no escapes, so `dropGhost` had nothing to drop and the
+   * suggestion was "text": every `!` command sent after such a reply was refused
+   * with this 409 and never ran. Both looks here keep the escapes now, so a dim
+   * suggestion (or the `!` caret, drawn dim while Claude is working) reads as
+   * what it is, and text somebody typed — never drawn dim — still refuses.
    */
   if (shell && submit) {
-    const now = await capturePaneLines(name);
+    const now = await capturePaneLines(name, { escapes: true });
     if (!now || !typing.composerDrawn(now)) {
       return { ok: false, code: 409, message: 'claude is not running in this session — a shell command needs its prompt' };
     }
@@ -2951,7 +2970,9 @@ async function sendTextToPane(name, text, { submit = true, boxHolds = null, type
       let entered = false;
       while (Date.now() < by) {
         await sleep(50);
-        const look = await capturePaneLines(name);
+        // composerShellMode reads the `!` row with every escape stripped and
+        // nothing dropped, so the caret counts however it is drawn.
+        const look = await capturePaneLines(name, { escapes: true });
         if (look && typing.composerShellMode(look)) { entered = true; break; }
       }
       if (!entered) {
