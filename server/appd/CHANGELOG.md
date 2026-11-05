@@ -33,6 +33,12 @@ version number collided. Entries below are reconstructed from the shipping commi
   hour and expire with nobody told. The send queue still treats the session as working.
 - `GET /v1/sessions/recent-dirs` lists the newest session's directory first, by when it was created;
   the registry's `updatedAt` is the same for every live entry, so the newest came last or was cut.
+- A `STOP` or `STOP-FABLE` hold armed for one login is decided again from the next login's own
+  windows when another login becomes active (an account switch, or a sign-in made outside Huginn):
+  it stays only if that login is at a hold level itself, else it clears at once. It waited for the
+  new login to fall below the clear level, holding every Agent/Workflow spawn until that login's
+  reset. The sentinel records the login it was armed for, also across a restart; a hand-armed
+  hold is never cleared.
 
 ## 3.17.0 — 2026-11-02
 

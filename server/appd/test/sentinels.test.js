@@ -104,6 +104,58 @@ test('a sentinel records WHO armed it, and a hand-armed one has no author (#12)'
   assert.equal(hand.by, null, 'nobody claimed it, so the tick must not reap it');
 });
 
+test('arm records the login it was armed for, and re-arms IN PLACE for another (2026-11-04)', () => {
+  // The plan's band belongs to the login that armed the hold (lib/headroom.js
+  // sentinelPlan), so the file has to say which login that was — and a hold the
+  // next login keeps is that login's from then on: its reason, because the
+  // reason is which window the band clears on, and its since.
+  const dir = scratch();
+  const file = path.join(dir, 'STOP');
+  const a = sent.arm(dir, 'STOP', 'weekly_all 99%', 1_789_459_000_000, { account: 'acct-a' });
+  assert.equal(a.created, true);
+  assert.equal(a.account, 'acct-a');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')),
+    { reason: 'weekly_all 99%', since: 1_789_459_000_000, by: 'appd', account: 'acct-a' });
+  assert.equal(sent.state(dir).STOP.account, 'acct-a');
+
+  // The same login re-asserting it every pass: idempotent, exactly as before.
+  const again = sent.arm(dir, 'STOP', 'weekly_all 100%', 1_789_459_060_000, { account: 'acct-a' });
+  assert.equal(again.created, false);
+  assert.equal(again.rearmed, false);
+  assert.equal(again.since, 1_789_459_000_000);
+  assert.equal(again.reason, 'weekly_all 99%');
+
+  // Another login that is out of room itself.
+  const b = sent.arm(dir, 'STOP', 'session 75%', 1_789_460_000_000, { account: 'acct-b' });
+  assert.equal(b.created, false);
+  assert.equal(b.rearmed, true);
+  assert.equal(b.was, 'acct-a');
+  assert.deepEqual(sent.state(dir).STOP,
+    { since: 1_789_460_000_000, reason: 'session 75%', by: 'appd', account: 'acct-b' });
+  // One rename: the gate tests for the file every two seconds, and a clear
+  // followed by an arm is a window in which a held spawn walks through.
+  assert.deepEqual(fs.readdirSync(dir), ['STOP'], 'nothing half-written left beside it');
+});
+
+test('a hand-armed sentinel is never re-armed for a login; an older daemon\'s is', () => {
+  const dir = scratch();
+  fs.writeFileSync(path.join(dir, 'STOP'), '');                  // the operator's `touch STOP`
+  const hand = sent.arm(dir, 'STOP', 'weekly_all 99%', Date.now(), { account: 'acct-b' });
+  assert.equal(hand.rearmed, false);
+  assert.equal(hand.by, null);
+  assert.equal(fs.readFileSync(path.join(dir, 'STOP'), 'utf8'), '', 'the operator\'s file is not rewritten');
+
+  // Written by a daemon that recorded no login: whose band it is cannot be
+  // known, so the plan decided it again and this login is taking it on.
+  fs.writeFileSync(path.join(dir, 'STOP-FABLE'),
+    `${JSON.stringify({ reason: 'weekly_fable 95%', since: 1_789_459_000_000, by: 'appd' })}\n`);
+  const old = sent.arm(dir, 'STOP-FABLE', 'weekly_fable 90%', 1_789_460_000_000, { account: 'acct-b' });
+  assert.equal(old.rearmed, true);
+  assert.equal(old.was, null);
+  assert.deepEqual(sent.state(dir)['STOP-FABLE'],
+    { since: 1_789_460_000_000, reason: 'weekly_fable 90%', by: 'appd', account: 'acct-b' });
+});
+
 test('a sentinel touched by hand is still armed, with mtime as its since', () => {
   // The operator's escape hatch when the daemon is the thing that is wrong:
   // `touch STOP`. The gate only tests for existence, so the reader must agree —

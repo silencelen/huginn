@@ -8542,6 +8542,13 @@ async function fetchPlan() {
     }
     const token = creds && creds.claudeAiOauth && creds.claudeAiOauth.accessToken;
     if (!token) { planCache.error = 'not signed in with an OAuth account'; return; }
+    // The saved login these credentials are, looked up WITH them. `isActive` is
+    // judged against the credentials file as it is when asked, so asked after
+    // the round trips below it named whoever had signed in meanwhile: the new
+    // login's name on the old login's numbers — and the headroom tick arms a
+    // sentinel in the name `data.account` carries.
+    let slug = null;
+    try { const rec = accounts.list().find((a) => a.isActive); slug = rec ? rec.slug : null; } catch { /* no store yet */ }
 
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 15_000);
@@ -8580,8 +8587,6 @@ async function fetchPlan() {
      * clients already render.
      */
     const id = await resolveIdentity(creds);
-    let slug = null;
-    try { const rec = accounts.list().find((a) => a.isActive); slug = rec ? rec.slug : null; } catch { /* no store yet */ }
     const o = (creds && creds.claudeAiOauth) || {};
     data.account = (id && (id.email || id.uuid)) || slug
       ? {
@@ -10868,6 +10873,15 @@ async function headroomTickInner() {
   const activeSlug = (activeRec && activeRec.slug) || (ident && ident.slug) || 'active';
   const activeEmail = (activeRec && activeRec.email) || (ident && ident.email) || null;
   const activeWindows = headroomLib.windowsOf((planCache.data && planCache.data.limits) || []);
+  // WHOSE numbers those are. The plan cache is one slot keyed on nothing, and a
+  // sign-in made outside huginn never empties it (performSwitch does), so for up
+  // to PLAN_TTL_MS it holds the login just left while the credentials file
+  // already names the next. A sentinel is armed for — and held by the band of —
+  // the login its numbers were read for: these numbers credited to the new
+  // login would arm STOP in its name, and its own reading would then hold that.
+  // (An identified login's slug IS its uuid: the rung for a reading taken before
+  // its profile was saved.)
+  const readFor = (ident && (ident.slug || ident.accountUuid)) || activeSlug;
 
   const nextAccounts = {};
   // A host with no login at all gets NO active row rather than an empty one:
@@ -10963,7 +10977,7 @@ async function headroomTickInner() {
       blocked: oauthRefresh.switchRefusal(accounts.readProfile(slug), now),
     }));
   const verdict = headroomLib.decide({
-    active: haveActive ? { slug: activeSlug, email: activeEmail, windows: activeWindows } : null,
+    active: haveActive ? { slug: activeSlug, email: activeEmail, windows: activeWindows, readFor } : null,
     candidates,
     sessions: model,
     settings,
@@ -11354,6 +11368,13 @@ function resolvePendingLadder(state, action, v) {
 function writeSentinels(plan, state, settings) {
   try {
     const onDisk = sentinelsLib.state(HEADROOM_DIR);
+    // A login as a log line names it: its email where the tick has read one.
+    const who = (slug) => {
+      if (!slug) return 'an unrecorded login';
+      const row = state.accounts && state.accounts[slug];
+      return (row && row.email) || slug;
+    };
+    const account = (plan && plan.account) || null;
     /**
      * Assert one sentinel against the plan.
      *
@@ -11371,12 +11392,20 @@ function writeSentinels(plan, state, settings) {
      * HEARTBEAT whatever is armed regardless of who armed it — without the
      * touch, the gate would age a hand-armed hold out after
      * HUGINN_GATE_STALE_S and every held spawn would go through anyway.
+     *
+     * The record names the LOGIN the plan armed it for, in memory (which
+     * headroom.json persists, and which is the plan's `current` after a
+     * restart) and in the file. Its band is that login's: a hold armed for
+     * another login is re-armed in this one's name or cleared, and the clear
+     * says why — "cleared STOP" alone reads as housekeeping.
      */
     const assertSentinel = (name, wanted, key) => {
+      const foreign = !!(plan.armedFor && Object.prototype.hasOwnProperty.call(plan.armedFor, key));
       if (wanted) {
-        const a = sentinelsLib.arm(HEADROOM_DIR, name, plan.reasons[name] || plan.reason);
-        state.sentinels[key] = { since: a.since, reason: a.reason };
+        const a = sentinelsLib.arm(HEADROOM_DIR, name, plan.reasons[name] || plan.reason, Date.now(), { account });
+        state.sentinels[key] = { since: a.since, reason: a.reason, account };
         if (a.created) log(`headroom: armed ${name} (${a.reason})`);
+        else if (a.rearmed) log(`headroom: re-armed ${name} for ${who(account)} (${a.reason}) — it was armed for ${who(a.was)}`);
         // The HEARTBEAT. An armed sentinel with no expiry wedges every spawn for
         // half an hour if this process dies while it is up; the gate ages it out
         // against this mtime, so re-asserting the plan must also say "still me".
@@ -11392,7 +11421,11 @@ function writeSentinels(plan, state, settings) {
         return;
       }
       if (state.sentinels[key] || found) {
-        if (sentinelsLib.clear(HEADROOM_DIR, name)) log(`headroom: cleared ${name}`);
+        if (sentinelsLib.clear(HEADROOM_DIR, name)) {
+          log(foreign
+            ? `headroom: cleared ${name} — armed for ${who(plan.armedFor[key])}, the active account has room`
+            : `headroom: cleared ${name}`);
+        }
         state.sentinels[key] = null;
       }
     };

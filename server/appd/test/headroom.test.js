@@ -272,6 +272,116 @@ test('an account with no figures arms nothing', () => {
   );
 });
 
+// ---- the sentinels and the login that armed them ---------------------------
+//
+// Seen live 2026-11-04: STOP armed `{"reason":"weekly_all 99%","by":"appd"}`
+// while one login sat at 100% of its week. The sessions then ran on a second
+// login, live at 54% — and because the record did not say WHICH login armed it,
+// the week's band (clear below 50%) was judged against the second login's week
+// and held until that login's own reset, days later. Every Agent/Workflow launch
+// waited out the gate's 1800 s timeout; a security scan's five researchers were
+// interrupted and restarted four times and the scan produced nothing.
+
+const armedBy = (account, reason) => ({ since: 1, reason, account });
+
+test('a STOP armed for one login clears at once when another login with room is active', () => {
+  const plan = h.sentinelPlan({ session: win(10), weekly_all: win(54), weekly_fable: win(30) },
+    S(), { STOP: armedBy('acct-a', 'weekly_all 99%'), 'STOP-FABLE': null }, 'acct-b');
+  assert.equal(plan.STOP, false, '54% is inside the band of the login that armed it, not of this one');
+  assert.equal(plan.armedFor.STOP, 'acct-a', 'the plan names whose hold it set aside');
+  assert.equal(plan.account, 'acct-b');
+});
+
+test('...and stays armed, as the new login\'s own, when that login is out of room itself', () => {
+  const cur = { STOP: armedBy('acct-a', 'weekly_all 99%') };
+  const red = h.sentinelPlan({ session: win(10), weekly_all: win(99) }, S(), cur, 'acct-b');
+  assert.equal(red.STOP, true);
+  assert.equal(red.reasons.STOP, 'weekly_all 99%');
+  assert.equal(red.account, 'acct-b', 'armed for the login whose window armed it');
+  // Its band is the new login's own window: armed by that login's 5-hour cap,
+  // it is that cap's reason, and nothing about the week the other one filled.
+  const bySession = h.sentinelPlan({ session: win(75), weekly_all: win(60) }, S(), cur, 'acct-b');
+  assert.equal(bySession.STOP, true);
+  assert.equal(bySession.reasons.STOP, 'session 75%');
+  assert.equal(bySession.account, 'acct-b');
+});
+
+test('the same login falling into the band still holds, in that login\'s name', () => {
+  const cur = { STOP: armedBy('acct-a', 'weekly_all 99%') };
+  const held = h.sentinelPlan({ session: win(10), weekly_all: win(54) }, S(), cur, 'acct-a');
+  assert.equal(held.STOP, true, 'the hysteresis is unchanged for the login that armed it');
+  assert.equal(held.reasons.STOP, 'weekly_all 99%');
+  assert.equal(held.account, 'acct-a');
+  assert.deepEqual(held.armedFor, {});
+  assert.equal(h.sentinelPlan({ session: win(10), weekly_all: win(49) }, S(), cur, 'acct-a').STOP, false);
+});
+
+test('STOP-FABLE belongs to the login that armed it too', () => {
+  const cur = { STOP: null, 'STOP-FABLE': armedBy('acct-a', 'weekly_fable 95%') };
+  const other = h.sentinelPlan({ session: win(5), weekly_all: win(20), weekly_fable: win(60) }, S(), cur, 'acct-b');
+  assert.equal(other.STOP_FABLE, false, 'another login inside the Fable band: cleared at once');
+  assert.equal(other.armedFor['STOP-FABLE'], 'acct-a');
+  assert.equal(h.sentinelPlan({ session: win(5), weekly_all: win(20) }, S(), cur, 'acct-b').STOP_FABLE, false,
+    'another login with no Fable week on its plan has nothing to hold for');
+  const full = h.sentinelPlan({ weekly_fable: win(90) }, S(), cur, 'acct-b');
+  assert.equal(full.STOP_FABLE, true);
+  assert.equal(full.reasons['STOP-FABLE'], 'weekly_fable 90%');
+  assert.equal(full.account, 'acct-b');
+  assert.equal(h.sentinelPlan({ weekly_fable: win(60) }, S(), cur, 'acct-a').STOP_FABLE, true,
+    'the same login inside its band holds');
+});
+
+test('a hold that names no login is decided again from the active login\'s windows', () => {
+  // What a daemon before this fix left in headroom.json — the live host's stuck
+  // STOP was one. Holding it in the band would carry the hold through the
+  // upgrade to the other login's reset.
+  const legacy = { STOP: { since: 1, reason: 'weekly_all 99%' }, 'STOP-FABLE': { since: 1, reason: 'weekly_fable 95%' } };
+  const plan = h.sentinelPlan({ session: win(10), weekly_all: win(54), weekly_fable: win(60) }, S(), legacy, 'acct-b');
+  assert.equal(plan.STOP, false);
+  assert.equal(plan.STOP_FABLE, false);
+  assert.deepEqual(plan.armedFor, { STOP: null, 'STOP-FABLE': null });
+  assert.equal(h.sentinelPlan({ weekly_all: win(95) }, S(), legacy, 'acct-b').STOP, true,
+    'still armed where this login is past a threshold itself');
+});
+
+test('the arbiter\'s own switch hands the sentinels to the next login\'s reading', () => {
+  const a = { slug: 'acct-a', email: 'a@x', windows: { session: win(10), weekly_all: win(99), weekly_fable: win(30) } };
+  const b = { slug: 'acct-b', email: 'b@x', windows: { session: win(5), weekly_all: win(54), weekly_fable: win(20) } };
+  const planOf = (v) => of(v, 'sentinels')[0].plan;
+  // The pass that switches still decides on A's reading — the switch only lands
+  // after it — so that pass's STOP is A's.
+  const v1 = h.decide({ active: a, candidates: [b], settings: SW(), state: { lastSwitchAt: 0, lastLadderAt: 0 }, now: NOW });
+  assert.equal(of(v1, 'switch_account')[0].slug, 'acct-b');
+  assert.equal(planOf(v1).STOP, true);
+  assert.equal(planOf(v1).account, 'acct-a');
+  // performSwitch empties the plan cache, so the next pass reads B: 54% is no
+  // threshold of B's, and the hold A armed is cleared at once.
+  const sentinels = { STOP: armedBy(planOf(v1).account, planOf(v1).reasons.STOP), 'STOP-FABLE': null };
+  const v2 = h.decide({
+    active: b, candidates: [a], settings: SW(), state: { lastSwitchAt: NOW, lastLadderAt: 0 }, sentinels, now: NOW + 60_000,
+  });
+  assert.equal(planOf(v2).STOP, false);
+  assert.equal(planOf(v2).armedFor.STOP, 'acct-a');
+});
+
+test('a reading still naming the login just left keeps that login\'s band', () => {
+  // A sign-in made outside huginn does not empty the plan cache: for up to its
+  // TTL the active login is B while the numbers are still A's. Judged as B's,
+  // those numbers would re-arm STOP in B's name and B's own reading would then
+  // hold it — the bug over again, one pass later.
+  const cur = { STOP: armedBy('acct-a', 'weekly_all 99%'), 'STOP-FABLE': null };
+  const stale = h.decide({
+    active: { slug: 'acct-b', readFor: 'acct-a', windows: { session: win(10), weekly_all: win(99) } },
+    settings: S(), sentinels: cur, now: NOW,
+  });
+  assert.equal(of(stale, 'sentinels')[0].plan.STOP, true);
+  assert.equal(of(stale, 'sentinels')[0].plan.account, 'acct-a', 'A\'s numbers arm nothing in B\'s name');
+  const fresh = h.decide({
+    active: { slug: 'acct-b', windows: { session: win(10), weekly_all: win(54) } }, settings: S(), sentinels: cur, now: NOW,
+  });
+  assert.equal(of(fresh, 'sentinels')[0].plan.STOP, false, 'B\'s own reading clears it');
+});
+
 // ---- the arbiter: the account-switch cases, moved from autoswitch.test.js ---
 //
 // Every one of these passed against `decideSwitch` and must pass against

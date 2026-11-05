@@ -464,16 +464,39 @@ function ladderedTo(rec) {
  *
  * `weekly_all` going red also arms STOP: a week-wide cap blocks every model, so
  * there is no ladder rung left to move to and holding spawns is the only lever.
+ *
+ * ⚠ THE BAND BELONGS TO THE LOGIN THAT ARMED IT. `account` is the login
+ * `activeWindows` were read for, and each record in `current` names the login
+ * it was armed for. Seen live 2026-11-04: STOP armed at "weekly_all 99%" on one
+ * login, the host then ran on another at 54%, and the week-armed hold waited for
+ * THAT login to fall under clearBelowPct — days away. Every Agent/Workflow spawn
+ * on the host sat out the gate's 30-minute timeout, and a security scan's
+ * subagents were interrupted and restarted four times and produced nothing. A
+ * record armed for another login, or one that names none (written before the
+ * login was recorded), is decided again from these windows as if nothing were
+ * armed: it stays only if this login is at an arming threshold itself.
+ * `armedFor` names the login of each record set aside that way. Without an
+ * `account` the plan cannot tell logins apart and holds whatever is armed.
  */
-function sentinelPlan(activeWindows, settings = defaults(), current = {}) {
+function sentinelPlan(activeWindows, settings = defaults(), current = {}, account = null) {
   const w = activeWindows || {};
   const sess = w.session ? numOrNull(w.session.percent) : null;
   const all = w.weekly_all ? numOrNull(w.weekly_all.percent) : null;
   const fable = w.weekly_fable ? numOrNull(w.weekly_fable.percent) : null;
   const allMode = w.weekly_all ? classify(w.weekly_all, settings) : 'ok';
 
-  const wasStop = !!current.STOP;
-  const wasFable = !!current['STOP-FABLE'];
+  const login = typeof account === 'string' && account ? account : null;
+  const held = { STOP: null, 'STOP-FABLE': null };
+  const armedFor = {};
+  for (const name of Object.keys(held)) {
+    const rec = current && current[name];
+    if (!rec) continue;
+    if (!login || rec.account === login) held[name] = rec;
+    else armedFor[name] = typeof rec.account === 'string' && rec.account ? rec.account : null;
+  }
+
+  const wasStop = !!held.STOP;
+  const wasFable = !!held['STOP-FABLE'];
   const reasons = { STOP: null, 'STOP-FABLE': null };
 
   let STOP;
@@ -489,8 +512,8 @@ function sentinelPlan(activeWindows, settings = defaults(), current = {}) {
     // under clearBelowPct as well held a reset session hostage to a normal
     // 69 % week (seen live 2026-09-18, every spawn held for hours). A week-armed
     // STOP keeps the week's own hysteresis: red arms it, low clears it.
-    const armedByWeek = !!(current.STOP && typeof current.STOP.reason === 'string'
-      && current.STOP.reason.startsWith('weekly_all'));
+    const armedByWeek = !!(held.STOP && typeof held.STOP.reason === 'string'
+      && held.STOP.reason.startsWith('weekly_all'));
     const sessLow = sess === null || sess < settings.clearBelowPct;
     const weekLow = armedByWeek
       ? (all === null || all < settings.clearBelowPct)
@@ -499,7 +522,7 @@ function sentinelPlan(activeWindows, settings = defaults(), current = {}) {
       STOP = false;
     } else {
     STOP = wasStop;
-    if (STOP) reasons.STOP = current.STOP && current.STOP.reason ? current.STOP.reason : 'held';
+    if (STOP) reasons.STOP = held.STOP && held.STOP.reason ? held.STOP.reason : 'held';
     }
   }
 
@@ -511,14 +534,17 @@ function sentinelPlan(activeWindows, settings = defaults(), current = {}) {
     STOP_FABLE = false;
   } else {
     STOP_FABLE = wasFable;
-    if (STOP_FABLE) reasons['STOP-FABLE'] = current['STOP-FABLE'] && current['STOP-FABLE'].reason
-      ? current['STOP-FABLE'].reason : 'held';
+    if (STOP_FABLE) reasons['STOP-FABLE'] = held['STOP-FABLE'] && held['STOP-FABLE'].reason
+      ? held['STOP-FABLE'].reason : 'held';
   }
 
   const parts = [];
   if (STOP) parts.push(`STOP (${reasons.STOP})`);
   if (STOP_FABLE) parts.push(`STOP-FABLE (${reasons['STOP-FABLE']})`);
-  return { STOP, STOP_FABLE, reason: parts.length ? parts.join(', ') : 'nothing armed', reasons };
+  return {
+    STOP, STOP_FABLE, reason: parts.length ? parts.join(', ') : 'nothing armed', reasons,
+    account: login, armedFor,
+  };
 }
 
 // ---- the arbiter ----------------------------------------------------------
@@ -567,8 +593,14 @@ function minutes(ms) { return Math.ceil(ms / 60000); }
 /**
  * The arbiter.
  *
- * @param input {{active, candidates, sessions, settings, state, now, lastFableResetAt}}
- *   active      {slug, email, windows|limits}
+ * @param input {{active, candidates, sessions, settings, state, sentinels, now, lastFableResetAt}}
+ *   active      {slug, email, windows|limits, readFor} — `readFor` is the login
+ *               `windows` were READ for, when that is not `slug`: the plan
+ *               cache is one slot, and after a sign-in made outside huginn it
+ *               still holds the login just left until it ages out. The
+ *               sentinels' hysteresis is judged against it (sentinelPlan).
+ *   sentinels   what is armed now, `{STOP, 'STOP-FABLE'}`, each record naming
+ *               the `account` it was armed for
  *   candidates  [{slug, email, windows|limits, aged, blocked}] — `blocked` is
  *               why the switch gate would refuse one, and such a one is never
  *               picked (autoswitch.decideSwitch)
@@ -765,7 +797,8 @@ function decide(input = {}) {
   else if (ladderUp) actions.push(ladderUp);
   if (offerUp) actions.push(offerUp);
 
-  actions.push({ type: 'sentinels', plan: sentinelPlan(activeWindows, settings, input.sentinels || {}) });
+  const readFor = active.readFor != null ? active.readFor : active.slug;
+  actions.push({ type: 'sentinels', plan: sentinelPlan(activeWindows, settings, input.sentinels || {}, readFor) });
 
   // ---- why ----------------------------------------------------------------
   let why;

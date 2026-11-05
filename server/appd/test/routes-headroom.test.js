@@ -1647,3 +1647,95 @@ test('PATCH refuses broken keep-awake settings by NAMING the rule', async () => 
   // And off again, so nothing after this file spends anything.
   await api('/v1/headroom/settings', { method: 'PATCH', body: JSON.stringify({ keepAwake: false }) });
 });
+
+// ------------------------------------------- a hold and the login it was armed for
+//
+// Seen live 2026-11-04: STOP armed at "weekly_all 99%" while one login was at
+// 100% of its week; the host then ran on a second login at 54%, and the week's
+// band (clear below 50%) held the sentinel until THAT login's own reset, days
+// later. Every Agent/Workflow spawn on the host waited out the gate's timeout.
+// These run last: they sign in to other logins and restart the daemon.
+
+/** What `claude /login` leaves behind: another login, made outside huginn. */
+function signInOutside(name) {
+  fs.writeFileSync(path.join(claudeDir, '.credentials.json'), JSON.stringify({
+    claudeAiOauth: {
+      accessToken: `tok-${name}`, refreshToken: `rt-${name}`,
+      expiresAt: Date.now() + 3600_000, subscriptionType: 'max', scopes: ['user:profile'],
+    },
+  }, null, 2));
+}
+/** The live row's slug when the live login is `name` (the identity stub names it by its token). */
+function liveAs(b, name) {
+  const slug = Object.keys((b && b.accounts) || {}).find((k) => b.accounts[k] && b.accounts[k].live);
+  return slug && b.accounts[slug].email === `tok-${name}@example.test` ? slug : null;
+}
+/**
+ * The /v1/headroom body after a pass that read `pct` for this login has
+ * FINISHED. A pass writes the account rows before it decides, so a row showing
+ * the number says nothing yet about the sentinels; a later reading of that row
+ * means the pass that read it has written them.
+ */
+async function decidedOn(slug, pct) {
+  const seen = await until((b) => b.accounts[slug] && b.accounts[slug].windows.weekly_all
+    && b.accounts[slug].windows.weekly_all.percent === pct, 15_000, `the login read at ${pct}%`);
+  const at = seen.accounts[slug].readAt;
+  return until((b) => b.accounts[slug] && b.accounts[slug].readAt > at, 15_000, 'the pass after that reading');
+}
+
+test('a STOP armed for one login clears when the owner signs in to another with room', async () => {
+  signInOutside('hold-a');
+  setUsage({ session: 5, weekly_all: 99, weekly_fable: 20 });
+  await tick({});
+  const armed = await until((b) => liveAs(b, 'hold-a') && b.sentinels.STOP, 15_000, 'STOP armed for the first login');
+  const a = liveAs(armed, 'hold-a');
+  assert.equal(armed.sentinels.STOP.reason, 'weekly_all 99%');
+  assert.equal(armed.sentinels.STOP.account, a, 'the sentinel names the login it was armed for');
+
+  // The same login inside the band: the hysteresis is unchanged.
+  setUsage({ session: 5, weekly_all: 54, weekly_fable: 20 });
+  const held = await decidedOn(a, 54);
+  assert.ok(held.sentinels.STOP, 'the login that armed it still holds it at 54%');
+
+  // Another login at the same 54%: no threshold of its own is met, so the hold goes.
+  signInOutside('hold-b');
+  const cleared = await until((b) => liveAs(b, 'hold-b') && !b.sentinels.STOP, 15_000,
+    'STOP cleared once the login with room is live');
+  assert.equal(cleared.accounts[liveAs(cleared, 'hold-b')].windows.weekly_all.percent, 54);
+  assert.equal(fs.existsSync(path.join(headroomDir, 'STOP')), false);
+});
+
+test('the login a hold was armed for survives a restart, and so does the rule', async () => {
+  signInOutside('hold-c');
+  setUsage({ session: 5, weekly_all: 99, weekly_fable: 20 });
+  await tick({});
+  const armed = await until((b) => liveAs(b, 'hold-c') && b.sentinels.STOP
+    && b.sentinels.STOP.account === liveAs(b, 'hold-c'), 15_000, 'STOP armed for this login');
+  const c = liveAs(armed, 'hold-c');
+  // headroom.json is saved at the end of the pass, after the sentinels.
+  await until(() => {
+    try {
+      const onDisk = JSON.parse(fs.readFileSync(path.join(dataDir, 'headroom.json'), 'utf8'));
+      return !!(onDisk.sentinels && onDisk.sentinels.STOP && onDisk.sentinels.STOP.account === c);
+    } catch { return false; }
+  }, 15_000, 'headroom.json naming the login');
+
+  setUsage({ session: 5, weekly_all: 54, weekly_fable: 20 });
+  daemon.kill('SIGTERM');
+  await wait(600);
+  daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], daemonOpts);
+  daemon.on('error', (e) => { throw e; });
+  for (let i = 0; i < 300; i++) {
+    try { if ((await api('/v1/ping')).status === 200) break; } catch { /* not up */ }
+    await wait(100);
+  }
+  // The same login inside the band, after the restart: still held. A record
+  // that came back naming no login would have been decided again and released.
+  const held = await decidedOn(c, 54);
+  assert.ok(held.sentinels.STOP, 'held through the restart, by the login that armed it');
+  assert.equal(held.sentinels.STOP.account, c);
+
+  signInOutside('hold-d');
+  await until((b) => liveAs(b, 'hold-d') && !b.sentinels.STOP, 15_000, 'STOP cleared for the next login');
+  setUsage({});
+});

@@ -21,8 +21,9 @@
 // A sentinel FILE is the contract, not a field in headroom.json: the gate must
 // be able to answer with one `test -e` and no parsing, and the operator must be
 // able to arm one by hand with `touch` when the daemon itself is the problem.
-// Content is a single JSON line for humans (and for `reason`); an unparseable or
-// empty file is still ARMED — existence is the signal, the body is commentary.
+// Content is a single JSON line for humans (and for `reason`, `by` and the
+// `account` it was armed for); an unparseable or empty file is still ARMED —
+// existence is the signal, the body is commentary.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -69,15 +70,29 @@ function msOf(v) {
  * original `since` and reason, because the tick re-asserts its plan every pass
  * and a `since` that resets every 30 s is a number no hysteresis can use and no
  * operator can read ("armed 4 seconds ago" for a stop that has held all night).
- * Returns { name, since, reason, created }.
+ *
+ * `account` is the login the plan armed it for (lib/headroom.js sentinelPlan):
+ * its hysteresis is that login's. One this daemon armed for ANOTHER login, or
+ * before the login was recorded, is re-armed IN PLACE for this one — this
+ * login, this reason, a new `since` — with one rename, so the gate never sees
+ * it missing. Keeping the old reason would hand the new login the clear rule of
+ * a window it never filled. A hand-armed sentinel is never rewritten.
+ *
+ * Returns { name, since, reason, by, account, created, rearmed, was } — `was` is
+ * the login a re-armed one was armed for before.
  */
-function arm(dir, name, reason, nowMs = Date.now()) {
+function arm(dir, name, reason, nowMs = Date.now(), { account = null } = {}) {
   assertName(name);
   ensureDir(dir);
   const file = path.join(dir, name);
+  const owner = typeof account === 'string' && account ? account : null;
   const existing = readSentinel(file);
-  if (existing) {
-    return { name, since: existing.since, reason: existing.reason, by: existing.by, created: false };
+  const reattribute = !!existing && !!owner && existing.by === 'appd' && existing.account !== owner;
+  if (existing && !reattribute) {
+    return {
+      name, since: existing.since, reason: existing.reason, by: existing.by,
+      account: existing.account || null, created: false, rearmed: false,
+    };
   }
   const since = Math.floor(nowMs);
   // ⚠ `by` IS WHAT MAKES THE ESCAPE HATCH REAL (#12). The tick has to keep
@@ -87,9 +102,13 @@ function arm(dir, name, reason, nowMs = Date.now()) {
   // outside. A file this daemon wrote says so; a file somebody touched cannot,
   // and that asymmetry is exactly the signal. Measured lifetimes for a
   // hand-armed hold before this: 299 s idle, 23 ms after a settings PATCH.
-  const body = `${JSON.stringify({ reason: String(reason == null ? '' : reason), since, by: 'appd' })}\n`;
+  const text = String(reason == null ? '' : reason);
+  const body = `${JSON.stringify({ reason: text, since, by: 'appd', ...(owner ? { account: owner } : {}) })}\n`;
   writeAtomic(file, body);
-  return { name, since, reason: String(reason == null ? '' : reason), by: 'appd', created: true };
+  return {
+    name, since, reason: text, by: 'appd', account: owner,
+    created: !existing, rearmed: !!existing, was: existing ? existing.account || null : null,
+  };
 }
 
 /**
@@ -160,12 +179,14 @@ function readSentinel(file) {
   }
   let reason = '';
   let by = null;
+  let account = null;
   let since = armedAt(st);
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (parsed && typeof parsed === 'object') {
       if (typeof parsed.reason === 'string') reason = parsed.reason;
       if (typeof parsed.by === 'string' && parsed.by) by = parsed.by;
+      if (typeof parsed.account === 'string' && parsed.account) account = parsed.account;
       const stored = msOf(parsed.since);
       if (stored !== null) since = stored;
     }
@@ -176,11 +197,12 @@ function readSentinel(file) {
   // `by` stays null for a hand-armed file AND for one an older daemon wrote.
   // Both are "not mine to reap", which is the safe side of that ambiguity: the
   // worst case is a stale sentinel a human can delete, against the old worst
-  // case of a fleet-wide pause evaporating inside one tick.
-  return { since, reason, by };
+  // case of a fleet-wide pause evaporating inside one tick. `account` appears
+  // only when the file names the login it was armed for.
+  return { since, reason, by, ...(account ? { account } : {}) };
 }
 
-/** { STOP: {since, reason, by} | null, 'STOP-FABLE': {since, reason, by} | null } */
+/** { STOP: {since, reason, by, account?} | null, 'STOP-FABLE': {…} | null } */
 function state(dir) {
   const out = {};
   for (const name of NAMES) out[name] = readSentinel(path.join(dir, name));

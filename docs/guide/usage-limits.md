@@ -88,6 +88,10 @@ A hold clears when its window drops below **Treat a window as cleared below** (d
 The gap between the two numbers keeps a hold from switching on and off while a percentage
 wobbles.
 
+A hold belongs to the login whose window started it. When another login becomes active, through
+an account switch or a sign-in made outside Huginn, the hold is decided again from that login's
+own windows: it stays only if that login is at a hold level itself, and otherwise clears at once.
+
 The hook only delays; it never refuses. A held agent starts after about 30 minutes even if the
 hold is still on. If the daemon stops while a hold is on, the hold lapses by itself after
 15 minutes. `huginn headroom` shows how many agents are waiting.
