@@ -189,7 +189,31 @@ class HuginnMessagingService : FirebaseMessagingService() {
             }
         }
 
-        val redundant = proposal != null || headroom != null || chatAsk != null || kind == "session_resolved" || when (kind) {
+        // A project went quiet: ONE notice for the whole project, where a
+        // `session_finished` per member used to land each time one paused
+        // (owner decision, 2026-11-06). Finished, no buttons, and a tap opens
+        // THAT project's page. Nothing while that page is on screen. Unrouted,
+        // it fell into the generic slot under Needs you with nowhere to go.
+        // See [ProjectIdle].
+        val idle = ProjectIdle.fromPush(kind, data["title"].orEmpty(), text, subject, data["payload"])
+        if (idle != null && ProjectIdle.shows(idle)) {
+            val a = ProjectIdle.postArgs(idle)
+            posts += { SessionWatchWorker.post(
+                applicationContext,
+                a.title,
+                a.text,
+                a.session,
+                answers = a.answers,
+                fingerprint = a.fingerprint,
+                replyChat = a.replyChat,
+                isResult = a.isResult,
+                key = a.key,
+                project = a.project,
+                projectActions = a.projectActions,
+            ) }
+        }
+
+        val redundant = proposal != null || headroom != null || chatAsk != null || idle != null || kind == "session_resolved" || when (kind) {
             "chat_finished" -> Foreground.showsChat(subject)
             "session_attention", "session_finished" -> Foreground.showsSession(subject)
             else -> false

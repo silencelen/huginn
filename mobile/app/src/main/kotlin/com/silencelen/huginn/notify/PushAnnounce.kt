@@ -39,11 +39,11 @@ object PushAnnounce {
      * anyway.
      *
      * ⚠ BOUNDED ON PURPOSE. The gate can be held across up to three
-     * `client.screen()` round trips, and a notification is the one thing here
-     * that must not queue behind the network — the post used to happen before
-     * anything suspended at all. Past this, an alert that might duplicate beats
-     * an alert that never arrives, which is the trade this file's neighbours
-     * already make out loud.
+     * `client.screen()` round trips and a session-list read, and a
+     * notification is the one thing here that must not queue behind the
+     * network — the post used to happen before anything suspended at all. Past
+     * this, an alert that might duplicate beats an alert that never arrives,
+     * which is the trade this file's neighbours already make out loud.
      */
     const val GATE_WAIT_MS: Long = 3_000
 

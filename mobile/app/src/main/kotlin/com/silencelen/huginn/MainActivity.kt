@@ -760,6 +760,7 @@ fun HuginnApp(
     DisposableEffect(dest) {
         Foreground.chat = (dest as? Dest.Chat)?.id
         Foreground.session = (dest as? Dest.SessionView)?.name
+        Foreground.project = (dest as? Dest.Project)?.id
         // ⚠ AND REMEMBERED ACROSS A COLD START (P-35). `dest` is
         // rememberSaveable, which holds across a fold and a rotate and loses to
         // a force-stop, a low-memory kill and a reboot — most of the ways a
@@ -774,12 +775,15 @@ fun HuginnApp(
             // the card the latter pointed at is on screen now.
             is Dest.Chat -> listOf("chat:${d.id}", com.silencelen.huginn.notify.ChatAttention.keyFor(d.id))
             is Dest.SessionView -> listOf(d.name)
+            // The project's idle notice (ProjectIdle). Not its proposal's slot:
+            // Spawn and Discard there are a choice still waiting on the reader.
+            is Dest.Project -> listOf(com.silencelen.huginn.notify.ProjectIdle.keyFor(d.id))
             else -> emptyList()
         }
         for (slot in read) {
             runCatching { NotificationManagerCompat.from(ctx).cancel(SessionWatchWorker.notificationIdFor(slot)) }
         }
-        onDispose { Foreground.chat = null; Foreground.session = null }
+        onDispose { Foreground.chat = null; Foreground.session = null; Foreground.project = null }
     }
 
 

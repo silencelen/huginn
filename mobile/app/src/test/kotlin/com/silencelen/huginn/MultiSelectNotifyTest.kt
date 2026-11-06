@@ -73,7 +73,7 @@ class MultiSelectNotifyTest {
 
     @Test
     fun `the needs-you notification takes its buttons from the rule`() {
-        val post = watchNotifier().substringAfter("\"\$name needs you\"", "").substringBefore("posted++", "")
+        val post = watchNotifier().substringAfter("WatchCycle.needsYouTitle(name", "").substringBefore("posted++", "")
         assertTrue("the needs-you post read as ${post.length} chars — wrong slice", post.length in 1..800)
         assertTrue("the buttons are not the rule's", "answerButtonsFor(prompt)" in post)
         assertFalse("every option is drawn as a button again", "prompt?.options?.map" in post)

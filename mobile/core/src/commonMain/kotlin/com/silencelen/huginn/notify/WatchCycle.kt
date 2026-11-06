@@ -1,5 +1,8 @@
 package com.silencelen.huginn.notify
 
+import com.silencelen.huginn.data.SessionProject
+import com.silencelen.huginn.ui.ProjectRules
+
 /**
  * What one observation of huginn MEANS — the rules, with no Android and no I/O.
  *
@@ -51,5 +54,27 @@ object WatchCycle {
     ): Set<String> {
         val ranAgain = runsNow.filter { (id, now) -> (runsBefore[id] ?: now) < now }.keys
         return ranAgain + (previouslyRunning - running)
+    }
+
+    /**
+     * The title of a "needs you" a client writes ITSELF — the watch cycle's,
+     * for a question no push announced first.
+     *
+     * A project session is named by its project and role, `<project name> ·
+     * <role> needs you`, the lead as `lead` (owner decision, 2026-11-06): the
+     * daemon titles its own `session_attention` for one that way, and the two
+     * paths must not describe the same question differently depending on which
+     * noticed it first. A project's members are tmux names (`<slug>-<role>`)
+     * that say little on a lock screen beside a dozen others. Every other
+     * session keeps `<name> needs you`, and so does a tag missing its name or
+     * role — a half-named project is worse than the session's own name.
+     *
+     * [project] is the row's `project` (`GET /v1/sessions`); the watch digest
+     * does not carry it.
+     */
+    fun needsYouTitle(session: String, project: SessionProject?): String {
+        val name = project?.name?.trim().orEmpty()
+        val role = if (project?.lead == true) ProjectRules.LEAD_ROLE else project?.role?.trim().orEmpty()
+        return if (name.isEmpty() || role.isEmpty()) "$session needs you" else "$name · $role needs you"
     }
 }

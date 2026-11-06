@@ -30,6 +30,12 @@ object Foreground {
     /** The session open in the UI, if the current destination is a session. */
     @Volatile var session: String? = null
 
+    /**
+     * The project whose page is open in the UI, by id. A `project_idle` about
+     * it says nothing the page in front of the reader does not.
+     */
+    @Volatile var project: String? = null
+
     /** Is this chat on screen in front of the reader right now? */
     fun showsChat(id: String?): Boolean =
         resumed && id != null && chat == id
@@ -37,4 +43,8 @@ object Foreground {
     /** Is this session on screen in front of the reader right now? */
     fun showsSession(name: String?): Boolean =
         resumed && name != null && session == name
+
+    /** Is this project's page on screen in front of the reader right now? */
+    fun showsProject(id: String?): Boolean =
+        resumed && id != null && project == id
 }
