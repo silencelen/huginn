@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.17.0 — 2026-11-06
 
 ### Added
 - A project that has gone quiet notifies once for the whole project (the `project_idle` push), under

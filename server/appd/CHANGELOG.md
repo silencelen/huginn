@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.18.0 — 2026-11-06
 
 ### Added
 - A `project_idle` push, once per working burst of a project: sent when every session of the project
