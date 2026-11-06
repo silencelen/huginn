@@ -680,9 +680,60 @@ function sameConsent(before, after) {
 // The heading is the gate. A numbered list is an extremely common thing for
 // Claude to WRITE, and a parser that accepted any numbered run would read an
 // answer as a dialog and start pressing keys into a live conversation.
+//
+// ⚠ A SHORT PANE SHOWS A WINDOW OF THE LIST, NOT THE LIST (Claude Code 2.1.316,
+// measured 2026-11-05). At 80x24 — the size of every session no client has
+// open, which includes every project member appd spawns — the picker draws two
+// rows: the highlighted one and one neighbour, the neighbour marked `↑` when
+// rows are hidden above it and `↓` when rows are hidden below it, then
+// `… +N models` while any remain below. The highlight opens on the session's
+// CURRENT model, so the window starts at row 2 or 3 as readily as at row 1. A
+// parser that wanted the rows numbered from 1, with nothing but a caret before
+// the number, read that window as no picker at all: the ladder left it open,
+// and four project sessions sat behind an open `/model` picker for a week with
+// every message from the apps queued behind it as a dialog.
 const PICKER_HEAD_RE = /^\s*Select model\s*$/;
-const PICKER_ROW_RE = /^(\s*)([❯>]?)\s*(\d{1,2})[.)]\s+(\S.*)$/;
+const PICKER_ROW_RE = /^(\s*)([❯>↑↓]?)\s*(\d{1,2})[.)]\s+(\S.*)$/;
+/** `… +11 models`, `… +1 model`: the rows the window hides below it. */
+const PICKER_MORE_RE = /^\s*…\s*\+(\d+) models?$/;
+/** The picker's last line: `Enter to set as default · s to use this session only · Esc to cancel`. */
+const PICKER_FOOT_RE = /(?:^|\s)Esc to cancel$/;
+/** A composer's or a dialog's own rule. Every box Claude Code draws opens with one. */
+const PICKER_RULE_RE = /[─━]{8,}/;
 const CHECK_RE = /[✔✓]/;
+
+/**
+ * Is the `/model` picker ITSELF on screen, as opposed to a picture of one?
+ *
+ * The picker is drawn at the bottom of the pane, in place of the composer, and
+ * ends on its own footer. So: a `Select model` heading, the footer (`… Esc to
+ * cancel`) among the last three non-blank lines — nothing under it but perhaps
+ * a status line — and no rule between the two. The same words quoted in an
+ * answer always have the composer under them, which opens with a rule and puts
+ * three lines of its own below any footer.
+ *
+ * This is the only test that licenses an Escape. Escape on a busy Claude
+ * interrupts the turn and on a dialog it answers it, so a pane that does not
+ * pass this gets no key at all, picker-shaped or not.
+ */
+function modelPickerShown(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  const filled = [];
+  for (let i = 0; i < plain.length; i++) if (plain[i].trim()) filled.push(i);
+  let foot = -1;
+  for (const i of filled.slice(-3).reverse()) {
+    // A pane narrower than the footer wraps it at a space: `… · Esc to` / `cancel`.
+    const two = i > 0 && plain[i - 1].trim() ? `${plain[i - 1].trim()} ${plain[i].trim()}` : '';
+    if (PICKER_FOOT_RE.test(plain[i]) || PICKER_FOOT_RE.test(two)) { foot = i; break; }
+  }
+  if (foot < 0) return false;
+  for (let i = foot - 1; i >= 0; i--) {
+    if (PICKER_HEAD_RE.test(plain[i])) return true;
+    if (PICKER_RULE_RE.test(plain[i])) return false;
+  }
+  return false;
+}
 
 /**
  * Read the `/model` picker off a captured pane.
@@ -696,6 +747,15 @@ const CHECK_RE = /[✔✓]/;
  *            rows like "Default (recommended)" that name no model of their own
  *   current  the ✔ row: the model this SESSION is on right now
  *   cursor   the ❯ row: where the selector's highlight sits
+ *
+ * The array also carries two non-enumerable counts, so every caller that reads
+ * it as a plain list of rows sees exactly what it always saw:
+ *
+ *   more     rows hidden BELOW what is drawn (`… +N models`); 0 for a whole list
+ *   total    the length of the list: the last row drawn plus `more`
+ *
+ * Rows hidden ABOVE are the first drawn row's number less one. The list is the
+ * whole list when `rows[0].n === 1 && more === 0`.
  */
 function parseModelPicker(lines) {
   const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
@@ -707,16 +767,30 @@ function parseModelPicker(lines) {
   if (head < 0) return null;
 
   const rows = [];
+  let more = 0;
+  let nameCol = 0;
   for (let i = head + 1; i < plain.length; i++) {
-    const m = PICKER_ROW_RE.exec(plain[i]);
+    const line = plain[i];
+    if (rows.length) {
+      const below = PICKER_MORE_RE.exec(line);
+      if (below) { more = Number(below[1]); break; }
+      // A description too long for the pane wraps onto lines of its own,
+      // indented to the description column (captured: `❯ 3. Fable ✔  Fable 5.1 ·
+      // Most capable for your hardest and` / `longest-running tasks`). It belongs
+      // to the row above and does not end the run, even if it begins with a
+      // number. Everything that does end it — the effort line, the footer, a
+      // blank — starts left of the name column.
+      if (line.trim() && /^\s*/.exec(line)[0].length > nameCol) continue;
+    }
+    const m = PICKER_ROW_RE.exec(line);
     if (!m) {
-      if (rows.length) break;          // the run has ended: effort line, footer
-      if (plain[i].trim() && rows.length === 0 && /^\s*\S/.test(plain[i])) continue; // the blurb
-      continue;
+      if (!rows.length) continue;      // the blurb, and the blank line under it
+      break;                           // the run has ended: effort line, footer
     }
     // The name column is separated from the description by a run of spaces.
     const cells = m[4].split(/\s{2,}/);
     const nameCell = (cells[0] || '').trim();
+    nameCol = line.length - m[4].length;
     rows.push({
       n: Number(m[3]),
       label: nameCell.replace(CHECK_RE, '').trim(),
@@ -725,10 +799,16 @@ function parseModelPicker(lines) {
       cursor: m[2] === '❯' || m[2] === '>',
     });
   }
-  // Numbered from 1 and contiguous, or this is not the picker — the same
-  // strictness detectPrompt uses, for the same reason.
+  // Contiguous, or this is not the picker — the same strictness detectPrompt
+  // uses, for the same reason. A run that does not start at 1 is a window onto
+  // the list, and a window is believed only with the picker's own footer under
+  // it: `3.` and `4.` after a line reading "Select model" is a thing an answer
+  // can say.
   if (rows.length < 2) return null;
-  for (let i = 0; i < rows.length; i++) if (rows[i].n !== i + 1) return null;
+  for (let i = 0; i < rows.length; i++) if (rows[i].n !== rows[0].n + i) return null;
+  if (rows[0].n !== 1 && !modelPickerShown(arr)) return null;
+  Object.defineProperty(rows, 'more', { value: more });
+  Object.defineProperty(rows, 'total', { value: rows[rows.length - 1].n + more });
   return rows;
 }
 
@@ -1069,7 +1149,7 @@ module.exports = {
   detectTrustDialog, detectUnnumberedSelector, dialogBodyRows, drawsAskRows,
   consentRecommended,
   sameConsent,
-  parseModelPicker,
+  parseModelPicker, modelPickerShown,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, fastModeUnavailable, loginPaneState,
 };

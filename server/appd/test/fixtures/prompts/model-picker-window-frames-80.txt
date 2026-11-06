@@ -1,0 +1,142 @@
+== after Down x1
+   Select model
+
+   ↑ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+   ❯ 3.  Fable 5.1              For your toughest challenges
+      … +10 models
+
+   ● High effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== after Down x2
+   Select model
+
+   ↑ 3.  Fable 5.1              For your toughest challenges
+   ❯ 4.  Sonnet 5.5             Most efficient for simpler tasks
+      … +9 models
+
+   ◐ Medium effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== after Down x3
+   Select model
+
+   ↑ 4.  Sonnet 5.5             Most efficient for simpler tasks
+   ❯ 5.  Haiku 5.5              Fastest for quick answers
+      … +8 models
+
+   ◐ Medium effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== after Down x4
+   Select model
+
+   ↑ 5.  Haiku 5.5              Fastest for quick answers
+   ❯ 6.  Haiku 4.5              Fastest for quick answers
+      … +7 models
+
+   ○ Effort not supported for Haiku 4.5
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== after Down x5
+   Select model
+
+   ↑ 6.  Haiku 4.5              Fastest for quick answers
+   ❯ 7.  Sonnet 5               Efficient for routine tasks
+      … +6 models
+
+   ◉ xHigh effort ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== bottom (Down x13 total)
+   Select model
+   Switch between Claude models. Your pick becomes the default for new
+   sessions. For other/previous model names, specify with --model.
+
+     1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+      … +11 models
+
+
+   ● High effort ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== one more Down at the bottom
+   Select model
+   Switch between Claude models. Your pick becomes the default for new
+   sessions. For other/previous model names, specify with --model.
+
+   ↑ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+   ❯ 3.  Fable 5.1              For your toughest challenges
+      … +10 models
+
+
+   ● High effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== Up x1 from the bottom
+   Select model
+   Switch between Claude models. Your pick becomes the default for new
+   sessions. For other/previous model names, specify with --model.
+
+     1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+   ❯ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+      … +11 models
+
+
+   ● High effort ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== back at the top (Up x12)
+   Select model
+   Switch between Claude models. Your pick becomes the default for new
+   sessions. For other/previous model names, specify with --model.
+
+   ↑ 3.  Fable 5.1              For your toughest challenges
+   ❯ 4.  Sonnet 5.5             Most efficient for simpler tasks
+      … +9 models
+
+
+   ◐ Medium effort (default) ←/→ to adjust
+
+   Use /fast to turn on Fast mode (Opus 5.5).
+
+   Enter to set as default · s to use this session only · Esc to cancel
+== cursor 12
+   Select model
+   ↑ 11. Opus 4.7               Best for everyday, complex tasks
+   ❯ 12. Opus 4.6               Best for everyday, complex tasks
+      … +1 model
+   Enter to set as default · s to use this session only · Esc to cancel
+== cursor 13 (last)
+   Select model
+   ↑ 12. Opus 4.6               Best for everyday, complex tasks
+   ❯ 13. Sonnet 4.6             Efficient for routine tasks
+   Enter to set as default · s to use this session only · Esc to cancel
+== Down from last (wrap)
+   Select model
+   ❯ 1.  Default (recommended)  Opus 5.5 · Best for everyday, complex tasks
+   ↓ 2.  Opus 5.5 ✔             For complex work and everyday tasks
+      … +11 models
+   Enter to set as default · s to use this session only · Esc to cancel
+== Up from first (wrap back)
+   Select model
+   ↑ 12. Opus 4.6               Best for everyday, complex tasks
+   ❯ 13. Sonnet 4.6             Efficient for routine tasks
+   Enter to set as default · s to use this session only · Esc to cancel

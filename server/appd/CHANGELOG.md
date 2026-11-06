@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Fixed
+- The usage ladder moves sessions whose `/model` picker shows a window of the list, as it does in
+  an 80x24 pane (any session no client has open): it reads the `↑`/`↓` rows, `… +N models` and
+  wrapped descriptions, walks to a row hidden above or below the window, sets the newest row of the
+  family and confirms it. Such a picker read as never having appeared, or as offering no such model.
+- The usage ladder no longer leaves the `/model` picker open. One it cannot read, one that opens
+  after the wait (8 s, was 3 s, then watched 10 s more) and one still on screen after a failed
+  switch are closed with Escape and looked at again until they are gone; an open picker held every
+  message sent to the session until it was closed on the Screen tab. A pane that does not show the
+  picker still gets no key.
+- The usage ladder waits for the picker's highlight to move after each key. On a pane that redrew
+  late it could set a different model of the same family from the one on screen.
+
 ## 3.17.1 — 2026-11-04
 
 ### Added

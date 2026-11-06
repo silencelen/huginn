@@ -437,7 +437,7 @@ What it reads off the screen:
 | The folder-trust dialog (unnumbered) | `detectTrustDialog` | Answered with arrow keys |
 | Any other unnumbered selector (`❯` indented under a column-0 rule, no `N.`) | `detectUnnumberedSelector` | Holds a send as a dialog; not offered as a prompt |
 | The usage-credits consent dialog | `consentRecommended` | A prompt card with a recommended row |
-| The `/model` picker and the `Switch model?` confirmation | `parseModelPicker`, `LADDER_*_RE` in `huginn-appd.js` | The headroom ladder's session-only switch |
+| The `/model` picker and the `Switch model?` confirmation | `parseModelPicker`, `modelPickerShown`, `LADDER_*_RE` in `huginn-appd.js` | The headroom ladder's session-only switch, and closing a picker it cannot use |
 | The composer (`❯` between `─` rules) and a settled paste | `composerDrawn`, `pasteLanded` and others in `lib/typing.js` | The send queue |
 | The composer in shell mode (`!` where the `❯` was; Enter runs the box as a command) | `composerShellMode` | Nothing is submitted into it (409) — except a send with `shell: true`, which puts it there itself (below) |
 | Spinner, progress rows, `N/M agents done` | `parseSpinner`, `parseStatusExtras` | Working status in the apps |
@@ -477,6 +477,64 @@ because the paste alone would switch the mode. Fixture: `test/fixtures/fake-clau
 mode (`HG_FAKE_CLAUDE_SHELL_OUT`, and `HG_FAKE_CLAUDE_BUSY`, `HG_FAKE_CLAUDE_SHELL_GHOST`,
 `HG_FAKE_CLAUDE_TRUECOLOR` for the dim carets, the history ghost and truecolour cells). Tests:
 `typing-shell-mode.test.js`, `routes-send-guards.test.js`.
+
+### The `/model` picker in a short pane
+
+Measured on Claude Code 2.1.316 (2026-11-05) in an 80x24 pane, the size of every session no client
+has open, which includes every project member appd spawns:
+
+- The picker draws a **window** of the list, not the list: two rows, the highlight and one
+  neighbour. It opens on the session's current model (the `✔` row), so the window starts at row 2
+  or 3 as readily as at row 1. Every capture fits `clamp(cursor - floor(rows / 2), 0, length - rows)`
+  for the window's first row: the highlight sits on the lower row everywhere but row 1.
+- The neighbour is marked `↑` when rows are hidden above it (`↑ 2.` over `❯ 3.`), `↓` when rows are
+  hidden below it (`❯ 1.` over `↓ 2.`, after Down wrapped from the last row), and not at all at the
+  top of the list (`  1.` over `❯ 2.`). Under the window, `… +N models` (`… +1 model`) counts the rows
+  hidden below; the last row has no such line. Rows hidden above are implied only by the first
+  number.
+- Numbers run to two digits (`12. Opus 4.6`); `N.` takes four columns and the name column 23. A
+  description too long for the pane wraps onto lines indented to its own column.
+- Up and Down are cyclic: Down on the last row goes to row 1, Up on row 1 to the last.
+- Under the window: the effort line, which changes with the highlighted model (`● High effort ←/→ to
+  adjust`, `◐ Medium effort (default) …`, `○ Effort not supported for Haiku 4.5`), `Use /fast to turn
+  on Fast mode (…)`, and the footer `Enter to set as default · s to use this session only · Esc to
+  cancel`. Escape closes the picker cleanly. Enter would rewrite the host default and is never
+  pressed.
+
+Why it matters: `parseModelPicker` wanted the rows numbered from 1 with nothing but a caret before
+the number. A window opened on row 2 or 3 read as no picker at all, the ladder returned "the model
+picker never appeared" without pressing anything, and the picker stayed open. Four project sessions
+sat behind an open `/model` picker for a week (2026-10-29 to 11-05): every message the apps sent
+queued behind it as a dialog (`blockedBy: modal`) until somebody pressed Escape on the Screen tab,
+and one of those Claude Code processes burned two cores the whole time. A window that did start at
+row 1 parsed, but the row to set was hidden under `… +N models`, so the move never happened.
+
+What the daemon does now:
+
+- `parseModelPicker` reads the window: `↑`/`↓` where the caret goes, a contiguous run that need not
+  start at 1, wrapped description lines skipped. It returns the rows as before, with two
+  non-enumerable counts: `more` (rows hidden below) and `total` (the list's length). A run that does
+  not start at 1 is believed only with the picker's footer at the bottom of the pane.
+- `modelPickerShown` is the one test that licenses an Escape: the `Select model` heading and the
+  `Esc to cancel` footer, the footer among the last three non-blank lines, no rule between them. The
+  same lines quoted in an answer have the composer, which opens with a rule, under them.
+- The ladder walks to the first row of the family, which is the newest (the list is newest first):
+  a window that does not show row 1 is walked up to row 1 first, then down. After every key it
+  waits for the highlight to move before choosing the next one. On a pane that redraws late, a
+  fixed pause read old frames and `s` set a row the pane had not shown.
+- No exit after `/model` leaves a picker open. A picker on screen that cannot be read is closed
+  with Escape; one that has not opened after `PICKER_WAIT_MS` (8 s) is watched `PICKER_LATE_MS`
+  (10 s) longer and closed if it comes; every failure path's Escape is followed by another look, and
+  another Escape while the picker is still on screen (not measured, but Escape on `Switch model?` may
+  well go back to the picker, as its "No, go back" row does). A pane that does not show the picker gets no key at all:
+  Escape on a busy Claude interrupts the turn, and on a dialog it answers it.
+
+Fixtures: `model-picker-window-80x24.txt` and `model-picker-window-frames-80.txt` (captured),
+`model-picker-window-wrapped-80.txt` (assembled from the lines quoted from the live wedge). The
+stub picker draws the layout with `HG_STUB_WINDOW=<rows>` and opens late with `HG_STUB_LATE_MS`;
+`test/fixtures/picker-frame.js` is the one drawer both it and the in-process tests use. Tests:
+`pane.test.js`, `pane-fixtures.test.js`, `ladder-picker-window.test.js`,
+`routes-ladder-window.test.js`.
 
 The context window, model and effort come from the status-line record (see
 [The status line](#the-status-line)) wherever one exists; the `parseStatusLine` scrape is the
@@ -528,16 +586,23 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     `eval '…'` shape. Test: `tasks.test.js`.
 13. **Model discovery** (`lib/models.js`): model ids as literal strings in the executable, and
     the global npm install path. Check `GET /v1/models` on a running daemon.
-14. **The `/model` picker** (`parseModelPicker`), the ladder's only in-session lever. Load-bearing
-    copy: the `Select model` heading (the gate that stops a numbered list in an answer from being
-    walked with arrow keys), the row labels, matched by family name because row numbers shift as
-    models come and go, and the `✔`/`❯` glyphs for the current model and the highlight. Then the
-    `s` key ("use this session only"), the optional `Switch model?` dialog with its
-    `❯ 1. Yes, switch to <model>` row, and the confirmation line `Set model to <model> … for this
-    session only`. If any of these change, the ladder stops moving sessions, and the symptom is
-    `delivery_unconfirmed` in `GET /v1/headroom`, not an error. Tests: `pane.test.js`,
-    `pane-fixtures.test.js` (`model-picker-80.txt`, `model-picker-v2-80.txt`,
-    `switch-model-confirm-80.txt`), `routes-headroom.test.js`.
+14. **The `/model` picker** (`parseModelPicker`, `modelPickerShown`), the ladder's only in-session
+    lever. Load-bearing copy: the `Select model` heading (the gate that stops a numbered list in an
+    answer from being walked with arrow keys), the footer ending `Esc to cancel` (the only thing
+    that licenses an Escape, and what a window not starting at row 1 is believed by), the row
+    labels, matched by family name because row numbers shift as models come and go, the list's
+    newest-first order, and the `✔`/`❯` glyphs for the current model and the highlight. In a short
+    pane also the window (see [The `/model` picker in a short pane](#the-model-picker-in-a-short-pane)):
+    the `↑`/`↓` neighbour marks, the `… +N models` count, wrapped description lines, and Up/Down
+    wrapping round the list. Then the `s` key ("use this session only"), the optional
+    `Switch model?` dialog with its `❯ 1. Yes, switch to <model>` row, and the confirmation line
+    `Set model to <model> … for this session only`. If any of these change, the ladder stops moving
+    sessions, and the symptom is `delivery_unconfirmed` in `GET /v1/headroom`, not an error. A
+    picker the ladder leaves OPEN shows instead as every send to that session held as `modal`;
+    check an 80x24 pane, not only a tall one. Tests: `pane.test.js`, `pane-fixtures.test.js`
+    (`model-picker-80.txt`, `model-picker-v2-80.txt`, `model-picker-window-*.txt`,
+    `switch-model-confirm-80.txt`), `ladder-picker-window.test.js`, `routes-ladder-window.test.js`,
+    `routes-headroom.test.js`.
 15. **The trust dialog** (`detectTrustDialog`): its two row labels (`No, exit`,
     `Yes, I trust this folder`), its question text and the `Enter to confirm` footer. Test:
     `pane-fixtures.test.js` (`trust-dialog-unnumbered-80.txt`).

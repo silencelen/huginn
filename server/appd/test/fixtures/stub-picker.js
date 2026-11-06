@@ -37,6 +37,19 @@
 // only` line above the confirm dialog — history left on screen by an earlier
 // move, which is not this switch.
 //
+// env HG_STUB_WINDOW=<n> draws the picker the way Claude Code 2.1.316 draws it
+// in a SHORT pane: <n> rows of the list around the highlight, `↑`/`↓` on the
+// neighbour, `… +N models` under the window, descriptions wrapped at the pane's
+// width (picker-frame.js, from the 80x24 captures). An 80x24 pane gets 2 — the
+// layout that left four project sessions behind an open picker for a week. 1
+// draws the highlight alone, a picker on screen that no parser can walk.
+//
+// env HG_STUB_LATE_MS=<ms> opens the picker that long after `/model`, the way a
+// session starved of CPU drew it after the ladder had stopped waiting.
+//
+// Up and Down WRAP in every layout (Down on the last row is row 1, Up on row 1
+// the last), as the real picker's do.
+//
 // Frames CLEAR the screen the way a real TUI does, which matters for more than
 // tidiness: `paneReadyForInput` refuses to release a queued send while selector
 // rows are drawn near the bottom, so a stub that left its old rows on screen
@@ -45,6 +58,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { pickerFrame } = require('./picker-frame');
 
 const rows = JSON.parse(process.argv[2] || '[]');
 const mode = process.argv[3] || 'normal';
@@ -52,6 +66,8 @@ const stateDir = process.argv[4] || null;
 const session = process.argv[5] || null;
 const transcript = process.env.HG_STUB_TRANSCRIPT || null;
 const stale = process.env.HG_STUB_STALE || null;
+const visible = Number(process.env.HG_STUB_WINDOW) || 0;
+const lateMs = Number(process.env.HG_STUB_LATE_MS) || 0;
 
 let cursor = rows.findIndex((r) => r.current);
 if (cursor < 0) cursor = 0;
@@ -65,6 +81,10 @@ const CLEAR = '\u001b[2J\u001b[H';
 function caret() { w('\n❯ \n'); }
 
 function draw() {
+  if (visible) {
+    w([CLEAR, ...pickerFrame(rows, cursor, { visible, width: process.stdout.columns || 80 }), ''].join('\n'));
+    return;
+  }
   const out = [CLEAR, '   Select model',
     '   Switch between Claude models. Your pick becomes the default for new sessions.', ''];
   rows.forEach((r, i) => {
@@ -122,8 +142,8 @@ process.stdin.on('data', (buf) => {
   }
   if (open) {
     // Arrow keys arrive as CSI sequences; a bare ESC is the cancel.
-    if (s.includes('[A') || s.includes('OA')) { cursor = Math.max(0, cursor - 1); draw(); return; }
-    if (s.includes('[B') || s.includes('OB')) { cursor = Math.min(rows.length - 1, cursor + 1); draw(); return; }
+    if (s.includes('[A') || s.includes('OA')) { cursor = (cursor + rows.length - 1) % rows.length; draw(); return; }
+    if (s.includes('[B') || s.includes('OB')) { cursor = (cursor + 1) % rows.length; draw(); return; }
     if (s.includes('s')) {
       open = false;
       if (mode === 'confirm') {
@@ -143,8 +163,9 @@ process.stdin.on('data', (buf) => {
   }
   for (const ch of s) {
     if (ch === '\r' || ch === '\n') {
-      if (typed.trim() === '/model' && mode !== 'nopicker') { open = true; draw(); }
-      else caret();
+      if (typed.trim() === '/model' && mode !== 'nopicker') {
+        if (lateMs) { caret(); setTimeout(() => { open = true; draw(); }, lateMs); } else { open = true; draw(); }
+      } else caret();
       typed = '';
     } else {
       typed += ch;

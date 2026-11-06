@@ -29,7 +29,7 @@ const { execFile, spawn } = require('node:child_process');
 const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
-  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, sameConsent,
+  extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, modelPickerShown, sameConsent,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity, unwrapPasted, lastWorkAt, transcriptHead } = require('./lib/transcript');
@@ -9515,12 +9515,36 @@ const HEADROOM_IDLE_MS = 5 * 60_000;
 /** A saved (inactive) profile is priced at most this often — it is not moving. */
 const SAVED_PLAN_MS = 30 * 60_000;
 
-/** How long the picker has to appear after `/model` before we give up quietly. */
-const PICKER_WAIT_MS = 3_000;
+// The picker's clocks. The first two are overridable by env for the route
+// suites ONLY, the way the auto-resume graces below are: a suite that waited
+// eighteen real seconds for every picker that never opens would spend its run
+// doing nothing. The defaults are the contract's.
+/**
+ * How long the picker has to appear after `/model` before the ladder stops
+ * waiting to USE it. Three seconds was too short for a loaded host: a session
+ * starved of CPU drew its picker after the ladder had given up on it.
+ */
+const PICKER_WAIT_MS = Number(process.env.HUGINN_APPD_PICKER_WAIT_MS) || 8_000;
+/**
+ * …and how much longer it is watched for after that, to be CLOSED if it does
+ * open: a picker nobody is driving is a dialog that holds every message the
+ * apps send until somebody presses Escape on the Screen tab.
+ */
+const PICKER_LATE_MS = Number(process.env.HUGINN_APPD_PICKER_LATE_MS) || 10_000;
+/** How long one Up or Down has to show as a moved highlight before the walk gives up. */
+const PICKER_MOVE_MS = 3_000;
+/** How long a closing picker gets to go before the clean-up looks again (and only then presses). */
+const PICKER_CLOSE_MS = 3_000;
+/** Escapes the clean-up presses on its own, each one only at a picker still on screen. */
+const PICKER_ESCAPES = 2;
 /** How long the `for this session only` line has to appear after `s`. */
 const LADDER_FEEDBACK_MS = 5_000;
-/** A picker is five or six rows; ten moves means we are not reading it right. */
-const MAX_CURSOR_MOVES = 10;
+/**
+ * The walk's ceiling, whatever the list says its length is. A windowed picker
+ * is walked up to row 1 and then down (applyLadder), which on today's 13 rows is
+ * at most 24 keys; the walk is also held to twice the list's own length.
+ */
+const MAX_CURSOR_MOVES = 60;
 /**
  * Both spellings observed for the session-only confirmation (native-rl §4),
  * capturing the model. Read ONLY out of Claude Code's own command-output record
@@ -10449,26 +10473,80 @@ async function answerPlanQuestion(name, q, plan) {
  * model table and a `claude update` renumbers it; a remembered number would
  * press `s` on a different model and report success.
  *
- * Every failure path presses Esc and returns `delivery_unconfirmed` rather than
- * guessing: an abandoned picker left open blocks the next message the owner
- * types, and a ladder that claims a move it did not make is worse than one that
- * says it could not.
+ * ⚠ A SHORT PANE SHOWS TWO ROWS OF THE LIST (Claude Code 2.1.316, 80x24 — every
+ * session no client has open, every project member appd spawns; see
+ * parseModelPicker). The row to set may be hidden above the window or below it,
+ * so the walk goes to row 1 and down from there (see below).
+ *
+ * ⚠ NO EXIT LEAVES A PICKER OPEN (2026-11-05). Four project sessions sat behind
+ * an open `/model` picker for a week: their windowed picker did not parse, this
+ * returned "the model picker never appeared" with nothing pressed, and every
+ * message the apps sent waited behind the dialog until somebody pressed Escape
+ * on the Screen tab (one of those Claude Code processes burned two cores the
+ * whole time). So every exit after `/model` went in closes a picker that is
+ * positively on screen — heading AND footer at the bottom of the pane
+ * (paneLib modelPickerShown) — with Escape, and looks again until it is gone:
+ * an unreadable picker, one that opens after the wait, one still up after `s`.
+ * Still nothing is pressed into a pane that does NOT show one: Escape on a busy
+ * Claude interrupts the turn, and on a dialog it answers it.
+ *
+ * Every failure returns `delivery_unconfirmed` rather than guessing: a ladder
+ * that claims a move it did not make is worse than one that says it could not.
  *
  * Runs as one queue JOB, so it starts only at a turn boundary with a bare caret.
  */
 async function applyLadder(name, to) {
   const target = `=${name}:`;
   const esc = () => run('tmux', ['send-keys', '-t', target, 'Escape']).catch(() => { });
+  const shownNow = async () => modelPickerShown((await paneLines(name)) || []);
+  // The picker as the ladder may act on it: DRAWN, at the bottom of the pane
+  // (modelPickerShown), and READ (parseModelPicker). A picture of one — the same
+  // rows quoted in an answer above a live composer — is neither.
+  const readPicker = (lines) => (lines && modelPickerShown(lines) ? parseModelPicker(lines) : null);
+  // Close the picker if it is on screen, and look again before every further
+  // key. `patience` is how long a picker that may already be closing (an Escape
+  // has gone in, or the switch has just landed) gets to go first: a loaded
+  // Claude Code redraws late, and an Escape it did not need lands on the
+  // composer instead. And an Escape on `Switch model?` may take the session
+  // back to the picker rather than out of it, as the dialog's own "No, go back"
+  // does (not measured): that is what the second look is for.
+  const closePicker = async ({ patience = 0 } = {}) => {
+    for (let escapes = 0; ; escapes++) {
+      const by = Date.now() + patience;
+      let shown = await shownNow();
+      while (shown && Date.now() < by) {
+        await sleep(200);
+        shown = await shownNow();
+      }
+      if (!shown) return { open: false, escapes };
+      if (escapes >= PICKER_ESCAPES) return { open: true, escapes };
+      await esc();
+      patience = PICKER_CLOSE_MS;
+    }
+  };
   // ⚠ ESCAPE **AND** C-u, because the two ways this can fail leave different
   // wreckage. Esc closes whatever `/model` opened — a picker left open blocks
   // the next message the owner types. C-u clears the COMPOSER, which is where
   // `/model` itself is sitting if the Enter never went: the pump then released
   // the next entry into it and the session received
-  // `/modelYour usage limit has reset. Continue the task…`.
+  // `/modelYour usage limit has reset. Continue the task…`. Then the look: a
+  // picker that is still drawn gets the clean-up's own Escapes.
   const fail = async (reason) => {
     await esc();
     await run('tmux', ['send-keys', '-t', target, 'C-u']).catch(() => { });
-    return { ok: false, delivery: 'delivery_unconfirmed', reason };
+    const left = await closePicker({ patience: PICKER_CLOSE_MS });
+    return {
+      ok: false,
+      delivery: 'delivery_unconfirmed',
+      reason: left.open ? `${reason}; the model picker is still open after Escape` : reason,
+    };
+  };
+  // A picker on screen that cannot be used: closed, and the reason says so.
+  const giveBack = async (what) => {
+    const left = await closePicker();
+    const after = left.open ? 'it is still open after Escape'
+      : left.escapes ? 'it was closed with Escape' : 'it closed before Escape was needed';
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: `${what}; ${after}` };
   };
 
   // Whether a composer is drawn BEFORE `/model` goes in: what lets the look below
@@ -10505,44 +10583,105 @@ async function applyLadder(name, to) {
   // session received `/modelYour usage limit has reset. Continue the task…`.
   if (look.failed) return fail('could not submit /model');
 
+  let lines = null;
   let rows = null;
   const openBy = Date.now() + PICKER_WAIT_MS;
   for (;;) {
-    rows = parseModelPicker(await paneLines(name));
+    lines = await paneLines(name);
+    rows = readPicker(lines);
     if (rows) break;
     if (Date.now() >= openBy) break;
     await sleep(200);
   }
-  // Nothing typed further: if the picker is not there, the keys would land in
-  // whatever IS there — which is the failure this whole path exists to avoid.
-  if (!rows) return { ok: false, delivery: 'delivery_unconfirmed', reason: 'the model picker never appeared' };
+  if (!rows) {
+    // On screen and not read: a layout this parser does not know. It is closed
+    // rather than walked, and tried again after the cooldown.
+    if (lines && modelPickerShown(lines)) return giveBack('the model picker could not be read');
+    // ⚠ NOT YET IS NOT NEVER. The session that drew its picker late was starved
+    // of CPU, and a picker that opens after the ladder has gone is one nobody
+    // will close. So it is watched for a while longer — and closed if it comes,
+    // not used: the wait for a usable picker is over.
+    const lateBy = Date.now() + PICKER_LATE_MS;
+    while (Date.now() < lateBy) {
+      await sleep(250);
+      if (await shownNow()) return giveBack('the model picker appeared too late to be used');
+    }
+    // Nothing typed further: if the picker is not there, the keys would land in
+    // whatever IS there — which is the failure this whole path exists to avoid.
+    return { ok: false, delivery: 'delivery_unconfirmed', reason: 'the model picker never appeared' };
+  }
 
-  let want = rows.find((r) => r.family === to);
-  if (!want) return fail(`the picker offers no ${to} row`);
   let cursor = rows.find((r) => r.cursor) || null;
   if (!cursor) return fail('the picker draws no cursor');
-
-  for (let moves = 0; cursor.label !== want.label; moves++) {
-    if (moves >= MAX_CURSOR_MOVES) return fail(`the cursor never reached ${want.label}`);
-    const key = cursor.n < want.n ? 'Down' : 'Up';
+  const budget = Math.min(MAX_CURSOR_MOVES, 2 * rows.total + 2);
+  let moves = 0;
+  // One key, then read until the highlight has MOVED. The next key is chosen
+  // from where this one put the cursor, never from a frame drawn before it
+  // landed: a fixed pause read the old frame of a pane that redraws late,
+  // pressed again from a highlight that had already moved, and the last look
+  // before `s` was as stale as the rest — so `s` set a row the pane had not
+  // shown, of the same family, and the move read as confirmed. The list is
+  // cyclic (Down on the last row is row 1, Up on row 1 is the last; measured),
+  // and Up is never pressed on row 1. Returns why the walk must stop, or null.
+  const step = async (key) => {
+    if (moves >= budget) return `the cursor never reached a ${to} row`;
+    moves += 1;
+    const from = cursor.n;
     const r = await run('tmux', ['send-keys', '-t', target, key]);
-    if (r.err) return fail(`tmux refused ${key}`);
-    await sleep(150);
-    // Re-read EVERY time: verifying the highlighted label before the next key is
-    // what makes a shifted list a no-op instead of a wrong model.
-    const fresh = parseModelPicker(await paneLines(name));
-    if (!fresh) return fail('the picker vanished mid-move');
-    const c2 = fresh.find((x) => x.cursor);
-    const w2 = fresh.find((x) => x.family === to);
-    if (!c2 || !w2) return fail('the picker redrew without a cursor or a target row');
-    cursor = c2;
-    want = w2;
+    if (r.err) return `tmux refused ${key}`;
+    const by = Date.now() + PICKER_MOVE_MS;
+    for (;;) {
+      await sleep(100);
+      const fresh = readPicker(await paneLines(name));
+      const c2 = fresh && fresh.find((x) => x.cursor);
+      if (c2 && c2.n !== from) {
+        rows = fresh;
+        cursor = c2;
+        return null;
+      }
+      if (Date.now() >= by) return fresh ? `the picker did not move on ${key}` : 'the picker vanished mid-move';
+    }
+  };
+
+  // ⚠ THE FIRST ROW OF THE FAMILY, which is the NEWEST (the list is newest
+  // first) — the row `rows.find` has always picked off a whole list. A window
+  // that does not show row 1 cannot say which row that is: a newer one may be
+  // hidden above it, and the first one scanning down from the highlight is an
+  // OLDER model (Opus 4.8 under a session on Fable 5, with Opus 5.5 above it).
+  // So a window that does not start at row 1 is walked up to row 1 first.
+  const firstOnScreen = () => (rows[0].n === 1 ? rows.find((r) => r.family === to) || null : null);
+  let want = firstOnScreen();
+  if (!want) {
+    while (cursor.n !== 1) {
+      const why = await step('Up');
+      if (why) return fail(why);
+    }
+    want = firstOnScreen();
+  }
+  if (want) {
+    // On screen from row 1, so nothing above it is of the family: walk to it.
+    // Re-reading after every key is what makes a shifted list a no-op instead of
+    // a wrong model — the walk goes by number, and arrives only on the label.
+    while (cursor.n !== want.n) {
+      const why = await step(cursor.n < want.n ? 'Down' : 'Up');
+      if (why) return fail(why);
+    }
+    if (cursor.label !== want.label) return fail(`the cursor never reached ${want.label}`);
+  } else {
+    // Hidden below the window: down from row 1, a row at a time, to the first
+    // row of the family. Back on row 1 means the whole list went by without one.
+    while (cursor.family !== to) {
+      const why = await step('Down');
+      if (why) return fail(why);
+      if (cursor.n === 1) return fail(`the picker offers no ${to} row`);
+    }
+    want = cursor;
   }
 
   // One LAST read before the key that actually changes the model. Every cursor
   // move re-reads, but the gap between the final move and `s` was not checked —
   // and if the picker closed in it, `s` lands in the composer instead.
-  const lastLook = parseModelPicker(await paneLines(name));
+  const lastLook = readPicker(await paneLines(name));
   if (!lastLook) return fail('the picker closed before the model could be set');
   const stillThere = lastLook.find((x) => x.cursor);
   if (!stillThere || stillThere.label !== want.label) {
@@ -10574,6 +10713,12 @@ async function applyLadder(name, to) {
   // Claude Code itself writes for the command's output — neither of which a
   // model's prose can produce.
   let confirmed = false;
+  // The switch landed. A picker still drawn after it — a frame Claude Code has
+  // not redrawn yet gets PICKER_CLOSE_MS to go first — is closed all the same.
+  const moved = async (via) => {
+    await closePicker({ patience: PICKER_CLOSE_MS });
+    return { ok: true, delivery: 'confirmed', to, via };
+  };
   const by = Date.now() + LADDER_FEEDBACK_MS;
   for (;;) {
     // Structured proof (hooks/huginn-modelswitch-hook, PostModelSwitch): a switch
@@ -10581,10 +10726,10 @@ async function applyLadder(name, to) {
     const sw = modelswitch.readSwitch(STATE_DIR, name);
     if (sw && sw.ts >= sAt && (!sid || !sw.sessionId || sw.sessionId === sid)
       && headroomLib.familyOf(sw.to) === to) {
-      return { ok: true, delivery: 'confirmed', to, via: 'hook' };
+      return moved('hook');
     }
     if (ladderSwitchRecorded(tFile, tAt, to)) {
-      return { ok: true, delivery: 'confirmed', to, via: 'transcript' };
+      return moved('transcript');
     }
     if (!confirmed) {
       // The dialog by its STRUCTURE — a live selector, one caret, nothing of the

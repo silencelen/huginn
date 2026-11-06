@@ -156,6 +156,10 @@ before(async () => {
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_WORKDIR: tmp,
       HUGINN_APPD_STARTUP_GRACE_MS: '0',
+      // The stand-in has no picker, so every job ends "never appeared": three
+      // seconds and one more, not production's 8 s + 10 s.
+      HUGINN_APPD_PICKER_WAIT_MS: '3000',
+      HUGINN_APPD_PICKER_LATE_MS: '1000',
       HUGINN_APPD_USAGE_URL: 'http://127.0.0.1:9/usage',
       HUGINN_APPD_OAUTH_ACCOUNT_URL: 'http://127.0.0.1:9/account',
       HUGINN_APPD_TELEGRAM_SCRIPT: '',

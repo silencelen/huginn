@@ -161,7 +161,7 @@ force.
 | `HUGINN_API_BASE` | Stub endpoint for the API key above. |
 | `HUGINN_APPD_CLAUDE_DIR`, `HUGINN_CLAUDE_SETTINGS` | Move Claude Code's configuration directory and settings file away from the live ones. |
 | `HUGINN_APPD_STATE_DIR`, `HUGINN_APPD_TMUX_SOCKET`, `HUGINN_APPD_CLAUDE_SCRATCH`, `HUGINN_HEADROOM_DIR` | Point the daemon at scratch state, a private tmux server, or a headroom directory the installed hooks do not watch. |
-| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*` | Shorten timers and limits so tests run in seconds. |
+| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_PICKER_WAIT_MS`, `HUGINN_APPD_PICKER_LATE_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*` | Shorten timers and limits so tests run in seconds. |
 
 The headroom gate hook has its own settings (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
 `HUGINN_GATE_POLL`, `HUGINN_GATE_STALE_S`). It runs inside Claude Code, not inside the daemon, so a

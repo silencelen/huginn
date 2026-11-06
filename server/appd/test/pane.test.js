@@ -8,7 +8,10 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker } = require('../lib/pane');
+const {
+  screenHash, stripAnsi, previewLines, detectPrompt, extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker,
+  modelPickerShown,
+} = require('../lib/pane');
 
 const ESC = '\u001B';
 const BEL = '\u0007';
@@ -859,6 +862,55 @@ test('a numbered list Claude WROTE is not a picker', () => {
   ]), null);
   assert.strictEqual(parseModelPicker(['Select model', '  1. Fable']), null,
     'one row is not a menu');
+});
+
+// ---- the picker in a short pane (Claude Code 2.1.316) -------------------------
+//
+// A window of two rows that need not start at 1 (see the 2.1.316 fixtures in
+// pane-fixtures.test.js). Reading it must not loosen the gate: the window is
+// believed only with the picker's own footer at the bottom of the pane, and
+// the footer is the only thing that licenses an Escape.
+
+const PICKER_FOOTER = '   Enter to set as default · s to use this session only · Esc to cancel';
+const COMPOSER_BELOW = ['', '─'.repeat(80), '❯ ', '─'.repeat(80), '  [dev] Fable 5.1 · ctx 4%'];
+const WINDOW_ROWS = [
+  '   Select model', '',
+  '   ↑ 2.  Opus 5.5 ✔             For complex work and everyday tasks',
+  '   ❯ 3.  Fable 5.1              For your toughest challenges',
+  '      … +10 models',
+];
+
+test('a window onto the list is believed only with the picker\'s footer under it, at the bottom', () => {
+  assert.ok(parseModelPicker([...WINDOW_ROWS, '', PICKER_FOOTER]), 'with its footer it is the picker');
+  assert.strictEqual(parseModelPicker(WINDOW_ROWS), null, 'without it, two numbered rows under a heading are words');
+  assert.strictEqual(parseModelPicker(['Select model', '  3. Fable', '  4. Opus']), null);
+  assert.strictEqual(parseModelPicker([...WINDOW_ROWS, '', PICKER_FOOTER, ...COMPOSER_BELOW]), null,
+    'quoted above a live composer, footer and all, it is a picture of the picker');
+  assert.strictEqual(parseModelPicker(['   Select model', '   ↑ 2.  Opus', '   ❯ 4.  Fable', PICKER_FOOTER]), null,
+    'a gap in the numbers is not a window');
+});
+
+test('modelPickerShown: the picker itself, never a picture of one', () => {
+  const picker = fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'prompts', 'model-picker-window-80x24.txt'), 'utf8',
+  ).replace(/\n$/, '').split('\n');
+  assert.strictEqual(modelPickerShown(picker), true);
+  assert.strictEqual(modelPickerShown([...picker, '', '  [dev] Opus 5.5 · ctx 4%', '']), true,
+    'a status line under it is still the picker');
+  assert.strictEqual(modelPickerShown([...picker, ...COMPOSER_BELOW]), false,
+    'the same lines with the composer under them are an answer quoting the picker');
+  assert.strictEqual(modelPickerShown([
+    '   Select model', '', '─'.repeat(80), ' Bash command', '', ' ❯ 1. Yes', '   2. No', '', ' Esc to cancel',
+  ]), false, 'another dialog under a quoted heading opens with its own rule: Escape would answer IT');
+  assert.strictEqual(modelPickerShown(picker.filter((l) => !/Select model/.test(l))), false, 'no heading');
+  assert.strictEqual(modelPickerShown(picker.filter((l) => !/Esc to cancel/.test(l))), false, 'no footer');
+  assert.strictEqual(modelPickerShown(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'prompts', 'switch-model-confirm-80.txt'), 'utf8',
+  ).split('\n')), false, 'the `Switch model?` confirmation is not the picker');
+  assert.strictEqual(modelPickerShown([
+    '   Select model', '   ❯ 1. Fable', '   Enter to set as default · s to use this session only · Esc to', '   cancel',
+  ]), true, 'a pane narrower than the footer wraps it at a space');
+  assert.strictEqual(modelPickerShown([]), false);
 });
 
 // ---- the Fable consent dialog ----------------------------------------------

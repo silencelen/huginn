@@ -440,6 +440,10 @@ test('every committed dialog capture still reads as a dialog', () => {
     'trust-dialog-unnumbered-80.txt': 'trust', 'model-picker-v2-80.txt': 'modal',
     'switch-model-confirm-80.txt': 'modal', 'plan-approval-v2-80.txt': 'modal',
     'ask-simple-v2-80.txt': 'modal',
+    // Claude Code 2.1.316, 2026-11-05: the picker in an 80x24 pane, a two-row
+    // window onto the list. Still a dialog — which is why one the ladder left
+    // open held every send to the session.
+    'model-picker-window-80x24.txt': 'modal', 'model-picker-window-wrapped-80.txt': 'modal',
   };
   for (const [file, why] of Object.entries(expect)) {
     assert.equal(t.paneReadyForInput(fixturePane(file)).why, why, file);

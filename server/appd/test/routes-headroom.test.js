@@ -424,6 +424,12 @@ globalThis.fetch = async (input, init) => {
       // The consent backstop waits two minutes in production. One millisecond
       // here, so the second pass over an unanswered dialog acts.
       HUGINN_APPD_CONSENT_GRACE_MS: '1',
+      // The picker clocks this file was written against: three seconds for the
+      // picker to open, one more watched for a late one. Production's 8 s + 10 s
+      // would make every picker that never opens — and the arbiter's retries of
+      // it, which run inside the tick every later test waits on — cost 18 s.
+      HUGINN_APPD_PICKER_WAIT_MS: '3000',
+      HUGINN_APPD_PICKER_LATE_MS: '1000',
       // A downgrade sends a notification; nothing may leave this host.
       HUGINN_APPD_TELEGRAM_SCRIPT: '',
     },

@@ -12,7 +12,9 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { detectPrompt, parseStatusLine, promptFingerprint, parseModelPicker } = require('../lib/pane');
+const {
+  detectPrompt, parseStatusLine, promptFingerprint, parseModelPicker, modelPickerShown,
+} = require('../lib/pane');
 
 const DIR = path.join(__dirname, 'fixtures', 'prompts');
 const load = (name) => fs.readFileSync(path.join(DIR, name), 'utf8').split('\n');
@@ -218,4 +220,109 @@ test('2.1.306: the Bash permission dialog, the plan approval with its feedback r
   assert.match(ask.options[1].label, /^SQLite/);
   assert.equal(ask.question, 'Which database should the service use?');
   assert.deepEqual(ask.headers.map((h) => [h.label, h.checked]), [['Database', false], ['Monitors', false], ['Name', false]]);
+});
+
+// ---- Claude Code 2.1.316: the picker in a short pane (2026-11-05) ----------------
+//
+// At 80x24 the `/model` picker draws a WINDOW of two rows, not the list, and
+// opens it on the session's current model. The parser read anything but a run
+// numbered from 1 as "no picker", the ladder left the picker open, and four
+// project sessions sat behind it for a week with every message from the apps
+// queued as a dialog. These are the real frames (model-picker-window-*.txt).
+
+/** The frames file: `== <what was pressed>` heads each captured frame. */
+function frames() {
+  const out = new Map();
+  let label = null;
+  for (const line of load('model-picker-window-frames-80.txt')) {
+    const m = /^== (.*)$/.exec(line);
+    if (m) { label = m[1]; out.set(label, []); } else if (label) out.get(label).push(line);
+  }
+  return out;
+}
+const brief = (rows) => rows.map((r) => `${r.n}:${r.label}${r.cursor ? '❯' : ''}${r.current ? '✔' : ''}`);
+
+test('2.1.316 short pane, just opened: rows 1-2 of 13, and the count of the rows hidden below', () => {
+  const rows = parseModelPicker(load('model-picker-window-80x24.txt'));
+  assert.ok(rows, 'the window is read');
+  assert.deepEqual(brief(rows), ['1:Default (recommended)', '2:Opus 5.5❯✔']);
+  assert.equal(rows.more, 11, '`… +11 models` says how many rows are below the window');
+  assert.equal(rows.total, 13, 'so the list is 13 rows long');
+  assert.equal(modelPickerShown(load('model-picker-window-80x24.txt')), true);
+});
+
+test('2.1.316 short pane, scrolled: an `↑ N.` row over the highlight is a row, and the run need not start at 1', () => {
+  const f = frames();
+  const down1 = parseModelPicker(f.get('after Down x1'));
+  assert.ok(down1, 'a window opened on row 2 is still the picker');
+  assert.deepEqual(brief(down1), ['2:Opus 5.5✔', '3:Fable 5.1❯']);
+  assert.equal(down1.more, 10);
+  assert.equal(down1.total, 13);
+  // Two-digit numbers, and the singular `… +1 model`.
+  const at12 = parseModelPicker(f.get('cursor 12'));
+  assert.deepEqual(brief(at12), ['11:Opus 4.7', '12:Opus 4.6❯']);
+  assert.equal(at12.more, 1, '`… +1 model`, singular');
+  assert.equal(at12.total, 13);
+});
+
+test('2.1.316 short pane, last row: no `… +` line, nothing hidden below', () => {
+  const last = parseModelPicker(frames().get('cursor 13 (last)'));
+  assert.deepEqual(brief(last), ['12:Opus 4.6', '13:Sonnet 4.6❯']);
+  assert.equal(last.more, 0);
+  assert.equal(last.total, 13);
+});
+
+test('2.1.316 short pane, wrapped to the top: `❯ 1.` over a `↓ 2.` row', () => {
+  const top = parseModelPicker(frames().get('Down from last (wrap)'));
+  assert.ok(top, 'the `↓` neighbour is a row, not the end of the run');
+  assert.deepEqual(brief(top), ['1:Default (recommended)❯', '2:Opus 5.5✔']);
+  assert.equal(top.more, 11);
+});
+
+test('2.1.316 short pane: every captured frame is two contiguous rows, one highlight, a 13-row list', () => {
+  for (const [label, lines] of frames()) {
+    const rows = parseModelPicker(lines);
+    assert.ok(rows, `${label}: read`);
+    assert.equal(rows.length, 2, `${label}: a two-row window`);
+    assert.equal(rows[1].n, rows[0].n + 1, `${label}: contiguous`);
+    assert.equal(rows.filter((r) => r.cursor).length, 1, `${label}: one highlight`);
+    assert.equal(rows.total, 13, `${label}: the same list`);
+    assert.equal(modelPickerShown(lines), true, `${label}: on screen`);
+  }
+});
+
+test('a description that WRAPS is skipped, not taken for the end of the run (the live wedge, 80 columns)', () => {
+  // ASSEMBLED (see the fixtures README): the highlighted row, its wrapped line
+  // and `… +2 models` are verbatim from the live pane that stayed open a week.
+  const rows = parseModelPicker(load('model-picker-window-wrapped-80.txt'));
+  assert.ok(rows, 'the wrapped window is read');
+  assert.deepEqual(brief(rows), ['2:Opus (1M context)', '3:Fable❯✔']);
+  assert.deepEqual(rows.map((r) => r.family), ['opus', 'fable']);
+  assert.equal(rows.more, 2, 'the `… +2 models` under the wrapped line is still seen');
+  assert.equal(rows.total, 5);
+});
+
+test('2.1.296 tall window: the rows after a wrapped description are read too, and `… +3 models`', () => {
+  // Before, the run stopped at row 9's wrapped line, and `↓ 10.` and the count
+  // under it were never read.
+  const rows = parseModelPicker(load('model-picker-v2-80.txt'));
+  assert.equal(rows.length, 10);
+  assert.equal(rows[9].label, 'Opus 4.8');
+  assert.equal(rows[8].label, 'Fable 5', 'the wrapped row keeps its own label');
+  assert.equal(rows.more, 3);
+  assert.equal(rows.total, 13);
+});
+
+test('the whole list still parses to the same rows, and says nothing is hidden', () => {
+  const rows = parseModelPicker(load('model-picker-80.txt'));
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { n: 1, label: 'Default (recommended)', family: null, current: false, cursor: false },
+    { n: 2, label: 'Opus (1M context)', family: 'opus', current: false, cursor: false },
+    { n: 3, label: 'Fable', family: 'fable', current: false, cursor: false },
+    { n: 4, label: 'Sonnet', family: 'sonnet', current: true, cursor: true },
+    { n: 5, label: 'Haiku', family: 'haiku', current: false, cursor: false },
+  ]);
+  assert.equal(rows.more, 0);
+  assert.equal(rows.total, 5);
+  assert.deepEqual(Object.keys(rows), ['0', '1', '2', '3', '4'], 'the counts are not rows: callers that map or spread the array see five');
 });
