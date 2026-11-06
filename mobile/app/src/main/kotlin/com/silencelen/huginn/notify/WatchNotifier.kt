@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.core.app.NotificationManagerCompat
 import com.silencelen.huginn.data.HuginnClient
 import com.silencelen.huginn.data.PanePrompt
+import com.silencelen.huginn.data.SessionProject
 import com.silencelen.huginn.data.SettingsStore
 import com.silencelen.huginn.data.Watch
 import com.silencelen.huginn.widget.FleetWidget
@@ -55,7 +56,8 @@ object WatchNotifier {
      *
      * [apply] is an unguarded read-modify-write over three persisted baselines
      * (notified, stalled/laddered, running/runs) with up to three `client.screen()`
-     * round trips in between — 35-42 ms on loopback, hundreds from a phone — and
+     * round trips in between — 35-42 ms on loopback, hundreds from a phone —
+     * plus one session-list read for the project names, and
      * FIVE same-process callers reach it with no mutual exclusion: the watch
      * service, the heartbeat, the session worker, the widget worker and the push
      * reconcile. Two cycles observing the same transition both computed the same
@@ -182,6 +184,12 @@ object WatchNotifier {
         }
 
         val fresh = needing - previouslyNeeding
+        // Which of them are PROJECT sessions. The digest is name → state and
+        // nothing else; the daemon joins the project onto the session ROWS, so
+        // a cycle about to post reads them once (never when nothing is fresh).
+        // Without a client, or on a failed read, the notice still goes out,
+        // under the session's own name.
+        val projects = if (fresh.any { !Foreground.showsSession(it) }) projectsOf(client) else emptyMap()
         // ONE NOTIFICATION PER SESSION, never an aggregate.
         //
         // The aggregate ("3 sessions need you") was posted under the FIRST
@@ -211,7 +219,9 @@ object WatchNotifier {
 
             SessionWatchWorker.post(
                 context,
-                "$name needs you",
+                // A project member is named by its project and role, the way the
+                // daemon's own push names it; the tap still opens the member.
+                WatchCycle.needsYouTitle(name, projects[name]),
                 prompt?.question?.takeIf { it.isNotBlank() } ?: "Waiting for your answer",
                 name,
                 answerButtonsFor(prompt),
@@ -224,6 +234,13 @@ object WatchNotifier {
         val previouslyRunning = settings.runningChats.first()
         val runsBefore = settings.chatRuns.first()
 
+        // ⚠ CHATS ONLY. No observation ever posts a SESSION "finished": that is
+        // the daemon's push alone (`session_finished`, gated on how long the run
+        // worked and on an attached terminal, neither of which the digest can
+        // see), and a project session gets none at all — its project's one
+        // `project_idle` stands for the whole cluster (owner decision,
+        // 2026-11-06). A session finish added here would put one "finished" per
+        // member back on the shade, every time one paused.
         val finished = WatchCycle.finishedSince(runsBefore, runsNow, previouslyRunning, running)
 
         // A chat whose run finished is waiting on nobody: a start_session "needs
@@ -279,6 +296,21 @@ object WatchNotifier {
         settings.setFleetSnapshot(Fleet.encode(Fleet.snapshot(watch, System.currentTimeMillis())))
         FleetWidget.update(context)
     }
+}
+
+/**
+ * Session name → the project it belongs to, from one `GET /v1/sessions` read.
+ *
+ * The watch digest names each session and its state and nothing else, so a
+ * cycle that has to say WHICH project a waiting member belongs to reads the
+ * rows, where the daemon joins it (`project`, null outside every live project).
+ * Empty without a client and on any failure: the notice is still posted, under
+ * the session's own name.
+ */
+internal suspend fun projectsOf(client: HuginnClient?): Map<String, SessionProject> {
+    if (client == null) return emptyMap()
+    val rows = runCatching { client.sessions() }.getOrNull() ?: return emptyMap()
+    return rows.mapNotNull { s -> s.project?.let { s.name to it } }.toMap()
 }
 
 /**

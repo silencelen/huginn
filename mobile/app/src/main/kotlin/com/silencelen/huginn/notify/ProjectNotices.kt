@@ -217,8 +217,12 @@ object ProjectNotices {
         projectActions = n.actions,
     )
 
-    /** `{"projectId":"…","manifestRev":"2","name":"…"}` — string fields only. */
-    private fun parsePayload(raw: String?): Map<String, String> {
+    /**
+     * `{"projectId":"…","manifestRev":"2","name":"…"}` — string fields only.
+     * Shared with [ProjectIdle], so every project push names its project the
+     * same way.
+     */
+    internal fun parsePayload(raw: String?): Map<String, String> {
         if (raw.isNullOrBlank()) return emptyMap()
         return runCatching {
             pushJson.parseToJsonElement(raw).jsonObject

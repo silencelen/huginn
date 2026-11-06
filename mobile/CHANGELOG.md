@@ -1,5 +1,16 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Added
+- A project that has gone quiet notifies once for the whole project (the `project_idle` push), under
+  Finished, with no buttons; a tap opens that project's page. Nothing is posted while that page is on
+  screen, and the notice comes down when the page is opened.
+
+### Changed
+- A "needs you" the app posts itself for a project session is titled `<project name> · <role> needs
+  you` (`lead` for the lead), the way the server titles the push; a tap still opens that session.
+
 ## 3.16.1 — 2026-11-04
 
 ### Added

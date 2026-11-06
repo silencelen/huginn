@@ -1,5 +1,6 @@
 package com.silencelen.huginn
 
+import com.silencelen.huginn.data.SessionProject
 import com.silencelen.huginn.notify.WatchCycle
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -116,5 +117,38 @@ class WatchCycleTest {
             mapOf("c1" to 5L), mapOf("c1" to 2L), emptySet(), emptySet(),
         )
         assertTrue(finished.isEmpty())
+    }
+
+    // ------------------------------------------------- the needs-you title
+
+    /**
+     * A project session's "needs you" is named by its project (owner decision,
+     * 2026-11-06), in the daemon's own `session_attention` words, so the watch
+     * cycle and the push say the same thing about one question. The tag is the
+     * session row's `project`, exactly as `lib/projects.js` writes it.
+     */
+    @Test
+    fun `a project session needs-you is named by its project and role`() {
+        val member = SessionProject(id = "p1", name = "Vault rewrite", slug = "vault", role = "guide", lead = false)
+        assertEquals("Vault rewrite · guide needs you", WatchCycle.needsYouTitle("vault-guide", member))
+        // The lead is `lead`, said by the tag's flag rather than by its role word.
+        val lead = SessionProject(id = "p1", name = "Vault rewrite", slug = "vault", role = "lead", lead = true)
+        assertEquals("Vault rewrite · lead needs you", WatchCycle.needsYouTitle("vault-lead", lead))
+        assertEquals("Vault rewrite · lead needs you", WatchCycle.needsYouTitle("vault-lead", lead.copy(role = "")))
+        // Every other session keeps its own name.
+        assertEquals("build needs you", WatchCycle.needsYouTitle("build", null))
+    }
+
+    @Test
+    fun `a half-named project tag falls back to the session's own name`() {
+        val member = SessionProject(id = "p1", name = "Vault rewrite", slug = "vault", role = "guide")
+        assertEquals("vault-guide needs you", WatchCycle.needsYouTitle("vault-guide", member.copy(name = " ")))
+        assertEquals("vault-guide needs you", WatchCycle.needsYouTitle("vault-guide", member.copy(role = "")))
+        // kotlin.test: (expected, actual, message).
+        assertEquals(
+            "Vault rewrite · guide needs you",
+            WatchCycle.needsYouTitle("vault-guide", member.copy(name = " Vault rewrite ", role = " guide ")),
+            "trimmed, not doubled",
+        )
     }
 }
