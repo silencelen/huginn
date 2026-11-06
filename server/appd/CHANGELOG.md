@@ -9,6 +9,19 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- A `project_idle` push, once per working burst of a project: sent when every session of the project
+  has been quiet (not running, not waiting on you) for 5 minutes after a burst that worked at least
+  5 minutes. Subject the project id, title `<project name> is idle`, text
+  `Worked <duration>; <roles> ran.`, `payload.projectId`, no buttons; Telegram carries it when no push
+  is delivered, as for a finished session.
+
+### Changed
+- A project session, lead or member, no longer sends `session_finished`.
+- A project session's `session_attention` title is `<project name> · <role> needs you`.
+
 ## 3.17.2 — 2026-11-05
 
 ### Fixed

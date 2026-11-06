@@ -22,6 +22,8 @@ const ALERT_GLYPH = {
   session_resolved: GLYPH.running,
   chat_finished: GLYPH.ok,
   chat_attention: GLYPH.needsYou,
+  // A project's sessions finishing, said once for the project.
+  project_idle: GLYPH.ok,
 };
 
 /** Minimum gap before the same subject may alert again. */
@@ -35,6 +37,29 @@ const REPEAT_MS = 30 * 60 * 1000;
  * looking at; above it, they walked away and this is the whole point of the app.
  */
 const LONG_RUN_MS = 5 * 60 * 1000;
+
+/**
+ * How long EVERY session of a project must have been quiet before the project
+ * counts as idle (2026-11-06).
+ *
+ * A project's sessions hand work to one another — the lead asks, a member works,
+ * the lead reads the result — so each one goes on and off all through a single
+ * piece of work, and the per-session finish rule said "finished" for every member
+ * whose turn ran past LONG_RUN_MS: several notifications for one conversation
+ * between sessions. A gap of a minute or two is the project talking to itself;
+ * five minutes with nothing running and nothing waiting on the owner is the same
+ * bar as LONG_RUN_MS, the point where the owner has plausibly stopped watching.
+ */
+const PROJECT_QUIET_MS = 5 * 60 * 1000;
+
+/**
+ * `map[key]` only when the map itself holds the key. These maps are keyed by
+ * session name and persisted as JSON, which reloads them as plain objects — and
+ * a plain object answers `__proto__` with its prototype, which is truthy (#35).
+ */
+function own(map, key) {
+  return map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+}
 
 /**
  * When each currently-running session's run BEGAN, carried forward observation to
@@ -70,6 +95,107 @@ function carryRunStarts(prevSince, sessions, nowSec) {
   return out;
 }
 
+/**
+ * The project each live session belongs to, read from the session list's own join.
+ *
+ * `listSessions` tags the row of the lead and of every member of a project that is
+ * not archived with `project: {id, name, slug, role, lead}`, and every other row
+ * with null (an archived project claims nothing: lib/projects membershipIndex).
+ * That tag is the whole definition of a project session here, read afresh on every
+ * observation, so a project archived or deleted between two ticks is simply absent
+ * from the next one.
+ *
+ * @param rows listSessions() rows
+ * @returns {name: {id, name, role}} — the lead's role reads `lead`
+ */
+function projectSessions(rows) {
+  const out = Object.create(null);   // keyed by session NAME (#35)
+  for (const r of rows || []) {
+    const p = r && r.project;
+    if (!p || !p.id || typeof r.name !== 'string') continue;
+    out[r.name] = {
+      id: String(p.id),
+      name: String(p.name || p.slug || p.id),
+      role: p.lead ? 'lead' : String(p.role || ''),
+    };
+  }
+  return out;
+}
+
+/**
+ * Each project's working burst, carried observation to observation the way
+ * carryRunStarts carries a session's run, so decideAlerts can say a project went
+ * idle while staying a pure function of two observations.
+ *
+ * A burst opens when any session of the project starts running, and ends once
+ * EVERY session of it has been quiet for PROJECT_QUIET_MS. Quiet is neither
+ * `running` nor `attention`: a member waiting on the owner is blocked, not
+ * finished, and its own "needs you" alert covers it. A session that runs again
+ * before the quiet period is up extends the same burst.
+ *
+ * The end is RECORDED, as `endedAt` on the observation that reaches it, and the
+ * burst is dropped from the observation after. decideAlerts therefore sees the end
+ * as an edge between two observations, like every other alert, and the tick that
+ * fails to deliver it can roll the burst back open for the next tick to end again.
+ *
+ * What a burst carries:
+ *   startedAt     the earliest run start among the sessions that opened it, from
+ *                 their run-start ledger, so a burst open across a daemon restart
+ *                 keeps its start (epoch seconds, like the ledger)
+ *   lastRunningAt the observation that last saw a session of it running, or saw
+ *                 the last one stop: the same stamp a session's finish measures to
+ *   roles         the roles that ran, in the order they first ran
+ *   running       whether a session of it was running at this observation
+ *   quietSince    since when every session has been quiet; null while one is busy
+ *   endedAt       set on the observation where the quiet period was reached
+ *   name          the project's name as last seen, for the notification's title
+ *
+ * A project with no session in this observation — archived, deleted, or every
+ * session gone — drops out with its burst unannounced. Nothing opens a burst for a
+ * project already quiet, so the first look after a start finds none to end.
+ *
+ * @param prevBursts {projectId: burst} from the previous observation
+ * @param sessions   {name: state} of the current observation
+ * @param members    {name: {id, name, role}} of the current observation (projectSessions)
+ * @param since      {name: epochSeconds} run starts of the current observation (carryRunStarts)
+ * @param nowSec     epoch seconds
+ */
+function carryProjectBursts(prevBursts, sessions, members, since, nowSec) {
+  const byProject = new Map();
+  for (const [name, m] of Object.entries(members || {})) {
+    if (!m || !m.id) continue;
+    if (!byProject.has(m.id)) byProject.set(m.id, []);
+    byProject.get(m.id).push({ name, role: m.role, project: m.name, state: own(sessions, name) ?? null });
+  }
+  const startOf = (x) => Number(own(since, x.name)) || nowSec;
+  // First-run order: by run start; among sessions first seen in the same tick, the
+  // lead first, then by role, so the order never depends on how tmux lists them.
+  const firstRan = (x, y) => startOf(x) - startOf(y)
+    || (y.role === 'lead') - (x.role === 'lead')
+    || (x.role < y.role ? -1 : x.role > y.role ? 1 : 0);
+  const out = Object.create(null);
+  for (const [id, list] of byProject) {
+    const before = own(prevBursts, id);
+    const open = before && !before.endedAt ? before : null;
+    const running = list.filter((x) => x.state === 'running');
+    const busy = list.some((x) => x.state === 'running' || x.state === 'attention');
+    // Nothing has run since this project last went idle, or since the watcher
+    // began looking: nothing to carry, and nothing to announce later.
+    if (!open && !running.length) continue;
+    const b = open
+      ? { ...open, roles: Array.isArray(open.roles) ? [...open.roles] : [] }
+      : { startedAt: Math.min(...running.map(startOf)), lastRunningAt: nowSec, roles: [], running: false, quietSince: null, endedAt: null };
+    b.name = list[0].project;
+    for (const x of running.filter((r) => !b.roles.includes(r.role)).sort(firstRan)) b.roles.push(x.role);
+    if (running.length || b.running) b.lastRunningAt = nowSec;
+    b.running = running.length > 0;
+    b.quietSince = busy ? null : (Number(b.quietSince) || nowSec);
+    if (!busy && (nowSec - b.quietSince) * 1000 >= PROJECT_QUIET_MS) b.endedAt = nowSec;
+    out[id] = b;
+  }
+  return out;
+}
+
 /** "7m", "1h 12m" — enough to know whether it was the slow thing you started. */
 function humanDuration(ms) {
   const mins = Math.round(ms / 60000);
@@ -81,6 +207,8 @@ function humanDuration(ms) {
  * Diffs two observations and returns the alerts worth sending.
  *
  * @param prev  previous {sessions:{name:state}, chats:{id:{running,title}},
+ *              sessionsSince?:{name:epochSec}, sessionsAttached?:{name:true},
+ *              sessionsProject?:{name:{id, name, role}}, projectBursts?:{projectId:burst},
  *              chatAsks?:{id:{title, asks:[{id, text, fingerprint}]}}}
  * @param next  current, same shape
  * @param sent  {key: timestampMs} of what has already been said
@@ -111,11 +239,16 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
     if (state === 'attention' && before !== 'attention') {
       const key = `session:${name}`;
       if (fresh(key)) {
+        // A project session is named by its project and role (2026-11-06): its
+        // tmux name (`<slug>-<role>`) is one the owner never typed, on a session
+        // the apps list under its project rather than on their Sessions page. The
+        // subject stays the session, so a tap still opens the member that asks.
+        const p = own(next.sessionsProject, name);
         alerts.push({
           key,
           kind: 'session_attention',
           subject: name,
-          title: `${name} needs you`,
+          title: p ? `${p.name} · ${p.role} needs you` : `${name} needs you`,
           text: `Claude Code session ${name} is waiting for an answer.`,
         });
         sentUpdates[key] = now;
@@ -142,7 +275,15 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
       // attaches (it reads panes over capture), so app-driven sessions still
       // notify unless the app itself is foregrounded on them.
       const attended = !!(prev.sessionsAttached || {})[name];
-      if (!attended && ranForMs >= LONG_RUN_MS) {
+      // ⚠ NEVER FOR A PROJECT SESSION, lead or member (2026-11-06). Its sessions
+      // go on and off all through one piece of work as they hand it to each other,
+      // and saying each long turn's end was several "finished" for one
+      // conversation. The project is announced once instead, when all of it has
+      // gone quiet (project_idle, below). Either observation's tag counts: a
+      // session in the project while it ran, or once it stopped, ran as part of
+      // the project's burst.
+      const inProject = !!(own(next.sessionsProject, name) || own(prev.sessionsProject, name));
+      if (!inProject && !attended && ranForMs >= LONG_RUN_MS) {
         // Keyed by which run finished, so a session that runs long twice reports
         // twice while a redelivery of the same finish stays suppressed.
         const key = `session-done:${name}:${since}`;
@@ -186,6 +327,37 @@ function decideAlerts(prev, next, sent, now, prevAt = 0) {
       text: 'The question was handled elsewhere.',
     });
     sentUpdates[`session:${name}`] = 0;
+  }
+
+  // A project going idle: its sessions' finishes, said ONCE for the whole project
+  // (2026-11-06). The burst is carried in the observations (carryProjectBursts);
+  // this says only its END, as an edge — open in `prev`, ended in `next`, the same
+  // burst — and only when the burst worked at least as long as one session must
+  // run for its own finish to be said: from its first run start to the last
+  // moment any of its sessions was running. Not withheld for an attached
+  // terminal: watching one member's screen is not watching the project.
+  for (const [id, b] of Object.entries(next.projectBursts || {})) {
+    if (!b || !b.endedAt) continue;
+    const had = own(prev.projectBursts, id);
+    if (!had || had.endedAt || had.startedAt !== b.startedAt) continue;
+    const workedMs = (Number(b.lastRunningAt) - Number(b.startedAt)) * 1000;
+    if (!(workedMs >= LONG_RUN_MS)) continue;
+    // Keyed by which burst ended, as a finish is by which run: a later burst
+    // reports again while a redelivery of this one stays suppressed.
+    const key = `project-idle:${id}:${b.startedAt}`;
+    if (!fresh(key)) continue;
+    alerts.push({
+      key,
+      kind: 'project_idle',
+      subject: id,
+      title: `${b.name} is idle`,
+      text: `Worked ${humanDuration(workedMs)}; ${(b.roles || []).join(', ')} ran.`,
+      // No buttons: there is nothing to answer. The payload is what aims the tap
+      // at the project's page.
+      options: [],
+      payload: { projectId: id },
+    });
+    sentUpdates[key] = now;
   }
 
   for (const [id, cur] of Object.entries(next.chats || {})) {
@@ -343,4 +515,7 @@ function pruneSent(sent, now) {
   return out;
 }
 
-module.exports = { decideAlerts, routeAlerts, telegramText, pruneSent, humanDuration, carryRunStarts, REPEAT_MS, LONG_RUN_MS };
+module.exports = {
+  decideAlerts, routeAlerts, telegramText, pruneSent, humanDuration, carryRunStarts,
+  projectSessions, carryProjectBursts, REPEAT_MS, LONG_RUN_MS, PROJECT_QUIET_MS,
+};

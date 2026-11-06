@@ -46,7 +46,7 @@ const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const sessreg = require('./lib/session-registry');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
-const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts } = require('./lib/alerts');
+const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts, projectSessions, carryProjectBursts } = require('./lib/alerts');
 const stateWatch = require('./lib/statewatch');
 const screenWait = require('./lib/screenwait');
 const clientsLib = require('./lib/clients');
@@ -12619,9 +12619,20 @@ async function alertTickInner(st) {
   // Name-keyed, so prototype-less for the same reason as lib/watch's digest (#35).
   const sessionsAttached = Object.create(null);
   for (const s of sessions) if (s.attachedClients > 0) sessionsAttached[s.name] = true;
+  // A project's sessions finish as ONE project (2026-11-06): which project each
+  // row is tagged with by the list's own join (an archived project tags nothing),
+  // and each project's working burst, carried from the previous observation like
+  // the run-start ledger. decideAlerts sends no session_finished for a project
+  // session and one project_idle when the whole project has gone quiet.
+  const sessionsProject = projectSessions(sessions);
+  const projectBursts = carryProjectBursts(st.prev && st.prev.projectBursts, d.sessions, sessionsProject,
+    sessionsSince, Math.floor(now / 1000));
   // The start_session requests chats are waiting on (chatAsksNow): a new one is a
   // chat_attention push, once per request.
-  const observation = { sessions: d.sessions, sessionsSince, sessionsAttached, chats: d.chats, chatAsks: chatAsksNow() };
+  const observation = {
+    sessions: d.sessions, sessionsSince, sessionsAttached, sessionsProject, projectBursts,
+    chats: d.chats, chatAsks: chatAsksNow(),
+  };
 
   const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
 
@@ -12756,6 +12767,14 @@ async function alertTickInner(st) {
             ...cur, running: false, finishedRuns: Math.max(0, (Number(cur.finishedRuns) || 1) - 1),
           };
         }
+      } else if (a.kind === 'project_idle') {
+        // ⚠ ITS SUBJECT IS A PROJECT ID, NOT A SESSION. The session rollback below
+        // would restore nothing, and the next tick would drop the ended burst
+        // unannounced. The burst goes back to the open one the previous
+        // observation held (a burst ends only on a tick after the one that opened
+        // it), so the next tick ends it again and re-decides it.
+        const before = (prevObs.projectBursts || {})[a.subject];
+        if (before) observation.projectBursts[a.subject] = before;
       } else {
         const before = (prevObs.sessions || {})[a.subject];
         if (before === undefined) delete observation.sessions[a.subject];
