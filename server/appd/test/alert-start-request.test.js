@@ -41,6 +41,8 @@ function watcher() {
     telegramText: alertsLib.telegramText,
     pruneSent: alertsLib.pruneSent,
     carryRunStarts: alertsLib.carryRunStarts,
+    projectSessions: alertsLib.projectSessions,
+    carryProjectBursts: alertsLib.carryProjectBursts,
     captureScreen: async () => null,
     questionsFor: (name) => world.questions[name] || [],
     questionsLib,

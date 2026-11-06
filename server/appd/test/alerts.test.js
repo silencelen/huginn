@@ -649,3 +649,206 @@ test('a chat request alert: its title without one, the first look, an old observ
   assert.strictEqual(tg, `${GLYPH.needsYou} deploy notes needs you\na chat asks to start a session in /srv/r6`,
     'Telegram: the needs-you glyph and a statement');
 });
+
+// ------------------------------------------- a project's sessions, as one project
+//
+// 2026-11-06: a project's sessions hand work to one another, so each one goes on
+// and off all through one piece of work, and every member whose turn ran past
+// five minutes said "finished" on its own: several notifications for one
+// conversation between sessions. A project session now never sends
+// session_finished; the project sends ONE project_idle once all of it has been
+// quiet for five minutes after a burst that worked five minutes or more, and a
+// member that needs you is named by its project and role.
+
+const { projectSessions, carryProjectBursts } = require('../lib/alerts');
+
+const MIN = 60_000;
+const GARDEN = { id: 'p-1f2e3d', name: 'Garden', slug: 'garden' };
+/** listSessions rows from {name: [state, role]}; a null role is a session outside every project. */
+const listed = (spec) => Object.entries(spec).map(([name, [state, role]]) => ({
+  name, state, attachedClients: 0,
+  project: role ? { ...GARDEN, role, lead: role === 'lead' } : null,
+}));
+/** The garden's three sessions: its lead, a guide and a vault. */
+const garden = (lead, guide, vault) => ({
+  'garden-lead': [lead, 'lead'], 'garden-guide': [guide, 'guide'], 'garden-vault': [vault, 'vault'],
+});
+const quiet = () => garden('idle', 'idle', 'idle');
+
+/**
+ * The daemon's alert tick without its I/O: each observation built the way
+ * alertTickInner builds it, decided against the last, what was said merged and
+ * pruned, and the observation kept as JSON, the way alerts.json keeps it.
+ */
+function projectWatcher() {
+  let prev = null;
+  let sent = {};
+  const said = [];
+  const tick = (spec, atMs) => {
+    const rows = Array.isArray(spec) ? spec : listed(spec);
+    const nowSec = Math.floor(atMs / 1000);
+    const sessions = Object.fromEntries(rows.map((r) => [r.name, r.state]));
+    const sessionsSince = carryRunStarts(prev && prev.sessionsSince, sessions, nowSec);
+    const sessionsAttached = {};
+    for (const r of rows) if (r.attachedClients > 0) sessionsAttached[r.name] = true;
+    const sessionsProject = projectSessions(rows);
+    const projectBursts = carryProjectBursts(prev && prev.projectBursts, sessions, sessionsProject, sessionsSince, nowSec);
+    const next = { sessions, sessionsSince, sessionsAttached, sessionsProject, projectBursts, chats: {} };
+    const r = decideAlerts(prev, next, sent, atMs, prev ? atMs - 10_000 : 0);
+    sent = pruneSent({ ...sent, ...r.sentUpdates }, atMs);
+    prev = JSON.parse(JSON.stringify(next));
+    said.push(...r.alerts);
+    return r.alerts;
+  };
+  return { said, tick };
+}
+
+test('a project session ending a long run sends no session_finished; a plain session beside it still does', () => {
+  const w = projectWatcher();
+  w.tick({ ...garden('running', 'running', 'idle'), solo: ['running', null] }, NOW);
+  const said = w.tick({ ...quiet(), solo: ['idle', null] }, NOW + 9 * MIN);
+  assert.deepStrictEqual(said.map((a) => [a.kind, a.subject]), [['session_finished', 'solo']],
+    'nine minutes each: the lead and the guide said finished too');
+  assert.strictEqual(said[0].title, 'solo finished');
+  assert.strictEqual(said[0].text, 'Ran for 9m, now idle.');
+});
+
+test('a project that worked and then went quiet for five minutes is announced once, as the project', () => {
+  const w = projectWatcher();
+  w.tick(quiet(), NOW);                                          // the first look: a quiet project
+  w.tick(garden('running', 'idle', 'idle'), NOW + 1 * MIN);      // the lead starts: a burst opens
+  w.tick(garden('idle', 'running', 'idle'), NOW + 10 * MIN);     // it hands to the guide
+  w.tick(garden('idle', 'running', 'running'), NOW + 20 * MIN);  // the vault joins in
+  w.tick(garden('running', 'idle', 'idle'), NOW + 30 * MIN);     // and back to the lead
+  w.tick(quiet(), NOW + 43 * MIN);                               // the last run ends
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 47 * MIN), [], 'four quiet minutes is the project between turns');
+  const said = w.tick(quiet(), NOW + 48 * MIN);
+  assert.deepStrictEqual(said.map((a) => a.kind), ['project_idle']);
+  const a = said[0];
+  assert.strictEqual(a.subject, GARDEN.id, 'the project, which a tap opens');
+  assert.strictEqual(a.title, 'Garden is idle');
+  assert.strictEqual(a.text, 'Worked 42m; lead, guide, vault ran.',
+    'from the first run start to the last run end; the roles in the order they first ran');
+  assert.deepStrictEqual(a.options, [], 'no buttons');
+  assert.deepStrictEqual(a.payload, { projectId: GARDEN.id });
+  assert.strictEqual(telegramText(a), `${GLYPH.ok} Garden is idle\nWorked 42m; lead, guide, vault ran.`,
+    'Telegram: the ok glyph, as for a finished session');
+  assert.deepStrictEqual(w.said.map((x) => x.kind), ['project_idle'], 'not one member said finished on the way');
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 60 * MIN), [], 'said once');
+});
+
+test('a burst that worked under five minutes ends without a word', () => {
+  const w = projectWatcher();
+  w.tick(quiet(), NOW);
+  w.tick(garden('running', 'idle', 'idle'), NOW + 1 * MIN);
+  w.tick(garden('idle', 'running', 'idle'), NOW + 3 * MIN);
+  w.tick(quiet(), NOW + 5 * MIN);                                // worked four minutes
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 11 * MIN), [], 'quiet long enough to end, worked too little to say');
+  // The next burst is its own, measured from its own start.
+  w.tick(garden('running', 'idle', 'idle'), NOW + 20 * MIN);
+  w.tick(quiet(), NOW + 26 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 31 * MIN).map((a) => a.text), ['Worked 6m; lead ran.']);
+  assert.deepStrictEqual(w.said.map((a) => a.kind), ['project_idle']);
+});
+
+test('a project is not idle while any session of it runs or waits on the owner', () => {
+  const w = projectWatcher();
+  w.tick(quiet(), NOW);
+  w.tick(garden('running', 'idle', 'idle'), NOW + 1 * MIN);
+  w.tick(garden('idle', 'running', 'running'), NOW + 10 * MIN);
+  // The guide works on for a quarter of an hour after the others stop...
+  for (let m = 15; m <= 30; m++) w.tick(garden('idle', 'running', 'idle'), NOW + m * MIN);
+  // ...then the vault asks the owner something and waits half an hour for the answer.
+  for (let m = 31; m <= 60; m++) w.tick(garden('idle', 'idle', 'attention'), NOW + m * MIN);
+  assert.deepStrictEqual(w.said.map((a) => [a.kind, a.title]), [['session_attention', 'Garden · vault needs you']],
+    'a member waiting on the owner is blocked, not finished');
+  // Answered, and quiet from then on: the quiet period starts at the answer.
+  w.tick(quiet(), NOW + 61 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 65 * MIN), []);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 66 * MIN).map((a) => a.text), ['Worked 30m; lead, guide, vault ran.'],
+    'worked up to the last moment one of them was running');
+});
+
+test('a session running again inside the quiet period extends the same burst', () => {
+  const w = projectWatcher();
+  w.tick(quiet(), NOW);
+  w.tick(garden('running', 'idle', 'idle'), NOW + 1 * MIN);
+  w.tick(quiet(), NOW + 7 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 11 * MIN), [], 'four quiet minutes');
+  w.tick(garden('idle', 'running', 'idle'), NOW + 11.5 * MIN);   // the guide picks it up before five
+  w.tick(quiet(), NOW + 20 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 24.5 * MIN), [], 'the quiet period starts again from the last stop');
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 25 * MIN).map((a) => a.text), ['Worked 19m; lead, guide ran.'],
+    'one burst, from the first start to the last stop');
+  assert.deepStrictEqual(w.said.map((a) => a.kind), ['project_idle'], 'once, at the end');
+});
+
+test('a later burst of the same project is announced again', () => {
+  const w = projectWatcher();
+  w.tick(quiet(), NOW);
+  w.tick(garden('running', 'idle', 'idle'), NOW + 1 * MIN);
+  w.tick(quiet(), NOW + 8 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 13 * MIN).map((a) => a.text), ['Worked 7m; lead ran.']);
+  w.tick(garden('idle', 'idle', 'running'), NOW + 14 * MIN);     // a minute later, well inside the repeat window
+  w.tick(quiet(), NOW + 24 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 29 * MIN).map((a) => a.text), ['Worked 10m; vault ran.']);
+  assert.strictEqual(new Set(w.said.map((a) => a.key)).size, 2, 'each burst under its own key');
+});
+
+test('a terminal attached to a project session does not withhold the project going idle', () => {
+  const w = projectWatcher();
+  const watched = (spec) => listed(spec).map((r) => ({ ...r, attachedClients: r.name === 'garden-lead' ? 1 : 0 }));
+  w.tick(watched(quiet()), NOW);
+  w.tick(watched(garden('running', 'idle', 'idle')), NOW + 1 * MIN);
+  w.tick(watched(quiet()), NOW + 9 * MIN);
+  assert.deepStrictEqual(w.tick(watched(quiet()), NOW + 14 * MIN).map((a) => a.kind), ['project_idle']);
+});
+
+test('a project session needing you is named by its project and role; a plain session keeps its name', () => {
+  const w = projectWatcher();
+  w.tick({ ...garden('running', 'running', 'idle'), solo: ['running', null] }, NOW);
+  const said = w.tick({ ...garden('attention', 'idle', 'attention'), solo: ['attention', null] }, NOW + MIN);
+  assert.deepStrictEqual(said.map((a) => [a.kind, a.subject, a.title]), [
+    ['session_attention', 'garden-lead', 'Garden · lead needs you'],
+    ['session_attention', 'garden-vault', 'Garden · vault needs you'],
+    ['session_attention', 'solo', 'solo needs you'],
+  ], 'the subject stays the session, so a tap opens the member that asks');
+  assert.strictEqual(said[1].text, 'Claude Code session garden-vault is waiting for an answer.', 'the text is unchanged');
+  assert.strictEqual(telegramText(said[1]),
+    `${GLYPH.needsYou} Garden · vault needs you\nClaude Code session garden-vault is waiting for an answer.`);
+});
+
+test('the first look after a start announces nothing, and a project already quiet has no burst to end', () => {
+  // Whatever an observation holds, the first one has nothing to compare against.
+  const sec = Math.floor(NOW / 1000);
+  const ended = { [GARDEN.id]: {
+    name: 'Garden', startedAt: sec - 3600, lastRunningAt: sec - 600, roles: ['lead'], running: false,
+    quietSince: sec - 600, endedAt: sec,
+  } };
+  assert.deepStrictEqual(decideAlerts(null, { sessions: {}, projectBursts: ended, chats: {} }, {}, NOW).alerts, []);
+  // A daemon that comes up on a quiet project opens no burst, so it has none to end later.
+  const w = projectWatcher();
+  assert.deepStrictEqual(w.tick(quiet(), NOW), []);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 10 * MIN), []);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 60 * MIN), []);
+  // Its next burst is announced, measured from the run the watcher saw start.
+  w.tick(garden('running', 'idle', 'idle'), NOW + 61 * MIN);
+  w.tick(quiet(), NOW + 70 * MIN);
+  assert.deepStrictEqual(w.tick(quiet(), NOW + 75 * MIN).map((a) => a.text), ['Worked 9m; lead ran.']);
+});
+
+test('a project archived or deleted mid-burst is never announced', () => {
+  const run = (after) => {
+    const w = projectWatcher();
+    w.tick(quiet(), NOW);
+    w.tick(garden('running', 'running', 'idle'), NOW + 1 * MIN);
+    w.tick(quiet(), NOW + 20 * MIN);                             // every session stops: the quiet period begins
+    for (const m of [22, 25, 30, 35, 40]) w.tick(after, NOW + m * MIN);
+    return w.said;
+  };
+  assert.deepStrictEqual(run(quiet()).map((a) => a.text), ['Worked 19m; lead, guide ran.'], 'left alone, it is announced');
+  // Archived: the list tags nothing with an archived project, so its sessions are plain again.
+  assert.deepStrictEqual(run(listed(quiet()).map((r) => ({ ...r, project: null }))), [], 'archived');
+  // Deleted with its sessions: gone from the list between two ticks.
+  assert.deepStrictEqual(run([]), [], 'deleted');
+});

@@ -39,6 +39,8 @@ function watcher() {
     telegramText: alertsLib.telegramText,
     pruneSent: alertsLib.pruneSent,
     carryRunStarts: alertsLib.carryRunStarts,
+    projectSessions: alertsLib.projectSessions,
+    carryProjectBursts: alertsLib.carryProjectBursts,
     captureScreen: async () => null,
     promptFor: () => ({ prompt: null }),
     deliverPush: async () => ({ sent: 0 }),          // push unconfigured, or no device registered
