@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.17.2 — 2026-11-05
 
 ### Fixed
 - The usage ladder moves sessions whose `/model` picker shows a window of the list, as it does in
