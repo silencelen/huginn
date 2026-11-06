@@ -35,6 +35,18 @@ version number collided. Entries below are reconstructed from the shipping commi
   or restored on it, and the sweep checks each session with `tmux has-session` before removing its
   files.
 - A session list that could not be read no longer prunes the usage ladder's per-session records.
+- A session tmux cannot be shown to lack is not reported gone. tmux's "no server" counts as an
+  absent session only when systemd answers that `huginn-tmux.service` has no main process; until
+  then the session routes answer `503`, not `404`, a queued message waits instead of failing as
+  "the session it was sent to has ended", and a `DELETE` whose kill may not have reached tmux
+  answers `503` and keeps the session's state file and restore entry. A rename onto such a name,
+  a message or new task for such a project member, and the sign-in routes answer `503` too; a
+  project delete lists such a member under `refused`.
+- Creating a session, a project lead or member, a revived session or the sign-in session answers
+  `503` instead of running `tmux new-session` when tmux reports no server and systemd cannot
+  confirm there is none: `new-session` would start a second, empty server beside the running
+  one. When only the server's socket is gone, the server is asked to recreate it, and a retry
+  lands on that server.
 
 ## 3.17.2 — 2026-11-05
 

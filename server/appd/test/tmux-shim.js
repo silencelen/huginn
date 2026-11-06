@@ -7,9 +7,12 @@
 //
 // The control files, one per lie, each changing ONE subcommand:
 //
-//   list-noserver   `list-sessions` fails with tmux's own words for "there is no
-//                   socket": error connecting to <socket> (No such file or
-//                   directory). The server and its sessions stay up.
+//   noserver        every subcommand named on one of its lines (`ls`,
+//                   `display-message`, `kill-session`, …) fails with tmux's own
+//                   words for "there is no socket": error connecting to <socket>
+//                   (No such file or directory). The server and its sessions
+//                   stay up.
+//   list-noserver   the same for `list-sessions` alone.
 //   list-hide       `list-sessions` leaves out every row that contains one of the
 //                   file's lines, and succeeds: a listing that is wrong.
 //   has-refuse      `has-session` whose arguments contain one of the file's lines
@@ -43,10 +46,22 @@ function lyingTmux(dir, { sock }) {
   fs.writeFileSync(path.join(dir, 'tmux'), [
     '#!/bin/sh',
     `real='${REAL_TMUX}'`,
+    // The subcommand is the first argument that is not an option: the daemon
+    // runs `tmux -u -L <socket> <subcommand> …`.
     'sub=',
+    'skip=',
     'for a in "$@"; do',
-    '  case "$a" in list-sessions|has-session) sub=$a; break ;; esac',
+    '  if [ -n "$skip" ]; then skip=; continue; fi',
+    '  case "$a" in',
+    '    -L|-S|-f) skip=1 ;;',
+    '    -*) ;;',
+    '    *) sub=$a; break ;;',
+    '  esac',
     'done',
+    'if [ -n "$sub" ] && [ -s "$HG_SHIM/noserver" ] && grep -qx -- "$sub" "$HG_SHIM/noserver"; then',
+    `  echo 'error connecting to ${sockPath} (No such file or directory)' >&2`,
+    '  exit 1',
+    'fi',
     'if [ "$sub" = list-sessions ] && [ -f "$HG_SHIM/list-noserver" ]; then',
     `  echo 'error connecting to ${sockPath} (No such file or directory)' >&2`,
     '  exit 1',
