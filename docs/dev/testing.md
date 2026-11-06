@@ -74,6 +74,13 @@ grep -E '^# (pass|fail)' /tmp/appd-tests.tap; echo "floor: $APPD_MIN"
   systemd has given the pane a scope of its own, and wherever a user bus is reachable that is
   after `new-session` has returned. A helper that hands a test a pane showing something waits
   for it with `untilDrawn` from `server/appd/test/until-drawn.js`.
+- **To test what the daemon does when tmux will not answer**, give its daemon the stand-ins
+  from `server/appd/test/tmux-shim.js`: a `tmux` that passes through to the real one until told
+  to fail a listing the no-server way, leave sessions out of one, or refuse `has-session`, and a
+  `systemctl` that answers the tmux unit's main pid as told, or fails. The reconcile timers have
+  test-only knobs (`HUGINN_APPD_RECONCILE_MS`, `HUGINN_APPD_ABSENT_CONFIRM_MS`). The only pid the
+  `systemctl` stand-in may ever be given is the suite's own private tmux server's: the daemon
+  sends a living unit's pid `SIGUSR1`.
 - `server/appd/test/docs-truth.test.js` reads the `/v1/ping` and `/v1/challenge` rows of the
   API table in `docs/reference/api.md`. Keep those rows, and what they say about the token, when
   you edit that page.

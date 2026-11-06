@@ -418,6 +418,123 @@ test('reconcile drops a dead member, re-binds a restored id, and ends a project 
   assert.equal(false, projects.reconcilePlan(project({ status: 'archived' }), []).endProject);
 });
 
+// ---- nothing destructive on one look (2026-11-06) ---------------------------
+//
+// One listing came back empty while all 23 sessions were alive, and the
+// reconcile dropped every member of five projects and archived all five in that
+// tick. reconcilePlan is what ONE listing says; confirmPlan decides what may be
+// written: missing from every listing for the window, AND a direct probe of that
+// session saying tmux has no such session.
+
+// Required where used, so the tests above still run against a tree without it.
+const absenceLedger = (windowMs) => require('../lib/absence').absenceLedger(windowMs);
+const WINDOW = 55_000;
+const T0 = NOW * 1000;
+const BOTH = [{ name: 'stick-lead', claudeSessionId: 'sid-lead' }, { name: 'stick-docs', claudeSessionId: 'sid-a' }];
+
+/** A probe that answers from a table and remembers who it was asked about. */
+function prober(answer) {
+  const asked = [];
+  const probe = async (name) => { asked.push(name); return typeof answer === 'function' ? answer(name) : answer; };
+  return { probe, asked };
+}
+
+async function pass(p, live, ledger, now, probe) {
+  return projects.confirmPlan(p, projects.reconcilePlan(p, live), { ledger, now, windowMs: WINDOW, probe });
+}
+
+test('ONE listing without a project\'s sessions drops nothing; the next one with them forgets it', async () => {
+  const p = project();
+  const ledger = absenceLedger(WINDOW);
+  const { probe, asked } = prober({ gone: true, why: 'can\'t find session' });
+
+  const first = await pass(p, [], ledger, T0, probe);
+  assert.deepEqual([], first.drop, 'the 2026-11-06 tick dropped every member here');
+  assert.equal(false, first.endProject, 'and archived the project');
+  assert.deepEqual([], asked, 'nothing is even probed on the first look');
+  assert.ok(first.notes.some((n) => /the lead \(stick-lead\) is missing from the session list/.test(n)), first.notes.join('\n'));
+  assert.ok(first.notes.some((n) => /docs \(stick-docs\) is missing from the session list/.test(n)), first.notes.join('\n'));
+
+  const back = await pass(p, BOTH, ledger, T0 + 60_000, probe);
+  assert.deepEqual([], back.drop);
+  assert.equal(false, back.endProject);
+  assert.equal(0, ledger.size, 'seen again: the absence is forgotten');
+  assert.equal(2, back.notes.filter((n) => /is back in the session list/.test(n)).length, back.notes.join('\n'));
+
+  // Missing again a minute later is a NEW absence: had the old one been kept,
+  // this look would be past the window and would probe.
+  const again = await pass(p, [], ledger, T0 + 120_000, probe);
+  assert.deepEqual([], again.drop);
+  assert.equal(false, again.endProject);
+  assert.deepEqual([], asked, 'the clock started over');
+});
+
+test('missing for the window AND tmux says no such session: dropped and archived, as before', async () => {
+  const p = project();
+  const ledger = absenceLedger(WINDOW);
+  const { probe, asked } = prober({ gone: true, why: 'can\'t find session: stick-docs' });
+  assert.deepEqual([], (await pass(p, [], ledger, T0, probe)).drop);
+  const inside = await pass(p, [], ledger, T0 + WINDOW - 1, probe);
+  assert.deepEqual([], inside.drop, 'inside the window nothing is written');
+  assert.deepEqual([], asked);
+
+  const due = await pass(p, [], ledger, T0 + WINDOW, probe);
+  assert.deepEqual(['docs'], due.drop, 'a member whose session really ended still goes');
+  assert.equal(true, due.endProject, 'and a project whose lead really ended is still archived');
+  assert.deepEqual(['stick-lead', 'stick-docs'], asked, 'each exact session was probed before the write');
+
+  // Only what the listing lacked: a member present in the listing is never
+  // probed, and never dropped, while an absent one goes.
+  const ledger2 = absenceLedger(WINDOW);
+  const two = prober({ gone: true, why: 'can\'t find session' });
+  const onlyLead = [{ name: 'stick-lead', claudeSessionId: 'sid-lead' }];
+  await pass(p, onlyLead, ledger2, T0, two.probe);
+  const r = await pass(p, onlyLead, ledger2, T0 + WINDOW, two.probe);
+  assert.deepEqual(['docs'], r.drop);
+  assert.equal(false, r.endProject);
+  assert.deepEqual(['stick-docs'], two.asked);
+});
+
+test('missing for the window but the probe cannot reach tmux: HELD, said once, written when tmux answers', async () => {
+  const p = project();
+  const ledger = absenceLedger(WINDOW);
+  let answer = { gone: null, why: 'error connecting to /tmp/tmux-0/default (Connection refused)' };
+  const { probe } = prober(() => answer);
+  await pass(p, [], ledger, T0, probe);
+  const held = await pass(p, [], ledger, T0 + WINDOW, probe);
+  assert.deepEqual([], held.drop, 'a connection error is not a session that ended');
+  assert.equal(false, held.endProject);
+  assert.equal(2, held.notes.filter((n) => /would not confirm it is gone \(error connecting/.test(n)).length,
+    held.notes.join('\n'));
+
+  const still = await pass(p, [], ledger, T0 + WINDOW + 60_000, probe);
+  assert.equal(false, still.endProject);
+  assert.deepEqual([], still.notes, 'the same hold is not said again every pass');
+
+  answer = { gone: true, why: 'can\'t find session' };
+  const done = await pass(p, [], ledger, T0 + WINDOW + 120_000, probe);
+  assert.deepEqual(['docs'], done.drop, 'once a server answers that it is gone, it goes');
+  assert.equal(true, done.endProject);
+});
+
+test('missing from the listing but tmux still has the session: kept, and said once', async () => {
+  // A listing that keeps leaving out a session tmux has — its conversation
+  // archived while the kill is pending — must not cost the member.
+  const p = project();
+  const ledger = absenceLedger(WINDOW);
+  let answer = { gone: false, why: 'tmux has it' };
+  const { probe } = prober(() => answer);
+  await pass(p, [], ledger, T0, probe);
+  const kept = await pass(p, [], ledger, T0 + WINDOW, probe);
+  assert.deepEqual([], kept.drop);
+  assert.equal(false, kept.endProject);
+  assert.equal(2, kept.notes.filter((n) => /but tmux still has it — kept/.test(n)).length, kept.notes.join('\n'));
+  assert.deepEqual([], (await pass(p, [], ledger, T0 + WINDOW + 60_000, probe)).notes, 'once, not every pass');
+  answer = { gone: true, why: 'can\'t find session' };
+  assert.deepEqual(['docs'], (await pass(p, [], ledger, T0 + WINDOW + 120_000, probe)).drop,
+    'the moment tmux lets it go, it goes');
+});
+
 // ------------------------------------------------------------- the dashboard
 
 function overviewOf({ turns = 1, input = 10, output = 5, usd = null, models = [], last = NOW } = {}) {
