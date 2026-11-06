@@ -86,7 +86,11 @@ Two rules follow, and every reader of "what is live" keeps them:
    private socket). A systemd that fails, times out or answers something unreadable makes the
    list unknown: `GET /v1/sessions` answers `503`, and nothing is pruned, dropped, swept,
    archived or restored on it. Each decision is logged once, when it changes
-   (`lib/tmux-socket.js`).
+   (`lib/tmux-socket.js`). The same holds for one session: a session route answers `503`, not
+   `404` (a `404` makes both clients close the viewer with "Session ended"), a queued message
+   waits rather than failing as "the session has ended", a kill whose outcome is unknown keeps
+   the session's state file and restore entry, and no route starts a tmux server, because
+   `tmux new-session` would start a second one beside the running server.
 2. **Nothing destructive on one look.** A project member is dropped, a project archived for its
    lead, or a restore-registry row removed only when the session has been missing from every
    listing for 55 seconds (two reconcile ticks) *and* `tmux has-session`, asked about that exact

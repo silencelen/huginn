@@ -244,8 +244,10 @@ The unit is also how the daemon tells "no sessions" from "could not tell". The s
 empty only when tmux reports no server and `huginn-tmux.service` has no main process. If the unit
 still has one, the socket was removed under a running server, and the daemon sends that process
 `SIGUSR1`, which makes tmux recreate its socket. If systemd cannot be asked, the list is unknown
-(`503`) until it answers, and no project member, project or restore entry is written off
-meanwhile. Each of these is one `tmux: …` line in the log, written when the answer changes.
+(`503`) until it answers: no project member, project or restore entry is written off, a session
+route answers `503` rather than `404`, and a new session is refused rather than started on a
+second tmux server. Each of these is one `tmux: …` line in the log, written when the answer
+changes.
 
 ## See also
 

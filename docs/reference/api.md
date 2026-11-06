@@ -93,6 +93,11 @@ pin changes when the certificate is replaced.
   unless a route says otherwise. Responses are JSON unless a route serves a file or a stream.
 - **Errors** are a non-2xx status with `{"error": "<a sentence>"}`. Some `409` responses carry the
   current object instead, so a client can show what it collided with.
+- **`503` means tmux could not be read.** A session route answers `404` only when tmux says the
+  session does not exist. When tmux cannot be reached, or reports no server while the daemon
+  cannot confirm there is none (see [The tmux service](server-config.md#the-tmux-service)), the
+  route answers `503`, changes nothing, and can be retried. A create answers `503` instead of
+  starting a tmux server it cannot vouch for.
 - **Timestamps are Unix epoch seconds.** The exception is `/v1/headroom` (and the `headroom` block
   in `/v1/status`), which uses milliseconds throughout. A field ending in `Sec` is always seconds.
 - **`X-Huginn-Client: <id>`** identifies one client installation (up to 64 characters). Send a

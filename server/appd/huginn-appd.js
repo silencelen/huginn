@@ -1561,15 +1561,22 @@ async function createSession({ name: rawName, cwd: rawCwd } = {}) {
   const cwdBad = startDirProblem(rawCwd);
   if (cwdBad) return { ok: false, status: 400, error: cwdBad };
   const cwd = rawCwd ? path.resolve(rawCwd) : WORKDIR;
-  // Fresh: a name check before creating must not trust a shared answer.
-  if (await sessionExists(name, null, { fresh: true })) return { ok: false, status: 409, error: `session '${name}' already exists` };
+  // Fresh: a name check before creating must not trust a shared answer. And a
+  // check tmux could not answer is not "free": the name may be a live session's,
+  // and the clear below would take its state.
+  const taken = await sessionExists(name, null, { fresh: true });
+  if (taken === null) return { ok: false, status: 503, error: 'tmux is not answering right now' };
+  if (taken) return { ok: false, status: 409, error: `session '${name}' already exists` };
   // Whatever the last holder of this name left behind goes now, before the new
   // session can be observed. The born-time guard would reject it anyway, but
   // deleting it here closes the window rather than papering over it.
   clearSessionState(name);
   // Before the session exists, never after: the server's cgroup is decided by
-  // whoever starts it, and that is a one-time choice per server lifetime.
-  await ensureTmuxServer();
+  // whoever starts it, and that is a one-time choice per server lifetime. A
+  // refusal is a 503 BEFORE `new-session`, which would otherwise start a second
+  // server beside one it cannot reach (ensureTmuxServer).
+  const server = await ensureTmuxServer();
+  if (!server.ok) return { ok: false, status: 503, error: server.error };
   // Same shape as cc: open in the directory, claude first, fall through to a shell.
   // ⚠ `-P -F '#S'` — tmux PRINTS the name it gave the session, in the same
   // call that makes it. The old shape asked afterwards with
@@ -1996,6 +2003,15 @@ const TMUX_UNIT = 'huginn-tmux';
  *
  * Best effort by design: without systemd-run (a container without systemd, a
  * test), the server starts the old way. Degraded is better than no sessions.
+ *
+ * ⚠⚠ BUT NEVER A SECOND SERVER. Returns `{ ok: true }` when a server answers
+ * (or was just started on a host OBSERVED to have none), and `{ ok: false,
+ * error }` when tmux says there is no server and that cannot be shown: the
+ * unit's server is alive with its socket gone and the socket has not come back
+ * yet, or systemd would not say whether the unit has one (2026-11-06). The
+ * caller must then refuse (503) rather than run `tmux new-session`, because
+ * that call is what starts a server where it cannot connect to one — the empty
+ * second server of 2026-10-27, with every session stranded in the first.
  */
 /** Whether `tmux ls` failed because no server exists (see [ensureTmuxServer]). */
 function noTmuxServer(stderr) {
@@ -2105,8 +2121,8 @@ function noteListing(verdict, { err = null, stderr = '', unit = null } = {}) {
  * listing that left a session out is one look; this is a second, direct one at
  * the exact name, made immediately before the write. `display-message` (what
  * sessionExists uses) cannot serve: it exits 0 for a session that does not
- * exist, and sessionExists reads "no server" as absent, which is the very
- * answer a host gives while it is failing to list.
+ * exist, and sessionExists takes "no server" on a host shown to be empty as
+ * absent, where a write-off needs a living server to say so.
  */
 async function probeSessionGone(name) {
   return tmuxSockLib.probeVerdict(await run('tmux', ['has-session', '-t', `=${name}`]));
@@ -2163,7 +2179,7 @@ async function ensureTmuxServer() {
   // is worse than doing nothing.
   if (!probe.err || !noTmuxServer(probe.stderr)) {
     await noteTmuxServerCgroup();
-    return;
+    return { ok: true };
   }
 
   // The server may be alive in its unit with only the socket gone (a /tmp
@@ -2171,12 +2187,32 @@ async function ensureTmuxServer() {
   // would strand every session in the first one, which is exactly what happened
   // on 2026-10-27 — the second server even failed to start as the unit (already
   // loaded) and ran inside this daemon, empty, as the clients' whole world.
-  if (await recreateTmuxSocket(probe.stderr, 'ensureTmuxServer')) return;
+  // And when systemd cannot say whether the unit has a server at all
+  // (2026-11-06), nothing here may start one either.
+  const { verdict, unit } = await tmuxFailureVerdict(probe.stderr, 'ensureTmuxServer');
+  if (verdict === 'lost') {
+    const again = await run('tmux', ['ls']);
+    if (!again.err || !noTmuxServer(again.stderr)) return { ok: true };
+    return {
+      ok: false,
+      error: `tmux: the running ${TMUX_UNIT}.service server's socket is gone and has not come back yet — `
+        + 'not starting a second server; try again in a moment',
+    };
+  }
+  if (verdict !== 'empty') {
+    log(`tmux: no server answered, and systemd could not say whether ${TMUX_UNIT}.service holds one`
+      + ` (${unit ? unit.why : 'not asked'}) — not starting a second server`);
+    return {
+      ok: false,
+      error: `tmux is not answering, and systemd could not say whether ${TMUX_UNIT}.service is running a server — `
+        + 'not starting a second one',
+    };
+  }
 
   // An isolated test socket wants a plain private server, NOT the shared unit:
   // its name is global, so a per-pid test server in it would collide with the
   // live daemon's.
-  if (TMUX_SOCKET) { await run('tmux', ['start-server']); return; }
+  if (TMUX_SOCKET) { await run('tmux', ['start-server']); return { ok: true }; }
 
   const r = await run('systemd-run', [
     `--unit=${TMUX_UNIT}`, '--collect', '--quiet', '--service-type=forking',
@@ -2188,9 +2224,10 @@ async function ensureTmuxServer() {
   ]);
   if (r.err) {
     log(`tmux: could not start the server as ${TMUX_UNIT}.service (${(r.stderr || r.err.message || '').trim().slice(0, 120)}); it will run inside this daemon`);
-    return;
+    return { ok: true };
   }
   log(`tmux: server started as ${TMUX_UNIT}.service, independent of this daemon`);
+  return { ok: true };
 }
 
 /**
@@ -2261,7 +2298,8 @@ async function liveSessionIds() {
 }
 
 /**
- * Is this stderr tmux saying "there is nothing here", as opposed to tmux failing?
+ * Does this failed per-session tmux call PROVE the session absent? True, or
+ * null for "cannot tell" — never false, which would be a claim it is there.
  *
  * ⚠ THE DISTINCTION #14 IS ABOUT. A failure to OBSERVE is not an observation:
  * a fork that hit EAGAIN, a 10 s timeout on a loaded host, the server
@@ -2271,15 +2309,32 @@ async function liveSessionIds() {
  * question as answered and then re-announced it); this is the same split,
  * applied to the per-session reads.
  *
- * `no such file or directory` is in the list because a host with no tmux server
- * yet answers with it — leaving it out would turn "nothing is running" into a
- * permanent 503.
+ * A host with no tmux server yet answers "no server" (`error connecting to …
+ * (No such file or directory)`), and leaving that out would turn "nothing is
+ * running" into a permanent 503 — so it counts as absent, but only as far as
+ * tmuxFailureVerdict says the host is EMPTY.
+ *
+ * ⚠ 2026-11-06: "NO SERVER" IS NOT ALWAYS "NO SESSION". This was a regex that
+ * took any "no server running" or "no such file or directory" as absence. Under
+ * the load that made one listing say no server while 23 sessions ran, a
+ * per-session read answered that way said "gone" too: a route would 404 a live
+ * session (both clients eject the viewer with "Session <name> ended"), the send
+ * queue would fail every waiting message as "the session it was sent to has
+ * ended", and a kill that never reached tmux would clear the session's state
+ * file and its restore-registry row. Absent now means a server said "can't find
+ * session", or tmux said no server and systemd agrees there is none.
  */
-const TMUX_ABSENT_RE = /no server running|no such session|can't find session|no such file or directory/i;
-function tmuxSaysAbsent(stderr) { return TMUX_ABSENT_RE.test(String(stderr || '')); }
+async function tmuxProvesAbsent(stderr, why) {
+  const text = String(stderr || '');
+  if (tmuxSockLib.noServer(text)) {
+    return (await tmuxFailureVerdict(text, why)).verdict === 'empty' ? true : null;
+  }
+  return /no such session|can't find session|session not found/i.test(text) ? true : null;
+}
 
 /**
- * Does this session exist? TRUE, FALSE, or NULL for "tmux did not answer".
+ * Does this session exist? TRUE, FALSE, or NULL for "cannot tell": tmux did not
+ * answer, or said "no server" on a host that cannot be shown to have none.
  *
  * Null is not a third kind of no. Callers that gate a route turn it into a 503
  * (`requireSession`); callers doing housekeeping treat it as "leave it alone".
@@ -2326,8 +2381,9 @@ async function sessionExists(name, seen = null, { fresh = true } = {}) {
   // a second tmux process per request.
   const { err, stdout, stderr } = await run('tmux',
     ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_created}\t#{pane_pid}']);
-  // A failure tmux did not explain is a failure to observe, not an absence.
-  if (err && !tmuxSaysAbsent(stderr)) return null;
+  // A failure tmux did not explain is a failure to observe, not an absence; and
+  // "no server" is an absence only on an empty host (tmuxProvesAbsent).
+  if (err && !(await tmuxProvesAbsent(stderr, 'session check'))) return null;
   const [found, created, panePid] = (err ? '' : (stdout || '')).trim().split('\t');
   if (found !== name) { sessionBorn.delete(name); return false; }
   rememberBorn(name, created);
@@ -3949,6 +4005,12 @@ async function pumpQueue(name) {
         if (sendQueues.get(name) === q) failQueued(name, SEND_SESSION_ENDED);
         break;
       }
+      // ⚠ AND NULL HOLDS (2026-11-06). Nothing is known about the pane — tmux did
+      // not answer, or said "no server" while systemd could not say whether one
+      // runs — so nothing is typed into it, and nothing is failed or dropped:
+      // a send taken off the queue here would be lost for a session that is
+      // still running. The queue looks again on its next poll.
+      if (here === null) return;
       if (here && entry.born == null) entry.born = sessionBorn.get(name) || null;
       if (here && entry.born && sessionBorn.get(name) !== entry.born) {
         q.entries.shift();
@@ -4520,7 +4582,13 @@ async function hardEndSession(name) {
   // it on any error is how a kill whose client was SIGTERM'd left a restore
   // registry row that resurrected the session at the next reboot. Anything tmux
   // did not explain is a real failure to act: report it and touch nothing.
-  if (err && !tmuxSaysAbsent(stderr)) return { err, stderr, absent: false };
+  //
+  // ⚠ AND "NO SERVER" PROVES THE END ONLY ON AN EMPTY HOST (2026-11-06). A kill
+  // that could not reach a server whose unit is alive, or whose unit systemd
+  // would not answer for, ended nothing: the session runs on, and clearing its
+  // state and its registry row would take its conversation tab now and its
+  // restore at the next reboot (tmuxProvesAbsent).
+  if (err && !(await tmuxProvesAbsent(stderr, 'kill-session'))) return { err, stderr, absent: false };
   const absent = !!err;
   clearSessionState(name);
   // Off the restore list: a session ended on purpose (a DELETE, or an auto
@@ -4668,7 +4736,8 @@ async function restoreSessionsAfterReboot() {
   const plan = sessreg.restorePlan(loadRegistry(), new Set());
   if (!plan.length) return;
   log(`session restore: tmux server is gone (reboot?); ${plan.length} recorded session(s) to bring back`);
-  await ensureTmuxServer();
+  const server = await ensureTmuxServer();
+  if (!server.ok) { log(`session restore: ${server.error} — restoring nothing`); return; }
 
   // Which of them are project sessions, and as what: a project session comes
   // back launched as it was (projectRestoreCommand). An archived project claims
@@ -5887,9 +5956,15 @@ function findTranscriptFile(sessionId) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The sign-in flow's current state, read from its pane. */
+/**
+ * The sign-in flow's current state, read from its pane. Null when tmux cannot
+ * tell whether the flow's session is there: "not running" would tell the app no
+ * sign-in is in progress while one is (the caller answers 503).
+ */
 async function readLoginState() {
-  if (!(await sessionExists('login'))) {
+  const here = await sessionExists('login');
+  if (here === null) return null;
+  if (!here) {
     return { session: 'login', running: false, awaitingCode: false, done: false, url: loginUrl };
   }
   const cap = await run('tmux', ['capture-pane', '-p', '-e', '-t', '=login:']);
@@ -8082,7 +8157,9 @@ function projectRestoreCommand(hit, entry, hasTranscript) {
  * composer instead of being typed into an empty pty.
  */
 async function launchProjectSession(tmuxName, cwd, command) {
-  await ensureTmuxServer();
+  // Never a second server (ensureTmuxServer): a refusal is this launch's error.
+  const server = await ensureTmuxServer();
+  if (!server.ok) return { error: server.error, unavailable: true };
   // ⚠ ONLY A NAME NOBODY HOLDS. The clear below deletes the state file, the
   // question sidecars and the permission hand-offs filed under this name, and
   // tmux refusing the duplicate comes AFTER it — so a member whose name was
@@ -8093,7 +8170,8 @@ async function launchProjectSession(tmuxName, cwd, command) {
   // Fresh: a name check before creating must not trust a shared answer.
   const taken = await sessionExists(tmuxName, null, { fresh: true });
   if (taken !== false) {
-    return { error: taken ? `duplicate session: ${tmuxName}` : 'tmux is not answering right now' };
+    return taken ? { error: `duplicate session: ${tmuxName}` }
+      : { error: 'tmux is not answering right now', unavailable: true };
   }
   // Whatever the last holder of this name left behind goes before the new
   // session can be observed.
@@ -8250,7 +8328,9 @@ async function spawnMembers(project, sessions) {
  * project, because it is still running and nobody has asked it to stop.
  */
 async function softEndMember(project, member) {
-  if (!(await sessionExists(member.name))) return { ok: false, why: 'the session is not running' };
+  const here = await sessionExists(member.name);
+  if (here === null) return { ok: false, why: 'tmux is not answering right now' };
+  if (!here) return { ok: false, why: 'the session is not running' };
   const blocked = await dialogRefusal(member.name);
   if (blocked) {
     log(`project ${project.slug}: ${member.name} not wound down — ${blocked}`);
@@ -13879,8 +13959,10 @@ async function handleRequest(req, res) {
         before.orgName ? { orgName: before.orgName } : {});
       loginStartedFrom = fingerprint(cur);
       const existed = await sessionExists(name);
+      if (existed === null) return sendErr(res, 503, 'tmux is not answering right now');
       if (!existed) {
-        await ensureTmuxServer();
+        const server = await ensureTmuxServer();
+        if (!server.ok) return sendErr(res, 503, server.error);
         const r = await run('tmux',
           ['new-session', '-d', '-s', name, '-c', tmuxDir(WORKDIR), 'claude auth login; echo; echo "[done] press enter"; read _']);
         if (r.err) return sendErr(res, 500, `tmux: ${r.stderr.trim() || r.err.message}`);
@@ -13910,7 +13992,9 @@ async function handleRequest(req, res) {
 
     // Where the sign-in has got to, so the app can host the whole flow.
     if (req.method === 'GET' && p === '/v1/account/login/state') {
-      return sendJson(res, 200, await readLoginState());
+      const state = await readLoginState();
+      if (!state) return sendErr(res, 503, 'tmux is not answering right now');
+      return sendJson(res, 200, state);
     }
 
     // The pasted code, handed to the waiting prompt.
@@ -13922,7 +14006,9 @@ async function handleRequest(req, res) {
       if (!/^[A-Za-z0-9#._~:/?=&%+-]{8,600}$/.test(code)) {
         return sendErr(res, 400, 'that does not look like a sign-in code');
       }
-      if (!(await sessionExists('login'))) return sendErr(res, 409, 'no sign-in is in progress');
+      const signingIn = await sessionExists('login');
+      if (signingIn === null) return sendErr(res, 503, 'tmux is not answering right now');
+      if (!signingIn) return sendErr(res, 409, 'no sign-in is in progress');
 
       const before = fingerprint(accounts.readActive());
       const send = await run('tmux', ['send-keys', '-t', '=login:', '-l', '--', code]);
@@ -13980,7 +14066,9 @@ async function handleRequest(req, res) {
         }
       }
       // Still nothing: hand back what the pane says rather than a bare timeout.
-      return sendJson(res, 200, { ...(await readLoginState()), done: false });
+      const state = await readLoginState();
+      if (!state) return sendErr(res, 503, 'tmux is not answering right now');
+      return sendJson(res, 200, { ...state, done: false });
     }
 
     if (req.method === 'POST' && p === '/v1/account/logout') {
@@ -14540,7 +14628,13 @@ async function handleRequest(req, res) {
       const badName = nameProblem(body.name);
       if (badName) return sendErr(res, 400, badName);
       const to = canonName(body.name);
-      if (to !== from && await sessionExists(to, null, { fresh: true })) return sendErr(res, 409, `session '${to}' already exists`);
+      if (to !== from) {
+        // A name tmux could not say is free is not free: renaming onto it could
+        // land on a live session's state.
+        const toTaken = await sessionExists(to, null, { fresh: true });
+        if (toTaken === null) return sendErr(res, 503, 'tmux is not answering right now');
+        if (toTaken) return sendErr(res, 409, `session '${to}' already exists`);
+      }
       // ⚠ A PROJECT MEMBER'S NAME IS NOT ITS OWN (3.5.2). The project record
       // stores members by tmux name, its `claudeName` was minted from the slug
       // and the role when `claude --name` launched it, and the native peer
@@ -15464,7 +15558,8 @@ async function handleRequest(req, res) {
       // system tree, and never to a hidden path under it (hiddenUnder) - a session
       // started in a home directory used to make ~/.ssh and ~/.cache servable.
       const hiddenUnder = [];
-      if (sessName && await sessionExists(sessName)) {
+      const sessHere = sessName ? await sessionExists(sessName) : false;
+      if (sessHere) {
         const st = readSessionState(sessName);
         if (st && st.cwd) {
           cwd = st.cwd;
@@ -15476,6 +15571,10 @@ async function handleRequest(req, res) {
         requested: u.searchParams.get('path'),
         roots, cwd, hiddenUnder, maxBytes: IMAGE_SERVE_MAX_BYTES, fs,
       });
+      // A picture that may be under the session's folder is not "not there"
+      // because tmux could not say whether the session is: 503, so the client
+      // asks again instead of drawing it as missing.
+      if (!found.ok && sessHere === null) return sendErr(res, 503, 'tmux is not answering right now');
       if (!found.ok) return sendErr(res, found.status, found.error);
 
       // Private, because the token is the only thing between this and the host's
@@ -16207,7 +16306,10 @@ async function handleRequest(req, res) {
       // create route does it, and for the same reason: the new session must not be
       // observed through a corpse's state file.
       clearSessionState(want);
-      await ensureTmuxServer();
+      // Never a second server (ensureTmuxServer); the transcript restored above
+      // is simply there for the retry.
+      const server = await ensureTmuxServer();
+      if (!server.ok) return sendErr(res, 503, server.error);
       // ⚠ `-P -F '#S'`, for the same reason as the create route: tmux PRINTS the
       // name it gave the session. `want` can still carry a '.' here even though
       // the name rule bans them — it comes off an archive card an older daemon
@@ -16373,7 +16475,9 @@ async function handleRequest(req, res) {
       const kind = body.kind;
 
       const leadTmux = projectsLib.tmuxNameFor(slug, projectsLib.LEAD_ROLE);
-      if (await sessionExists(leadTmux)) {
+      const leadTaken = await sessionExists(leadTmux);
+      if (leadTaken === null) return sendErr(res, 503, 'tmux is not answering right now');
+      if (leadTaken) {
         return sendJson(res, 409, { error: `a tmux session called '${leadTmux}' already exists`, reason: 'name-taken' });
       }
       if (!given) {
@@ -16427,7 +16531,9 @@ async function handleRequest(req, res) {
         claudeLaunchCommand({ claudeName: project.lead.claudeName, persona }));
       if (launched.error) {
         unlinkPersonas(project.id);
-        return sendErr(res, 500, `tmux: ${launched.error}`);
+        // 503 when tmux could not be observed, as for any session route: nothing
+        // was made, and the same request may go through once it answers.
+        return sendErr(res, launched.unavailable ? 503 : 500, `tmux: ${launched.error}`);
       }
       project.lead.name = launched.name;
       saveProject(project);
@@ -16643,7 +16749,9 @@ async function handleRequest(req, res) {
           : typeof body.firstPrompt === 'string' ? body.firstPrompt.trim() : '';
         if (!description) return sendErr(res, 400, 'description is required — it is the member\'s new task');
         if (description.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, `a description is at most ${projectsLib.MAX_PROMPT} characters`);
-        if (!(await sessionExists(member.name))) return sendErr(res, 409, `${member.claudeName} is not running`);
+        const memberHere = await sessionExists(member.name);
+        if (memberHere === null) return sendErr(res, 503, 'tmux is not answering right now');
+        if (!memberHere) return sendErr(res, 409, `${member.claudeName} is not running`);
         const saved = updateProject(projectId, (proj) => {
           const x = (proj.members || []).find((y) => y.role === roleInPath);
           if (x) x.firstPrompt = description;
@@ -16925,7 +17033,9 @@ async function handleRequest(req, res) {
         const text = typeof body.text === 'string' ? body.text.trim() : '';
         if (!text) return sendErr(res, 400, 'text is required');
         if (text.length > projectsLib.MAX_PROMPT) return sendErr(res, 400, 'text too long');
-        if (!(await sessionExists(to.name))) return sendErr(res, 409, `${to.claudeName} is not running`);
+        const toHere = await sessionExists(to.name);
+        if (toHere === null) return sendErr(res, 503, 'tmux is not answering right now');
+        if (!toHere) return sendErr(res, 409, `${to.claudeName} is not running`);
         const r = await enqueueSend(to.name, projectsLib.peerMessageFrame(from.claudeName, text, project), {
           automated: true, origin: 'project', kind: 'peerMessage',
         });
@@ -16950,7 +17060,14 @@ async function handleRequest(req, res) {
         const refused = [];
         if (end === 'now' || end === 'graceful') {
           for (const member of projectsLib.memberList(project)) {
-            if (!(await sessionExists(member.name))) continue;
+            const here = await sessionExists(member.name);
+            if (here === false) continue;
+            // Cannot tell: not ended, and said so — the member may well be
+            // running on with no project behind it.
+            if (here === null) {
+              refused.push({ name: member.name, claudeName: member.claudeName, why: 'tmux is not answering right now' });
+              continue;
+            }
             if (end === 'graceful') {
               // ⚠ THE #9 HOLE, CLOSED. This used to call `sendLineToPane`, which
               // is a raw paste — no dialog check, no queue, no gates — so a
@@ -16987,6 +17104,12 @@ async function handleRequest(req, res) {
             } else {
               const r = await hardEndSession(member.name);
               if (!r.err) ended.push(member.name);
+              else {
+                refused.push({
+                  name: member.name, claudeName: member.claudeName,
+                  why: `tmux would not end it: ${(r.stderr || r.err.message || '').trim().slice(0, 120) || 'no answer'}`,
+                });
+              }
             }
           }
         }
