@@ -43,3 +43,74 @@ test('socketLost: no socket + a living unit is the swept-socket case; a fresh bo
   assert.equal(s.socketLost(NO_FILE, 0), false);
   assert.equal(s.socketLost(EAGAIN, 1284), false, 'a fork failure is a different failure to observe');
 });
+
+// ---- 2026-11-06: an empty host is OBSERVED, never inferred ------------------
+//
+// A loaded host failed one listing the no-server way while the server and all
+// 23 sessions were fine, and `systemctl show` failed too. The unit's pid read as
+// "none" for every "could not tell", so the daemon answered an empty host and
+// one reconcile tick archived five projects. These pin the three-way answer and
+// the verdict built on it. The run() results are shaped as execFile hands them.
+
+/** A run() result for a child that exited non-zero, or was killed by the 10 s timeout. */
+function failed(stderr, { code = 1, killed = false } = {}) {
+  const err = new Error('Command failed');
+  err.code = killed ? null : code;
+  if (killed) { err.killed = true; err.signal = 'SIGTERM'; }
+  return { err, stdout: '', stderr };
+}
+
+test('unitAnswer: systemd ANSWERING is a pid or 0; anything else is null, never 0', () => {
+  assert.equal(s.unitAnswer({ err: null, stdout: '1284\n', stderr: '' }).pid, 1284);
+  assert.equal(s.unitAnswer({ err: null, stdout: 'MainPID=1284\n', stderr: '' }).pid, 1284);
+  // A stopped unit, and a unit systemd has never heard of (LoadState=not-found),
+  // both answer 0: that IS an answer.
+  assert.equal(s.unitAnswer({ err: null, stdout: '0\n', stderr: '' }).pid, 0);
+  assert.equal(s.unitAnswer({ err: null, stdout: 'MainPID=0', stderr: '' }).pid, 0);
+
+  const bus = s.unitAnswer(failed('Failed to connect to bus: Connection timed out\n'));
+  assert.equal(bus.pid, null, 'a systemd that could not be asked is not a unit with no pid');
+  assert.match(bus.why, /Connection timed out/);
+  const slow = s.unitAnswer(failed('', { killed: true }));
+  assert.equal(slow.pid, null, 'the 10 s timeout on a loaded host (2026-11-06)');
+  assert.match(slow.why, /timed out/);
+  assert.equal(s.unitAnswer({ err: null, stdout: '', stderr: '' }).pid, null, 'no answer at all');
+  assert.equal(s.unitAnswer({ err: null, stdout: 'Unit huginn-tmux.service could not be found.', stderr: '' }).pid, null);
+  assert.equal(s.unitAnswer(undefined).pid, null);
+});
+
+test('listingVerdict: empty needs tmux\'s no-server words AND a unit with no main process', () => {
+  assert.equal(s.listingVerdict(NO_FILE, { pid: 0 }), 'empty', 'a fresh boot');
+  assert.equal(s.listingVerdict(STALE, { pid: 0 }), 'empty');
+  assert.equal(s.listingVerdict(NO_FILE, { pid: 1284 }), 'lost', 'the 2026-10-27 swept socket');
+  assert.equal(s.listingVerdict(REFUSED, { pid: 1284 }), 'lost');
+
+  assert.equal(s.listingVerdict(NO_FILE, { pid: null }), 'unknown', 'THE 2026-11-06 INCIDENT: systemd could not be asked');
+  assert.equal(s.listingVerdict(STALE, { pid: null }), 'unknown');
+  assert.equal(s.listingVerdict(NO_FILE, null), 'unknown', 'systemd not asked at all');
+  assert.equal(s.listingVerdict(EAGAIN, { pid: 0 }), 'unknown', 'a fork that failed says nothing about sessions');
+  assert.equal(s.listingVerdict('', { pid: 0 }), 'unknown');
+  // The daemon's old test was /no server running|no such file or directory/: any
+  // stderr naming ENOENT read as "no server". tmux's own words are narrower.
+  assert.equal(s.listingVerdict('couldn\'t create directory /tmp/tmux-0 (No such file or directory)\n', { pid: 0 }),
+    'unknown', 'ENOENT about something else is not tmux saying there is no server');
+});
+
+test('probeVerdict: only a server saying "can\'t find session" proves a session gone', () => {
+  // Verbatim tmux 3.6 for `has-session -t =<name>`.
+  assert.equal(s.probeVerdict({ err: null, stdout: '', stderr: '' }).gone, false, 'exit 0: it exists');
+  const gone = s.probeVerdict(failed('can\'t find session: build\n'));
+  assert.equal(gone.gone, true);
+  assert.match(gone.why, /can't find session/);
+
+  // Every way of not reaching a server holds: under the load that makes a
+  // listing lie, these are exactly the answers a probe gets.
+  for (const stderr of [NO_FILE, STALE, REFUSED, EAGAIN, '']) {
+    assert.equal(s.probeVerdict(failed(stderr)).gone, null, JSON.stringify(stderr));
+  }
+  const slow = s.probeVerdict(failed('', { killed: true }));
+  assert.equal(slow.gone, null, 'a probe killed by the timeout');
+  assert.match(slow.why, /timed out/);
+  assert.equal(s.probeVerdict(failed('can\'t find session: no server running\n')).gone, null,
+    'a session name that reads like a connection error is not trusted either way');
+});

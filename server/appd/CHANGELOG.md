@@ -22,6 +22,20 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A project session, lead or member, no longer sends `session_finished`.
 - A project session's `session_attention` title is `<project name> · <role> needs you`.
 
+### Fixed
+- An empty session list needs tmux to report no server and systemd to answer that
+  `huginn-tmux.service` has no main process. When `systemctl show` failed, timed out or answered
+  something unreadable, the list read as empty (`200` with no sessions) and one reconcile pass
+  could drop every project member and archive every project; it is unknown now (`503`), and
+  nothing is pruned, dropped or archived on it. Each such decision is logged once, when it changes.
+- A project member is dropped, or a project archived for its lead, only after its session has been
+  missing from every listing for 55 s and `tmux has-session` reports no such session. A probe that
+  cannot reach tmux holds the change. Restore-registry rows are pruned by the same rule.
+- The state sweep and the reboot restore read an unreachable tmux by the same rule: nothing is swept
+  or restored on it, and the sweep checks each session with `tmux has-session` before removing its
+  files.
+- A session list that could not be read no longer prunes the usage ladder's per-session records.
+
 ## 3.17.2 — 2026-11-05
 
 ### Fixed

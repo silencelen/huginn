@@ -161,7 +161,8 @@ force.
 | `HUGINN_API_BASE` | Stub endpoint for the API key above. |
 | `HUGINN_APPD_CLAUDE_DIR`, `HUGINN_CLAUDE_SETTINGS` | Move Claude Code's configuration directory and settings file away from the live ones. |
 | `HUGINN_APPD_STATE_DIR`, `HUGINN_APPD_TMUX_SOCKET`, `HUGINN_APPD_CLAUDE_SCRATCH`, `HUGINN_HEADROOM_DIR` | Point the daemon at scratch state, a private tmux server, or a headroom directory the installed hooks do not watch. |
-| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_PICKER_WAIT_MS`, `HUGINN_APPD_PICKER_LATE_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*` | Shorten timers and limits so tests run in seconds. |
+| `HUGINN_APPD_SYSTEMCTL` | A stand-in `systemctl` the daemon asks whether `huginn-tmux.service` has a main process. With a private tmux server it otherwise asks nobody, because the real one answers for the live unit, and a pid in that answer is sent `SIGUSR1`. |
+| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_PICKER_WAIT_MS`, `HUGINN_APPD_PICKER_LATE_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*`, `HUGINN_APPD_RECONCILE_MS`, `HUGINN_APPD_ABSENT_CONFIRM_MS` | Shorten timers and limits so tests run in seconds. |
 
 The headroom gate hook has its own settings (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
 `HUGINN_GATE_POLL`, `HUGINN_GATE_STALE_S`). It runs inside Claude Code, not inside the daemon, so a
@@ -238,6 +239,13 @@ tmux ls                           # the sessions in it
 
 `systemctl stop huginn-tmux` ends every session in it. The server uninstaller stops it only when
 no session is running.
+
+The unit is also how the daemon tells "no sessions" from "could not tell". The session list is
+empty only when tmux reports no server and `huginn-tmux.service` has no main process. If the unit
+still has one, the socket was removed under a running server, and the daemon sends that process
+`SIGUSR1`, which makes tmux recreate its socket. If systemd cannot be asked, the list is unknown
+(`503`) until it answers, and no project member, project or restore entry is written off
+meanwhile. Each of these is one `tmux: …` line in the log, written when the answer changes.
 
 ## See also
 

@@ -90,6 +90,9 @@ const typing = require('./lib/typing');
 // Whose journal this unit's really is — see lib/cgroup.js (M5).
 const cgroupLib = require('./lib/cgroup');
 const tmuxSockLib = require('./lib/tmux-socket');
+// "Absent since", per thing a reconcile might write off: nothing destructive on
+// one look (lib/absence.js, 2026-11-06).
+const absenceLib = require('./lib/absence');
 // The usage model and the arbiter: percentages and settings in, a list of
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
@@ -214,6 +217,13 @@ const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || '/run/huginn-claude-state
 // socket, i.e. exactly the production behaviour. `-L` (not TMUX_TMPDIR) because
 // an inherited $TMUX from the launching pane overrides TMUX_TMPDIR but not -L.
 const TMUX_SOCKET = process.env.HUGINN_APPD_TMUX_SOCKET || '';
+// What answers "is the tmux unit's server alive?" (tmuxUnitAnswer): systemd. A
+// private test socket's server is never the unit's, so a test daemon asks nobody
+// — its tmux saying "no server" is the whole truth — unless the suite hands it a
+// stand-in systemctl here. TEST-ONLY: the real systemctl under a private socket
+// would answer for the LIVE unit, and a "socket lost" verdict would then signal
+// the live tmux server.
+const TMUX_UNIT_SYSTEMCTL = process.env.HUGINN_APPD_SYSTEMCTL || (TMUX_SOCKET ? '' : 'systemctl');
 /**
  * An optional operator persona, appended to the system prompt of every chat and
  * round: HUGINN_APPD_PERSONA_FILE when set, else /etc/huginn/persona.md, else the
@@ -1097,7 +1107,19 @@ async function sweepStateDir(why = 'daily') {
     try { return now - fs.statSync(p).mtimeMs > STATE_KEEP_MS; } catch { return false; }
   };
   const drop = (p) => { try { fs.unlinkSync(p); return true; } catch { return false; } };
-  const took = { states: 0, sidecars: 0, partials: 0, dirs: 0 };
+  const took = { states: 0, sidecars: 0, partials: 0, dirs: 0, held: 0 };
+  // ⚠ AND ONE MORE LOOK BEFORE EACH UNLINK (2026-11-06). The listing above is
+  // one look, and a listing has come back missing every live session while the
+  // host was loaded. A session's files go only when tmux itself, asked about
+  // that exact name, says there is no such session (probeSessionGone); a probe
+  // that cannot reach a server keeps them for the next sweep. One probe per
+  // name, however many files carry it.
+  const verdicts = new Map();
+  const gone = async (name) => {
+    if (!verdicts.has(name)) verdicts.set(name, (await probeSessionGone(name)).gone === true);
+    if (!verdicts.get(name)) took.held += 1;
+    return verdicts.get(name);
+  };
 
   let entries = [];
   try { entries = fs.readdirSync(STATE_DIR, { withFileTypes: true }); } catch { return null; }
@@ -1107,6 +1129,7 @@ async function sweepStateDir(why = 'daily') {
     if (!stale(p)) continue;
     if (ent.name.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
     if (live.has(ent.name)) continue;
+    if (!(await gone(ent.name))) continue;
     if (drop(p)) took.states += 1;
   }
 
@@ -1119,6 +1142,7 @@ async function sweepStateDir(why = 'daily') {
       if (!stale(p)) continue;
       if (n.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
       if (live.has(n)) continue;
+      if (!(await gone(n))) continue;
       if (drop(p)) took.sidecars += 1;
     }
     if (!LEGACY_SIDECAR_DIRS.includes(kind)) continue;
@@ -1130,7 +1154,8 @@ async function sweepStateDir(why = 'daily') {
   // this one is the only thing on the host that removes a state file without a
   // person asking.
   log(`state sweep (${why}): ${took.states} state file(s), ${took.sidecars} sidecar(s), `
-    + `${took.partials} interrupted write(s), ${took.dirs} legacy dir(s); ${live.size} session(s) live`);
+    + `${took.partials} interrupted write(s), ${took.dirs} legacy dir(s); ${live.size} session(s) live`
+    + `${took.held ? `; ${took.held} file(s) kept, tmux would not confirm their session gone` : ''}`);
   return took;
 }
 
@@ -1694,16 +1719,20 @@ async function listSessions({ preview = false, shared = false } = {}) {
     // waiting question was announced as answered, its notification cancelled,
     // and then re-announced once tmux came back. A transient hiccup became a
     // burst of wrong notifications in both directions.
-    if (/no server running|no such file or directory/i.test(stderr || '')) {
-      // Unless the server is ALIVE in its unit and only the socket is gone: then
-      // nothing is known about the sessions, and saying [] here is what dropped
-      // the registry and archived every project on 2026-10-27 (recreateTmuxSocket).
-      if (await recreateTmuxSocket(stderr, 'list-sessions')) return null;
-      return [];
-    }
-    log(`tmux list-sessions failed: ${(stderr || err.message || '').trim().slice(0, 120)}`);
-    return null;
+    //
+    // ⚠⚠ AND "NO SERVER" IS ONLY AN OBSERVATION WHEN SYSTEMD AGREES. The server
+    // can be ALIVE in its unit with only the socket gone (2026-10-27: saying []
+    // dropped the registry and archived every project; recreateTmuxSocket) —
+    // and systemd itself may not answer. On 2026-11-06 a loaded host failed this
+    // listing the no-server way, `systemctl show` failed too, the unit's pid read
+    // as "none", and [] went out silently: one reconcile tick archived five live
+    // projects. [] now needs tmux's own no-server words AND the unit's "no main
+    // process"; everything else is null (tmuxFailureVerdict).
+    const { verdict, unit } = await tmuxFailureVerdict(stderr, 'list-sessions');
+    noteListing(verdict, { err, stderr, unit });
+    return verdict === 'empty' ? [] : null;
   }
+  noteListing('ok');
   let rows = [];
   const seen = new Set();
   for (const line of stdout.trim().split('\n')) {
@@ -1975,18 +2004,112 @@ function noTmuxServer(stderr) {
 }
 
 /**
- * The pid of the tmux server running as the shared unit, or null.
+ * What systemd says about the tmux unit: `{ pid, why }`, pid > 0 for a living
+ * server, 0 for "the unit has no main process", null for "could not be asked".
  *
- * Null covers every "I could not tell": no systemd, the unit unknown, a test
- * socket (whose server is private and never the unit's). A pid is the one fact
- * that tells an unlinked socket from a fresh boot, so a guess here would make
- * the daemon signal the wrong process or start a second server over a live one.
+ * ⚠⚠ THREE ANSWERS, NOT TWO (2026-11-06). This used to be a pid or null, and
+ * null meant every "I could not tell" — no systemd, the unit stopped, AND
+ * `systemctl show` failing on a loaded host. The listing read null as "no
+ * server here", so a systemd that did not answer, beside a tmux that did not
+ * either, made the host look empty and one reconcile tick archived five live
+ * projects. Only systemd ANSWERING "no main process" is evidence now.
+ *
+ * Zero without asking where no unit CAN hold the server: a private test socket
+ * (its server is the suite's, and the real systemctl would answer for the live
+ * unit), and a host that was not booted with systemd at all.
  */
-async function tmuxUnitMainPid() {
-  if (TMUX_SOCKET) return null;
-  const r = await run('systemctl', ['show', `${TMUX_UNIT}.service`, '-p', 'MainPID', '--value']);
-  if (r.err) return null;
-  return tmuxSockLib.unitMainPid(r.stdout);
+async function tmuxUnitAnswer() {
+  if (!TMUX_UNIT_SYSTEMCTL) return { pid: 0, why: 'the socket is private, so no unit can hold its server' };
+  if (!process.env.HUGINN_APPD_SYSTEMCTL && !systemdBooted()) {
+    return { pid: 0, why: 'this host was not booted with systemd, so no unit can hold a server' };
+  }
+  const r = await run(TMUX_UNIT_SYSTEMCTL, ['show', `${TMUX_UNIT}.service`, '-p', 'MainPID', '--value']);
+  const a = tmuxSockLib.unitAnswer(r);
+  return { pid: a.pid, why: a.pid === null ? a.why : `${TMUX_UNIT}.service ${a.why}` };
+}
+
+/**
+ * sd_booted(3): systemd is PID 1 exactly when /run/systemd/system is a
+ * directory. A stat that fails any way but "not there" proves nothing, so
+ * systemctl is asked after all.
+ */
+function systemdBooted() {
+  try { return fs.statSync('/run/systemd/system').isDirectory(); } catch (e) { return e.code !== 'ENOENT'; }
+}
+
+/**
+ * A tmux listing failed. Is that an OBSERVATION of a host with no server?
+ *
+ * `{ verdict, unit }`, verdict as lib/tmux-socket.js listingVerdict: 'empty'
+ * only for tmux's own no-server words plus a unit with no main process; 'lost'
+ * for a living unit whose socket is gone, which is asked to recreate it here
+ * (recreateTmuxSocket); 'unknown' for everything else. Every reader of "what is
+ * live" goes through this — the session list, the live-id map behind the state
+ * sweep and the archive routes, and the reboot restore — so none of them can
+ * read "could not tell" as "nothing there" on its own.
+ */
+async function tmuxFailureVerdict(stderr, why) {
+  if (!tmuxSockLib.noServer(stderr)) return { verdict: 'unknown', unit: null };
+  const unit = await tmuxUnitAnswer();
+  const verdict = tmuxSockLib.listingVerdict(stderr, unit);
+  if (verdict === 'lost') await recreateTmuxSocket(stderr, why, unit);
+  return { verdict, unit };
+}
+
+/**
+ * Say what the session listing decided, ONCE each time the decision changes.
+ *
+ * The 2026-11-06 listing that archived five projects left no line at all: the
+ * empty answer was silent by design. Every verdict that is not an ordinary
+ * listing is said now — an empty host and why it counts as one, a list that is
+ * unknown and why — but once per transition, never once per look: the list is
+ * read every few seconds per client, and a journal that repeats a line a
+ * thousand times hides the one that changed.
+ */
+let listingSaid = null;       // 'ok' | 'empty' | 'lost' | 'unit-unknown' | 'failed'
+let listingBadLooks = 0;      // looks that could not be read since the last good one
+function noteListing(verdict, { err = null, stderr = '', unit = null } = {}) {
+  if (verdict === 'ok') {
+    if (listingSaid && listingSaid !== 'ok' && listingSaid !== 'empty') {
+      log(`tmux: the session list answers again, after ${listingBadLooks} look(s) that could not be read`);
+    }
+    listingSaid = 'ok';
+    listingBadLooks = 0;
+    return;
+  }
+  const kind = verdict === 'unknown'
+    ? (tmuxSockLib.noServer(stderr) ? 'unit-unknown' : 'failed')
+    : verdict;
+  if (kind !== 'empty') listingBadLooks += 1;
+  if (kind === listingSaid) return;
+  listingSaid = kind;
+  const said = tmuxSockLib.firstLine(stderr) || (err && err.message) || 'no output';
+  if (kind === 'empty') {
+    log(`tmux: no server (${said}), and ${unit ? unit.why : 'no unit'} — the host has no sessions`);
+  } else if (kind === 'unit-unknown') {
+    log(`tmux: no server answered (${said}), and systemd could not say whether ${TMUX_UNIT}.service holds one`
+      + ` (${unit ? unit.why : 'not asked'}) — the session list is UNKNOWN, not empty; nothing is dropped or archived on it`);
+  } else if (kind === 'failed') {
+    const how = err && (err.killed || err.signal) ? `timed out (${err.signal || 'killed'})` : said;
+    log(`tmux list-sessions failed: ${how} — the session list is unknown until it answers`);
+  }
+  // 'lost': recreateTmuxSocket has said what it found and what it did.
+}
+
+/**
+ * Is this session GONE, in tmux's own words? `{ gone, why }` from
+ * lib/tmux-socket.js probeVerdict: true only when a living server answers that
+ * it has no session of that name, null for every failure to reach one.
+ *
+ * The confirmation every destructive reconcile write waits on (2026-11-06): a
+ * listing that left a session out is one look; this is a second, direct one at
+ * the exact name, made immediately before the write. `display-message` (what
+ * sessionExists uses) cannot serve: it exits 0 for a session that does not
+ * exist, and sessionExists reads "no server" as absent, which is the very
+ * answer a host gives while it is failing to list.
+ */
+async function probeSessionGone(name) {
+  return tmuxSockLib.probeVerdict(await run('tmux', ['has-session', '-t', `=${name}`]));
 }
 
 /**
@@ -2006,8 +2129,9 @@ async function tmuxUnitMainPid() {
  * a listing loop does not signal the server every few milliseconds.
  */
 let tmuxSocketAskedAt = 0;
-async function recreateTmuxSocket(stderr, why) {
-  const pid = await tmuxUnitMainPid();
+async function recreateTmuxSocket(stderr, why, unit = null) {
+  // `unit`: systemd's answer when the caller has just asked (tmuxFailureVerdict).
+  const { pid } = unit || await tmuxUnitAnswer();
   if (!tmuxSockLib.socketLost(stderr, pid)) return false;
   if (Date.now() - tmuxSocketAskedAt < 5_000) return true;
   tmuxSocketAskedAt = Date.now();
@@ -2102,12 +2226,19 @@ async function noteTmuxServerCgroup() {
  * read as "nothing is live" a failed listing would answer both questions wrongly
  * — a second Claude on one transcript, under a name already in use. The same
  * failure-to-observe guard listSessions and the registry reconcile carry.
+ *
+ * ⚠ AND THE SAME EMPTY-HOST RULE (2026-11-06). The empty map used to follow
+ * from any stderr mentioning "no such file or directory", without asking the
+ * unit at all — so the swept socket of 2026-10-27, or a loaded host whose
+ * systemd would not answer, read as "nothing is live" to the state sweep, which
+ * would then take the state of every session idle for a week. Empty only when
+ * tmuxFailureVerdict says the host is empty.
  */
 async function liveSessionIds() {
   const { err, stdout, stderr } = await run('tmux', ['list-sessions', '-F', '#{session_name}\t#{session_created}']);
   if (err) {
-    if (/no server running|no such file or directory/i.test(stderr || '')) return new Map();
-    return null;
+    const { verdict } = await tmuxFailureVerdict(stderr, 'live session ids');
+    return verdict === 'empty' ? new Map() : null;
   }
   const out = new Map();
   const reg = loadRegistry();
@@ -4411,6 +4542,18 @@ async function hardEndSession(name) {
 // ---- session registry reconcile + reboot restore ---------------------------
 
 /**
+ * How often the registry and the projects are reconciled with tmux, and how
+ * long a session must be missing from every listing before either may write
+ * it off (lib/absence.js). 55 s, not 60: the reconcile ticks every 60 s, and
+ * two ticks in a row must be able to confirm even when the first listing took
+ * a few seconds longer than the second. TEST-ONLY knobs, clamped like the
+ * other graces, so a suite can prove the rule in seconds.
+ */
+const RECONCILE_MS = Math.max(200, Math.min(60_000, Number(process.env.HUGINN_APPD_RECONCILE_MS) || 60_000));
+const ABSENT_CONFIRM_MS = Math.max(200, Math.min(600_000,
+  Number(process.env.HUGINN_APPD_ABSENT_CONFIRM_MS) || 55_000));
+
+/**
  * Keep the durable registry in step with what tmux actually has: fold in live
  * sessions (learning a claudeSessionId the moment the title hook writes one, and
  * picking up sessions started outside the daemon) and drop the ones that ended
@@ -4421,12 +4564,30 @@ async function hardEndSession(name) {
  * fork look alike enough that treating either as "nothing is live" would prune the
  * registry to empty and leave a reboot with nothing to restore — the same
  * failure-to-observe trap listSessions documents.
+ *
+ * ⚠ AND A LISTING THAT SUCCEEDED IS STILL ONE LOOK (2026-11-06). A row is
+ * dropped only once its session has been missing from every listing for
+ * ABSENT_CONFIRM_MS and `tmux has-session` then says it is gone — the rule the
+ * projects reconcile follows (lib/absence.js), for the store a reboot restores
+ * from. A row dropped on a bad look would come back on the next good one, but
+ * without its restore stamp, and a reboot in between would not bring it back.
  */
+const registryAbsence = absenceLib.absenceLedger(ABSENT_CONFIRM_MS);
+let registryReconcileBusy = false;
 async function reconcileSessionRegistry() {
+  // One pass at a time: a probe can take tmux's whole 10 s timeout on a loaded
+  // host, and two passes would race each other's registry write.
+  if (registryReconcileBusy) return;
+  registryReconcileBusy = true;
+  try { await reconcileSessionRegistryPass(); } finally { registryReconcileBusy = false; }
+}
+
+async function reconcileSessionRegistryPass() {
   const { err, stdout } = await run('tmux',
     ['list-sessions', '-F', '#{session_name}\t#{session_created}']);
   if (err) return;
   const now = Math.floor(Date.now() / 1000);
+  const nowMs = Date.now();
   const live = [];
   const liveNames = new Set();
   for (const line of stdout.trim().split('\n')) {
@@ -4443,8 +4604,32 @@ async function reconcileSessionRegistry() {
       cwd: st.cwd || null,
     });
   }
+  // Which recorded sessions are confirmed gone. Decided BEFORE the registry is
+  // read for the write below, because the probes await: a row added or removed
+  // while they ran must come through untouched.
+  const gone = new Set();
+  const recorded = Object.keys(loadRegistry());
+  for (const name of recorded) {
+    if (liveNames.has(name)) {
+      const was = registryAbsence.seen(name);
+      if (was && was.said) log(`session registry: ${name} is back in the session list — kept`);
+      continue;
+    }
+    const step = registryAbsence.missing(name, nowMs);
+    if (step !== 'due') continue;
+    const p = await probeSessionGone(name);
+    if (p.gone === true) { gone.add(name); registryAbsence.forget(name); continue; }
+    const row = registryAbsence.row(name);
+    const said = p.gone === false ? 'tmux still has it' : `tmux would not confirm it is gone (${p.why})`;
+    if (row && row.said !== said) {
+      row.said = said;
+      log(`session registry: ${name} has been missing from the session list for ${Math.round((nowMs - row.since) / 1000)} s, but ${said} — kept`);
+    }
+  }
+  registryAbsence.retain(new Set(recorded));
   const merged = sessreg.mergeLive(loadRegistry(), live, now);
-  const { next, removed } = sessreg.pruneDead(merged, liveNames);
+  const keep = new Set(Object.keys(merged).filter((name) => !gone.has(name)));
+  const { next, removed } = sessreg.pruneDead(merged, keep);
   saveRegistry(next);
   if (removed.length) log(`session registry: dropped ${removed.length} ended session(s): ${removed.join(', ')}`);
 }
@@ -4465,8 +4650,20 @@ async function reconcileSessionRegistry() {
  */
 async function restoreSessionsAfterReboot() {
   const probe = await run('tmux', ['ls']);
-  const serverGone = probe.err && /no server running|no such file or directory/i.test(probe.stderr || '');
-  if (!serverGone) return;  // appd-only restart (or a read we cannot trust) — leave live sessions be
+  if (!probe.err) return;  // a server answered: an appd-only restart — leave live sessions be
+  // ⚠ "No server" has to be OBSERVED here as everywhere (tmuxFailureVerdict).
+  // Read off the stderr alone, a swept socket (2026-10-27) or a systemd that
+  // would not answer (2026-11-06) made a host full of live sessions look
+  // rebooted, and this would recreate every one of them — on a second, empty
+  // server, since the first could not be reached.
+  const { verdict, unit } = await tmuxFailureVerdict(probe.stderr, 'session restore');
+  if (verdict !== 'empty') {
+    if (verdict === 'unknown' && tmuxSockLib.noServer(probe.stderr)) {
+      log(`session restore: tmux has no server, but systemd could not say whether ${TMUX_UNIT}.service holds one`
+        + ` (${unit ? unit.why : 'not asked'}) — restoring nothing; restart huginn-appd once it answers`);
+    }
+    return;
+  }
 
   const plan = sessreg.restorePlan(loadRegistry(), new Set());
   if (!plan.length) return;
@@ -8328,19 +8525,51 @@ function detectRosterChange(project) {
  * failure to OBSERVE, and reading that as "nothing is live" would drop every
  * member of every project and archive them all in one tick. The same trap
  * `pruneDead` documents, with a worse blast radius.
+ *
+ * ⚠⚠ WHICH IS EXACTLY WHAT HAPPENED, ON A LISTING THAT DID NOT FAIL
+ * (2026-11-06). A loaded host's tmux and systemd both failed to answer, the
+ * listing came back as an empty host, and this dropped every member of five
+ * projects and archived all five — 23 sessions running the whole time; the
+ * records came back from a backup. listSessions no longer calls that empty,
+ * and this no longer trusts any single listing: a member is dropped, or a
+ * project archived for its lead, only when the session has been missing from
+ * every listing for ABSENT_CONFIRM_MS AND `tmux has-session`, asked just
+ * before the write, says it is gone (projectsLib.confirmPlan). A probe that
+ * cannot reach tmux holds the change. Re-binds stay immediate: they rewrite an
+ * id and remove nothing.
  */
+const projectAbsence = absenceLib.absenceLedger(ABSENT_CONFIRM_MS);
+let projectsReconcileBusy = false;
 async function reconcileProjects() {
+  // One pass at a time: the probes can take tmux's whole timeout on a loaded
+  // host, and two passes would each decide the same write.
+  if (projectsReconcileBusy) return;
+  projectsReconcileBusy = true;
+  try { await reconcileProjectsPass(); } finally { projectsReconcileBusy = false; }
+}
+
+async function reconcileProjectsPass() {
   const live = await listSessions();
-  if (live === null) return;
-  const now = Math.floor(Date.now() / 1000);
+  if (live === null) return;   // listSessions has said why, once
+  const nowMs = Date.now();
+  const now = Math.floor(nowMs / 1000);
+  const touched = new Set();
   for (const row of listProjects()) {
     if (row.status === 'archived') continue;
     let project = loadProject(row.id);
     if (!project) continue;
     project = detectManifest(project);
     const plan = projectsLib.reconcilePlan(project, live);
-    if (!plan.drop.length && !plan.rebind.length && !plan.endProject) continue;
-    updateProject(project.id, (p) => {
+    const ok = await projectsLib.confirmPlan(project, plan, {
+      ledger: projectAbsence, now: nowMs, windowMs: ABSENT_CONFIRM_MS, probe: probeSessionGone,
+    });
+    for (const key of ok.touched) touched.add(key);
+    for (const note of ok.notes) log(`project ${project.slug}: ${note}`);
+    if (!ok.drop.length && !plan.rebind.length && !ok.endProject) continue;
+    // Re-read inside updateProject: the probes awaited, and the project may have
+    // been changed through a route meanwhile.
+    let archivedHere = false;
+    const saved = updateProject(project.id, (p) => {
       for (const r of plan.rebind) {
         // ⚠ RE-BOUND BY TMUX NAME. A reboot restore that falls back to a fresh
         // `claude` (nothing resumable on disk) mints a NEW Claude session id, so
@@ -8351,16 +8580,24 @@ async function reconcileProjects() {
         const m = (p.members || []).find((x) => x.role === r.role);
         if (m) m.sessionId = r.sessionId;
       }
-      if (plan.drop.length) p.members = (p.members || []).filter((m) => !plan.drop.includes(m.role));
-      if (plan.endProject) {
+      if (ok.drop.length) p.members = (p.members || []).filter((m) => !ok.drop.includes(m.role));
+      if (ok.endProject && p.status !== 'archived') {
         p.status = 'archived';
         p.endedReason = 'the lead session is gone';
         p.endedAt = now;
+        archivedHere = true;
       }
     });
-    if (plan.drop.length) log(`project ${project.slug}: dropped ${plan.drop.join(', ')} (session gone)`);
-    if (plan.endProject) log(`project ${project.slug}: archived — the lead session is gone`);
+    if (!saved) continue;
+    for (const role of ok.drop) projectAbsence.forget(projectsLib.absenceKey(project.id, role));
+    if (ok.endProject) for (const key of ok.touched) projectAbsence.forget(key);
+    const why = `missing from the session list for at least ${+(ABSENT_CONFIRM_MS / 1000).toFixed(1)} s, and tmux has no such session`;
+    if (ok.drop.length) log(`project ${project.slug}: dropped ${ok.drop.join(', ')} (session gone: ${why})`);
+    if (archivedHere) log(`project ${project.slug}: archived — the lead session is gone (${why})`);
   }
+  // What this pass did not look at has left the store some other way: an
+  // archived or deleted project, a member removed through a route.
+  projectAbsence.retain(touched);
 }
 
 /**
@@ -11075,7 +11312,10 @@ async function headroomTickInner() {
     .reduce((acc, r) => Math.max(acc, Number(r.at) || 0), 0);
 
   // ---- 3. the sessions -----------------------------------------------------
-  const live = (await listSessions()) || [];
+  // `listed` null is a list that could not be read, not an empty host: the
+  // sessions below are still decided on [], but nothing is pruned on it.
+  const listed = await listSessions();
+  const live = listed || [];
   const liveIds = new Set();
   const model = [];
   for (const s of live) {
@@ -11107,9 +11347,16 @@ async function headroomTickInner() {
   }
   // Prune records for sessions that are neither live nor on the restore
   // registry: a ladder belongs to a run, and a run that has ended takes it.
-  const registered = new Set(Object.values(loadRegistry()).map((r) => r && r.claudeSessionId).filter(Boolean));
-  for (const id of Object.keys(state.sessions)) {
-    if (!liveIds.has(id) && !registered.has(id)) delete state.sessions[id];
+  //
+  // ⚠ NEVER ON A LIST THAT COULD NOT BE READ. `|| []` above turned a failed
+  // look into "no session is live", and every ladder record whose id the
+  // registry had not merged yet (a run minutes old, a fresh id after /clear)
+  // went with it, on any tmux hiccup (2026-11-06 audit of the listing's readers).
+  if (listed !== null) {
+    const registered = new Set(Object.values(loadRegistry()).map((r) => r && r.claudeSessionId).filter(Boolean));
+    for (const id of Object.keys(state.sessions)) {
+      if (!liveIds.has(id) && !registered.has(id)) delete state.sessions[id];
+    }
   }
 
   // ---- 4. the arbiter ------------------------------------------------------
@@ -17765,10 +18012,11 @@ resolveBind().then(async (bind) => {
   // project whose lead is gone stops claiming to be running. It also picks up a
   // manifest the lead wrote while no client was looking — the GETs do it too,
   // but a proposal has to reach the owner's phone whether or not the app is open.
-  setTimeout(() => { reconcileSessionRegistry().catch(() => { }); }, 15_000).unref();
-  setTimeout(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, 15_000).unref();
-  setInterval(() => { reconcileSessionRegistry().catch(() => { }); }, 60_000).unref();
-  setInterval(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, 60_000).unref();
+  const firstReconcileMs = Math.min(15_000, RECONCILE_MS);
+  setTimeout(() => { reconcileSessionRegistry().catch(() => { }); }, firstReconcileMs).unref();
+  setTimeout(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, firstReconcileMs).unref();
+  setInterval(() => { reconcileSessionRegistry().catch(() => { }); }, RECONCILE_MS).unref();
+  setInterval(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, RECONCILE_MS).unref();
   // A restart kills any run that was in flight, and delivery of a chat's queue is
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.

@@ -61,6 +61,45 @@ see [Install a server](../install/server.md).
   Sessions started from the apps therefore run outside the daemon's sandbox, and they survive
   daemon restarts and updates (`huginn-appd.service` also sets `KillMode=process`).
 
+### When tmux cannot be read
+
+The daemon learns what is running from `tmux list-sessions`. Two incidents showed that one
+listing does not prove that anything has ended:
+
+- **A swept socket (2026-10-27).** A `/tmp` cleanup unlinked the tmux socket while the server
+  kept running with every session. tmux answered "No such file or directory", the daemon read
+  that as "no sessions", dropped the restore registry, archived two projects and started a
+  second, empty server. Since then the daemon asks systemd: while `huginn-tmux.service` has a
+  main process, it is the socket that is gone, not the server, and one `SIGUSR1` makes tmux
+  recreate it.
+- **A host too loaded to answer (2026-11-06).** During a nightly backup, with swap nearly full,
+  one listing failed the same no-server way while the server and all its sessions were fine,
+  and `systemctl show` failed too. The daemon took "systemd could not be asked" for "the unit has
+  no process", answered an empty host without a line in its log, and one reconcile tick dropped
+  every member of five projects and archived all five. The records came back from a backup.
+
+Two rules follow, and every reader of "what is live" keeps them:
+
+1. **An empty host is observed, never inferred.** A failed listing means "no sessions" only when
+   tmux says there is no server in its own words *and* systemd answers that the tmux unit has no
+   main process (or no unit can hold the server: a host not booted with systemd, a test's
+   private socket). A systemd that fails, times out or answers something unreadable makes the
+   list unknown: `GET /v1/sessions` answers `503`, and nothing is pruned, dropped, swept,
+   archived or restored on it. Each decision is logged once, when it changes
+   (`lib/tmux-socket.js`).
+2. **Nothing destructive on one look.** A project member is dropped, a project archived for its
+   lead, or a restore-registry row removed only when the session has been missing from every
+   listing for 55 seconds (two reconcile ticks) *and* `tmux has-session`, asked about that exact
+   name just before the write, answers that there is no such session. A probe that cannot reach
+   a server holds the change, so with no tmux server at all nothing is written off until one
+   answers. The state sweep, which already waits for a file a week untouched, makes the same
+   probe before each unlink. Re-binding a member to a new Claude session id stays immediate: it
+   removes nothing (`lib/absence.js`, `confirmPlan` in `lib/projects.js`).
+
+The suite proves both against a tmux and a systemctl that lie on request
+(`server/appd/test/tmux-shim.js`), with the reconcile's timers shortened by the test-only
+knobs in [Server configuration](../reference/server-config.md#do-not-set).
+
 ### Hooks
 
 Claude Code tells Huginn what it is doing through hooks in `~/.claude/settings.json`:

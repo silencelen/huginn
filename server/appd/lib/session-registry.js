@@ -88,6 +88,12 @@ function mergeLive(registry, live, now) {
  * tick, and the next reboot would then restore nothing. The daemon skips the whole
  * reconcile when the listing errors — the same failure-to-observe guard listSessions
  * carries, learned the same way.
+ *
+ * ⚠ AND A CLEAN LISTING IS STILL ONE LOOK (2026-11-06: one came back empty while
+ * every session was alive). The daemon passes `liveNames` PLUS every recorded name
+ * whose absence it has not confirmed — missing from every listing for its window
+ * (lib/absence.js) and then `tmux has-session` saying there is no such session —
+ * so a row goes only on that confirmation, never because one listing lacked it.
  */
 function pruneDead(registry, liveNames) {
   const set = liveNames instanceof Set ? liveNames : new Set(liveNames || []);

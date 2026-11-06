@@ -921,19 +921,21 @@ function joinMembers(project, liveSessions, nativeRows, now = Math.floor(Date.no
 }
 
 /**
- * What a reconcile pass should do about this project, as a plan rather than as
- * writes — so it can be asserted without a daemon.
+ * What ONE listing says about this project, as a plan rather than as writes —
+ * so it can be asserted without a daemon.
  *
- * `drop` is the members whose tmux session is gone AND whose row was already
- * stamped ended, or which were never present and have outlived the grace. A
- * member is only dropped when tmux itself has been read successfully; the caller
- * must never pass an empty `liveNames` it got from a FAILED listing, the
- * failure-to-observe trap `pruneDead` documents.
+ * `drop` is the members whose tmux session is not in `liveSessions`.
+ * `endProject` is set when the LEAD is not: without a lead there is nobody to
+ * propose, nobody to message the members and nothing the dashboard is about.
+ * Neither is a licence to write. A listing is one look, and on 2026-11-06 one
+ * look said every session was gone while all of them were running: the caller
+ * passes both through [confirmPlan] first. The caller must also never pass an
+ * empty listing it got from a FAILED tmux read, the failure-to-observe trap
+ * `pruneDead` documents.
  *
  * `rebind` is the members whose live `claudeSessionId` differs from the stored
- * one — a fresh-`claude` restore. `endProject` is set when the LEAD is gone:
- * without a lead there is nobody to propose, nobody to message the members and
- * nothing the dashboard is about.
+ * one — a fresh-`claude` restore. It is applied at once: it rewrites an id, it
+ * removes nothing.
  */
 function reconcilePlan(project, liveSessions) {
   const byName = new Map();
@@ -956,6 +958,85 @@ function reconcilePlan(project, liveSessions) {
 
   const endProject = !!project.lead && !lead && project.status !== 'archived';
   return { drop, rebind, endProject };
+}
+
+/** The key a project role's absence is noted under (lib/absence.js). */
+function absenceKey(projectId, role) { return `${projectId}\t${role}`; }
+
+/**
+ * Which of a [reconcilePlan]'s absences may be WRITTEN — a member dropped, the
+ * project archived for its lead — and the log lines that explain each step.
+ *
+ * ⚠ NOTHING DESTRUCTIVE ON ONE LOOK (2026-11-06). In one reconcile tick a
+ * listing that came back empty while all 23 sessions were alive dropped every
+ * member of five projects and archived all five. A role's absence is written
+ * only when BOTH hold:
+ *
+ *   1. it has been missing from every listing for at least `windowMs` (the
+ *      `ledger`, lib/absence.js — one listing that has it again forgets it), and
+ *   2. a direct probe of that exact session, made now, says tmux has no such
+ *      session (`probe(name)` resolves lib/tmux-socket.js probeVerdict's
+ *      `{ gone, why }`). A probe that finds the session keeps it; one that
+ *      cannot reach tmux holds the change for the next pass.
+ *
+ * Each note is said once per transition — gone missing, back, held, still in
+ * tmux — so a host that lists badly for an hour explains itself in a few lines.
+ * `touched` is every key this project has, for the ledger's `retain`.
+ */
+async function confirmPlan(project, plan, { ledger, now, windowMs, probe }) {
+  const missing = new Set(plan.drop);
+  if (plan.endProject) missing.add(LEAD_ROLE);
+  const roster = [];
+  if (project.lead) roster.push({ role: LEAD_ROLE, name: project.lead.name });
+  for (const m of project.members || []) roster.push({ role: m.role, name: m.name });
+
+  const confirmed = new Set();
+  const notes = [];
+  const touched = [];
+  const secs = +(windowMs / 1000).toFixed(1);
+  for (const { role, name } of roster) {
+    const key = absenceKey(project.id, role);
+    touched.push(key);
+    const who = role === LEAD_ROLE ? `the lead (${name})` : `${role} (${name})`;
+    if (!missing.has(role)) {
+      if (ledger.seen(key)) notes.push(`${who} is back in the session list — nothing was dropped`);
+      continue;
+    }
+    const step = ledger.missing(key, now);
+    const row = ledger.row(key);
+    if (step === 'new') {
+      notes.push(`${who} is missing from the session list — ${role === LEAD_ROLE ? 'the project is archived' : 'it is dropped'}`
+        + ` only if it is still missing in ${secs} s and tmux confirms the session is gone`);
+      continue;
+    }
+    if (step !== 'due') continue;
+    const missingFor = Math.round((now - row.since) / 1000);
+    // A member with no tmux name has no session to probe and none it could be.
+    const p = name ? await probe(name) : { gone: true, why: 'it has no tmux name' };
+    if (p.gone === true) { confirmed.add(role); continue; }
+    if (p.gone === false) {
+      // Kept, and still noted: a listing that keeps leaving out a session tmux
+      // has (one whose conversation is archived while the kill is pending) must
+      // not log this every pass, and is dropped the moment tmux lets it go.
+      row.held = null;
+      if (!row.present) {
+        row.present = true;
+        notes.push(`${who} has been missing from the session list for ${missingFor} s, but tmux still has it — kept`);
+      }
+      continue;
+    }
+    row.present = false;
+    if (row.held !== p.why) {
+      row.held = p.why;
+      notes.push(`${who} has been missing for ${missingFor} s, but tmux would not confirm it is gone (${p.why}) — holding`);
+    }
+  }
+  return {
+    drop: plan.drop.filter((role) => confirmed.has(role)),
+    endProject: !!plan.endProject && confirmed.has(LEAD_ROLE),
+    notes,
+    touched,
+  };
 }
 
 // ---------------------------------------------------------- the dashboard
@@ -1260,7 +1341,7 @@ module.exports = {
   briefFrame, firstPromptFrame, spawnedFrame, peerMessageFrame,
   changeAppliedFrame, changeDeclinedFrame, reroleFrame, changePush, LEAD_TEXT_RULE,
   liveRoster, manifestDiff, diffIsEmpty, memberCapProblem, pendingChangeFor, pendingChangeRow, changeToken, canonicalJson,
-  memberList, membershipIndex, sessionProjectTag, joinMembers, reconcilePlan,
+  memberList, membershipIndex, sessionProjectTag, joinMembers, reconcilePlan, confirmPlan, absenceKey,
   aggregateDashboard, rollupMembers, rollupMembersAsync, dashboardMemberRow,
   memberRow, projectRow, publicProject, sortProjects,
 };
