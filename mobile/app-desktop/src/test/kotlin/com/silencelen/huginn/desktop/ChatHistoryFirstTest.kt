@@ -10,7 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -33,7 +33,10 @@ class ChatHistoryFirstTest {
 
     private fun rig(record: CompletableDeferred<Unit>, turns: Int, transcript: Pair<HttpStatusCode, String>): Rig {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val seen = Collections.synchronizedList(mutableListOf<String>())
+        // Copy-on-write, not Collections.synchronizedList: this list is read with any/count while
+        // the code under test appends from its own thread, and a synchronized list has to be locked
+        // by hand to iterate — unlocked, it threw ConcurrentModificationException under load.
+        val seen = CopyOnWriteArrayList<String>()
         val client = HuginnClient(
             baseUrlProvider = { base },
             tokenProvider = { "t" },

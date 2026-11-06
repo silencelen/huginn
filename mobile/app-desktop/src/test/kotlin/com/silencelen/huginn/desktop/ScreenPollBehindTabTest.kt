@@ -12,7 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -39,7 +39,10 @@ class ScreenPollBehindTabTest {
 
     private fun rig(): Rig {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val screens = Collections.synchronizedList(mutableListOf<Long>())
+        // Copy-on-write, not Collections.synchronizedList: this list is read with any/count while
+        // the code under test appends from its own thread, and a synchronized list has to be locked
+        // by hand to iterate — unlocked, it threw ConcurrentModificationException under load.
+        val screens = CopyOnWriteArrayList<Long>()
         val frame = AtomicInteger()
         val client = HuginnClient(
             baseUrlProvider = { base },

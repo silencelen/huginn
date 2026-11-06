@@ -14,7 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -51,7 +51,10 @@ class NewSessionTranscriptTest {
      */
     private fun rig(rows: MutableStateFlow<List<Session>>, written: () -> Boolean): Rig {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val reads = Collections.synchronizedList(mutableListOf<Long>())
+        // Copy-on-write, not Collections.synchronizedList: this list is read with any/count while
+        // the code under test appends from its own thread, and a synchronized list has to be locked
+        // by hand to iterate — unlocked, it threw ConcurrentModificationException under load.
+        val reads = CopyOnWriteArrayList<Long>()
         val client = HuginnClient(
             baseUrlProvider = { base },
             tokenProvider = { "t" },

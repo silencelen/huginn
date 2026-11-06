@@ -12,7 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -47,7 +47,10 @@ class OverviewMetaArrivalTest {
         scope: CoroutineScope,
         headerFails: () -> Boolean = { false },
     ): Rig {
-        val seen = Collections.synchronizedList(mutableListOf<String>())
+        // Copy-on-write, not Collections.synchronizedList: this list is read with any/count while
+        // the code under test appends from its own thread, and a synchronized list has to be locked
+        // by hand to iterate — unlocked, it threw ConcurrentModificationException under load.
+        val seen = CopyOnWriteArrayList<String>()
         val metaJson = """{"goals":"SERVER GOALS","notes":"SERVER NOTES"}"""
         val client = HuginnClient(
             baseUrlProvider = { base },
@@ -92,7 +95,10 @@ class OverviewMetaArrivalTest {
 
     @Test
     fun `first visit to Overview shows the saved goals, and typing appends to them`() {
-        val saves = Collections.synchronizedList(mutableListOf<String>())
+        // Copy-on-write, not Collections.synchronizedList: this list is read with any/count while
+        // the code under test appends from its own thread, and a synchronized list has to be locked
+        // by hand to iterate — unlocked, it threw ConcurrentModificationException under load.
+        val saves = CopyOnWriteArrayList<String>()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val meta = SessionMetaSaver(scope, { n, g, no -> saves += "$n goals=$g notes=$no"; SessionMeta(g ?: "", no ?: "") })
         try {
