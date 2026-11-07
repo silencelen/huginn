@@ -63,6 +63,8 @@ import com.silencelen.huginn.desktop.ui.common.EmptyBlock
 import com.silencelen.huginn.desktop.ui.common.Frame
 import com.silencelen.huginn.desktop.ui.common.LoadingBlock
 import com.silencelen.huginn.desktop.ui.common.PaneScrollbar
+import com.silencelen.huginn.desktop.RestartHold
+import com.silencelen.huginn.desktop.ui.common.RestartWords
 import com.silencelen.huginn.desktop.ui.common.RowMenu
 import com.silencelen.huginn.desktop.ui.common.Selection
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
@@ -291,6 +293,8 @@ fun SessionsList(
     // How many projects they are in: the number the line says (owner, 2026-10-17).
     projectCount: Int = 0,
     onOpenProjects: (() -> Unit)? = null,
+    /** Restarts the daemon is holding, by session — see [AppStore.restartHolds]. */
+    restartHolds: Map<String, RestartHold> = emptyMap(),
 ) {
     // Collapsed by default, and remembered only as long as the pane is: the
     // archive is a footnote to this list. A section that came back open would
@@ -361,6 +365,7 @@ fun SessionsList(
                     ) {
                         SessionRow(
                             session = s,
+                            hold = restartHolds[s.name],
                             active = s.name == activeName,
                             selected = s.name in selection && selection.size > 1,
                             onClick = { ctrl, shift ->
@@ -418,17 +423,24 @@ private fun SessionRow(
     selected: Boolean,
     onClick: (ctrl: Boolean, shift: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** A restart the daemon is holding for this session, or null. */
+    hold: RestartHold? = null,
 ) {
     val now = remember(session) { System.currentTimeMillis() / 1000 }
+    // The daemon is cycling this session's Claude Code (runtime.restarting): the
+    // pane is a shell until Claude draws its composer again, which is exactly
+    // what a just-created session looks like — so it takes that state, the
+    // no-state dot, with the tip saying why.
+    val restarting = session.runtime?.restarting == true
     // THE HOUSE ROW (UI-AUDIT section 3), at the desktop's 12/6: the state dot ·
     // the session's NAME in the mono face (it is a name) · one meta line · the
     // time trailing. The frame keeps its hover and its multi-select.
     RowFrame(active = active, selected = selected, onClick = onClick, modifier = modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Tip(sessionStateTip(session.state, session.stateSince, now)) {
+            Tip(if (restarting) RestartWords.RESTARTING_TIP else sessionStateTip(session.state, session.stateSince, now)) {
                 // The one state language: working is the accent, needs-you is
                 // stateAttention (never the error red), waiting the quiet 6 dp dot.
-                DotColumn { com.silencelen.huginn.ui.theme.StateDot(session.state) }
+                DotColumn { com.silencelen.huginn.ui.theme.StateDot(if (restarting) null else session.state) }
             }
             Text(
                 session.name,
@@ -444,6 +456,16 @@ private fun SessionRow(
             // A session mid-compaction gets the marker on the first line, where it
             // reads at a glance in the Conversations list.
             if (session.compacting) CompactingChip(Modifier.padding(start = Scale.s8))
+            // Launched before the last deploy (runtime.stale): a small word in
+            // the row's own muted ink, like the compaction marker — never a
+            // colour of its own, never a bar. While the daemon cycles it, the
+            // word says that instead.
+            session.runtime?.let { rt ->
+                when {
+                    rt.restarting -> Tip(RestartWords.RESTARTING_TIP) { Muted(RestartWords.RESTARTING, Modifier.padding(start = Scale.s8)) }
+                    rt.stale -> Tip(RestartWords.staleTip(rt)) { Muted(RestartWords.STALE, Modifier.padding(start = Scale.s8)) }
+                }
+            }
             Tip(timeTip("Last activity", session.activityAt, now)) {
                 Muted(TimeWords.short(session.activityAt, now * 1000L), Modifier.padding(start = Scale.s8))
             }
@@ -485,6 +507,14 @@ private fun SessionRow(
                         "waiting to go in — the daemon sends them when the turn ends",
                 ) {
                     Muted("${session.pendingSends} queued", Modifier.padding(end = Scale.s8))
+                }
+            }
+            // A restart the daemon is holding for this session: the same shape as
+            // the queued send above, with what it waits on in the tip. Gone once
+            // the row itself reports the cycle (see AppStore.restartHolds).
+            if (hold != null && !restarting) {
+                Tip(RestartWords.holdTip(hold.blockedBy, hold.alreadyQueued)) {
+                    Muted(RestartWords.HOLD, Modifier.padding(end = Scale.s8))
                 }
             }
             // "ctx N%" sits with the row's other metadata, only when the host

@@ -117,6 +117,40 @@ data class SessionProject(
     val lead: Boolean = false,
 )
 
+/**
+ * What the session's Claude Code process LOADED at launch, against what a launch
+ * would load now. A Claude Code process reads its MCP servers, hooks, settings
+ * and binary at START and never again, so a session launched before a deploy
+ * keeps the old wiring until it is restarted — one session launched on 10-27
+ * still had no `start_session` tool on 11-07, four days after it was registered.
+ * The daemon stamps every launch with a generation ([gen], a short hash over the
+ * `claude` version, the user-level MCP config, the settings and hooks it reads,
+ * and the appd that installed them) and compares it with [current] on each row.
+ *
+ * Null on a daemon that records no generations, and ABSENT IS NOT STALE: a row
+ * from an older daemon must not draw every session as out of date. [stale] is
+ * the daemon's verdict, not something a client recomputes — the gens are opaque
+ * and a session launched before the daemon kept them has none, yet counts as
+ * stale once. Like [SessionProject], this is the daemon's join, not a record.
+ */
+@Serializable
+data class SessionRuntime(
+    val stale: Boolean = false,
+    /** The generation the session launched under; null when none was recorded (it then counts as stale once). */
+    val gen: String? = null,
+    /** The generation a launch would get now. */
+    val current: String? = null,
+    /** The `claude` version the session launched with. */
+    val claude: String? = null,
+    /** The `claude` version a launch would get now. */
+    val currentClaude: String? = null,
+    /**
+     * The daemon's restart job is cycling this session right now: drawn like a
+     * session that is starting, and a second restart is answered 409 `restarting`.
+     */
+    val restarting: Boolean = false,
+)
+
 @Serializable
 data class Session(
     val name: String,
@@ -197,6 +231,12 @@ data class Session(
     val fast: FastMode? = null,
     val limits: SessionLimits? = null,
     val cost: SessionCost? = null,
+    /**
+     * Whether this session's Claude Code still runs what a launch would load now,
+     * and whether the daemon is restarting it. Null on an older daemon, which is
+     * NOT stale — see [SessionRuntime]. Read it as `runtime?.stale == true`.
+     */
+    val runtime: SessionRuntime? = null,
 )
 
 @Serializable
@@ -628,6 +668,30 @@ data class Queued(
     val blockedBy: String? = null,
     val error: String? = null,
 )
+
+/**
+ * The answer to `POST /v1/sessions/:name/restart`. A restart is a send-queue
+ * JOB — it runs only at a turn boundary with an empty composer — so the route
+ * answers 202 `queued`: due now, or held until [blockedBy] clears (`running` ·
+ * `dialog` · `draft` · `background` · `attached` · `load`). A 409 `restarting`
+ * means one is already queued or running, which is exactly the outcome the
+ * caller asked for, so it reads as [queued] true with [reason] `restarting`
+ * rather than as a failure; every other code throws with the daemon's sentence,
+ * as any other route does. Not [Queued]: that type's 409 is a refusal.
+ */
+@Serializable
+data class RestartResult(
+    val queued: Boolean = false,
+    /** What holds the restart, when something does; null when it is due now. */
+    val blockedBy: String? = null,
+    /** `restarting` when the daemon already had one queued or running; null on a fresh 202. */
+    val reason: String? = null,
+    /** The daemon's own sentence, when it sent one beside the reason. */
+    val error: String? = null,
+) {
+    /** The daemon was already restarting this session: nothing new was queued, and nothing is wrong. */
+    val alreadyQueued: Boolean get() = reason == "restarting"
+}
 
 /**
  * `GET|PATCH /v1/settings/claude`: the sessions account's Claude Code settings

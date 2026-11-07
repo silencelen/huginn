@@ -174,6 +174,16 @@ for want in .PKGINFO .MTREE opt/huginn-desktop-kt/bin/huginn-desktop-kt usr/shar
   grep -qx "$want" <<<"$LIST" || { echo "REFUSING: $PKG does not carry $want" >&2; exit 1; }
 done
 [ "$(head -1 <<<"$LIST")" = ".MTREE" ] || { echo "REFUSING: $PKG does not open with .MTREE (pacman reads it first)" >&2; exit 1; }
+# The menu entry as pacman will lay it down: it must claim huginn:// and its Exec
+# must be a BARE path. xdg-utils' resolver (xdg-mime query default, xdg-open on a
+# compositor it does not know) runs `command -v` on the first whitespace-split
+# word of Exec, so a quoted launcher is "no such binary" and every notification
+# click falls through to the browser (the Omarchy report, 2026-11-07).
+DE="$(bsdtar -xOf "$PKG" usr/share/applications/huginn-desktop-kt.desktop)"
+grep -qx 'MimeType=x-scheme-handler/huginn;' <<<"$DE" \
+  || { echo "REFUSING: the package's desktop entry does not claim x-scheme-handler/huginn" >&2; exit 1; }
+grep -qx 'Exec=/opt/huginn-desktop-kt/bin/huginn-desktop-kt %u' <<<"$DE" \
+  || { echo "REFUSING: the package's desktop entry Exec is not the bare launcher path + %u:"; echo "$DE"; exit 1; } >&2
 if bsdtar -tvf "$PKG" | awk '{print $3" "$4}' | grep -qv '^root root$'; then
   echo "REFUSING: $PKG has entries not owned by root:root" >&2; exit 1
 fi

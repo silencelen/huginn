@@ -13,6 +13,7 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -38,9 +39,7 @@ class ProjectDashboardPollTest {
     private val dirs = mutableListOf<File>()
     private val scopes = mutableListOf<CoroutineScope>()
 
-    private fun store(): AppStore {
-        val dir = Files.createTempDirectory("huginn-dashboard-test").toFile()
-        dirs += dir
+    private fun store(dir: File = Files.createTempDirectory("huginn-dashboard-test").toFile().also { dirs += it }): AppStore {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         scopes += scope
         // Never started: nothing here may reach a daemon. The adopt step is the
@@ -157,5 +156,35 @@ class ProjectDashboardPollTest {
         s.openProject("b")
         assertEquals("b", s.projectDashboard.value?.project?.id)
         assertEquals(500L, s.projectDashboard.value?.generatedAt)
+    }
+
+    /**
+     * ⚠ "SEEMS TO HAVE NO CACHE, AND JUST SHOWS 'NOTHING TO SHOW YET' FOR 5ISH
+     * SECONDS" (R5, 2026-11-07). The book above lived in memory, so every
+     * relaunch began empty and the first open of each project read the empty
+     * text until the daemon's first rollup landed — seconds when the daemon has
+     * to walk a cold member's transcript. The book is shelved beside the
+     * settings file now: a second store over the same profile directory is a
+     * relaunch, and it draws what the project last said at once.
+     */
+    @Test
+    fun `after a relaunch the last dashboard is drawn at once, from the profile directory`() {
+        val profile = Files.createTempDirectory("huginn-dashboard-relaunch").toFile().also { dirs += it }
+        val first = store(profile)
+        first.openProject("a")
+        assertTrue(first.adoptDashboard(dashboard(id = "a", at = 500, per10m = 1_000)))
+
+        val relaunched = store(profile)
+        relaunched.openProject("a")
+        assertEquals(500L, relaunched.projectDashboard.value?.generatedAt, "the last rollup, at once — not null until the first fetch lands")
+        assertEquals(1_000L, relaunched.projectDashboard.value?.rate?.tokensPerMin10)
+        // The empty text is only for a project no run has ever had a rollup for.
+        relaunched.openProject("never")
+        assertNull(relaunched.projectDashboard.value)
+        // And the refetch still replaces it only when it has moved.
+        relaunched.openProject("a")
+        assertFalse(relaunched.adoptDashboard(dashboard(id = "a", at = 500, per10m = 1_000)), "the daemon re-sent the same rollup")
+        assertTrue(relaunched.adoptDashboard(dashboard(id = "a", at = 510, per10m = 2_000)))
+        assertEquals(510L, store(profile).let { it.openProject("a"); it.projectDashboard.value?.generatedAt })
     }
 }

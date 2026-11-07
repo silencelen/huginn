@@ -52,6 +52,7 @@ import com.silencelen.huginn.desktop.core.CoreSetup
 import androidx.compose.ui.window.isTraySupported
 import com.silencelen.huginn.desktop.diag.AppLog
 import com.silencelen.huginn.desktop.notify.Notifiers
+import com.silencelen.huginn.desktop.notify.SchemeRegistrar
 import com.silencelen.huginn.desktop.ui.Muted
 import com.silencelen.huginn.desktop.ui.common.openInBrowser
 import com.silencelen.huginn.desktop.update.UpdateState
@@ -525,6 +526,10 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
     val settings = store.settings
     val notifyEnabled by settings.notifyEnabled.collectAsState(initial = true)
     val present by store.presence.present.collectAsState()
+    // Whether a huginn:// link (a notification click) reaches this app, as the
+    // registrar proved it at launch. Read live: the row is the one place the
+    // contract's line is shown, and it must not say "fine" from a stale value.
+    val link by SchemeRegistrar.linkStatus.collectAsState()
 
     ScopeOf("notify.claim-route", store)
     SettingsToggleRow(
@@ -549,7 +554,9 @@ fun ColumnScope.NotifyPage(store: AppStore, mark: String?) {
         id = Notifiers.PATH_ROW_ID,
         title = "How notifications reach this computer",
         value = Notifiers.pathWords(AppLog.notifierName),
-        summary = Notifiers.pathSummary(AppLog.notifierName),
+        // The click path too: a notification that arrives and then opens a blank
+        // browser tab is this row's fact as much as the posting path is.
+        summary = Notifiers.pathSummary(AppLog.notifierName, link),
         highlighted = SettingsRowStyle.isHighlighted(Notifiers.PATH_ROW_ID, mark),
         modifier = revealMark(Notifiers.PATH_ROW_ID),
     )

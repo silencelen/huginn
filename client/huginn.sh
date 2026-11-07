@@ -1261,11 +1261,33 @@ _huginn_desktop_tar_ok() {
   '
 }
 
+# The launcher as the entry's first Exec argument: BARE unless the Desktop Entry
+# spec reserves a character in it (space, quotes, backslash, $ ` < > ~ | & ; * ? #
+# parentheses), then quoted with the spec's own escapes; % doubled in both forms.
+#
+# ⚠ BARE ON PURPOSE. It used to be quoted always, "for a home with a space in
+# it", and that broke every notification click on an Omarchy laptop
+# (2026-11-07): under a compositor xdg-utils does not know (Hyprland), xdg-open
+# resolves a handler with its own shell code, which splits Exec on whitespace and
+# runs `command -v` on the FIRST WORD - so a quoted path was "no such binary",
+# the entry was skipped, and the huginn:// link fell through to the browser.
+# Same bytes as the app's SchemeRegistrar.execArgument, which rewrites this
+# entry at every launch.
+_huginn_desktop_exec_arg() {
+  local arg reserved
+  reserved=$'\t\n'" \"'\\\$\`<>~|&;*?#()"
+  case "$1" in
+    *["$reserved"]*) arg="\"$(printf '%s' "$1" | sed 's/[\\"`$]/\\&/g')\"" ;;
+    *) arg="$1" ;;
+  esac
+  printf '%s' "$arg" | sed 's/%/%%/g'
+}
+
 _huginn_desktop_entry() {   # $1 = stable launcher; the same text as SchemeRegistrar.linuxDesktopEntry
   local exe="$1" app
   app="${exe%/bin/huginn-desktop-kt}"
   printf '[Desktop Entry]\nType=Application\nName=Huginn\nComment=huginn desktop client\n'
-  printf 'Exec="%s" %%u\n' "$(printf '%s' "$exe" | sed 's/%/%%/g')"
+  printf 'Exec=%s %%u\n' "$(_huginn_desktop_exec_arg "$exe")"
   printf 'Icon=%s/lib/huginn-desktop-kt.png\n' "$app"
   printf 'Terminal=false\nCategories=Development;Utility;\nMimeType=x-scheme-handler/huginn;\n'
 }
@@ -1366,6 +1388,20 @@ _huginn_desktop_install() (
   _huginn_desktop_entry "$L" > "$apps/huginn-desktop-kt.desktop"
   command -v xdg-mime >/dev/null 2>&1 && xdg-mime default huginn-desktop-kt.desktop x-scheme-handler/huginn >/dev/null 2>&1
   command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$apps" >/dev/null 2>&1
+  # VERIFIED, not assumed: registering and being resolved are two different
+  # facts (the Omarchy report above had both files right and no working link).
+  # Read back the way xdg-open will read it, and say so when it does not agree;
+  # the app re-checks and repairs at every launch, so this is a warning, not a
+  # failure of the install.
+  if command -v xdg-mime >/dev/null 2>&1; then
+    local handler
+    handler="$(xdg-mime query default x-scheme-handler/huginn 2>/dev/null)"
+    if [ "$handler" != huginn-desktop-kt.desktop ]; then
+      _huginn_ui_line warn desktop "huginn:// links may not open the app yet: xdg-mime names '${handler:-nothing}' for x-scheme-handler/huginn (the app re-registers when it starts)"
+    fi
+  else
+    _huginn_ui_line warn desktop "xdg-utils is not installed, so a huginn:// link (a notification click) has nothing to route it"
+  fi
   # An autostart entry from a /opt install would keep starting the package after
   # it is removed. Repointed only if one exists - turning it ON is the app's
   # setting, not this verb's.

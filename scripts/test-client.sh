@@ -1317,9 +1317,19 @@ esac
 [ -f "$src" ] || exit 22
 if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi
 STUB
-for s in sudo xdg-mime update-desktop-database; do
+for s in sudo update-desktop-database; do
   printf '#!/usr/bin/env bash\necho "%s $*" >> "$DT_FEED/calls.log"\nexit 0\n' "$s" > "$DT/bin/$s"
 done
+# xdg-mime answers `query default` the way the install reads the handler back:
+# our own entry, unless a lane staged another answer in $DT_FEED/xdg-answer.
+cat > "$DT/bin/xdg-mime" <<'STUB'
+#!/usr/bin/env bash
+echo "xdg-mime $*" >> "$DT_FEED/calls.log"
+if [ "$1 $2" = "query default" ]; then
+  if [ -f "$DT_FEED/xdg-answer" ]; then cat "$DT_FEED/xdg-answer"; else echo huginn-desktop-kt.desktop; fi
+fi
+exit 0
+STUB
 # A pacman that reports the old distro package installed, so the removal hint shows.
 printf '#!/usr/bin/env bash\n[ "$1 $2" = "-Q huginn-desktop-kt" ] && { echo "huginn-desktop-kt 1.12.1-1"; exit 0; }\nexit 1\n' > "$DT/bin/pacman"
 chmod +x "$DT/bin/"*
@@ -1375,12 +1385,34 @@ dt_run 'huginn desktop install'; RC=$?
 [ "$("$DT/home/.local/bin/huginn-desktop" 2>&1)" = "huginn-desktop 9.9.0" ] \
   && ok "install: ~/.local/bin/huginn-desktop runs the installed launcher" || bad "install: the launcher symlink does not run 9.9.0"
 DE="$DT/home/.local/share/applications/huginn-desktop-kt.desktop"
-grep -qxF "Exec=\"$DR/current/bin/huginn-desktop-kt\" %u" "$DE" 2>/dev/null && grep -qx 'MimeType=x-scheme-handler/huginn;' "$DE" \
+# ⚠ THE EXEC PATH IS BARE. It was quoted, and xdg-utils' own resolver (xdg-mime
+# query default; xdg-open under Hyprland and every other compositor it does not
+# know) runs `command -v` on the first whitespace-split word of Exec — so the
+# quoted path was "no such binary" and every notification click fell through to
+# the browser (Omarchy, 2026-11-07). SchemeRegistrar.linuxDesktopEntry writes
+# the same bytes at every launch; the Kotlin side is pinned in LinuxSchemeTest.
+grep -qxF "Exec=$DR/current/bin/huginn-desktop-kt %u" "$DE" 2>/dev/null && ! grep -q '^Exec="' "$DE" \
+  && grep -qx 'MimeType=x-scheme-handler/huginn;' "$DE" \
   && grep -qxF "Icon=$DR/current/lib/huginn-desktop-kt.png" "$DE" \
-  && ok "install: the menu entry points at current (never a version) and claims huginn://" \
+  && ok "install: the menu entry points at current (never a version), bare Exec, and claims huginn://" \
   || bad "install: desktop entry wrong: $(cat "$DE" 2>/dev/null)"
 grep -q 'xdg-mime default huginn-desktop-kt.desktop x-scheme-handler/huginn' "$DT/feed/calls.log" \
   && ok "install: huginn:// handed to the entry with xdg-mime" || bad "install: xdg-mime was not called"
+grep -q 'xdg-mime query default x-scheme-handler/huginn' "$DT/feed/calls.log" && ! grep -q 'may not open the app' "$DT/out" \
+  && ok "install: reads the handler back, and says nothing when it is ours" \
+  || bad "install: handler not read back, or a false warning: $(cat "$DT/out")"
+# The same rule as SchemeRegistrar.execArgument, on the paths that decide it.
+dt_run '_huginn_desktop_exec_arg "/home/Alex Doe/x"; echo; _huginn_desktop_exec_arg "/home/alex/a%b"; echo; _huginn_desktop_exec_arg "/home/a\$b/x"'
+[ "$(cat "$DT/out")" = $'"/home/Alex Doe/x"\n/home/alex/a%%b\n"/home/a\\$b/x"' ] \
+  && ok "install: Exec is quoted only for a path the spec reserves a character in, with its escapes" \
+  || bad "install: exec argument rule: $(cat "$DT/out")"
+# A machine that keeps naming another handler: said, with what it names.
+echo microsoft-edge.desktop > "$DT/feed/xdg-answer"
+dt_run 'huginn desktop install'
+grep -q "may not open the app yet: xdg-mime names 'microsoft-edge.desktop' for x-scheme-handler/huginn" "$DT/out" \
+  && ok "install: an unresolved huginn:// handler is reported with what xdg-mime named" \
+  || bad "install: no warning for an unresolved handler: $(cat "$DT/out")"
+rm -f "$DT/feed/xdg-answer"
 grep -q 'sudo pacman -R huginn-desktop-kt' "$DT/out" \
   && ok "install: names the distro package's removal command" || bad "install: no pacman removal hint: $(cat "$DT/out")"
 grep -q '^sudo' "$DT/feed/calls.log" && bad "install RAN sudo: $(grep '^sudo' "$DT/feed/calls.log")" || ok "install: never runs sudo"

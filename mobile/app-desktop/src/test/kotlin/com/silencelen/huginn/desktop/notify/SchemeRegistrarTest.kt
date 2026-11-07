@@ -116,6 +116,32 @@ class SchemeRegistrarTest {
         assertTrue(SchemeRegistrar.WINDOWS_ROOT.endsWith(Activations.SCHEME))
     }
 
+    // ------------------------------------------------------------ linux entry
+
+    /**
+     * ⚠⚠ THE EXEC PATH IS BARE. The Omarchy report (2026-11-07): the per-user
+     * entry was written, `~/.config/mimeapps.list` named it, `mimeinfo.cache`
+     * indexed it — and every notification click opened a blank browser tab.
+     * Under a desktop xdg-utils does not know (Hyprland), `xdg-open` resolves a
+     * handler with its own shell code: `command -v` on the first
+     * whitespace-split word of Exec. That word was `"/home/…` WITH its quote,
+     * so the entry was skipped as "binary gone" and the link fell through to
+     * `$BROWSER`. Bare is what every other entry on the machine does; the
+     * quoted form is kept for the paths the spec reserves it for
+     * (`LinuxSchemeTest`).
+     */
+    @Test
+    fun `THE EXEC PATH IS BARE — a quoted one is a handler xdg-open cannot run`() {
+        val exe = "/home/alex/.local/share/huginn-desktop/current/bin/huginn-desktop-kt"
+        val entry = SchemeRegistrar.linuxDesktopEntry(exe)
+        val lines = entry.lines()
+        assertTrue(lines.contains("Exec=$exe %u"), "the launcher path must stand bare before %u:\n$entry")
+        assertFalse(lines.any { it.startsWith("Exec=\"") }, "a quoted Exec is the field report:\n$entry")
+        assertTrue(lines.contains("MimeType=x-scheme-handler/huginn;"), entry)
+        assertTrue(lines.contains("Icon=/home/alex/.local/share/huginn-desktop/current/lib/huginn-desktop-kt.png"), entry)
+        assertTrue(lines.contains("Name=Huginn") && lines.contains("Type=Application") && lines.contains("Terminal=false"), entry)
+    }
+
     // --------------------------------------------------- the installer's half
 
     /**

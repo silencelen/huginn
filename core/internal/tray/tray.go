@@ -57,6 +57,9 @@ type role struct {
 	o        Options
 	notifier Notifier
 	lock     *os.File
+	// openURL is the OS's huginn:// handler (OpenURL), openApp's way when no
+	// desktop app is attached; a test records the call instead.
+	openURL func(target string)
 
 	mu        sync.Mutex
 	open      *systray.MenuItem
@@ -80,7 +83,7 @@ func Run(o Options) {
 	if o.Logger == nil {
 		o.Logger = log.Default()
 	}
-	r := &role{o: o}
+	r := &role{o: o, openURL: OpenURL}
 	if o.Lock != "" {
 		// The runtime dir is the core's to create; a tray at login can start
 		// before the core has ever run.
@@ -101,7 +104,10 @@ func Run(o Options) {
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
-	r.notifier = newNotifier(o.Logger)
+	// A click on a notification is an openApp like a menu row's: through the
+	// core to the attached app, not xdg-open (which a web browser answered
+	// where the huginn:// handler did not resolve to the app, 2026-11-07).
+	r.notifier = newNotifier(o.Logger, r.openApp)
 	waitForTaskbar()
 	go r.watchdog()
 	systray.Run(r.ready, func() {})
@@ -348,8 +354,9 @@ func (r *role) toApp(c traystate.GUICmd) bool {
 	return resp.StatusCode == http.StatusAccepted
 }
 
-// openApp brings the window up: through the core when the app is running (no
-// second process starting just to hand the click over), else by opening
+// openApp brings the window up — for the menu's Open Huginn, a "needs you"
+// row, or a click on a notification: through the core when the app is running
+// (no second process starting just to hand the click over), else by opening
 // huginn://, which starts it.
 func (r *role) openApp(target string) {
 	r.mu.Lock()
@@ -361,7 +368,7 @@ func (r *role) openApp(target string) {
 	if target == "" {
 		target = "huginn://open"
 	}
-	OpenURL(target)
+	r.openURL(target)
 }
 
 // showGUI shows or hides the app's items for what the core says of it.
@@ -461,7 +468,8 @@ func icoFromPNG(png []byte) []byte {
 // a machine without sending anything through appd (which would also reach the
 // phone). Returns the first error.
 func NotifyTest(hold time.Duration) error {
-	n := newNotifier(log.Default())
+	// No role here: a click on the sample opens huginn:// through the OS.
+	n := newNotifier(log.Default(), OpenURL)
 	err := n.Post(traystate.Notice{Action: "post", Key: "test:notify", Urgent: true,
 		Title: "huginn notification test", Body: "If you can read this, huginn core can reach you here.", URL: "huginn://open"})
 	if err != nil {

@@ -46,6 +46,7 @@ import com.silencelen.huginn.data.RouteFailures
 import com.silencelen.huginn.data.RouteGuard
 import com.silencelen.huginn.data.RouteHealth
 import com.silencelen.huginn.data.RouteResolver
+import com.silencelen.huginn.data.RestartResult
 import com.silencelen.huginn.data.Session
 import com.silencelen.huginn.data.Status
 import com.silencelen.huginn.ui.QuickActionRules
@@ -72,6 +73,8 @@ import kotlinx.coroutines.flow.stateIn
 import com.silencelen.huginn.desktop.update.UpdateState
 import com.silencelen.huginn.update.UpdateReminder
 import com.silencelen.huginn.ui.DashboardBook
+import com.silencelen.huginn.ui.FileDashboardShelf
+import java.io.File
 import com.silencelen.huginn.desktop.update.parkedThrough
 import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.isActive
@@ -1004,8 +1007,16 @@ class AppStore(
     private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
     val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
 
-    /** The last rollup each project answered with — see [DashboardBook]. */
-    private val dashboards = DashboardBook()
+    /**
+     * The last rollup each project answered with — see [DashboardBook] — shelved
+     * beside the settings file, so the first open after a relaunch draws what
+     * the project last said (with its own "as of") instead of "Nothing to show
+     * yet." until the daemon's first rollup lands. Tests isolate it for free:
+     * their settings file is in a temp dir, so the shelf is too.
+     */
+    private val dashboards = DashboardBook(
+        FileDashboardShelf(File(File(settings.path).absoluteFile.parentFile ?: File("."), "dashboards")),
+    )
 
     /** Set by [start]: the one place a walk may ask the daemon at once (tests never start). */
     @Volatile private var started = false
@@ -2178,12 +2189,64 @@ class AppStore(
             .onFailure { note(Faults.CHATS, it); refreshRounds() }
     }
 
-    suspend fun refreshSessions() {
+    suspend fun refreshSessions(fetch: suspend () -> List<Session> = { client.sessions(preview = true) }) {
         // preview=1: the list rows show what each session is doing, which is the
         // only thing that makes the list worth reading at a glance.
-        runCatching { client.sessions(preview = true) }
+        runCatching { fetch() }
             .onSuccess { landSessions(it); _sessionsLoaded.value = true; faults.ok(Faults.SESSIONS) }
             .onFailure { note(Faults.SESSIONS, it) }
+    }
+
+    // ------------------------------------------------------ restart to update
+
+    /**
+     * Restarts the daemon is HOLDING, by session, from each request's own answer
+     * ([RestartResult]): what it waits on, or that one was already under way.
+     * Drawn on the row the way a queued send is, so a reader who asked and
+     * walked away can see the restart is still owed. Swept in [landSessions]:
+     * the row reporting the cycle (`runtime.restarting`), a stale row coming
+     * back fresh, the session going, or [RESTART_HOLD_MS] passing (a daemon
+     * that dropped the job without a word) all end it.
+     */
+    private val _restartHolds = MutableStateFlow<Map<String, RestartHold>>(emptyMap())
+    val restartHolds: StateFlow<Map<String, RestartHold>> = _restartHolds.asStateFlow()
+
+    /**
+     * Ask the daemon to restart [name]'s Claude Code so it loads what a launch
+     * loads now (R5). A send-queue JOB on the host: 202 queues it and the answer
+     * names what holds it; a 409 `restarting` is one already under way, which is
+     * the outcome asked for. Any other refusal is the daemon's own sentence on
+     * the status line, like [reviveArchive]'s. [force] skips the `attached` hold
+     * only — sent only after the row's confirm, never by default.
+     *
+     * No refresh here: the hold is the immediate feedback, and the list poll
+     * brings the row's `runtime` round within its tick.
+     */
+    suspend fun restartSession(
+        name: String,
+        force: Boolean = false,
+        restart: suspend (String, Boolean) -> RestartResult = { n, f -> client.restartSession(n, f) },
+    ) {
+        val wasStale = _sessions.value.firstOrNull { it.name == name }?.runtime?.stale == true
+        runCatching { restart(name, force) }
+            .onSuccess { r ->
+                _restartHolds.value = _restartHolds.value +
+                    (name to RestartHold(r.blockedBy, r.alreadyQueued, wasStale, System.currentTimeMillis()))
+            }
+            .onFailure { note(Faults.ACTION, it) }
+    }
+
+    /** [landSessions]' half of [restartHolds]: which holds the new rows end. */
+    private fun sweepRestartHolds(rows: List<Session>, now: Long = System.currentTimeMillis()) {
+        val holds = _restartHolds.value
+        if (holds.isEmpty()) return
+        _restartHolds.value = holds.filter { (name, hold) ->
+            val rt = rows.firstOrNull { it.name == name }?.runtime ?: return@filter false
+            // Cycling now, or a stale row that came back fresh: the restart happened.
+            if (rt.restarting) return@filter false
+            if (hold.wasStale && !rt.stale) return@filter false
+            now - hold.at < RESTART_HOLD_MS
+        }
     }
 
     /**
@@ -2201,6 +2264,7 @@ class AppStore(
         val cancelled = WrapUpWatch.cancelled(windingDown, rows)
         windingDown = WrapUpWatch.winding(rows)
         _sessions.value = rows
+        sweepRestartHolds(rows)
         if (cancelled.isNotEmpty()) {
             _wrapUpNotices.value = _wrapUpNotices.value + cancelled.associateWith { WrapUpWatch.NOTICE }
         }
@@ -2857,3 +2921,24 @@ internal fun addressEdit(book: com.silencelen.huginn.data.RouteBook, typed: Stri
         else -> book.add("huginn", clean, now).let { b -> b.routes.lastOrNull()?.let { b.activate(it.id) } ?: b }
     }
 }
+
+/**
+ * A restart the daemon is holding for one session — see [AppStore.restartHolds].
+ *
+ * @property blockedBy what the daemon waits on (`running` · `dialog` · `draft` ·
+ *   `background` · `attached` · `load`), null when it was due at once.
+ * @property alreadyQueued the daemon answered 409 `restarting`: one was already
+ *   queued or running, nothing new was asked.
+ * @property wasStale whether the row read stale when the restart was asked, so a
+ *   row coming back fresh can be read as the restart having happened.
+ * @property at when it was asked, for the age-out.
+ */
+data class RestartHold(
+    val blockedBy: String?,
+    val alreadyQueued: Boolean,
+    val wasStale: Boolean,
+    val at: Long,
+)
+
+/** How long a hold is shown when the row never reports the cycle: a daemon that dropped the job. */
+internal const val RESTART_HOLD_MS: Long = 10 * 60 * 1000L

@@ -175,10 +175,14 @@ fun main(args: Array<String>) {
     // toast buttons answered "don't know how to open the link huginn". In the log
     // ring it rides along in "Copy diagnostics", which is where the next person
     // to ask "why did that button do nothing" will look.
+    // And PROVEN, not reported (SchemeRegistrar.LinuxScheme): the Omarchy field
+    // report had a registered handler xdg-open could not run, and the old line
+    // here said "registered" over it. A link that will not open the app is a
+    // warning, and the same sentence is on Settings → Notifications.
     val schemeStatus = SchemeRegistrar.register()
-    println("[huginn] $schemeStatus")
-    if (schemeStatus.startsWith("scheme registration failed")) AppLog.warn("notify", schemeStatus)
-    else AppLog.info("notify", schemeStatus)
+    println("[huginn] ${schemeStatus.sentence}")
+    if (schemeStatus.ok || !schemeStatus.relevant) AppLog.info("notify", schemeStatus.sentence)
+    else AppLog.warn("notify", schemeStatus.sentence)
 
     // Named in the diagnostics report, because which path a notification took is
     // the first thing worth knowing when one did not arrive. Null for NoNotifier,

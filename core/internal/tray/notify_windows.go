@@ -60,7 +60,11 @@ type toastNotifier struct {
 	script string
 }
 
-func newNotifier(l *log.Logger) Notifier {
+// newNotifier: open (what a click does with the notice's URL) is not used
+// here. A toast is activationType="protocol": the shell itself opens
+// toastLaunch(URL) through the registered huginn:// handler, and this process
+// is not in that path (it may not even be running when the toast is clicked).
+func newNotifier(l *log.Logger, _ func(target string)) Notifier {
 	dir := filepath.Join(os.Getenv("LOCALAPPDATA"), "huginn", "state", "toast")
 	os.MkdirAll(dir, 0o700)
 	script := filepath.Join(dir, "huginn-toast.ps1")

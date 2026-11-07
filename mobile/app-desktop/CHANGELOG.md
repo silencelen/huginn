@@ -1,5 +1,24 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Added
+- A session launched before the last server update carries a small "restart to update" mark (its tip
+  names the Claude Code versions when they differ), and the session menu has "Restart to pick up
+  updates": the server restarts Claude Code in place at a safe point and resumes the conversation.
+  While it is held the row says "restart queued" with the reason; while it runs the row shows the
+  starting state. When somebody is attached to the session the menu asks once before forcing it.
+
+### Fixed
+- The project page draws the last dashboard it had for a project at once, with its "as of" line, and
+  refreshes it in place; the dashboards are kept across navigation and relaunches (a small per-project
+  cache under the settings directory). "Nothing to show yet." is only for a project that never had one.
+- Notification links (`huginn://`) open the app on Linux desktops xdg-utils does not know (Hyprland and
+  other bare compositors). The per-user menu entry's Exec is the bare launcher path instead of a quoted
+  one, which xdg-open could not run and handed to the browser. At launch the app checks what xdg-mime
+  resolves, repairs the entry and the default, and says on Settings > Notifications when a link still
+  would not open it.
+
 ## 2.10.1
 
 ### Fixed
