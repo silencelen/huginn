@@ -3,6 +3,7 @@ package com.silencelen.huginn
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectRow
 import com.silencelen.huginn.ui.DashboardBook
+import com.silencelen.huginn.ui.DashboardShelf
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -67,5 +68,79 @@ class DashboardBookTest {
         assertTrue(DashboardBook.moved(dashboard("a", at = 100), dashboard("a", at = 0)))
         // Stamps are per answer, not per cluster: another project always lands.
         assertTrue(DashboardBook.moved(dashboard("a", at = 100), dashboard("b", at = 100)))
+    }
+
+    // ------------------------------------------------------------- the shelf
+
+    /** A shelf as a map of encoded files: what a directory would hold. */
+    private class MemoryShelf : DashboardShelf {
+        val files = mutableMapOf<String, String>()
+        override fun load(): Map<String, ProjectDashboard> = files.values.mapNotNull { DashboardBook.decode(it) }.toMap()
+        override fun save(id: String, dashboard: ProjectDashboard) { files[id] = DashboardBook.encode(id, dashboard) }
+        override fun remove(id: String) { files.remove(id) }
+    }
+
+    /**
+     * ⚠ "SEEMS TO HAVE NO CACHE" (R5, 2026-11-07). The book fixed the walk-back
+     * and not the relaunch: every start began empty, and the first open of each
+     * project read "Nothing to show yet." until the daemon's first rollup
+     * landed. A new book over the same shelf is a relaunch, and it draws at once.
+     */
+    @Test
+    fun `what a project last said survives a relaunch - a new book over the same shelf draws it at once`() {
+        val shelf = MemoryShelf()
+        assertTrue(DashboardBook(shelf).adopt("a", dashboard("a", at = 100)))
+
+        val relaunched = DashboardBook(shelf)
+        assertEquals(100L, relaunched.held("a")?.generatedAt, "drawn from the shelf, not null until the first fetch")
+        assertNull(relaunched.held("never"), "the empty text is only for a project no run ever had a rollup for")
+        // The refetch replaces it only when it has moved, and the shelf follows.
+        assertFalse(relaunched.adopt("a", dashboard("a", at = 100)), "the daemon re-sent the same rollup")
+        assertTrue(relaunched.adopt("a", dashboard("a", at = 101)))
+        assertEquals(101L, DashboardBook(shelf).held("a")?.generatedAt)
+    }
+
+    @Test
+    fun `forget and retain take the shelf's copy with them`() {
+        val shelf = MemoryShelf()
+        val book = DashboardBook(shelf)
+        book.adopt("a", dashboard("a", at = 1))
+        book.adopt("b", dashboard("b", at = 1))
+        book.adopt("c", dashboard("c", at = 1))
+        book.retain(listOf("a", "b"))
+        assertEquals(setOf("a", "b"), shelf.files.keys)
+        book.forget("a")
+        assertEquals(setOf("b"), shelf.files.keys)
+        assertEquals("b", DashboardBook(shelf).held("b")?.project?.id, "and a relaunch sees only what was kept")
+    }
+
+    @Test
+    fun `a shelf that cannot be read or written is an empty book, never a crash`() {
+        val broken = object : DashboardShelf {
+            override fun load(): Map<String, ProjectDashboard> = throw IllegalStateException("disk gone")
+            override fun save(id: String, dashboard: ProjectDashboard) = throw IllegalStateException("disk gone")
+            override fun remove(id: String) = throw IllegalStateException("disk gone")
+        }
+        val book = DashboardBook(broken)
+        assertNull(book.held("a"))
+        assertTrue(book.adopt("a", dashboard("a", at = 5)), "the book still works in memory")
+        assertEquals(5L, book.held("a")?.generatedAt)
+        book.retain(emptyList())
+        book.forget("a")
+        assertNull(book.held("a"))
+    }
+
+    @Test
+    fun `the shelf format round-trips, carries the id beside the rollup, and refuses what it cannot read`() {
+        val text = DashboardBook.encode("proj-1", dashboard("proj-1", at = 42))
+        val (id, back) = DashboardBook.decode(text) ?: error("did not decode: $text")
+        assertEquals("proj-1", id)
+        assertEquals(42L, back.generatedAt)
+        assertEquals("proj-1", back.project?.id)
+        assertNull(DashboardBook.decode("not json at all"))
+        assertNull(DashboardBook.decode("{}"), "no id is no entry")
+        assertNull(DashboardBook.decode("""{"id":"","dashboard":{}}"""), "an empty id is no entry")
+        // A field this client does not know (a newer app shelved it) is skipped, not fatal.
+        assertEquals("p", DashboardBook.decode("""{"id":"p","dashboard":{"generatedAt":7,"future":true}}""")?.first)
     }
 }
