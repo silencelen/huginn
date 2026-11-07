@@ -25,6 +25,12 @@ type dbusNotifier struct {
 	urls map[uint32]string // server id -> url opened on click
 	conn *dbus.Conn
 	icon string
+	// open gets the clicked notification's URL: the role's openApp, which
+	// hands it to the attached desktop app over /core/gui and only opens
+	// huginn:// through the OS when no app is here. It used to be OpenURL
+	// outright, and xdg-open on a laptop whose huginn:// handler did not
+	// resolve to the app sent the click to a web browser (2026-11-07).
+	open func(target string)
 }
 
 const (
@@ -32,8 +38,13 @@ const (
 	fdoPath = "/org/freedesktop/Notifications"
 )
 
-func newNotifier(l *log.Logger) Notifier {
-	n := &dbusNotifier{log: l, ids: map[string]uint32{}, urls: map[uint32]string{}}
+// newNotifier: open is what a click on a notification does with its URL (see
+// dbusNotifier.open); nil means the OS's huginn:// handler, as before.
+func newNotifier(l *log.Logger, open func(target string)) Notifier {
+	if open == nil {
+		open = OpenURL
+	}
+	n := &dbusNotifier{log: l, ids: map[string]uint32{}, urls: map[uint32]string{}, open: open}
 	// The raven, written once where a notification server can read it.
 	if dir, err := os.UserCacheDir(); err == nil {
 		p := filepath.Join(dir, "huginn", "notify-icon.png")
@@ -92,21 +103,30 @@ func (n *dbusNotifier) bus() (*dbus.Conn, error) {
 		c.Signal(ch)
 		go func() {
 			for sig := range ch {
-				if len(sig.Body) < 1 {
-					continue
-				}
-				id, _ := sig.Body[0].(uint32)
-				n.mu.Lock()
-				u := n.urls[id]
-				n.mu.Unlock()
-				if u != "" {
-					OpenURL(u)
-				}
+				n.clicked(sig)
 			}
 		}()
 	}
 	n.conn = c
 	return c, nil
+}
+
+// clicked is one ActionInvoked signal (id, action key). It is matched by the
+// notification's id — ours or not — and not by the key: the one action a
+// notice posts is "default", the body click, so any key on our id is the
+// person asking for that notice's target. The lock is released before open
+// runs: openApp waits on the core, and Post must not queue behind a click.
+func (n *dbusNotifier) clicked(sig *dbus.Signal) {
+	if len(sig.Body) < 1 {
+		return
+	}
+	id, _ := sig.Body[0].(uint32)
+	n.mu.Lock()
+	u := n.urls[id]
+	n.mu.Unlock()
+	if u != "" {
+		n.open(u)
+	}
 }
 
 func (n *dbusNotifier) Post(t traystate.Notice) error {
