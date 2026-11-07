@@ -1365,6 +1365,34 @@ class HuginnClient(
     }
 
     /**
+     * Asks the daemon to restart [name]'s Claude Code process so it picks up what
+     * a launch loads at start — MCP servers, hooks, settings, the `claude` binary
+     * — resuming the same Claude session in the same tmux session. A send-queue
+     * JOB like [refreshSessionContext]: 202 queues it, [RestartResult.blockedBy]
+     * naming what holds it. ⚠ A 409 `restarting` IS NOT A REFUSAL here, unlike
+     * [queue]'s: one is already queued or running, which is the outcome asked
+     * for, so it comes back queued with its reason. Any other code (404; 503
+     * when tmux cannot be observed; a 409 with any other reason) throws with the
+     * daemon's text, like every other route.
+     *
+     * [force] skips the `attached` hold ONLY, never the others, and the key is
+     * sent only when it is true, so an unforced call puts the same empty body
+     * on the wire as every other queue route.
+     */
+    suspend fun restartSession(name: String, force: Boolean = false): RestartResult {
+        val body = buildJsonObject { if (force) put("force", JsonPrimitive(true)) }
+        val resp = http().request { build("/v1/sessions/${seg(name)}/restart", HttpMethod.Post, Tier.NORMAL, body) }
+        val text = resp.bodyAsText()
+        if (resp.status.value == 409) {
+            val refusal = runCatching { decode<RestartResult>(text) }.getOrNull()
+            if (refusal?.alreadyQueued == true) return refusal.copy(queued = true)
+            throw errorFrom(resp.status.value, text)
+        }
+        if (!resp.status.isSuccess()) throw errorFrom(resp.status.value, text)
+        return decode<RestartResult>(text).copy(queued = true)
+    }
+
+    /**
      * The sessions account's Claude Code settings the daemon exposes, or NULL
      * when this daemon has no such route (pre-3.14.0) — the feature probe the
      * Settings row and the chat's fast option are gated on, in the same shape as
