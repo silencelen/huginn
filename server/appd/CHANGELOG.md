@@ -9,6 +9,31 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Added
+- Every session row carries `runtime: {stale, gen, current, claude, currentClaude, restarting}`: the
+  runtime generation the session's Claude Code was launched under — a hash of the `claude` binary,
+  `~/.claude/settings.json` less `fastMode`, the user-scope MCP registrations and the daemon version —
+  against the current one, re-read every minute. A session launched before generations were recorded
+  reads stale once. `/v1/watch` hashes `stale` and `restarting` and carries them as `runtime`;
+  `/v1/status` reports the current generation (`runtime`) and `cycleOnDeploy`.
+- `POST /v1/sessions/<name>/restart`: quit the session's Claude Code with `/exit` at a safe point and
+  relaunch it in the same tmux session with its captured flags and `--resume <id>`; a project session
+  as the reboot restore launches it. `202 {queued, blockedBy}` with `blockedBy` one of `running`,
+  `dialog`, `draft`, `background`, `attached`, `load`; `409 {reason: "restarting"}` while one is queued
+  or running, `409 {reason: "no-claude"}` with nothing to resume, `404`, `503`. `{force: true}` skips
+  the `attached` hold and the load gate. Messages queued meanwhile wait; nothing is dropped. A failed
+  relaunch is retried once after 60 s, then the session stays stale.
+- `HUGINN_APPD_CYCLE_ON_DEPLOY` (on by default): stale sessions are cycled on their own, one at a time,
+  oldest first, 30 s apart, only inside the host's `cpu.pressure` lull; an attached session is left
+  for a manual restart. A session under restart is exempt from the project reconcile, the registry
+  prune, the state sweep and the alert watcher.
+
+### Changed
+- A person's message or keystroke queued behind a held send-queue job (a restart, the usage ladder)
+  is delivered ahead of it instead of waiting with it.
+
 ## 3.18.0 — 2026-11-06
 
 ### Added

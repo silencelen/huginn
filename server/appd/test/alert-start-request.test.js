@@ -30,6 +30,7 @@ function watcher() {
   const copy = (o) => JSON.parse(JSON.stringify(o));
   const { fns } = lift(['alertTickInner'], {
     Date: FakeDate,
+    restarts: new Map(),        // no session is being cycled onto a new runtime generation here
     log: () => {},
     listSessions: async () => copy(world.sessions),
     chatStates: () => [],

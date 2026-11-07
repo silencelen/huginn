@@ -258,6 +258,29 @@ status line back. The daemon itself writes exactly one key, `fastMode`, for `PAT
 /v1/settings/claude`, through `rewriteClaudeSettings` in `huginn-appd.js` (the same rules again:
 parse first, through a link, mode kept, temp file and rename).
 
+### What a session loads at start, and the runtime generation
+
+A `claude` process reads its MCP servers (`mcpServers` in `~/.claude.json`, where `claude mcp add
+-s user` registers Huginn's), its hooks and settings (`~/.claude/settings.json`) and its own binary
+once, at start. A session started before a deploy or a `claude update` therefore keeps the old
+wiring until it is restarted: a session started 2026-10-27 still had no `start_session` tool on
+11-07, a tool registered 11-03. `server/appd/lib/runtime.js` hashes exactly those inputs — the
+binary's real path, size and mtime (not `claude --version`, which costs a process; the version
+string is read from the `package.json` beside the binary and reported, never hashed), the settings
+file less `fastMode` (the one key the daemon writes per toggle), the `mcpServers` object alone (the
+rest of `~/.claude.json` is rewritten by every running `claude`), and the daemon version — into the
+**runtime generation**, re-read every minute. The daemon records it on every session it launches
+(`runtimeGen` on the restore registry row) and reports `runtime` on every session row.
+
+A stale session is cycled (`cycleSession` in `huginn-appd.js`): the Claude Code process under the
+pane is found by walking the pane process's descendants in `/proc` (comm `claude`, argv[0]
+`claude`/`claude.exe`, or node running `claude-code/cli.js`; else the first non-shell), its exact
+argv read from `/proc/<pid>/cmdline`, `/exit` typed and submitted, and the pane respawned
+(`tmux respawn-pane -k`, which keeps the session, its birth time and any attached client) with
+`claude <flags> --resume <id>; exec "$SHELL" -l`, `--resume <id>` replacing any `--resume`, `-r`,
+`--continue` or `-c` the process had. A project session is relaunched with
+`projectRestoreCommand`, as after a reboot. Verified against 2.1.316.
+
 ## Headless runs (`claude -p`)
 
 | Caller | Arguments (after `claude`) | Prompt |
@@ -329,7 +352,8 @@ host's `fastMode` decides. Device runs do not carry it.
 | `claude auth status` | parsed as JSON: `loggedIn`, `email`, `orgName`, `subscriptionType`, `authMethod`, `apiProvider` |
 | `claude auth login` in a tmux session named `login` | sign-in from the apps; the pane is read for the URL and the result |
 | `claude auth logout` | sign-out from the apps |
-| `claude --version` | reported in `GET /v1/status`, cached for an hour |
+| `claude --version` | reported in `GET /v1/status`, cached for an hour; and the runtime generation's `currentClaude` where no `package.json` sits beside the binary |
+| `/exit` typed at the composer | ends a session's Claude Code for a restart (`POST /v1/sessions/<name>/restart`, the sweep). Measured on 2.1.316 (2026-11-07): the slash-command menu opens on the typed text with `/exit` highlighted, Enter runs it, the process exits at once with no confirmation, and the pane falls through to what follows `claude` in its command. Typed and submitted through the same look-before-Enter path a message takes (`enterAfterLook`); a pane with no composer gets `SIGTERM` instead. |
 
 ## Files Huginn reads
 
@@ -663,6 +687,16 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     '{"fastMode":…}'` flag on a chat run, and `fastModePerSessionOptIn`, are behaviours: verify on
     a throwaway session that a `/fast on` in one session leaves another alone. Tests:
     `statusline.test.js`, `transcript.test.js`, `routes-context-fast.test.js`.
+25. **`/exit` and the relaunch** (`cycleSession`): that `/exit` typed at the composer still quits
+    the process at once with no confirmation (a dialog added here would hold every restart as
+    `dialog` with `/exit` left in the box), that `--resume <id>` still takes the conversation back
+    in the same working directory, that the process in the pane is still found by the names under
+    [What a session loads at start](#what-a-session-loads-at-start-and-the-runtime-generation)
+    (comm `claude`, `claude.exe`, `claude-code/cli.js`), and that the generation's inputs are
+    still what a session loads at start — a new per-session file Claude Code reads at launch
+    belongs in `lib/runtime.js`. Tests: `runtime.test.js`, `routes-restart.test.js`,
+    `routes-restart-sweep.test.js` (a stand-in `claude` that quits on `/exit` and records its
+    argv: `test/fixtures/fake-claude.js`).
 
 ### Capturing a new fixture
 

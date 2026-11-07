@@ -125,7 +125,7 @@ All routes need the token except `GET /v1/challenge`.
 |---|---|---|
 | GET | `/v1/challenge` | **Unauthenticated: no token.** `?nonce=<16-64 hex>` returns `{version, tls: {v, fp, proof}}` over HTTPS, and `{proof, version}` over plain HTTP (this host only, by default) for clients older than 3.11. Limited to 20 requests per second per address. |
 | GET | `/v1/ping` | `{ok, version, host, via: {addr, port}, secure}`: liveness, and which of the server's addresses you reached. Requires the bearer token, like every route except the challenge. |
-| GET | `/v1/status` | Server health: uptime, load, disk, Claude Code version, the server's addresses, session and chat counts, usage summary, quick-action wording. |
+| GET | `/v1/status` | Server health: uptime, load, disk, Claude Code version, the server's addresses, session and chat counts, usage summary, quick-action wording, `cycleOnDeploy` and the current runtime generation (`runtime: {gen, claude, since}`; see [Runtime generation and restart](#runtime-generation-and-restart)). |
 | PATCH | `/v1/quick-actions` | Change the wording behind the quick-reply buttons. Current values come with `/v1/status`. |
 | GET | `/v1/models` | The models the installed Claude Code offers. `?local=1` adds models served by local-AI devices. |
 | GET | `/v1/watch` | Change signal. See [Streams](#streams). |
@@ -156,7 +156,7 @@ All routes need the token except `GET /v1/challenge`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. `?preview=1` adds titles and activity previews. |
+| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. Every row carries `runtime` (see [Runtime generation and restart](#runtime-generation-and-restart)). `?preview=1` adds titles and activity previews. |
 | GET | `/v1/sessions/recent-dirs` | The directories recent sessions started in (the server default first), for the create dialog. |
 | POST | `/v1/sessions` | `{name, cwd?}`: create a session running Claude Code, in `cwd` (an existing directory on the server) or the server default. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
@@ -170,6 +170,7 @@ All routes need the token except `GET /v1/challenge`.
 | POST | `/v1/sessions/<name>/questions/<id>` | Answer one request, with its `fingerprint` (required). An ask: `{answers: {"<question text>": string \| string[]}, annotations?, response?}` with every question answered (a list only for a multi-select). A permission: `{behavior: "allow", updatedPermissions?}` (entries from `suggestions` only) or `{behavior: "deny", message?}`. A plan: `{behavior: "allow", mode?: "auto"}` or `{behavior: "deny", message}`. A session request: `{behavior: "allow", start: true, id: "<this question's id>", name?}` creates the session in `input.directory` (named `name`, else the request's name, else after the directory) and queues `input.prompt` to it through the send queue, answering `200 {ok, via: "daemon", started: true, name, cwd, delivered, queued}` — or the create's own `400`/`409` with `error` and the still-waiting `question`, so you can answer again with another `name` or decline. **`start: true` and the echoed `id` are required**: they are what the session card sends after showing the whole prompt, and an allow without them (the permission shape `{behavior: "allow"}`, a wrong or missing `id`) is refused `409 {reason: "unsupported", error: "this request needs the session card — update the app"}` with the request left waiting — not declined, nothing started. For a session request the `fingerprint` is a full content hash over `{directory, prompt, name}` (treat it as opaque; do not assume its length), so a request whose file was rewritten after the card was drawn no longer matches and is refused `409 {reason: "changed"}` with nothing started. `{behavior: "deny", message?}` answers `200 {ok, via: "daemon", started: false}` and the prompt goes nowhere. Otherwise `200 {ok, via: "hook" \| "keys"}`; `409 {reason: "gone" \| "changed" \| "unbound"}`. |
 | POST | `/v1/sessions/<name>/answer` | `{option, fingerprint}`, or `{options: [...], fingerprint}` for a multiple choice: answer the question on screen by its row number. With a question's `fingerprint` from the registry the answer goes through that request's hook; with the pane's it types the row. A question of kind `session` is never answered by row: `409 {reason: "unsupported"}`, the request stays waiting, and only `POST .../questions/<id>` with the session card's body starts it. `409` (`gone`, `changed`, `undetected`) if that question is gone. |
 | POST | `/v1/sessions/<name>/soft-end` | `{phrase?, auto?, force?}`: ask Claude Code to wrap up, then end the session once it settles. |
+| POST | `/v1/sessions/<name>/restart` | `{force?: true}`: quit the session's Claude Code with `/exit` at a safe point and bring the same conversation back on the current runtime generation, in the same tmux session (see [Runtime generation and restart](#runtime-generation-and-restart)). `202 {queued: true, blockedBy}` with `blockedBy` `null` or what holds it: `running`, `dialog`, `draft`, `background`, `attached`, `load`. `409 {reason: "restarting"}` when one is already queued or running; `409 {reason: "no-claude"}` when no Claude session is recorded here (nothing to resume); `404`; `503` when tmux cannot be observed. |
 | POST | `/v1/sessions/<name>/compact` | Ask the session to compact its context. |
 | GET | `/v1/sessions/<name>/context` | `{context, model, breakdown}`: the live context window and model (from the status line, see below) and the last `/context` table Claude Code wrote, parsed: `breakdown: {asOf (ms), uuid, totalTokens, maxTokens, percent, categories: [{id, name, tokens, percent, kind}], autocompactWindow, autocompactSource, model: {display, id}, mcpTools: [{name, tokens}], mcpAvailable: [name], skills: [{name, tokens}]}`, or `null` until the session has run `/context`. `kind` is `used`, `free`, `buffer` or `deferred`; ids are Claude Code's (`system_prompt`, `system_tools`, `mcp_tools`, `mcp_instructions`, `mcp_tools_deferred`, `system_tools_deferred`, `custom_agents`, `memory_files`, `skills`, `messages`, `autocompact_buffer`, `compact_buffer`, `free_space`). |
 | POST | `/v1/sessions/<name>/context/refresh` | Type `/context` into the session, through the send queue: `202 {queued, delivered, blockedBy}`. Sent mid-turn, Claude Code runs it when the turn ends; the next GET has the table. `409 {reason, error}` when it cannot be queued: `shell` (no Claude Code here, or its prompt is in shell mode), `dialog` (a question is on screen), `busy` (the same command is already waiting). |
@@ -194,6 +195,46 @@ or `null`) and `cost: {usd, durationMs, apiMs, linesAdded, linesRemoved}`. Each 
 a record, and a record older than six hours or from another Claude session under the same name is
 ignored. `contextPercent` keeps being served for older clients, filled from `context.percent`,
 else from a status line drawn in the `[name] Model · ctx N%` shape.
+
+### Runtime generation and restart
+
+A Claude Code process loads its MCP servers, hooks, settings and binary once, at start, so a
+session started before a deploy or a `claude update` keeps the old wiring until it is restarted.
+The daemon hashes what a session loads — the `claude` binary's identity (its real path, size and
+modification time), the sessions account's `~/.claude/settings.json` (all of it but `fastMode`,
+the one key the daemon writes itself), the user-scope `mcpServers` of `~/.claude.json`, and the
+daemon's own version, which stands for the hooks and the MCP server it installed — into a short
+**generation**, re-reads the inputs every minute, and records the generation on every session it
+launches (a session started outside the daemon takes the generation current at its birth).
+
+Every session row carries `runtime: {stale, gen, current, claude, currentClaude, restarting}`:
+`gen` is the generation the session was launched under (`null` when none was recorded, which is a
+session that was running before the daemon learned generations and counts as stale once),
+`current` the daemon's, `claude` and `currentClaude` the Claude Code versions, `stale` whether
+the two generations differ, and `restarting` whether the session's Claude is being cycled right
+now. `/v1/watch` hashes `stale` and `restarting` and carries them as `runtime: {<name>: {stale,
+restarting}}`, so a client learns of either without polling rows.
+
+`POST /v1/sessions/<name>/restart` queues the restart as a send-queue job. At a turn boundary
+with an empty prompt the daemon re-checks the safe point — idle, no dialog, nothing in the box,
+no background shells or agents, no attached terminal, the host inside the CPU-pressure lull the
+release cuts wait for — captures the `claude` process's flags from `/proc`, asks it to quit with
+`/exit` (a signal only if the prompt is gone), and relaunches it in the same tmux session and
+directory with the same flags and `--resume <claudeSessionId>` in place of any `--resume` or
+`-c`. A project session is relaunched as the reboot restore launches it: its persona, its effort,
+its model only when nothing resumes. Messages queued meanwhile wait and are delivered once the
+prompt is back; nothing is dropped. `{force: true}` skips the `attached` hold and the load gate
+for that one restart and nothing else. A job that finds no turn boundary within ten minutes gives
+up (the row reads `stale` again); a relaunch that fails is retried once after 60 s and then left
+`stale` for a manual restart. The journal has one line per outcome, `restart: <name>: <old gen>
+-> <new gen>`.
+
+With `HUGINN_APPD_CYCLE_ON_DEPLOY` on, the default (`0` in `site.conf` turns it off; `/v1/status`
+reports it as `cycleOnDeploy`), the daemon cycles stale sessions on its own: one at a time,
+oldest first, each at its own safe point, 30 s apart, and only while the host is in its lull. An
+attached session is skipped and stays `stale` for a manual restart. A session under restart is
+exempt from the project reconcile, the restore-registry prune, the state sweep and the alert
+watcher, so a cycle sends no `session_finished` or `session_resolved`.
 
 ### Chats
 

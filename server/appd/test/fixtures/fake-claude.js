@@ -119,6 +119,32 @@ const SHELL_GHOST = process.env.HG_FAKE_CLAUDE_SHELL_GHOST || '';
 const TRUECOLOR = process.env.HG_FAKE_CLAUDE_TRUECOLOR === '1';
 let shellMode = false;
 
+/**
+ * The session-cycling knobs (appd 3.19.0), modelled on 2.1.316 (2026-11-07, a
+ * throwaway session on a private socket):
+ *   HG_FAKE_CLAUDE_ARGV_OUT        a file that gets one JSON line of this process's
+ *                                  flags (argv after the script) at every start —
+ *                                  how a test proves a relaunch replayed the argv
+ *                                  and put `--resume <id>` in. `/exit` typed at the
+ *                                  composer quits the process at once, as the real
+ *                                  CLI does (no confirmation; the pane falls through
+ *                                  to whatever follows `claude` in its command), and
+ *                                  notes `exit` in `<file>.exit` first.
+ *   HG_FAKE_CLAUDE_DIE_WITH_RESUME '1': a start carrying `--resume` exits 1 at once,
+ *                                  before any composer — a relaunch that fails.
+ */
+const ARGV_OUT = process.env.HG_FAKE_CLAUDE_ARGV_OUT || '';
+const FLAGS = process.argv.slice(2);
+const RESUME_ID = (() => {
+  const i = FLAGS.indexOf('--resume');
+  return i >= 0 && FLAGS[i + 1] && !FLAGS[i + 1].startsWith('-') ? FLAGS[i + 1] : null;
+})();
+if (ARGV_OUT) fs.appendFileSync(ARGV_OUT, `${JSON.stringify(FLAGS)}\n`);
+if (process.env.HG_FAKE_CLAUDE_DIE_WITH_RESUME === '1' && FLAGS.includes('--resume')) {
+  process.stdout.write('Error: nothing to resume\n');
+  process.exit(1);
+}
+
 /** The box, with the status lines UNDER it — the shape that matters. */
 const RULE = '─'.repeat(70);
 function drawComposer(typed = '') {
@@ -215,6 +241,14 @@ process.stdin.on('data', (d) => {
       shellMode = false;
       continue;
     }
+    // `/exit` quits, as 2.1.316 does: the process ends and the pane runs whatever
+    // follows `claude` in its command. Nothing is written to OUT — the line was
+    // not a message.
+    if (line.trim() === '/exit') {
+      if (ARGV_OUT) fs.appendFileSync(`${ARGV_OUT}.exit`, 'exit\n');
+      process.stdout.write('\nGoodbye!\n');
+      process.exit(0);
+    }
     fs.appendFileSync(OUT, `${line}\n`);
     // What a submitted message looks like in the pane: it leaves the composer,
     // is echoed above it, and the box redraws empty underneath.
@@ -232,6 +266,8 @@ setTimeout(() => {
     : 'Claude Code v2.1.258\n'
     + 'Permission allow rule (settings): a wildcard before the rest of the command\n'
     + 'matches more than it looks like it does.\n');
+  // A resumed conversation says which, where a pane capture can read it.
+  if (RESUME_ID) process.stdout.write(`Resuming ${RESUME_ID}\n`);
   setTimeout(() => {
     if (TRUST) { drawTrust(); return; }   // never accepting: a blind Enter here exits
     accepting = true;
