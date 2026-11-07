@@ -1089,6 +1089,8 @@ fun HuginnApp(
     var renameText by remember { mutableStateOf("") }
     var killTarget by remember { mutableStateOf<String?>(null) }
     var softEndTarget by remember { mutableStateOf<String?>(null) }
+    // The session whose restart is waiting on the one attached-terminal question.
+    var restartTarget by remember { mutableStateOf<String?>(null) }
     var deleteChatTarget by remember { mutableStateOf<String?>(null) }
     // The project to wind down, by id. See the End project dialog below.
     var endProjectTarget by remember { mutableStateOf<String?>(null) }
@@ -1304,6 +1306,31 @@ fun HuginnApp(
                 }) { Text("Send wrap-up") }
             },
             dismissButton = { TextButton(onClick = { softEndTarget = null }) { Text("Cancel") } },
+        )
+    }
+    // Asked ONCE, and only over an attached terminal: the daemon holds an
+    // unforced restart behind `attached` for as long as the terminal stays, so
+    // the answer here is what lets the restart go through (`force` skips that
+    // hold and no other). Not destructive — the conversation resumes — so the
+    // default button colour, as the wrap-up above.
+    restartTarget?.let { name ->
+        AlertDialog(
+            onDismissRequest = { restartTarget = null },
+            title = { Text("Restart $name?") },
+            text = {
+                Text(
+                    com.silencelen.huginn.ui.SessionRestart.ATTACHED_QUESTION + " Claude Code quits at the next " +
+                        "turn boundary and resumes the same conversation with what a launch loads now; " +
+                        "whoever is attached sees it go and come back.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.restartSession(name, force = true)
+                    restartTarget = null
+                }) { Text("Restart") }
+            },
+            dismissButton = { TextButton(onClick = { restartTarget = null }) { Text("Cancel") } },
         )
     }
     deleteChatTarget?.let { id ->
@@ -2261,6 +2288,18 @@ fun HuginnApp(
                                             add(HouseMenuItem("Fit pane to phone") { vm.forceFit() })
                                             add(HouseMenuItem("Interrupt (Esc)") { vm.interruptSession(d.name) })
                                             add(HouseMenuItem("Compact context") { vm.compactSession(d.name) })
+                                            // Restart to pick up what a launch loads (appd 3.19).
+                                            // Offered only on a row the daemon has stamped with
+                                            // a runtime cell — an older daemon has no route — and
+                                            // asked about once when a terminal is attached, since
+                                            // that is the one hold `force` may skip.
+                                            val row = sessions.firstOrNull { it.name == d.name }
+                                            if (com.silencelen.huginn.ui.SessionRestart.offered(row)) {
+                                                add(HouseMenuItem(com.silencelen.huginn.ui.SessionRestart.MENU_LABEL) {
+                                                    if (com.silencelen.huginn.ui.SessionRestart.needsConfirm(row)) restartTarget = d.name
+                                                    else vm.restartSession(d.name)
+                                                })
+                                            }
                                             // The pair, in the two tones — same words and
                                             // same token as the session list's row menu and
                                             // the desktop's right-click. See EndVerbs.
