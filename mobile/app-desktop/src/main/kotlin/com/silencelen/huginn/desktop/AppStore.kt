@@ -72,6 +72,8 @@ import kotlinx.coroutines.flow.stateIn
 import com.silencelen.huginn.desktop.update.UpdateState
 import com.silencelen.huginn.update.UpdateReminder
 import com.silencelen.huginn.ui.DashboardBook
+import com.silencelen.huginn.ui.FileDashboardShelf
+import java.io.File
 import com.silencelen.huginn.desktop.update.parkedThrough
 import kotlinx.coroutines.flow.runningFold
 import kotlinx.coroutines.isActive
@@ -1004,8 +1006,16 @@ class AppStore(
     private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
     val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
 
-    /** The last rollup each project answered with — see [DashboardBook]. */
-    private val dashboards = DashboardBook()
+    /**
+     * The last rollup each project answered with — see [DashboardBook] — shelved
+     * beside the settings file, so the first open after a relaunch draws what
+     * the project last said (with its own "as of") instead of "Nothing to show
+     * yet." until the daemon's first rollup lands. Tests isolate it for free:
+     * their settings file is in a temp dir, so the shelf is too.
+     */
+    private val dashboards = DashboardBook(
+        FileDashboardShelf(File(File(settings.path).absoluteFile.parentFile ?: File("."), "dashboards")),
+    )
 
     /** Set by [start]: the one place a walk may ask the daemon at once (tests never start). */
     @Volatile private var started = false

@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## [Unreleased]
+
+### Fixed
+- The project page draws the last dashboard it had for a project at once, with its "as of" line, and
+  refreshes it in place; the dashboards are kept across navigation and relaunches (a small per-project
+  cache under the settings directory). "Nothing to show yet." is only for a project that never had one.
+
 ## 2.10.1
 
 ### Fixed
