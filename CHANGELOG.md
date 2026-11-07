@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- `huginn desktop install` writes the menu entry's Exec as the bare launcher path (quoted only when the
+  path needs it), reads the `huginn://` handler back with xdg-mime and warns when it does not resolve
+  to the entry.
+
 ## [2.10.1] - 2026-11-04
 
 ### Changed
