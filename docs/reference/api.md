@@ -312,7 +312,7 @@ and whose requests it surfaces to you:
 | POST | `/v1/projects` | `{name, kind, brief, cwd?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. |
 | GET, PATCH | `/v1/projects/<id>` | View or change one. `PATCH` needs the current `rev`. |
 | DELETE | `/v1/projects/<id>` | Delete it. `?end=graceful` (or `{end: "graceful" \| "now"}`) also ends its sessions. |
-| GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. |
+| GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. The answer leaves within about a second: a member whose transcript is still being read carries `pending: true` with its last known numbers (or zero), `pending` counts such members, and the next poll has the rest. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
 | POST | `/v1/projects/<id>/discard` | Send a proposal back to the lead. |
 | POST | `/v1/projects/<id>/approve-change` | `{rev, token}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. Both fields are required (`400` without). `409` with the current project when `rev` is not the change on offer, or when `token` is not the token of the change now waiting — the lead rewrote its block after the card was drawn; redraw from the project returned. |

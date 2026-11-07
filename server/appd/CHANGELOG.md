@@ -34,6 +34,14 @@ version number collided. Entries below are reconstructed from the shipping commi
 - A person's message or keystroke queued behind a held send-queue job (a restart, the usage ladder)
   is delivered ahead of it instead of waiting with it.
 
+### Fixed
+- `GET /v1/projects/<id>/dashboard` no longer waits for its members' transcripts one after another:
+  cold members are read four at a time, and the answer leaves within 1 s with the numbers that are
+  ready. A member still being read carries `pending: true` with its last known numbers (or zero), the
+  dashboard counts them in `pending`, and the next poll has the rest; a warm member is not re-read.
+  One such read serves every client polling the project. The route had a median of 38 ms and a tail
+  to 8.6 s, during which the page showed "Nothing to show yet.".
+
 ## 3.18.0 — 2026-11-06
 
 ### Added

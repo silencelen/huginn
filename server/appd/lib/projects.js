@@ -1140,28 +1140,83 @@ function aggregateDashboard(rows) {
  * assertion, and it is not one a live daemon can be asked for.
  */
 function rollupMembers(members, opts) {
-  const steps = rollupSteps(members, opts);
-  let r = steps.next();
-  while (!r.done) r = steps.next(opts.overview(...r.value));
-  return r.value;
+  const plan = rollupPlan(members, opts);
+  for (const ask of plan.asks) rollupLand(plan, ask, opts.overview(ask.member.transcript, ask.member.sessionId), opts.cache);
+  return plan.rows;
 }
 
 /**
- * rollupMembers with an `overview` that returns a promise — the daemon's, which
- * walks a cold member without holding the event loop (sessionOverviewAsync).
- * The same rule, by construction: both drivers run rollupSteps, which yields
- * the [transcript, sessionId] of each member it has to ask about.
+ * rollupMembers with an `overview` that returns a promise — walking a cold
+ * member without holding the event loop (sessionOverviewAsync) — one member
+ * after another. The same rule, by construction: every driver runs rollupPlan,
+ * which decides what has to be asked about, and rollupLand, which records it.
  */
 async function rollupMembersAsync(members, opts) {
-  const steps = rollupSteps(members, opts);
-  let r = steps.next();
-  while (!r.done) r = steps.next(await opts.overview(...r.value));
-  return r.value;
+  const plan = rollupPlan(members, opts);
+  for (const ask of plan.asks) rollupLand(plan, ask, await opts.overview(ask.member.transcript, ask.member.sessionId), opts.cache);
+  return plan.rows;
 }
 
-function* rollupSteps(members, { cache, sizeOf, agentBytesOf = () => 0, now = Date.now() }) {
+/**
+ * The cold members asked about CONCURRENTLY, `limit` at a time, with a cap on
+ * how long the answer waits for them (2026-11-07).
+ *
+ * ⚠ THE DASHBOARD WAS SERIAL AND UNBOUNDED. `GET /v1/projects/<id>/dashboard`
+ * awaited one cold member's walk after the next, so a project with several
+ * cold members (after a daemon restart, or the graph LRU) answered in the SUM
+ * of their walks: median 38 ms, p99 109 ms, and a tail of 8.6 s (11 s on an
+ * earlier day), during which the page showed "Nothing to show yet." and every
+ * request behind it on the same connection waited. Now the cold members are
+ * walked `limit` at a time, and the answer leaves at `capMs` with what has
+ * finished: a member still being walked is reported with its LAST KNOWN
+ * overview (the cache's previous entry, however old — never nothing when there
+ * was something) and `pending: true`, and its walk runs on to completion so the
+ * next poll finds it warm. A warm member costs nothing here, as before.
+ *
+ * `overview(file, id)` resolves an overview; `setTimer`/`clearTimer` are
+ * injectable so the cap can be asserted without waiting it out. Resolves
+ * `{rows, pending}`: the rows as rollupMembers returns them, `pending` on the
+ * members the cap left behind, and how many those are.
+ */
+async function rollupMembersConcurrent(members, opts) {
+  const { cache, overview, limit = 4, capMs = Infinity, setTimer = setTimeout, clearTimer = clearTimeout } = opts;
+  const plan = rollupPlan(members, opts);
+  if (!plan.asks.length) return { rows: plan.rows, pending: 0 };
+  let next = 0;
+  let landed = 0;
+  const worker = async () => {
+    while (next < plan.asks.length) {
+      const ask = plan.asks[next++];
+      let o = null;
+      try { o = await overview(ask.member.transcript, ask.member.sessionId); } catch { o = null; }
+      rollupLand(plan, ask, o, cache);
+      landed += 1;
+    }
+  };
+  const pool = Promise.all(Array.from({ length: Math.max(1, Math.min(limit, plan.asks.length)) }, worker));
+  if (Number.isFinite(capMs) && capMs >= 0) {
+    let timer = null;
+    const cap = new Promise((resolve) => { timer = setTimer(() => resolve('cap'), capMs); });
+    await Promise.race([pool, cap]);
+    if (timer !== null) clearTimer(timer);
+  } else {
+    await pool;
+  }
+  // A snapshot: a worker landing after this return must not change what was
+  // answered. The workers go on; the cache learns what they find.
+  return { rows: [...plan.rows], pending: plan.asks.length - landed };
+}
+
+/**
+ * The cache rule, as a PLAN: which members are answered from the cache now,
+ * and which have to be asked about — `asks`, each with the row index its answer
+ * lands in. Until it lands, that row holds the member's last known overview (if
+ * the cache had one, at another size) and `pending: true`. Pure.
+ */
+function rollupPlan(members, { cache, sizeOf, agentBytesOf = () => 0, now = Date.now() }) {
   const nowSec = Math.floor(now / 1000);
   const rows = [];
+  const asks = [];
   for (const m of members || []) {
     if (!m.sessionId || !m.transcript) { rows.push({ ...m, overview: null }); continue; }
     const size = sizeOf(m.transcript);
@@ -1179,11 +1234,19 @@ function* rollupSteps(members, { cache, sizeOf, agentBytesOf = () => 0, now = Da
       rows.push({ ...m, overview: overviewAt(hit.overview, nowSec) });
       continue;
     }
-    const o = yield [m.transcript, m.sessionId];
-    cache.set(m.sessionId, { size, agentBytes, file: m.transcript, overview: o });
-    rows.push({ ...m, overview: o });
+    asks.push({ index: rows.length, member: m, size, agentBytes });
+    // The last known overview is the same conversation's only when the file is:
+    // a smaller file at the path is another conversation, and shows nothing.
+    const known = hit && hit.file === m.transcript && size >= hit.size ? overviewAt(hit.overview, nowSec) : null;
+    rows.push({ ...m, overview: known, pending: true });
   }
-  return rows;
+  return { rows, asks };
+}
+
+/** An ask answered: the cache learns it and the row takes it. */
+function rollupLand(plan, ask, o, cache) {
+  cache.set(ask.member.sessionId, { size: ask.size, agentBytes: ask.agentBytes, file: ask.member.transcript, overview: o });
+  plan.rows[ask.index] = { ...ask.member, overview: o };
 }
 
 /**
@@ -1222,6 +1285,9 @@ function dashboardMemberRow(row) {
     pendingSends: row.pendingSends ?? 0,
     headroom: row.headroom ?? null,
     title: row.title ?? null,
+    // Its transcript was still being read when the answer left (rollupMembersConcurrent):
+    // the numbers below are its last known, or zero; the next poll has the rest.
+    pending: !!row.pending,
     turns: t ? t.turns : 0,
     tokens: t ? t.tokens : zeroTokens(),
     estCostUsd: t && t.estCost ? t.estCost.usd : null,
@@ -1342,6 +1408,6 @@ module.exports = {
   changeAppliedFrame, changeDeclinedFrame, reroleFrame, changePush, LEAD_TEXT_RULE,
   liveRoster, manifestDiff, diffIsEmpty, memberCapProblem, pendingChangeFor, pendingChangeRow, changeToken, canonicalJson,
   memberList, membershipIndex, sessionProjectTag, joinMembers, reconcilePlan, confirmPlan, absenceKey,
-  aggregateDashboard, rollupMembers, rollupMembersAsync, dashboardMemberRow,
+  aggregateDashboard, rollupMembers, rollupMembersAsync, rollupMembersConcurrent, dashboardMemberRow,
   memberRow, projectRow, publicProject, sortProjects,
 };

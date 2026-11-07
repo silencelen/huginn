@@ -4762,7 +4762,7 @@ async function reconcileSessionRegistryPass() {
   // and reads stale once.
   for (const e of Object.values(merged)) {
     if (e.runtimeGen) continue;
-    const g = runtimeLib.assignGen({ createdAt: e.createdAt, current: runtimeNow });
+    const g = runtimeLib.assignGen({ createdAt: e.createdAt, current: currentRuntime() });
     if (g) { e.runtimeGen = g.gen; e.runtimeClaude = g.claude; }
   }
   const keep = new Set(Object.keys(merged).filter((name) => !gone.has(name)));
@@ -4986,18 +4986,35 @@ function shortClaudeVersion(text) {
   return v && v !== 'unknown' ? v : null;
 }
 
+/**
+ * The current generation, its version string filled in from the hourly
+ * `claude --version` the status route asks (claudeVersion) where no install sat
+ * beside the binary to read it from. Read here, on the way out, rather than
+ * written from claudeVersion: that function is lifted into a sandbox by the
+ * status-probe tests, and a new free name in it fails them.
+ */
+function currentRuntime() {
+  if (runtimeNow && !runtimeNow.claude) {
+    const v = shortClaudeVersion(cachedClaudeVersion);
+    if (v) { runtimeNow.claude = v; saveRuntimeFile(); }
+  }
+  return runtimeNow;
+}
+
 /** The fields a launch records on its registry row: the generation it was launched under. */
 function launchGenFields() {
-  return runtimeNow ? { runtimeGen: runtimeNow.gen, runtimeClaude: runtimeNow.claude || null } : {};
+  const now = currentRuntime();
+  return now ? { runtimeGen: now.gen, runtimeClaude: now.claude || null } : {};
 }
 
 /** The `runtime` row field for one session (lib/runtime runtimeFor). */
 function runtimeOf(name, createdAt, reg = null) {
   const e = (reg || registryCached())[name];
+  const current = currentRuntime();
   const recorded = e && e.runtimeGen
     ? { gen: e.runtimeGen, claude: e.runtimeClaude || null }
-    : runtimeLib.assignGen({ createdAt, current: runtimeNow });
-  return runtimeLib.runtimeFor({ recorded, current: runtimeNow, restarting: underRestart(name) });
+    : runtimeLib.assignGen({ createdAt, current });
+  return runtimeLib.runtimeFor({ recorded, current, restarting: underRestart(name) });
 }
 
 /** Is this session's Claude being quit and relaunched right now? */
@@ -9312,6 +9329,38 @@ function rememberOverview(key, value) {
   }
 }
 
+/**
+ * How long a dashboard answer waits for a member whose transcript has to be
+ * walked, and how many such walks run at once (projectsLib
+ * rollupMembersConcurrent). The cap is a TEST-ONLY knob, clamped like the others.
+ *
+ * ⚠ 2026-11-07: measured from the retained journal, `GET /v1/projects/<id>/
+ * dashboard` had a median of 38 ms, a p99 of 109 ms — and 8 answers over 1 s,
+ * 3 over 5 s, the worst 8.6 s (11 s on an earlier scan): the cold members of a
+ * project were walked one after another, and the page said "Nothing to show
+ * yet." for the sum of them.
+ */
+const DASHBOARD_CAP_MS = Math.max(20, Math.min(60_000, Number(process.env.HUGINN_APPD_DASHBOARD_CAP_MS) || 1_000));
+const DASHBOARD_WALKS_AT_ONCE = 4;
+
+/**
+ * One walk per member however many dashboard polls ask for it: a cold member
+ * that two clients poll every five seconds is walked once, and a poll that left
+ * before the walk finished finds the same walk, further along, on its next ask.
+ * (sessionGraphAsync shares its cache entry between callers; this spares the
+ * second caller even the call.)
+ */
+const overviewWalks = new Map();   // sessionId (or file) -> promise of an overview
+function sharedOverview(file, id) {
+  const key = id || file;
+  const running = overviewWalks.get(key);
+  if (running) return running;
+  const p = sessionOverviewAsync(file, id).catch(() => null)
+    .finally(() => { if (overviewWalks.get(key) === p) overviewWalks.delete(key); });
+  overviewWalks.set(key, p);
+  return p;
+}
+
 async function projectDashboard(project) {
   const sessions = await listSessions();
   const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
@@ -9320,13 +9369,18 @@ async function projectDashboard(project) {
     const file = (st && st.transcript) || (r.sessionId ? findTranscriptFile(r.sessionId) : null);
     return { ...r, transcript: file };
   });
-  // Awaited member by member: a member whose walk went cold (a restart, the
-  // graph LRU) is walked in steps that let the rest of the daemon run.
-  const rows = await projectsLib.rollupMembersAsync(withFiles, {
+  // The cold members — a walk that went cold after a restart, or the graph LRU
+  // — are walked a few at a time, each in steps that let the rest of the daemon
+  // run, and the answer leaves at the cap with what has finished: a member still
+  // walking is shown with its last known numbers and `pending`, and its walk
+  // goes on so the next poll has it. A warm member costs a stat.
+  const { rows, pending } = await projectsLib.rollupMembersConcurrent(withFiles, {
     cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
     sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
     agentBytesOf,
-    overview: async (f, id) => { try { return await sessionOverviewAsync(f, id); } catch { return null; } },
+    overview: sharedOverview,
+    limit: DASHBOARD_WALKS_AT_ONCE,
+    capMs: DASHBOARD_CAP_MS,
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
   return {
@@ -9334,6 +9388,8 @@ async function projectDashboard(project) {
     generatedAt: Math.floor(Date.now() / 1000),
     totals,
     rate,
+    // How many members' numbers are still being read (their rows say `pending`).
+    pending,
     members: rows.map(projectsLib.dashboardMemberRow),
   };
 }
@@ -9686,12 +9742,6 @@ async function claudeVersion() {
     claudeVersionAsk = run('claude', ['--version']).then(({ stdout }) => {
       cachedClaudeVersion = stdout.trim().split('\n')[0] || 'unknown';
       claudeVersionAt = Date.now();
-      // The runtime generation's version string, where no install sits beside
-      // the binary to read it from (refreshRuntimeGen).
-      if (runtimeNow && !runtimeNow.claude && shortClaudeVersion(cachedClaudeVersion)) {
-        runtimeNow.claude = shortClaudeVersion(cachedClaudeVersion);
-        saveRuntimeFile();
-      }
       return cachedClaudeVersion;
     }).finally(() => { claudeVersionAsk = null; });
   }
@@ -9850,7 +9900,7 @@ async function statusPayload() {
     // Whether stale sessions are cycled onto a new runtime generation on their
     // own (HUGINN_APPD_CYCLE_ON_DEPLOY), and the generation itself (lib/runtime.js).
     cycleOnDeploy: CYCLE_ON_DEPLOY,
-    runtime: runtimeNow ? { gen: runtimeNow.gen, claude: runtimeNow.claude || null, since: runtimeNow.since } : null,
+    runtime: currentRuntime() ? { gen: runtimeNow.gen, claude: runtimeNow.claude || null, since: runtimeNow.since } : null,
     // Beside the soft-end phrase and for the same reason: the clients render
     // host-owned copy rather than their own. One small file read per poll, which
     // is nothing next to the df and the version shell-out above.
