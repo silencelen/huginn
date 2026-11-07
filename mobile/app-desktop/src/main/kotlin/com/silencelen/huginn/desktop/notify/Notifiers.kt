@@ -128,6 +128,19 @@ object Notifiers {
         }
 
     /**
+     * [pathSummary], plus the one line the contract asks for when a `huginn://`
+     * link will not open this app ([SchemeRegistrar.LinkStatus]) — the posting
+     * path and the click path are two facts, and a notification that arrives and
+     * then opens a blank browser tab (Omarchy, 2026-11-07) is the second one
+     * failing while the first row reads fine. Nothing is appended when the link
+     * works or nothing could be registered (a Gradle run).
+     */
+    fun pathSummary(name: String?, link: SchemeRegistrar.LinkStatus?): String {
+        val base = pathSummary(name)
+        return if (link != null && link.relevant && !link.ok) "$base ${link.sentence}" else base
+    }
+
+    /**
      * What the CLAIM row says, told the same fact the PATH row below it is told.
      *
      * ⚠ D-31. TWO ADJACENT SENTENCES THAT CONTRADICTED EACH OTHER. The claim read

@@ -4,6 +4,9 @@ import com.silencelen.huginn.desktop.update.LinuxInstall
 import java.io.File
 import java.nio.charset.Charset
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Registers this install as the handler for `huginn://`.
@@ -40,17 +43,38 @@ import java.util.concurrent.TimeUnit
  *
  * ### The other half
  *
- * **Linux / deb.** Ship a `.desktop` file with `MimeType=x-scheme-handler/huginn;`
- * and let `update-desktop-database` pick it up. What [register] writes below is
- * the same thing into the per-user applications directory.
+ * **Linux.** A `.desktop` file with `MimeType=x-scheme-handler/huginn;`, made the
+ * default with `xdg-mime default` and indexed by `update-desktop-database`. The
+ * Arch package ships one under `/usr/share/applications`; `huginn desktop install`
+ * and [register] write the same per-user one. [LinuxScheme] VERIFIES what the
+ * machine answers before and after, because registering is not the same as being
+ * resolved — see its header for the field report.
  *
  * Everything here is best-effort and quiet: a client that cannot register a scheme
  * is a client with no toast buttons, not a client that fails to start. Quiet is
  * not SILENT, though — [register]'s sentence goes to [com.silencelen.huginn.desktop.diag.AppLog]
- * and so into "Copy diagnostics", because this failing invisibly for six weeks is
- * the only reason it took a field report to find.
+ * and so into "Copy diagnostics", and a link that will not open the app is one
+ * line on Settings → Notifications ([linkStatus]), because this failing invisibly
+ * for six weeks is the only reason it took a field report to find.
  */
 object SchemeRegistrar {
+
+    /**
+     * Whether a `huginn://` link on this machine reaches this app, as the
+     * registrar last proved it.
+     *
+     * @property ok the link opens this app.
+     * @property sentence one line for the log and the Settings row — the
+     *   contract's wording when [ok] is false and [relevant] is true.
+     * @property relevant false for a run nothing could register for (a Gradle
+     *   run, an unsupported platform): not a fault, nothing to show.
+     */
+    data class LinkStatus(val ok: Boolean, val sentence: String, val relevant: Boolean = true)
+
+    private val _linkStatus = MutableStateFlow<LinkStatus?>(null)
+
+    /** The last [register] verdict, for Settings → Notifications. Null before the first. */
+    val linkStatus: StateFlow<LinkStatus?> = _linkStatus.asStateFlow()
 
     /**
      * Whether a launcher path is known — false when running from Gradle. ⚠ The
@@ -60,17 +84,19 @@ object SchemeRegistrar {
      */
     fun launcherPath(): String? = LinuxInstall.stableLauncherForThisProcess()
 
-    fun register(): String {
+    fun register(): LinkStatus {
         val exe = launcherPath()
             // A Gradle run has no stable launcher to point the scheme at, and
             // registering one that will not exist tomorrow is worse than none.
-            ?: return "scheme not registered: unpackaged run, no launcher path"
+            ?: return LinkStatus(false, "scheme not registered: unpackaged run, no launcher path", relevant = false).also { _linkStatus.value = it }
         val os = System.getProperty("os.name").orEmpty().lowercase()
-        return when {
+        val status = when {
             os.startsWith("windows") -> registerWindows(exe)
-            os.contains("linux") -> registerLinux(exe)
-            else -> "scheme not registered: unsupported platform"
+            os.contains("linux") -> LinuxScheme.forThisUser().register(exe)
+            else -> LinkStatus(false, "scheme not registered: unsupported platform", relevant = false)
         }
+        _linkStatus.value = status
+        return status
     }
 
     /** `HKEY_CURRENT_USER\Software\Classes\huginn` — per-user, so no elevation. */
@@ -110,7 +136,7 @@ object SchemeRegistrar {
     internal fun regEscape(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    private fun registerWindows(exe: String): String {
+    private fun registerWindows(exe: String): LinkStatus {
         // A FIXED NAME, not File.createTempFile. Two reasons, and the second is
         // why it is written down: the file is imported and deleted inside this
         // function so a unique name buys nothing, and `createTempFile` is the one
@@ -129,11 +155,11 @@ object SchemeRegistrar {
             }
             true
         }.getOrDefault(false)
-        if (!wrote) return "scheme registration failed: could not write ${file.absolutePath}"
+        if (!wrote) return broken("huginn:// handler could not be written (${file.absolutePath})")
 
         try {
             if (!run(listOf("reg", "import", file.absolutePath))) {
-                return "scheme registration failed (reg import)"
+                return broken("huginn:// handler could not be registered (reg import failed)")
             }
         } finally {
             file.delete()
@@ -144,31 +170,19 @@ object SchemeRegistrar {
         // non-zero is the difference between a log line that is true and one that
         // is merely optimistic.
         return if (run(listOf("reg", "query", "HKCU\\$WINDOWS_COMMAND_KEY", "/ve"))) {
-            "scheme huginn:// registered for this user -> $exe"
+            LinkStatus(true, "scheme huginn:// registered for this user -> $exe")
         } else {
-            "scheme registration failed: reg import reported success but the key is absent"
+            broken("huginn:// has no handler (reg import reported success but the key is absent)")
         }
     }
 
-    private fun registerLinux(exe: String): String {
-        val home = System.getProperty("user.home") ?: return "scheme not registered: no home directory"
-        val appsDir = File(
-            System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.local/share",
-            "applications",
-        )
-        val name = LINUX_DESKTOP_FILE
-        val written = runCatching {
-            appsDir.mkdirs()
-            File(appsDir, name).writeText(linuxDesktopEntry(exe))
-            true
-        }.getOrDefault(false)
-        if (!written) return "scheme registration failed: could not write $appsDir/$name"
-        // Best effort; neither tool is guaranteed present, and the .desktop file on
-        // its own is enough for desktops that scan the directory.
-        run(listOf("update-desktop-database", appsDir.absolutePath))
-        run(listOf("xdg-mime", "default", name, "x-scheme-handler/${Activations.SCHEME}"))
-        return "scheme huginn:// registered via $appsDir/$name"
-    }
+    /**
+     * The contract's one line for a link that will not open the app, with what
+     * was found in the brackets. Same words on Settings → Notifications, in the
+     * log and in "Copy diagnostics".
+     */
+    internal fun broken(found: String): LinkStatus =
+        LinkStatus(false, "Notification links will not open the app: $found")
 
     /**
      * The per-user entry's name. ⚠ ONE NAME, SHARED WITH `huginn desktop install`
@@ -178,26 +192,173 @@ object SchemeRegistrar {
      */
     const val LINUX_DESKTOP_FILE: String = "huginn-desktop-kt.desktop"
 
+    /** What the scheme is registered as, for xdg-mime. */
+    const val LINUX_MIME_TYPE: String = "x-scheme-handler/${Activations.SCHEME}"
+
     /**
      * The entry, entire. PURE — asserted in `SchemeRegistrarTest`. The icon comes
      * from beside the launcher (`<app>/lib/huginn-desktop-kt.png`, where Compose's
      * app-image puts it), so a portable install's icon follows `current` too.
-     * Exec is QUOTED: a portable install lives under `$HOME`, and a home with a
-     * space in it would otherwise launch a program that is not this one.
+     *
+     * ⚠ THE EXEC PATH IS BARE UNLESS THE SPEC FORBIDS IT — see [execArgument].
+     * It used to be quoted always, "for a home with a space in it", and that is
+     * exactly what broke every notification click on the owner's Omarchy laptop
+     * (2026-11-07): see [LinuxScheme].
      */
     internal fun linuxDesktopEntry(exe: String): String = buildString {
         appendLine("[Desktop Entry]")
         appendLine("Type=Application")
         appendLine("Name=Huginn")
         appendLine("Comment=huginn desktop client")
-        appendLine("Exec=\"${exe.replace("%", "%%")}\" %u")
+        appendLine("Exec=${execArgument(exe)} %u")
         File(exe).parentFile?.parentFile?.let { app -> appendLine("Icon=${File(app, LinuxInstall.ICON_REL).path}") }
         appendLine("Terminal=false")
         appendLine("Categories=Development;Utility;")
-        appendLine("MimeType=x-scheme-handler/${Activations.SCHEME};")
+        appendLine("MimeType=$LINUX_MIME_TYPE;")
     }
 
-    private fun run(cmd: List<String>): Boolean = runCatching {
+    /**
+     * The characters the Desktop Entry Specification reserves in an Exec
+     * argument — an argument holding any of them MUST be quoted, and one holding
+     * none must not be, because of who reads the line (see [LinuxScheme]).
+     */
+    internal const val EXEC_RESERVED: String = " \t\n\"'\\><~|&;$*?#()`"
+
+    /**
+     * [exe] as the first Exec argument: bare when the spec allows it, and quoted
+     * with the spec's own escapes (`\` `"` `` ` `` `$` get a backslash) when a
+     * reserved character leaves no choice. `%` is doubled in both forms, because
+     * the field-code pass runs over the whole value.
+     *
+     * ⚠ `huginn desktop install` (client/huginn.sh, `_huginn_desktop_exec_arg`)
+     * applies the same rule; the two must produce the same bytes.
+     */
+    internal fun execArgument(exe: String): String {
+        val arg = if (exe.any { it in EXEC_RESERVED }) {
+            "\"" + exe.replace("\\", "\\\\").replace("\"", "\\\"").replace("`", "\\`").replace("$", "\\$") + "\""
+        } else {
+            exe
+        }
+        return arg.replace("%", "%%")
+    }
+
+    /**
+     * The Linux half, with the machine injected so the rules are testable.
+     *
+     * ⚠⚠ REGISTERED IS NOT RESOLVED, AND THIS IS THE FIELD REPORT THAT PROVED IT
+     * (Omarchy, Hyprland/Wayland, portable install, 2026-11-07). The per-user
+     * entry was written, `~/.config/mimeapps.list` named it, `mimeinfo.cache`
+     * indexed it — and every notification click opened a blank browser tab.
+     * Under a desktop xdg-utils does not know (Hyprland is "generic"), `xdg-open`
+     * resolves the handler with its OWN shell code: `xdg-mime query default`
+     * takes the entry's Exec line, splits it on whitespace, and runs
+     * `command -v` on the FIRST WORD. The Exec was `"/home/…/huginn-desktop-kt" %u`
+     * — quoted — so the first word was `"/home/…` with a literal double quote,
+     * `command -v` said no, the entry was skipped as "the binary is gone", and
+     * `xdg-open` fell through to `$BROWSER`. GIO and KDE parse quotes to the
+     * spec; the shell scripts every bare compositor falls back to do not.
+     *
+     * So the entry is bare where the spec allows and this class PROVES the
+     * result instead of reporting the write: query → write/register when it is
+     * not ours → query again, plus the same first-word check xdg-utils makes,
+     * which is the only way to see this bug from inside the app.
+     */
+    class LinuxScheme(
+        private val appsDir: File,
+        /** Runs a command for its exit status; false when it cannot run, times out or exits non-zero. */
+        private val run: (List<String>) -> Boolean,
+        /** Runs a command for its stdout; null when it cannot run, times out or exits non-zero. */
+        private val query: (List<String>) -> String?,
+        private val onPath: (String) -> Boolean,
+        /** Whether xdg-open's `command -v` would accept this word as something to run. */
+        private val canExecute: (String) -> Boolean = { File(it).canExecute() },
+    ) {
+        fun register(exe: String): LinkStatus {
+            val entry = linuxDesktopEntry(exe)
+            val file = File(appsDir, LINUX_DESKTOP_FILE)
+            val haveXdgMime = onPath("xdg-mime")
+            val haveDb = onPath("update-desktop-database")
+            val before = if (haveXdgMime) defaultHandler() else null
+
+            // The file follows `current` and carries the fix for an older entry,
+            // so it is compared and rewritten when it differs — never rewritten
+            // when it does not, which would churn the apps dir and its index at
+            // every launch.
+            val current = runCatching { file.takeIf { it.isFile }?.readText() }.getOrNull()
+            var indexed = false
+            if (current != entry) {
+                val written = runCatching {
+                    appsDir.mkdirs()
+                    file.writeText(entry)
+                    true
+                }.getOrDefault(false)
+                if (!written) return broken("huginn:// handler could not be written ($file)")
+                if (haveDb) { run(listOf("update-desktop-database", appsDir.absolutePath)); indexed = true }
+            }
+            if (before != LINUX_DESKTOP_FILE) {
+                if (haveXdgMime) run(listOf("xdg-mime", "default", LINUX_DESKTOP_FILE, LINUX_MIME_TYPE))
+                if (haveDb && !indexed) run(listOf("update-desktop-database", appsDir.absolutePath))
+            }
+
+            // The first-word check, BEFORE the query: a handler xdg-mime names
+            // and xdg-open cannot run is the exact shape of the field report, and
+            // the query alone passed it.
+            launchProblem(entry, canExecute)?.let { return broken(it) }
+            if (!haveXdgMime) return broken("huginn:// has no handler (xdg-utils is not installed, so nothing can route the link)")
+            val after = defaultHandler()
+            return if (after == LINUX_DESKTOP_FILE) {
+                LinkStatus(true, "scheme huginn:// registered via $file (xdg-mime names it)")
+            } else {
+                broken("huginn:// has no handler (xdg-mime names ${after?.let { "'$it'" } ?: "nothing"} for $LINUX_MIME_TYPE)")
+            }
+        }
+
+        private fun defaultHandler(): String? =
+            query(listOf("xdg-mime", "query", "default", LINUX_MIME_TYPE))?.trim()?.takeIf { it.isNotEmpty() }
+
+        companion object {
+            /** The registrar for this user's XDG applications dir, running the real tools. */
+            fun forThisUser(): LinuxScheme {
+                val home = System.getProperty("user.home").orEmpty()
+                val appsDir = File(
+                    System.getenv("XDG_DATA_HOME")?.takeIf { it.isNotBlank() } ?: "$home/.local/share",
+                    "applications",
+                )
+                return LinuxScheme(
+                    appsDir = appsDir,
+                    run = SchemeRegistrar::run,
+                    query = { cmd -> LibnotifyNotifier.runQuiet(cmd, 5_000L) },
+                    onPath = { bin -> LibnotifyNotifier.runQuiet(listOf("sh", "-c", "command -v '$bin'"), 2_000L) != null },
+                )
+            }
+
+            /**
+             * Why xdg-open could not launch [entry], or null when it can. PURE.
+             *
+             * Mirrors xdg-utils' `desktop_file_to_binary` / `search_desktop_file`:
+             * the Exec value's first whitespace-delimited word is handed to
+             * `command -v`. A word that opens with a quote never resolves, so a
+             * launcher path the spec makes us quote (a space, a `$`) is one
+             * xdg-open cannot run — said plainly, with the remedy, rather than
+             * left for a blank browser tab to report.
+             */
+            fun launchProblem(entry: String, canExecute: (String) -> Boolean): String? {
+                val exec = entry.lineSequence().firstOrNull { it.startsWith("Exec=") }?.removePrefix("Exec=")
+                    ?: return "the desktop entry has no Exec line"
+                val word = exec.trimStart().takeWhile { it != ' ' && it != '\t' }
+                if (word.startsWith("\"")) {
+                    return "the install path contains a character xdg-open cannot parse in a quoted Exec " +
+                        "($exec) — reinstall under a path with no spaces or quotes"
+                }
+                if (word.isEmpty() || !canExecute(word.replace("%%", "%"))) {
+                    return "xdg-open would run '${word.replace("%%", "%")}', which is not an executable file"
+                }
+                return null
+            }
+        }
+    }
+
+    internal fun run(cmd: List<String>): Boolean = runCatching {
         val p = ProcessBuilder(cmd)
             .redirectOutput(ProcessBuilder.Redirect.DISCARD)
             .redirectError(ProcessBuilder.Redirect.DISCARD)
