@@ -56,6 +56,46 @@ class ModelsTest {
         assertEquals(0, old.pendingSends, "a daemon with no queue really had nothing waiting")
     }
 
+    /**
+     * The runtime cell, the same two ways round: present with the daemon's
+     * verdict, present with only part of it, and absent on a daemon that records
+     * no generations — which must read as NOT stale, or every row on an older
+     * daemon would say "update".
+     */
+    @Test
+    fun `a session row carries its runtime generation, or nothing at all`() {
+        val list = json.decodeFromString<SessionList>(
+            """
+            {"sessions":[
+              {"name":"w1","cols":80,"rows":24,
+               "runtime":{"stale":true,"gen":"a1b2c3","current":"d4e5f6","claude":"2.1.300","currentClaude":"2.1.316","restarting":false}},
+              {"name":"w2","cols":80,"rows":24,
+               "runtime":{"stale":false,"restarting":true}},
+              {"name":"legacy","cols":80,"rows":24}
+            ]}
+            """.trimIndent(),
+        )
+        val stale = assertNotNull(list.sessions[0].runtime)
+        assertTrue(stale.stale)
+        assertEquals("a1b2c3", stale.gen)
+        assertEquals("d4e5f6", stale.current)
+        assertEquals("2.1.300", stale.claude)
+        assertEquals("2.1.316", stale.currentClaude)
+        assertFalse(stale.restarting)
+
+        val partial = assertNotNull(list.sessions[1].runtime, "the verdict and the flag alone are a cell")
+        assertFalse(partial.stale)
+        assertTrue(partial.restarting)
+        assertNull(partial.gen)
+        assertNull(partial.current)
+        assertNull(partial.claude)
+        assertNull(partial.currentClaude)
+
+        val old = list.sessions[2]
+        assertNull(old.runtime, "no cell is not a stale cell: nothing to mark")
+        assertFalse(old.runtime?.stale == true, "absent is not stale")
+    }
+
     @Test
     fun `status carries the host's quick-action templates, or nothing at all`() {
         // The whole point of serving these: one copy of the wording, on the host,

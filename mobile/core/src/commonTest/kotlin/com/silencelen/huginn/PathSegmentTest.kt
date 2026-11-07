@@ -59,6 +59,7 @@ class PathSegmentTest {
             "saveSessionMeta" to { client.saveSessionMeta(evil, goals = "g") },
             "softEndSession" to { client.softEndSession(evil) },
             "compactSession" to { client.compactSession(evil) },
+            "restartSession" to { client.restartSession(evil) },
             "archiveSession" to { client.archiveSession(evil) },
             "reviveArchive" to { client.reviveArchive(evil) },
             "deleteArchive" to { client.deleteArchive(evil) },
