@@ -106,6 +106,7 @@ import com.silencelen.huginn.desktop.ui.common.SessionEndedCard
 import com.silencelen.huginn.desktop.ui.common.archiveFor
 import com.silencelen.huginn.desktop.ui.common.noSessionOpenCopy
 import com.silencelen.huginn.desktop.ui.common.sessionEndedCopy
+import com.silencelen.huginn.desktop.ui.common.RestartWords
 import com.silencelen.huginn.desktop.ui.common.SessionVerbs
 import com.silencelen.huginn.desktop.ui.common.rememberTerminalVerb
 import com.silencelen.huginn.desktop.ui.common.Space
@@ -301,6 +302,7 @@ fun Shell(store: AppStore) {
         copyId = { copy(it) },
         delete = { ids -> confirming = ConfirmTarget.DeleteChats(ids) },
     )
+    val restartHolds by store.restartHolds.collectAsState()
     val sessionVerbs = SessionVerbs(
         // Guarded like the row's own click: the menu reaches the same pane, and
         // a session the daemon will not route to bounces it. See
@@ -322,6 +324,15 @@ fun Shell(store: AppStore) {
         archive = if (archiveAvailable == true) ({ names -> confirming = ConfirmTarget.ArchiveSessions(names) }) else null,
         kill = { names -> confirming = ConfirmTarget.KillSessions(names) },
         openTerminal = terminalVerb,
+        // A restart resumes the conversation in place, so it needs no confirm —
+        // EXCEPT when somebody is attached to the session's tmux window (a
+        // terminal opened from here, or anywhere else): the daemon holds it on
+        // `attached`, and the only way past that hold is `force`, which is asked
+        // once, here, never sent by default. The row's own count is the fact.
+        restart = { s ->
+            if (s.attachedClients > 0) confirming = ConfirmTarget.RestartAttached(s.name)
+            else act { store.restartSession(s.name) }
+        },
     )
 
     // Pages get the list-plus-detail shape too: the list IS the navigation, and an
@@ -589,6 +600,7 @@ fun Shell(store: AppStore) {
                                                         // READ it without bringing it back: the
                                                         // detail pane, read only, no decision made.
                                                         onViewArchive = { store.openArchive(it) },
+                                                        restartHolds = restartHolds,
                                                     )
                                                 }
                                             }
@@ -870,6 +882,9 @@ fun Shell(store: AppStore) {
                             // even stay (a wrap-up question cancels the auto-end) — so
                             // drafts and history are deliberately NOT cleared there.
                             is ConfirmTarget.SoftEndSessions -> act { store.softEndSessions(target.names) }
+                            // The one place `force` is ever sent: the reader was
+                            // told somebody is attached and said go ahead.
+                            is ConfirmTarget.RestartAttached -> act { store.restartSession(target.name, force = true) }
                             // Drafts and history ARE cleared, unlike a wrap-up:
                             // this session is going, and the text typed at it is
                             // not coming with it. The store re-throws a refusal so
@@ -1609,6 +1624,12 @@ sealed interface ConfirmTarget {
 
     /** Forget an archived row AND the copy of the conversation it was keeping. */
     data class ForgetArchive(val row: ArchivedSession) : ConfirmTarget
+
+    /**
+     * Restart a session's Claude Code while somebody is attached to its tmux
+     * window — the one restart that sends `force`, and only after this.
+     */
+    data class RestartAttached(val name: String) : ConfirmTarget
 }
 
 /**
@@ -1880,12 +1901,16 @@ private fun ConfirmDialog(target: ConfirmTarget, onDismiss: () -> Unit, onConfir
                     "Send wrap-up",
                 )
             }
+        is ConfirmTarget.RestartAttached ->
+            ConfirmWords("Restart", target.name, RestartWords.ATTACHED_BODY, RestartWords.ATTACHED_VERB)
     }
-    // A wrap-up sends a message and an archive keeps everything it ends; only
-    // the verbs that actually lose something are red. (The MENU rows differ: the
-    // wrap-up is a lighter red there, because it sits beside the kill and has to
-    // read as its pair. A confirm button has no such neighbour.)
-    val destructive = target !is ConfirmTarget.SoftEndSessions && target !is ConfirmTarget.ArchiveSessions
+    // A wrap-up sends a message, an archive keeps everything it ends and a
+    // restart resumes the conversation in place; only the verbs that actually
+    // lose something are red. (The MENU rows differ: the wrap-up is a lighter
+    // red there, because it sits beside the kill and has to read as its pair. A
+    // confirm button has no such neighbour.)
+    val destructive = target !is ConfirmTarget.SoftEndSessions && target !is ConfirmTarget.ArchiveSessions &&
+        target !is ConfirmTarget.RestartAttached
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {

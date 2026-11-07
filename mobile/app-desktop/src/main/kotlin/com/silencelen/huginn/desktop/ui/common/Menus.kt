@@ -418,6 +418,13 @@ class SessionVerbs(
      * launcher (a test), which keeps the item out rather than inert.
      */
     val openTerminal: TerminalVerb? = null,
+    /**
+     * Restart the session's Claude Code so it loads what a launch loads now
+     * ([RestartWords]). Offered only where [RestartWords.offered] says the
+     * daemon speaks runtime and is not already cycling the row; null keeps it
+     * out (a test).
+     */
+    val restart: ((Session) -> Unit)? = null,
 )
 
 /**
@@ -456,6 +463,13 @@ fun sessionMenu(session: Session, selection: Set<String>, verbs: SessionVerbs): 
         // The context manager: types "/compact" so the owner can reclaim context
         // without opening the pane. Host guards a plain shell / waiting question.
         add(HuginnMenuItem("Compact context") { verbs.compact(session.name) })
+        // Beside the other maintenance verb, and only on a daemon that has the
+        // route (the runtime cell and the route ship together): a restart is a
+        // send-queue job that resumes the conversation in place, so it is PLAIN,
+        // not a red. Not offered while the daemon is already cycling the row.
+        verbs.restart?.takeIf { RestartWords.offered(session) }?.let { r ->
+            add(HuginnMenuItem(RestartWords.MENU) { r(session) })
+        }
         // The graceful sibling of "Kill session": sends the wrap-up phrase, and the
         // host (auto-end on) ends the session once it settles. A LIGHTER red than
         // the kill — it ends the session and loses nothing — and the two are a
