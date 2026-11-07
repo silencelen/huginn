@@ -70,6 +70,7 @@ import com.silencelen.huginn.notify.PushTally
 import com.silencelen.huginn.notify.HuginnMessagingService
 import com.silencelen.huginn.notify.WatchService
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -2600,8 +2601,21 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     private val _projectDashboard = MutableStateFlow<ProjectDashboard?>(null)
     val projectDashboard: StateFlow<ProjectDashboard?> = _projectDashboard.asStateFlow()
 
-    /** The last rollup each project answered with — see [DashboardBook]. */
-    private val dashboards = DashboardBook()
+    /**
+     * The last rollup each project answered with — see [DashboardBook] — shelved
+     * under the app's cache directory ([com.silencelen.huginn.ui.FileDashboardShelf],
+     * the same files the desktop keeps), so the first open after a process
+     * death draws what the project last said, with its own "as of", instead of
+     * "Nothing to show yet." until the daemon's first rollup lands.
+     *
+     * The shelf is read ONCE, on the book's first use, under its lock. That
+     * first use is warmed on IO below rather than left to the page's first
+     * `held()` on the main thread: a page opened before the warm-up finishes
+     * waits on the lock for the few small files, not for the network.
+     */
+    private val dashboards = DashboardBook(
+        com.silencelen.huginn.ui.FileDashboardShelf(java.io.File(getApplication<Application>().cacheDir, "dashboards")),
+    ).also { book -> viewModelScope.launch(Dispatchers.IO) { book.held(null) } }
 
     /** The project the dashboard screen is showing, by id; what the list tick also fetches members for. */
     private var dashboardId: String? = null
@@ -2686,6 +2700,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 val live = list.projects.map { it.id }.toSet()
                 _projectMembers.value = _projectMembers.value.filterKeys { it in live }
                 _projectsExpanded.value = _projectsExpanded.value.filterTo(mutableSetOf()) { it in live }
+                // The book takes its shelf with it: a project that is gone must
+                // not come back as a shelved page in the next process.
                 dashboards.retain(live)
             }
     }
@@ -2825,23 +2841,49 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * answer carrying the stamp already on screen is the same answer, and pushing
      * it into the flow would redraw a table of twelve rows of identical numbers
      * every five seconds for as long as anybody reads it. See [DashboardCursor].
+     *
+     * ⚠⚠ THE LAST DASHBOARD IS DRAWN BEFORE THE FIRST READ, FROM THE SHELF IF
+     * NEED BE (owner, 2026-11-07: "seems to have no cache, and just shows
+     * 'nothing to show yet' for 5ish seconds"). The book covers a walk back
+     * within the process; after a process death — which on a phone is the
+     * ordinary way to arrive here, from a notification tap or a restore — the
+     * book used to be empty and the page waited on the store load, the pinned
+     * handshake and the daemon's one-at-a-time queue behind the cold start's
+     * own fan-out before it drew anything. The shelf-backed book answers
+     * `held(id)` with what the project last said in ANY run, and the poll
+     * replaces it when it lands. Read BEFORE [awaitReady], on the way in: the
+     * shelf needs no token and no route, and the gate must not stand between a
+     * reader and a page the app already has.
+     *
+     * ⚠ AND A FAILED READ IS RETRIED SOON, NOT NEXT TICK. The first read is the
+     * one most likely to fail (a route still being re-resolved, a handshake that
+     * timed out), and it used to wait the whole five seconds in silence — see
+     * [DashboardPoll.delayAfter].
      */
     fun startDashboardPolling(id: String) {
         dashboardJob?.cancel()
         dashboardId = id
-        // What this project last said, drawn at once; null only when it never has.
+        // What this project last said — in this process or, from the shelf, in
+        // an earlier one — drawn at once; null only when it never has.
         _projectDashboard.value = dashboards.held(id)
         dashboardJob = viewModelScope.launch {
             awaitReady()
+            var failures = 0
             while (isActive) {
                 runCatching { client.projectDashboard(id) }
                     .onSuccess { d ->
+                        failures = 0
+                        // The book shelves what it adopts, so the next process opens on it.
                         if ((d.project?.id ?: id) == id && dashboards.adopt(id, d) && dashboardId == id) {
                             _projectDashboard.value = d
                         }
                     }
+                    .onFailure { e ->
+                        if (e is CancellationException) throw e
+                        failures++
+                    }
                 landOpenProject(id)
-                delay(5_000)
+                delay(DashboardPoll.delayAfter(failures))
             }
         }
     }
@@ -3800,6 +3842,30 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { client.compactSession(name) }
                 .onSuccess { r ->
                     _toast.value = if (r.queued) "Compacting $name after this turn" else "Compacting $name…"
+                    refreshSessions()
+                }
+                .onFailure { _toast.value = errText(it) }
+        }
+    }
+
+    /**
+     * Restart the session's Claude Code so it picks up what a launch loads at
+     * start (MCP servers, hooks, settings, the `claude` binary), resuming the same
+     * conversation in the same tmux session — a send-queue JOB on the daemon
+     * (appd 3.19), so the answer is "due now", "held, and why", or "already
+     * under way", and the toast says which ([SessionRestart.words]). A 409
+     * `restarting` is the outcome asked for, not a failure (the client folds it
+     * into the result); every other refusal is the daemon's own sentence, shown
+     * verbatim like every verb here.
+     *
+     * [force] skips the `attached` hold only, and is sent only after the one
+     * question the menu asks ([SessionRestart.needsConfirm]).
+     */
+    fun restartSession(name: String, force: Boolean = false) {
+        viewModelScope.launch {
+            runCatching { client.restartSession(name, force = force) }
+                .onSuccess { r ->
+                    _toast.value = SessionRestart.words(name, r)
                     refreshSessions()
                 }
                 .onFailure { _toast.value = errText(it) }

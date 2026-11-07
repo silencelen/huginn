@@ -1,5 +1,21 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Added
+- A session whose Claude Code is behind what a launch would load now (appd 3.19) carries a
+  "restart to update" mark on its row ("update" in the two-pane column); one being restarted reads
+  "restarting" with the breathing dot.
+- The session's action menu has "Restart to pick up updates": the restart is queued at the next
+  turn boundary and the toast says whether it is due now, what holds it, or that one is already
+  under way. With a terminal attached it asks once before forcing past that hold.
+
+### Fixed
+- A project page draws the last dashboard it had for that project at once, with its own "as of"
+  line, across navigation and across app restarts (a small per-project cache on disk); "Nothing to
+  show yet." appears only for a project that has never answered. A dashboard read that fails is
+  retried after a second instead of at the next five-second tick.
+
 ## 3.17.0 — 2026-11-06
 
 ### Added

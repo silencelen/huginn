@@ -47,6 +47,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -54,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.data.ArchivedSession
 import com.silencelen.huginn.data.Session
+import com.silencelen.huginn.ui.theme.StateKind
+import com.silencelen.huginn.ui.theme.stateColor
 import com.silencelen.huginn.ui.theme.verbInk
 import com.silencelen.huginn.ui.system.HouseDialog
 import com.silencelen.huginn.ui.system.ListRow
@@ -211,6 +216,8 @@ fun SessionsScreen(
                         onSoftEnd = { confirmSoftEnd = s.name },
                         onArchive = if (archiveAvailable == true) ({ confirmArchive = s.name }) else null,
                         onRename = { renaming = s.name; renameTo = s.name },
+                        // The 292dp column has no room for a sentence on the meta line.
+                        compact = twoPane,
                         modifier = mod,
                     )
                     HorizontalDivider(color = LocalHuginnColors.current.outlineHairline)
@@ -467,10 +474,16 @@ private fun SessionRow(
     /** Null on a daemon without the archive feature, which is what hides the item. */
     onArchive: (() -> Unit)? = null,
     onRename: () -> Unit,
+    /** The row is one column of a two-pane layout: the runtime mark takes its short form. */
+    compact: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val c = LocalHuginnColors.current
     val backgroundWork = s.bgShells > 0 || s.bgAgents > 0
+    // The daemon is cycling this session's Claude Code (appd 3.19): drawn as a
+    // session that is starting up — the busy word and the breathing dot — and
+    // the stale mark below stays off, because the restart IS its answer.
+    val restarting = SessionRestart.restarting(s.runtime)
     // THE HOUSE ROW (UI-AUDIT section 3): dot · mono name · one state line ·
     // ctx, age and the menu trailing. The detail lines below ride ListRow's
     // `detail` slot so the frame, the inset and the selection are the house ones.
@@ -488,9 +501,10 @@ private fun SessionRow(
         // shells was a lie of omission — the list is where "looks stalled" started.
         titleSuffix = {
             Text(
-                if (s.state != "running" && backgroundWork) "background work" else stateLabel(s.state),
+                SessionRestart.titleWord(s.state, backgroundWork, s.runtime),
                 style = MaterialTheme.typography.labelSmall,
                 color = when {
+                    restarting -> MaterialTheme.colorScheme.primary
                     s.state == "attention" -> c.stateAttention
                     s.state == "running" || backgroundWork -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -504,7 +518,7 @@ private fun SessionRow(
         leading = {
             // One 8 dp dot column, so the quiet 6 dp waiting dot does not shift the name.
             Box(Modifier.size(Scale.dot), contentAlignment = Alignment.Center) {
-                if (s.state == "running" || backgroundWork) {
+                if (restarting || s.state == "running" || backgroundWork) {
                     PulsingDot(
                         if (s.state == "attention") c.stateAttention
                         else MaterialTheme.colorScheme.primary
@@ -619,17 +633,30 @@ private fun SessionRow(
                 }
             }
 
+            // The runtime mark (appd 3.19): this session's Claude Code is behind
+            // what a launch would load now. On the meta line, in the state
+            // language's info colour, so the row keeps its shape and the mark
+            // still reads as a state rather than as one more terminal fact.
+            val runtimeMark = SessionRestart.rowMark(s.runtime, short = compact)
             val meta = buildList {
                 // FIRST: a message this person typed is still waiting to reach the
                 // pane, and every other fact on this line is about the terminal.
                 SendQueue.rowMark(s.pendingSends)?.let { add(it) }
+                runtimeMark?.let { add(it) }
                 if (s.cols > 0) add("${s.cols}x${s.rows}")
                 if (s.attachedClients > 0) add("${s.attachedClients} attached")
                 if (s.sizeLeased) add("fitted to phone")
             }
             if (meta.isNotEmpty()) {
+                val markInk = stateColor(StateKind.INFO)
                 Text(
-                    meta.joinToString("  ·  "),
+                    buildAnnotatedString {
+                        meta.forEachIndexed { i, part ->
+                            if (i > 0) append("  ·  ")
+                            if (part === runtimeMark) withStyle(SpanStyle(color = markInk)) { append(part) }
+                            else append(part)
+                        }
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline,
                     maxLines = 1,
