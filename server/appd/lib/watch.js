@@ -100,6 +100,20 @@ function digest(sessions, chats, headroom) {
     sentinels: Array.isArray(hr.sentinels) ? [...hr.sentinels].map(String).sort() : [],
   };
 
+  // The runtime generation (lib/runtime.js, 2026-11-07): a session turning
+  // STALE after a deploy, or a restart starting and ending, is what the apps draw
+  // the "restart to update" mark and the starting-style state from — learned
+  // here, from the digest, without polling rows. Only the two booleans: the
+  // generation strings themselves change exactly when `stale` does. Rows from a
+  // caller that carries no `runtime` (an older daemon's shape, the tests above)
+  // add nothing, so their hash is what it always was.
+  const r = Object.create(null);
+  for (const x of sessions || []) {
+    if (x && x.runtime && typeof x.runtime === 'object') {
+      r[x.name] = { stale: !!x.runtime.stale, restarting: !!x.runtime.restarting };
+    }
+  }
+
   // Sorted keys so the hash depends on the values, not on directory order.
   //
   // Note which fields are IN the hash and which are only carried: the hash is a
@@ -112,12 +126,14 @@ function digest(sessions, chats, headroom) {
     c: Object.keys(c).sort().map((k) => [k, c[k].running, c[k].pending, c[k].finishedRuns]),
     h: [h.mode, h.stalled, h.lastResumeAt, h.lastLadderAt, h.sentinels,
       Object.entries(h.stalls), Object.entries(h.laddered)],
+    r: Object.keys(r).sort().map((k) => [k, r[k].stale, r[k].restarting]),
   });
   return {
     hash: createHash('sha1').update(stable).digest('hex').slice(0, 16),
     sessions: s,
     chats: c,
     headroom: h,
+    runtime: r,
   };
 }
 

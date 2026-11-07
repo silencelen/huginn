@@ -93,6 +93,9 @@ const tmuxSockLib = require('./lib/tmux-socket');
 // "Absent since", per thing a reconcile might write off: nothing destructive on
 // one look (lib/absence.js, 2026-11-06).
 const absenceLib = require('./lib/absence');
+// The runtime GENERATION a session was launched under, and the pure half of
+// cycling a stale one onto the current wiring (lib/runtime.js, 2026-11-07).
+const runtimeLib = require('./lib/runtime');
 // The usage model and the arbiter: percentages and settings in, a list of
 // actions out. Pure, so every judgment call it makes is asserted in
 // test/headroom.test.js rather than discovered on a live account.
@@ -1128,7 +1131,8 @@ async function sweepStateDir(why = 'daily') {
     const p = path.join(STATE_DIR, ent.name);
     if (!stale(p)) continue;
     if (ent.name.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
-    if (live.has(ent.name)) continue;
+    // And never a session mid-restart: its files are the next Claude's to rewrite.
+    if (live.has(ent.name) || underRestart(ent.name)) continue;
     if (!(await gone(ent.name))) continue;
     if (drop(p)) took.states += 1;
   }
@@ -1141,7 +1145,7 @@ async function sweepStateDir(why = 'daily') {
       const p = path.join(dir, n);
       if (!stale(p)) continue;
       if (n.endsWith('.tmp')) { if (drop(p)) took.partials += 1; continue; }
-      if (live.has(n)) continue;
+      if (live.has(n) || underRestart(n)) continue;
       if (!(await gone(n))) continue;
       if (drop(p)) took.sidecars += 1;
     }
@@ -1592,7 +1596,7 @@ async function createSession({ name: rawName, cwd: rawCwd } = {}) {
   // title hook writes it once Claude boots — so the reconcile timer fills it in;
   // until then a reboot would bring this session back as a fresh `claude`, which
   // is still the create route's own default and better than losing the name.
-  registryAdd(created, { cwd });
+  registryAdd(created, { cwd, ...launchGenFields() });
   // ⚠ AND MARKED AS STILL COMING UP. This 201 is the client's cue to show a
   // composer, and a message typed into it arrives while the pane is still
   // empty — `claude` needs about two more seconds to paint anything that
@@ -1651,6 +1655,20 @@ function registryRename(from, to) {
   if (!sessreg.isReserved(to)) s[to] = { ...s[from], name: to };
   delete s[from];
   saveRegistry(s);
+}
+
+/**
+ * The registry, re-read only when its file changed. The sessions list reads it
+ * on every poll of every client for each row's runtime generation (runtimeOf),
+ * and a parse per poll of a file that changes a few times an hour is waste.
+ */
+let registryCache = { key: null, sessions: {} };
+function registryCached() {
+  let st;
+  try { st = fs.statSync(SESSION_REGISTRY_FILE); } catch { registryCache = { key: null, sessions: {} }; return registryCache.sessions; }
+  const key = `${st.mtimeMs}:${st.size}`;
+  if (registryCache.key !== key) registryCache = { key, sessions: loadRegistry() };
+  return registryCache.sessions;
 }
 
 /** Background shells + agents for one session, or the empty shape. */
@@ -1742,6 +1760,8 @@ async function listSessions({ preview = false, shared = false } = {}) {
   noteListing('ok');
   let rows = [];
   const seen = new Set();
+  // One registry read for every row's runtime generation (runtimeOf).
+  const reg = registryCached();
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     const [name, created, attached, activity, windows, w, h, wsize, sessActivity, panePid] = line.split('\t');
@@ -1821,6 +1841,11 @@ async function listSessions({ preview = false, shared = false } = {}) {
       bgShells: 0,
       bgAgents: 0,
       bgTask: null,
+      // Which runtime generation this session's Claude was launched under, and
+      // whether that is the current one (lib/runtime.js): `{stale, gen, current,
+      // claude, currentClaude, restarting}`. A stale session is drawn with a
+      // "restart to update" mark; `restarting` while its Claude is being cycled.
+      runtime: runtimeOf(name, Number(created), reg),
     });
   }
 
@@ -2293,6 +2318,11 @@ async function liveSessionIds() {
     // moment it creates the session, which is the only thing that knows sooner.
     const entry = reg[name];
     out.set(name, (st && st.sessionId) || (entry && entry.claudeSessionId) || null);
+  }
+  // A session mid-restart is live whatever one listing said: its id from the
+  // registry, which the relaunch stamped.
+  for (const [name, rec] of restarts) {
+    if (rec.phase === 'cycling' && !out.has(name)) out.set(name, (reg[name] && reg[name].claudeSessionId) || null);
   }
   return out;
 }
@@ -4202,6 +4232,20 @@ async function pumpQueue(name) {
         }
       }
       if (!d.release) {
+        // ⚠ A HELD JOB DOES NOT HOLD A PERSON'S KEYS (2026-11-07). A restart or
+        // ladder job at the head waits for a turn boundary and a bare caret, and
+        // a person's message or the Screen tab's keystrokes behind it waited with
+        // it — so when the job was held by the person's OWN draft, the C-u that
+        // would have cleared it was the thing stuck behind the job. A person's
+        // entry behind a held job goes first (3.0.3: a person's message never
+        // waits for Claude); the job keeps its turn at the next boundary.
+        const ahead = typeof entry.run === 'function'
+          ? q.entries.findIndex((e) => !e.automated && typeof e.run !== 'function') : -1;
+        if (ahead > 0) {
+          const [first] = q.entries.splice(ahead, 1);
+          q.entries.unshift(first);
+          continue;
+        }
         q.blockedBy = d.blockedBy;
         armQueueTimer(name);
         return;
@@ -4268,12 +4312,26 @@ async function pumpQueue(name) {
       // delivery is an Enter into the box (or nothing, if the box no longer holds
       // it), never a second paste. The sender is told `blockedBy` like any hold.
       if (r && r.ok && r.held) {
-        entry.typedInBox = true;
         q.entries.unshift(entry);
         q.blockedBy = r.held.blockedBy;
-        if (guarded && draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
-        log(`typing: ${name}: holding the send until the dialog is answered; it will be `
-          + 'submitted from the box, never pasted again');
+        if (typeof entry.run === 'function') {
+          // A JOB that looked at its own safe point and found it not yet safe —
+          // a restart's background work, an attached terminal, host load
+          // (cycleSession) — goes back to the head and is asked again on the
+          // next poll. It has said why itself; nothing of it is in the box. A
+          // person's entry behind it goes first, as above.
+          const ahead = q.entries.findIndex((e) => !e.automated && typeof e.run !== 'function');
+          if (ahead > 0) {
+            const [first] = q.entries.splice(ahead, 1);
+            q.entries.unshift(first);
+            continue;
+          }
+        } else {
+          entry.typedInBox = true;
+          if (guarded && draftSeen === true) noteIntoDraft(name, now - entry.at, gate.composerHolds);
+          log(`typing: ${name}: holding the send until the dialog is answered; it will be `
+            + 'submitted from the box, never pasted again');
+        }
         armQueueTimer(name);
         return;
       }
@@ -4678,7 +4736,9 @@ async function reconcileSessionRegistryPass() {
   const gone = new Set();
   const recorded = Object.keys(loadRegistry());
   for (const name of recorded) {
-    if (liveNames.has(name)) {
+    // A session mid-restart (its Claude quit, the next not yet up) is live
+    // however a listing read it: its row is what the relaunch stamps.
+    if (liveNames.has(name) || underRestart(name)) {
       const was = registryAbsence.seen(name);
       if (was && was.said) log(`session registry: ${name} is back in the session list — kept`);
       continue;
@@ -4696,6 +4756,15 @@ async function reconcileSessionRegistryPass() {
   }
   registryAbsence.retain(new Set(recorded));
   const merged = sessreg.mergeLive(loadRegistry(), live, now);
+  // A session nobody recorded a runtime generation for — one `cc` made, or one
+  // that was running when this daemon first learned generations — gets the one
+  // its birth time puts it under (lib/runtime assignGen), or stays unrecorded
+  // and reads stale once.
+  for (const e of Object.values(merged)) {
+    if (e.runtimeGen) continue;
+    const g = runtimeLib.assignGen({ createdAt: e.createdAt, current: currentRuntime() });
+    if (g) { e.runtimeGen = g.gen; e.runtimeClaude = g.claude; }
+  }
   const keep = new Set(Object.keys(merged).filter((name) => !gone.has(name)));
   const { next, removed } = sessreg.pruneDead(merged, keep);
   saveRegistry(next);
@@ -4766,11 +4835,571 @@ async function restoreSessionsAfterReboot() {
     // Without this mark appd would see an interactive session, believe the
     // native wait was armed, and sit out its 90-second grace waiting for a
     // continuation that can never come — every time, on every restored session.
-    registryAdd(entry.name, { restoredAt: Math.floor(Date.now() / 1000) });
+    registryAdd(entry.name, { restoredAt: Math.floor(Date.now() / 1000), ...launchGenFields() });
     if (canResume) log(`session restore: ${entry.name} resumed (${entry.claudeSessionId})`);
     else { fresh++; log(`session restore: ${entry.name} restarted fresh (nothing resumable on disk)`); }
   }
   log(`session restore: ${restored}/${plan.length} back${fresh ? `, ${fresh} without a transcript` : ''}`);
+}
+
+// ---- runtime generation + session cycling (2026-11-07) ---------------------
+//
+// A Claude Code process loads its MCP servers, its hooks and settings, and its
+// own binary once, at START. A session started before a deploy keeps the old
+// wiring until it is restarted — one started 10-27 still had no `start_session`
+// tool on 11-07, a tool registered 11-03 — and `claude update` is the same. So
+// the daemon hashes what a session loads at start into a GENERATION
+// (lib/runtime.js), records it on every session it launches, reports `runtime`
+// on every row, and — while `cycleOnDeploy` is on — quits each stale session
+// with `/exit` at its own safe point and relaunches it in the same tmux session
+// with `--resume`, one at a time. `POST /v1/sessions/<name>/restart` queues the
+// same cycle for one session.
+
+/** Whether stale sessions are cycled on their own (`HUGINN_APPD_CYCLE_ON_DEPLOY=0` in site.conf turns it off). */
+const CYCLE_ON_DEPLOY = process.env.HUGINN_APPD_CYCLE_ON_DEPLOY !== '0';
+/**
+ * How often the generation's inputs are re-read, the gap between two cycles of
+ * the sweep, and how long a failed relaunch waits for its one retry. TEST-ONLY
+ * knobs, clamped like the other graces.
+ */
+const RUNTIME_RECHECK_MS = Math.max(200, Math.min(600_000, Number(process.env.HUGINN_APPD_RUNTIME_RECHECK_MS) || 60_000));
+const CYCLE_GAP_MS = Math.max(200, Math.min(600_000, Number(process.env.HUGINN_APPD_CYCLE_GAP_MS) || 30_000));
+const RESTART_RETRY_MS = Math.max(200, Math.min(600_000, Number(process.env.HUGINN_APPD_RESTART_RETRY_MS) || 60_000));
+/**
+ * The container's own PSI file — the load gate the release cuts wait on before
+ * the appd suite (`some avg10` under 5). `/proc/loadavg` in an LXC is the
+ * hypervisor's (lxcfs passes it through) and never settles.
+ */
+const PRESSURE_FILE = process.env.HUGINN_APPD_PRESSURE_FILE || '/sys/fs/cgroup/cpu.pressure';
+/** How long `/exit` gets to end the process before a signal is considered. */
+const QUIT_WAIT_MS = 20_000;
+/** A waiting job's safe-point facts (background work, attachment, load) are re-read at most this often. */
+const HOLD_RECHECK_MS = 3_000;
+/** A sweep attempt that failed short of two relaunch failures is not retried for this long. */
+const SWEEP_BACKOFF_MS = 10 * 60_000;
+const RUNTIME_FILE = path.join(DATA_DIR, 'runtime.json');
+
+/** The current generation: `{gen, since (epoch s), claude, inputs}`, null until read. */
+let runtimeNow = null;
+/** Restarts queued or running, by tmux name: `{phase: 'queued'|'cycling', since, force, by, blockedBy, oldGen, lastHold, onDone}`. */
+const restarts = new Map();
+/** Two relaunch failures: waits for a manual restart or a new generation. */
+const restartGaveUp = new Map();   // tmux name -> ms
+/** The sweep leaves these alone until the time given. */
+const restartBackoff = new Map();  // tmux name -> ms
+/** The one session being cycled right now, or null: never two at once. */
+let cycleBusy = null;
+
+function loadRuntimeFile() {
+  try {
+    const o = JSON.parse(fs.readFileSync(RUNTIME_FILE, 'utf8'));
+    return o && typeof o.gen === 'string' ? o : null;
+  } catch { return null; }
+}
+
+/** tmp+rename at 0600, like the registry. Best effort: a lost file costs one `since` after the next restart. */
+function saveRuntimeFile() {
+  if (!runtimeNow) return;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(`${RUNTIME_FILE}.tmp`, JSON.stringify({ version: 1, ...runtimeNow }, null, 2), { mode: 0o600 });
+    fs.renameSync(`${RUNTIME_FILE}.tmp`, RUNTIME_FILE);
+  } catch (e) { log(`runtime: save failed: ${e.message}`); }
+}
+
+/** Where `claude` on this daemon's PATH really is, with what the fingerprint wants; null when there is none. */
+function claudeBinaryFacts() {
+  for (const dir of String(process.env.PATH || '').split(':')) {
+    if (!dir) continue;
+    const p = path.join(dir, 'claude');
+    try {
+      fs.accessSync(p, fs.constants.X_OK);
+      const realPath = fs.realpathSync(p);
+      const st = fs.statSync(realPath);
+      if (!st.isFile()) continue;
+      return { realPath, size: st.size, mtimeMs: st.mtimeMs };
+    } catch { /* not here */ }
+  }
+  return null;
+}
+
+/**
+ * The generation's four inputs, read from the daemon's configured HOME (so a
+ * suite stubs them with its own): the `claude` binary's identity, the settings
+ * file (`claudeSettingsFile`, behind any link), the user-scope MCP registrations
+ * in `~/.claude.json`, and this daemon's version, which stands for the hooks and
+ * the MCP server it installed. `mcp` is null for a torn read of that file.
+ */
+function readRuntimeInputs() {
+  const bin = claudeBinaryFacts();
+  const readOr = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } };
+  let settingsPath = claudeSettingsFile();
+  try { settingsPath = fs.realpathSync(settingsPath); } catch { /* not a link, or not there yet */ }
+  return {
+    bin,
+    claude: bin ? runtimeLib.claudeFingerprint(bin) : 'none',
+    settings: runtimeLib.settingsDigest(readOr(settingsPath)),
+    mcp: runtimeLib.mcpDigest(readOr(path.join(process.env.HOME || '/root', '.claude.json'))),
+    appd: VERSION,
+  };
+}
+
+/**
+ * Compute the current generation and say so when it changed.
+ *
+ * On start, a generation equal to the saved one keeps its `since`, so a session
+ * `cc` made after the last change still reads current across a daemon restart;
+ * any other change starts `since` now. The version STRING is read from the
+ * install beside the binary (claudeVersionFromPath); where there is none (a
+ * native install) it is filled in by the hourly `claude --version` the status
+ * route already asks (claudeVersion), and reads null until then.
+ *
+ * ⚠ NO `claude --version` OF ITS OWN. The route suites shadow `claude` with a
+ * stub that records every spawn, and several read "the run" as the first one
+ * recorded; a version probe at daemon start was that first spawn and failed them.
+ */
+async function refreshRuntimeGen(why) {
+  const inputs = readRuntimeInputs();
+  if (inputs.mcp === null) inputs.mcp = runtimeNow ? runtimeNow.inputs.mcp : 'none';
+  const gen = runtimeLib.genOf(inputs);
+  if (runtimeNow && runtimeNow.gen === gen) return false;
+  const { bin, ...kept } = inputs;
+  const prev = runtimeNow;
+  const saved = prev ? null : loadRuntimeFile();
+  const sameAsSaved = !!saved && saved.gen === gen;
+  const since = sameAsSaved && Number.isFinite(Number(saved.since)) ? Number(saved.since) : Math.floor(Date.now() / 1000);
+  const fromPath = bin ? runtimeLib.claudeVersionFromPath(bin.realPath, (p) => fs.readFileSync(p, 'utf8')) : null;
+  runtimeNow = {
+    gen, since, inputs: kept,
+    claude: fromPath || (sameAsSaved && saved.claude) || shortClaudeVersion(cachedClaudeVersion) || null,
+  };
+  saveRuntimeFile();
+  log(`runtime: generation ${prev ? `${prev.gen} -> ${gen}` : gen} (${why}; claude ${runtimeNow.claude || 'version pending'}, appd ${VERSION})`);
+  // A new generation gives every session another go at the sweep.
+  if (prev) { restartGaveUp.clear(); restartBackoff.clear(); }
+  return true;
+}
+
+/** `2.1.316 (Claude Code)`, as the CLI prints it, to the bare version; null for nothing. */
+function shortClaudeVersion(text) {
+  const v = String(text || '').trim().split('\n')[0].replace(/\s*\(Claude Code\)\s*$/, '').trim();
+  return v && v !== 'unknown' ? v : null;
+}
+
+/**
+ * The current generation, its version string filled in from the hourly
+ * `claude --version` the status route asks (claudeVersion) where no install sat
+ * beside the binary to read it from. Read here, on the way out, rather than
+ * written from claudeVersion: that function is lifted into a sandbox by the
+ * status-probe tests, and a new free name in it fails them.
+ */
+function currentRuntime() {
+  if (runtimeNow && !runtimeNow.claude) {
+    const v = shortClaudeVersion(cachedClaudeVersion);
+    if (v) { runtimeNow.claude = v; saveRuntimeFile(); }
+  }
+  return runtimeNow;
+}
+
+/** The fields a launch records on its registry row: the generation it was launched under. */
+function launchGenFields() {
+  const now = currentRuntime();
+  return now ? { runtimeGen: now.gen, runtimeClaude: now.claude || null } : {};
+}
+
+/** The `runtime` row field for one session (lib/runtime runtimeFor). */
+function runtimeOf(name, createdAt, reg = null) {
+  const e = (reg || registryCached())[name];
+  const current = currentRuntime();
+  const recorded = e && e.runtimeGen
+    ? { gen: e.runtimeGen, claude: e.runtimeClaude || null }
+    : runtimeLib.assignGen({ createdAt, current });
+  return runtimeLib.runtimeFor({ recorded, current, restarting: underRestart(name) });
+}
+
+/** Is this session's Claude being quit and relaunched right now? */
+function underRestart(name) {
+  const rec = restarts.get(name);
+  return !!rec && rec.phase === 'cycling';
+}
+
+/** Add a row for every session mid-restart that a listing left out, so a reconcile reads it as live. */
+function withRestartingPresent(rows) {
+  const names = new Set(rows.map((r) => r.name));
+  for (const [name, rec] of restarts) {
+    if (rec.phase !== 'cycling' || names.has(name)) continue;
+    rows.push({ name, addressable: NAME_RE.test(name), createdAt: sessionBorn.get(name) || 0, state: null, claudeSessionId: null });
+  }
+  return rows;
+}
+
+/** The host's lull: the cuts' `cpu.pressure` rule (lib/runtime pressureLull); a missing file gates nothing. */
+function loadLull() {
+  let text;
+  try { text = fs.readFileSync(PRESSURE_FILE, 'utf8'); } catch { return true; }
+  return runtimeLib.pressureLull(text);
+}
+
+/** `#{session_attached}` for one session, fresh; null when tmux will not say. */
+async function attachedCount(name) {
+  const { err, stdout } = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{session_name}\t#{session_attached}']);
+  if (err) return null;
+  const [found, n] = String(stdout || '').trim().split('\t');
+  return found === name ? Number(n) || 0 : null;
+}
+
+/**
+ * What holds a restart of this session right now, in the route's words, or
+ * null (lib/runtime safePointHold): the state file's word, the pane read the
+ * way the queue reads it (a dialog; a draft, ghost-free), the tasks directory
+ * (background shells and agents), tmux (an attached client), the PSI file (the
+ * lull) — and another session mid-cycle, which counts as load, so two never run
+ * at once. `rec.lastHold` throttles the re-reads while a queued job polls.
+ */
+async function restartHold(name, { force = false, panePid = null, rec = null } = {}) {
+  if (rec && rec.lastHold && Date.now() - rec.lastHold.at < HOLD_RECHECK_MS) return rec.lastHold.word;
+  const st = readSessionState(name);
+  const lines = await capturePaneLines(name, { escapes: true });
+  const dialog = !!lines && typing.paneBlocks(typing.paneReadyForInput(lines).why);
+  const holds = lines ? typing.composerText(lines, { dropGhost: true }) : null;
+  // `/exit` in the box is this restart's own, left by an attempt a dialog held.
+  const draft = typing.jobHold({ composerHolds: holds }) && String(holds).trim() !== '/exit';
+  const bg = panePid ? await backgroundWork(name, panePid) : { shells: [], agents: 0 };
+  const attached = ((await attachedCount(name)) || 0) > 0;
+  const word = runtimeLib.safePointHold({
+    state: st ? st.state : null,
+    dialog,
+    draft,
+    bg: bg.agents > 0 || bg.shells.length > 0,
+    attached,
+    force,
+    lull: cycleBusy && cycleBusy !== name ? false : (force ? true : loadLull()),
+  });
+  if (rec) rec.lastHold = { at: Date.now(), word };
+  return word;
+}
+
+/** Every process's parent and start time, from /proc: `pid -> {ppid, start}`. */
+function procParents() {
+  const out = new Map();
+  let names = [];
+  try { names = fs.readdirSync('/proc'); } catch { return out; }
+  for (const n of names) {
+    if (!/^\d+$/.test(n)) continue;
+    let stat;
+    try { stat = fs.readFileSync(`/proc/${n}/stat`, 'utf8'); } catch { continue; }
+    const close = stat.lastIndexOf(')');
+    if (close < 0) continue;
+    const f = stat.slice(close + 2).split(' ');
+    out.set(Number(n), { ppid: Number(f[1]), start: f[19] });
+  }
+  return out;
+}
+
+/**
+ * The Claude Code process under a pane, with its EXACT argv from /proc:
+ * `{pid, argv, start}`, or null when only shells are there (Claude has exited
+ * to the login shell). The pane runs `claude …; exec "$SHELL" -l` through
+ * `sh -c`, so the program is the shell's child; a wrapper that `exec`s is
+ * replaced, one that does not is a shell with a non-shell child (lib/runtime
+ * pickClaudePid). `start` is `/proc/<pid>/stat`'s start time, so a reused pid
+ * cannot pass for the process (pidLive).
+ */
+function claudeProcessOf(panePid) {
+  const root = Number(panePid);
+  if (!Number.isInteger(root) || root <= 0) return null;
+  const procs = procParents();
+  const children = new Map();
+  for (const [pid, p] of procs) {
+    if (!children.has(p.ppid)) children.set(p.ppid, []);
+    children.get(p.ppid).push(pid);
+  }
+  const order = [];
+  const queue = [...(children.get(root) || [])];
+  while (queue.length) {
+    const pid = queue.shift();
+    order.push(pid);
+    for (const c of children.get(pid) || []) queue.push(c);
+  }
+  const argvOf = (pid) => {
+    try {
+      const a = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+      if (a.length && a[a.length - 1] === '') a.pop();
+      return a;
+    } catch { return null; }
+  };
+  const commOf = (pid) => { try { return fs.readFileSync(`/proc/${pid}/comm`, 'utf8').trim(); } catch { return null; } };
+  const pid = runtimeLib.pickClaudePid(order, { argvOf, commOf });
+  if (!pid) return null;
+  return { pid, argv: argvOf(pid) || [], start: (procs.get(pid) || {}).start ?? null };
+}
+
+/**
+ * Ask the session's Claude Code to quit: `/exit` typed at a bare caret and
+ * submitted through the same look-before-Enter a message gets (enterAfterLook).
+ * On 2.1.316 the command quits at once, with no confirmation (measured
+ * 2026-11-07 in a throwaway session on a private socket). A pane with no
+ * composer — a Claude already on its way out, or hung — gets SIGTERM instead,
+ * and only then. Resolves `{ok: true}` once the process is gone; `held` when a
+ * dialog or somebody's text took the pane (the job goes back to waiting, and
+ * `/exit` already in the box is submitted next time, never typed twice).
+ */
+async function quitClaude(name, claude) {
+  const target = `=${name}:`;
+  const lines = await capturePaneLines(name, { escapes: true });
+  const composer = !!lines && typing.composerDrawn(lines);
+  if (composer) {
+    const holds = typing.composerText(lines, { dropGhost: true });
+    const mine = holds !== null && String(holds).trim() === '/exit';
+    if (!mine && typing.jobHold({ composerHolds: holds })) {
+      return { ok: false, held: 'draft', reason: 'there is unsent text in the composer; /exit was not typed' };
+    }
+    if (!mine) {
+      const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/exit']);
+      if (typed.err) return { ok: false, reason: 'could not type /exit' };
+      await sleep(SUBMIT_BEAT_MS);
+    }
+    const look = await enterAfterLook(name, '/exit', { hadComposer: true });
+    if (look.held) {
+      return { ok: false, held: 'dialog', reason: `a dialog opened before /exit was submitted (${look.held.why})` };
+    }
+    if (look.failed) return { ok: false, reason: 'could not submit /exit' };
+  } else {
+    log(`restart: ${name}: no composer on screen; sending claude (pid ${claude.pid}) SIGTERM`);
+    try { process.kill(claude.pid, 'SIGTERM'); } catch (e) {
+      if (e.code !== 'ESRCH') return { ok: false, reason: `could not signal claude: ${e.message}` };
+    }
+  }
+  const by = Date.now() + QUIT_WAIT_MS;
+  while (Date.now() < by) {
+    if (!pidLive(claude.pid, claude.start)) return { ok: true };
+    await sleep(150);
+  }
+  // Still running after /exit, and the prompt it was typed at is gone with the
+  // shutdown: a signal is the fallback now, and not before.
+  if (composer) {
+    const again = await capturePaneLines(name);
+    if (again && !typing.composerDrawn(again)) {
+      log(`restart: ${name}: claude is still running ${QUIT_WAIT_MS / 1000}s after /exit and its prompt is gone; sending SIGTERM`);
+      try { process.kill(claude.pid, 'SIGTERM'); } catch { /* gone between */ }
+      const by2 = Date.now() + 10_000;
+      while (Date.now() < by2) {
+        if (!pidLive(claude.pid, claude.start)) return { ok: true };
+        await sleep(150);
+      }
+    }
+  }
+  return { ok: false, reason: `claude (pid ${claude.pid}) did not exit` };
+}
+
+/**
+ * The command a relaunch runs: a project session as the reboot restore launches
+ * it — persona rewritten from the project as it stands, its effort, its model
+ * only when nothing resumes (projectRestoreCommand) — and any other session
+ * with the flags its process was started with, `--resume <id>` in place of
+ * whatever it had (lib/runtime replayArgs).
+ */
+function relaunchCommandFor(name, id, argv) {
+  const membership = projectsLib.membershipIndex(listProjects());
+  const fromProject = projectRestoreCommand(membership.get(name), { name, claudeSessionId: id }, true);
+  if (fromProject) return { command: fromProject.command, how: 'project' };
+  const args = runtimeLib.replayArgs(runtimeLib.claudeArgs(argv), id);
+  return { command: runtimeLib.relaunchCommand(args), how: 'argv' };
+}
+
+/**
+ * Relaunch in the SAME tmux session. `respawn-pane -k` replaces the pane's
+ * process and keeps the session: its name, its `#{session_created}` (what the
+ * queue's born check and the state file's incarnation rule key on, so nothing
+ * queued is failed as "replaced") and any attached client — where a kill and a
+ * `new-session` would lose all three. Then the marks a restore sets (the
+ * startup hold, the registry row with `restoredAt` and the new generation), and
+ * a wait for the composer. A shell prompt with no Claude under the pane is a
+ * launch that failed, said at once rather than at the end of the grace.
+ */
+async function relaunchInPane(name, { cwd, command, id }) {
+  const r = await run('tmux', ['respawn-pane', '-k', '-t', `=${name}:`, '-c', tmuxDir(cwd), command]);
+  if (r.err) return { ok: false, reason: `tmux: ${(r.stderr || r.err.message || '').trim().slice(0, 120)}` };
+  markLaunching(name);
+  registryAdd(name, { cwd, claudeSessionId: id, restoredAt: Math.floor(Date.now() / 1000) });
+  const by = Date.now() + STARTUP_GRACE_MS;
+  while (Date.now() < by) {
+    await sleep(250);
+    const lines = await capturePaneLines(name);
+    if (!lines) continue;
+    if (typing.composerDrawn(lines)) {
+      // Only now is the session ON the current generation: a relaunch that
+      // failed leaves the row reading `stale`, as it is.
+      registryAdd(name, launchGenFields());
+      return { ok: true };
+    }
+    if (typing.shellPrompt(lines)) {
+      const seen = { panePid: null };
+      if ((await sessionExists(name, seen)) === true && !claudeProcessOf(seen.panePid)) {
+        return { ok: false, reason: 'claude exited to the shell' };
+      }
+    }
+  }
+  return { ok: false, reason: `no composer ${Math.round(STARTUP_GRACE_MS / 1000)}s after the relaunch` };
+}
+
+/**
+ * The restart JOB (enqueueJob): run under the queue's lock at a turn boundary
+ * with a bare caret. It re-checks the safe point in the route's words (held: back
+ * to the head of the queue, asked again on the next poll), captures the Claude
+ * process's argv from /proc, marks `restarting`, quits it, relaunches it and
+ * waits for the composer. The queue holds for the whole of it — nothing is typed
+ * into the pane between one Claude leaving and the next one's composer — and
+ * nothing queued is lost. A relaunch that fails is retried once after
+ * RESTART_RETRY_MS and then given up on: the session stays `stale`.
+ */
+async function cycleSession(name, rec) {
+  const fail = (reason, extra = {}) => ({ ok: false, reason, message: reason, ...extra });
+  // A hold read moments ago still holds: the 400 ms poll costs this job no tmux
+  // call of its own until HOLD_RECHECK_MS has passed.
+  if (rec.lastHold && rec.lastHold.word && Date.now() - rec.lastHold.at < HOLD_RECHECK_MS) {
+    return { ok: true, held: { blockedBy: rec.lastHold.word, job: true } };
+  }
+  const seen = { panePid: null };
+  const here = await sessionExists(name, seen);
+  if (here !== true) return fail(here === false ? 'the session is gone' : 'tmux is not answering');
+  const hold = await restartHold(name, { force: rec.force, panePid: seen.panePid, rec });
+  if (hold) {
+    // The sweep leaves an attached session alone — it stays stale for a manual
+    // restart — where a restart somebody asked for waits for the terminal to go.
+    if (hold === 'attached' && rec.by === 'sweep') return fail('a terminal is attached; left for a manual restart');
+    if (rec.blockedBy !== hold) { rec.blockedBy = hold; log(`restart: ${name}: waiting (${hold})`); }
+    return { ok: true, held: { blockedBy: hold, job: true } };
+  }
+  const st = readSessionState(name);
+  const id = st && st.sessionId;
+  if (!id || !sessreg.UUID_RE.test(id)) return fail('no Claude session id to resume');
+  const transcript = st.transcript && fs.existsSync(st.transcript) ? st.transcript : findTranscriptFile(id);
+  if (!transcript) return fail('no transcript on disk to resume');
+  const claude = claudeProcessOf(seen.panePid);
+  if (!claude) return fail('no claude process under the pane');
+  const where = await run('tmux', ['display-message', '-p', '-t', `=${name}:`, '#{pane_current_path}']);
+  const cwd = st.cwd || (!where.err && String(where.stdout || '').trim()) || (registryCached()[name] || {}).cwd || WORKDIR;
+  const { command, how } = relaunchCommandFor(name, id, claude.argv);
+  rec.phase = 'cycling';
+  rec.blockedBy = null;
+  rec.oldGen = runtimeOf(name, sessionBorn.get(name) || null).gen;
+  cycleBusy = name;
+  log(`restart: ${name}: cycling (${rec.by}${rec.force ? ', forced' : ''}): claude pid ${claude.pid}, relaunch by ${how}`);
+  try {
+    const quit = await quitClaude(name, claude);
+    if (!quit.ok) {
+      if (quit.held) {
+        rec.phase = 'queued';
+        cycleBusy = null;
+        if (rec.blockedBy !== quit.held) { rec.blockedBy = quit.held; log(`restart: ${name}: waiting (${quit.held}): ${quit.reason}`); }
+        return { ok: true, held: { blockedBy: quit.held, job: true } };
+      }
+      return fail(quit.reason);
+    }
+    let up = await relaunchInPane(name, { cwd, command, id });
+    if (!up.ok) {
+      log(`restart: ${name}: relaunch failed (${up.reason}); one retry in ${Math.round(RESTART_RETRY_MS / 1000)}s`);
+      await sleep(RESTART_RETRY_MS);
+      up = await relaunchInPane(name, { cwd, command, id });
+      if (!up.ok) {
+        // No composer is coming: the startup hold the relaunch set would keep
+        // every send to this pane waiting out the grace for nothing. Off, so a
+        // send meets the pane as it is (a shell, which refuses it) at once.
+        launchingAt.delete(name);
+        unmarkedHeld.delete(name);
+        return fail(`relaunch failed twice (${up.reason})`, { gaveUp: true });
+      }
+    }
+    log(`restart: ${name}: ${rec.oldGen || 'none'} -> ${runtimeNow ? runtimeNow.gen : 'none'}`);
+    return { ok: true, gen: runtimeNow ? runtimeNow.gen : null };
+  } finally {
+    if (cycleBusy === name) cycleBusy = null;
+  }
+}
+
+/** The job's settle: the row stops reading `restarting`, and a failure is written down. */
+function finishRestart(name, rec, v) {
+  restarts.delete(name);
+  const ok = !!(v && v.delivered);
+  if (!ok) {
+    const result = (v && v.result) || {};
+    const why = v && v.dropped
+      ? `dropped: ${typing.dropMessage(v.dropped, { origin: 'restart' })}`
+      : (result.reason || result.message || 'no result');
+    log(`restart: ${name}: not restarted (${why}); it stays marked stale`);
+    if (result.gaveUp) restartGaveUp.set(name, Date.now());
+    else if (rec.by === 'sweep') restartBackoff.set(name, Date.now() + SWEEP_BACKOFF_MS);
+  }
+  if (typeof rec.onDone === 'function') { try { rec.onDone(ok); } catch { /* the sweep's own */ } }
+}
+
+/**
+ * Queue a restart of one session as a send-queue job, and answer what holds it
+ * now in the route's words. The job rides the AUTOMATED lane on purpose: a job
+ * at the head of the queue holds every message behind it, so one that cannot
+ * reach its safe point gives up after the lane's ten minutes (the row goes back
+ * to `stale`; the sweep tries again later, a person can ask again) and is
+ * dropped when the owner types meanwhile — a restart never talks over anybody.
+ * Not awaited past the first look: the first pump pass may run the whole cycle,
+ * and the caller's answer is "queued".
+ */
+async function queueRestart(name, { force = false, by = 'route', panePid = null, onDone = null } = {}) {
+  const rec = { phase: 'queued', since: Date.now(), force, by, blockedBy: null, oldGen: null, lastHold: null, onDone };
+  restarts.set(name, rec);
+  restartGaveUp.delete(name);
+  restartBackoff.delete(name);
+  let hold = null;
+  try { hold = await restartHold(name, { force, panePid, rec }); } catch { /* read on the first pass */ }
+  rec.blockedBy = hold;
+  log(`restart: ${name}: queued (${by}${force ? ', forced' : ''}${hold ? `; waiting: ${hold}` : ''})`);
+  enqueueJob(name, () => cycleSession(name, rec), {
+    automated: true, origin: 'restart', kind: 'restart', prompt: '/exit',
+    onSettle: (v) => finishRestart(name, rec, v),
+  }).catch((e) => log(`restart: ${name}: queue failed: ${e.message}`));
+  return { queued: true, blockedBy: hold };
+}
+
+/**
+ * The automatic sweep: while `cycleOnDeploy` is on and a generation is known,
+ * cycle stale sessions ONE AT A TIME, oldest first, each at its own safe point
+ * — idle, unattached, with a conversation to resume (lib/runtime sweepPick) —
+ * with CYCLE_GAP_MS between cycles and the load gate before each. Never mid-turn
+ * (the job waits for the boundary), never two at once (`cycleBusy`). A session
+ * given up on, or left for a manual restart, is skipped until the generation
+ * changes again.
+ */
+let sweepBusy = false;
+let sweepNextAt = 0;
+let sweepLullSaid = false;
+async function cycleSweepTick() {
+  if (!CYCLE_ON_DEPLOY || !runtimeNow || sweepBusy || cycleBusy || Date.now() < sweepNextAt) return;
+  const rows = await listSessions({ shared: true });
+  if (!rows) return;
+  const now = Date.now();
+  for (const [n, until] of restartBackoff) if (until <= now) restartBackoff.delete(n);
+  const skip = new Set([...restartGaveUp.keys(), ...restartBackoff.keys(), ...restarts.keys()]);
+  const pick = runtimeLib.sweepPick(rows, { skip });
+  if (!pick) return;
+  if (!loadLull()) {
+    if (!sweepLullSaid) {
+      sweepLullSaid = true;
+      log(`restart sweep: ${pick.name} is stale, but the host is loaded (${PRESSURE_FILE}); waiting for the lull`);
+    }
+    return;
+  }
+  sweepLullSaid = false;
+  sweepBusy = true;
+  const stale = rows.filter((r) => r.runtime && r.runtime.stale).length;
+  log(`restart sweep: ${stale} stale session(s); cycling ${pick.name} (${pick.runtime.gen || 'none'} -> ${runtimeNow.gen})`);
+  try {
+    await new Promise((resolve) => {
+      queueRestart(pick.name, { by: 'sweep', panePid: pick.panePid, onDone: resolve }).catch(() => resolve(false));
+    });
+  } finally {
+    sweepBusy = false;
+    sweepNextAt = Date.now() + CYCLE_GAP_MS;
+  }
 }
 
 /** One pass over the pending soft ends; kills the ones that have settled. */
@@ -8185,7 +8814,7 @@ async function launchProjectSession(tmuxName, cwd, command) {
   // read back anyway, because "should never" is how the rename route got bitten.
   const q = await run('tmux', ['display-message', '-p', '-t', `=${tmuxName}:`, '#S']);
   const created = (q.stdout || '').trim() || tmuxName;
-  registryAdd(created, { cwd });
+  registryAdd(created, { cwd, ...launchGenFields() });
   markLaunching(created);
   return { name: created };
 }
@@ -8631,6 +9260,9 @@ async function reconcileProjects() {
 async function reconcileProjectsPass() {
   const live = await listSessions();
   if (live === null) return;   // listSessions has said why, once
+  // A session mid-restart (its Claude quit, the next not yet up) is live however
+  // a listing read it: never dropped, never re-bound, never archived for.
+  withRestartingPresent(live);
   const nowMs = Date.now();
   const now = Math.floor(nowMs / 1000);
   const touched = new Set();
@@ -8697,6 +9329,38 @@ function rememberOverview(key, value) {
   }
 }
 
+/**
+ * How long a dashboard answer waits for a member whose transcript has to be
+ * walked, and how many such walks run at once (projectsLib
+ * rollupMembersConcurrent). The cap is a TEST-ONLY knob, clamped like the others.
+ *
+ * ⚠ 2026-11-07: measured from the retained journal, `GET /v1/projects/<id>/
+ * dashboard` had a median of 38 ms, a p99 of 109 ms — and 8 answers over 1 s,
+ * 3 over 5 s, the worst 8.6 s (11 s on an earlier scan): the cold members of a
+ * project were walked one after another, and the page said "Nothing to show
+ * yet." for the sum of them.
+ */
+const DASHBOARD_CAP_MS = Math.max(20, Math.min(60_000, Number(process.env.HUGINN_APPD_DASHBOARD_CAP_MS) || 1_000));
+const DASHBOARD_WALKS_AT_ONCE = 4;
+
+/**
+ * One walk per member however many dashboard polls ask for it: a cold member
+ * that two clients poll every five seconds is walked once, and a poll that left
+ * before the walk finished finds the same walk, further along, on its next ask.
+ * (sessionGraphAsync shares its cache entry between callers; this spares the
+ * second caller even the call.)
+ */
+const overviewWalks = new Map();   // sessionId (or file) -> promise of an overview
+function sharedOverview(file, id) {
+  const key = id || file;
+  const running = overviewWalks.get(key);
+  if (running) return running;
+  const p = sessionOverviewAsync(file, id).catch(() => null)
+    .finally(() => { if (overviewWalks.get(key) === p) overviewWalks.delete(key); });
+  overviewWalks.set(key, p);
+  return p;
+}
+
 async function projectDashboard(project) {
   const sessions = await listSessions();
   const joined = projectsLib.joinMembers(project, sessions || [], readNativeRegistry());
@@ -8705,13 +9369,18 @@ async function projectDashboard(project) {
     const file = (st && st.transcript) || (r.sessionId ? findTranscriptFile(r.sessionId) : null);
     return { ...r, transcript: file };
   });
-  // Awaited member by member: a member whose walk went cold (a restart, the
-  // graph LRU) is walked in steps that let the rest of the daemon run.
-  const rows = await projectsLib.rollupMembersAsync(withFiles, {
+  // The cold members — a walk that went cold after a restart, or the graph LRU
+  // — are walked a few at a time, each in steps that let the rest of the daemon
+  // run, and the answer leaves at the cap with what has finished: a member still
+  // walking is shown with its last known numbers and `pending`, and its walk
+  // goes on so the next poll has it. A warm member costs a stat.
+  const { rows, pending } = await projectsLib.rollupMembersConcurrent(withFiles, {
     cache: { get: (k) => projectOverviewCache.get(k), set: rememberOverview },
     sizeOf: (f) => { try { return fs.statSync(f).size; } catch { return null; } },
     agentBytesOf,
-    overview: async (f, id) => { try { return await sessionOverviewAsync(f, id); } catch { return null; } },
+    overview: sharedOverview,
+    limit: DASHBOARD_WALKS_AT_ONCE,
+    capMs: DASHBOARD_CAP_MS,
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
   return {
@@ -8719,6 +9388,8 @@ async function projectDashboard(project) {
     generatedAt: Math.floor(Date.now() / 1000),
     totals,
     rate,
+    // How many members' numbers are still being read (their rows say `pending`).
+    pending,
     members: rows.map(projectsLib.dashboardMemberRow),
   };
 }
@@ -9226,6 +9897,10 @@ async function statusPayload() {
     // automatic) without carrying their own copy that could drift from the host.
     softEndPhrase: SOFT_END_PHRASE,
     softEndAuto: SOFT_END_AUTO,
+    // Whether stale sessions are cycled onto a new runtime generation on their
+    // own (HUGINN_APPD_CYCLE_ON_DEPLOY), and the generation itself (lib/runtime.js).
+    cycleOnDeploy: CYCLE_ON_DEPLOY,
+    runtime: currentRuntime() ? { gen: runtimeNow.gen, claude: runtimeNow.claude || null, since: runtimeNow.since } : null,
     // Beside the soft-end phrase and for the same reason: the clients render
     // host-owned copy rather than their own. One small file read per poll, which
     // is nothing next to the df and the version shell-out above.
@@ -12927,6 +13602,17 @@ async function alertTickInner(st) {
   // tmux blip turns into mass spurious resolutions; the next tick is 10s away.
   if (sessions === null) { log('alerts: skipping tick, session list unavailable'); return; }
   const d = digest(sessions, chatStates(), headroomFacts());
+  // A session whose Claude is being cycled onto the current runtime generation
+  // (cycleSession) is exempt: its quit and relaunch are not a run ending or a
+  // question answered, and its fresh state file is not a new run. The previous
+  // observation's word stands in for the whole cycle, so this tick sees no edge
+  // for it and the run-start ledger below carries unchanged.
+  for (const [name, rec] of restarts) {
+    if (rec.phase !== 'cycling') continue;
+    const was = st.prev && st.prev.sessions ? st.prev.sessions[name] : undefined;
+    if (was === undefined) delete d.sessions[name];
+    else d.sessions[name] = was;
+  }
   // When each running session's run began — the watcher's OWN ledger, carried
   // from the previous observation, not the state file's timestamp. The file is
   // rewritten by the hook on every tool call, so its ts means "seconds since a
@@ -15086,6 +15772,31 @@ async function handleRequest(req, res) {
         typing.typingSnapshot(sendQueues.get(name), Date.now(), intoDraftFor(name)));
     }
 
+    // --- restart: quit this session's Claude Code and bring the conversation back
+    // on the current runtime generation (lib/runtime.js). Queued as a send-queue
+    // JOB, the ladder's shape: it runs at a turn boundary with a bare caret, and
+    // the answer says what holds it now in the route's own words.
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/restart$/)) && req.method === 'POST') {
+      const name = m[1];
+      const seen = { panePid: null };
+      if (!(await requireSession(res, name, seen))) return;    // 404 gone, 503 tmux would not say
+      const body = await readJsonBody(req);
+      if (restarts.has(name)) {
+        return sendJson(res, 409, { reason: 'restarting', error: 'a restart is already queued or running for this session' });
+      }
+      // Nothing to resume is nothing to restart: a plain shell, or a Claude whose
+      // hooks never wrote a state file, would come back as a fresh conversation.
+      const st = readSessionState(name);
+      if (!st || !st.sessionId || !sessreg.UUID_RE.test(st.sessionId)) {
+        return sendJson(res, 409, {
+          reason: 'no-claude',
+          error: 'no Claude session is recorded here yet — there is nothing to resume, so this session cannot be restarted',
+        });
+      }
+      const out = await queueRestart(name, { force: body.force === true, by: 'route', panePid: seen.panePid });
+      return sendJson(res, 202, { queued: true, blockedBy: out.blockedBy || null });
+    }
+
     // --- soft end: type a wrap-up phrase, and (when auto) end on settle
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/soft-end$/)) && req.method === 'POST') {
       const name = m[1];
@@ -16348,7 +17059,7 @@ async function handleRequest(req, res) {
       // died with the old process". As true for a revive as for a reboot: without
       // it auto-resume sits out its 90-second native grace waiting for a
       // continuation that can never come.
-      registryAdd(created, { cwd, claudeSessionId: id, restoredAt: Math.floor(Date.now() / 1000) });
+      registryAdd(created, { cwd, claudeSessionId: id, restoredAt: Math.floor(Date.now() / 1000), ...launchGenFields() });
       // The same startup hold the create route takes: `claude` needs about two
       // seconds before anything reads stdin, and a revive is followed immediately
       // by somebody typing into it.
@@ -18114,6 +18825,9 @@ resolveBind().then(async (bind) => {
   // a daemon that learned it only on the next archive would spend its first
   // minutes reporting sessions somebody deliberately ended.
   refreshArchivedIds();
+  // The current runtime generation, BEFORE the restore below: every session it
+  // brings back is launched under it and records it (lib/runtime.js).
+  await refreshRuntimeGen('start').catch((e) => log(`runtime: could not read the generation: ${e.message}`));
   // Bring back the tmux sessions a reboot/power-cut killed. A no-op when the tmux
   // server survived (an ordinary appd restart), so it is safe to run every start.
   // Before listen, like the sweep above, so the session list is whole by the time a
@@ -18140,6 +18854,12 @@ resolveBind().then(async (bind) => {
   setTimeout(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, firstReconcileMs).unref();
   setInterval(() => { reconcileSessionRegistry().catch(() => { }); }, RECONCILE_MS).unref();
   setInterval(() => { reconcileProjects().catch((e) => log(`projects: reconcile failed: ${e.message}`)); }, RECONCILE_MS).unref();
+  // The runtime generation, re-read cheaply (two file digests and a stat of the
+  // `claude` binary) so a `claude update` or a re-run of install-hooks shows up
+  // within a minute; and the sweep that cycles stale sessions one at a time
+  // while `cycleOnDeploy` is on (lib/runtime.js).
+  setInterval(() => { refreshRuntimeGen('re-read').catch((e) => log(`runtime: refresh failed: ${e.message}`)); }, RUNTIME_RECHECK_MS).unref();
+  setInterval(() => { cycleSweepTick().catch((e) => log(`restart sweep: tick failed: ${e.message}`)); }, Math.min(CYCLE_GAP_MS, 30_000)).unref();
   // A restart kills any run that was in flight, and delivery of a chat's queue is
   // triggered by that run closing — so without this, messages queued before a
   // restart would sit on disk unanswered forever.

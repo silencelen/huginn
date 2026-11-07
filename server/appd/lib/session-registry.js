@@ -72,6 +72,12 @@ function mergeLive(registry, live, now) {
       // the old process" back into "armed", and auto-resume would then wait 90
       // seconds for a continuation nobody is going to send.
       restoredAt: (prev && prev.restoredAt) || null,
+      // The runtime generation this session was launched under (lib/runtime.js),
+      // recorded at launch and carried for the same reason as `restoredAt`:
+      // anything not named here evaporates on the next reconcile, and a session
+      // whose generation evaporated would read stale and be cycled for nothing.
+      runtimeGen: (prev && prev.runtimeGen) || null,
+      runtimeClaude: (prev && prev.runtimeClaude) || null,
       updatedAt: now,
     };
   }

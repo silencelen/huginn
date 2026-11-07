@@ -48,6 +48,22 @@ test('a chat title changing does not wake a watcher', () => {
   assert.strictEqual(digest(sessions, chats).hash, digest(sessions, retitled).hash);
 });
 
+test('a session turning stale, or starting a restart, changes the hash; the rest of its runtime does not', () => {
+  // The apps draw the "restart to update" mark and the starting-style state from
+  // this (lib/runtime.js); a row's generation strings change exactly when `stale`
+  // does, so only the two booleans are in the hash.
+  const current = [{ ...sessions[0], runtime: { stale: false, gen: 'a', current: 'a', restarting: false } }, sessions[1]];
+  const stale = [{ ...sessions[0], runtime: { stale: true, gen: 'a', current: 'b', restarting: false } }, sessions[1]];
+  const restarting = [{ ...sessions[0], runtime: { stale: true, gen: 'a', current: 'b', restarting: true } }, sessions[1]];
+  const relabelled = [{ ...sessions[0], runtime: { stale: false, gen: 'c', current: 'c', claude: '2.1.320', restarting: false } }, sessions[1]];
+  assert.notStrictEqual(digest(current, chats).hash, digest(stale, chats).hash, 'stale');
+  assert.notStrictEqual(digest(stale, chats).hash, digest(restarting, chats).hash, 'restarting');
+  assert.strictEqual(digest(current, chats).hash, digest(relabelled, chats).hash, 'the generation strings alone');
+  assert.deepEqual(digest(restarting, chats).runtime, { andrev: { stale: true, restarting: true } }, 'carried, for a client that reads it');
+  // Rows that carry no runtime (an older shape) hash as they always did.
+  assert.strictEqual(digest(sessions, chats).runtime && Object.keys(digest(sessions, chats).runtime).length, 0);
+});
+
 test('a new session or chat appearing changes the hash', () => {
   assert.notStrictEqual(
     digest(sessions, chats).hash,

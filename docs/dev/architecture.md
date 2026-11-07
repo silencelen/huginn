@@ -170,6 +170,7 @@ token. The full contract is [Daemon TLS protocol](protocol-tls.md).
 | Headroom | The plan's usage windows for every saved account, and one arbiter that decides account switches, the model ladder and stops; resumes sessions stalled on a usage limit | `lib/headroom.js`, `lib/sentinels.js`, `lib/limits.js`, `lib/resume.js` |
 | Apps | A registry of web apps this server hosts, probed at every address a client has used | `lib/apps.js` |
 | Push and alerts | Firebase push to the Android app when a service-account key is configured; an optional alert script for when no client is watching | `lib/fcm.js`, `lib/pushtokens.js`, `lib/alerts.js` |
+| Session cycling | The runtime generation a session was launched under (the `claude` binary, the settings file, the user-scope MCP registrations, the daemon version), recorded on every launch and reported as `runtime` on every row; a stale session is quit with `/exit` at a safe point and relaunched in the same tmux session with its captured flags and `--resume`, by request (`POST /v1/sessions/<name>/restart`) or by the sweep, one at a time | `lib/runtime.js`, `cycleSession` in `huginn-appd.js` |
 | Also | Archive (ended sessions, revivable), scratchpads, uploads, saved logins | `lib/archive.js`, `lib/scratchpads.js`, `lib/uploads.js`, `lib/accounts.js` |
 
 The daemon speaks three state words on the wire for a session: `running`, `attention` and

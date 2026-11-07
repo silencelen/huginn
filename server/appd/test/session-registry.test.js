@@ -35,6 +35,23 @@ test('mergeLive makes a learned id and cwd STICKY across a later empty read', ()
   assert.equal(r.dev.updatedAt, 102, 'updatedAt still moves');
 });
 
+test('mergeLive carries the runtime generation a launch recorded, like restoredAt', () => {
+  // The daemon records which generation (lib/runtime.js) it launched a session
+  // under; mergeLive rebuilds every entry from an explicit field list, so a field
+  // it does not name is gone at the next reconcile — and a session whose
+  // generation evaporated would read stale and be cycled for nothing.
+  const store = {
+    web: { name: 'web', createdAt: 1, claudeSessionId: 'id-1', cwd: '/w', runtimeGen: 'abc123abc123', runtimeClaude: '2.1.316', updatedAt: 1 },
+  };
+  const next = reg.mergeLive(store, [{ name: 'web', createdAt: 1, claudeSessionId: 'id-1', cwd: '/w' }], 50);
+  assert.strictEqual(next.web.runtimeGen, 'abc123abc123');
+  assert.strictEqual(next.web.runtimeClaude, '2.1.316');
+  // A session first seen here has none yet: the daemon assigns one by its birth time.
+  const fresh = reg.mergeLive({}, [{ name: 'cc', createdAt: 40, claudeSessionId: null, cwd: null }], 50);
+  assert.strictEqual(fresh.cc.runtimeGen, null);
+  assert.strictEqual(fresh.cc.runtimeClaude, null);
+});
+
 test('mergeLive never records the reserved login session', () => {
   const out = reg.mergeLive({}, [{ name: 'login', createdAt: 1 }, { name: 'dev', createdAt: 2 }], 100);
   assert.deepEqual(Object.keys(out), ['dev']);
