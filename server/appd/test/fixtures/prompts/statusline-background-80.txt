@@ -1,0 +1,24 @@
+
+[38;5;231m●[39m done
+
+[38;5;246m✻[39m [38;5;246mChurned[39m [38;5;246mfor[39m [38;5;246m5s[39m [38;5;246m·[39m [38;5;246mdone[39m [38;5;246m12:55[39m [38;5;246mAM[39m [38;5;246m·[39m [38;5;246m1[39m [38;5;246mshell, 1 monitor still running[39m
+
+[38;5;246m[48;5;237m❯[39m [38;5;231m/exit[39m
+
+[38;5;246m❯ [38;5;231mUse the Monitor tool with description r5 probe, timeout_ms 600000 and exactly[39m
+  [38;5;231mthis command: while true; do sleep 20; done   When it is armed, reply with [39m
+  [38;5;231mthe single word armed and nothing else.[39m
+[49m
+[38;5;114m●[39m [1mMonitor[0m(r5 probe)
+[38;5;246m  ⎿  [39mMonitor started [38;5;246m· task b5hn0ywo7 · timeout 600s[39m
+[38;5;246m  ⎿  Allowed by auto mode[39m
+
+[38;5;231m●[39m armed
+
+[38;5;246m✻[39m [38;5;246mWorked for 6s · done 12:59 AM · 1 shell, 1 monitor still running[39m
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ 
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;220m⏵⏵[39m [38;5;220mauto[39m [38;5;220mmode[39m [38;5;220mon[38;5;246m ·[39m [38;5;44m1[39m [38;5;44mshell,[39m [38;5;44m1[39m [38;5;44mmonitor[38;5;246m ·[39m [38;5;246m↓ to manage[39m
+

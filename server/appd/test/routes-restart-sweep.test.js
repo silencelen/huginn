@@ -18,6 +18,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const paneLib = require('../lib/pane');
+const typing = require('../lib/typing');
 
 // PORT ALLOCATION — see the table in routes-lifecycle.test.js; this file owns
 // 13150 + pid%50 -> 13150-13199.
@@ -157,7 +159,11 @@ before(async () => {
     + 'name=$(tmux display-message -p "#S" 2>/dev/null)\n'
     + `export HG_FAKE_CLAUDE_OUT="${tmp}/$name.submitted"\n`
     + `export HG_FAKE_CLAUDE_ARGV_OUT="${tmp}/$name.argv"\n`
-    + 'case "$name" in *dies*) export HG_FAKE_CLAUDE_DIE_WITH_RESUME=1 ;; esac\n'
+    + 'case "$name" in\n'
+    + '  *dies*) export HG_FAKE_CLAUDE_DIE_WITH_RESUME=1 ;;\n'
+    + '  *draft*) export HG_FAKE_CLAUDE_TYPED="half a thought" ;;\n'
+    + `  *exitasks*) export HG_FAKE_CLAUDE_EXIT_ASKS_FILE="${tmp}/$name.exit-asks" ;;\n`
+    + 'esac\n'
     + `exec ${process.execPath} ${fake} "$@"\n`, { mode: 0o755 });
 
   // The install beside the binary, which is where the daemon reads the Claude Code
@@ -179,6 +185,12 @@ before(async () => {
     HUGINN_APPD_RUNTIME_RECHECK_MS: '400',
     HUGINN_APPD_CYCLE_GAP_MS: String(GAP_MS),
     HUGINN_APPD_RESTART_RETRY_MS: '800',
+    // The backoff ladder in seconds (1.5 s, 4.5 s, 9 s, …), the stand-in's
+    // `/exit` answered within a second, the summary every 5 s instead of hourly.
+    HUGINN_APPD_SWEEP_BACKOFF_MS: '1500',
+    HUGINN_APPD_QUIT_WAIT_MS: '1500',
+    HUGINN_APPD_EXIT_DIALOG_HOLD_MS: '500',
+    HUGINN_APPD_SWEEP_SUMMARY_MS: '5000',
     HG_FAKE_CLAUDE_BOOT_MS: String(BOOT_MS),
     HG_FAKE_CLAUDE_BANNER_MS: String(BANNER_MS),
   };
@@ -236,11 +248,11 @@ test('cycleOnDeploy is on by default, and the sweep cycles stale sessions one at
   // Oldest first, and the gap between them.
   const log = daemonLog();
   const at = (re) => { const m = re.exec(log); return m ? log.indexOf(m[0]) : -1; };
-  const firstPicked = at(new RegExp(`restart sweep: \\d+ stale session\\(s\\); cycling ${first.name} `));
+  const firstPicked = at(new RegExp(`restart sweep: picked ${first.name} \\(`));
   const firstDone = at(new RegExp(`restart: ${first.name}: [0-9a-f]{12} -> ${now}`));
-  const secondPicked = at(new RegExp(`restart sweep: \\d+ stale session\\(s\\); cycling ${second.name} `));
+  const secondPicked = at(new RegExp(`restart sweep: picked ${second.name} \\(`));
   assert.ok(firstPicked >= 0 && firstDone > firstPicked && secondPicked > firstDone, `the order in the log:\n${log.split('\n').filter((l) => /restart/.test(l)).join('\n')}`);
-  assert.ok(/restart sweep: 3 stale session\(s\); cycling/.test(log), 'the sweep counted the attached one as stale too');
+  assert.ok(/restart sweep: picked \S+ \(3 stale; first in line; /.test(log), `the sweep counted the attached one as stale too:\n${log.split('\n').filter((l) => /restart sweep/.test(l)).join('\n')}`);
 
   // The attached one is left alone, and stays stale for a manual restart...
   await wait(GAP_MS * 2 + 1_000);
@@ -279,6 +291,73 @@ test('the sweep waits for the lull: a loaded host cycles nothing', async () => {
   assert.deepEqual(starts[1], ['--resume', busy.sid]);
 });
 
+test('the sweep takes the stale session that is at a safe point NOW, not the oldest: a draft ahead of it is skipped, not waited on', async () => {
+  // The sessions above are done with; the line below is these two alone. Not
+  // killed mid-cycle: a relaunch whose session vanishes under it waits out the
+  // startup grace before the sweep is free again.
+  assert.ok(await until(async () => ((await rows()).every((r) => !(r.runtime && r.runtime.restarting)) ? true : null), 30_000, 200), 'no cycle in flight');
+  for (const s of ['first', 'second', 'watched', 'loadhold']) { try { tmux(['kill-session', '-t', `=${PFX}-${s}`]); } catch { /* gone */ } }
+  const drafty = await readySession('olddraft');     // somebody's words in its box: never at a safe point
+  await wait(1_100);
+  const idle = await readySession('idleyoung');
+  await bumpGeneration();
+  // On the old rule the oldest went first and its job sat on the draft for the
+  // lane's ten minutes, the sweep with it; the younger idle one was never reached.
+  const starts = await until(() => (argvLines(idle.name).length >= 2 ? argvLines(idle.name) : null), 15_000, 100);
+  assert.ok(starts, `the younger idle session was cycled first:\n${daemonLog().split('\n').filter((l) => /restart/.test(l)).slice(-12).join('\n')}`);
+  assert.deepEqual(starts[1], ['--resume', idle.sid]);
+  assert.equal(argvLines(drafty.name).length, 1, 'the one with the draft was not touched');
+  assert.match(daemonLog(), new RegExp(`restart sweep: picked ${idle.name} \\(\\d+ stale; skipped ${drafty.name} draft; `), 'one line says who was skipped and why');
+  assert.ok(!new RegExp(`restart: ${drafty.name}: queued`).test(daemonLog()), 'a skip at the pick is not an attempt: nothing was queued for it');
+  // The draft cleared, it is taken on a later tick: a skip costs it no backoff.
+  const keys = await api(`/v1/sessions/${drafty.name}/keys`, { method: 'POST', body: JSON.stringify({ keys: ['C-u'] }) });
+  assert.equal(keys.status, 200, JSON.stringify(keys.body));
+  const later = await until(() => (argvLines(drafty.name).length >= 2 ? argvLines(drafty.name) : null), 15_000, 100);
+  assert.ok(later, 'cycled once its box was empty');
+  assert.deepEqual(later[1], ['--resume', drafty.sid]);
+});
+
+test('a sweep job that cannot cycle its session yields: backed off longer each time, the next candidate taken in the same tick, and a summary line', async () => {
+  // Nothing on disk or on the pane says this one has background work, so the
+  // pick takes it — and its `/exit` meets Claude Code's "Background work is
+  // running" prompt. The job backs out of the prompt and yields; the tick moves
+  // on at once. On the old rule the prompt was left on the pane and the sweep
+  // waited out its twenty seconds before anything else happened.
+  const asks = await readySession('oldexitasks');
+  const flag = path.join(tmp, `${asks.name}.exit-asks`);
+  fs.writeFileSync(flag, '1');
+  await wait(1_100);
+  const next = await readySession('nextidle');
+  const logBefore = daemonLog().length;
+  await bumpGeneration();
+  const starts = await until(() => (argvLines(next.name).length >= 2 ? argvLines(next.name) : null), 12_000, 100);
+  const tail = () => daemonLog().slice(logBefore).split('\n').filter((l) => /restart/.test(l)).join('\n');
+  assert.ok(starts, `the next candidate was cycled right after the yield:\n${tail()}`);
+  const log = daemonLog().slice(logBefore);
+  const yielded = new RegExp(`restart sweep: ${asks.name}: claude asked before exiting \\(shell · sleep 900, monitor · r5 probe\\); backed out with Esc; backed off 2 s`).exec(log);
+  assert.ok(yielded, `one line: held, why, backed off:\n${tail()}`);
+  const pickedAsks = log.indexOf(`restart sweep: picked ${asks.name} (`);
+  const pickedNext = log.indexOf(`restart sweep: picked ${next.name} (`);
+  assert.ok(pickedAsks >= 0 && pickedAsks < yielded.index && yielded.index < pickedNext, `picked, yielded, then the next pick:\n${tail()}`);
+  // The stand-in repaints below rather than clearing: the prompt's rows stay in
+  // the scroll, and what matters is that it is no longer the thing on screen.
+  const screen = tmux(['capture-pane', '-p', '-t', `=${asks.name}:`]).split('\n');
+  assert.equal(paneLib.exitDialog(screen), null, `the prompt was left on its pane:\n${screen.join('\n')}`);
+  assert.equal(typing.composerDrawn(screen), true, 'its composer is back');
+  // Tried again after its backoff, and backed off three times as long.
+  const again = await until(() => (new RegExp(`restart sweep: ${asks.name}: .*; backed off 5 s`).test(daemonLog()) ? true : null), 15_000, 100);
+  assert.ok(again, `backed off longer the second time:\n${tail()}`);
+  const exits = readOr(path.join(tmp, `${asks.name}.argv.exit`)).split('\n').filter(Boolean);
+  assert.ok(exits.length >= 2 && exits.every((l) => l === 'exit'), `two attempts, the prompt never answered: ${JSON.stringify(exits)}`);
+  assert.ok(await until(() => (/restart sweep: \d+ stale, \d+ cycled, \d+ backed off in the last \d+ s/.test(daemonLog()) ? true : null), 12_000, 200),
+    `the summary line:\n${tail()}`);
+  // The work ends: cycled in its turn.
+  fs.unlinkSync(flag);
+  const done = await until(() => (argvLines(asks.name).length >= 2 ? argvLines(asks.name) : null), 40_000, 100);
+  assert.ok(done, `cycled once the work was gone:\n${tail()}`);
+  assert.deepEqual(done[1], ['--resume', asks.sid]);
+});
+
 test('cycleOnDeploy=false cycles nothing; a relaunch that fails is retried once, then the session is left stale', async () => {
   // The same host, the same sessions, a daemon told not to sweep.
   await reap(daemon);
@@ -292,7 +371,7 @@ test('cycleOnDeploy=false cycles nothing; a relaunch that fails is retried once,
   await wait(GAP_MS * 3 + 1_000);
   assert.equal(argvLines(quiet.name).length, 1, 'nothing cycled on its own');
   assert.equal((await rowOf(quiet.name)).runtime.stale, true, 'and it stays stale, for a manual restart');
-  assert.ok(!/restart sweep: .* cycling/.test(daemonLog().slice(logBefore)), 'no sweep line from this daemon');
+  assert.ok(!/restart sweep: picked/.test(daemonLog().slice(logBefore)), 'no sweep line from this daemon');
 
   // A manual restart whose relaunch dies: one retry after RESTART_RETRY_MS, then given up.
   assert.equal((await rowOf(dies.name)).runtime.stale, true);

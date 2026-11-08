@@ -9,6 +9,29 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Fixed
+- The restart sweep moves on. It takes the stale session that is at a safe point now (the
+  transcript's turn, no dialog, an empty prompt, no background work, no terminal) rather than the
+  oldest, reads candidates in order until it finds one, and a job that still cannot cycle its
+  session yields at once instead of waiting the lane's ten minutes: the session is backed off (10
+  min, then 30, 60, 2 h, 4 h, 6 h; a new generation resets it) and goes to the back of the line,
+  and the next candidate is taken in the same pass. A sweep job waits at most a minute for a turn
+  boundary. One journal line per decision (picked, held and backed off, cycled), a summary at most
+  hourly.
+- `/exit` over background work: Claude Code answers with its "Background work is running" prompt
+  instead of quitting. The cycle now reads the pane while it waits, backs out of that prompt with
+  Esc (never answers it) and holds the restart as `background`; a dialog of any other kind holds it
+  as `dialog`; `/exit` taken with nothing happening is tried once more, and a second no-op leaves
+  the process running — no signal while a prompt is drawn. Before, the prompt was left on the pane
+  and held every later restart as `dialog` until a person dismissed it.
+- Background work is counted the way Claude Code counts it: the mode hint under the prompt
+  (`⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage`) is read beside the tasks directory, so a
+  Monitor — which leaves nothing there until its first event and never holds its file open — holds
+  a restart. Session rows carry `bgMonitors` (preview list); `bgShells` and `bgAgents` take the
+  larger of the two counts.
+
 ## 3.19.0 — 2026-11-07
 
 ### Added

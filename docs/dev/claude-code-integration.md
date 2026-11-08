@@ -353,7 +353,8 @@ host's `fastMode` decides. Device runs do not carry it.
 | `claude auth login` in a tmux session named `login` | sign-in from the apps; the pane is read for the URL and the result |
 | `claude auth logout` | sign-out from the apps |
 | `claude --version` | reported in `GET /v1/status`, cached for an hour; and the runtime generation's `currentClaude` where no `package.json` sits beside the binary |
-| `/exit` typed at the composer | ends a session's Claude Code for a restart (`POST /v1/sessions/<name>/restart`, the sweep). Measured on 2.1.316 (2026-11-07): the slash-command menu opens on the typed text with `/exit` highlighted, Enter runs it, the process exits at once with no confirmation, and the pane falls through to what follows `claude` in its command. Typed and submitted through the same look-before-Enter path a message takes (`enterAfterLook`); a pane with no composer gets `SIGTERM` instead. |
+| `/exit` typed at the composer | ends a session's Claude Code for a restart (`POST /v1/sessions/<name>/restart`, the sweep). Measured on 2.1.316 (2026-11-07, and again 2026-11-08 with background work): the slash-command menu opens on the typed text with `/exit` highlighted and Enter runs it. With nothing running in the background the process exits at once, no confirmation, and the pane falls through to what follows `claude` in its command. With background work — a `run_in_background` shell, a `Monitor`, an agent — it draws a numbered selector in place of the composer instead: `Background work is running` / `The following will stop when you exit:` / one row per task (`shell · sleep 900`, `monitor · r5 probe`) / `❯ 1. Exit and stop tasks` / `2. Move to background and exit` / `3. Stay` / `Enter to confirm · Esc to cancel` (fixture `exit-background-work-80.txt`, `lib/pane.js exitDialog`). Enter takes the highlighted row, which kills the work; Esc is `Stay` — the composer comes back empty, the process stays. The transcript records the command (`<local-command-stdout>(no content)</local-command-stdout>`) only when the prompt ends, and Claude Code's own message queue holds behind it. Typed and submitted through the same look-before-Enter path a message takes (`enterAfterLook`); the cycle reads the pane while it waits, backs out of the prompt with Esc and holds as `background`; a pane with no composer gets `SIGTERM` instead. |
+| the mode hint under the composer | `⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage` while background work runs (fixture `statusline-background-80.txt`), `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents` while none does: Claude Code's own count of what `/exit` would refuse to leave (`lib/pane.js parseBackgroundHint`). It is the only place a `Monitor` shows — one leaves nothing under `tasks/` until its first event, and the `<id>.output` it then writes is the claude process's own, never held open by a shell (the fd rule in `lib/tasks.js` cannot see it). Read for the restart safe point and the preview list's `bgMonitors`. |
 
 ## Files Huginn reads
 
@@ -687,16 +688,22 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     '{"fastMode":…}'` flag on a chat run, and `fastModePerSessionOptIn`, are behaviours: verify on
     a throwaway session that a `/fast on` in one session leaves another alone. Tests:
     `statusline.test.js`, `transcript.test.js`, `routes-context-fast.test.js`.
-25. **`/exit` and the relaunch** (`cycleSession`): that `/exit` typed at the composer still quits
-    the process at once with no confirmation (a dialog added here would hold every restart as
-    `dialog` with `/exit` left in the box), that `--resume <id>` still takes the conversation back
-    in the same working directory, that the process in the pane is still found by the names under
-    [What a session loads at start](#what-a-session-loads-at-start-and-the-runtime-generation)
+25. **`/exit` and the relaunch** (`cycleSession`, `quitClaude`): that `/exit` typed at the
+    composer still quits the process at once when nothing runs in the background, that over
+    background work it still draws the `Background work is running` selector with `Exit and stop
+    tasks` highlighted and `Stay` as its last row and Esc as `Stay` (`lib/pane.js exitDialog`; a
+    reworded or unnumbered prompt would be backed out of as nothing and left on the pane, holding
+    every later restart as `dialog`), that the mode hint still counts the background work as
+    `N shell[s], N monitor[s], N agent[s]` (`parseBackgroundHint`; a Monitor counted nowhere else
+    means `/exit` meets that prompt every time), that `--resume <id>` still takes the conversation
+    back in the same working directory, that the process in the pane is still found by the names
+    under [What a session loads at start](#what-a-session-loads-at-start-and-the-runtime-generation)
     (comm `claude`, `claude.exe`, `claude-code/cli.js`), and that the generation's inputs are
     still what a session loads at start — a new per-session file Claude Code reads at launch
-    belongs in `lib/runtime.js`. Tests: `runtime.test.js`, `routes-restart.test.js`,
-    `routes-restart-sweep.test.js` (a stand-in `claude` that quits on `/exit` and records its
-    argv: `test/fixtures/fake-claude.js`).
+    belongs in `lib/runtime.js`. Tests: `runtime.test.js`, `pane-background-exit.test.js`,
+    `routes-restart.test.js`, `routes-restart-sweep.test.js` (a stand-in `claude` that quits on
+    `/exit`, or draws the prompt, or ignores the command, and records its argv:
+    `test/fixtures/fake-claude.js`).
 
 ### Capturing a new fixture
 

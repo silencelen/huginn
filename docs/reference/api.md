@@ -156,7 +156,7 @@ All routes need the token except `GET /v1/challenge`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. Every row carries `runtime` (see [Runtime generation and restart](#runtime-generation-and-restart)). `?preview=1` adds titles and activity previews. |
+| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. Every row carries `runtime` (see [Runtime generation and restart](#runtime-generation-and-restart)). `?preview=1` adds titles, activity previews and the background work: `bgShells`, `bgAgents`, `bgMonitors` (Claude Code's own count off the pane, beside the tasks directory) and `bgTask`. |
 | GET | `/v1/sessions/recent-dirs` | The directories recent sessions started in (the server default first), for the create dialog. |
 | POST | `/v1/sessions` | `{name, cwd?}`: create a session running Claude Code, in `cwd` (an existing directory on the server) or the server default. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
@@ -216,25 +216,41 @@ now. `/v1/watch` hashes `stale` and `restarting` and carries them as `runtime: {
 restarting}}`, so a client learns of either without polling rows.
 
 `POST /v1/sessions/<name>/restart` queues the restart as a send-queue job. At a turn boundary
-with an empty prompt the daemon re-checks the safe point — idle, no dialog, nothing in the box,
-no background shells or agents, no attached terminal, the host inside the CPU-pressure lull the
-release cuts wait for — captures the `claude` process's flags from `/proc`, asks it to quit with
-`/exit` (a signal only if the prompt is gone), and relaunches it in the same tmux session and
+with an empty prompt the daemon re-checks the safe point — idle by the state file and the
+transcript, no dialog, nothing in the box, no background work, no attached terminal, the host
+inside the CPU-pressure lull the release cuts wait for — captures the `claude` process's flags
+from `/proc`, asks it to quit with `/exit`, and relaunches it in the same tmux session and
 directory with the same flags and `--resume <claudeSessionId>` in place of any `--resume` or
-`-c`. A project session is relaunched as the reboot restore launches it: its persona, its effort,
-its model only when nothing resumes. Messages queued meanwhile wait and are delivered once the
-prompt is back; nothing is dropped. `{force: true}` skips the `attached` hold and the load gate
-for that one restart and nothing else. A job that finds no turn boundary within ten minutes gives
-up (the row reads `stale` again); a relaunch that fails is retried once after 60 s and then left
-`stale` for a manual restart. The journal has one line per outcome, `restart: <name>: <old gen>
--> <new gen>`.
+`-c`. Background work is counted the way Claude Code counts it: the tasks directory (shells and
+agents) and the mode hint under the prompt (`⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage`),
+which is the only place a Monitor shows. `/exit` has three outcomes on Claude Code 2.1.316 and
+the cycle reads the pane for which: the process ends; Claude Code draws its "Background work is
+running" prompt (work it counts that the daemon could not see), which the cycle backs out of with
+Esc — never answers — and holds as `background` for five minutes; or the command is taken and
+nothing happens, in which case `/exit` is tried once more and a second no-op leaves the process
+running (a signal only when no prompt is drawn at all). A project session is relaunched as the
+reboot restore launches it: its persona, its effort, its model only when nothing resumes.
+Messages queued meanwhile wait and are delivered once the prompt is back; nothing is dropped.
+`{force: true}` skips the `attached` hold and the load gate for that one restart and nothing
+else. A job that finds no turn boundary within ten minutes gives up (the row reads `stale`
+again); a relaunch that fails is retried once after 60 s and then left `stale` for a manual
+restart. The journal has one line per outcome, `restart: <name>: <old gen> -> <new gen>`.
 
 With `HUGINN_APPD_CYCLE_ON_DEPLOY` on, the default (`0` in `site.conf` turns it off; `/v1/status`
-reports it as `cycleOnDeploy`), the daemon cycles stale sessions on its own: one at a time,
-oldest first, each at its own safe point, 30 s apart, and only while the host is in its lull. An
-attached session is skipped and stays `stale` for a manual restart. A session under restart is
-exempt from the project reconcile, the restore-registry prune, the state sweep and the alert
-watcher, so a cycle sends no `session_finished` or `session_resolved`.
+reports it as `cycleOnDeploy`), the daemon cycles stale sessions on its own: one at a time, each
+at its own safe point, 30 s apart, and only while the host is in its lull. Each pass walks the
+stale sessions — never tried under this generation first, oldest first; the tried behind them in
+the order they were tried — reads each one's safe point as it stands, and takes the first that
+is at one. A sweep job that still cannot cycle its session (a hold appeared, Claude Code's exit
+prompt said work is running, no turn boundary within a minute) yields at once: the session is
+backed off — 10 min, then 30, 60, 2 h, 4 h, 6 h, reset by a new generation — and goes to the
+back of the line, and the next candidate is taken in the same pass. An attached session is
+skipped and stays `stale` for a manual restart. The journal gets one line per decision (`restart
+sweep: picked <name> (…)`, `restart sweep: <name>: … backed off <wait>`, `restart: <name>: <old
+gen> -> <new gen>`) and a summary at most hourly (`restart sweep: N stale, M cycled, K backed
+off in the last …`). A session under restart is exempt from the project reconcile, the
+restore-registry prune, the state sweep and the alert watcher, so a cycle sends no
+`session_finished` or `session_resolved`.
 
 ### Chats
 

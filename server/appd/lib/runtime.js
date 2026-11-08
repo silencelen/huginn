@@ -319,18 +319,46 @@ function relaunchCommand(args) {
 // ------------------------------------------------------------------ the sweep
 
 /**
- * The session the automatic sweep cycles next, or null: stale, not already
- * restarting, idle (its job would otherwise sit behind a turn while the rest
- * wait), with a Claude session to resume, unattached (an attached session stays
- * `stale` for a manual restart), not in `skip` (given up on, or queued), oldest
- * first.
+ * The LINE the automatic sweep works through: every stale session that is not
+ * already restarting, idle by its state file (its job would otherwise sit
+ * behind a turn while the rest wait), with a Claude session to resume,
+ * unattached (an attached session stays `stale` for a manual restart) and not
+ * in `skip` (given up on, backed off, or queued).
+ *
+ * ⚠ THE ORDER IS NOT "OLDEST FIRST" ALONE (2026-11-08). It was, and on its first
+ * real run the sweep picked the oldest stale session — a project member that is
+ * never idle for ten minutes — seven times in six hours, alternating with one
+ * other, while 27 stale sessions behind it were never looked at. So the ones
+ * never tried under this generation come first, oldest first, and a session
+ * the sweep has tried goes to the BACK of the line in the order it was tried
+ * (`triedAt`: name -> ms). The daemon reads each candidate's safe point in this
+ * order and takes the first that is at one now.
  */
-function sweepPick(rows, { skip = new Set() } = {}) {
+function sweepCandidates(rows, { skip = new Set(), triedAt = new Map() } = {}) {
   const fit = (rows || []).filter((r) => r && r.runtime && r.runtime.stale && !r.runtime.restarting
     && r.addressable !== false && r.state === 'idle' && !!r.claudeSessionId
     && !(Number(r.attachedClients) > 0) && !skip.has(r.name));
-  fit.sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
-  return fit[0] || null;
+  const tried = (r) => Number(triedAt.get(r.name)) || 0;
+  fit.sort((a, b) => (tried(a) - tried(b)) || ((Number(a.createdAt) || 0) - (Number(b.createdAt) || 0)));
+  return fit;
+}
+
+/** The head of that line, or null. */
+function sweepPick(rows, opts = {}) {
+  return sweepCandidates(rows, opts)[0] || null;
+}
+
+/**
+ * How long the sweep leaves a session alone after an attempt that could not
+ * cycle it: the base (ten minutes) at the first, then 3×, 6×, 12×, 24×, 36× it
+ * — 10 min, 30, 60, 2 h, 4 h, 6 h — so a session that is never at a safe point
+ * costs the sweep less and less, and a new generation starts it over (the
+ * daemon clears its levels).
+ */
+const SWEEP_BACKOFF_STEPS = Object.freeze([1, 3, 6, 12, 24, 36]);
+function sweepBackoffMs(level, base = 10 * 60_000) {
+  const i = Math.max(0, Math.min(SWEEP_BACKOFF_STEPS.length - 1, Math.floor(Number(level) || 0)));
+  return SWEEP_BACKOFF_STEPS[i] * (Number(base) > 0 ? Number(base) : 10 * 60_000);
 }
 
 module.exports = {
@@ -338,5 +366,5 @@ module.exports = {
   assignGen, runtimeFor,
   HOLD_WORDS, safePointHold, holdWord, pressureAvg10, pressureLull,
   looksLikeClaude, isShell, pickClaudePid, claudeArgs, replayArgs, shellQuote, relaunchCommand,
-  sweepPick,
+  sweepCandidates, sweepPick, sweepBackoffMs, SWEEP_BACKOFF_STEPS,
 };

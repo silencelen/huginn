@@ -225,3 +225,30 @@ test('the sweep takes the oldest stale, idle, unattached session with a conversa
   assert.strictEqual(rt.sweepPick([], {}), null);
   assert.strictEqual(rt.sweepPick(null, {}), null);
 });
+
+test('the sweep\'s line: never tried first, oldest first; a session the sweep tried goes to the back, in the order tried', () => {
+  // The first real run (2026-11-08) took the oldest stale session seven times in
+  // six hours — it was never at a safe point — and never looked past the second.
+  const row = (name, createdAt) => ({
+    name, createdAt, state: 'idle', attachedClients: 0, claudeSessionId: `id-${name}`, addressable: true,
+    runtime: { stale: true, restarting: false },
+  });
+  const rows = [row('c', 300), row('a', 100), row('b', 200), row('d', 400)];
+  const names = (r) => r.map((x) => x.name);
+  assert.deepStrictEqual(names(rt.sweepCandidates(rows)), ['a', 'b', 'c', 'd'], 'oldest first with nothing tried');
+  const triedAt = new Map([['a', 5_000], ['c', 2_000]]);
+  assert.deepStrictEqual(names(rt.sweepCandidates(rows, { triedAt })), ['b', 'd', 'c', 'a'],
+    'the untried in front, then the tried in the order they were tried');
+  assert.deepStrictEqual(names(rt.sweepCandidates(rows, { triedAt, skip: new Set(['b']) })), ['d', 'c', 'a']);
+  assert.strictEqual(rt.sweepPick(rows, { triedAt }).name, 'b', 'sweepPick is the head of that line');
+  assert.deepStrictEqual(rt.sweepCandidates(null), []);
+});
+
+test('the backoff ladder: 10 min, then 3x, 6x, 12x, 24x, 36x, and no further', () => {
+  const m = 10 * 60_000;
+  assert.deepStrictEqual([0, 1, 2, 3, 4, 5, 6, 40].map((l) => rt.sweepBackoffMs(l)),
+    [m, 3 * m, 6 * m, 12 * m, 24 * m, 36 * m, 36 * m, 36 * m]);
+  assert.strictEqual(rt.sweepBackoffMs(1, 1_000), 3_000, 'the base is a knob');
+  assert.strictEqual(rt.sweepBackoffMs(-3), m, 'nothing below the first step');
+  assert.strictEqual(rt.sweepBackoffMs('x', 0), m, 'junk reads as the first step at the default base');
+});

@@ -30,6 +30,7 @@ const {
   screenHash, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, loginPaneState, parseModelPicker, modelPickerShown, sameConsent,
+  parseBackgroundHint, exitDialog,
 } = require('./lib/pane');
 const { parseAskSidecar, fuseAskPrompt, degradedAskCard, parsePlanSidecar } = require('./lib/ask');
 const { readTranscript, liveActivity, unwrapPasted, lastWorkAt, transcriptHead } = require('./lib/transcript');
@@ -1690,6 +1691,39 @@ async function backgroundWork(name, panePid) {
     fs, shells ? knownBackgroundIds(st) : null);
 }
 
+/**
+ * A session's background work COUNTED THE WAY CLAUDE CODE COUNTS IT: `{shells:
+ * [...], agents, monitors, counts: {shells, agents, monitors}, total}` — the
+ * tasks directory's shells (with their commands) and agents (backgroundWork),
+ * and, given the pane (`lines`), Claude Code's own count.
+ *
+ * ⚠ THE TASKS DIRECTORY CANNOT SEE A MONITOR (2026-11-08). A `Monitor` writes
+ * nothing there until its first event, and the `<id>.output` it then writes is
+ * written by the claude process itself, never held open by a descendant — so
+ * the fd rule in lib/tasks.js, exact for shells, counts it as nothing. On the
+ * restart sweep's first real run that read a session with a live Monitor as
+ * idle, `/exit` was typed, and Claude Code answered with its "Background work
+ * is running" prompt (quitClaude). The count that prompt is built from is on
+ * the pane the whole time, under the box: `⏵⏵ auto mode on · 1 shell, 1
+ * monitor · ↓ to manage` (lib/pane parseBackgroundHint). The two sources are
+ * taken together, the larger count of each kind winning: the hint is the
+ * truth about what Claude Code will refuse to leave, the files say which
+ * command.
+ */
+async function backgroundCount(name, panePid, { lines = null } = {}) {
+  const found = await backgroundWork(name, panePid);
+  const hint = lines ? parseBackgroundHint(lines) : null;
+  const counts = {
+    shells: Math.max(found.shells.length, hint ? hint.shells : 0),
+    agents: Math.max(found.agents, hint ? hint.agents : 0),
+    monitors: hint ? hint.monitors : 0,
+  };
+  return {
+    shells: found.shells, agents: counts.agents, monitors: counts.monitors, counts,
+    total: counts.shells + counts.agents + counts.monitors,
+  };
+}
+
 // window_activity, NOT session_activity: the latter does not move when a pane
 // produces output, so it read ~8 hours stale on sessions that had been busy
 // continuously and the list ordered by it was effectively frozen.
@@ -1840,6 +1874,7 @@ async function listSessions({ preview = false, shared = false } = {}) {
       panePid: Number(panePid) || null,
       bgShells: 0,
       bgAgents: 0,
+      bgMonitors: 0,
       bgTask: null,
       // Which runtime generation this session's Claude was launched under, and
       // whether that is the current one (lib/runtime.js): `{stale, gen, current,
@@ -1904,17 +1939,21 @@ async function listSessions({ preview = false, shared = false } = {}) {
     // Background work rides along so the LIST can say a session is not stalled:
     // that complaint came from exactly this surface. One ps snapshot serves all
     // rows via the cache; the per-row cost is one readdir plus a few /proc reads.
+    // The panes first: the preview lines come from them, and so does Claude
+    // Code's own background count (backgroundWork), which the tasks directory
+    // cannot give for a Monitor.
+    const panes = await capturePanes(rows.map((r) => r.name));
     await Promise.all(rows.map(async (r) => {
-      const bg = await backgroundWork(r.name, r.panePid);
-      r.bgShells = bg.shells.length;
-      r.bgAgents = bg.agents;
+      const bg = await backgroundCount(r.name, r.panePid, { lines: panes.get(r.name) || null });
+      r.bgShells = bg.counts.shells;
+      r.bgAgents = bg.counts.agents;
+      r.bgMonitors = bg.counts.monitors;
       r.bgTask = bg.shells[0] ? bg.shells[0].command : null;
     }));
     // Title comes from the transcript (Claude Code's own ai-title, which is a far
     // better label than the tmux name); the preview lines come from the pane,
     // because the spinner/progress state a user wants at a glance is drawn by the
     // TUI and never lands in the transcript.
-    const panes = await capturePanes(rows.map((r) => r.name));
     await Promise.all(rows.map(async (r) => {
       const st = readSessionState(r.name);
       if (st && st.transcript) {
@@ -3757,8 +3796,11 @@ async function checkGates(name) {
   // gone, and holding a send on a pane we cannot read would be a wait with no
   // end. Fall through to the old behaviour and let delivery report the failure.
   const starting = lines ? await startupGate(name, lines) : false;
+  // The capture itself rides along for the one reader that wants more of the
+  // pane than the verdicts above (restartHold: Claude Code's own background
+  // count, off the mode hint). Null when the capture failed.
   return { idle, lastKind, paneWhy, starting, composerEmpty, composerHolds, composer, shell, shellMode,
-    sessionState: readSessionState(name), transcript: file };
+    sessionState: readSessionState(name), transcript: file, lines };
 }
 
 /**
@@ -4453,6 +4495,10 @@ function enqueueSend(name, text, opts = {}) {
     origin: opts.origin || null,
     kind: opts.kind || null,
     family: opts.family || null,
+    // A ceiling of this entry's own on the wait for a turn boundary, in ms
+    // (typing.dropReason); the lane's ten minutes without one. The restart
+    // sweep's job carries a minute.
+    maxWaitMs: Number(opts.maxWaitMs) > 0 ? Number(opts.maxWaitMs) : null,
     // Whether the paste is followed by Enter. The Screen tab types without
     // submitting (its Enter arrives as its own key op), every other caller
     // means "send this".
@@ -4871,22 +4917,50 @@ const RESTART_RETRY_MS = Math.max(200, Math.min(600_000, Number(process.env.HUGI
  * hypervisor's (lxcfs passes it through) and never settles.
  */
 const PRESSURE_FILE = process.env.HUGINN_APPD_PRESSURE_FILE || '/sys/fs/cgroup/cpu.pressure';
-/** How long `/exit` gets to end the process before a signal is considered. */
-const QUIT_WAIT_MS = 20_000;
+/**
+ * How long `/exit` gets to end the process before its prompt is read for
+ * Claude Code's answer or a signal is considered, and how often the pane is
+ * read meanwhile. TEST-ONLY knob, clamped: the suite's stand-in answers in a
+ * second, the real thing in a few.
+ */
+const QUIT_WAIT_MS = Math.max(500, Math.min(60_000, Number(process.env.HUGINN_APPD_QUIT_WAIT_MS) || 20_000));
+const QUIT_LOOK_MS = 500;
 /** A waiting job's safe-point facts (background work, attachment, load) are re-read at most this often. */
 const HOLD_RECHECK_MS = 3_000;
-/** A sweep attempt that failed short of two relaunch failures is not retried for this long. */
-const SWEEP_BACKOFF_MS = 10 * 60_000;
+/**
+ * After Claude Code's own exit prompt said background work is running, a
+ * restart holds as `background` for this long before `/exit` is tried again —
+ * its count outranks ours (a ws Monitor leaves nothing on disk at all).
+ */
+const EXIT_DIALOG_HOLD_MS = Math.max(200, Math.min(3_600_000, Number(process.env.HUGINN_APPD_EXIT_DIALOG_HOLD_MS) || 5 * 60_000));
+/**
+ * The sweep's backoff base: a session the sweep could not cycle waits this
+ * long before it is looked at again, then 3×, 6×, 12×, 24×, 36× it (lib/runtime
+ * sweepBackoffMs), and a new generation starts every session over. The two
+ * below bound how long a sweep job waits at the queue for a turn boundary (a
+ * person's restart keeps the lane's ten minutes) and how often the sweep sums
+ * itself up in the journal. All three TEST-ONLY knobs, clamped.
+ */
+const SWEEP_BACKOFF_MS = Math.max(200, Math.min(3_600_000, Number(process.env.HUGINN_APPD_SWEEP_BACKOFF_MS) || 10 * 60_000));
+const SWEEP_QUEUE_WAIT_MS = Math.max(1_000, Math.min(600_000, Number(process.env.HUGINN_APPD_SWEEP_QUEUE_WAIT_MS) || 60_000));
+const SWEEP_SUMMARY_MS = Math.max(1_000, Math.min(24 * 3_600_000, Number(process.env.HUGINN_APPD_SWEEP_SUMMARY_MS) || 3_600_000));
+/** How many candidates one sweep pass reads the safe point of (a capture and a transcript tail each) before leaving the rest to the next tick. */
+const SWEEP_LOOK_MAX = 12;
 const RUNTIME_FILE = path.join(DATA_DIR, 'runtime.json');
 
 /** The current generation: `{gen, since (epoch s), claude, inputs}`, null until read. */
 let runtimeNow = null;
-/** Restarts queued or running, by tmux name: `{phase: 'queued'|'cycling', since, force, by, blockedBy, oldGen, lastHold, onDone}`. */
+/** Restarts queued or running, by tmux name: `{phase: 'queued'|'cycling', since, force, by, blockedBy, oldGen, lastHold, exitDialogAt, onDone}`. */
 const restarts = new Map();
 /** Two relaunch failures: waits for a manual restart or a new generation. */
 const restartGaveUp = new Map();   // tmux name -> ms
-/** The sweep leaves these alone until the time given. */
-const restartBackoff = new Map();  // tmux name -> ms
+/** The sweep leaves these alone until `until`; `level` counts the attempts that could not cycle the session and sets the next wait. */
+const restartBackoff = new Map();  // tmux name -> {until, level}
+/** When the sweep last tried each session under this generation: the back of its line (lib/runtime sweepCandidates). */
+const sweepTried = new Map();      // tmux name -> ms
+/** The sweep's "none at a safe point" line, said once per generation; its counts for the summary line. */
+let sweepNoneSaid = false;
+const sweepStats = { since: Date.now(), cycled: 0, backedOff: 0, stale: 0, reasons: '' };
 /** The one session being cycled right now, or null: never two at once. */
 let cycleBusy = null;
 
@@ -4975,8 +5049,9 @@ async function refreshRuntimeGen(why) {
   };
   saveRuntimeFile();
   log(`runtime: generation ${prev ? `${prev.gen} -> ${gen}` : gen} (${why}; claude ${runtimeNow.claude || 'version pending'}, appd ${VERSION})`);
-  // A new generation gives every session another go at the sweep.
-  if (prev) { restartGaveUp.clear(); restartBackoff.clear(); }
+  // A new generation gives every session another go at the sweep: the
+  // give-ups, the backoff levels and the order they were tried in all start over.
+  if (prev) { restartGaveUp.clear(); restartBackoff.clear(); sweepTried.clear(); sweepNoneSaid = false; }
   return true;
 }
 
@@ -5050,27 +5125,36 @@ async function attachedCount(name) {
 
 /**
  * What holds a restart of this session right now, in the route's words, or
- * null (lib/runtime safePointHold): the state file's word, the pane read the
- * way the queue reads it (a dialog; a draft, ghost-free), the tasks directory
- * (background shells and agents), tmux (an attached client), the PSI file (the
- * lull) — and another session mid-cycle, which counts as load, so two never run
- * at once. `rec.lastHold` throttles the re-reads while a queued job polls.
+ * null (lib/runtime safePointHold): the state file's word and the transcript's
+ * (checkGates — a tail that ends on a person's message is a turn in progress
+ * whatever the hook last wrote; the sweep took such a session for idle seven
+ * times on 2026-11-08 and its job waited out the lane's ten minutes each
+ * time), the pane read the way the queue reads it (a dialog; a draft,
+ * ghost-free), the background work — the tasks directory AND Claude Code's own
+ * count off the pane (backgroundWork), and its exit prompt's word for a while
+ * after it said work was running (`rec.exitDialogAt`) — tmux (an attached
+ * client), the PSI file (the lull) — and another session mid-cycle, which
+ * counts as load, so two never run at once. `rec.lastHold` throttles the
+ * re-reads while a queued job polls.
  */
 async function restartHold(name, { force = false, panePid = null, rec = null } = {}) {
   if (rec && rec.lastHold && Date.now() - rec.lastHold.at < HOLD_RECHECK_MS) return rec.lastHold.word;
-  const st = readSessionState(name);
-  const lines = await capturePaneLines(name, { escapes: true });
-  const dialog = !!lines && typing.paneBlocks(typing.paneReadyForInput(lines).why);
-  const holds = lines ? typing.composerText(lines, { dropGhost: true }) : null;
+  const gate = await checkGates(name);
+  const st = gate.sessionState;
+  const lines = gate.lines;
+  const dialog = !!lines && typing.paneBlocks(gate.paneWhy);
+  const holds = gate.composerHolds;
   // `/exit` in the box is this restart's own, left by an attempt a dialog held.
   const draft = typing.jobHold({ composerHolds: holds }) && String(holds).trim() !== '/exit';
-  const bg = panePid ? await backgroundWork(name, panePid) : { shells: [], agents: 0 };
+  const bg = panePid ? await backgroundCount(name, panePid, { lines }) : { total: 0 };
+  const exitSaid = !!(rec && rec.exitDialogAt && Date.now() - rec.exitDialogAt < EXIT_DIALOG_HOLD_MS);
   const attached = ((await attachedCount(name)) || 0) > 0;
+  const stateWord = st ? st.state : null;
   const word = runtimeLib.safePointHold({
-    state: st ? st.state : null,
+    state: stateWord === 'running' || gate.idle === false ? 'running' : stateWord,
     dialog,
     draft,
-    bg: bg.agents > 0 || bg.shells.length > 0,
+    bg: bg.total > 0 || exitSaid,
     attached,
     force,
     lull: cycleBusy && cycleBusy !== name ? false : (force ? true : loadLull()),
@@ -5135,59 +5219,155 @@ function claudeProcessOf(panePid) {
 }
 
 /**
- * Ask the session's Claude Code to quit: `/exit` typed at a bare caret and
- * submitted through the same look-before-Enter a message gets (enterAfterLook).
- * On 2.1.316 the command quits at once, with no confirmation (measured
- * 2026-11-07 in a throwaway session on a private socket). A pane with no
- * composer — a Claude already on its way out, or hung — gets SIGTERM instead,
- * and only then. Resolves `{ok: true}` once the process is gone; `held` when a
- * dialog or somebody's text took the pane (the job goes back to waiting, and
- * `/exit` already in the box is submitted next time, never typed twice).
+ * Ask the session's Claude Code to quit, and read what it did.
+ *
+ * `/exit` is typed at a bare caret and submitted through the same
+ * look-before-Enter a message gets (enterAfterLook); what happens next is read
+ * off the pane every QUIT_LOOK_MS while the process is still there, because on
+ * 2.1.316 the command has three outcomes (measured 2026-11-08 in a throwaway
+ * session on a private socket with a background shell and a Monitor; the first
+ * was measured on 11-07 and was the only one this knew):
+ *
+ *   - nothing running in the background: the process ends at once, with no
+ *     confirmation, and the pane falls through to what follows `claude` in its
+ *     command → `{ok: true}`.
+ *   - background work (a shell, a Monitor, an agent): Claude Code draws its
+ *     "Background work is running" selector in place of the composer
+ *     (lib/pane exitDialog), whose highlighted row kills the work and whose
+ *     Esc is `Stay`. ⚠ THIS IS WHAT HAPPENED ON THE SWEEP'S FIRST REAL RUN: the
+ *     session had a live Monitor the tasks directory cannot see, the dialog
+ *     came up, this waited twenty seconds for the pid, read a caret (the
+ *     dialog's own `❯ 1.`), sent no signal, and left the dialog on the pane for
+ *     two hours — holding every later restart as `dialog`, and Claude Code's
+ *     own message queue behind it, until a person pressed Esc. The dialog is
+ *     now backed out of with Esc, never answered, and the restart holds as
+ *     `background`: Claude Code's count outranks ours, and `rec.exitDialogAt`
+ *     keeps restartHold saying so for EXIT_DIALOG_HOLD_MS.
+ *   - the command was taken and nothing happened (the box is back and empty,
+ *     the process alive): `/exit` once more; a second no-op leaves the process
+ *     alone — `{ok: false}` with the reason, and NO signal while a composer is
+ *     drawn, because a prompt on screen is a Claude somebody may be using.
+ *
+ * A pane with no composer at all — a Claude already on its way out, or hung —
+ * gets SIGTERM, and only then; so does one whose prompt is gone after `/exit`.
+ * `held` ('draft' | 'dialog' | 'background') sends the job back to waiting;
+ * `/exit` already in the box is submitted next time, never typed twice.
  */
-async function quitClaude(name, claude) {
+async function quitClaude(name, claude, rec = null) {
+  const first = await capturePaneLines(name, { escapes: true });
+  if (!first || !typing.composerDrawn(first)) {
+    log(`restart: ${name}: no composer on screen; sending claude (pid ${claude.pid}) SIGTERM`);
+    return signalClaude(claude);
+  }
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const sent = await submitExit(name);
+    if (sent.held) return { ok: false, held: sent.held, reason: sent.reason };
+    if (sent.failed) return { ok: false, reason: sent.reason };
+    const out = await awaitQuit(name, claude);
+    if (out.gone) return { ok: true };
+    if (out.dialog) {
+      const ex = exitDialog(out.lines);
+      if (!ex) return { ok: false, held: 'dialog', reason: 'a dialog opened after /exit was submitted' };
+      const work = ex.work.length ? ex.work.join(', ') : 'work it did not name';
+      const backed = await backOutOfExitDialog(name);
+      if (rec) rec.exitDialogAt = Date.now();
+      return {
+        ok: false, held: 'background',
+        reason: `claude asked before exiting (${work}); ${backed ? 'backed out with Esc' : 'the prompt went away on its own'}`,
+      };
+    }
+    if (!typing.composerDrawn(out.lines)) {
+      log(`restart: ${name}: claude is still running ${Math.round(QUIT_WAIT_MS / 1000)}s after /exit and its prompt is gone; sending SIGTERM`);
+      return signalClaude(claude);
+    }
+    if (attempt === 1) log(`restart: ${name}: claude took /exit and is still running with its prompt back; trying /exit once more`);
+  }
+  return { ok: false, reason: `claude (pid ${claude.pid}) ignored /exit twice and still draws its prompt; left running` };
+}
+
+/**
+ * `/exit` into the box and Enter after a look: `{}` when it went, `{held,
+ * reason}` for a draft or a dialog (nothing typed over either), `{failed,
+ * reason}` when tmux would not, or the pane is not a Claude's any more.
+ */
+async function submitExit(name) {
   const target = `=${name}:`;
   const lines = await capturePaneLines(name, { escapes: true });
-  const composer = !!lines && typing.composerDrawn(lines);
-  if (composer) {
-    const holds = typing.composerText(lines, { dropGhost: true });
-    const mine = holds !== null && String(holds).trim() === '/exit';
-    if (!mine && typing.jobHold({ composerHolds: holds })) {
-      return { ok: false, held: 'draft', reason: 'there is unsent text in the composer; /exit was not typed' };
+  if (!lines) return { failed: true, reason: 'could not read the pane' };
+  if (typing.paneBlocks(typing.paneReadyForInput(lines).why)) return { held: 'dialog', reason: 'a dialog is on screen' };
+  if (!typing.composerDrawn(lines)) return { failed: true, reason: 'the composer is gone' };
+  const holds = typing.composerText(lines, { dropGhost: true });
+  const mine = holds !== null && String(holds).trim() === '/exit';
+  if (!mine && typing.jobHold({ composerHolds: holds })) {
+    return { held: 'draft', reason: 'there is unsent text in the composer; /exit was not typed' };
+  }
+  if (!mine) {
+    const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/exit']);
+    if (typed.err) return { failed: true, reason: 'could not type /exit' };
+    await sleep(SUBMIT_BEAT_MS);
+  }
+  const look = await enterAfterLook(name, '/exit', { hadComposer: true });
+  if (look.held) {
+    if (look.held.blockedBy === 'shell') return { failed: true, reason: look.held.why };
+    return { held: 'dialog', reason: `a dialog opened before /exit was submitted (${look.held.why})` };
+  }
+  if (look.failed) return { failed: true, reason: 'could not submit /exit' };
+  return {};
+}
+
+/**
+ * Wait QUIT_WAIT_MS for the process to go, reading the pane every QUIT_LOOK_MS
+ * for a dialog meanwhile: `{gone}`, `{dialog, lines}`, or `{alive, lines}`.
+ */
+async function awaitQuit(name, claude) {
+  const by = Date.now() + QUIT_WAIT_MS;
+  let lines = null;
+  let lookAt = Date.now() + 300;
+  while (Date.now() < by) {
+    if (!pidLive(claude.pid, claude.start)) return { gone: true };
+    if (Date.now() >= lookAt) {
+      lookAt = Date.now() + QUIT_LOOK_MS;
+      const got = await capturePaneLines(name, { escapes: true });
+      if (got) {
+        lines = got;
+        if (typing.paneBlocks(typing.paneReadyForInput(got).why)) return { dialog: true, lines: got };
+      }
     }
-    if (!mine) {
-      const typed = await run('tmux', ['send-keys', '-t', target, '-l', '--', '/exit']);
-      if (typed.err) return { ok: false, reason: 'could not type /exit' };
-      await sleep(SUBMIT_BEAT_MS);
-    }
-    const look = await enterAfterLook(name, '/exit', { hadComposer: true });
-    if (look.held) {
-      return { ok: false, held: 'dialog', reason: `a dialog opened before /exit was submitted (${look.held.why})` };
-    }
-    if (look.failed) return { ok: false, reason: 'could not submit /exit' };
-  } else {
-    log(`restart: ${name}: no composer on screen; sending claude (pid ${claude.pid}) SIGTERM`);
-    try { process.kill(claude.pid, 'SIGTERM'); } catch (e) {
-      if (e.code !== 'ESRCH') return { ok: false, reason: `could not signal claude: ${e.message}` };
-    }
+    await sleep(150);
+  }
+  if (!pidLive(claude.pid, claude.start)) return { gone: true };
+  if (!lines) lines = (await capturePaneLines(name, { escapes: true })) || [];
+  return { alive: true, lines };
+}
+
+/**
+ * Esc on Claude Code's exit prompt — its own `Stay` — after one more look that
+ * it is still the thing on screen: Esc on a busy Claude interrupts the turn,
+ * and on any other dialog it answers it. True when the composer is back.
+ */
+async function backOutOfExitDialog(name) {
+  const now = await capturePaneLines(name, { escapes: true });
+  if (!now || !exitDialog(now)) return false;
+  const esc = await run('tmux', ['send-keys', '-t', `=${name}:`, 'Escape']);
+  if (esc.err) return false;
+  const by = Date.now() + 3_000;
+  while (Date.now() < by) {
+    await sleep(150);
+    const lines = await capturePaneLines(name, { escapes: true });
+    if (lines && !exitDialog(lines) && typing.composerDrawn(lines)) return true;
+  }
+  return true;
+}
+
+/** SIGTERM, then QUIT_WAIT_MS for the process to go. */
+async function signalClaude(claude) {
+  try { process.kill(claude.pid, 'SIGTERM'); } catch (e) {
+    if (e.code !== 'ESRCH') return { ok: false, reason: `could not signal claude: ${e.message}` };
   }
   const by = Date.now() + QUIT_WAIT_MS;
   while (Date.now() < by) {
     if (!pidLive(claude.pid, claude.start)) return { ok: true };
     await sleep(150);
-  }
-  // Still running after /exit, and the prompt it was typed at is gone with the
-  // shutdown: a signal is the fallback now, and not before.
-  if (composer) {
-    const again = await capturePaneLines(name);
-    if (again && !typing.composerDrawn(again)) {
-      log(`restart: ${name}: claude is still running ${QUIT_WAIT_MS / 1000}s after /exit and its prompt is gone; sending SIGTERM`);
-      try { process.kill(claude.pid, 'SIGTERM'); } catch { /* gone between */ }
-      const by2 = Date.now() + 10_000;
-      while (Date.now() < by2) {
-        if (!pidLive(claude.pid, claude.start)) return { ok: true };
-        await sleep(150);
-      }
-    }
   }
   return { ok: false, reason: `claude (pid ${claude.pid}) did not exit` };
 }
@@ -5265,9 +5445,17 @@ async function cycleSession(name, rec) {
   if (here !== true) return fail(here === false ? 'the session is gone' : 'tmux is not answering');
   const hold = await restartHold(name, { force: rec.force, panePid: seen.panePid, rec });
   if (hold) {
-    // The sweep leaves an attached session alone — it stays stale for a manual
-    // restart — where a restart somebody asked for waits for the terminal to go.
-    if (hold === 'attached' && rec.by === 'sweep') return fail('a terminal is attached; left for a manual restart');
+    // ⚠ THE SWEEP NEVER WAITS (2026-11-08). Its job used to sit at the head of
+    // the queue for the lane's ten minutes on a hold — a draft, a Monitor, a
+    // turn — and the sweep sat with it: six hours, two sessions tried in turn,
+    // nothing cycled, 27 others never looked at. A sweep job that is not at its
+    // safe point yields at once: the session is backed off (finishRestart) and
+    // the tick moves to the next candidate. A restart somebody asked for waits,
+    // as before; an attached session is left for a manual restart either way.
+    if (rec.by === 'sweep') {
+      return fail(hold === 'attached' ? 'a terminal is attached; left for a manual restart' : `not at a safe point (${hold})`,
+        { yield: hold });
+    }
     if (rec.blockedBy !== hold) { rec.blockedBy = hold; log(`restart: ${name}: waiting (${hold})`); }
     return { ok: true, held: { blockedBy: hold, job: true } };
   }
@@ -5287,11 +5475,18 @@ async function cycleSession(name, rec) {
   cycleBusy = name;
   log(`restart: ${name}: cycling (${rec.by}${rec.force ? ', forced' : ''}): claude pid ${claude.pid}, relaunch by ${how}`);
   try {
-    const quit = await quitClaude(name, claude);
+    const quit = await quitClaude(name, claude, rec);
     if (!quit.ok) {
       if (quit.held) {
+        // The sweep yields here too (above); a person's restart waits, and
+        // `background` from Claude Code's own exit prompt is a hold like the
+        // others, re-read on the next poll with its word standing for a while.
+        if (rec.by === 'sweep') return fail(quit.reason, { yield: quit.held });
         rec.phase = 'queued';
         cycleBusy = null;
+        // What the quit found is the hold the next polls read, until the facts
+        // are re-read: the one read a moment ago said "safe", and is not.
+        rec.lastHold = { at: Date.now(), word: quit.held };
         if (rec.blockedBy !== quit.held) { rec.blockedBy = quit.held; log(`restart: ${name}: waiting (${quit.held}): ${quit.reason}`); }
         return { ok: true, held: { blockedBy: quit.held, job: true } };
       }
@@ -5318,18 +5513,36 @@ async function cycleSession(name, rec) {
   }
 }
 
-/** The job's settle: the row stops reading `restarting`, and a failure is written down. */
+/**
+ * The job's settle: the row stops reading `restarting`, and a failure is
+ * written down — one line. A sweep attempt that could not cycle the session
+ * (it yielded on a hold, was dropped at the queue's ceiling, or failed short of
+ * two relaunch failures) backs the session off, longer each time (lib/runtime
+ * sweepBackoffMs); a person's restart says what happened and leaves the
+ * session for them.
+ */
 function finishRestart(name, rec, v) {
   restarts.delete(name);
   const ok = !!(v && v.delivered);
-  if (!ok) {
+  if (ok) {
+    if (rec.by === 'sweep') { sweepStats.cycled += 1; restartBackoff.delete(name); }
+  } else {
     const result = (v && v.result) || {};
     const why = v && v.dropped
-      ? `dropped: ${typing.dropMessage(v.dropped, { origin: 'restart' })}`
+      ? `dropped: ${typing.dropMessage(v.dropped, { origin: 'restart', maxWaitMs: rec.by === 'sweep' ? SWEEP_QUEUE_WAIT_MS : null })}`
       : (result.reason || result.message || 'no result');
-    log(`restart: ${name}: not restarted (${why}); it stays marked stale`);
-    if (result.gaveUp) restartGaveUp.set(name, Date.now());
-    else if (rec.by === 'sweep') restartBackoff.set(name, Date.now() + SWEEP_BACKOFF_MS);
+    if (result.gaveUp) {
+      restartGaveUp.set(name, Date.now());
+      log(`restart: ${name}: not restarted (${why}); it stays marked stale`);
+    } else if (rec.by === 'sweep') {
+      const level = ((restartBackoff.get(name) || {}).level || 0) + 1;
+      const ms = runtimeLib.sweepBackoffMs(level - 1, SWEEP_BACKOFF_MS);
+      restartBackoff.set(name, { until: Date.now() + ms, level });
+      sweepStats.backedOff += 1;
+      log(`restart sweep: ${name}: ${result.yield ? why : `not restarted (${why})`}; backed off ${durationWords(ms)}`);
+    } else {
+      log(`restart: ${name}: not restarted (${why}); it stays marked stale`);
+    }
   }
   if (typeof rec.onDone === 'function') { try { rec.onDone(ok); } catch { /* the sweep's own */ } }
 }
@@ -5344,61 +5557,147 @@ function finishRestart(name, rec, v) {
  * Not awaited past the first look: the first pump pass may run the whole cycle,
  * and the caller's answer is "queued".
  */
-async function queueRestart(name, { force = false, by = 'route', panePid = null, onDone = null } = {}) {
-  const rec = { phase: 'queued', since: Date.now(), force, by, blockedBy: null, oldGen: null, lastHold: null, onDone };
+async function queueRestart(name, { force = false, by = 'route', panePid = null, onDone = null, hold = undefined } = {}) {
+  const rec = { phase: 'queued', since: Date.now(), force, by, blockedBy: null, oldGen: null, lastHold: null, exitDialogAt: null, onDone };
   restarts.set(name, rec);
   restartGaveUp.delete(name);
-  restartBackoff.delete(name);
-  let hold = null;
-  try { hold = await restartHold(name, { force, panePid, rec }); } catch { /* read on the first pass */ }
-  rec.blockedBy = hold;
-  log(`restart: ${name}: queued (${by}${force ? ', forced' : ''}${hold ? `; waiting: ${hold}` : ''})`);
+  // A person asking starts the session's backoff ladder over; the sweep's own
+  // ask keeps the level, which is what sets its next wait.
+  if (by !== 'sweep') restartBackoff.delete(name);
+  let word = hold;
+  if (word === undefined) {
+    word = null;
+    try { word = await restartHold(name, { force, panePid, rec }); } catch { /* read on the first pass */ }
+  }
+  rec.blockedBy = word;
+  // The sweep's pick line has already said so.
+  if (by !== 'sweep') log(`restart: ${name}: queued (${by}${force ? ', forced' : ''}${word ? `; waiting: ${word}` : ''})`);
   enqueueJob(name, () => cycleSession(name, rec), {
     automated: true, origin: 'restart', kind: 'restart', prompt: '/exit',
+    // A sweep job waits a minute for a turn boundary, not the lane's ten: a
+    // sweep behind one busy session is not sweeping.
+    maxWaitMs: by === 'sweep' ? SWEEP_QUEUE_WAIT_MS : null,
     onSettle: (v) => finishRestart(name, rec, v),
   }).catch((e) => log(`restart: ${name}: queue failed: ${e.message}`));
-  return { queued: true, blockedBy: hold };
+  return { queued: true, blockedBy: word };
 }
 
 /**
  * The automatic sweep: while `cycleOnDeploy` is on and a generation is known,
- * cycle stale sessions ONE AT A TIME, oldest first, each at its own safe point
- * — idle, unattached, with a conversation to resume (lib/runtime sweepPick) —
- * with CYCLE_GAP_MS between cycles and the load gate before each. Never mid-turn
- * (the job waits for the boundary), never two at once (`cycleBusy`). A session
- * given up on, or left for a manual restart, is skipped until the generation
- * changes again.
+ * cycle stale sessions ONE AT A TIME, each at its own safe point, with
+ * CYCLE_GAP_MS between cycles and the load gate before each. Never mid-turn,
+ * never two at once (`cycleBusy`). A session given up on, or left for a manual
+ * restart, is skipped until the generation changes again.
+ *
+ * ⚠ THE PICK IS "THE STALE SESSION MOST LIKELY TO CYCLE NOW", NOT THE OLDEST
+ * (2026-11-08). The first real run took the oldest stale session — a project
+ * member that is never idle for ten minutes — queued it, waited the lane's ten
+ * minutes for a boundary, dropped it, backed it off ten minutes and took it
+ * AGAIN: seven times in six hours, alternating with one other, while 27 stale
+ * sessions behind it were never looked at. Now each tick walks the line
+ * (lib/runtime sweepCandidates: never tried first, oldest first; the tried at
+ * the back), reads each candidate's safe point as it stands — the transcript's
+ * turn, a dialog, a draft, Claude Code's own background count, a terminal —
+ * and takes the first that is at one. A job that still cannot cycle yields
+ * instead of waiting (cycleSession), the session is backed off longer each
+ * time (finishRestart), and the walk goes on to the next candidate in the
+ * SAME tick. A host of mostly busy sessions cycles its idle ones.
+ *
+ * The journal gets one line per decision — picked, held and backed off,
+ * cycled — and a summary at most every SWEEP_SUMMARY_MS.
  */
 let sweepBusy = false;
 let sweepNextAt = 0;
 let sweepLullSaid = false;
+
+/** `10 min`, `2 h`, `45 s`, for the journal. */
+function durationWords(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n >= 3_600_000 && n % 3_600_000 === 0) return `${n / 3_600_000} h`;
+  if (n >= 60_000) return `${Math.round(n / 60_000)} min`;
+  return `${Math.max(1, Math.round(n / 1000))} s`;
+}
+
+/** `running 3, background 2`: the holds that kept every candidate off the sweep, counted. */
+function holdCounts(skipped) {
+  const counts = new Map();
+  for (const s of skipped) counts.set(s.hold, (counts.get(s.hold) || 0) + 1);
+  return [...counts].map(([w, n]) => `${w} ${n}`).join(', ');
+}
+
+/** The summary line, when SWEEP_SUMMARY_MS has passed and there was anything to say. */
+function sweepSummaryMaybe() {
+  const now = Date.now();
+  if (now - sweepStats.since < SWEEP_SUMMARY_MS) return;
+  if (sweepStats.stale > 0 || sweepStats.cycled || sweepStats.backedOff) {
+    log(`restart sweep: ${sweepStats.stale} stale, ${sweepStats.cycled} cycled, ${sweepStats.backedOff} backed off`
+      + ` in the last ${durationWords(now - sweepStats.since)}${sweepStats.reasons ? `; not at a safe point: ${sweepStats.reasons}` : ''}`);
+  }
+  sweepStats.since = now;
+  sweepStats.cycled = 0;
+  sweepStats.backedOff = 0;
+  sweepStats.reasons = '';
+}
+
 async function cycleSweepTick() {
   if (!CYCLE_ON_DEPLOY || !runtimeNow || sweepBusy || cycleBusy || Date.now() < sweepNextAt) return;
-  const rows = await listSessions({ shared: true });
-  if (!rows) return;
-  const now = Date.now();
-  for (const [n, until] of restartBackoff) if (until <= now) restartBackoff.delete(n);
-  const skip = new Set([...restartGaveUp.keys(), ...restartBackoff.keys(), ...restarts.keys()]);
-  const pick = runtimeLib.sweepPick(rows, { skip });
-  if (!pick) return;
-  if (!loadLull()) {
-    if (!sweepLullSaid) {
-      sweepLullSaid = true;
-      log(`restart sweep: ${pick.name} is stale, but the host is loaded (${PRESSURE_FILE}); waiting for the lull`);
-    }
-    return;
-  }
-  sweepLullSaid = false;
   sweepBusy = true;
-  const stale = rows.filter((r) => r.runtime && r.runtime.stale).length;
-  log(`restart sweep: ${stale} stale session(s); cycling ${pick.name} (${pick.runtime.gen || 'none'} -> ${runtimeNow.gen})`);
   try {
-    await new Promise((resolve) => {
-      queueRestart(pick.name, { by: 'sweep', panePid: pick.panePid, onDone: resolve }).catch(() => resolve(false));
-    });
+    const rows = await listSessions({ shared: true });
+    if (!rows) return;
+    const stale = rows.filter((r) => r.runtime && r.runtime.stale).length;
+    sweepStats.stale = stale;
+    const now = Date.now();
+    const skip = new Set([...restartGaveUp.keys(), ...restarts.keys()]);
+    for (const [n, b] of restartBackoff) if (b.until > now) skip.add(n);
+    const line = runtimeLib.sweepCandidates(rows, { skip, triedAt: sweepTried });
+    if (!line.length) return;
+    const skipped = [];
+    let looked = 0;
+    while (line.length && looked < SWEEP_LOOK_MAX) {
+      if (cycleBusy) return;
+      if (!loadLull()) {
+        if (!sweepLullSaid) {
+          sweepLullSaid = true;
+          log(`restart sweep: ${line[0].name} is stale, but the host is loaded (${PRESSURE_FILE}); waiting for the lull`);
+        }
+        return;
+      }
+      sweepLullSaid = false;
+      const c = line.shift();
+      looked += 1;
+      const hold = await restartHold(c.name, { panePid: c.panePid });
+      if (hold) {
+        skipped.push({ name: c.name, hold });
+        continue;
+      }
+      sweepNoneSaid = false;
+      const said = skipped.length
+        ? `skipped ${skipped.slice(0, 6).map((s) => `${s.name} ${s.hold}`).join(', ')}${skipped.length > 6 ? ', …' : ''}`
+        : 'first in line';
+      log(`restart sweep: picked ${c.name} (${stale} stale; ${said}; ${c.runtime.gen || 'none'} -> ${runtimeNow.gen})`);
+      skipped.length = 0;
+      sweepTried.set(c.name, Date.now());
+      const ok = await new Promise((resolve) => {
+        queueRestart(c.name, { by: 'sweep', panePid: c.panePid, onDone: resolve, hold: null }).catch(() => resolve(false));
+      });
+      if (ok) {
+        sweepNextAt = Date.now() + CYCLE_GAP_MS;
+        return;
+      }
+      // Not cycled: finishRestart has backed it off and said why. The next
+      // candidate, now — the host gate and the one-at-a-time rule still apply.
+    }
+    if (skipped.length) {
+      sweepStats.reasons = holdCounts(skipped);
+      if (!sweepNoneSaid) {
+        sweepNoneSaid = true;
+        log(`restart sweep: ${stale} stale, none at a safe point now (${sweepStats.reasons}); looking again each tick, said once`);
+      }
+    }
   } finally {
     sweepBusy = false;
-    sweepNextAt = Date.now() + CYCLE_GAP_MS;
+    sweepSummaryMaybe();
   }
 }
 
