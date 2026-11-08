@@ -8,21 +8,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silencelen.huginn.update.AppUpdateState
+import com.silencelen.huginn.update.UpdateHandoff
 
 /**
- * Which build is installed, and how to hand somebody the facts about it.
+ * Which build is installed, whether a newer one exists, and how to hand
+ * somebody the facts about it.
  *
- * The update half is unchanged and stays three explicit steps — check, download,
- * install — so a background check never spends the owner's data and an APK never
- * installs without two taps and the system's own confirmation. **There is no
- * update channel and never will be**: it is a compile-time constant by explicit
- * security decision, so this page has a repo it reads from and no picker.
+ * The update half checks and stops: this app installs nothing, not even itself
+ * (see [com.silencelen.huginn.update.PhoneUpdater]). A found release's one
+ * button opens the store app that installs it, or the release page on a phone
+ * without the store ([UpdateHandoff]). **There is no update channel and never
+ * will be**: it is a compile-time constant by explicit security decision, so
+ * this page has a repo it reads from and no picker.
  *
- * COPY DIAGNOSTICS IS NEW, and is the owner's answer to Q3 of the redesign. The
- * phone had no diagnostics at all — no bundle, no logcat, no export — while the
- * question it answers ("why did nothing arrive last night") is more a phone
- * question than a desktop one. The *Delivery details* rows already held most of
- * the facts; this makes them pasteable.
+ * COPY DIAGNOSTICS is the owner's answer to Q3 of the redesign. The phone had
+ * no diagnostics at all — no bundle, no logcat, no export — while the question
+ * it answers ("why did nothing arrive last night") is more a phone question
+ * than a desktop one. The *Delivery details* rows already held most of the
+ * facts; this makes them pasteable.
  *
  * ⚠ THE BUNDLE CARRIES NO TOKEN, by construction rather than by redaction — see
  * [diagnosticsBundle]. It is meant to be pasted into a conversation with
@@ -33,19 +36,21 @@ fun UpdatesPage(
     state: AppUpdateState,
     installedVersion: String,
     repo: String,
+    /** Whether the store app is on this phone: decides the found row's button and where it goes. */
+    storeInstalled: Boolean,
     onCheck: () -> Unit,
-    onDownload: () -> Unit,
-    onInstall: () -> Unit,
+    onOpen: (UpdateHandoff) -> Unit,
     onCopyDiagnostics: () -> Unit,
     highlight: String?,
 ) {
     ScopeOf("updates.check")
     val updateHighlighted = SettingsRowStyle.isHighlighted("updates.check", highlight)
+    val installed = installedVersion.ifBlank { "—" }
     when (state) {
         is AppUpdateState.Idle -> SettingsActionRow(
             id = "updates.check",
             title = "Software update",
-            summary = "Installed ${installedVersion.ifBlank { "—" }} · updates from github.com/$repo",
+            summary = "Installed $installed · devstore installs updates from github.com/$repo",
             actionLabel = "Check for updates",
             onAction = onCheck,
             highlighted = updateHighlighted,
@@ -55,7 +60,7 @@ fun UpdatesPage(
             id = "updates.check",
             title = "Software update",
             value = "checking…",
-            summary = "Installed ${installedVersion.ifBlank { "—" }}",
+            summary = "Installed $installed",
             highlighted = updateHighlighted,
         )
 
@@ -69,39 +74,23 @@ fun UpdatesPage(
         )
 
         is AppUpdateState.Available -> {
-            val mb = if (state.size > 0) " (${state.size / 1_000_000} MB)" else ""
+            val handoff = UpdateHandoff.choose({ storeInstalled }, state.releasePageUrl)
             SettingsActionRow(
                 id = "updates.check",
                 title = "Update available: ${state.versionName}",
-                summary = "Installed ${installedVersion.ifBlank { "—" }} · downloads from github.com/$repo",
-                actionLabel = "Download$mb",
-                onAction = onDownload,
+                summary = when (handoff) {
+                    UpdateHandoff.Store -> "Installed $installed · devstore installs it"
+                    is UpdateHandoff.ReleasePage ->
+                        "Installed $installed · no devstore on this phone; the release page has the APK"
+                },
+                actionLabel = handoff.label,
+                onAction = { onOpen(handoff) },
                 highlighted = updateHighlighted,
             )
             if (state.notes.isNotBlank()) {
                 SettingsNote(state.notes, Modifier.padding(start = 8.dp, top = 2.dp), maxLines = 8)
             }
         }
-
-        is AppUpdateState.Downloading -> {
-            val pct = state.fraction?.let { " ${(it * 100).toInt()}%" } ?: ""
-            SettingsReadOnlyRow(
-                id = "updates.check",
-                title = "Software update",
-                value = "downloading$pct",
-                summary = "Version ${state.versionName}",
-                highlighted = updateHighlighted,
-            )
-        }
-
-        is AppUpdateState.Ready -> SettingsActionRow(
-            id = "updates.check",
-            title = "Update ready: ${state.versionName}",
-            summary = "Downloaded and verified. Android asks its own question before it installs.",
-            actionLabel = "Install and restart",
-            onAction = onInstall,
-            highlighted = updateHighlighted,
-        )
 
         is AppUpdateState.Error -> {
             SettingsActionRow(

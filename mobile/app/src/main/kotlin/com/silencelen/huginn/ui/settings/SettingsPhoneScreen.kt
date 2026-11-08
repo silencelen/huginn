@@ -301,9 +301,11 @@ fun SettingsPhoneScreen(
                         state = updateState,
                         installedVersion = appVersion.ifBlank { vm.installedVersion },
                         repo = vm.updateSourceRepo,
+                        // Asked once per update state, not per recomposition: a
+                        // package lookup is a binder call.
+                        storeInstalled = remember(updateState) { vm.updateStoreInstalled() },
                         onCheck = { vm.checkForUpdate() },
-                        onDownload = { vm.downloadUpdate() },
-                        onInstall = { vm.installUpdate() },
+                        onOpen = { vm.openUpdate(it) },
                         // Built at the moment it is pressed: a bundle assembled
                         // from a cached snapshot describes a phone that no longer
                         // exists, and the whole point is the facts as they are.
@@ -332,8 +334,6 @@ internal fun updateWord(state: AppUpdateState): String = when (state) {
     is AppUpdateState.Checking -> "checking"
     is AppUpdateState.UpToDate -> "up to date"
     is AppUpdateState.Available -> "${state.versionName} available"
-    is AppUpdateState.Downloading -> "downloading"
-    is AppUpdateState.Ready -> "${state.versionName} ready to install"
     is AppUpdateState.Error -> "update check failed"
 }
 

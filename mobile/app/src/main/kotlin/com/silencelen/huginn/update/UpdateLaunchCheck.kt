@@ -6,9 +6,9 @@ package com.silencelen.huginn.update
  * The phone used to look for an update only when Settings opened, so the owner
  * learned of a release by going to look (2026-11-01). Now the view model asks
  * once as it starts — and ONLY asks: [PhoneUpdater.check] finds a newer release
- * and stops. The download is ~50 MB, the phone may be on mobile data, and an
- * install is the system's own question; both stay the owner's taps, on the
- * notice card or in Settings > Updates. Nothing in this class can reach either.
+ * and stops. What follows is a tap, on the notice card or in Settings >
+ * Updates, which opens the store app or the release page ([UpdateHandoff]);
+ * nothing in this class can reach either.
  *
  * Once per instance: a second call (a screen that re-composes, a resume) is a
  * no-op, so a launch costs the GitHub API one request.

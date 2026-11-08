@@ -122,9 +122,10 @@ data class PhoneSettingsFacts(
  * - `diagnostics` is unconditional, and is the owner's answer to Q3: the phone
  *   had no diagnostics at all, and "why did nothing arrive last night" is more a
  *   phone question than a desktop one.
- * - `selfUpdate` is unconditional. This APK updates itself from the public
- *   GitHub releases; unlike the desktop there is no store build to compile it
- *   out. It is still never a SETTING — there is one channel and no picker.
+ * - `selfUpdate` is unconditional. This build checks the public GitHub releases
+ *   (the store app installs what it finds); unlike the desktop there is no store
+ *   build to compile it out. It is still never a SETTING — there is one channel
+ *   and no picker.
  * - `localServe` is false: serving local models is a machine's own decision and
  *   this phone is not a candidate.
  */

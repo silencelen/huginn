@@ -25,12 +25,12 @@
          of whether it is warranted is the person who owns both the phone and the host
          it watches. Asking is all it does: the system dialogue decides. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <!-- Lets the app self-update from GitHub releases (PhoneUpdater): the app
-         downloads a sha256-verified APK and hands it to the system installer,
-         which shows its own "install unknown apps" confirmation. Same reasoning
-         as the Doze entry — sideloaded, so the owner is the judge, and asking is
-         all it does. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- No install permission, on purpose. The in-app self-updater used to hold
+         one; Play Protect flagged each new sideloaded build as possibly harmful,
+         and that permission was the strongest downloader-like signal the APK
+         carried, for a path the store app that installed this app already
+         covers. A found release is handed to it (UpdateHandoff); this app
+         installs nothing. NoInstallerTest keeps it that way. -->
 
     <!-- Package visibility (Android 11+): resolveActivity for the system speech
          dialog silently returns null without this, which made the dictation mic
@@ -49,6 +49,10 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- The store app that installs this app's updates (UpdateHandoff): a
+             launch-intent lookup for a package not named here answers null on
+             Android 11+, which would read as "no store" on every phone. -->
+        <package android:name="com.silence.devstore" />
     </queries>
 
     <application
