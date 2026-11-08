@@ -51,17 +51,7 @@ Then open **Settings > Notifications** and allow notifications and background us
 
 ## Updates
 
-**Settings > Updates & diagnostics > Software update** shows the installed version. Opening
-Settings checks the project's GitHub releases for a newer `app-v` release. Nothing downloads or
-installs without a tap:
-
-1. **Download** fetches the APK and checks it against the `sha256` in that release's
-   `latest.json`. A mismatch is discarded.
-2. **Install and restart** hands the verified file to Android's installer. The first time,
-   Android asks you to allow Huginn to install apps.
-
-You can also install a newer APK from the releases page over the old one. Either way, Android
-installs an update only when it is signed with the same key as the app already installed.
+Settings › Updates & diagnostics shows the installed version and checks the `app-v` releases on GitHub at launch. When a newer build exists, a card offers **Open devstore** (the devstore app installs it) or, on a phone without devstore, **Open release page**, where the APK is. The app itself never downloads or installs anything, so it asks for no install permission.
 
 ## Notifications: the prebuilt APK and your own build
 

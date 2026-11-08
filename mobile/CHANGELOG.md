@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.18.1 — 2026-11-08
 
 ### Changed
 - The app no longer installs its own updates. A found release still shows on the chats list and

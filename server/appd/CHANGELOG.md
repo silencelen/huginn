@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.19.1 — 2026-11-08
 
 ### Fixed
 - The restart sweep moves on. It takes the stale session that is at a safe point now (the

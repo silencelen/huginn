@@ -936,7 +936,7 @@ object SettingsCatalog {
             SettingsItem(
                 id = "updates.check",
                 title = "Check for updates",
-                summary = "Looks for a newer build and installs it when you say so.",
+                summary = "Looks for a newer build and says where to get it.",
                 keywords = listOf("update", "upgrade", "version", "download", "install", "release"),
                 availability = { it.selfUpdate },
                 inventory = listOf(26, 27, 28, 58, 59),
