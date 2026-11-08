@@ -122,6 +122,7 @@ not affected: they run in their own unit, `huginn-tmux.service`.
 | `HUGINN_APPD_PORT` | `8787` | Listen port, for HTTPS and loopback HTTP alike. |
 | `HUGINN_APPD_BIND` | `0.0.0.0` | Listen address. `0.0.0.0` (every interface) keeps loopback reachable. A single other address does not, and the host tools and the install check talk to `127.0.0.1`; restrict access with a firewall instead. |
 | `HUGINN_APPD_DATA` | `/var/lib/huginn-appd` | Data directory. |
+| `HUGINN_APPD_CYCLE_ON_DEPLOY` | `1` | After the runtime generation changes (a deploy, `claude update`, a hooks or MCP change), restart stale, idle, unattached sessions one at a time so they pick up the new runtime (`runtime.stale` on the session rows; `POST /v1/sessions/<name>/restart` for one by hand). `0` leaves every session as it is until asked. |
 | `HUGINN_APPD_TOKEN_FILE` | `/etc/huginn-appd/token` | The access token file. Read once at startup; at least 32 characters, or the daemon refuses to start. |
 | `HUGINN_APPD_PLAINTEXT` | `local` | Who may use plain HTTP. `local`: the server itself only; everyone else gets `426` and must use HTTPS. `any`: everyone, which sends the token across the network unencrypted. Leave it at `local`. |
 | `HUGINN_APPD_TLS_CERT`, `HUGINN_APPD_TLS_KEY` | unset | Your own certificate and key, instead of the self-signed pair. Set both or neither. See [Use your own certificate](#use-your-own-certificate). |
@@ -162,7 +163,7 @@ force.
 | `HUGINN_APPD_CLAUDE_DIR`, `HUGINN_CLAUDE_SETTINGS` | Move Claude Code's configuration directory and settings file away from the live ones. |
 | `HUGINN_APPD_STATE_DIR`, `HUGINN_APPD_TMUX_SOCKET`, `HUGINN_APPD_CLAUDE_SCRATCH`, `HUGINN_HEADROOM_DIR` | Point the daemon at scratch state, a private tmux server, or a headroom directory the installed hooks do not watch. |
 | `HUGINN_APPD_SYSTEMCTL` | A stand-in `systemctl` the daemon asks whether `huginn-tmux.service` has a main process. With a private tmux server it otherwise asks nobody, because the real one answers for the live unit, and a pid in that answer is sent `SIGUSR1`. |
-| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_PICKER_WAIT_MS`, `HUGINN_APPD_PICKER_LATE_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*`, `HUGINN_APPD_RECONCILE_MS`, `HUGINN_APPD_ABSENT_CONFIRM_MS` | Shorten timers and limits so tests run in seconds. |
+| `HUGINN_APPD_PLAN_TTL_MS`, `HUGINN_APPD_NATIVE_GRACE_MS`, `HUGINN_APPD_CONSENT_GRACE_MS`, `HUGINN_APPD_PICKER_WAIT_MS`, `HUGINN_APPD_PICKER_LATE_MS`, `HUGINN_APPD_RUNTIME_RECHECK_MS`, `HUGINN_APPD_CYCLE_GAP_MS`, `HUGINN_APPD_RESTART_RETRY_MS`, `HUGINN_APPD_PRESSURE_FILE`, `HUGINN_APPD_DASHBOARD_CAP_MS`, `HUGINN_APPD_LEASE_MS`, `HUGINN_APPD_LIVE_KEYS_WINDOW_MS`, `HUGINN_APPD_ROUNDS_TICK_MS`, `HUGINN_APPD_ROUND_WRAPUP_S`, `HUGINN_APPD_IMAGE_SERVE_MAX`, `HUGINN_APPD_OAUTH_LOCK_*`, `HUGINN_APPD_RECONCILE_MS`, `HUGINN_APPD_ABSENT_CONFIRM_MS` | Shorten timers and limits so tests run in seconds. |
 
 The headroom gate hook has its own settings (`HUGINN_HEADROOM_DIR`, `HUGINN_GATE_TIMEOUT`,
 `HUGINN_GATE_POLL`, `HUGINN_GATE_STALE_S`). It runs inside Claude Code, not inside the daemon, so a

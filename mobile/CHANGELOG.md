@@ -1,6 +1,6 @@
 # Huginn changelog
 
-## [Unreleased]
+## 3.18.0 — 2026-11-07
 
 ### Added
 - A session whose Claude Code is behind what a launch would load now (appd 3.19) carries a

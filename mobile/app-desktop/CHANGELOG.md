@@ -1,6 +1,6 @@
 # Huginn Desktop changelog
 
-## [Unreleased]
+## 2.11.0
 
 ### Added
 - A session launched before the last server update carries a small "restart to update" mark (its tip

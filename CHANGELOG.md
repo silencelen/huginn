@@ -8,7 +8,7 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.11.0] - 2026-11-07
 
 ### Fixed
 - `huginn desktop install` writes the menu entry's Exec as the bare launcher path (quoted only when the
