@@ -1,5 +1,17 @@
 # Huginn changelog
 
+## [Unreleased]
+
+### Changed
+- The app no longer installs its own updates. A found release still shows on the chats list and
+  under Settings > Updates; its button opens devstore, which installs it, or the release page on
+  GitHub on a phone without devstore.
+
+### Security
+- `REQUEST_INSTALL_PACKAGES` is gone from the manifest, with the APK download, the sha256 check and
+  the installer hand-off it served. A downloaded APK left in the app's cache by an earlier version
+  is removed at start.
+
 ## 3.18.0 — 2026-11-07
 
 ### Added

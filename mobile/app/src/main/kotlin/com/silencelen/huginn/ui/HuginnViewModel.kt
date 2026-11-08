@@ -572,8 +572,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val sentFiles: com.silencelen.huginn.ui.SentFileHost = AndroidSentFiles(app) { client }
 
     /**
-     * Self-update from the public GitHub releases (not the private devstore).
-     * Find/download/install are three explicit steps — see [PhoneUpdater].
+     * Finds a newer release in the public GitHub repo, and installs nothing: the
+     * hand-off is the store app, or the release page — see
+     * [com.silencelen.huginn.update.UpdateHandoff].
      */
     private val updater = com.silencelen.huginn.update.PhoneUpdater.forApp(getApplication())
     val updateState: StateFlow<com.silencelen.huginn.update.AppUpdateState> = updater.state
@@ -581,18 +582,28 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     val updateSourceRepo: String get() = updater.sourceRepo
 
     fun checkForUpdate() { viewModelScope.launch { updater.check() } }
-    fun downloadUpdate() { viewModelScope.launch { updater.download() } }
-    fun installUpdate() {
-        if (!updater.install()) _toast.value = "Could not start the installer"
+
+    /** Whether the store app is on this phone: decides the hand-off's words and where it goes. */
+    fun updateStoreInstalled(): Boolean =
+        com.silencelen.huginn.update.UpdateHandoff.storeInstalled(getApplication())
+
+    /** A found release's one action: the store app, or the release page in a browser. */
+    fun openUpdate(handoff: com.silencelen.huginn.update.UpdateHandoff) {
+        if (com.silencelen.huginn.update.UpdateHandoff.open(getApplication(), handoff)) return
+        _toast.value = when (handoff) {
+            com.silencelen.huginn.update.UpdateHandoff.Store -> "Could not open devstore"
+            is com.silencelen.huginn.update.UpdateHandoff.ReleasePage -> "Could not open a browser"
+        }
     }
 
     // ------------------------------------------------------------ update notice
     //
     // The card at the top of the chats list. The rule is `UpdateReminder` in
     // :core, read through `phoneUpdateNotice`; these are its inputs: the updater's
-    // state, "Later" (this run only, so it lives here and nowhere on disk) and the
-    // persisted "Don't remind me" version. The check itself is made ONCE at
-    // launch (`UpdateLaunchCheck`, below in init) and never downloads.
+    // state, "Later" (this run only, so it lives here and nowhere on disk), the
+    // persisted "Don't remind me" version, and whether the store app is here —
+    // asked only when there is a card to build. The check itself is made ONCE at
+    // launch (`UpdateLaunchCheck`, below in init).
 
     private val launchCheck = com.silencelen.huginn.update.UpdateLaunchCheck()
     private val _updateLater = MutableStateFlow<String?>(null)
@@ -601,7 +612,9 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     /** What the chats list announces, or null — see [com.silencelen.huginn.update.phoneUpdateNotice]. */
     val updateNotice: StateFlow<com.silencelen.huginn.update.PhoneUpdateNotice?> = combine(
         updater.state, _updateLater, _updateSilenced,
-    ) { state, later, silenced -> com.silencelen.huginn.update.phoneUpdateNotice(state, later, silenced) }
+    ) { state, later, silenced ->
+        com.silencelen.huginn.update.phoneUpdateNotice(state, later, silenced, storeInstalled = ::updateStoreInstalled)
+    }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** "Later": this version stays off the card until the app is next launched. */
@@ -611,15 +624,6 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
     fun updateSilence(version: String) {
         _updateSilenced.value = version
         viewModelScope.launch { settings.setUpdateSilencedVersion(version) }
-    }
-
-    /** The notice card's button: the step the updater is at — download, or install. */
-    fun updateNoticeAct(notice: com.silencelen.huginn.update.PhoneUpdateNotice) {
-        when (notice.action) {
-            is com.silencelen.huginn.update.PhoneUpdateNotice.Action.Download -> downloadUpdate()
-            is com.silencelen.huginn.update.PhoneUpdateNotice.Action.Downloading -> Unit
-            com.silencelen.huginn.update.PhoneUpdateNotice.Action.Install -> installUpdate()
-        }
     }
 
     // ---- shared UI state
@@ -1298,10 +1302,15 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                 HuginnMessagingService.syncToken(getApplication())
                 if (_watchEnabled.value) WatchService.start(getApplication())
             }
-            // Once, check only: a found release shows on the chats list; the
-            // download and the install stay the owner's taps. Not gated on a
+            // Once, check only: a found release shows on the chats list, and the
+            // tap goes to the store app or the release page. Not gated on a
             // token — the release feed is GitHub, not the daemon.
             launch { launchCheck.runOnce { updater.check() } }
+            // What the self-updater of earlier releases left in the cache: a
+            // downloaded APK waiting for an install this app no longer makes.
+            launch(Dispatchers.IO) {
+                com.silencelen.huginn.update.StaleDownloads.sweep(getApplication<Application>().cacheDir)
+            }
         }
     }
 
