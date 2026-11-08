@@ -31,6 +31,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { lyingTmux, REAL_TMUX } = require('./tmux-shim');
+const paneLib = require('../lib/pane');
+const typing = require('../lib/typing');
 
 // PORT ALLOCATION — see the table in routes-lifecycle.test.js; this file owns
 // 13100 + pid%50 -> 13100-13149 (routes-questions holds 12800-13099).
@@ -211,7 +213,14 @@ before(async () => {
     + 'case "$name" in\n'
     + '  *draft*) export HG_FAKE_CLAUDE_TYPED="half a thought" ;;\n'
     + '  *trust*) export HG_FAKE_CLAUDE_TRUST=1 ;;\n'
+    // The three other things `/exit` does on 2.1.316 (fake-claude.js): the
+    // background-work prompt while `<name>.exit-asks` exists; taken and
+    // ignored, once or always; and the TUI's own background count on the pane.
+    + `  *exitasks*) export HG_FAKE_CLAUDE_EXIT_ASKS_FILE="${tmp}/$name.exit-asks" ;;\n`
+    + '  *exitonce*) export HG_FAKE_CLAUDE_EXIT_IGNORED=once ;;\n'
+    + '  *exitnever*) export HG_FAKE_CLAUDE_EXIT_IGNORED=1 ;;\n'
     + 'esac\n'
+    + `export HG_FAKE_CLAUDE_BG_HINT_FILE="${tmp}/$name.bg-hint"\n`
     + `exec ${process.execPath} ${fake} "$@"\n`, { mode: 0o755 });
   // The lying tmux and systemctl, for the one 503 case; its own `claude` is
   // removed so the stand-in above is the one found.
@@ -241,6 +250,10 @@ before(async () => {
     HUGINN_APPD_RUNTIME_RECHECK_MS: '400',
     HUGINN_APPD_RECONCILE_MS: '600',
     HUGINN_APPD_ABSENT_CONFIRM_MS: '600',
+    // The stand-in answers `/exit` within a second; Claude Code's exit prompt,
+    // once backed out of, holds a restart as `background` for 1.5 s here, not 5 min.
+    HUGINN_APPD_QUIT_WAIT_MS: '1500',
+    HUGINN_APPD_EXIT_DIALOG_HOLD_MS: '1500',
     HG_FAKE_CLAUDE_BOOT_MS: String(BOOT_MS),
     HG_FAKE_CLAUDE_BANNER_MS: String(BANNER_MS),
   };
@@ -424,6 +437,91 @@ test('202 blockedBy background: a background agent holds it until it is done', a
   const starts = await cycled(name);
   assert.ok(starts, 'cycled once the agent was gone');
   assert.deepEqual(starts[1], ['--resume', sid]);
+});
+
+test('202 blockedBy background: Claude Code\'s own count on the pane holds it — a Monitor, which the tasks directory cannot see', async () => {
+  // A Monitor writes nothing under tasks/ until its first event, and the file
+  // it then writes is the claude process's own, never held open by a shell: the
+  // fd rule reads it as nothing. The TUI draws its count under the box —
+  // `⏵⏵ auto mode on · 1 monitor · ↓ to manage` — and that is what `/exit`
+  // would refuse to leave (fixture statusline-background-80).
+  const { name, sid } = await readySession('bghint');
+  const hint = path.join(tmp, `${name}.bg-hint`);
+  fs.writeFileSync(hint, '1 monitor');
+  assert.ok(await until(() => /1 monitor · ↓ to manage/.test(tmux(['capture-pane', '-p', '-t', `=${name}:`])), 4_000, 100), 'the stand-in drew the count');
+  // The list row reads it off the pane too (preview), with nothing on disk.
+  const prow = ((await api('/v1/sessions?preview=1')).body.sessions || []).find((r) => r.name === name);
+  assert.equal(prow.bgMonitors, 1, JSON.stringify({ bgShells: prow.bgShells, bgAgents: prow.bgAgents, bgMonitors: prow.bgMonitors }));
+  assert.equal(prow.bgShells, 0);
+  const r = await api(`/v1/sessions/${name}/restart`, { method: 'POST', body: '{}' });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal(r.body.blockedBy, 'background');
+  await wait(1_500);
+  assert.equal(argvLines(name).length, 1, 'held while the Monitor runs');
+  assert.equal(readOr(`${argvFor(name)}.exit`), '', 'and /exit was never typed into it');
+  fs.unlinkSync(hint);
+  const starts = await cycled(name);
+  assert.ok(starts, 'cycled once the count was gone');
+  assert.deepEqual(starts[1], ['--resume', sid]);
+});
+
+test('/exit answered by Claude Code\'s background-work prompt: backed out with Esc, never answered, and the restart holds as background until the work is gone', async () => {
+  // What happened on the sweep's first real run: a session with a Monitor the
+  // tasks directory could not see was quit with `/exit`, Claude Code drew its
+  // "Background work is running" selector, and the daemon left it there for
+  // two hours with every later restart held by it as `dialog`.
+  const { name, sid } = await readySession('exitasks');
+  const flag = path.join(tmp, `${name}.exit-asks`);
+  fs.writeFileSync(flag, '1');
+  const r = await api(`/v1/sessions/${name}/restart`, { method: 'POST', body: '{}' });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  assert.equal(r.body.blockedBy, null, 'nothing on disk or on the pane said work was running');
+  const held = await until(() => (new RegExp(`restart: ${name}: waiting \\(background\\): claude asked before exiting `
+    + '\\(shell · sleep 900, monitor · r5 probe\\); backed out with Esc').test(daemonLog()) ? true : null), 10_000, 100);
+  assert.ok(held, daemonLog().split('\n').filter((l) => l.includes(name)).join('\n'));
+  // The stand-in repaints below rather than clearing, so the prompt's rows stay
+  // in the scroll; what matters is that it is no longer the thing on screen.
+  const screen = tmux(['capture-pane', '-p', '-t', `=${name}:`]).split('\n');
+  assert.equal(paneLib.exitDialog(screen), null, `the prompt was left on the pane:\n${screen.join('\n')}`);
+  assert.equal(typing.paneBlocks(typing.paneReadyForInput(screen).why), false, 'no dialog has the pane');
+  assert.equal(typing.composerDrawn(screen), true, 'the composer is back');
+  assert.equal(readOr(`${argvFor(name)}.exit`), 'exit\n', 'one /exit so far, and the prompt was never answered (no `answered` line)');
+  assert.equal(argvLines(name).length, 1, 'the process was neither killed nor relaunched');
+  const again = await api(`/v1/sessions/${name}/restart`, { method: 'POST', body: '{}' });
+  assert.equal(again.status, 409, 'still queued, waiting');
+  assert.equal(again.body.reason, 'restarting');
+  const row = await rowOf(name);
+  assert.equal(row.runtime.restarting, false, 'waiting is not restarting');
+  // The work ends: the next /exit quits, and the session is cycled.
+  fs.unlinkSync(flag);
+  const starts = await cycled(name);
+  assert.ok(starts, 'cycled once the work was gone');
+  assert.deepEqual(starts[1], ['--resume', sid]);
+  assert.equal(readOr(`${argvFor(name)}.exit`), 'exit\nexit\n', 'the second /exit quit it; nothing was ever answered');
+});
+
+test('/exit taken and nothing happening: one more /exit, then the process is left alone while its prompt is drawn', async () => {
+  const once = await readySession('exitonce');
+  const r = await api(`/v1/sessions/${once.name}/restart`, { method: 'POST', body: '{}' });
+  assert.equal(r.status, 202, JSON.stringify(r.body));
+  const starts = await cycled(once.name);
+  assert.ok(starts, 'cycled on the second /exit');
+  assert.deepEqual(starts[1], ['--resume', once.sid]);
+  assert.equal(readOr(`${argvFor(once.name)}.exit`), 'exit\nexit\n');
+  assert.match(daemonLog(), new RegExp(`restart: ${once.name}: claude took /exit and is still running with its prompt back; trying /exit once more`));
+
+  const never = await readySession('exitnever');
+  const r2 = await api(`/v1/sessions/${never.name}/restart`, { method: 'POST', body: '{}' });
+  assert.equal(r2.status, 202, JSON.stringify(r2.body));
+  const left = await until(() => (new RegExp(`restart: ${never.name}: not restarted \\(claude \\(pid \\d+\\) ignored /exit twice `
+    + 'and still draws its prompt; left running\\); it stays marked stale').test(daemonLog()) ? true : null), 15_000, 100);
+  assert.ok(left, daemonLog().split('\n').filter((l) => l.includes(never.name)).join('\n'));
+  assert.equal(readOr(`${argvFor(never.name)}.exit`), 'exit\nexit\n', 'exactly two, never a third');
+  assert.equal(argvLines(never.name).length, 1, 'never relaunched');
+  const rows_ = tmux(['capture-pane', '-p', '-t', `=${never.name}:`]).split('\n').filter((l) => l.trim());
+  assert.match(rows_[rows_.length - 1], /auto mode on/, `the stand-in still draws its prompt — nothing was signalled:\n${rows_.slice(-4).join('\n')}`);
+  assert.ok(!/SIGTERM/.test(daemonLog().split('\n').filter((l) => l.includes(never.name)).join('\n')), 'no signal while a composer is drawn');
+  assert.equal((await rowOf(never.name)).runtime.restarting, false);
 });
 
 test('202 blockedBy attached: a terminal on the session holds it; force skips that hold and only that hold', async () => {

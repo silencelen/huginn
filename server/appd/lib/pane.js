@@ -1144,6 +1144,109 @@ function loginPaneState(lines) {
   return { awaitingCode, done, failed: !!failedLine, message };
 }
 
+// ---- Claude Code's own count of its background work ---------------------------
+//
+// ⚠ THE TASKS DIRECTORY DOES NOT SEE A MONITOR (2026-11-08). A `Monitor` leaves
+// nothing in `/tmp/claude-<uid>/<slug>/<id>/tasks/` until its first event, and
+// the `<id>.output` it then writes is written by the claude process itself —
+// never held open by a descendant shell, which is the one liveness signal
+// lib/tasks.js has. So a session with a live Monitor read `bgShells: 0,
+// bgAgents: 0`, the restart cycle took it for idle, typed `/exit`, and Claude
+// Code answered with its "Background work is running" prompt (below), which
+// then sat on the pane for two hours. The count that prompt is built from is
+// on the pane the whole time: the mode hint under the box reads
+//
+//     ⏵⏵ auto mode on · 1 shell, 1 monitor · ↓ to manage        ◐ medium · /effort
+//
+// while work runs (2.1.316, fixture statusline-background-80) and
+// `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents` while none does. Read
+// from the hint row only: the turn summary above the box (`… · 1 shell, 1
+// monitor still running`) is history and does not change when the work ends.
+const BG_COUNT_RE = /(\d+)\s+(shell|monitor|agent|subagent|task)s?\b/gi;
+
+/**
+ * What Claude Code says it is running in the background, off the mode-hint
+ * row: `{shells, monitors, agents, total}`, zeros for a hint row that counts
+ * nothing, null when no hint row is on the pane (a dialog has replaced the
+ * box, or this is not a Claude pane).
+ */
+function parseBackgroundHint(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let hint = null;
+  for (let i = plain.length - 1, seen = 0; i >= 0 && seen < 10; i--) {
+    const t = plain[i];
+    if (!t.trim()) continue;
+    seen += 1;
+    if (MODE_HINT_RE.test(t)) { hint = t; break; }
+  }
+  if (hint === null) return null;
+  const out = { shells: 0, monitors: 0, agents: 0, total: 0 };
+  let m;
+  BG_COUNT_RE.lastIndex = 0;
+  while ((m = BG_COUNT_RE.exec(hint)) !== null) {
+    const n = Number(m[1]);
+    const kind = m[2].toLowerCase();
+    if (kind === 'shell') out.shells += n;
+    else if (kind === 'monitor') out.monitors += n;
+    else out.agents += n;
+  }
+  out.total = out.shells + out.monitors + out.agents;
+  return out;
+}
+
+// ---- the `/exit` prompt ---------------------------------------------------------
+//
+// `/exit` on a session with background work does not quit (2.1.316, measured
+// 2026-11-08 in a throwaway session with a background shell and a Monitor,
+// fixture exit-background-work-80): it draws a numbered selector in place of
+// the composer —
+//
+//     Background work is running
+//     The following will stop when you exit:
+//     shell · sleep 900
+//     monitor · r5 probe
+//     ❯ 1. Exit and stop tasks
+//       2. Move to background and exit
+//       3. Stay
+//     Enter to confirm · Esc to cancel
+//
+// — Enter takes the highlighted row, which is the one that kills the work, and
+// Esc is `Stay`: the dialog closes, the composer is back and empty, the
+// process is still there. The transcript records the command (`<local-command-
+// stdout>(no content)`) only when the prompt ends, and Claude Code's own
+// message queue holds behind it. Recognised by its rows, never by its heading
+// alone, like every other dialog here.
+const EXIT_HEADING_RE = /^\s*Background work is running\s*$/;
+const EXIT_LIST_RE = /^\s*The following will stop when you exit:?\s*$/;
+const EXIT_EXIT_ROW_RE = /^Exit and stop tasks$/i;
+const EXIT_STAY_ROW_RE = /^Stay$/i;
+
+/**
+ * Is Claude Code's `/exit` prompt on this pane? `{work: ['shell · sleep 900',
+ * 'monitor · r5 probe'], prompt}` when it is — `work` being the rows it says it
+ * will stop, as drawn — else null.
+ */
+function exitDialog(lines) {
+  const arr = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const prompt = detectNumberedPrompt(arr);
+  if (!prompt || !Array.isArray(prompt.options)) return null;
+  const labels = prompt.options.map((o) => String(o.label || '').trim());
+  if (!labels.some((l) => EXIT_EXIT_ROW_RE.test(l)) || !labels.some((l) => EXIT_STAY_ROW_RE.test(l))) return null;
+  const plain = arr.map((l) => stripAnsi(String(l)).replace(/\s+$/, ''));
+  let first = -1;
+  for (let i = plain.length - 1; i >= 0; i--) {
+    if (/^\s*(?:[❯>]\s*)?1[.)]\s+Exit and stop tasks/i.test(plain[i])) { first = i; break; }
+  }
+  if (first < 0) return null;
+  const from = Math.max(0, first - 24);
+  const block = plain.slice(from, first);
+  if (!block.some((l) => EXIT_HEADING_RE.test(l))) return null;
+  const list = block.findIndex((l) => EXIT_LIST_RE.test(l));
+  const work = (list >= 0 ? block.slice(list + 1) : []).map((l) => l.trim()).filter((l) => l && !RULE_RE.test(l));
+  return { work, prompt };
+}
+
 module.exports = {
   screenHash, stripAnsi, previewLines, detectPrompt, promptFingerprint, multiToggleDigits,
   detectTrustDialog, detectUnnumberedSelector, dialogBodyRows, drawsAskRows,
@@ -1152,4 +1255,5 @@ module.exports = {
   parseModelPicker, modelPickerShown,
   parseSpinner, parseStatusExtras, spinnerIsCompacting,
   extractLoginUrl, parseStatusLine, fastModeUnavailable, loginPaneState,
+  parseBackgroundHint, exitDialog,
 };

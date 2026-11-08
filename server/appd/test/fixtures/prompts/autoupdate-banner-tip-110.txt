@@ -1,0 +1,21 @@
+[38;5;231m●[39m The two app-stage files pass on their own, so the earlier failure was the load-flake refusal and app 3.18.0
+  can ship with a part-C cut. The daemon misread an idle pane with an auto-update banner as a modal, so both
+  issues go to a 3.19.1 fix lane and don't block the app.[38;5;239m · summary[39m
+
+[38;5;246m [39m Appd 3.19.1: restart sweep defects[38;5;246m · 35s[39m
+[38;5;246m  ⎿  $ SP=/tmp/claude-1000/-home-alex-work/00000000-0000-4000-8000-000000000000/scratchpad; python3 - "$SP" <<'PY'[39m
+     [38;5;246mimport sys[39m
+     [38;5;246msp=sys.argv[1]; s=open(f"{sp}/cut-r5.sh").read()[39m
+     [38;5;246mhead=s.split('echo "=== 1: appd 3.19.0')[0][39m
+     [38;5;246mhead=head.replace('# R5 cut: appd 3.19.0 (sessions pick up updates; dashboard cap) -> CLI/…[39m
+
+[38;5;246m●[39m [1mAgent[0m(appd 3.19.1: restart sweep defects)
+
+[38;5;174m✽[39m [38;5;180mPhotosynthesizing…[38;5;174m [38;5;246m(3m 52s · ↓[39m [38;5;246m9.1k tokens)[39m
+[38;5;246m  ⎿  Tip: Connect Claude to your IDE · /ide[39m
+                              [38;5;211m✘ Auto-update failed · Try [1mclaude doctor[0m[38;5;211m or [1mnpm i -g @anthropic-ai/claude-code[0m
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [39m
+[38;5;244m──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m[alex] Fable 5.1 · ctx 63% | wk 77% · main · ⚠ 7 sessions in this tree[39m
+  [38;5;220m⏵⏵ auto mode on[38;5;246m (shift+tab to cycle)[39m

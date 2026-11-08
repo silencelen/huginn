@@ -2004,8 +2004,29 @@ function dropReason(entry, ctx = {}) {
   if (!entry.automated) return null;
   const now = Number(ctx.now) || 0;
   // 3.0.2 made the timeout automated-only; the early return above says it once.
-  if (now && entry.at && now - entry.at >= QUEUE_MAX_WAIT_MS) return 'timeout';
+  // An entry may carry a shorter ceiling of its own (`maxWaitMs`): the restart
+  // sweep's job waits a minute for a boundary, not the lane's ten, because a
+  // sweep that sits behind one busy session is not sweeping (2026-11-08).
+  if (now && entry.at && now - entry.at >= entryCeilingMs(entry)) return 'timeout';
   return null;
+}
+
+/** The boundary ceiling this entry waits under: its own, or the lane's. */
+function entryCeilingMs(entry) {
+  const own = Number(entry && entry.maxWaitMs);
+  return Number.isFinite(own) && own > 0 ? own : QUEUE_MAX_WAIT_MS;
+}
+
+/** `10 minutes`, `1 minute`, `45 seconds`: the ceiling, for a journal line. */
+function waitWords(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return '10 minutes';
+  if (n >= 60_000 && n % 60_000 === 0) {
+    const m = n / 60_000;
+    return `${m} minute${m === 1 ? '' : 's'}`;
+  }
+  const s = Math.max(1, Math.round(n / 1000));
+  return `${s} second${s === 1 ? '' : 's'}`;
 }
 
 /**
@@ -2041,7 +2062,7 @@ function dropMessage(reason, entry = {}) {
     case 'family':
       return `dropped an automated ${what}: the session already changed model`;
     case 'timeout':
-      return 'waited 10 minutes for a turn boundary and gave up';
+      return `waited ${waitWords(entry.maxWaitMs)} for a turn boundary and gave up`;
     default:
       return `dropped a queued ${what}`;
   }

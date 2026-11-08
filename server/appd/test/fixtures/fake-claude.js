@@ -134,6 +134,39 @@ let shellMode = false;
  *                                  before any composer — a relaunch that fails.
  */
 const ARGV_OUT = process.env.HG_FAKE_CLAUDE_ARGV_OUT || '';
+/**
+ * The three things `/exit` does on 2.1.316 besides quitting (appd 3.19.1,
+ * measured 2026-11-08 in a throwaway session with a background shell and a
+ * Monitor; fixture prompts/exit-background-work-80.txt):
+ *   HG_FAKE_CLAUDE_EXIT_ASKS_FILE  while this file exists, `/exit` draws Claude
+ *                                  Code's "Background work is running" selector in
+ *                                  place of the composer instead of quitting. Esc
+ *                                  is `Stay` (the box comes back, empty); Enter
+ *                                  takes the highlighted row — `Exit and stop
+ *                                  tasks` — which is noted as `answered` in
+ *                                  `<argv>.exit` before the process ends, so a test
+ *                                  can tell a dismissal from the one answer that
+ *                                  kills the work. The file gone, `/exit` quits.
+ *   HG_FAKE_CLAUDE_EXIT_IGNORED    '1': `/exit` is taken as a command and nothing
+ *                                  happens — the box redraws empty, the process
+ *                                  stays; 'once': only the first `/exit` is.
+ *   HG_FAKE_CLAUDE_BG_HINT_FILE    while this file exists, the mode hint under the
+ *                                  box reads `⏵⏵ auto mode on · <its contents> · ↓
+ *                                  to manage` — Claude Code's own count of its
+ *                                  background work, which is how a Monitor shows
+ *                                  (nothing of it is in the tasks directory). The
+ *                                  box is redrawn when the file comes or goes.
+ */
+const EXIT_ASKS_FILE = process.env.HG_FAKE_CLAUDE_EXIT_ASKS_FILE || '';
+const EXIT_IGNORED = process.env.HG_FAKE_CLAUDE_EXIT_IGNORED || '';
+const BG_HINT_FILE = process.env.HG_FAKE_CLAUDE_BG_HINT_FILE || '';
+let exitDialogUp = false;
+let exitsSeen = 0;
+const bgHintNow = () => {
+  if (!BG_HINT_FILE) return '';
+  try { return fs.readFileSync(BG_HINT_FILE, 'utf8').trim(); } catch { return ''; }
+};
+let lastBgHint = bgHintNow();
 const FLAGS = process.argv.slice(2);
 const RESUME_ID = (() => {
   const i = FLAGS.indexOf('--resume');
@@ -161,9 +194,23 @@ function drawComposer(typed = '') {
       + '  ! for shell mode\n');
     return;
   }
+  const hint = bgHintNow();
   process.stdout.write(`${RULE}\n${dimOn}❯${dimOff} ${body}\n${RULE}\n`
     + '  [fake] Fable 5.1 · ctx 4%\n'
-    + '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n');
+    + (hint ? `  ⏵⏵ auto mode on · ${hint} · ↓ to manage\n` : '  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n'));
+}
+
+/** Claude Code's `/exit` prompt, as 2.1.316 draws it over background work (the fixture, verbatim rows). */
+function drawExitDialog() {
+  process.stdout.write(`\n❯ /exit\n${RULE}\n`
+    + '  Background work is running\n'
+    + '  The following will stop when you exit:\n'
+    + '  shell · sleep 900\n'
+    + '  monitor · r5 probe\n'
+    + '  ❯ 1. Exit and stop tasks\n'
+    + '    2. Move to background and exit\n'
+    + '    3. Stay\n'
+    + '  Enter to confirm · Esc to cancel\n');
 }
 
 /** The one dialog whose default is destructive. Drawn INSTEAD of a composer. */
@@ -196,6 +243,17 @@ function render() { drawComposer(clean(buf)); }
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => {
+  // The exit prompt has the keyboard: Esc is `Stay`, Enter is the highlighted
+  // row (`Exit and stop tasks`), everything else is ignored, as on 2.1.316.
+  if (exitDialogUp) {
+    if (d.includes('\u001B')) { exitDialogUp = false; buf = ''; render(); return; }
+    if (/[\r\n]/.test(d)) {
+      if (ARGV_OUT) fs.appendFileSync(`${ARGV_OUT}.exit`, 'answered\n');
+      process.stdout.write('\nGoodbye!\n');
+      process.exit(0);
+    }
+    return;
+  }
   if (!accepting) {
     // 'stuck': the pty holds it and the TUI picks it up at paint time, minus the
     // newline. 'lost': nobody is reading, and the real thing discards it.
@@ -245,7 +303,20 @@ process.stdin.on('data', (d) => {
     // follows `claude` in its command. Nothing is written to OUT — the line was
     // not a message.
     if (line.trim() === '/exit') {
+      exitsSeen += 1;
       if (ARGV_OUT) fs.appendFileSync(`${ARGV_OUT}.exit`, 'exit\n');
+      // Background work: the prompt instead of the exit (see the knobs above).
+      if (EXIT_ASKS_FILE && fs.existsSync(EXIT_ASKS_FILE)) {
+        exitDialogUp = true;
+        buf = '';
+        drawExitDialog();
+        return;
+      }
+      // The command taken and nothing happening: the box redraws empty below.
+      if (EXIT_IGNORED === '1' || (EXIT_IGNORED === 'once' && exitsSeen === 1)) {
+        process.stdout.write('\n❯ /exit\n');
+        continue;
+      }
       process.stdout.write('\nGoodbye!\n');
       process.exit(0);
     }
@@ -257,6 +328,17 @@ process.stdin.on('data', (d) => {
   render();
 });
 process.stdin.resume();
+
+// The hint under the box follows the file: a Monitor that ends redraws it on
+// the real thing too, without a keystroke.
+if (BG_HINT_FILE) {
+  setInterval(() => {
+    const now = bgHintNow();
+    if (now === lastBgHint) return;
+    lastBgHint = now;
+    if (accepting && !exitDialogUp) render();
+  }, 300);
+}
 
 setTimeout(() => {
   // Phase 2: console text. Deliberately caret-free — this is the frame that

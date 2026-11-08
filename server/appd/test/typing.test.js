@@ -647,6 +647,22 @@ test('an AUTOMATED send that waited ten minutes is dropped, and says so', () => 
   assert.match(t.dropMessage('timeout'), /waited 10 minutes for a turn boundary and gave up/);
 });
 
+test('an AUTOMATED entry may carry a shorter ceiling of its own, and the drop says which', () => {
+  // The restart sweep's job waits a minute for a boundary, not the lane's ten: a
+  // sweep that sat behind one busy session for ten minutes at a time swept
+  // nothing in six hours (2026-11-08).
+  const now = Date.now();
+  const sweep = { automated: true, origin: 'restart', kind: 'restart', at: now - 61_000, maxWaitMs: 60_000 };
+  assert.equal(t.dropReason(sweep, { now }), 'timeout');
+  assert.equal(t.dropReason({ ...sweep, at: now - 59_000 }, { now }), null);
+  assert.equal(t.dropReason({ ...sweep, maxWaitMs: null, at: now - 61_000 }, { now }), null, 'no ceiling of its own: the lane\'s ten minutes');
+  assert.equal(t.dropReason({ ...sweep, maxWaitMs: -5, at: now - 61_000 }, { now }), null, 'junk reads as the lane\'s');
+  assert.match(t.dropMessage('timeout', sweep), /waited 1 minute for a turn boundary and gave up/);
+  assert.match(t.dropMessage('timeout', { maxWaitMs: 90_000 }), /waited 90 seconds for a turn boundary/);
+  assert.match(t.dropMessage('timeout', { maxWaitMs: 0 }), /waited 10 minutes/);
+  assert.match(t.dropLogLine('s', sweep, 'timeout', { idle: false, lastKind: 'user' }), /dropped restart\/restart for s: timeout \(last gate: idle=false tail=user\)/);
+});
+
 // HOTFIX 3.0.2: a person's message is never binned. 3.0.0 dropped it after ten
 // minutes, and because the boundary check also misread the CLI's bookkeeping
 // records as "still busy", 43 of the owner's messages vanished from one session.
