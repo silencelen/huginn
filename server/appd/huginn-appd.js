@@ -45,6 +45,7 @@ const oauthRefresh = require('./lib/oauth-refresh');
 const oauthlock = require('./lib/oauthlock');
 const { formatModel, discoverModels, parseModelId } = require('./lib/models');
 const sessreg = require('./lib/session-registry');
+const seedstate = require('./lib/seedstate');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts, projectSessions, carryProjectBursts } = require('./lib/alerts');
@@ -931,10 +932,19 @@ async function tmuxNameReadback(requested, printed = '') {
  * The word it reports is the flat file's, EXCEPT where a prompt sidecar says a
  * question is waiting — see withPendingQuestion, which is the whole reason this
  * is the one door every reader comes through.
+ *
+ * ⚠ NO FILE IS NOT "NOTHING KNOWN" (2026-11-09). A live session whose file is
+ * gone — the hook has had no event since the state sweep took an aged file on a
+ * bad listing — still has its id in its own process's argv, the registry, its
+ * project record or its transcript. derivedSessionState reads those, through
+ * this same door, so every reader (the rows, the gates, the reconciles, the
+ * restart sweep) sees one answer; and it seeds the file once the id is known,
+ * so from then on the file is read like any other. A file ALWAYS wins: the
+ * derivation is only ever asked when there is none.
  */
 function readSessionState(name) {
   let raw;
-  try { raw = fs.readFileSync(path.join(STATE_DIR, name), 'utf8').trim(); } catch { return null; }
+  try { raw = fs.readFileSync(path.join(STATE_DIR, name), 'utf8').trim(); } catch { return derivedSessionState(name); }
   if (!raw) return null;
   let mtimeMs = null;
   try { mtimeMs = fs.statSync(path.join(STATE_DIR, name)).mtimeMs; } catch { }
@@ -984,6 +994,21 @@ const sessionBorn = new Map();   // name -> epoch seconds
 function rememberBorn(name, created) {
   const n = Number(created);
   if (Number.isFinite(n) && n > 0) sessionBorn.set(name, n);
+}
+
+/**
+ * Each live session's pane pid, learned from the tmux calls the routes already
+ * make (the listing's `#{pane_pid}`, sessionExists's display-message), so that
+ * a state read for a session with NO state file can find its Claude process
+ * without a tmux call of its own (derivedSessionState). Pruned with sessionBorn:
+ * a name's pane pid is this incarnation's, and a new session of the name must
+ * not inherit it.
+ */
+const panePids = new Map();   // name -> pane pid
+
+function rememberPane(name, panePid) {
+  const n = Number(panePid);
+  if (Number.isInteger(n) && n > 0) panePids.set(name, n);
 }
 
 /**
@@ -1800,8 +1825,10 @@ async function listSessions({ preview = false, shared = false } = {}) {
     if (!line) continue;
     const [name, created, attached, activity, windows, w, h, wsize, sessActivity, panePid] = line.split('\t');
     // Before the state read below, which needs it to tell this session's state
-    // from that of a dead session that had the same name.
+    // from that of a dead session that had the same name — and the pane pid,
+    // which a session with no state file is read through (derivedSessionState).
     rememberBorn(name, created);
+    rememberPane(name, panePid);
     seen.add(name);
     // Still listed, never silently hidden: a monitoring app that drops a session
     // from the list is worse than one that cannot open it, because the reader
@@ -1888,6 +1915,7 @@ async function listSessions({ preview = false, shared = false } = {}) {
   // in the map has ended. Pruning matters because a NEW session of a pruned name
   // must be born-stamped afresh rather than inheriting its predecessor's stamp.
   for (const name of [...sessionBorn.keys()]) if (!seen.has(name)) sessionBorn.delete(name);
+  for (const name of [...panePids.keys()]) if (!seen.has(name)) { panePids.delete(name); derivedStates.delete(name); }
 
   // Which project, if any, each session belongs to — joined HERE, where the
   // store lives, so a client does not have to read every project's detail to
@@ -2423,6 +2451,7 @@ async function sessionExists(name, seen = null, { fresh = true } = {}) {
         const f = line.split('\t');
         if (f[0] !== name) continue;
         rememberBorn(name, f[1]);
+        rememberPane(name, f[9]);
         if (seen) seen.panePid = Number(f[9]) || null;
         return true;
       }
@@ -2454,8 +2483,9 @@ async function sessionExists(name, seen = null, { fresh = true } = {}) {
   // "no server" is an absence only on an empty host (tmuxProvesAbsent).
   if (err && !(await tmuxProvesAbsent(stderr, 'session check'))) return null;
   const [found, created, panePid] = (err ? '' : (stdout || '')).trim().split('\t');
-  if (found !== name) { sessionBorn.delete(name); return false; }
+  if (found !== name) { sessionBorn.delete(name); panePids.delete(name); derivedStates.delete(name); return false; }
   rememberBorn(name, created);
+  rememberPane(name, panePid);
   if (seen) seen.panePid = Number(panePid) || null;
   return true;
 }
@@ -3738,29 +3768,42 @@ function transcriptSize(file) {
  */
 const TAIL_WIDEN_CAP_BYTES = 4 * 1024 * 1024;
 
+/**
+ * The transcript's own turn verdict (lib/typing boundaryFromTail), read from a
+ * 64 KB tail that widens on "could not see a boundary" up to the cap — the
+ * liveness authority the send gate trusts over the pane, shared with the state
+ * read of a session that has no state file (derivedSessionState). `{idle,
+ * lastKind, unknown, bytes}`, or null when the file cannot be read at all.
+ */
+function transcriptBoundary(file) {
+  let bytes = 64 * 1024;
+  for (;;) {
+    const tail = transcriptTail(file, null, bytes);
+    if (!tail) return null;
+    const b = typing.boundaryFromTail(tail.text);
+    // Widen only on "I could not SEE a boundary", never on "there isn't one":
+    // a window holding a conversational record has answered the question.
+    if (b.unknown && bytes < TAIL_WIDEN_CAP_BYTES && bytes < tail.size) {
+      bytes = Math.min(bytes * 2, TAIL_WIDEN_CAP_BYTES);
+      continue;
+    }
+    return { ...b, bytes };
+  }
+}
+
 async function checkGates(name) {
   const file = transcriptPath(name);
   let idle = true;
   let lastKind = null;
   if (file) {
-    let bytes = 64 * 1024;
-    for (;;) {
-      const tail = transcriptTail(file, null, bytes);
-      if (!tail) break;
-      const b = typing.boundaryFromTail(tail.text);
-      // Widen only on "I could not SEE a boundary", never on "there isn't one":
-      // a window holding a conversational record has answered the question.
-      if (b.unknown && bytes < TAIL_WIDEN_CAP_BYTES && bytes < tail.size) {
-        bytes = Math.min(bytes * 2, TAIL_WIDEN_CAP_BYTES);
-        continue;
-      }
+    const b = transcriptBoundary(file);
+    if (b) {
       idle = b.idle;
       lastKind = b.lastKind;
       if (b.unknown) {
         log(`typing: ${name}: no conversational record in the last `
-          + `${Math.round(bytes / 1024)}KB of the transcript; treating the turn as unfinished`);
+          + `${Math.round(b.bytes / 1024)}KB of the transcript; treating the turn as unfinished`);
       }
-      break;
     }
   }
   // ⚠ `-e`, SO THE DIM RUNS SURVIVE THE CAPTURE (P-14). Every rule below strips
@@ -5216,6 +5259,208 @@ function claudeProcessOf(panePid) {
   const pid = runtimeLib.pickClaudePid(order, { argvOf, commOf });
   if (!pid) return null;
   return { pid, argv: argvOf(pid) || [], start: (procs.get(pid) || {}).start ?? null };
+}
+
+// ---- a session with no state file (2026-11-09) -----------------------------
+//
+// The title hook writes the state file on every event, and an idle session
+// fires none. Before 3.17.3 the state sweep took every file a week untouched
+// whose session was missing from a listing — and on 11-06 a loaded host's
+// listing came back empty with every session alive (the mass-archive incident).
+// Eight live project members relaunched by the 10-27 reboot restore, whose last
+// event was 10-28 or the launch itself, came out of that with no file and no
+// event since: rows with no id, no cwd, no transcript and no state, and a
+// restart sweep that could not cycle them because it could not name what to
+// resume. Everything the file would say was still there to read: the pane's
+// own `claude --resume <id>`, the registry row the hook had taught, the project
+// record, the transcript on disk. So a state read that finds no file derives
+// the record here — cached per session, invalidated when the pane's process
+// changes — and seeds the file once the id is known, so every reader from then
+// on finds an ordinary file. The hook's next event overwrites the seed whole.
+//
+// ⚠ ONLY WITH THE TRANSCRIPT ON DISK, AND NEVER AN ID ANOTHER SESSION HOLDS
+// (lib/seedstate.js). `--resume <id>` is what the process was told, not what it
+// is: one lead was relaunched with the id of a transcript that did not exist
+// and Claude Code started a fresh conversation under a new id, which the hook
+// then wrote and the registry kept. And binding an id a live session already
+// has would put a second Claude on one conversation at the next cycle.
+
+/** How long a derivation that found nothing stands before the sources are read again. */
+const DERIVE_RETRY_MS = 60_000;
+const derivedStates = new Map();   // name -> the cache entry deriveIdentity builds
+
+/** The session id in a state FILE, read without the derivation (so it cannot recurse). */
+function stateFileId(name) {
+  try {
+    const o = JSON.parse(fs.readFileSync(path.join(STATE_DIR, name), 'utf8'));
+    return o && typeof o === 'object' && o.sessionId ? String(o.sessionId) : null;
+  } catch { return null; }
+}
+
+/** The ids every live session but `except` holds, plus the archived conversations. */
+function claimedIds(except) {
+  const out = new Set();
+  const reg = registryCached();
+  for (const name of panePids.keys()) {
+    if (name === except) continue;
+    const id = stateFileId(name) || ((derivedStates.get(name) || {}).id) || ((reg[name] || {}).claudeSessionId);
+    if (id) out.add(id);
+  }
+  for (const id of archivedIds.keys()) out.add(id);
+  return out;
+}
+
+/** The transcript directories Claude Code may keep for a cwd, as a change key: their mtimes. */
+function transcriptDirKey(cwd) {
+  const root = archiveLib.projectsRoot(CLAUDE_DIR);
+  return seedstate.projectSlugs(cwd).map((slug) => {
+    try { return String(fs.statSync(path.join(root, slug)).mtimeMs); } catch { return 'none'; }
+  }).join('|');
+}
+
+/** Every transcript under those directories: `{id, file, mtimeMs}`. */
+function transcriptsUnder(cwd) {
+  const root = archiveLib.projectsRoot(CLAUDE_DIR);
+  const files = [];
+  for (const slug of seedstate.projectSlugs(cwd)) {
+    const dir = path.join(root, slug);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const n of names) {
+      if (!n.endsWith('.jsonl')) continue;
+      const file = path.join(dir, n);
+      try { files.push({ id: n.slice(0, -'.jsonl'.length), file, mtimeMs: fs.statSync(file).mtimeMs }); } catch { /* raced */ }
+    }
+  }
+  return files;
+}
+
+/**
+ * What can be read about a session with no state file: its Claude process's
+ * cwd, and its session id from the first source that has one WITH a transcript
+ * on disk — the process's argv, the registry row, the project record — or the
+ * one transcript in its cwd's directory that is newer than the session and
+ * nobody else's (lib/seedstate uniqueNewest). One /proc walk per call; cached
+ * by derivedSessionState.
+ */
+function deriveIdentity(name, panePid) {
+  const c = {
+    panePid, claudePid: null, start: null, at: Date.now(), cwd: null,
+    id: null, source: null, transcript: null, dirKey: null, live: null, seeded: false,
+  };
+  const claude = claudeProcessOf(panePid);
+  if (!claude) return c;
+  c.claudePid = claude.pid;
+  c.start = claude.start;
+  try { c.cwd = fs.readlinkSync(`/proc/${claude.pid}/cwd`); } catch { c.cwd = null; }
+  const claimed = claimedIds(name);
+  const reg = registryCached()[name] || {};
+  let member = null;
+  try { const hit = projectsLib.membershipIndex(listProjects()).get(name); member = hit ? hit.member : null; } catch { member = null; }
+  const pick = seedstate.pickId([
+    { id: seedstate.idFromArgs(runtimeLib.claudeArgs(claude.argv)), source: 'argv' },
+    { id: reg.claudeSessionId, source: 'registry' },
+    { id: member && member.sessionId, source: 'project' },
+  ], { hasTranscript: (id) => !!findTranscriptFile(id), claimed });
+  if (pick) {
+    c.id = pick.id;
+    c.source = pick.source;
+    c.transcript = findTranscriptFile(pick.id);
+    return c;
+  }
+  if (!c.cwd) return c;
+  c.dirKey = transcriptDirKey(c.cwd);
+  const files = transcriptsUnder(c.cwd);
+  const born = sessionBorn.get(name);
+  const id = seedstate.uniqueNewest(files, { bornMs: born ? born * 1000 : null, claimed });
+  if (id) {
+    c.id = id;
+    c.source = 'transcript';
+    c.transcript = (files.find((f) => f.id === id) || {}).file || null;
+  }
+  return c;
+}
+
+/**
+ * The state file's record for a session that has NO state file, in
+ * readSessionState's shape, or null when nothing can be said: no pane pid
+ * learned yet, a restart in flight (the relaunch stamps the registry and the
+ * hook writes the new file), no Claude under the pane, no id with a transcript.
+ *
+ * The identity is cached and re-derived only when the pane's process changed
+ * (pane pid, or the Claude pid it found has gone), when a derivation that found
+ * no id is a minute old, or when the cwd's transcript directory changed (a
+ * first turn writes the file the newest-transcript rule needs). The state word
+ * is the transcript's own (transcriptBoundary), re-read only when the file
+ * moved. `stateSince` is the later of the transcript's last write and the
+ * session's birth — a resumed conversation nobody has spoken to since is idle
+ * since it came up — and the record is not put through ofThisIncarnation: it is
+ * bound to the live pane by construction. Once the word is known the file is
+ * seeded, once.
+ */
+function derivedSessionState(name) {
+  const panePid = panePids.get(name);
+  if (!panePid || underRestart(name)) return null;
+  const now = Date.now();
+  let c = derivedStates.get(name);
+  const again = !c || c.panePid !== panePid
+    || (c.claudePid && !pidLive(c.claudePid, c.start))
+    || (!c.id && now - c.at > DERIVE_RETRY_MS)
+    || (!c.id && c.dirKey !== null && transcriptDirKey(c.cwd) !== c.dirKey);
+  if (again) {
+    c = deriveIdentity(name, panePid);
+    derivedStates.set(name, c);
+  }
+  if (!c.id || !c.transcript) return null;
+  let st;
+  try { st = fs.statSync(c.transcript); } catch { return null; }
+  const key = `${st.size}:${st.mtimeMs}`;
+  if (!c.live || c.live.key !== key) {
+    c.live = { key, mtimeMs: st.mtimeMs, word: seedstate.livenessWord(transcriptBoundary(c.transcript)) };
+  }
+  const bornMs = (sessionBorn.get(name) || 0) * 1000;
+  const sinceMs = Math.max(Math.floor(c.live.mtimeMs) || 0, bornMs) || now;
+  const rec = {
+    state: c.live.word,
+    sessionId: c.id,
+    transcript: c.transcript,
+    cwd: c.cwd,
+    stateSince: Math.floor(sinceMs / 1000),
+    stateSinceMs: sinceMs,
+    source: c.source,
+  };
+  if (!c.seeded && rec.state) c.seeded = seedStateFile(name, rec);
+  return withPendingQuestion(name, rec);
+}
+
+/**
+ * The state file the hook would have written, in its place: the hook's own
+ * fields plus `seeded: true` and the id's source (lib/seedstate seedRecord),
+ * 0600, a temp file of this process's own linked into place — `link` fails
+ * where a file exists, so a file the hook wrote meanwhile is never replaced.
+ * The name is a filename here as in readSessionState, so the route rule for
+ * names applies. One log line per seeded session.
+ */
+function seedStateFile(name, rec) {
+  if (!ROUTE_NAME_RE.test(name)) return false;
+  const target = path.join(STATE_DIR, name);
+  const tmpf = path.join(STATE_DIR, `${name}.${process.pid}.tmp`);
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(tmpf, JSON.stringify(seedstate.seedRecord(rec)), { mode: 0o600 });
+    try { fs.linkSync(tmpf, target); } catch (e) {
+      fs.unlinkSync(tmpf);
+      if (e && e.code === 'EEXIST') return true;   // the hook got there first: its file wins
+      throw e;
+    }
+    fs.unlinkSync(tmpf);
+  } catch (e) {
+    try { fs.unlinkSync(tmpf); } catch { /* never made */ }
+    log(`state: ${name}: no state file, and it could not be seeded: ${e.message}`);
+    return false;
+  }
+  log(`state: ${name}: no state file; seeded from ${rec.source} (${rec.sessionId}, ${rec.state}, cwd ${rec.cwd || 'unknown'})`);
+  return true;
 }
 
 /**

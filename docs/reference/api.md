@@ -156,7 +156,7 @@ All routes need the token except `GET /v1/challenge`.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. Every row carries `runtime` (see [Runtime generation and restart](#runtime-generation-and-restart)). `?preview=1` adds titles, activity previews and the background work: `bgShells`, `bgAgents`, `bgMonitors` (Claude Code's own count off the pane, beside the tasks directory) and `bgTask`. |
+| GET | `/v1/sessions` | Sessions and their states. A session whose Claude is waiting on its own `start_session` request reads `attention` here (and in `/v1/watch`) until the request is answered or expires; the send queue still treats it as working. Every row carries `runtime` (see [Runtime generation and restart](#runtime-generation-and-restart)). `?preview=1` adds titles, activity previews and the background work: `bgShells`, `bgAgents`, `bgMonitors` (Claude Code's own count off the pane, beside the tasks directory) and `bgTask`. `state`, `stateSince`, `claudeSessionId` and `hasTranscript` are read from the session's state file; for a live session that has none (the hook has had no event since the file was lost) they come from the session's own process — the Claude session id from its `--resume`/`--session-id` argument, else the registry, else its project record, else the one transcript in its working directory that is newer than the session and no other session's; the state from that transcript's turn boundary; the working directory from `/proc` — and the daemon then seeds the state file, so the row reads like any other from then on. A session whose id cannot be named with a transcript on disk stays `null`. |
 | GET | `/v1/sessions/recent-dirs` | The directories recent sessions started in (the server default first), for the create dialog. |
 | POST | `/v1/sessions` | `{name, cwd?}`: create a session running Claude Code, in `cwd` (an existing directory on the server) or the server default. |
 | DELETE | `/v1/sessions/<name>` | End the session at once. |
@@ -232,7 +232,9 @@ running (a signal only when no prompt is drawn at all). A project session is rel
 reboot restore launches it: its persona, its effort, its model only when nothing resumes.
 Messages queued meanwhile wait and are delivered once the prompt is back; nothing is dropped.
 `{force: true}` skips the `attached` hold and the load gate for that one restart and nothing
-else. A job that finds no turn boundary within ten minutes gives up (the row reads `stale`
+else. A session that had no state file is cycled once its id has been derived and seeded (see
+`GET /v1/sessions`); `409 no-claude` is only for a session nothing names with a transcript on
+disk, and the sweep never takes one. A job that finds no turn boundary within ten minutes gives up (the row reads `stale`
 again); a relaunch that fails is retried once after 60 s and then left `stale` for a manual
 restart. The journal has one line per outcome, `restart: <name>: <old gen> -> <new gen>`.
 

@@ -61,6 +61,21 @@ Every hook script follows the same contract:
 Code session id and transcript path; without `jq` on the server it degrades to the bare state
 word and the apps lose the structured conversation view.
 
+A file the **daemon** wrote carries `seeded: true` and `source` (`argv`, `registry`, `project`
+or `transcript`) beside the same fields. An idle session fires no event, so a file untouched for
+a week could be swept while its session lived (before 3.17.3, on a listing that came back empty:
+2026-11-06), and nothing rewrote it until the next event — eight live sessions sat with no file.
+The daemon's state read (`readSessionState` → `derivedSessionState` in `huginn-appd.js`,
+`lib/seedstate.js`) therefore derives a missing file from the session's own process: the id from
+the `claude` argv under the pane (`--resume <id>`, `--resume=<id>`, `-r <id>`, `--session-id`),
+else the registry row, else the project record, else the one transcript in the cwd's project
+directory that is newer than the tmux session and no other live session's — an id counts only
+with its transcript on disk, because `--resume` of a missing id makes Claude Code start a fresh
+conversation under a new id; the cwd from `/proc/<pid>/cwd`; the state from the transcript's turn
+boundary (`boundaryFromTail`, the send gate's liveness authority). It is cached per session and
+re-read when the pane's process changes, and the file is seeded once the id and a state word are
+known. The hook's next event overwrites the seed whole; an existing file always wins.
+
 The same hook keeps three dot-prefixed subdirectories (the leading dot keeps them out of the
 session-name namespace):
 

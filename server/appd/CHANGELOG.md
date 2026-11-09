@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## [Unreleased]
+
+### Fixed
+- A live session with no state file (the hook has had no event since the state sweep took an
+  aged file on a bad listing) no longer reads `state: null`, `claudeSessionId: null`,
+  `hasTranscript: false` for good, and the restart sweep no longer passes it over. The daemon
+  derives what the file would say — the Claude session id from the pane's `--resume` /
+  `--session-id` argv, else the registry row, else the project record, else the one transcript
+  in its working directory that is newer than the session and nobody else's (an id counts only
+  with its transcript on disk; two candidates are nobody's); the cwd from `/proc`; the state from
+  the transcript's own turn boundary — through the same read every row, gate, reconcile and the
+  sweep use, and seeds the state file once the id is known (`seeded: true`, `source`), one log
+  line per session. An existing file always wins. A session with nothing to resume stays `null`
+  and is still never cycled.
+
 ## 3.19.1 — 2026-11-08
 
 ### Fixed
