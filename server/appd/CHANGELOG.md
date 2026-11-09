@@ -9,7 +9,7 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
-## [Unreleased]
+## 3.19.2 — 2026-11-09
 
 ### Fixed
 - A live session with no state file (the hook has had no event since the state sweep took an
