@@ -1,5 +1,17 @@
 # Huginn Desktop changelog
 
+## 2.12.0
+
+### Added
+- The model menus show models that a newer Claude Code offers but the server's installed one does
+  not, greyed and not pickable, with the version they need (for example "Fable 5.3 · needs Claude
+  Code 2.1.330"). Needs huginn-appd 3.19.3 or newer.
+
+### Fixed
+- A session's model menu now picks up a model the server gained after the app started. The list was
+  fetched once per run, so a new model appeared only after a restart. It is refreshed on every
+  session switch and every five minutes.
+
 ## 2.11.0
 
 ### Added
