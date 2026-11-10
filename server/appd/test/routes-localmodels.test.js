@@ -102,6 +102,8 @@ before(async () => {
       HUGINN_APPD_TMUX_SOCKET: TMUX_SOCK,
       HUGINN_APPD_STATE_DIR: path.join(tmp, 'state'),
       HUGINN_APPD_WORKDIR: tmp,
+      // Never the host's real update-watcher state: its `pending` rows would ride along.
+      HUGINN_CC_UPDATE_STATE: path.join(tmp, 'no-cc-update-state.json'),
     },
     stdio: 'ignore',
   });

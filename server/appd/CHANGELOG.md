@@ -15,6 +15,11 @@ version number collided. Entries below are reconstructed from the shipping commi
 - Claude Fable 5.2 and Claude Mythos 5.2 are priced at their own published rate ($8 / $40 per
   MTok, cache reads at 2.5 %) instead of the Fable family card. The model menus already offer
   Fable 5.2 once Claude Code 2.1.322 or newer is installed; they are read from the installed CLI.
+- `GET /v1/models` carries `pending`: models that a newer published Claude Code offers and the
+  installed one does not, each with the version that brings it (`needs`). It is read from an
+  optional update-watcher state file (`HUGINN_CC_UPDATE_STATE`, default
+  `/var/lib/huginn-cc-update/state.json`), present only when non-empty, and kept out of `models`
+  so that older clients never offer a row the installed CLI cannot run.
 
 ## 3.19.2 — 2026-11-09
 

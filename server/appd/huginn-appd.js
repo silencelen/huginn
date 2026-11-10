@@ -43,7 +43,7 @@ const { GLYPH } = require('./lib/state-table');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const oauthRefresh = require('./lib/oauth-refresh');
 const oauthlock = require('./lib/oauthlock');
-const { formatModel, discoverModels, parseModelId } = require('./lib/models');
+const { formatModel, discoverModels, parseModelId, pendingModels, readUpdateState } = require('./lib/models');
 const sessreg = require('./lib/session-registry');
 const seedstate = require('./lib/seedstate');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
@@ -15052,14 +15052,19 @@ async function handleRequest(req, res) {
       const bin = process.env.HUGINN_CLAUDE_BIN ||
         '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
       const models = await discoverModels(bin);
+      // Models a newer Claude Code would add, from the update watcher's state.
+      // A separate key, only when non-empty: see lib/models.pendingModels.
+      const pending = pendingModels(models, readUpdateState(
+        process.env.HUGINN_CC_UPDATE_STATE || '/var/lib/huginn-cc-update/state.json'));
+      const extra = pending.length ? { pending } : {};
       // Local rows are OPT-IN (?local=1): an old client would render them and
       // then 400 on every pick, so a client asks for them when it knows how to
       // treat them. Computed per request from the registry — no cache, because
       // `available` is time-dependent and a cache would lie.
       if (u.searchParams.get('local') === '1') {
-        return sendJson(res, 200, { models: models.concat(devicesLib.localModelRows(deviceState, Date.now())) });
+        return sendJson(res, 200, { models: models.concat(devicesLib.localModelRows(deviceState, Date.now())), ...extra });
       }
-      return sendJson(res, 200, { models });
+      return sendJson(res, 200, { models, ...extra });
     }
 
     // --- account

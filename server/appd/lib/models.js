@@ -153,7 +153,40 @@ function discoverModels(binPath, timeoutMs = 60_000) {
   });
 }
 
+/**
+ * Models a NEWER Claude Code offers that the installed one does not — shown to
+ * people as greyed rows ("needs Claude Code X"), never as picks.
+ *
+ * `state` is what the update watcher wrote: the newest published version and
+ * the raw model ids scanned out of its executable. They go through the same
+ * `selectModels` as the installed list, so a row here reads exactly as it will
+ * once the update lands — and the moment it does, discovery lists the id and it
+ * drops out of here with no help from the watcher.
+ *
+ * ⚠ NEVER MERGED INTO `models`. A client before this field filters only LOCAL
+ * rows by `available`, so a Claude row there would be offered as a pick the old
+ * CLI cannot run. A separate key is invisible to it.
+ *
+ * Empty when discovery fell back to the aliases: with no installed ids to diff
+ * against, every row would read as pending.
+ */
+function pendingModels(installed, state) {
+  if (!state || typeof state.latest !== 'string' || !Array.isArray(state.latestIds)) return [];
+  const list = Array.isArray(installed) ? installed : [];
+  if (!list.length || list.every((m) => FAMILIES.includes(m.id))) return [];
+  const have = new Set(list.map((m) => m.id));
+  return selectModels(state.latestIds.filter((id) => typeof id === 'string'))
+    .filter((m) => !have.has(m.id))
+    .map((m) => ({ ...m, needs: state.latest }));
+}
+
+/** The watcher's state file, or null. Never throws: a missing file is the normal case. */
+function readUpdateState(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
 module.exports = {
   CONTEXT_SUFFIX_RE,
   parseModelId, familyOf, formatModel, selectModels, aliasModels, discoverModels, compareVersions,
+  pendingModels, readUpdateState,
 };

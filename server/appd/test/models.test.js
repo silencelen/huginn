@@ -5,7 +5,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseModelId, formatModel, selectModels, aliasModels, compareVersions } = require('../lib/models');
+const { parseModelId, formatModel, selectModels, aliasModels, compareVersions, pendingModels } = require('../lib/models');
 
 test('an id keeps its version when formatted', () => {
   assert.strictEqual(formatModel('claude-opus-5'), 'Opus 5');
@@ -77,4 +77,20 @@ test('a named variant does not become a duplicate entry', () => {
 
 test('the alias fallback is always usable', () => {
   assert.deepStrictEqual(aliasModels().map((m) => m.id), ['fable', 'opus', 'sonnet', 'haiku']);
+});
+
+test('pending lists what a newer CLI adds, read as the menu will read it once installed', () => {
+  const installed = selectModels(['claude-fable-5-1', 'claude-fable-5', 'claude-opus-5-5', 'claude-opus-5']);
+  const state = { latest: '2.1.330', latestIds: ['claude-fable-5-2', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-fable-5-2-20261109'] };
+  assert.deepEqual(pendingModels(installed, state),
+    [{ id: 'claude-fable-5-2', display: 'Fable 5.2', family: 'fable', needs: '2.1.330' }]);
+});
+
+test('pending is empty once the update lands, with no state, or on the alias fallback', () => {
+  const state = { latest: '2.1.330', latestIds: ['claude-fable-5-2'] };
+  assert.deepEqual(pendingModels(selectModels(['claude-fable-5-2', 'claude-opus-5-5']), state), []);
+  assert.deepEqual(pendingModels(selectModels(['claude-opus-5-5']), null), []);
+  assert.deepEqual(pendingModels(selectModels(['claude-opus-5-5']), { latest: '2.1.330' }), []);
+  assert.deepEqual(pendingModels(aliasModels(), state), [], 'no installed ids to diff against');
+  assert.deepEqual(pendingModels([], state), []);
 });
