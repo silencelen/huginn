@@ -1412,6 +1412,11 @@ fun HuginnApp(
             val to = destToKey(dest)
             if (ChatListScroll.shouldSnap(cameFrom, to)) chatsListState.scrollToItem(0)
             cameFrom = to
+            // A session's model menu reads the same list a chat's does, and it
+            // was refreshed only on chat open, so a phone that never opened a
+            // chat kept the list from launch — a model the host gained after
+            // that (a Claude Code update) never appeared. Stale-guarded (60 s).
+            if (dest is Dest.SessionView) vm.refreshModels()
         }
 
         // Each surface once, as a lambda, so the narrow and wide layouts are

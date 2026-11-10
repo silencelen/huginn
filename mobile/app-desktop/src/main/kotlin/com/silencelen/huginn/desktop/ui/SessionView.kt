@@ -365,7 +365,7 @@ fun SessionView(store: AppStore, name: String) {
             leased = controller.leasedHere && screen?.sizeLeased == true,
             cols = screen?.width,
             rows = screen?.height,
-            models = rememberModels(store.client),
+            models = rememberModels(store.client, name),
             headroom = row?.headroom,
             hostHeadroom = statusHeadroomOf(hostHeadroom),
             // The STALL RECORD, from the host's own headroom read. The list row
