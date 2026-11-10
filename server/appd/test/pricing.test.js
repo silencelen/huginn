@@ -309,6 +309,16 @@ test('Fable 5.1 and Mythos 5.1 read cache at 2.5 %; Fable 5 stays on the family 
   assert.equal(priceTokens({ 'claude-fable-5-mythos-5': tokens({ cacheRead: MILLION }) }).usd, 1, 'nor is the Mythos 5 variant');
 });
 
+test('Fable 5.2 and Mythos 5.2 price at $8/$40 and read cache at 2.5 %', () => {
+  for (const m of ['claude-fable-5-2', 'claude-mythos-5-2', 'claude-fable-5-2[1m]', 'claude-fable-5-2@20261109']) {
+    assert.equal(priceTokens({ [m]: tokens({ input: MILLION }) }).usd, 8, m);
+    assert.equal(priceTokens({ [m]: tokens({ output: MILLION }) }).usd, 40, m);
+    assert.equal(priceTokens({ [m]: tokens({ cacheRead: MILLION }) }).usd, 0.2, `${m} reads at 2.5 %`);
+    assert.equal(priceTokens({ [m]: tokens({ cacheCreation5m: MILLION }) }).usd, 10, m);
+  }
+  assert.equal(priceTokens({ 'claude-fable-5-1': tokens({ output: MILLION }) }).usd, 50, 'Fable 5.1 keeps its own card');
+});
+
 test('a card derives its writes from its input rate like a family does; only the read is its own', () => {
   for (const [card, r] of Object.entries(CARD_RATES)) {
     assert.equal(r.cacheWrite5m, r.input * 1.25, `${card} 5m write`);

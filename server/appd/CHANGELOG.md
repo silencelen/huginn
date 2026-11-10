@@ -9,6 +9,13 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.19.3 — 2026-11-09
+
+### Added
+- Claude Fable 5.2 and Claude Mythos 5.2 are priced at their own published rate ($8 / $40 per
+  MTok, cache reads at 2.5 %) instead of the Fable family card. The model menus already offer
+  Fable 5.2 once Claude Code 2.1.322 or newer is installed; they are read from the installed CLI.
+
 ## 3.19.2 — 2026-11-09
 
 ### Fixed

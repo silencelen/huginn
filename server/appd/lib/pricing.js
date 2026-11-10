@@ -92,6 +92,8 @@ const RATES = Object.fromEntries(FAMILIES.map((f) => [f.family, rateCard(f.input
 const MODEL_CARDS = [
   { card: 'opus-5-5', match: /opus-5-5(?:[-@]\d{8})?(?:\[1m\])?$/, input: 4.00, output: 20.00, cacheRead: 0.05 },
   { card: 'fable-5-1', match: /(?:fable|mythos)-5-1(?:[-@]\d{8})?(?:\[1m\])?$/, input: 10.00, output: 50.00, cacheRead: 0.025 },
+  // Claude Fable 5.2 / Mythos 5.2 (2026-11-09): $8/$40, reads cache at 2.5 % ($0.20).
+  { card: 'fable-5-2', match: /(?:fable|mythos)-5-2(?:[-@]\d{8})?(?:\[1m\])?$/, input: 8.00, output: 40.00, cacheRead: 0.025 },
 ];
 
 /** card id -> its rate card, derived exactly as a family's is (plus its own read discount). */
