@@ -123,8 +123,15 @@ function aliasModels() {
 }
 
 // Discovery is a scan of the CLI executable, cached against its identity so it
-// runs once per installed version rather than once per request.
-let cache = { key: null, models: null };
+// runs once per installed version rather than once per request. The scan's raw
+// ids are what is cached: the selection is redone per call because `extraIds`
+// (the Models API's list, lib/modelsapi.js) changes on its own clock.
+let cache = { key: null, ids: null };
+
+function pick(ids) {
+  const picked = selectModels(ids);
+  return picked.length ? picked : aliasModels();
+}
 
 function binaryKey(binPath) {
   try {
@@ -133,10 +140,16 @@ function binaryKey(binPath) {
   } catch { return null; }
 }
 
-function discoverModels(binPath, timeoutMs = 60_000) {
+/**
+ * The models to offer: the installed CLI's ids, merged with `extraIds` (ids the
+ * server lists for this login — a model Claude Code's own picker already offers
+ * can be newer than the binary). Aliases only when both are empty.
+ */
+function discoverModels(binPath, timeoutMs = 60_000, extraIds = []) {
+  const extra = Array.isArray(extraIds) ? extraIds.filter((id) => typeof id === 'string') : [];
   const key = binaryKey(binPath);
-  if (!key) return Promise.resolve(aliasModels());
-  if (cache.key === key && cache.models) return Promise.resolve(cache.models);
+  if (!key) return Promise.resolve(pick(extra));
+  if (cache.key === key && cache.ids) return Promise.resolve(pick(cache.ids.concat(extra)));
   return new Promise((resolve) => {
     // The path goes in as "$1", never into the script text: inside double
     // quotes sh still expands $(...), backticks and $VAR, so a binary path
@@ -145,10 +158,8 @@ function discoverModels(binPath, timeoutMs = 60_000) {
       `strings -n 6 "$1" | grep -oE 'claude-(fable|opus|sonnet|haiku)-[0-9][0-9a-z-]*' | sort -u`, 'sh', binPath],
     { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
       const ids = err ? [] : stdout.split('\n').map((l) => l.trim()).filter(Boolean);
-      const picked = selectModels(ids);
-      const models = picked.length ? picked : aliasModels();
-      cache = { key, models };
-      resolve(models);
+      cache = { key, ids };
+      resolve(pick(ids.concat(extra)));
     });
   });
 }

@@ -127,7 +127,7 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/ping` | `{ok, version, host, via: {addr, port}, secure}`: liveness, and which of the server's addresses you reached. Requires the bearer token, like every route except the challenge. |
 | GET | `/v1/status` | Server health: uptime, load, disk, Claude Code version, the server's addresses, session and chat counts, usage summary, quick-action wording, `cycleOnDeploy` and the current runtime generation (`runtime: {gen, claude, since}`; see [Runtime generation and restart](#runtime-generation-and-restart)). |
 | PATCH | `/v1/quick-actions` | Change the wording behind the quick-reply buttons. Current values come with `/v1/status`. |
-| GET | `/v1/models` | The models the installed Claude Code offers. `?local=1` adds models served by local-AI devices. `pending` (present only when non-empty): `{id, display, family, needs}` rows a newer published Claude Code adds, from the host's update watcher. Never pickable; `needs` is the version that brings them. |
+| GET | `/v1/models` | The models the installed Claude Code offers, merged with those Anthropic's Models API lists for the signed-in account (cached 30 min). `?local=1` adds models served by local-AI devices. `pending` (present only when non-empty): `{id, display, family, needs}` rows a newer published Claude Code adds, from the host's update watcher. Never pickable; `needs` is the version that brings them. |
 | GET | `/v1/watch` | Change signal. See [Streams](#streams). |
 | GET | `/v1/clients` | Which clients have checked in, and how recently. |
 

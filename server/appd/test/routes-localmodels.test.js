@@ -104,6 +104,8 @@ before(async () => {
       HUGINN_APPD_WORKDIR: tmp,
       // Never the host's real update-watcher state: its `pending` rows would ride along.
       HUGINN_CC_UPDATE_STATE: path.join(tmp, 'no-cc-update-state.json'),
+      // Never the real Models API: a closed loopback port answers "unreachable" at once.
+      HUGINN_APPD_MODELS_API_URL: 'http://127.0.0.1:9/v1/models',
     },
     stdio: 'ignore',
   });

@@ -44,6 +44,7 @@ const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/acco
 const oauthRefresh = require('./lib/oauth-refresh');
 const oauthlock = require('./lib/oauthlock');
 const { formatModel, discoverModels, parseModelId, pendingModels, readUpdateState } = require('./lib/models');
+const { createModelsApi } = require('./lib/modelsapi');
 const sessreg = require('./lib/session-registry');
 const seedstate = require('./lib/seedstate');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
@@ -120,7 +121,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.19.3';
+const VERSION = '3.19.4';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -8611,6 +8612,20 @@ const OAUTH_TOKEN_URL = testUrl('HUGINN_APPD_OAUTH_TOKEN_URL', oauthRefresh.TOKE
 const CREDENTIALS_PATH = path.join(CLAUDE_DIR, '.credentials.json');
 const CLAUDE_CONFIG_PATH = `${CLAUDE_DIR.replace(/\/+$/, '')}.json`;
 const accounts = new AccountStore(path.join(DATA_DIR, 'accounts'), CREDENTIALS_PATH, CLAUDE_CONFIG_PATH);
+/**
+ * The Models API, asked with the active login like the usage and identity reads
+ * above, so a model the server offers reaches the menus without waiting for a
+ * Claude Code update (lib/modelsapi.js). Same test-only override terms.
+ */
+const MODELS_API_URL = testUrl('HUGINN_APPD_MODELS_API_URL', 'https://api.anthropic.com/v1/models?limit=1000');
+const modelsApi = createModelsApi({
+  url: MODELS_API_URL,
+  readToken: () => {
+    const c = accounts.readActive();
+    return (c && c.claudeAiOauth && c.claudeAiOauth.accessToken) || null;
+  },
+  log,
+});
 
 // Fingerprint of the login that was active when a sign-in flow started. When the
 // live credentials no longer match it, the flow finished — which is how the
@@ -15051,7 +15066,10 @@ async function handleRequest(req, res) {
     if (req.method === 'GET' && p === '/v1/models') {
       const bin = process.env.HUGINN_CLAUDE_BIN ||
         '/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe';
-      const models = await discoverModels(bin);
+      // The binary's ids merged with what the server lists for this login: a
+      // model Claude Code's own picker already offers is not held back waiting
+      // for a CLI update. Each source covers a day the other misses.
+      const models = await discoverModels(bin, undefined, await modelsApi.list());
       // Models a newer Claude Code would add, from the update watcher's state.
       // A separate key, only when non-empty: see lib/models.pendingModels.
       const pending = pendingModels(models, readUpdateState(

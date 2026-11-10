@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.19.4 — 2026-11-10
+
+### Added
+- `GET /v1/models` also lists the models Anthropic's Models API offers the signed-in account,
+  merged with the ones found in the installed Claude Code. A new model reaches the menus when the
+  server offers it, as it reaches Claude Code's own `/model` picker, instead of waiting for a Claude
+  Code update. The list is cached for 30 minutes and never delays the response beyond the first
+  call; a failed refresh keeps the last good list. Without a signed-in account nothing changes.
+
 ## 3.19.3 — 2026-11-09
 
 ### Added
