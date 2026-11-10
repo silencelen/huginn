@@ -1124,7 +1124,9 @@ class HuginnClient(
     // ?local=1 is the OPT-IN for family:"local" rows: this client knows to keep
     // them out of session pickers and to treat picking one as a machine choice,
     // so it asks for them. An older daemon ignores the unknown parameter.
-    suspend fun models(): List<ModelChoice> = decode<ModelList>(call("/v1/models?local=1")).models
+    // Pending rows (models the installed CLI predates) ride along marked by
+    // `needs`; ModelLabels keeps them unpickable. See ModelList.choices.
+    suspend fun models(): List<ModelChoice> = decode<ModelList>(call("/v1/models?local=1")).choices()
 
     // ------------------------------------------------- account + usage
 

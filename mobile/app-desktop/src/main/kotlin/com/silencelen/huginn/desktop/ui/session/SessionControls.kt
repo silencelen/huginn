@@ -33,11 +33,13 @@ fun ControlPicker(
     label: String,
     options: List<Pair<String, String>>,
     modifier: Modifier = Modifier,
+    /** Greyed, unpickable rows under the options (see [OptionPickerChip]). */
+    disabled: List<String> = emptyList(),
     onPick: (String) -> Unit,
 ) {
     // The SAME chip the chat's options row draws (PR 4), where this used to be a
     // bare "label ▾" in labelSmall: one picker vocabulary across the desktop.
-    OptionPickerChip(label = label, options = options, modifier = modifier, onPick = onPick)
+    OptionPickerChip(label = label, options = options, modifier = modifier, disabled = disabled, onPick = onPick)
 }
 
 /**

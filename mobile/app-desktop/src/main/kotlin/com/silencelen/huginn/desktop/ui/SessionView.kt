@@ -789,6 +789,8 @@ private fun SessionHeader(
                 ModelLabels.model(model),
                 ModelLabels.options(models, ModelLabels.PickerSite.SESSION),
                 Modifier.padding(start = 6.dp),
+                // Models the host's Claude Code predates: shown, greyed, never pickable.
+                disabled = ModelLabels.pendingRows(models),
             ) { onCommand("/model $it") }
         }
     }

@@ -123,6 +123,8 @@ fun SessionControls(
                 // SESSION site: Claude rows only — this chip types /model into a
                 // live pane, where a local row could never work.
                 options = ModelLabels.options(models, ModelLabels.PickerSite.SESSION),
+                // Models the host's Claude Code predates: shown, greyed, never pickable.
+                disabled = ModelLabels.pendingRows(models),
                 onPick = { onCommand("/model $it") },
             )
             PickerChip(
@@ -211,6 +213,7 @@ fun ChatOptionsBar(
                 // with no way to return to the host default at all.
                 options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT, current = model, started = started) +
                     (if (localNow && started) emptyList() else listOf("" to "Host default")),
+                disabled = ModelLabels.pendingRows(models, current = model, started = started),
                 enabled = enabled,
                 onPick = onModel,
             )
@@ -275,6 +278,8 @@ fun ChatOptionsBar(
 private fun PickerChip(
     label: String,
     options: List<Pair<String, String>>,
+    /** Rows drawn greyed under the options, set apart by a hairline; never pickable. */
+    disabled: List<String> = emptyList(),
     enabled: Boolean = true,
     onPick: (String) -> Unit,
 ) {
@@ -299,7 +304,10 @@ private fun PickerChip(
         HouseMenu(
             expanded = open,
             onDismiss = { open = false },
-            items = options.map { (value, text) -> HouseMenuItem(text) { onPick(value) } },
+            items = options.map { (value, text) -> HouseMenuItem(text) { onPick(value) } } +
+                disabled.mapIndexed { i, text ->
+                    HouseMenuItem(text, enabled = false, dividerBefore = i == 0 && options.isNotEmpty()) {}
+                },
             dense = true,
         )
     }

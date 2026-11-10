@@ -12,6 +12,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -80,6 +81,8 @@ fun ChatOptionsRow(
             // absent rather than doomed.
             options = ModelLabels.options(models, ModelLabels.PickerSite.CHAT, current = model, started = started) +
                 (if (localNow && started) emptyList() else listOf(CLEAR to "Host default")),
+            // Models the host's Claude Code predates: shown, greyed, never pickable.
+            disabled = ModelLabels.pendingRows(models, current = model, started = started),
             enabled = enabled,
             onPick = onModel,
         )
@@ -143,6 +146,8 @@ fun OptionPickerChip(
     options: List<Pair<String, String>>,
     enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    /** Rows drawn greyed under the options, set apart by a hairline; never pickable. */
+    disabled: List<String> = emptyList(),
     onPick: (String) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -166,6 +171,17 @@ fun OptionPickerChip(
                 DropdownMenuItem(
                     text = { Text(text, style = MaterialTheme.typography.bodySmall) },
                     onClick = { open = false; onPick(value) },
+                    modifier = Modifier.height(32.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                )
+            }
+            if (disabled.isNotEmpty() && options.isNotEmpty()) HorizontalDivider()
+            disabled.forEach { text ->
+                // Material's own disabled ink; not clickable, so not a control.
+                DropdownMenuItem(
+                    text = { Text(text, style = MaterialTheme.typography.bodySmall) },
+                    onClick = {},
+                    enabled = false,
                     modifier = Modifier.height(32.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                 )

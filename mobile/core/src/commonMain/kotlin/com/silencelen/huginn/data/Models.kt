@@ -1952,10 +1952,50 @@ data class ModelChoice(
     val available: Boolean = true,
     /** The device a local row runs on. Display only — the id already carries it. */
     val host: String? = null,
+    /**
+     * Set only on a row that came from the daemon's `pending` list: the Claude
+     * Code version the host must be updated to before this model can run. Such a
+     * row is NEVER pickable — [com.silencelen.huginn.ui.ModelLabels.options]
+     * drops it and [com.silencelen.huginn.ui.ModelLabels.pendingRows] draws it
+     * greyed. Never sent by the daemon inside `models[]`.
+     */
+    val needs: String? = null,
 )
 
+/**
+ * A Claude model the newest Claude Code build offers but the host's installed
+ * CLI does not (daemon 3.20+, `GET /v1/models` → `pending`). Shown greyed in the
+ * model menus with the version it needs, so a new model is visible the day it
+ * ships, and honest about why it cannot be picked yet.
+ */
 @Serializable
-data class ModelList(val models: List<ModelChoice> = emptyList())
+data class PendingModel(
+    val id: String = "",
+    val display: String = "",
+    val family: String = "",
+    /** The Claude Code version that carries this model. */
+    val needs: String = "",
+) {
+    fun toChoice(): ModelChoice = ModelChoice(id = id, display = display, family = family, needs = needs)
+}
+
+@Serializable
+data class ModelList(
+    val models: List<ModelChoice> = emptyList(),
+    /** Absent on an older daemon, and empty whenever the installed CLI is current. */
+    val pending: List<PendingModel> = emptyList(),
+) {
+    /**
+     * The one list every picker reads: the offered rows, then the pending ones
+     * marked by [ModelChoice.needs]. A pending id the host already offers is
+     * dropped — the offered row is the truth.
+     */
+    fun choices(): List<ModelChoice> {
+        val offered = models.mapTo(HashSet()) { it.id }
+        return models + pending.filter { it.id.isNotBlank() && it.needs.isNotBlank() && it.id !in offered }
+            .map { it.toChoice() }
+    }
+}
 
 /** Where an uploaded image landed on huginn. */
 @Serializable

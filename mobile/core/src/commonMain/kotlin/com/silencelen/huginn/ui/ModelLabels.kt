@@ -91,6 +91,17 @@ object ModelLabels {
         site: PickerSite,
         current: String? = null,
         started: Boolean = false,
+    ): List<Pair<String, String>> =
+        // ⚠ A PENDING ROW IS NEVER AN OPTION: the installed CLI cannot run it, so
+        // a session chip would type a `/model` the pane refuses and a chat would
+        // 400. It is drawn by [pendingRows] instead, greyed.
+        offered(models.filterNot { isPending(it) }, site, current, started)
+
+    private fun offered(
+        models: List<ModelChoice>,
+        site: PickerSite,
+        current: String?,
+        started: Boolean,
     ): List<Pair<String, String>> {
         if (models.isEmpty()) return FALLBACK_MODELS
         val claude = models.filter { it.family != "local" }.map { it.id to it.display }
@@ -115,6 +126,30 @@ object ModelLabels {
         val local = models.filter { it.family == "local" && it.available && !isEmbedding(it) }
             .map { it.id to it.display }
         return (claude.ifEmpty { FALLBACK_MODELS }) + local
+    }
+
+    /** Whether a row is one the host's installed Claude Code predates (see [ModelChoice.needs]). */
+    fun isPending(model: ModelChoice): Boolean = !model.needs.isNullOrBlank()
+
+    /**
+     * The GREYED rows a model menu draws under its options: Claude models the
+     * newest Claude Code offers and this host's CLI does not, each labelled with
+     * the version it needs — e.g. `Fable 5.3 · needs Claude Code 2.1.330`.
+     *
+     * Shown at both sites, because both the session chip and the chat picker are
+     * where somebody looks for a new model; never pickable at either (the shells
+     * draw them disabled). Absent from a STARTED LOCAL chat, whose menu offers
+     * only its own machine — a Claude row there, even a greyed one, describes a
+     * switch the daemon would refuse for a reason the label does not give.
+     */
+    fun pendingRows(
+        models: List<ModelChoice>,
+        current: String? = null,
+        started: Boolean = false,
+    ): List<String> {
+        if (started && isLocal(current, models)) return emptyList()
+        return models.filter { isPending(it) && it.family != "local" }
+            .map { "${it.display.ifBlank { it.id }} · needs Claude Code ${it.needs}" }
     }
 
     /** Whether this chat's model is a local-family row (machine-pinned, Ask-only). */
