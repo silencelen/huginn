@@ -61,6 +61,7 @@ const { untilDrawn } = require('./until-drawn');
 const PORT = 10500 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget } = require('./load-budget');
 const PFX = `typ-${process.pid}`;
 // `-L`, not TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides
 // the latter but never the former.
@@ -164,7 +165,7 @@ async function typingOf(name) {
 }
 /** Poll until the queue for this session has drained, or give up and say so. */
 async function drains(name, ms = 6000) {
-  const until = Date.now() + ms;
+  const until = Date.now() + budget(ms);   // a wait, scaled for load (test/load-budget.js)
   for (;;) {
     const st = await typingOf(name);
     if (st && st.queued === 0) return st;

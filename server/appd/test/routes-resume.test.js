@@ -70,6 +70,7 @@ const crypto = require('node:crypto');
 const PORT = 10450 + (process.pid % 10);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget } = require('./load-budget');
 const PFX = `rs-${process.pid}`;
 // `-L`, not TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides
 // the latter but never the former.
@@ -251,6 +252,7 @@ const typed = (out) => { try { return fs.readFileSync(out, 'utf8'); } catch { re
 const notifications = () => { try { return fs.readFileSync(tgLog, 'utf8'); } catch { return ''; } };
 /** Poll a session's send-queue state — `GET /typing` is what the client reads. */
 async function untilTyping(name, fn, ms = 30_000, what = 'the queue') {
+  ms = budget(ms);
   const deadline = Date.now() + ms;
   for (;;) {
     const t = (await api(`/v1/sessions/${name}/typing`)).body || {};
@@ -272,6 +274,7 @@ async function untilTyping(name, fn, ms = 30_000, what = 'the queue') {
  * some other session's, which reads as the wrong session being announced.
  */
 async function untilLogged(re, ms = 30_000, what = 'the notification') {
+  ms = budget(ms);
   const deadline = Date.now() + ms;
   for (;;) {
     const text = notifications();
@@ -316,16 +319,19 @@ async function tick(patch = {}) {
  * file on an idle host. Several were 20-25 s, which is a comfortable margin
  * alone and a coin toss at load 11-23.
  */
-async function until(fn, ms = 45_000, what = 'the condition') {
-  const deadline = Date.now() + ms;
+async function until(fn, ms = 45_000, what = 'the condition', about = null) {
+  const deadline = Date.now() + budget(ms);
   let last = null;
   let nextTick = Date.now() + 1_500;
   for (;;) {
     last = (await api('/v1/headroom')).body;
     if (await fn(last)) return last;
     if (Date.now() > deadline) {
-      throw new Error(`${what} never became true. Last /v1/headroom sessions: `
-        + `${JSON.stringify((last && last.sessions) || null).slice(0, 700)}`);
+      // The row this wait was about when the caller names it (as untilQuiet
+      // does): a truncated dump of every OTHER fixture says nothing about it.
+      const shown = about ? sessionRow(last || {}, about) : ((last && last.sessions) || null);
+      throw new Error(`${what} never became true. Last /v1/headroom ${about ? `row for ${about}` : 'sessions'}: `
+        + `${JSON.stringify(shown).slice(0, 700)}`);
     }
     if (Date.now() > nextTick) {
       nextTick = Date.now() + 1_500;
@@ -344,7 +350,7 @@ async function until(fn, ms = 45_000, what = 'the condition') {
  * of two subsystems notices something first.
  */
 async function untilQuiet(fn, ms = 45_000, what = 'the condition', about = null) {
-  const deadline = Date.now() + ms;
+  const deadline = Date.now() + budget(ms);
   let last = null;
   for (;;) {
     last = (await api('/v1/headroom')).body;
@@ -779,6 +785,9 @@ test('the limit notification is sent ONCE per stall, not once per tick', async (
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on g');
   const count = () => notifications().split('\n').filter((l) => l.includes(`${s.name} hit the`)).length;
+  // The stall row and its notification are not the same write: polled, not read
+  // in the next statement (see untilLogged). Then the count is exact.
+  await untilLogged(new RegExp(`${s.name} hit the`), 30_000, `the stall notification for ${s.name}`);
   assert.equal(count(), 1);
   // Several more passes over the same, unchanged stall. A window can take a week
   // to come back; one notification per minute for it would be ten thousand.
@@ -850,8 +859,16 @@ test('a resume held in the queue is NOT recorded as resumed, and settles when it
   // reconciled it: applyResumes skipped the session forever and noteStall
   // eventually deleted the record. The one session appd most needs to speak to
   // was the one it silently gave up on.
-  const s = await stalledSession('q', { make: mkBlockedSink });
+  // ⚠ THE READING FIRST, THEN THE 429 (see armStall). Armed at creation, the
+  // daemon's own resume poll found this stall the instant its state file landed
+  // and stamped it with the PREVIOUS test's reading — a reset an hour out — and a
+  // stall keeps the reset it was recorded with, so the resume this test waits
+  // for was never coming ("the window has not reset yet"). The wait outlasts
+  // the 1 s plan cache, so any pass from here on reads this reading.
+  const s = await stalledSession('q', { make: mkBlockedSink, armStall: false });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
+  await wait(1_200);
+  s.armStall();
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on q');
 
@@ -860,7 +877,7 @@ test('a resume held in the queue is NOT recorded as resumed, and settles when it
   const held = await until(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
     return !!(st && st.queuedAt);
-  }, 45_000, 'the resume to be queued behind the dialog');
+  }, 45_000, 'the resume to be queued behind the dialog', s.name);
   const q = sessionRow(held, s.name).stall;
   assert.equal(q.resumedAt, null, 'a send that is merely QUEUED is not a resume');
   assert.equal(q.attempts, 0, 'and it has not spent one of the three attempts');
@@ -885,8 +902,16 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   // Dropped for 'human': the owner typed while it waited, so the queue bins it.
   // Nothing was typed, so nothing was spent — and the record must say so rather
   // than reading as a resume that happened.
-  const s = await stalledSession('h', { make: mkBlockedSink });
+  // ⚠ THE READING FIRST, THEN THE 429 (see armStall). Armed at creation, the
+  // daemon's own resume poll found this stall the instant its state file landed
+  // and stamped it with the PREVIOUS test's reading — a reset an hour out — and a
+  // stall keeps the reset it was recorded with, so the resume this test waits
+  // for was never coming ("the window has not reset yet"). The wait outlasts
+  // the 1 s plan cache, so any pass from here on reads this reading.
+  const s = await stalledSession('h', { make: mkBlockedSink, armStall: false });
   setUsage({ session: 100, weekly_all: 10, weekly_fable: 20, resetsAt: new Date(Date.now() - 1_000).toISOString() });
+  await wait(1_200);
+  s.armStall();
   await tick({ cooldownMs: 0 });
   await until(async (b) => !!(sessionRow(b, s.name) || {}).stall, 45_000, 'the stall on h');
 
@@ -895,7 +920,7 @@ test('a queued resume the pump DROPS leaves the stall unresumed and unspent', as
   await until(async (b) => {
     const st = (sessionRow(b, s.name) || {}).stall;
     return !!(st && st.queuedAt);
-  }, 45_000, 'the resume to be queued behind the dialog');
+  }, 45_000, 'the resume to be queued behind the dialog', s.name);
 
   // The owner speaks. The pump drops the automated send on its next pass.
   fs.appendFileSync(s.transcript, `${human(Date.now())}\n`);

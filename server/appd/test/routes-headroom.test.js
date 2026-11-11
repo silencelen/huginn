@@ -67,6 +67,7 @@ const h = require('../lib/headroom');
 const PORT = 10350 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget } = require('./load-budget');
 const PFX = `hr-${process.pid}`;
 // `-L`, not TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides
 // the latter but never the former.
@@ -205,7 +206,7 @@ async function tick(patch = {}) {
 }
 /** Poll a predicate against /v1/headroom rather than sleeping a fixed time. */
 async function until(fn, ms = 12_000, what = 'the condition') {
-  const deadline = Date.now() + ms;
+  const deadline = Date.now() + budget(ms);   // a wait, scaled for load (test/load-budget.js)
   let last = null;
   let nextTick = Date.now() + 2_000;
   for (;;) {
@@ -1465,7 +1466,7 @@ function pings() {
 
 /** Wait for the ping count to reach [n], nudging the tick along the way. */
 async function untilPings(n, ms = 20_000) {
-  const deadline = Date.now() + ms;
+  const deadline = Date.now() + budget(ms);
   for (;;) {
     if (pings().length >= n) return pings();
     if (Date.now() > deadline) {

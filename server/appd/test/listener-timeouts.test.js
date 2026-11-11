@@ -24,6 +24,7 @@
 // scratch, and every port is one the kernel just handed out.
 
 require('./no-owner-contact'); // before any daemon is spawned
+const { budget } = require('./load-budget');
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const { spawn } = require('node:child_process');
@@ -51,7 +52,13 @@ function freePort() {
  * Open a connection, do `start(socket)` once it is up, and report when (and
  * whether) the far end closed it within `ms`, with the first line it said.
  */
-function hold(connect, start, ms) {
+/**
+ * Open a connection, run `start` on it, and report what came back: on close,
+ * after `ms`, or — with `answered` — the moment the reply matches it (a
+ * keep-alive connection is never closed by a reply, so a probe that only wants
+ * the answer would otherwise always sit out its whole window).
+ */
+function hold(connect, start, ms, { answered = null } = {}) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     let said = '';
@@ -62,7 +69,10 @@ function hold(connect, start, ms) {
       resolve({ closed, ms: Date.now() - t0, said, first: said.split('\r\n')[0] });
     };
     const timer = setTimeout(() => done(false), ms);
-    sock.on('data', (c) => { said += c.toString('latin1'); });
+    sock.on('data', (c) => {
+      said += c.toString('latin1');
+      if (answered && answered.test(said)) done(false);
+    });
     sock.on('error', () => { /* the close says it */ });
     sock.on('close', () => done(true));
     sock.once(sock instanceof tls.TLSSocket ? 'secureConnect' : 'connect', () => start(sock));
@@ -163,6 +173,11 @@ before(async () => {
   }, 25_000);
   // The control for that rule: the same slow body WITH the token is somebody
   // allowed to be slow — a 24-byte upload sent over twelve seconds lands.
+  // ⚠ THE WINDOW IS A WAIT, NOT THE RULE. Under load this process's own half-
+  // second writes slip, the body takes longer than twelve seconds to send, and
+  // an 18 s window closed before the answer it was waiting for. A cut is a
+  // close with no 200, which no window length turns into a pass; so the window
+  // is scaled for load and the probe returns as soon as the reply is in.
   probes.slowAuthed = hold(plainTo(port), (s) => {
     s.write(`POST /v1/uploads?name=slow.txt HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${token}\r\n`
       + 'Content-Type: text/plain\r\nContent-Length: 24\r\n\r\n');
@@ -172,7 +187,7 @@ before(async () => {
       if (++n === 24) clearInterval(iv);
     }, 500);
     s.on('close', () => clearInterval(iv));
-  }, 18_000);
+  }, budget(18_000), { answered: /"bytes":\d+/ });
 });
 
 after(() => {

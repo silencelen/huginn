@@ -39,6 +39,7 @@ const typing = require('../lib/typing');
 const PORT = 13100 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget } = require('./load-budget');
 const PFX = `rst-${process.pid}`;
 const TMUX_SOCK = `huginn-test-${process.pid}`;
 const DAEMON = path.join(__dirname, '..', 'huginn-appd.js');
@@ -92,9 +93,12 @@ const rows = async () => ((await api('/v1/sessions')).body || {}).sessions || []
 const rowOf = async (name) => (await rows()).find((r) => r.name === name) || null;
 const status = async () => (await api('/v1/status')).body;
 
-/** Poll until `fn` answers truthy, or give up after `ms` and return its last answer. */
+/**
+ * Poll until `fn` answers truthy, or give up after `ms` (scaled for a loaded
+ * host: test/load-budget.js) and return its last answer.
+ */
 async function until(fn, ms = 10_000, step = 100) {
-  const by = Date.now() + ms;
+  const by = Date.now() + budget(ms);
   for (;;) {
     const v = await fn();
     if (v) return v;
@@ -160,8 +164,27 @@ function attach(name) {
   return c;
 }
 
-/** Was this session cycled: the stand-in started a second time, with these flags? */
-const cycled = (name) => until(() => (argvLines(name).length >= 2 ? argvLines(name) : null), 15_000, 100);
+/**
+ * Was this session cycled: the stand-in started a second time, with these flags?
+ *
+ * ⚠ AND THE CYCLE IS OVER. The second start shows the moment the relaunch
+ * begins, but the daemon's cycle runs on until the relaunched composer is up,
+ * and while it runs every OTHER session's restart reads it as load (one cycle at
+ * a time: restartHold's `cycleBusy`). Returning at the second start let the next
+ * test's restart land inside this one's tail on a loaded host and read
+ * `blockedBy: "load"`. The row stops reading `restarting` only after the cycle
+ * has let go of that slot.
+ */
+async function cycled(name) {
+  const starts = await until(() => (argvLines(name).length >= 2 ? argvLines(name) : null), 15_000, 100);
+  if (starts) {
+    await until(async () => {
+      const row = await rowOf(name);
+      return !row || !row.runtime || row.runtime.restarting !== true;
+    }, 15_000, 100);
+  }
+  return starts;
+}
 
 function writePressure(avg10) {
   fs.writeFileSync(path.join(tmp, 'pressure'),

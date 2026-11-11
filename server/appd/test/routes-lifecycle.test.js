@@ -76,6 +76,7 @@ const crypto = require('node:crypto');
 const PORT = 9700 + (process.pid % 100);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget, holdFor, SOFT_END_FLOOR_MS } = require('./load-budget');
 const PFX = `life-${process.pid}`;
 // Private tmux socket shared with the daemon under test (HUGINN_APPD_TMUX_SOCKET),
 // so a session leaked by a SIGKILL never appears in the operator's desktop as
@@ -384,16 +385,20 @@ test('auto soft-end kills the session once idle has held', async () => {
   assert.equal(body.queued, true, 'sent while running, so it queued');
 
   // Arm: a running observation. Rewriting the state file triggers the daemon's
-  // fs.watch -> softEndTick.
-  writeState(name, 'running');
-  await wait(300);
+  // fs.watch -> softEndTick — late on a loaded host, where a pass that ran after
+  // the idle below never saw `running`, the end never armed, and the session
+  // could only expire. Held past one floor tick, it is certainly seen.
+  await holdFor(SOFT_END_FLOOR_MS, 500, () => writeState(name, 'running'));
   // Now settle: idle, and keep it idle past the stability gate (KILL_STABLE_MS
   // = 3s). Two idle observations >3s apart are needed; the rewrite drives a tick.
   writeState(name, 'idle');
   await wait(3400);
   writeState(name, 'idle');
-  // Give the debounced tick + tmux kill time to land.
-  for (let i = 0; i < 20 && sessionAlive(name); i++) await wait(150);
+  // Give the tick + tmux kill time to land. A late first idle pass leaves the
+  // two observations under 3 s apart, and the kill then comes on the next floor
+  // tick (≤ 10 s): a WAIT for a kill that is coming, so its budget is scaled.
+  const by = Date.now() + budget(12_000);
+  while (sessionAlive(name) && Date.now() < by) await wait(150);
   assert.equal(sessionAlive(name), false, 'a settled auto soft-end should have ended the session');
 });
 

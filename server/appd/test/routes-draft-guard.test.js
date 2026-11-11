@@ -53,6 +53,7 @@ const crypto = require('node:crypto');
 const PORT = 11550 + (process.pid % 50);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { relativeBound } = require('./load-budget');
 const PFX = `draft-${process.pid}`;
 // `-L`, not TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides
 // the latter but never the former.
@@ -488,12 +489,25 @@ test('an ordinary send into an empty composer is not slowed or held', async () =
   // than the one being fixed.
   const name = await startPane('warm');
 
+  // ⚠ THE BOUND IS RELATIVE TO THIS HOST, RIGHT NOW. A flat 1.5 s failed full
+  // runs on a loaded host (1734 ms) with nothing held: every tmux call the send
+  // makes was simply slower. The control is one pane capture through the daemon
+  // (GET /screen), taken a moment before — the cost the guard is allowed — and
+  // the send may take the slower of the old 1.5 s and eight of those. A guard
+  // that WAITED inline would cost its 5 s quiet (LIVE_KEYS_QUIET_MS), far past
+  // that on any host this suite runs on; one that HELD the send is caught below
+  // without a clock at all.
+  const c0 = Date.now();
+  await api(`/v1/sessions/${name}/screen`);
+  const control = Date.now() - c0;
   const t0 = Date.now();
   const { body } = await send(name, 'a perfectly ordinary message');
   const took = Date.now() - t0;
-  assert.equal(body.delivered, true);
+  assert.equal(body.delivered, true, 'delivered in the answer to its own POST, not queued');
   assert.equal(body.blockedBy, null);
-  assert.ok(took < 1_500, `a warm send must not wait on the guard (took ${took}ms)`);
+  assert.doesNotMatch(readOr(daemonLog), new RegExp(`${name}: holding a send`), 'the guard never held it');
+  const bound = relativeBound(control, { floorMs: 1_500, factor: 8 });
+  assert.ok(took < bound, `a warm send must not wait on the guard (took ${took}ms; bound ${bound}ms from a ${control}ms capture)`);
   await wait(300);
   assert.equal(readOr(outFor(name)), 'a perfectly ordinary message\n');
 });

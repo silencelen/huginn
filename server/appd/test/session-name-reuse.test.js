@@ -30,6 +30,7 @@ const crypto = require('node:crypto');
 const PORT = 12370 + (process.pid % 20);
 const BASE = `http://127.0.0.1:${PORT}`;
 require('./retry-fetch');
+const { budget, holdFor, SOFT_END_FLOOR_MS } = require('./load-budget');
 // `-L`, not TMUX_TMPDIR: an inherited $TMUX from the launching pane overrides
 // the latter but never the former.
 const TMUX_SOCK = `huginn-test-${process.pid}`;
@@ -117,7 +118,7 @@ function send(name, text) {
 }
 
 async function untilTrue(fn, ms = 10_000, step = 100) {
-  const until = Date.now() + ms;
+  const until = Date.now() + budget(ms);   // a wait, scaled for load (test/load-budget.js)
   for (;;) {
     if (await fn()) return true;
     if (Date.now() > until) return false;
@@ -176,7 +177,7 @@ function tagOf(id) {
 }
 
 async function projectUntil(id, ok, ms = 15_000) {
-  const until = Date.now() + ms;
+  const until = Date.now() + budget(ms);
   for (;;) {
     const r = await api(`/v1/projects/${id}`);
     if (r.status === 200 && r.body && ok(r.body.project)) return r.body.project;
@@ -376,7 +377,14 @@ test('a session renamed while its archive is pending is archived when it settles
   assert.equal(r.status, 202, JSON.stringify(r.body));
   assert.equal(r.body.pending, true);
   writeState(name, 'running', { sessionId: id, transcript });   // the wrap-up turn: the settle timer arms
-  await wait(500);
+  // ⚠ THE END ARMS ONLY WHEN A SOFT-END PASS SEES `running`, and nothing on the
+  // wire says it has. The passes ride the state-file watch, late under load, and
+  // a floor tick every 10 s. Renamed after half a second, a loaded host's first
+  // pass read the state AFTER the rename (no file under the old name), the end
+  // never armed, and the idle that followed could only expire it — "never
+  // archived" for a reason that is about scheduling. So the turn keeps running
+  // past one floor tick, re-written so the watch fires too.
+  await holdFor(SOFT_END_FLOOR_MS, 500, () => writeState(name, 'running', { sessionId: id, transcript }));
 
   const to = 'arch-renamed';
   madeSessions.add(to);

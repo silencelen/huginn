@@ -118,16 +118,28 @@ test('a poll parked on a pane quiet for ten seconds peeks it every 1.5 s', async
 });
 
 test('input through the daemon wakes a parked poll at once', async () => {
+  // The control: this plain read IS one capture through the daemon, timed. A
+  // read taken later, next to the key, would itself reset the pane's quiet clock
+  // (lib/screenwait) and un-park the very poll under test.
+  const c0 = Date.now();
   const first = await api(`/v1/sessions/${NAME}/screen`);
+  const capture = Date.now() - c0;
   await wait(10_500);
   const poll = api(`/v1/sessions/${NAME}/screen?hash=${first.body.hash}&wait=10000`);
   await wait(400); // parked, on the slow step
-  const sent = Date.now();
   const k = await api(`/v1/sessions/${NAME}/keys`, { method: 'POST', body: JSON.stringify({ text: 'x' }) });
   assert.equal(k.status, 200, JSON.stringify(k.body));
+  // ⚠ FROM THE KEY BEING IN, AND RELATIVE TO THIS HOST. The clock used to start
+  // before the /keys request, so a loaded host's slow paste counted against the
+  // wake (6841 ms in a full run, with the wake fine). What this proves is that
+  // the poll answered on the wake, not on its next slow peek (every 1.5 s): it
+  // may take a second plus two captures' worth of this host's current speed —
+  // on a quiet host that is the old one second.
+  const keyed = Date.now();
   const r = await poll;
-  const took = Date.now() - sent;
+  const took = Date.now() - keyed;
+  const bound = 1000 + 2 * capture;
   assert.equal(r.status, 200);
   assert.ok(!r.body.unchanged, 'the echo of the key changed the pane');
-  assert.ok(took < 1000, `answered ${took} ms after the key, not on the next slow peek`);
+  assert.ok(took < bound, `answered ${took} ms after the key, not on the next slow peek (bound ${bound} ms from a ${capture} ms capture)`);
 });
