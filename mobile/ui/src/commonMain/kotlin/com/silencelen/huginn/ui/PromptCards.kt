@@ -1111,10 +1111,17 @@ private fun PlanQuestionCard(
 // [AgentRequestLabels]'s, which both shells share.
 
 /**
- * One background agent's waiting request: who asks, the command (whole, wrapped,
- * scrolling inside its cap — the person is approving exactly these words) or a
- * one-line summary of another tool's input, the deadline, and Allow / Deny.
- * [note] is the daemon's answer when it was not "done" (409: answer on the pane).
+ * One background agent's waiting request: who asks, EVERYTHING it asks for — a
+ * Bash command or every key of another tool's input ([AgentRequestLabels.body]),
+ * drawn through [PromptDisplay.visible] in a block that wraps and scrolls inside
+ * its cap — the deadline, and Allow / Deny. [note] is the daemon's answer when it
+ * was not "done" (409: answer on the pane; 412: it changed, read it again).
+ *
+ * ⚠ ALLOW WAITS FOR THE END OF THE REQUEST (security scan 2026-11-11, F1): a
+ * background agent has no dialog anywhere, so this card is its only gate, and the
+ * person is approving every character of it. Same rule as the session-request
+ * card's Start: latched per request (id + digest), false until the block has
+ * measured. Allow also needs the daemon's digest, which the answer carries back.
  */
 @Composable
 fun AgentRequestCard(
@@ -1128,23 +1135,26 @@ fun AgentRequestCard(
     onAnswer: (allow: Boolean) -> Unit,
 ) {
     val metrics = promptCardMetrics(compact)
+    val body = AgentRequestLabels.body(request)
+    var read by remember(request.id, request.digest, body) { mutableStateOf(body == null) }
     Box(modifier) { CardShell(metrics) {
         HeaderChip(AgentRequestLabels.HEADER, null)
         Text(
             AgentRequestLabels.headline(request), style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.testTag("agentRequest.headline"),
         )
-        AgentRequestLabels.body(request)?.let { body ->
+        if (body != null) {
             Spacer(Modifier.height(4.dp))
-            if (AgentRequestLabels.isBash(request)) {
-                WrappedMonoBlock(body, maxHeight = 140.dp, tag = "agentRequest.command")
-            } else {
-                Text(
-                    body, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("agentRequest.summary"),
-                )
+            Box(Modifier.testTag("agentRequest.body")) {
+                WrappedMonoBlock(PromptDisplay.visible(body), maxHeight = SESSION_PROMPT_FOLD_HEIGHT,
+                    tag = "agentRequest.body", onAtEnd = { if (it) read = true })
             }
+            Text(
+                PromptDisplay.countsLine(body),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp).testTag("agentRequest.counts"),
+            )
         }
         AgentRequestLabels.expiry(request, nowMs)?.let {
             Text(
@@ -1154,8 +1164,21 @@ fun AgentRequestCard(
         }
         Spacer(Modifier.height(6.dp))
         OptionLayout(wrap = true) {
-            Button(onClick = { onAnswer(true) }, enabled = !answering) { Text(AgentRequestLabels.ALLOW) }
-            OutlinedButton(onClick = { onAnswer(false) }, enabled = !answering) { Text(AgentRequestLabels.DENY) }
+            Button(
+                onClick = { onAnswer(true) },
+                enabled = !answering && read && AgentRequestLabels.canAllow(request),
+                modifier = Modifier.testTag("agentRequest.allow"),
+            ) { Text(AgentRequestLabels.ALLOW) }
+            OutlinedButton(onClick = { onAnswer(false) }, enabled = !answering,
+                modifier = Modifier.testTag("agentRequest.deny")) { Text(AgentRequestLabels.DENY) }
+        }
+        if (!read) {
+            Text(
+                AgentRequestLabels.READ_FIRST,
+                style = MaterialTheme.typography.labelSmall, color = stateColor(StateKind.NEEDS_YOU),
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp).testTag("agentRequest.scroll"),
+            )
         }
         NoteLine(note)
     } }

@@ -140,8 +140,9 @@ test('a background agent\'s request is listed by id, the session stays running, 
   assert.equal(r.agentRequests, 1, 'the list carries its own mark');
   assert.equal(r.state, 'running', 'a background agent\'s request is not a question on this session');
 
+  assert.match(got[0].digest, /^[0-9a-f]{64}$/, 'the view carries what an Allow is bound to');
   const hook = fakeHook(dir, id);
-  const res = await api(`/v1/sessions/${name}/agent-requests/${id}`, { method: 'POST', body: JSON.stringify({ decision: 'allow' }) });
+  const res = await api(`/v1/sessions/${name}/agent-requests/${id}`, { method: 'POST', body: JSON.stringify({ decision: 'allow', digest: got[0].digest }) });
   assert.equal(res.status, 200);
   assert.deepEqual(await hook, { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } });
   fs.rmSync(path.join(dir, `${id}.json`), { force: true });   // the real hook's exit trap
@@ -185,4 +186,35 @@ test('a subagent request whose dialog IS on the pane stays the keyboard\'s: not 
   assert.deepEqual((await listed(name)).requests, []);
   const res = await api(`/v1/sessions/${name}/agent-requests/${id}`, { method: 'POST', body: JSON.stringify({ decision: 'allow' }) });
   assert.equal(res.status, 409);
+});
+
+test('an Allow without the digest of the request shown, or with another request\'s, is refused and the agent waits on', async () => {
+  const name = session();
+  const { dir, id } = writeReq(name, { tool: 'Write', input: { file_path: '/home/x/proj/notes.md', content: 'hi' } });
+  await wait(5);   // ids are millisecond-stamped
+  const other = writeReq(name, { tool: 'Write', input: { file_path: '/root/.ssh/authorized_keys', content: 'ssh-ed25519 AAAA' } });
+  const reqs = await until('both requests to be listed', async () => {
+    const b = await listed(name);
+    return b && b.requests && b.requests.length === 2 ? b.requests : null;
+  });
+  const shown = reqs.find((r) => r.id === id);
+  const elsewhere = reqs.find((r) => r.id === other.id);
+  assert.notEqual(shown.digest, elsewhere.digest);
+  const post = (body) => api(`/v1/sessions/${name}/agent-requests/${id}`, { method: 'POST', body: JSON.stringify(body) });
+  assert.equal((await post({ decision: 'allow' })).status, 412, 'no digest: nothing tied the tap to what was shown');
+  assert.equal((await post({ decision: 'allow', digest: elsewhere.digest })).status, 412, 'another request\'s digest');
+  assert.equal((await post({ decision: 'allow', digest: 'A'.repeat(64) })).status, 412);
+  assert.equal(fs.existsSync(path.join(dir, `${id}.ans`)), false, 'no answer was written');
+  // The digest does not depend on the order the hook wrote the keys in.
+  fs.writeFileSync(path.join(dir, `${id}.json`), JSON.stringify({
+    ...JSON.parse(fs.readFileSync(path.join(dir, `${id}.json`), 'utf8')),
+    input: { content: 'hi', file_path: '/home/x/proj/notes.md' },
+  }));
+  const hook = fakeHook(dir, id);
+  assert.equal((await post({ decision: 'allow', digest: shown.digest })).status, 200);
+  assert.equal((await hook).hookSpecificOutput.decision.behavior, 'allow');
+  // A Deny needs no digest: declining what you did not read is always safe.
+  const hook2 = fakeHook(other.dir, other.id);
+  assert.equal((await api(`/v1/sessions/${name}/agent-requests/${other.id}`, { method: 'POST', body: JSON.stringify({ decision: 'deny' }) })).status, 200);
+  assert.equal((await hook2).hookSpecificOutput.decision.behavior, 'deny');
 });

@@ -4,7 +4,9 @@
 
 ### Added
 - When a session's background agent asks for permission to run something, the session shows a
-  card with the agent, the exact command and Allow / Deny. The sessions list marks the row
+  card with the agent, everything it asked for and Allow / Deny. The whole request is shown,
+  hidden characters spelled out, and Allow waits until it has been scrolled to its end. The
+  sessions list marks the row
   "agent asks". An unanswered request is declined automatically after 10 minutes, and the card
   says when. Needs huginn-appd 3.20.0 or newer.
 

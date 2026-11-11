@@ -2009,6 +2009,12 @@ data class AgentRequest(
     val askedAt: Long = 0,
     /** Epoch milliseconds; 0 when the daemon gives no deadline. */
     val expiresAt: Long = 0,
+    /**
+     * What an Allow is bound to: the daemon's digest of this exact request, sent
+     * back with the answer so it approves the request the card showed. Null from
+     * a daemon that has none, and then the card offers no Allow.
+     */
+    val digest: String? = null,
 )
 
 @Serializable
@@ -2022,6 +2028,8 @@ enum class AgentRequestAnswer {
     GONE,
     /** A dialog for it is on the pane: it must be answered there. */
     ON_PANE,
+    /** The daemon's request is not the one the card was drawn from (412): read it again. */
+    CHANGED,
 }
 
 @Serializable

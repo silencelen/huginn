@@ -14,8 +14,10 @@ version number collided. Entries below are reconstructed from the shipping commi
 ### Added
 - A background agent's permission request can be answered from the apps.
   `GET /v1/sessions/<name>/agent-requests` lists the requests that have no dialog on the session's
-  screen; `POST /v1/sessions/<name>/agent-requests/<id>` with `{decision}` answers one. Session
-  rows carry `agentRequests` while any are waiting.
+  screen; `POST /v1/sessions/<name>/agent-requests/<id>` with `{decision}` answers one. Each
+  request carries a `digest`, and an Allow must send it back, so it approves exactly the request
+  the app showed; one without it, or with another request's, is refused with `412`. Session rows
+  carry `agentRequests` while any are waiting.
 
 ### Fixed
 - A background agent waiting on an approval no longer marks its session as needing an answer, and

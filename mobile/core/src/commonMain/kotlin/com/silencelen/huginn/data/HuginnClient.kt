@@ -1023,10 +1023,16 @@ class HuginnClient(
      * Answers one background agent's request by its id. 404 is [AgentRequestAnswer.GONE]
      * (answered elsewhere, lapsed, the agent moved on) and 409 is
      * [AgentRequestAnswer.ON_PANE] (its dialog is on the pane, so it is answered
-     * there); every other failure throws as usual.
+     * there); 412 is [AgentRequestAnswer.CHANGED] (an Allow whose [digest] does
+     * not name the waiting request); every other failure throws as usual. An
+     * Allow carries the digest of the request the card showed (appd refuses one
+     * without it); a Deny needs none.
      */
-    suspend fun answerAgentRequest(session: String, id: String, allow: Boolean): AgentRequestAnswer {
-        val body = buildJsonObject { put("decision", JsonPrimitive(if (allow) "allow" else "deny")) }
+    suspend fun answerAgentRequest(session: String, id: String, allow: Boolean, digest: String? = null): AgentRequestAnswer {
+        val body = buildJsonObject {
+            put("decision", JsonPrimitive(if (allow) "allow" else "deny"))
+            if (allow && digest != null) put("digest", JsonPrimitive(digest))
+        }
         val resp = http().request {
             build("/v1/sessions/${seg(session)}/agent-requests/${seg(id)}", HttpMethod.Post, Tier.NORMAL, body)
         }
@@ -1035,6 +1041,7 @@ class HuginnClient(
             resp.status.isSuccess() -> AgentRequestAnswer.OK
             code == 404 -> AgentRequestAnswer.GONE
             code == 409 -> AgentRequestAnswer.ON_PANE
+            code == 412 -> AgentRequestAnswer.CHANGED
             else -> throw errorFrom(code, resp.bodyAsText())
         }
     }

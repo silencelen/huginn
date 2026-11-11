@@ -4157,7 +4157,7 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         if (r.id in _agentRequestAnswering.value) return
         _agentRequestAnswering.value = _agentRequestAnswering.value + r.id
         viewModelScope.launch {
-            runCatching { client.answerAgentRequest(name, r.id, allow) }
+            runCatching { client.answerAgentRequest(name, r.id, allow, r.digest) }
                 .onSuccess { result ->
                     when (result) {
                         com.silencelen.huginn.data.AgentRequestAnswer.OK,
@@ -4167,6 +4167,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         com.silencelen.huginn.data.AgentRequestAnswer.ON_PANE ->
                             _agentRequestNotes.value = _agentRequestNotes.value + (r.id to AgentRequestLabels.ON_PANE)
+                        com.silencelen.huginn.data.AgentRequestAnswer.CHANGED ->
+                            _agentRequestNotes.value = _agentRequestNotes.value + (r.id to AgentRequestLabels.CHANGED)
                     }
                 }
                 .onFailure { e ->

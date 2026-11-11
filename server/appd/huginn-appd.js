@@ -6271,6 +6271,20 @@ function agentRequestsOf(name) {
   return e ? [...e.detached.values()] : [];
 }
 
+/**
+ * What an Allow is bound to: sha256 over the request's tool and its WHOLE input,
+ * keys sorted at every level so the same request always reads the same. The view
+ * carries it and an Allow must send it back (security scan 2026-11-11, F1): the
+ * card is a background agent's ONLY gate, so the approval names the exact request
+ * the card was drawn from, not just an id.
+ */
+function agentRequestDigest(r) {
+  const canon = (v) => Array.isArray(v) ? v.map(canon)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+      : v;
+  const input = r.input && typeof r.input === 'object' ? r.input : {};
+  return crypto.createHash('sha256').update(JSON.stringify(canon({ tool: r.tool, input }))).digest('hex');
+}
 function agentRequestView(r) {
   const input = r.input && typeof r.input === 'object' ? r.input : {};
   return {
@@ -6278,6 +6292,7 @@ function agentRequestView(r) {
     tool: r.tool, input,
     command: r.tool === 'Bash' && typeof input.command === 'string' ? input.command : null,
     askedAt: r.ts, expiresAt: r.ts + AGENT_REQ_PASS_MS,
+    digest: agentRequestDigest(r),
   };
 }
 
@@ -16219,6 +16234,11 @@ async function handleRequest(req, res) {
       // up to two seconds old, and the agent may have moved on since.
       const live = known && permhook.liveRequests(STATE_DIR, name).find((r) => r.id === id);
       if (!live) return sendErr(res, 404, 'that request is no longer waiting');
+      // An Allow approves the request the card showed, or nothing: its digest
+      // must name exactly this one (see agentRequestDigest). A Deny needs none.
+      if (decision === 'allow' && (typeof body.digest !== 'string' || body.digest !== agentRequestDigest(live))) {
+        return sendErr(res, 412, 'that is not the request the card showed: read it again');
+      }
       const ok = await permhook.deliver(STATE_DIR, name, live, decision === 'allow'
         ? { behavior: 'allow' }
         : { behavior: 'deny', message: 'Declined from Huginn by the person running this session.' });

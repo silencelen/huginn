@@ -38,29 +38,61 @@ class AgentRequestLabelsTest {
     }
 
     @Test
-    fun anotherToolIsSummarisedTellingKeysFirst() {
+    fun anotherToolShowsEveryKeyTellingKeysFirst() {
         val r = AgentRequest(
             agentType = "Explore", tool = "WebFetch",
             input = buildJsonObject { put("prompt", "summarise"); put("url", "https://example.net/a") },
         )
         assertEquals("Explore wants to use WebFetch", AgentRequestLabels.headline(r))
-        assertEquals("url: https://example.net/a  ·  prompt: summarise", AgentRequestLabels.body(r))
+        assertEquals("url: https://example.net/a\nprompt: summarise", AgentRequestLabels.body(r))
     }
 
     @Test
-    fun aLongSummaryIsCutAndNestedValuesAreCounted() {
+    fun aLongInputIsNeverCut() {
+        // Security scan 2026-11-11, F1: Allow approves all of it, so all of it is shown.
+        val old = "y".repeat(400)
         val r = AgentRequest(tool = "Edit", input = buildJsonObject {
-            put("file_path", "/a/b.kt"); put("old_string", "y".repeat(400))
+            put("file_path", "/a/b.kt"); put("old_string", old); put("new_string", "line 1\nrm -rf ~")
             put("edits", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(2))))
+            put("replace_all", true)
         })
         val s = AgentRequestLabels.body(r)!!
-        assertTrue(s.startsWith("file_path: /a/b.kt  ·  old_string: y"))
-        assertTrue(s.length <= AgentRequestLabels.SUMMARY_MAX)
-        assertTrue(s.endsWith("…"))
-        assertEquals("edits: [2]", AgentRequestLabels.summary(buildJsonObject {
-            put("edits", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(1), JsonPrimitive(2))))
-        }))
-        assertNull(AgentRequestLabels.summary(buildJsonObject { }))
+        assertTrue(s.startsWith("file_path: /a/b.kt\n"))
+        assertTrue("old_string: $old" in s)
+        assertTrue("new_string:\nline 1\nrm -rf ~" in s, "a multi-line value starts on its own line, whole")
+        assertTrue("replace_all: true" in s)
+        assertTrue("edits:\n[\n    1,\n    2\n]" in s, "nested values are spelled out, not counted")
+        assertNull(AgentRequestLabels.detail(buildJsonObject { }))
+    }
+
+    @Test
+    fun aPaddedPathCannotHideWhereItGoes() {
+        // The scan's attack: no-break-space padding pushing `/../../.ssh/...` past the cut.
+        val path = "/home/alex/proj/notes.md" + "\u00a0".repeat(200) + "/../../../.ssh/authorized_keys"
+        val r = AgentRequest(tool = "Write", input = buildJsonObject { put("file_path", path); put("content", "ssh-ed25519 AAAA") })
+        val shown = com.silencelen.huginn.ui.PromptDisplay.visible(AgentRequestLabels.body(r)!!)
+        assertTrue("authorized_keys" in shown)
+        assertTrue(com.silencelen.huginn.ui.PromptDisplay.GAP in shown, "the padding is one visible gap")
+        assertTrue("\u00a0" !in shown)
+        assertTrue("content: ssh-ed25519 AAAA" in shown)
+    }
+
+    @Test
+    fun aPathThatMovesSaysWhereItResolves() {
+        assertEquals("/home/.ssh/authorized_keys", AgentRequestLabels.resolvedPath("/home/alex/proj/../../.ssh/authorized_keys"))
+        assertEquals("/etc/passwd", AgentRequestLabels.resolvedPath("/../../etc//passwd"))
+        assertEquals("/a/b", AgentRequestLabels.resolvedPath("/a/./b"))
+        assertNull(AgentRequestLabels.resolvedPath("/a/b.kt"))
+        assertNull(AgentRequestLabels.resolvedPath("/a/b/"))
+        assertNull(AgentRequestLabels.resolvedPath("../x"))
+        val r = AgentRequest(tool = "Write", input = buildJsonObject { put("file_path", "/p/q/../../root/.bashrc"); put("content", "x") })
+        assertTrue(AgentRequestLabels.body(r)!!.startsWith("file_path: /p/q/../../root/.bashrc\n  → resolves to /root/.bashrc\n"))
+    }
+
+    @Test
+    fun allowNeedsTheDaemonsDigest() {
+        assertTrue(!AgentRequestLabels.canAllow(bash("ls")))
+        assertTrue(AgentRequestLabels.canAllow(bash("ls").copy(digest = "ab".repeat(32))))
     }
 
     @Test
@@ -92,11 +124,12 @@ class AgentRequestLabelsTest {
         val list = json.decodeFromString(AgentRequestList.serializer(), """
             {"requests":[{"id":"1794382118113601751-2255438","agentId":"a116","agentType":"general-purpose",
               "tool":"Bash","input":{"command":"git push","timeout":120000},"command":"git push",
-              "askedAt":1794382118122,"expiresAt":1794382718122,"future":"ignored"}]}
+              "askedAt":1794382118122,"expiresAt":1794382718122,"digest":"9f2c","future":"ignored"}]}
         """.trimIndent())
         val r = list.requests.single()
         assertEquals("git push", r.command)
         assertEquals(1794382718122L, r.expiresAt)
+        assertEquals("9f2c", r.digest)
         val row = json.decodeFromString(Session.serializer(), """{"name":"s"}""")
         assertEquals(0, row.agentRequests, "absent on an older daemon")
         assertEquals(2, json.decodeFromString(Session.serializer(), """{"name":"s","agentRequests":2}""").agentRequests)
