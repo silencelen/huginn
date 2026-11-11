@@ -289,7 +289,18 @@ function clearRequests(stateDir, name) {
   try { fs.rmSync(permDir(stateDir, name), { recursive: true, force: true }); } catch { /* gone */ }
 }
 
+/**
+ * Hand a parked request back to Claude Code UNDECIDED: the hook claims the
+ * answer file, finds no allow/deny in it, prints nothing and exits 0 — exactly
+ * its "no answer" path, minus the wait. For a background agent that is the CLI's
+ * own decline ("couldn't be asked for here"), which lets the agent carry on and
+ * report what it needed instead of sitting out the hook's hour.
+ */
+function pass(stateDir, name, req, opts = {}) {
+  return deliver(stateDir, name, req, null, opts);
+}
+
 module.exports = {
   PERM_DIRNAME, permDir, liveRequests, dialogRegion, dialogCommandBlock, matchesPrompt, pickRequest,
-  decisionFor, deliver, clearRequests,
+  decisionFor, deliver, pass, clearRequests,
 };

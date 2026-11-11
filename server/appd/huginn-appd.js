@@ -121,7 +121,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.19.5';
+const VERSION = '3.20.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1962,6 +1962,10 @@ async function listSessions({ preview = false, shared = false } = {}) {
   for (const r of rows) {
     const asked = startRequestSince(r.name, r.state);
     if (asked != null) { r.state = 'attention'; r.stateSince = Math.floor(asked / 1000); }
+    // A background agent waiting on an approval: a mark of its own, never the
+    // session's attention (see agentReqTick). Absent when there is none.
+    const waiting = agentRequestsOf(r.name).length;
+    if (waiting) r.agentRequests = waiting;
   }
 
   if (preview) {
@@ -6223,10 +6227,112 @@ function permPendingSince(name, sessionId) {
   for (const r of reqs) {
     if (r.tool === 'AskUserQuestion' || r.tool === 'ExitPlanMode') continue;
     if (sessionId && r.sessionId && r.sessionId !== sessionId) continue;
+    // A SUBAGENT's request counts only once its dialog has been seen on the
+    // pane (agentReqTick). A background agent's never is: it is not a question
+    // on this session's screen, and treating it as one turned the row yellow and
+    // held every send for the hook's whole hour (owner, 2026-11-10).
+    if (r.agentId && !agentReqAttached(name, r.id)) continue;
     const s = Math.floor(Number(r.ts) / 1000);
     if (s && (!since || s < since)) since = s;
   }
   return since;
+}
+
+// ---- background agents' permission requests ------------------------------
+//
+// A subagent's PermissionRequest reaches the hook like any other, and the hook
+// parks it for up to an hour. When the agent runs in the BACKGROUND, Claude Code
+// draws no dialog for it anywhere on the pane (it waits on the hook and, given
+// no decision, declines on its own: "couldn't be asked for here"). Such a
+// request could not be answered from the apps — /answer matches a request to
+// the dialog on screen — yet it made the session `attention` and held every
+// send behind it, while the agent sat blocked (owner, 2026-11-10).
+//
+// So a tick sorts every live subagent request into ATTACHED (its dialog is on
+// the pane: answered there, as before) or DETACHED (no dialog after
+// AGENT_REQ_SETTLE_MS). Detached requests are listed by id
+// (GET /v1/sessions/<name>/agent-requests) and answered by id (POST …/<id>);
+// they never count as a question on the session. One left unanswered for
+// AGENT_REQ_PASS_MS is handed back to the CLI undecided, which declines it, so
+// the agent carries on instead of waiting out the hook.
+const AGENT_REQ_SETTLE_MS = 3_000;
+const AGENT_REQ_PASS_MS = Number(process.env.HUGINN_AGENT_REQ_PASS_MS) || 10 * 60_000;
+const AGENT_REQ_TICK_MS = 2_000;
+const agentReqs = new Map();         // name -> { attached: Set<id>, detached: Map<id, req> }
+let agentReqBusy = false;
+
+function agentReqAttached(name, id) {
+  const e = agentReqs.get(name);
+  return !!(e && e.attached.has(id));
+}
+
+function agentRequestsOf(name) {
+  const e = agentReqs.get(name);
+  return e ? [...e.detached.values()] : [];
+}
+
+function agentRequestView(r) {
+  const input = r.input && typeof r.input === 'object' ? r.input : {};
+  return {
+    id: r.id, agentId: r.agentId || null, agentType: r.agentType || null,
+    tool: r.tool, input,
+    command: r.tool === 'Bash' && typeof input.command === 'string' ? input.command : null,
+    askedAt: r.ts, expiresAt: r.ts + AGENT_REQ_PASS_MS,
+  };
+}
+
+async function agentReqTick() {
+  if (agentReqBusy) return;
+  agentReqBusy = true;
+  try {
+    let names = [];
+    try { names = fs.readdirSync(path.join(STATE_DIR, permhook.PERM_DIRNAME)); } catch { /* none yet */ }
+    const seen = new Set();
+    for (const name of names) {
+      let reqs;
+      try {
+        reqs = permhook.liveRequests(STATE_DIR, name)
+          .filter((r) => r.agentId && r.tool !== 'AskUserQuestion' && r.tool !== 'ExitPlanMode');
+      } catch { continue; }
+      if (!reqs.length) continue;
+      seen.add(name);
+      const prev = agentReqs.get(name) || { attached: new Set(), detached: new Map() };
+      const lines = await paneLines(name);
+      const prompt = lines ? promptFor(name, lines).prompt : null;
+      const region = lines ? permhook.dialogRegion(lines) : '';
+      const next = { attached: new Set(), detached: new Map() };
+      const now = Date.now();
+      for (const r of reqs) {
+        // Once drawn, the pane's for good: a dialog scrolled out of a reading is
+        // still the keyboard's to answer.
+        if (prev.attached.has(r.id) || (prompt && permhook.matchesPrompt(r, prompt, region))) {
+          next.attached.add(r.id);
+          continue;
+        }
+        if (now - r.ts < AGENT_REQ_SETTLE_MS) continue;
+        if (now - r.ts >= AGENT_REQ_PASS_MS) {
+          const ok = await permhook.pass(STATE_DIR, name, r);
+          log(`agent-requests: ${name}: ${r.agentType || 'agent'} ${r.tool} unanswered for ${Math.round((now - r.ts) / 60000)} min — handed back to Claude Code${ok ? '' : ' (the hook did not take it)'}`);
+          continue;
+        }
+        if (!prev.detached.has(r.id)) {
+          const what = r.tool === 'Bash' && r.input && r.input.command ? String(r.input.command).slice(0, 80) : r.tool;
+          log(`agent-requests: ${name}: background ${r.agentType || 'agent'} asks to run ${what} (answerable from the apps)`);
+        }
+        next.detached.set(r.id, r);
+      }
+      agentReqs.set(name, next);
+    }
+    for (const name of [...agentReqs.keys()]) if (!seen.has(name)) agentReqs.delete(name);
+  } catch (e) {
+    log(`agent-requests: tick failed: ${e.message}`);
+  } finally {
+    agentReqBusy = false;
+  }
+}
+{
+  const t = setInterval(() => { agentReqTick(); }, AGENT_REQ_TICK_MS);
+  if (t.unref) t.unref();
 }
 
 // The pane module by name, for the two helpers the import block at the top does
@@ -16092,6 +16198,36 @@ async function handleRequest(req, res) {
       registryRename(from, actual);
       releaseQueue(heldQueue);
       return sendJson(res, 200, { ok: true, name: actual });
+    }
+
+    // --- a background agent's permission requests (see agentReqTick)
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agent-requests$/)) && req.method === 'GET') {
+      const name = m[1];
+      if (!(await requireSession(res, name))) return;
+      return sendJson(res, 200, { requests: agentRequestsOf(name).map(agentRequestView) });
+    }
+    if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/agent-requests\/(\d{10,25}-\d{1,10})$/)) && req.method === 'POST') {
+      const name = m[1];
+      const id = m[2];
+      if (!(await requireSession(res, name))) return;
+      const body = await readJsonBody(req);
+      const decision = body && body.decision;
+      if (decision !== 'allow' && decision !== 'deny') return sendErr(res, 400, 'decision must be "allow" or "deny"');
+      if (agentReqAttached(name, id)) return sendErr(res, 409, 'that request is a dialog on the session\'s screen: answer it there');
+      const known = agentRequestsOf(name).find((r) => r.id === id);
+      // Answer only a request that is still parked RIGHT NOW: the tick's list is
+      // up to two seconds old, and the agent may have moved on since.
+      const live = known && permhook.liveRequests(STATE_DIR, name).find((r) => r.id === id);
+      if (!live) return sendErr(res, 404, 'that request is no longer waiting');
+      const ok = await permhook.deliver(STATE_DIR, name, live, decision === 'allow'
+        ? { behavior: 'allow' }
+        : { behavior: 'deny', message: 'Declined from Huginn by the person running this session.' });
+      if (!ok) return sendErr(res, 404, 'that request is no longer waiting');
+      const e = agentReqs.get(name);
+      if (e) e.detached.delete(id);
+      const what = live.tool === 'Bash' && live.input && live.input.command ? String(live.input.command).slice(0, 80) : live.tool;
+      log(`agent-requests: ${name}: ${decision === 'allow' ? 'allowed' : 'declined'} ${live.agentType || 'agent'} ${what} from the apps`);
+      return sendJson(res, 200, { ok: true });
     }
 
     if ((m = p.match(/^\/v1\/sessions\/([A-Za-z0-9_][A-Za-z0-9_.-]{0,49})\/keys$/)) && req.method === 'POST') {

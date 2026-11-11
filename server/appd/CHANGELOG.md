@@ -9,6 +9,20 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.20.0 — 2026-11-10
+
+### Added
+- A background agent's permission request can be answered from the apps.
+  `GET /v1/sessions/<name>/agent-requests` lists the requests that have no dialog on the session's
+  screen; `POST /v1/sessions/<name>/agent-requests/<id>` with `{decision}` answers one. Session
+  rows carry `agentRequests` while any are waiting.
+
+### Fixed
+- A background agent waiting on an approval no longer marks its session as needing an answer, and
+  messages sent to that session are no longer held behind it. The request used to wait up to an
+  hour with nothing able to answer it; one left unanswered now goes back to Claude Code after 10
+  minutes, which declines it and lets the agent carry on.
+
 ## 3.19.5 — 2026-11-10
 
 ### Changed
