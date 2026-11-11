@@ -1,5 +1,13 @@
 # Huginn Desktop changelog
 
+## 2.13.0
+
+### Added
+- When a session's background agent asks for permission to run something, the session shows a
+  card with the agent, the exact command and Allow / Deny. The sessions list marks the row
+  "agent asks". An unanswered request is declined automatically after 10 minutes, and the card
+  says when. Needs huginn-appd 3.20.0 or newer.
+
 ## 2.12.0
 
 ### Added

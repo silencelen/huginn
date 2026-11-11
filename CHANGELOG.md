@@ -8,6 +8,12 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.13.0] - 2026-11-11
+
+### Changed
+- No terminal-client changes. The version moves with the desktop client 2.13.0, which carries this
+  core.
+
 ## [2.12.0] - 2026-11-09
 
 ### Changed
