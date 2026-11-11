@@ -5,7 +5,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { parseModelId, formatModel, selectModels, aliasModels, compareVersions, pendingModels } = require('../lib/models');
+const { parseModelId, formatModel, selectModels, aliasModels, compareVersions, pendingModels, modelCommandArg } = require('../lib/models');
 
 test('an id keeps its version when formatted', () => {
   assert.strictEqual(formatModel('claude-opus-5'), 'Opus 5');
@@ -93,4 +93,15 @@ test('pending is empty once the update lands, with no state, or on the alias fal
   assert.deepEqual(pendingModels(selectModels(['claude-opus-5-5']), { latest: '2.1.330' }), []);
   assert.deepEqual(pendingModels(aliasModels(), state), [], 'no installed ids to diff against');
   assert.deepEqual(pendingModels([], state), []);
+});
+
+test('a /model line names its model; the picker, extra words and other text do not', () => {
+  assert.equal(modelCommandArg('/model claude-fable-5-2'), 'claude-fable-5-2');
+  assert.equal(modelCommandArg('  /model opus[1m]  '), 'opus[1m]');
+  assert.equal(modelCommandArg('/model'), null, 'the bare command opens the picker');
+  assert.equal(modelCommandArg('/model a b'), null);
+  assert.equal(modelCommandArg('/models x'), null);
+  assert.equal(modelCommandArg('please /model x'), null);
+  assert.equal(modelCommandArg('/model x\n/exit'), null, 'one line only');
+  assert.equal(modelCommandArg(null), null);
 });

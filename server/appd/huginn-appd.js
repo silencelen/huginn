@@ -43,7 +43,7 @@ const { GLYPH } = require('./lib/state-table');
 const { AccountStore, fingerprint, sameAccount, normUuid } = require('./lib/accounts');
 const oauthRefresh = require('./lib/oauth-refresh');
 const oauthlock = require('./lib/oauthlock');
-const { formatModel, discoverModels, parseModelId, pendingModels, readUpdateState } = require('./lib/models');
+const { formatModel, discoverModels, parseModelId, pendingModels, readUpdateState, modelCommandArg } = require('./lib/models');
 const { createModelsApi } = require('./lib/modelsapi');
 const sessreg = require('./lib/session-registry');
 const seedstate = require('./lib/seedstate');
@@ -121,7 +121,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.19.4';
+const VERSION = '3.19.5';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -11484,6 +11484,46 @@ function lastModelRecord(tail) {
  * Refuses on an unparseable file rather than replacing it: half of a settings
  * file is worse than a wrong model.
  */
+/**
+ * Undo the "saved as your default" half of a `/model <name>` Huginn typed.
+ *
+ * A session's model menu types `/model <id>`, and Claude Code then writes that
+ * id into settings.json as the default for every NEW session — so picking a
+ * model for one session silently changed the host default (owner, 2026-11-10:
+ * "switch only that session instead"). The session itself does not re-read the
+ * file: measured on 2.1.322, a session set to Haiku and then given its old
+ * default back kept answering on Haiku.
+ *
+ * `before` is the default as it stood when the line was QUEUED (a queued send
+ * can wait for a turn boundary; the default it should come back to is the one
+ * the person saw when they picked). Waits up to MODEL_DEFAULT_WATCH_MS for the
+ * CLI's write, then puts `before` back — removing the key if there was none.
+ * Nothing changes if the CLI never wrote (an unknown model is refused before
+ * anything is saved).
+ */
+const MODEL_DEFAULT_WATCH_MS = 15_000;
+async function keepDefaultAfterModelCommand(name, before, picked) {
+  const read = () => {
+    const r = readClaudeSettings('model-command');
+    return r && r.settings ? (r.settings.model ?? null) : undefined;
+  };
+  const until = Date.now() + MODEL_DEFAULT_WATCH_MS;
+  while (Date.now() < until) {
+    const now = read();
+    if (now !== undefined && now !== before) {
+      const r = rewriteClaudeSettings((o) => {
+        if ((o.model ?? null) === before) return false;
+        if (before === null) delete o.model; else o.model = before;
+        return true;
+      }, 'model-command');
+      if (r.ok && r.changed) log(`models: ${name} set to ${picked} for this session only; host default kept at ${before ?? '(none)'} (the CLI had saved ${now})`);
+      else if (!r.ok) log(`models: ${name}: could not put the host default back to ${before ?? '(none)'} (${r.error})`);
+      return;
+    }
+    await sleep(250);
+  }
+}
+
 function repairDefaultModel(expected) {
   let was = null;
   const r = rewriteClaudeSettings((o) => {
@@ -16284,7 +16324,25 @@ async function handleRequest(req, res) {
             intoDraft: null, duplicate: true,
           });
         }
-        const out = await enqueueSend(name, typedKeys, { origin: 'client', submit: wantsEnter, shell });
+        // `/model <id>` from a session's model menu: session-only, so the host
+        // default the CLI saves alongside is put back once it lands.
+        const modelArg = !shell && wantsEnter ? modelCommandArg(typedKeys) : null;
+        let defaultBefore;
+        if (modelArg) {
+          const r = readClaudeSettings('model-command');
+          defaultBefore = r && r.settings ? (r.settings.model ?? null) : undefined;
+        }
+        const out = await enqueueSend(name, typedKeys, {
+          origin: 'client', submit: wantsEnter, shell,
+          ...(modelArg && defaultBefore !== undefined ? {
+            onSettle: (v) => {
+              if (v && v.result && v.result.ok) {
+                keepDefaultAfterModelCommand(name, defaultBefore, modelArg)
+                  .catch((e) => log(`models: ${name}: default watch failed: ${e.message}`));
+              }
+            },
+          } : {}),
+        });
         if (out.result && !out.result.ok) {
           return sendErr(res, out.result.code || 500, out.result.message);
         }

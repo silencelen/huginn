@@ -196,8 +196,25 @@ function readUpdateState(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
 }
 
+/**
+ * The model a `/model <name>` line names, or null for anything else — the bare
+ * `/model` (the picker), a line with more words, a shell command.
+ *
+ * Why it matters: Claude Code's `/model <name>` ALWAYS saves the name as the
+ * default for new sessions ("Set model to X and saved as your default for new
+ * sessions"); only the picker's `s` key is session-only. A session's model menu
+ * in Huginn types exactly this line, so the daemon recognises it and puts the
+ * saved default back afterwards (measured 2026-11-10: a running session keeps
+ * the model it was set to when the file is changed back under it).
+ */
+function modelCommandArg(text) {
+  if (typeof text !== 'string') return null;
+  const m = /^\/model[ \t]+(\S+)[ \t]*$/.exec(text.trim());
+  return m ? m[1] : null;
+}
+
 module.exports = {
   CONTEXT_SUFFIX_RE,
   parseModelId, familyOf, formatModel, selectModels, aliasModels, discoverModels, compareVersions,
-  pendingModels, readUpdateState,
+  pendingModels, readUpdateState, modelCommandArg,
 };

@@ -9,6 +9,15 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.19.5 — 2026-11-10
+
+### Changed
+- Picking a model in a session's model menu changes that session only. Claude Code's
+  `/model <name>` also saves the name as the default for new sessions; when a client sends that
+  line to a session, the daemon now puts the previous default back once Claude Code has written
+  it. The running session keeps the model it was set to. Typing `/model` at the session's own
+  keyboard is unchanged.
+
 ## 3.19.4 — 2026-11-10
 
 ### Added
