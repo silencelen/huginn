@@ -1101,3 +1101,62 @@ private fun PlanQuestionCard(
         NoteLine(note)
     }
 }
+
+// ---- a background agent's permission request (appd 3.20) ----------------------
+//
+// NOT a registry question: a background agent's request has no dialog anywhere —
+// Claude Code asks the permission hook and, with no answer, declines the tool
+// itself — so it is answered BY ID and lapses at its deadline. Same shell and
+// chip as a permission card so it reads as one of them; the words are
+// [AgentRequestLabels]'s, which both shells share.
+
+/**
+ * One background agent's waiting request: who asks, the command (whole, wrapped,
+ * scrolling inside its cap — the person is approving exactly these words) or a
+ * one-line summary of another tool's input, the deadline, and Allow / Deny.
+ * [note] is the daemon's answer when it was not "done" (409: answer on the pane).
+ */
+@Composable
+fun AgentRequestCard(
+    request: com.silencelen.huginn.data.AgentRequest,
+    answering: Boolean = false,
+    note: String? = null,
+    compact: Boolean = true,
+    /** The clock, for the "declined automatically" line; 0 draws none. */
+    nowMs: Long = 0L,
+    modifier: Modifier = Modifier,
+    onAnswer: (allow: Boolean) -> Unit,
+) {
+    val metrics = promptCardMetrics(compact)
+    Box(modifier) { CardShell(metrics) {
+        HeaderChip(AgentRequestLabels.HEADER, null)
+        Text(
+            AgentRequestLabels.headline(request), style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.testTag("agentRequest.headline"),
+        )
+        AgentRequestLabels.body(request)?.let { body ->
+            Spacer(Modifier.height(4.dp))
+            if (AgentRequestLabels.isBash(request)) {
+                WrappedMonoBlock(body, maxHeight = 140.dp, tag = "agentRequest.command")
+            } else {
+                Text(
+                    body, style = LocalMonoStyle.current, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("agentRequest.summary"),
+                )
+            }
+        }
+        AgentRequestLabels.expiry(request, nowMs)?.let {
+            Text(
+                it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp).testTag("agentRequest.expiry"),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        OptionLayout(wrap = true) {
+            Button(onClick = { onAnswer(true) }, enabled = !answering) { Text(AgentRequestLabels.ALLOW) }
+            OutlinedButton(onClick = { onAnswer(false) }, enabled = !answering) { Text(AgentRequestLabels.DENY) }
+        }
+        NoteLine(note)
+    } }
+}

@@ -216,6 +216,13 @@ data class Session(
      * it had no queue, so nothing was ever waiting.
      */
     val pendingSends: Int = 0,
+    /**
+     * Permission requests from this session's BACKGROUND agents waiting for an
+     * answer (`GET /v1/sessions/:name/agent-requests`). They have no dialog on
+     * the session's own pane, so they never make the session `attention` and
+     * never hold a send; the row only carries a quiet mark. 0 on an older daemon.
+     */
+    val agentRequests: Int = 0,
     val project: SessionProject? = null,
     /**
      * What the session's own status line reports (appd 3.14.0): the context
@@ -1977,6 +1984,44 @@ data class PendingModel(
     val needs: String = "",
 ) {
     fun toChoice(): ModelChoice = ModelChoice(id = id, display = display, family = family, needs = needs)
+}
+
+/**
+ * A permission request from one of a session's BACKGROUND agents
+ * (`GET /v1/sessions/:name/agent-requests`, appd 3.20).
+ *
+ * Claude Code asks the permission hook first and, for a background agent,
+ * declines the tool itself when the hook gives no answer — there is no dialog
+ * anywhere to answer it in. So the request is answered BY ID, and lapses at
+ * [expiresAt], after which the daemon hands it back for that decline.
+ */
+@Serializable
+data class AgentRequest(
+    val id: String = "",
+    val agentId: String? = null,
+    val agentType: String? = null,
+    val tool: String = "",
+    /** The tool input exactly as the hook received it. */
+    val input: JsonObject? = null,
+    /** A Bash request's command, pulled out by the daemon; null for other tools. */
+    val command: String? = null,
+    /** Epoch milliseconds. */
+    val askedAt: Long = 0,
+    /** Epoch milliseconds; 0 when the daemon gives no deadline. */
+    val expiresAt: Long = 0,
+)
+
+@Serializable
+data class AgentRequestList(val requests: List<AgentRequest> = emptyList())
+
+/** How an answer to an [AgentRequest] landed. */
+enum class AgentRequestAnswer {
+    /** The agent has it. */
+    OK,
+    /** Answered elsewhere, lapsed, or the agent moved on: drop the card. */
+    GONE,
+    /** A dialog for it is on the pane: it must be answered there. */
+    ON_PANE,
 }
 
 @Serializable

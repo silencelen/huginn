@@ -4046,6 +4046,8 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
      * every second, and a busy one updates as fast as it changes.
      */
     fun startScreenPolling(name: String) {
+        // Keyed on the name: geometry restarts the pane poll, not this one.
+        if (agentRequestsFor != name) startAgentRequestPolling(name)
         currentSession = name
         screenJob?.cancel()
         screenJob = viewModelScope.launch {
@@ -4108,7 +4110,74 @@ class HuginnViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- a background agent's permission requests (appd 3.20) -----------------
+    //
+    // No dialog on the pane, so they ride neither the screen poll nor the
+    // registry's questions: their own small route, read every few seconds while a
+    // session is open. They never make the session "need you" or hold a send.
+
+    private val _agentRequests = MutableStateFlow<List<com.silencelen.huginn.data.AgentRequest>>(emptyList())
+    val agentRequests: StateFlow<List<com.silencelen.huginn.data.AgentRequest>> = _agentRequests.asStateFlow()
+    /** The daemon's word on an answer that did not land, by request id. */
+    private val _agentRequestNotes = MutableStateFlow<Map<String, String>>(emptyMap())
+    val agentRequestNotes: StateFlow<Map<String, String>> = _agentRequestNotes.asStateFlow()
+    private val _agentRequestAnswering = MutableStateFlow<Set<String>>(emptySet())
+    val agentRequestAnswering: StateFlow<Set<String>> = _agentRequestAnswering.asStateFlow()
+    private var agentRequestJob: Job? = null
+    private var agentRequestsFor: String? = null
+
+    private fun startAgentRequestPolling(name: String) {
+        agentRequestJob?.cancel()
+        agentRequestsFor = name
+        _agentRequests.value = emptyList()
+        _agentRequestNotes.value = emptyMap()
+        agentRequestJob = viewModelScope.launch {
+            while (isActive) {
+                awaitReady()
+                runCatching { client.agentRequests(name) }.onSuccess { list ->
+                    _agentRequests.value = list
+                    val ids = list.map { it.id }.toSet()
+                    _agentRequestNotes.value = _agentRequestNotes.value.filterKeys { it in ids }
+                }
+                delay(AGENT_REQUEST_POLL_MS)
+            }
+        }
+    }
+
+    private fun stopAgentRequestPolling() {
+        agentRequestJob?.cancel()
+        agentRequestJob = null
+        agentRequestsFor = null
+        _agentRequests.value = emptyList()
+        _agentRequestNotes.value = emptyMap()
+    }
+
+    /** Allow or deny one background agent's request; a gone one drops quietly. */
+    fun answerAgentRequest(name: String, r: com.silencelen.huginn.data.AgentRequest, allow: Boolean) {
+        if (r.id in _agentRequestAnswering.value) return
+        _agentRequestAnswering.value = _agentRequestAnswering.value + r.id
+        viewModelScope.launch {
+            runCatching { client.answerAgentRequest(name, r.id, allow) }
+                .onSuccess { result ->
+                    when (result) {
+                        com.silencelen.huginn.data.AgentRequestAnswer.OK,
+                        com.silencelen.huginn.data.AgentRequestAnswer.GONE -> {
+                            _agentRequests.value = _agentRequests.value.filterNot { it.id == r.id }
+                            _agentRequestNotes.value = _agentRequestNotes.value - r.id
+                        }
+                        com.silencelen.huginn.data.AgentRequestAnswer.ON_PANE ->
+                            _agentRequestNotes.value = _agentRequestNotes.value + (r.id to AgentRequestLabels.ON_PANE)
+                    }
+                }
+                .onFailure { e ->
+                    _agentRequestNotes.value = _agentRequestNotes.value + (r.id to (e.message ?: "Could not answer"))
+                }
+            _agentRequestAnswering.value = _agentRequestAnswering.value - r.id
+        }
+    }
+
     fun stopScreenPolling() {
+        stopAgentRequestPolling()
         screenJob?.cancel()
         screenJob = null
         currentSession = null
@@ -5493,3 +5562,6 @@ class AttachmentSlots {
         const val SETTLE_TIMEOUT_MS: Long = 20_000
     }
 }
+
+/** How often an open session re-reads its background agents' waiting requests. */
+private const val AGENT_REQUEST_POLL_MS = 5_000L

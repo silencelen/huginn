@@ -515,6 +515,28 @@ fun SessionView(store: AppStore, name: String) {
         // re-opened): Claude Code 2.1.306 answers a parked request whole through
         // its own hook, so the compact card can finish every shape the daemon's
         // registry binds. The link bar stays for everything it does not.
+        // A BACKGROUND AGENT's waiting requests (appd 3.20). They have no dialog
+        // on the pane, so no tab can answer them but this: drawn on every face,
+        // above the question card, and never a reason to hold a send.
+        val agentRequests by controller.agentRequests.collectAsState()
+        if (agentRequests.isNotEmpty()) {
+            val agentNotes by controller.agentRequestNotes.collectAsState()
+            val agentAnswering by controller.agentRequestAnswering.collectAsState()
+            var agentNow by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(agentRequests) {
+                while (true) { agentNow = System.currentTimeMillis(); kotlinx.coroutines.delay(15_000) }
+            }
+            agentRequests.forEach { r ->
+                com.silencelen.huginn.ui.AgentRequestCard(
+                    request = r,
+                    answering = r.id in agentAnswering,
+                    note = agentNotes[r.id],
+                    nowMs = agentNow,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    onAnswer = { allow -> controller.answerAgentRequest(r, allow) },
+                )
+            }
+        }
         if (PromptGate.visible(hasQuestion = hasQuestion, face = tab.face)) {
             val placement = PromptPlacement.of(tab.face, PromptSurface.SESSION, bound = cardQuestion != null)
             BoxWithConstraints(Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {

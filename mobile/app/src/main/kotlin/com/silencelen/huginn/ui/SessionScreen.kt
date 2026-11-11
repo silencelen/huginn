@@ -36,11 +36,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -189,6 +191,11 @@ fun SessionScreen(
     /** The hoisted question-card drafts and setter — persistence across tabs/chats. */
     questionDrafts: Map<String, QuestionDraft> = emptyMap(),
     onQuestionDraft: (String, QuestionDraft) -> Unit = { _, _ -> },
+    /** A background agent's waiting permission requests (appd 3.20), drawn as cards above the composer. */
+    agentRequests: List<com.silencelen.huginn.data.AgentRequest> = emptyList(),
+    agentRequestNotes: Map<String, String> = emptyMap(),
+    agentRequestAnswering: Set<String> = emptySet(),
+    onAnswerAgentRequest: (com.silencelen.huginn.data.AgentRequest, Boolean) -> Unit = { _, _ -> },
 ) {
     // The tab index in the form the shared rules reason about, so "which face is
     // showing" is answered the same way here as it is on the desktop rather than
@@ -303,6 +310,10 @@ fun SessionScreen(
                     onAnswerQuestion = onAnswerQuestion,
                     questionDrafts = questionDrafts,
                     onQuestionDraft = onQuestionDraft,
+                    agentRequests = agentRequests,
+                    agentRequestNotes = agentRequestNotes,
+                    agentRequestAnswering = agentRequestAnswering,
+                    onAnswerAgentRequest = onAnswerAgentRequest,
                     onOpenScreen = { onTab(1) },
                     quickActions = quickActions,
                     onSelectionAction = onSelectionAction,
@@ -398,6 +409,11 @@ private fun SessionConversation(
     onAnswerQuestion: (com.silencelen.huginn.data.SessionQuestion, kotlinx.serialization.json.JsonObject) -> Unit = { _, _ -> },
     questionDrafts: Map<String, QuestionDraft> = emptyMap(),
     onQuestionDraft: (String, QuestionDraft) -> Unit = { _, _ -> },
+    /** A background agent's waiting permission requests (appd 3.20), drawn as cards above the composer. */
+    agentRequests: List<com.silencelen.huginn.data.AgentRequest> = emptyList(),
+    agentRequestNotes: Map<String, String> = emptyMap(),
+    agentRequestAnswering: Set<String> = emptySet(),
+    onAnswerAgentRequest: (com.silencelen.huginn.data.AgentRequest, Boolean) -> Unit = { _, _ -> },
     spinner: String?,
     statusLines: List<String>,
     transientLine: String?,
@@ -740,6 +756,25 @@ private fun SessionConversation(
         // and the composer got the remainder — a sliver with the keyboard up.
         ComposerStack(
             card = {
+              Column {
+                // A BACKGROUND AGENT's requests first: they have no dialog on the
+                // pane, so nothing else on screen can answer them (appd 3.20).
+                if (agentRequests.isNotEmpty()) {
+                    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+                    LaunchedEffect(agentRequests) {
+                        while (true) { nowMs = System.currentTimeMillis(); delay(15_000) }
+                    }
+                    agentRequests.forEach { r ->
+                        AgentRequestCard(
+                            request = r,
+                            answering = r.id in agentRequestAnswering,
+                            note = agentRequestNotes[r.id],
+                            nowMs = nowMs,
+                            onAnswer = { allow -> onAnswerAgentRequest(r, allow) },
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        )
+                    }
+                }
                 if (cardQuestion != null) {
                     // The card scrolls inside a height cap so a tall question's
                     // lower options and its OWN answer buttons stay reachable
@@ -769,6 +804,7 @@ private fun SessionConversation(
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                     )
                 }
+              }
             },
             // The long-press verbs, ABOVE the composer and below everything else, so
             // the text being acted on stays visible while the verb is chosen.

@@ -398,6 +398,7 @@ class SessionController(
     // ------------------------------------------------------------- lifecycle
 
     fun start() {
+        scope.launch { agentRequestLoop() }
         scope.launch { transcriptLoop() }
         scope.launch { agentLoop() }
         scope.launch { agentListLoop() }
@@ -968,6 +969,55 @@ class SessionController(
         }
     }
 
+    // ---------------------------------- a background agent's requests (appd 3.20)
+    //
+    // No dialog on the pane, so neither the screen poll nor the registry carries
+    // them: their own small route, read every few seconds while the view is open.
+    // They never make the session "need you" and never hold a send.
+
+    private val _agentRequests = MutableStateFlow<List<com.silencelen.huginn.data.AgentRequest>>(emptyList())
+    val agentRequests: StateFlow<List<com.silencelen.huginn.data.AgentRequest>> = _agentRequests.asStateFlow()
+    private val _agentRequestNotes = MutableStateFlow<Map<String, String>>(emptyMap())
+    val agentRequestNotes: StateFlow<Map<String, String>> = _agentRequestNotes.asStateFlow()
+    private val _agentRequestAnswering = MutableStateFlow<Set<String>>(emptySet())
+    val agentRequestAnswering: StateFlow<Set<String>> = _agentRequestAnswering.asStateFlow()
+
+    private suspend fun agentRequestLoop() {
+        while (true) {
+            runCatching { client.agentRequests(name) }.onSuccess { list ->
+                _agentRequests.value = list
+                val ids = list.map { it.id }.toSet()
+                _agentRequestNotes.value = _agentRequestNotes.value.filterKeys { it in ids }
+            }
+            kotlinx.coroutines.delay(AGENT_REQUEST_POLL_MS)
+        }
+    }
+
+    /** Allow or deny one background agent's request; a gone one drops quietly. */
+    fun answerAgentRequest(r: com.silencelen.huginn.data.AgentRequest, allow: Boolean) {
+        if (r.id in _agentRequestAnswering.value) return
+        _agentRequestAnswering.value = _agentRequestAnswering.value + r.id
+        scope.launch {
+            runCatching { client.answerAgentRequest(name, r.id, allow) }
+                .onSuccess { result ->
+                    when (result) {
+                        com.silencelen.huginn.data.AgentRequestAnswer.OK,
+                        com.silencelen.huginn.data.AgentRequestAnswer.GONE -> {
+                            _agentRequests.value = _agentRequests.value.filterNot { it.id == r.id }
+                            _agentRequestNotes.value = _agentRequestNotes.value - r.id
+                        }
+                        com.silencelen.huginn.data.AgentRequestAnswer.ON_PANE ->
+                            _agentRequestNotes.value = _agentRequestNotes.value +
+                                (r.id to com.silencelen.huginn.ui.AgentRequestLabels.ON_PANE)
+                    }
+                }
+                .onFailure { e ->
+                    _agentRequestNotes.value = _agentRequestNotes.value + (r.id to (e.message ?: "Could not answer"))
+                }
+            _agentRequestAnswering.value = _agentRequestAnswering.value - r.id
+        }
+    }
+
     // --------------------------------------------------------------- answering
     //
     // Two routes. `answerQuestion` is the card's (since 2026-10-23): it answers a
@@ -1430,3 +1480,6 @@ object SendQueue {
         }
     }
 }
+
+/** How often an open session view re-reads its background agents' waiting requests. */
+private const val AGENT_REQUEST_POLL_MS = 5_000L

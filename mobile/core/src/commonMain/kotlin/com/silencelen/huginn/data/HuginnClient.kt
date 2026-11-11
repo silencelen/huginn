@@ -1008,6 +1008,38 @@ class HuginnClient(
         decode<SessionQuestions>(call("/v1/chats/${seg(chatId)}/questions")).questions
 
     /**
+     * The session's background agents' waiting permission requests
+     * (`GET /v1/sessions/:name/agent-requests`, appd 3.20). A daemon older than
+     * the route answers 404, which is read as "none" — silently, since nothing
+     * a person can do changes it.
+     */
+    suspend fun agentRequests(session: String): List<AgentRequest> = try {
+        decode<AgentRequestList>(call("/v1/sessions/${seg(session)}/agent-requests")).requests
+    } catch (e: HuginnException) {
+        if (e.code == 404) emptyList() else throw e
+    }
+
+    /**
+     * Answers one background agent's request by its id. 404 is [AgentRequestAnswer.GONE]
+     * (answered elsewhere, lapsed, the agent moved on) and 409 is
+     * [AgentRequestAnswer.ON_PANE] (its dialog is on the pane, so it is answered
+     * there); every other failure throws as usual.
+     */
+    suspend fun answerAgentRequest(session: String, id: String, allow: Boolean): AgentRequestAnswer {
+        val body = buildJsonObject { put("decision", JsonPrimitive(if (allow) "allow" else "deny")) }
+        val resp = http().request {
+            build("/v1/sessions/${seg(session)}/agent-requests/${seg(id)}", HttpMethod.Post, Tier.NORMAL, body)
+        }
+        val code = resp.status.value
+        return when {
+            resp.status.isSuccess() -> AgentRequestAnswer.OK
+            code == 404 -> AgentRequestAnswer.GONE
+            code == 409 -> AgentRequestAnswer.ON_PANE
+            else -> throw errorFrom(code, resp.bodyAsText())
+        }
+    }
+
+    /**
      * The one answer route. A 409 (`gone`, `changed`, `unbound`) decodes into the
      * result rather than throwing; so does a session request's create refusal —
      * a 400 or 409 carrying `{error, question}`, where the question is STILL

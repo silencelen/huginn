@@ -509,6 +509,14 @@ private fun SessionRow(
                     Muted("${session.pendingSends} queued", Modifier.padding(end = Scale.s8))
                 }
             }
+            // A background agent waiting on an answer (appd 3.20): quiet, never the
+            // attention colour — its request has no dialog on this session's pane,
+            // and the open session view is where it is answered.
+            com.silencelen.huginn.ui.AgentRequestLabels.rowMark(session.agentRequests)?.let { mark ->
+                Tip("A background agent is waiting for Allow or Deny — open the session to answer") {
+                    Muted(mark, Modifier.padding(end = Scale.s8))
+                }
+            }
             // A restart the daemon is holding for this session: the same shape as
             // the queued send above, with what it waits on in the tip. Gone once
             // the row itself reports the cycle (see AppStore.restartHolds).

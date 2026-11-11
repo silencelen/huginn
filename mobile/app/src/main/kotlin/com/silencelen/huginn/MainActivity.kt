@@ -875,6 +875,9 @@ fun HuginnApp(
     val archiveRead by vm.archiveRead.collectAsState()
     val rounds by vm.rounds.collectAsState()
     val questionDrafts by vm.questionDrafts.collectAsState()
+    val agentRequests by vm.agentRequests.collectAsState()
+    val agentRequestNotes by vm.agentRequestNotes.collectAsState()
+    val agentRequestAnswering by vm.agentRequestAnswering.collectAsState()
     val recentDirs by vm.recentDirs.collectAsState()
     val chatQuestions by vm.chatQuestions.collectAsState()
     val chatQuestionNote by vm.chatQuestionNote.collectAsState()
@@ -1766,6 +1769,10 @@ fun HuginnApp(
                 onAnswerQuestion = { q, body -> vm.answerQuestion(name, q, body) },
                 questionDrafts = questionDrafts,
                 onQuestionDraft = { id, d -> vm.setQuestionDraft(id, d) },
+                agentRequests = agentRequests,
+                agentRequestNotes = agentRequestNotes,
+                agentRequestAnswering = agentRequestAnswering,
+                onAnswerAgentRequest = { r, allow -> vm.answerAgentRequest(name, r, allow) },
                 onLive = { vm.sendLive(name, it) },
                 // Live typing is what entitles this phone to reshape the owner's
                 // tmux window; leaving it hands the window straight back.

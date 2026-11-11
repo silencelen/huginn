@@ -642,6 +642,9 @@ private fun SessionRow(
                 // FIRST: a message this person typed is still waiting to reach the
                 // pane, and every other fact on this line is about the terminal.
                 SendQueue.rowMark(s.pendingSends)?.let { add(it) }
+                // A background agent waiting on an answer: quiet, never yellow —
+                // its request has no dialog on this session's pane.
+                AgentRequestLabels.rowMark(s.agentRequests)?.let { add(it) }
                 runtimeMark?.let { add(it) }
                 if (s.cols > 0) add("${s.cols}x${s.rows}")
                 if (s.attachedClients > 0) add("${s.attachedClients} attached")
