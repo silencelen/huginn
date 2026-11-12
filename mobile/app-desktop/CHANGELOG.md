@@ -1,5 +1,12 @@
 # Huginn Desktop changelog
 
+## 2.13.1
+
+### Fixed
+- Windows: after an update, huginn core could open a console window showing its log that did not
+  go away, and closing it stopped the core. The core now starts with no window. Carries huginn
+  core 2.13.1.
+
 ## 2.13.0
 
 ### Added

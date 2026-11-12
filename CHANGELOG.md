@@ -8,6 +8,13 @@ and the daemon ([`server/appd/CHANGELOG.md`](server/appd/CHANGELOG.md)).
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions use
 [SemVer](https://semver.org/).
 
+## [2.13.1] - 2026-11-11
+
+### Fixed
+- Windows: when an update had to start huginn core itself, rather than through its Task
+  Scheduler task, the core opened a console window showing its log, and closing that window
+  stopped the core. It now starts with no window.
+
 ## [2.13.0] - 2026-11-11
 
 ### Changed

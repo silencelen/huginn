@@ -86,14 +86,14 @@ func WaitExit(pid int, timeout time.Duration) bool {
 // the process belongs to no job of the caller's: an ssh session, the desktop
 // app or a console that started it can end without taking it along. Used to
 // start the core directly when Task Scheduler is holding its task back
-// (Energy Saver on battery, no logon server reachable).
+// (Energy Saver on battery, no logon server reachable). Its console is created
+// hidden (see WMICreateScript).
 func StartIndependent(bin string, args ...string) error {
 	line := `"` + bin + `"`
 	for _, a := range args {
 		line += " " + a
 	}
-	ps := "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '" +
-		strings.ReplaceAll(line, "'", "''") + "' }; exit [int]$r.ReturnValue"
+	ps := WMICreateScript(line)
 	u := utf16.Encode([]rune(ps))
 	b := make([]byte, len(u)*2)
 	for i, c := range u {
