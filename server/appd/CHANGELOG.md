@@ -9,6 +9,21 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.21.0 — 2026-11-13
+
+### Added
+- Announcements can be held while a display that mirrors a phone's notifications, such as smart
+  glasses, is showing Huginn itself, so a notification no longer lands on top of the page being
+  read there. `POST /v1/alerts/hold` with `{seconds, by?}` begins a hold of up to 120 seconds or
+  extends the live one, and `DELETE /v1/alerts/hold` ends it. During a hold, session, project and
+  chat alerts are kept back, and a phone registered for push sees `GET /v1/watch` as it stood when
+  the hold began, so it posts nothing of its own either. When the hold ends, what was kept back is
+  sent if it is still true: a question answered meanwhile is dropped, and so is a finish whose
+  session is working again. The answer to each hold request lists what is kept back, so the
+  display can show it in its own way, and `GET /v1/alerts` reports `hold` and `held`. A hold lasts
+  at most 10 minutes of unbroken renewals before what it kept back goes out. Account switch, usage
+  limit, project change and round notifications are not held.
+
 ## 3.20.1 — 2026-11-12
 
 ### Added

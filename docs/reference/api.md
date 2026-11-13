@@ -111,7 +111,7 @@ pin changes when the certificate is replaced.
 
 | Stream | How |
 |---|---|
-| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. It answers `503` when tmux cannot be read, never an empty session list. |
+| Changes | `GET /v1/watch?stream=1` is a server-sent event stream. An `event: state` frame arrives when sessions, chats or usage change; a comment line (`: ka <time>`) every 25 seconds proves the connection is alive; `event: bye` after 30 minutes means reconnect. Without `stream=1`, the route is a long poll: pass the last `hash` you saw. It answers `503` when tmux cannot be read, never an empty session list. While announcements are held (`POST /v1/alerts/hold`), a phone registered for push gets the digest from when the hold began, in all three forms. |
 | A chat run | `POST /v1/chats/<id>/messages?stream=1` answers with an event stream of the run. Each event has an `id:` (its sequence number) and one of the types `started`, `delta`, `assistant`, `tool_start`, `tool`, `result`, `error`, `done`. Reattach after a dropped connection with `GET /v1/chats/<id>/stream?since=<last id>`; the daemon replays what you missed. |
 | A session's screen | `GET /v1/sessions/<name>/screen?hash=<h>&wait=<ms>` holds the request until the screen differs from `h`, or the wait ends. |
 
@@ -404,7 +404,9 @@ core. They are not meant for scripts.
 
 | Method | Path | What it does |
 |---|---|---|
-| GET, POST | `/v1/alerts` | Server-sent alerts through the relay script: `{enabled, mode: "fallback" \| "always"}`. |
+| GET, POST | `/v1/alerts` | Server-sent alerts through the relay script: `{enabled, mode: "fallback" \| "always"}`. `GET` also returns `hold` (`{since, until, by}` in epoch seconds, or `null`) and `held`, the number of alerts a hold is keeping back. |
+| POST | `/v1/alerts/hold` | `{seconds, by?}`: hold announcements for `seconds` (1 to 120), for a display that mirrors a phone's notifications and is showing Huginn itself; `by` (up to 40 characters) names the holder in the log. Begins a hold or extends the live one, so the holder repeats the call while it is showing. While a hold is live, session, project and chat alerts are decided as usual and kept back, and a phone registered for push is answered on `GET /v1/watch` with the digest from when the hold began, so it posts nothing of its own; other clients see every change. Answers `{hold: {since, until, by}, held: [{key, kind, subject, title, text, at}]}`, `held` being what is kept back, for the holder to show itself. A hold repeated without a break for 10 minutes ends on the call that crosses it, which answers `{hold: null, released: true, held}`; the next call begins a new one. When a hold ends, what was kept back is sent if it is still true. `400` when `seconds` is not a number in range or `by` is not a string. Not kept across a restart; what is kept back is. |
+| DELETE | `/v1/alerts/hold` | End the hold now, if there is one, and send what it kept back: `{hold: null, held}`, with `held` as it stood before sending. |
 | GET | `/v1/push` | Whether push is set up, and the registered phones (never their tokens). |
 | POST | `/v1/push/register` | `{installId, token, model?}`: register a phone for push. |
 

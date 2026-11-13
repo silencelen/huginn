@@ -50,6 +50,7 @@ const seedstate = require('./lib/seedstate');
 const { pushPending, takePending, clearPending, drainPending, queuedEvents } = require('./lib/chatqueue');
 const { digest } = require('./lib/watch');
 const { decideAlerts, routeAlerts, telegramText, pruneSent, carryRunStarts, projectSessions, carryProjectBursts } = require('./lib/alerts');
+const alertHoldLib = require('./lib/alerthold');
 const stateWatch = require('./lib/statewatch');
 const screenWait = require('./lib/screenwait');
 const clientsLib = require('./lib/clients');
@@ -121,7 +122,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.20.1';
+const VERSION = '3.21.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -14327,6 +14328,75 @@ let alertBusy = false;
 // daemon with alerts off watches exactly as it always did.
 let lastAlertStates = null;
 let lastAlertTickAt = 0;
+
+// ---- holding announcements while a display shows Huginn (lib/alerthold.js) ----
+//
+// The hold itself, {since, until, by} in ms, or null. IN MEMORY ONLY, on purpose:
+// it lasts seconds and its holder renews it, so a display that has gone away
+// stops holding by saying nothing, and so does a daemon that restarted. What is
+// WAITING lives in the alert state file (`held`), which a restart keeps.
+let alertHold = null;
+// What GET /v1/watch tells a held phone for as long as the hold lasts: the digest
+// as it stood when the hold began. Null until the first good look after that.
+//
+// ⚠ THE PUSH IS ONLY ONE OF TWO ANNOUNCERS. A phone compares the watch digest on
+// its own and posts "needs you" and a chat's finish from it with no push
+// involved, so holding the daemon's alerts alone would move those notifications
+// to the phone's own watcher, not hold them. A digest that stands still is what
+// holding them looks like from the phone: nothing changed, nothing to say, and
+// its parked request stays parked. When the hold ends the digest moves and the
+// phone compares against the baseline it had before, as after any quiet spell.
+let alertHoldDigest = null;
+// Which callers that is: the installs registered for push when the hold began or
+// was last renewed. A phone's notifications are what a display mirrors; a client
+// with no push token (the desktop app's stream) is not behind any display, and
+// goes on seeing every change as it happens.
+let alertHoldInstalls = new Set();
+
+function endAlertHold(why) {
+  if (!alertHold) return;
+  log(`alerts: hold by ${alertHold.by} over (${why}) after ${Math.round((Date.now() - alertHold.since) / 1000)} s`);
+  alertHold = null;
+  alertHoldDigest = null;
+  alertHoldInstalls = new Set();
+}
+
+/** The live hold, or null. One that was not renewed is ended here, by whoever looks first. */
+function liveAlertHold(now) {
+  if (alertHold && !alertHoldLib.live(alertHold, now)) endAlertHold('not renewed');
+  return alertHold;
+}
+
+/**
+ * The digest GET /v1/watch answers this caller with: the live one, or, for a
+ * phone behind a hold, the one from when the hold began.
+ *
+ * @param installId the caller's `x-huginn-client`, '' when it sent none
+ * @param sess      the session list this look read; null when tmux did not answer
+ * @param d         the digest built from it
+ */
+function watchDigestFor(installId, sess, d) {
+  // A failed look is never kept and never replaced: every caller of the watch
+  // route treats `sess === null` as "unknown" before it reads the digest at all.
+  if (sess === null || !liveAlertHold(Date.now())) return d;
+  // The look taken when the hold began failed: this is the first good one since.
+  if (!alertHoldDigest) alertHoldDigest = d;
+  return installId && alertHoldInstalls.has(installId) ? alertHoldDigest : d;
+}
+
+/**
+ * An alert tick now rather than at the next beat of the timer: a hold has just
+ * ended and what waited should not wait ten seconds more. If a tick was already
+ * in flight it began under the hold and will only queue, so one more follows it.
+ */
+function alertTickSoon() {
+  const wasBusy = alertBusy;
+  alertTick().catch((e) => log('alerts: tick after a hold failed', e.message));
+  if (wasBusy) {
+    setTimeout(() => { alertTick().catch((e) => log('alerts: tick after a hold failed', e.message)); }, 1500).unref();
+  }
+}
+
 async function alertTick() {
   const st = loadAlertState();
   if (!st.enabled) return;
@@ -14334,13 +14404,13 @@ async function alertTick() {
   alertBusy = true;
   lastAlertTickAt = Date.now();
   try {
-    await alertTickInner(st);
+    await alertTickInner(st, liveAlertHold(Date.now()));
   } finally {
     alertBusy = false;
   }
 }
 
-async function alertTickInner(st) {
+async function alertTickInner(st, hold = null) {
   const now = Date.now();
   const sessions = await listSessions({ shared: true });
   // Unknown, not empty. Diffing against a snapshot we failed to take is how a
@@ -14392,7 +14462,41 @@ async function alertTickInner(st) {
     chats: d.chats, chatAsks: chatAsksNow(),
   };
 
-  const { alerts, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
+  const { alerts: decided, sentUpdates } = decideAlerts(st.prev, observation, st.sent, now, st.prevAt || 0);
+
+  // ---- a hold: a display is showing Huginn itself (lib/alerthold.js) ----------
+  //
+  // DECIDING is untouched. The edges above are consumed and the baseline below
+  // moves on as on any tick, so nothing is decided twice and a run that began and
+  // ended inside a hold is still seen. Only the SAYING waits: what was decided
+  // goes into `st.held` and onto no channel, and the first tick after the hold
+  // sends what of it is still true, ahead of its own alerts and through the same
+  // enrichment and delivery as they get.
+  //
+  // With no hold and nothing waiting this is the tick it always was.
+  let alerts = decided;
+  // The released alerts as they were queued, by key. Enrichment writes onto the
+  // alert it is handed, so the ones sent on are copies; these are what goes back
+  // into the queue when one of them reaches nobody (see `undelivered` below).
+  const releasedRaw = new Map();
+  const waiting = Array.isArray(st.held) ? st.held : [];
+  if (hold) {
+    const t = alertHoldLib.take(waiting, decided, now);
+    for (const a of t.queued) log(`alerts: holding ${a.kind} for ${a.subject} (${hold.by})`);
+    for (const a of t.cancelled) log(`alerts: ${a.subject} was answered while its question was held — neither is sent`);
+    st.held = t.held;
+    alerts = [];
+  } else if (waiting.length) {
+    const r = alertHoldLib.release(waiting, observation);
+    for (const a of r.dropped) log(`alerts: held ${a.kind} for ${a.subject} is no longer true — not sent`);
+    for (const a of r.alerts) releasedRaw.set(a.key, a);
+    if (r.alerts.length) log(`alerts: sending ${r.alerts.length} held alert(s)`);
+    alerts = [
+      ...r.alerts.map(({ heldAt, ...a }) => a),
+      ...decided.filter((a) => !releasedRaw.has(a.key)),
+    ];
+    st.held = [];
+  }
 
   // "A session needs you" is not much use on a lock screen — it says something is
   // wrong without saying what, so the only possible response is to go and look.
@@ -14505,6 +14609,19 @@ async function alertTickInner(st) {
   if (undelivered.length) {
     const prevObs = st.prev || {};
     for (const a of undelivered) {
+      // ⚠ A RELEASED ALERT HAS NO EDGE TO ROLL BACK TO. Its transition was
+      // consumed ticks ago, while the hold was live, so restoring the previous
+      // observation would recreate nothing and the alert would be gone for good.
+      // It goes back into the queue as it was held, and the next tick releases
+      // it again. That repeats once a tick for as long as nothing can be
+      // reached, the same beat as the edge retry below, and no longer than the
+      // alert stays true: release drops it the moment it is not.
+      const raw = releasedRaw.get(a.key);
+      if (raw) {
+        st.held = alertHoldLib.take(st.held, [raw], now).held;
+        log(`alerts: held ${a.kind} for ${a.subject} reached nobody — kept for the next tick`);
+        continue;
+      }
       if (a.kind === 'chat_attention') {
         // The request leaves this observation, so the next tick sees it arrive
         // again and re-decides it; the chat's other requests stay as seen.
@@ -14569,6 +14686,8 @@ async function alertTickInner(st) {
     // observation over that would defeat it. Keep only the suppression record
     // and let the next tick take a clean baseline.
     fresh.sent = st.sent;
+    // `held` is left as the switch left it, which is empty: what waited belonged
+    // to the baseline that has just been thrown away.
     log('alerts: settings changed during the tick; baseline left to the next one');
   } else {
     fresh.sent = st.sent;
@@ -14576,6 +14695,10 @@ async function alertTickInner(st) {
     fresh.prevAt = st.prevAt;
     fresh.delivered = st.delivered;
     fresh.lastAt = st.lastAt;
+    // What a hold is keeping back (lib/alerthold.js). The tick owns it like the
+    // baseline above: only a tick adds to it or sends from it.
+    if (Array.isArray(st.held) && st.held.length) fresh.held = st.held;
+    else delete fresh.held;
   }
   saveAlertState(fresh);
 }
@@ -14960,6 +15083,10 @@ async function handleRequest(req, res) {
         pushConfigured: !!fcm,
         pushDevices: pushLib.count(loadPushState()),
         pushed: pushLib.totals(loadPushState()).pushed,
+        // A display is showing Huginn itself and has asked for announcements to
+        // wait (POST /v1/alerts/hold): until when, and how many are waiting.
+        hold: alertHoldLib.view(liveAlertHold(Date.now()), Date.now()),
+        held: alertHoldLib.queue(st.held).length,
       });
     }
 
@@ -15103,12 +15230,56 @@ async function handleRequest(req, res) {
         // Forget the previous observation when switching on, so turning it on
         // does not announce whatever was already true.
         if (body.enabled) st.prev = null;
+        // And whatever a hold was keeping back (lib/alerthold.js). It was
+        // decided against the baseline that has just gone, and switched off
+        // means nothing is said at all, later included.
+        delete st.held;
       }
       if (body.mode === 'fallback' || body.mode === 'always') st.mode = body.mode;
       saveAlertState(st);
       if (st.enabled) startAlertWatcher();
       log(`alerts: ${st.enabled ? 'enabled' : 'disabled'} mode=${st.mode || 'fallback'}`);
       return sendJson(res, 200, { enabled: !!st.enabled, mode: st.mode || 'fallback' });
+    }
+
+    // --- a display that is showing Huginn itself asks for announcements to wait
+    //     (lib/alerthold.js; the state and its helpers sit above alertTick)
+    if (req.method === 'POST' && p === '/v1/alerts/hold') {
+      const body = await readJsonBody(req);
+      const want = alertHoldLib.holdRequest(body);
+      if (want.error) return sendErr(res, 400, want.error);
+      const now = Date.now();
+      const was = liveAlertHold(now);
+      const next = alertHoldLib.extend(was, want, now);
+      // What is waiting, as it stood when this call arrived: the holder shows it
+      // itself, which is the reason it is told.
+      const held = alertHoldLib.heldView(loadAlertState().held);
+      if (next.released) {
+        endAlertHold(`renewed for ${Math.round(alertHoldLib.MAX_RUN_MS / 60000)} minutes without a break`);
+        alertTickSoon();
+        return sendJson(res, 200, { hold: null, released: true, held });
+      }
+      alertHold = next.hold;
+      alertHoldInstalls = new Set(pushLib.list(loadPushState()).map((d) => d.installId));
+      if (!was) {
+        log(`alerts: hold begun by ${next.hold.by} (${alertHoldInstalls.size} phone(s) behind it)`);
+        // The digest those phones are told for the length of the hold. A look
+        // that fails is not kept: the first good one after it is (watchDigestFor).
+        const sess = await listSessions();
+        if (alertHold === next.hold && !alertHoldDigest && sess !== null) {
+          alertHoldDigest = digest(sess, chatStates(), headroomFacts());
+        }
+      }
+      return sendJson(res, 200, { hold: alertHoldLib.view(alertHold, Date.now()), held });
+    }
+    if (req.method === 'DELETE' && p === '/v1/alerts/hold') {
+      const held = alertHoldLib.heldView(loadAlertState().held);
+      const was = liveAlertHold(Date.now());
+      if (was) endAlertHold('ended by its holder');
+      // Straight away, not at the timer's next beat; and also when no hold was
+      // live but something still waits (one that ran out a moment ago).
+      if (was || held.length) alertTickSoon();
+      return sendJson(res, 200, { hold: null, held });
     }
 
     // --- the change signal a watching phone parks on
@@ -15145,7 +15316,9 @@ async function handleRequest(req, res) {
         while (!req.destroyed && !res.writableEnded) {
           const sess = await listSessions({ shared: !firstLook });
           firstLook = false;
-          const d = digest(sess ?? [], chatStates(), headroomFacts());
+          // For a phone behind a hold this is the digest from when the hold began
+          // (watchDigestFor), so no frame goes out until it ends.
+          const d = watchDigestFor(streamInstall, sess, digest(sess ?? [], chatStates(), headroomFacts()));
           // A failed observation must not be published as a change: the phone
           // would see every session disappear and act on it.
           if (sess !== null && d.hash !== last) {
@@ -15208,12 +15381,16 @@ async function handleRequest(req, res) {
       // for as long as a phone is watching.
       // The look itself asks tmux, so tmux not answering is a 503 and never an
       // older answer; only the re-looks of a parked poll share the listing.
+      const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
       let sess = await listSessions();
-      let d = digest(sess ?? [], chatStates(), headroomFacts());
+      // A phone behind a hold is answered with the digest from when the hold
+      // began (watchDigestFor): its poll stays parked, and a look with no hash
+      // finds nothing new, until the hold ends.
+      let d = watchDigestFor(installId, sess, digest(sess ?? [], chatStates(), headroomFacts()));
       while (known && (sess === null || d.hash === known) && Date.now() < deadline && !req.destroyed) {
         await sleep(3000);
         sess = await listSessions({ shared: true });
-        d = digest(sess ?? [], chatStates(), headroomFacts());
+        d = watchDigestFor(installId, sess, digest(sess ?? [], chatStates(), headroomFacts()));
       }
       if (req.destroyed) return;
       // ⚠ A FAILED LOOK IS NOT AN EMPTY HOST, here any more than in the stream
@@ -15225,7 +15402,6 @@ async function handleRequest(req, res) {
       // as new. GET /v1/sessions answers this failure with a 503, and each of
       // those callers keeps its baseline when the call fails.
       if (sess === null) return sendErr(res, 503, 'tmux is not answering right now');
-      const installId = String(req.headers['x-huginn-client'] || '').trim().slice(0, 64);
       const pushSt = installId ? loadPushState() : null;
       return sendJson(res, 200, {
         ...d,
