@@ -9,6 +9,14 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.20.1 — 2026-11-12
+
+### Added
+- `POST /v1/chats` takes `notify: false`, for a client that shows a chat's answers itself. The
+  finished runs of such a chat are not announced: no `chat_finished` alert is sent, and the chat
+  is left out of `GET /v1/watch`, so a watching phone posts nothing for it either. It is listed,
+  read and continued like any other chat, and the setting is fixed when the chat is made.
+
 ## 3.20.0 — 2026-11-10
 
 ### Added

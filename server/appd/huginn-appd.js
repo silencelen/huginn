@@ -121,7 +121,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.20.0';
+const VERSION = '3.20.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -791,6 +791,22 @@ function fastDecision(v) {
   if (v === undefined) return { fast: undefined };
   if (v === null || typeof v === 'boolean') return { fast: v };
   return { error: 'fast must be true, false or null (the host default)' };
+}
+
+/**
+ * A chat's `notify`: false makes a chat whose finished runs are never announced.
+ * It is for a client that shows the answer itself, in its own place, to a person
+ * who is looking at it: there a `chat_finished` push only repeats the answer, and
+ * on a phone whose notifications are mirrored to another display it lands on top
+ * of what it repeats. True, or not mentioned, is the ordinary chat.
+ *
+ * Set at creation and not changed afterwards: PATCH does not take it, so a chat
+ * cannot be silenced, or unsilenced, by whoever later holds its id.
+ */
+function notifyDecision(v) {
+  if (v === undefined || v === true) return { notify: true };
+  if (v === false) return { notify: false };
+  return { error: 'notify must be true or false' };
 }
 
 function effortDecision(v) {
@@ -6723,6 +6739,15 @@ function chatStates() {
     // alert watcher and once as the report — and two notifications for one event
     // is how a reader learns to ignore the channel.
     if (m.roundId) continue;
+    // A chat made with `notify: false` (notifyDecision): whoever made it shows the
+    // answer itself. Left out HERE, and not in decideAlerts, because this list is
+    // also the watch digest: a phone compares that on its own and posts the same
+    // "finished" from it, with no push involved, so dropping only the push would
+    // move the notification rather than remove it. The chat stays in GET
+    // /v1/chats and opens like any other. Its start_session requests are still
+    // announced (chatAsksNow reads every chat): that is a person being asked,
+    // not an answer being repeated.
+    if (m.notify === false) continue;
     out.push({
       id: m.id,
       title: m.title ?? null,
@@ -18991,6 +19016,8 @@ async function handleRequest(req, res) {
         if (evL.error) return sendErr(res, 400, evL.error);
         const fvL = fastDecision(body.fast);
         if (fvL.error) return sendErr(res, 400, fvL.error);
+        const nvL = notifyDecision(body.notify);
+        if (nvL.error) return sendErr(res, 400, nvL.error);
         const nowL = Math.floor(Date.now() / 1000);
         const metaL = {
           id: crypto.randomUUID(),
@@ -19000,6 +19027,7 @@ async function handleRequest(req, res) {
           model: r.id,
           effort: evL.effort,
           fast: fvL.fast ?? null,
+          ...(nvL.notify === false ? { notify: false } : {}),
           createdAt: nowL,
           updatedAt: nowL,
           claudeSessionId: null,
@@ -19017,6 +19045,8 @@ async function handleRequest(req, res) {
       if (ev.error) return sendErr(res, 400, ev.error);
       const fv = fastDecision(body.fast);
       if (fv.error) return sendErr(res, 400, fv.error);
+      const nv = notifyDecision(body.notify);
+      if (nv.error) return sendErr(res, 400, nv.error);
       const mode = body.mode === 'act' ? 'act' : 'ask';
       const now = Math.floor(Date.now() / 1000);
       // WHERE this chat runs, decided once and for the chat's life. Checked here
@@ -19040,6 +19070,9 @@ async function handleRequest(req, res) {
         // Fast mode for this chat's runs: true/false pins it, null (the usual)
         // leaves the host default (`fastMode` in settings.json) to decide.
         fast: fv.fast ?? null,
+        // Present only when false, so every chat made before this, and every
+        // ordinary one since, reads as it always did.
+        ...(nv.notify === false ? { notify: false } : {}),
         createdAt: now,
         updatedAt: now,
         claudeSessionId: null,
