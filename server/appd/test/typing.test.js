@@ -93,6 +93,63 @@ test('boundaryFromTail is idle only when the LAST record is the boundary', () =>
     { idle: false, lastKind: 'user', unknown: false });
 });
 
+// The shapes Claude Code 2.1.322 wrote for `/model` picked session-only, taken
+// from a real transcript (2026-11-13) with the ids dropped.
+const localCommand = (name, out, promptId = 'p1') => [
+  { type: 'user', promptId, isMeta: true, message: { role: 'user', content: '<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a message.</local-command-caveat>' } },
+  { type: 'user', promptId, message: { role: 'user', content: `<command-name>/${name}</command-name>\n            <command-message>${name}</command-message>\n            <command-args></command-args>` } },
+  { type: 'user', promptId, message: { role: 'user', content: `<local-command-stdout>${out}</local-command-stdout>` } },
+].map((r) => JSON.stringify(r)).join('\n');
+
+test('boundaryFromTail steps over a local command run after the turn ended', () => {
+  // ⚠ THE 2026-11-13 BUG: the sweep skipped idle sessions as "running" for days
+  // and the headroom ladder's own `/model` moves left sessions in that state.
+  const turn = JSON.stringify({ type: 'system', subtype: 'turn_duration' });
+  const snap = JSON.stringify({ type: 'file-history-snapshot' });
+  const model = localCommand('model', 'Set model to `Opus 5.5` for this session only');
+  const effort = localCommand('effort', 'Set effort level to max (this session only)', 'p2');
+  assert.deepEqual(t.boundaryFromTail(`${turn}\n${snap}\n${model}\n${snap}\n`),
+    { idle: true, lastKind: 'system/turn_duration', unknown: false });
+  // Two in a row, and a stderr, are the same thing.
+  const err = JSON.stringify({ type: 'user', message: { content: '<local-command-stderr>Error: unknown</local-command-stderr>' } });
+  const errName = JSON.stringify({ type: 'user', message: { content: '<command-name>/nope</command-name>' } });
+  assert.equal(t.boundaryFromTail(`${turn}\n${model}\n${effort}\n${errName}\n${err}\n`).idle, true);
+  // A `!` shell line is local too.
+  const bashIn = JSON.stringify({ type: 'user', message: { content: '<bash-input>ls</bash-input>' } });
+  const bashOut = JSON.stringify({ type: 'user', message: { content: [{ type: 'text', text: '<bash-stdout>a\nb</bash-stdout><bash-stderr></bash-stderr>' }] } });
+  assert.equal(t.boundaryFromTail(`${turn}\n${bashIn}\n${bashOut}\n`).idle, true);
+});
+
+test('boundaryFromTail: stepping over a local command lands on what was really there', () => {
+  // A command typed WHILE a turn ran: the turn's tool_use is still the answer.
+  const toolUse = JSON.stringify({ type: 'assistant', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } });
+  assert.deepEqual(t.boundaryFromTail(`${toolUse}\n${localCommand('model', 'Set model')}\n`),
+    { idle: false, lastKind: 'assistant', unknown: false });
+  // A PROMPT command (a skill, /loop) writes <command-name> and no output: the
+  // model is working on it, so it holds the gate.
+  const turn = JSON.stringify({ type: 'system', subtype: 'turn_duration' });
+  const prompt = JSON.stringify({ type: 'user', message: { content: '<command-name>/loop</command-name>\n<command-args>5m check</command-args>' } });
+  assert.deepEqual(t.boundaryFromTail(`${turn}\n${prompt}\n`),
+    { idle: false, lastKind: 'user', unknown: false });
+  // And a person's message that merely MENTIONS the tags is a message.
+  const said = JSON.stringify({ type: 'user', message: { content: 'why does <local-command-stdout> show up?' } });
+  assert.equal(t.boundaryFromTail(`${turn}\n${said}\n`).idle, false);
+  // A window holding only a local command saw no boundary: widen, never guess.
+  assert.deepEqual(t.boundaryFromTail(`${localCommand('model', 'Set model')}\n`),
+    { idle: false, lastKind: null, unknown: true });
+});
+
+test('localCommandPart names the three parts and nothing else', () => {
+  const u = (content) => ({ type: 'user', message: { content } });
+  assert.equal(t.localCommandPart(u('<local-command-stdout>x</local-command-stdout>')), 'output');
+  assert.equal(t.localCommandPart(u('<local-command-caveat>x</local-command-caveat>')), 'caveat');
+  assert.equal(t.localCommandPart(u('<command-name>/model</command-name>')), 'input');
+  assert.equal(t.localCommandPart(u('<bash-input>ls</bash-input>')), 'input');
+  assert.equal(t.localCommandPart(u('hello')), null);
+  assert.equal(t.localCommandPart(u([{ type: 'tool_result', content: '<local-command-stdout>' }])), null);
+  assert.equal(t.localCommandPart({ type: 'assistant', message: { content: '<command-name>' } }), null);
+});
+
 test('boundaryFromTail ignores attachment records landing after the boundary', () => {
   // Claude Code appends these after the fact; one arriving late must not
   // re-close a gate that legitimately opened.

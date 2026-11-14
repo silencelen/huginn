@@ -168,6 +168,40 @@ function isConversationalRecord(rec) {
   return CONVERSATIONAL_TYPES.has(rec.type);
 }
 
+/**
+ * Which part of a LOCAL command a `user` record is, or null.
+ *
+ * A command Claude Code runs itself, never sending it to the model (`/model`,
+ * `/effort`, `/compact`, a `!` shell line), is written as ordinary `user`
+ * records after the turn has ended: `<local-command-caveat>` (isMeta), then
+ * `<command-name>` (or `<bash-input>`), then `<local-command-stdout>` (or
+ * `<bash-stdout>`). No turn marker follows them, because no turn ran.
+ *
+ * ⚠ READ AS CONVERSATION THEY HELD EVERY AUTOMATED JOB FOREVER (2026-11-13).
+ * The last conversational record was a `user` record, so the session read as
+ * mid-turn with no end coming: the restart sweep skipped idle sessions as
+ * "running" for days, a queued restart waited out its ceiling, and the headroom
+ * ladder's own `/model` moves left every session they moved in that state.
+ * Only a command whose OUTPUT is on record is stepped over: a prompt command (a
+ * skill, `/loop`) writes `<command-name>` too, but no output record, and the
+ * model is working on it — that one still holds the gate.
+ *
+ * @returns {'output' | 'caveat' | 'input' | null}
+ */
+function localCommandPart(rec) {
+  if (!rec || rec.type !== 'user' || !rec.message) return null;
+  const c = rec.message.content;
+  let text = null;
+  if (typeof c === 'string') text = c;
+  else if (Array.isArray(c) && c.length === 1 && c[0] && c[0].type === 'text') text = String(c[0].text || '');
+  if (text === null) return null;
+  const t = text.trimStart();
+  if (/^<(?:local-command-(?:stdout|stderr)|bash-(?:stdout|stderr))>/.test(t)) return 'output';
+  if (t.startsWith('<local-command-caveat>')) return 'caveat';
+  if (/^<(?:command-name|bash-input)>/.test(t)) return 'input';
+  return null;
+}
+
 /** The record kind a caller can log or assert on: `user`, `system/turn_duration`, … */
 function kindOf(rec) {
   if (!rec || typeof rec.type !== 'string') return null;
@@ -191,6 +225,9 @@ function kindOf(rec) {
  */
 function boundaryFromTail(jsonlTail) {
   const lines = String(jsonlTail || '').split('\n');
+  // A local command's output was stepped over, so the command line that
+  // produced it (the record before it, reading back) is stepped over too.
+  let commandDone = false;
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (!line) continue;
@@ -199,6 +236,13 @@ function boundaryFromTail(jsonlTail) {
     if (!rec || typeof rec !== 'object') continue;
     // 3.0.2's inline test, lifted into a named rule with the census behind it.
     if (!isConversationalRecord(rec)) continue;
+    // A local command ran between turns and is not one (localCommandPart).
+    // Stepping over it lands on whatever was there before it: a turn marker
+    // (idle), or — a command typed while a turn ran — that turn's tool_use.
+    const part = localCommandPart(rec);
+    if (part === 'output') { commandDone = true; continue; }
+    if (part === 'caveat') continue;
+    if (part === 'input' && commandDone) { commandDone = false; continue; }
     return { idle: isBoundaryRecord(rec), lastKind: kindOf(rec), unknown: false };
   }
   // ⚠ `unknown` IS NOT "NOT IDLE" (#5). A window with no conversational record
@@ -2137,7 +2181,7 @@ module.exports = {
   paneTail, pasteLostLogLine, submitStalledLogLine, pasteResentLogLine, pasteLeftAloneLogLine,
   draftHeldLogLine, emptyBoxHeldLogLine, draftClearedLogLine, draftOverdueLogLine,
   sendKeysFits, chunks,
-  isBoundaryRecord, isConversationalRecord, boundaryFromTail, stateVerdict,
+  isBoundaryRecord, isConversationalRecord, localCommandPart, boundaryFromTail, stateVerdict,
   humanAttentionHold, ATTENTION_HOLD_MAX_MS, submitRefusal, stateStampMs,
   hasHumanUserRecord, kindOf, scanForHuman, scanForTurnStart, DELIVERY_SHOW_MAX_MS, promptSpelling,
   HUMAN_SCAN_MAX_BYTES,

@@ -147,7 +147,7 @@ All routes need the token except `GET /v1/challenge`.
 | GET | `/v1/plan` | Plan usage: the numbers Claude Code's `/usage` shows. |
 | GET | `/v1/usage` | Token and cost summary for today and the last 7 days, from the daemon's own ledger of the transcripts (`source: "huginn"`; cost at list rates, `costIsEstimate`). `correlation` is the latest weekly ccusage comparison, or null. |
 | GET | `/v1/headroom` | The whole usage picture: every account's limits, what is stalled or held, and why. Timestamps in milliseconds. |
-| PATCH | `/v1/headroom/settings` | Thresholds, model order, default model, auto-resume and account switching. |
+| PATCH | `/v1/headroom/settings` | Thresholds, model order, default model, auto-resume and account switching. A changed `defaultModel` is also written to Claude Code's `~/.claude/settings.json`, which is what new sessions start on, and a 409 says when that write failed. A default changed in Claude Code is taken up by the daemon within two usage checks. |
 | GET, POST | `/v1/autoswitch` | Deprecated alias for the account-switching part of `/v1/headroom/settings`. |
 | GET | `/v1/settings/claude` | `{fastModeDefault, fastModePerSession, feedbackOff, statusLine}`: the Claude Code settings the apps show, read from the sessions account's `settings.json` (`fastMode`, `fastModePerSessionOptIn`, the three feedback keys the installer turns off, and whether Huginn's status line is installed). |
 | PATCH | `/v1/settings/claude` | `{fastModeDefault: true \| false}`: write `fastMode` in that file, for every new session and chat. Written through a link, keeping the file's mode and everything else in it; `409` if the file cannot be parsed. Answers as the GET. |

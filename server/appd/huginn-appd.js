@@ -122,7 +122,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.21.0';
+const VERSION = '3.21.1';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -11655,21 +11655,29 @@ async function keepDefaultAfterModelCommand(name, before, picked) {
     return r && r.settings ? (r.settings.model ?? null) : undefined;
   };
   const until = Date.now() + MODEL_DEFAULT_WATCH_MS;
-  while (Date.now() < until) {
-    const now = read();
-    if (now !== undefined && now !== before) {
-      const r = rewriteClaudeSettings((o) => {
-        if ((o.model ?? null) === before) return false;
-        if (before === null) delete o.model; else o.model = before;
-        return true;
-      }, 'model-command');
-      if (r.ok && r.changed) log(`models: ${name} set to ${picked} for this session only; host default kept at ${before ?? '(none)'} (the CLI had saved ${now})`);
-      else if (!r.ok) log(`models: ${name}: could not put the host default back to ${before ?? '(none)'} (${r.error})`);
-      return;
+  // While this watch runs, the CLI's write is one this function is about to
+  // undo: followCliDefaultModel must not adopt it as the owner's new default.
+  modelDefaultWatches += 1;
+  try {
+    while (Date.now() < until) {
+      const now = read();
+      if (now !== undefined && now !== before) {
+        const r = rewriteClaudeSettings((o) => {
+          if ((o.model ?? null) === before) return false;
+          if (before === null) delete o.model; else o.model = before;
+          return true;
+        }, 'model-command');
+        if (r.ok && r.changed) log(`models: ${name} set to ${picked} for this session only; host default kept at ${before ?? '(none)'} (the CLI had saved ${now})`);
+        else if (!r.ok) log(`models: ${name}: could not put the host default back to ${before ?? '(none)'} (${r.error})`);
+        return;
+      }
+      await sleep(250);
     }
-    await sleep(250);
+  } finally {
+    modelDefaultWatches -= 1;
   }
 }
+let modelDefaultWatches = 0;
 
 function repairDefaultModel(expected) {
   let was = null;
@@ -11684,6 +11692,78 @@ function repairDefaultModel(expected) {
     return { ok: true, changed: true, was };
   }
   return r;
+}
+
+/**
+ * Take the host default model FROM Claude Code when it was changed there.
+ *
+ * ⚠ THE TWO COPIES DRIFTED (owner, 2026-11-13: "huginn shows opus as our
+ * default"). `defaultModel` was seeded from `~/.claude/settings.json` once, at
+ * first boot, and never read again — so a `/model <x>` typed in any pane (which
+ * Claude Code saves as the default for new sessions) changed what new sessions
+ * ran on while the apps went on showing the old model, and the Fable-consent
+ * repair would have written that stale model back over the owner's choice.
+ *
+ * Runs at the END of a headroom tick, never on a read: the consent dialog's
+ * persisted model is a change this daemon UNDOES (noteSessionModel's repair,
+ * earlier in the same tick), and adopting it first would make the repair a
+ * no-op. Likewise skipped while a model menu's `/model` is being made
+ * session-only (keepDefaultAfterModelCommand), whose save is about to be put
+ * back. A model this daemon cannot read is left alone and said once.
+ *
+ * Mutates `settings` in place so the rest of the tick sees the new value.
+ * @returns {boolean} whether the stored default changed
+ */
+let followRefused = null;
+let followPending = null;
+function followCliDefaultModel(settings) {
+  if (modelDefaultWatches > 0) return false;
+  const read = readClaudeSettings('follow');
+  if (read.error) return false;
+  const cli = typeof read.settings.model === 'string' ? read.settings.model.trim() : '';
+  // The file as it stands NOW, not the tick's copy: the tick awaits, and an
+  // app's save that landed meanwhile must not be overwritten by a stale form.
+  const cur = loadHeadroomSettings();
+  if (!cli || cli === cur.defaultModel) {
+    settings.defaultModel = cur.defaultModel;
+    followPending = null;
+    return false;
+  }
+  // ⚠ ON THE SECOND TICK THAT SEES IT, NOT THE FIRST. The consent dialog's save
+  // and the transcript record that arms its repair are written moments apart;
+  // a tick landing between them would adopt the very model the repair exists
+  // to undo. One tick of grace lets the repair see its record first.
+  if (followPending !== cli) {
+    followPending = cli;
+    return false;
+  }
+  followPending = null;
+  const v = headroomLib.validateSettings({ defaultModel: cli }, cur);
+  if (!v.ok) {
+    if (followRefused !== cli) log(`headroom: Claude Code's default model ${JSON.stringify(cli).slice(0, 60)} is not one this daemon reads; keeping ${cur.defaultModel}`);
+    followRefused = cli;
+    return false;
+  }
+  const was = cur.defaultModel;
+  saveHeadroomSettings(v.settings);
+  settings.defaultModel = v.settings.defaultModel;
+  followRefused = null;
+  log(`headroom: the host default model is now ${settings.defaultModel}, as Claude Code's settings say (was ${was})`);
+  return true;
+}
+
+/**
+ * Write a default model the apps picked INTO Claude Code's settings, which is
+ * what new sessions actually start on. Before 3.21.1 the pick was stored only
+ * here: the apps showed it, and every new session ignored it.
+ * @returns {{ok: true, changed: boolean} | {ok: false, error: string}}
+ */
+function writeCliDefaultModel(model) {
+  return rewriteClaudeSettings((o) => {
+    if (o.model === model) return false;
+    o.model = model;
+    return true;
+  }, 'change');
 }
 
 /** The sessions account's Claude Code settings file, as the CLI resolves it. */
@@ -12700,8 +12780,16 @@ function noteSessionModel(rec, read, now, settings) {
     if (!rec.nativeSwitch.seenAt && (!clearedAt || Number(read.consent.at) > clearedAt)) {
       rec.nativeSwitch = { seenAt: now, to: read.consent.to || family, how: 'consent', choice: read.consent.choice };
     }
-    if (read.consent.persistedAsDefault) {
+    // ONCE per consent record (3.21.1). The record sits in the tail for many
+    // ticks, and repairing on each of them put the old default back over any
+    // `/model` the owner typed afterwards — which followCliDefaultModel now
+    // adopts as the new default instead.
+    // Keyed on the record itself; a record with no timestamp (none seen from a
+    // real CLI) is told apart by its answer and target.
+    const consentKey = `${Number(read.consent.at) || ''}|${read.consent.choice || ''}|${read.consent.to || ''}`;
+    if (read.consent.persistedAsDefault && rec.consentRepairedKey !== consentKey) {
       const r = repairDefaultModel(settings.defaultModel);
+      if (r.ok) rec.consentRepairedKey = consentKey;
       if (r.ok && r.changed) rec.ladder = { ...(rec.ladder || {}), repairedDefault: true };
       else if (!r.ok) log(`headroom: could not restore the host default model (${r.error})`);
     }
@@ -12917,6 +13005,9 @@ async function headroomTickInner() {
       resumeBusy = false;
     }
   }
+
+  // After every session's consent repair above (followCliDefaultModel says why).
+  followCliDefaultModel(settings);
 
   // ---- 6. keep-awake -------------------------------------------------------
   // LAST, deliberately. Everything above may change the picture this decides on
@@ -15166,8 +15257,19 @@ async function handleRequest(req, res) {
       const body = await readJsonBody(req);
       // Validated BEFORE anything is written, and the rule that failed is the
       // message: "invalid settings" makes a slider that silently will not move.
-      const v = headroomLib.validateSettings(body, loadHeadroomSettings());
+      const before = loadHeadroomSettings();
+      const v = headroomLib.validateSettings(body, before);
       if (!v.ok) return sendErr(res, 400, v.error);
+      // A CHANGED default goes to Claude Code's settings first, which is what
+      // new sessions start on — and only a changed one: the apps send the whole
+      // form on every save, and a slider moved must not rewrite settings.json.
+      if (v.settings.defaultModel !== before.defaultModel) {
+        const w = writeCliDefaultModel(v.settings.defaultModel);
+        if (!w.ok && !/^no settings\.json/.test(w.error)) {
+          return sendErr(res, 409, `the default model could not be saved to Claude Code's settings: ${w.error}`);
+        }
+        if (w.ok && w.changed) log(`headroom: Claude Code's default model -> ${v.settings.defaultModel} (from the apps)`);
+      }
       saveHeadroomSettings(v.settings);
       log('headroom: settings updated');
       // Act on the new numbers now rather than at the next tick: a threshold

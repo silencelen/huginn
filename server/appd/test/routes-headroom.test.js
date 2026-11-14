@@ -1746,3 +1746,95 @@ test('the login a hold was armed for survives a restart, and so does the rule', 
   await until((b) => liveAs(b, 'hold-d') && !b.sentinels.STOP, 15_000, 'STOP cleared for the next login');
   setUsage({});
 });
+
+// ---- the host default model follows Claude Code (3.21.1) -------------------
+//
+// ⚠ owner, 2026-11-13: "huginn shows opus as our default". `defaultModel` was
+// seeded once at first boot and never read again, so a `/model` typed in any pane
+// (which Claude Code saves for new sessions) left the apps showing the old model;
+// and a pick in the apps' Settings was stored only here, so new sessions ignored it.
+
+const settingsPath = () => path.join(claudeDir, 'settings.json');
+const cliModel = () => JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).model;
+const setCliModel = (model) => {
+  const o = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
+  o.model = model;
+  fs.writeFileSync(settingsPath(), `${JSON.stringify(o, null, 2)}\n`);
+};
+
+test('a default changed in Claude Code becomes the default the apps show', async () => {
+  const start = (await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' })).body.defaultModel;
+  setCliModel('claude-opus-5-5');
+  await tick();
+  await until((b) => b.settings.defaultModel === 'claude-opus-5-5', 15_000, 'the CLI default adopted');
+  assert.equal(cliModel(), 'claude-opus-5-5', 'and Claude Code\'s file is left as the owner wrote it');
+
+  // One this daemon cannot read is kept out, never half-adopted.
+  setCliModel('some-future-alias');
+  await tick();
+  await wait(1500);
+  assert.equal((await api('/v1/headroom')).body.settings.defaultModel, 'claude-opus-5-5');
+
+  setCliModel(start);
+  await tick();
+  await until((b) => b.settings.defaultModel === start, 15_000, 'back to the start');
+});
+
+test('a default picked in the apps is written to Claude Code\'s settings, and only a CHANGED one', async () => {
+  const start = (await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' })).body;
+  const r = await api('/v1/headroom/settings', {
+    method: 'PATCH', body: JSON.stringify({ defaultModel: 'claude-sonnet-5-5' }),
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.defaultModel, 'claude-sonnet-5-5');
+  assert.equal(cliModel(), 'claude-sonnet-5-5', 'what new sessions start on');
+  assert.equal(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).effortLevel, 'xhigh', 'nothing else touched');
+
+  // The apps send the WHOLE form on every save: moving a slider re-sends the
+  // default too, and that must not rewrite a file the CLI changed meanwhile.
+  await wait(1500);
+  const mtime = fs.statSync(settingsPath()).mtimeMs;
+  await wait(50);
+  const form = { ...r.body, headsUpPct: r.body.headsUpPct === 80 ? 81 : 80 };
+  const s = await api('/v1/headroom/settings', { method: 'PATCH', body: JSON.stringify(form) });
+  assert.equal(s.status, 200, JSON.stringify(s.body));
+  await wait(1500);
+  assert.equal(fs.statSync(settingsPath()).mtimeMs, mtime, 'an unchanged default is not written back');
+
+  await tick({ defaultModel: start.defaultModel, headsUpPct: start.headsUpPct });
+  assert.equal(cliModel(), start.defaultModel, 'and a change back is written too');
+});
+
+test('the consent repair fires ONCE per consent record, then follows the owner\'s own /model', async () => {
+  const start = (await api('/v1/headroom/settings', { method: 'PATCH', body: '{}' })).body.defaultModel;
+  const { name } = fableSession('consent-once');
+  const transcript = path.join(tmp, `${name}.jsonl`);
+  fs.appendFileSync(transcript, `${JSON.stringify({
+    type: 'system', subtype: 'model_consent_fallback', timestamp: new Date().toISOString(),
+    choice: 'yes_default', toModel: 'claude-opus-5', persisted_as_default: true,
+  })}\n`);
+  writeState(name, { sessionId: `sid-${name}`, transcript });
+  await wait(2000);                      // let a tick already under way finish first
+  setCliModel('claude-opus-5');          // what the dialog's answer saved
+
+  setUsage({ session: 5, weekly_all: 10, weekly_fable: 20 });
+  await tick({ cooldownMs: 0 });
+  const deadline = Date.now() + budget(20_000);
+  while (cliModel() !== start && Date.now() < deadline) { await wait(400); await tick(); }
+  assert.equal(cliModel(), start, 'the dialog\'s save is undone');
+  assert.equal((await api('/v1/headroom')).body.settings.defaultModel, start, 'and not adopted');
+
+  // The owner then types `/model` themselves. The consent record is still in
+  // the tail; repairing on every tick used to put the old default straight back.
+  setCliModel('claude-sonnet-5-5');
+  await tick();
+  await until((b) => b.settings.defaultModel === 'claude-sonnet-5-5', 15_000, 'the owner\'s own pick adopted');
+  await tick();
+  await wait(1500);
+  assert.equal(cliModel(), 'claude-sonnet-5-5', 'and not repaired away');
+
+  setCliModel(start);
+  await tick();
+  await until((b) => b.settings.defaultModel === start, 15_000, 'back to the start');
+  setUsage({});
+});

@@ -9,6 +9,29 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.21.1 — 2026-11-13
+
+### Fixed
+- A session whose last entry was a command Claude Code runs itself, such as `/model`, `/effort` or a
+  `!` shell line, was read as being in the middle of a turn that would never end. Every automatic
+  action waited on it: the restart that moves a session onto a new Claude Code version, the sweep
+  that does it for every session, and the usage ladder's move back to Fable. Each session the ladder
+  had moved to another model was left in that state by its own `/model`. These commands are now
+  passed over when appd decides whether a turn is running. A command that hands the model a prompt,
+  such as a skill or `/loop`, still counts as a turn. Messages a person sends were never held.
+- The default model shown in the apps could disagree with the one new sessions actually start on.
+  appd copied Claude Code's default once, the first time it ran, and never looked again, so a
+  `/model` typed in any session, which Claude Code saves as the default for new sessions, left the
+  apps showing the old model. A default picked in the apps was stored only in appd's own settings,
+  so new sessions ignored it. A default picked in the apps is now written to
+  `~/.claude/settings.json` as well, and only when it changed, so saving another setting leaves that
+  file alone. A default changed in Claude Code is taken up within two usage checks, which can be up
+  to ten minutes when every session is idle.
+- When Claude Code's Fable consent dialog saved another model as the default, appd put the old
+  default back on every usage check for as long as the dialog's record stayed in the session's
+  recent history. That also undid any `/model` typed afterwards. The default is now put back once
+  per dialog.
+
 ## 3.21.0 — 2026-11-13
 
 ### Added
