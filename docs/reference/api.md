@@ -198,6 +198,12 @@ a record, and a record older than six hours or from another Claude session under
 ignored. `contextPercent` keeps being served for older clients, filled from `context.percent`,
 else from a status line drawn in the `[name] Model · ctx N%` shape.
 
+A project session launched with a context ceiling (see Projects) is measured against it: `window`
+is the ceiling, `percent` is `used` as a share of it, and `modelWindow` carries the window Claude
+Code reported. Claude Code's own status line keeps reporting the model's window under a ceiling, so
+without this a session a quarter of the way to its compaction would read 4%. `GET
+/v1/sessions/<name>/context` does the same.
+
 ### Runtime generation and restart
 
 A Claude Code process loads its MCP servers, hooks, settings and binary once, at start, so a
@@ -329,8 +335,8 @@ and whose requests it surfaces to you:
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/projects` | Projects. A `404` means the daemon has no projects feature. |
-| POST | `/v1/projects` | `{name, kind, brief, cwd?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. |
-| GET, PATCH | `/v1/projects/<id>` | View or change one. `PATCH` needs the current `rev`. |
+| POST | `/v1/projects` | `{name, kind, brief, cwd?, contextWindow?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. `contextWindow` is the context ceiling of its sessions (below); absent means 400000. |
+| GET, PATCH | `/v1/projects/<id>` | View or change one. `PATCH` needs the current `rev`; `contextWindow` may be changed there and applies to sessions launched after it (a running session keeps its window until it is restored). |
 | DELETE | `/v1/projects/<id>` | Delete it. `?end=graceful` (or `{end: "graceful" \| "now"}`) also ends its sessions. |
 | GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. The answer leaves within about a second: a member whose transcript is still being read carries `pending: true` with its last known numbers (or zero), `pending` counts such members, and the next poll has the rest. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
@@ -338,9 +344,22 @@ and whose requests it surfaces to you:
 | POST | `/v1/projects/<id>/approve-change` | `{rev, token}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. Both fields are required (`400` without). `409` with the current project when `rev` is not the change on offer, or when `token` is not the token of the change now waiting — the lead rewrote its block after the card was drawn; redraw from the project returned. |
 | POST | `/v1/projects/<id>/decline-change` | `{token?}`: drop the pending roster change and tell the lead. With a `token` that is not the current change's, `409` with the current project, as approve. |
 | POST | `/v1/projects/<id>/message` | `{from, to, text}`: pass a message from one member to another. |
-| POST | `/v1/projects/<id>/members` | `{name?, role}`: add a running session as a member (a record edit; nothing is launched). `{role, description, spawn: true, cwd?, model?, effort?}`: create a NEW member in a running project, the way an approved manifest does; `description` is its whole first message. Both respect the member limit. |
-| PATCH | `/v1/projects/<id>/members/<role>` | `{description}`: give a member a new task; it is typed into the member, framed as owner-approved. The role word itself cannot change while the session runs (`409`). |
+| POST | `/v1/projects/<id>/members` | `{name?, role}`: add a running session as a member (a record edit; nothing is launched). `{role, description, spawn: true, cwd?, model?, effort?, context?}`: create a NEW member in a running project, the way an approved manifest does; `description` is its whole first message. Both respect the member limit. |
+| PATCH | `/v1/projects/<id>/members/<role>` | `{description}`: give a member a new task; it is typed into the member, framed as owner-approved. When the member's context is 100k tokens or more, `/compact` is typed first and the task follows once the compaction is in its transcript (or after three minutes, whichever comes first). The role word itself cannot change while the session runs (`409`). |
 | DELETE | `/v1/projects/<id>/members/<role>` | Remove a member from the record; the session keeps running. With `?end=1` (or `{end: true}`) the member is asked to wrap up and end (the soft-end) and stays in the record, with `endedAt` set, until its session is gone. `end=now` is refused: a member is never ended outright. |
+
+**Context ceiling.** Every project session is launched with `--autocompact <tokens>`, so it
+compacts there instead of near the end of a 1M window. The ceiling is the session's own `context`
+(a manifest session, or the owner's direct add, may set one), else the project's `contextWindow`
+(`null` leaves Claude Code's default). Both are whole numbers from 100000 to 1000000; a project
+created before 3.22.0 has `contextWindow: null`. The flag is passed again at every restore, because
+a resumed conversation does not keep it, and only on a Claude Code that takes it (2.1.304 or
+later; an unknown version is launched without it). A project row carries `contextWindow` and
+`lead.contextCeiling`, and every member row `context` (its own setting) and `contextCeiling` (what
+its running session was launched with, `null` for none).
+
+**Roster.** Each member's persona lists its peers by name (`<slug>/<role>`). When members are
+added, ended or dropped, every running member is typed one `[Huginn]` line with the new list.
 
 A project row (`GET /v1/projects`, and `row` in the detail) carries `pendingChange`: `null`, or
 the roster change the lead proposed for a running project, waiting for Approve or Decline:
@@ -353,7 +372,7 @@ pendingChange: {
                                // The rev is the same for every proposal until one is applied; the token changes
                                // whenever the words on the card do, so a stale card cannot approve a rewritten block
   summary: string | null,      // the lead's one line
-  added:   [ {role, firstPrompt, cwd, model, effort, mode} ],   // spawned on approve
+  added:   [ {role, firstPrompt, cwd, model, effort, mode, context?} ],   // spawned on approve; context only when set
   removed: [ {role} ],                                          // asked to wrap up on approve
   changed: [ {role, firstPrompt} ],                             // told the new task on approve
   problem: string | null,      // set when the change cannot be applied as proposed (the member limit); approve answers 409 with it

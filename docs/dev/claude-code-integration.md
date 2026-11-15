@@ -144,6 +144,14 @@ the pane (`Fast mode disabled · …`, `Fast mode unavailable…`, `Fast mode re
 `auto mode unavailable while fast mode is on`). The daemon watches `.status/` with `fs.watch` like
 the state directory, to wake a parked screen poll; the lists are polled anyway.
 
+**Under `--autocompact` the JSON still describes the model's window.** Measured on 2.1.322
+(2026-11-15): launched with `--autocompact 150k`, a session reported `context_window_size:
+1000000` and `used_percentage: 4` at 36k tokens, where `/context` said `36.1k/150k tokens (24%)`.
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` behaves the same way. So for a project session, which the
+daemon launches with a ceiling it records (`contextCeiling`), `statuslineLib.withCeiling`
+recomputes `window` and `percent` against the ceiling and keeps the reported window as
+`modelWindow`.
+
 ### The permission hook and the request registry
 
 `huginn-permission-hook` parks **every** tool prompt — `AskUserQuestion`, `ExitPlanMode`, `Bash`,
@@ -332,8 +340,14 @@ it on every run, so editing it needs no restart. No file, no persona. It is neve
 runs, suggestions, polish or keep-awake pings.
 
 Project sessions are interactive, not `-p`: the daemon starts
-`claude --name <project>/<role> [--model M] [--effort E] --append-system-prompt-file <role file>`
+`claude --name <project>/<role> [--model M] [--effort E] [--autocompact N] --append-system-prompt-file <role file>`
 in tmux, where the role file is the project's own brief under the daemon's data directory.
+`--autocompact` is the project's context ceiling (2.1.304 or later only). Measured on 2.1.322: it
+reaches the session's subagents (`--debug-file` logs `autocompact: … effectiveWindow=<N-20k>` and
+`thresholdSource=settings` for them), a `--resume` does not keep it, and a value outside 100k to
+1M makes `claude` exit at launch. An interactive `/autocompact` saves to user settings
+(`modelSettings.<model>.autoCompactWindow`), so it reaches every session on that model on the
+host.
 
 ### The caged calls
 
@@ -719,6 +733,16 @@ from `server/appd` with `node --test test/<file>`; the whole suite is `node --te
     `routes-restart.test.js`, `routes-restart-sweep.test.js` (a stand-in `claude` that quits on
     `/exit`, or draws the prompt, or ignores the command, and records its argv:
     `test/fixtures/fake-claude.js`).
+26. **`--autocompact` on project sessions** (`claudeLaunchCommand`, `runtimeLib.takesAutocompact`):
+    that the flag still takes a token count from 100k to 1M, still reaches the session's
+    subagents, still needs passing again on a `--resume`, that `/compact` typed at an idle
+    composer still writes a `compact_boundary` system record (`awaitCompaction`; without it a
+    re-role waits its full three minutes), and that the status-line JSON still reports the model's
+    window under a ceiling (`withCeiling`; if Claude Code starts reporting the ceiling itself the
+    division is a no-op, since `withCeiling` leaves a window at or under the ceiling alone). A
+    flag the CLI stops taking makes every project session exit at launch. Tests:
+    `routes-projects-context.test.js`, `project-restore.test.js`, `statusline.test.js`,
+    `runtime.test.js`.
 
 ### Capturing a new fixture
 

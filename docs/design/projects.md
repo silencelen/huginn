@@ -70,3 +70,69 @@ sessions rely on, so no existing client starts ending sessions it only meant to 
 **Rejected:** a hard end for a member (`end=now`): the only route that kills project sessions is
 the project's own delete, and it says so in its name. A separate "propose change" tool for the
 lead: the block the lead already knows is enough, and a second grammar is a second thing to tag.
+
+## What a team costs to run
+
+The owner's decision (2026-11-15) was to make the feature cheap to run, after one host's usage
+showed that splitting a project into role sessions multiplied its spend. What was measured there:
+spend follows context size, because every request re-reads the whole context (reading cached
+context was over half of price-weighted spend), and team sessions rode the 1M window to about
+967k, averaging 440k to 520k per request. About half of all spend was turns started by a message
+from another session and almost none by a person. The busiest lead averaged five requests per
+message it received, relayed items between members, ran an hourly heartbeat that mostly found
+nothing, and its members slept and re-checked in loops.
+
+The work is in three steps; this section records the first.
+
+**E1. A context ceiling on every project session.** Every launch passes `--autocompact <tokens>`:
+the session's own `context`, else the project's `contextWindow`, default 400k. Replaying three
+weeks of that host's team sessions with a 400k compaction point removed about 30% of all spend,
+and recovery after a compaction was observed to be quick. Measured on Claude Code 2.1.322 before
+choosing the mechanism:
+
+- The flag reaches the session's subagents. With `--autocompact 100k` a subagent compacted three
+  times at 67k to 76k (debug log: `effectiveWindow=80000 thresholdSource=settings`); without it
+  the same subagent grew to 192k and never compacted.
+- A `--resume` does not keep it (back to the full window), so the restore path passes it every
+  time, as it does effort.
+- `/context` reports `used/<ceiling>`, but the status-line JSON keeps the model's window and a
+  percentage of it. The daemon records the ceiling each session was launched with
+  (`contextCeiling`) and divides by it (`statuslineLib.withCeiling`), so the apps' figure is a
+  share of the ceiling.
+- The flag accepts 100k to 1M; outside that `claude` exits at launch, so the daemon validates the
+  value. It is passed only on 2.1.304 or later.
+
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` would also work but beats every other setting, so the owner
+could not move one session's window from inside it. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` leaves
+`/context` reading against 1M. An interactive `/autocompact` saves to user settings and so moves
+every session on that model on the host.
+
+A project written before 3.22.0 has no `contextWindow` and reads `null`: its sessions are restored
+as they were until the owner sets one, because the restart a ceiling needs is the owner's call.
+
+**E2. A working agreement in both personas.** The personas explained how messaging works and
+never what it costs. Both now say that a message starts a full turn in the receiver, and set out
+the rules: one complete message per finished task or blocker, results in a file, verify once,
+probes in the same command as the work, one blocking wait with a timeout, a fresh subagent per
+task. The lead is told not to schedule heartbeats because a member's idle notice is the signal. A
+peer message cannot be queued or intercepted (it does not pass through appd), so these words are
+the lever. The safety paragraphs are unchanged.
+
+**E3. Members know their peers.** A member was told only the lead's name, so every hand-off went
+through the lead. A member's persona now lists its peers, and a roster change types every running
+member one `[Huginn]` line with the new list, marked as information that needs no reply. Only
+names and role words travel, never text the lead wrote: a role is a grammar-checked word, and a
+lead's prompt lifted into a persona would get system-prompt standing. The rule that a peer cannot
+grant permissions is unchanged on every path.
+
+**E4. The contract asks for a small team.** The manifest contract says what each session costs,
+and asks the lead to split only where work runs in parallel or needs isolation, to choose the
+cheapest model that fits, and to leave effort null unless the role needs more.
+
+**E5. Compact before a re-role.** A member given a new task carried its whole old one into every
+request of the new one. When its context is 100k tokens or more, appd types `/compact` first,
+then a queue job waits for the `compact_boundary` record in its transcript (three minutes at
+most), then the task. A compaction that cannot be confirmed does not cost the member its task.
+
+**Rejected:** holding or batching `SendMessage` traffic in the daemon: it never passes through
+appd, and it must not (see the module header). Step 2 adds a channel the daemon does carry.

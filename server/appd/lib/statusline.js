@@ -87,6 +87,31 @@ function contextOf(j) {
   };
 }
 
+/**
+ * `context` measured against the session's CONTEXT CEILING (`--autocompact`)
+ * instead of the model's window, or `context` unchanged when there is none.
+ *
+ * ⚠ CLAUDE CODE DOES NOT DO THIS ITSELF. Measured on 2.1.322 (2026-11-15): with
+ * `--autocompact 150k` the session compacts near 117k and `/context` says
+ * `36.1k/150k (24%)`, but the status-line JSON still reports
+ * `context_window_size: 1000000` and `used_percentage: 4` — the same under
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. A meter drawn from that says 4% about a
+ * session a quarter of the way to its compaction. So the daemon, which knows
+ * the ceiling it launched the session with, does the division. `window` becomes
+ * the ceiling and `modelWindow` keeps what Claude Code reported.
+ */
+function withCeiling(ctx, ceiling) {
+  if (!ctx || !(Number.isInteger(ceiling) && ceiling > 0)) return ctx;
+  if (Number.isInteger(ctx.window) && ctx.window > 0 && ceiling >= ctx.window) return ctx;
+  const used = Number.isFinite(ctx.used) ? ctx.used : 0;
+  return {
+    ...ctx,
+    window: ceiling,
+    percent: Math.max(0, Math.min(100, Math.round((used / ceiling) * 100))),
+    modelWindow: ctx.window ?? null,
+  };
+}
+
 /** One rate-limit window → {usedPercent, resetsAt (epoch seconds)}, or null. */
 function limitOf(l) {
   const o = obj(l);
@@ -156,5 +181,5 @@ function statusFor(stateDir, name, { sessionId = null, nowMs = Date.now(), paneL
 }
 
 module.exports = {
-  DIRNAME, MAX_AGE_MS, statusFile, readRecord, clearStatus, empty, parseStatusRecord, statusFor,
+  DIRNAME, MAX_AGE_MS, statusFile, readRecord, clearStatus, empty, parseStatusRecord, statusFor, withCeiling,
 };

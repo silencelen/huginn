@@ -82,10 +82,10 @@ function seed() {
   });
   const project = {
     id: PROJECT_ID, name: 'Restore', slug: 'rst', kind: 'software', status: 'active',
-    brief: 'bring the cluster back', cwd: tmp,
+    brief: 'bring the cluster back', cwd: tmp, contextWindow: 300000,
     lead: { role: 'lead', name: 'rst-lead', claudeName: 'rst/lead', sessionId: LEAD, spawnedAt: now - 600, endedAt: null },
     members: [
-      member('api', API, { model: 'sonnet', effort: 'low' }),
+      member('api', API, { model: 'sonnet', effort: 'low', context: 200000 }),
       member('web', WEB, { model: 'haiku', effort: 'high' }),
       // Adopted members are recorded with no first prompt: appd never launched them.
       member('notes', NOTES, { name: 'scratch-notes', claudeName: 'notes-by-hand', firstPrompt: null }),
@@ -128,6 +128,9 @@ before(async () => {
   const bin = path.join(tmp, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nexec cat >/dev/null\n', { mode: 0o755 });
+  // The install's own package.json beside the binary is where the daemon reads
+  // the CLI version (claudeVersionFromPath): one that takes `--autocompact`.
+  fs.writeFileSync(path.join(bin, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', version: '2.1.322' }));
 
   daemon = spawn(process.execPath, [path.join(__dirname, '..', 'huginn-appd.js')], {
     env: {
@@ -206,6 +209,20 @@ test('a member with nothing left to resume starts fresh exactly as it was first 
   assert.match(cmd, /--model haiku/, cmd);
   assert.match(cmd, /--effort high/, cmd);
   assert.ok(cmd.includes(`--append-system-prompt-file ${persona('web')}`), cmd);
+});
+
+test('THE CONTEXT CEILING COMES BACK WITH EVERY PROJECT SESSION, because a resume does not keep it', () => {
+  // Measured on Claude Code 2.1.322: `--resume` without `--autocompact` returns
+  // the session to the model's full window. So the restore passes it again — the
+  // role's own where it has one, else the project's — and records what it passed,
+  // which is what the context figure is then measured against.
+  assert.match(startCommand('rst-lead'), /--autocompact 300000 /, 'the lead: the project\'s ceiling');
+  assert.match(startCommand('rst-api'), new RegExp(`--resume ${API} .*--autocompact 200000 `), 'api: its own, beside the resume');
+  assert.match(startCommand('rst-web'), /--autocompact 300000 /, 'web, starting fresh: the project\'s');
+  const stored = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', `${PROJECT_ID}.json`), 'utf8'));
+  assert.equal(300000, stored.lead.contextCeiling);
+  assert.equal(200000, stored.members.find((m) => m.role === 'api').contextCeiling);
+  assert.equal(300000, stored.members.find((m) => m.role === 'web').contextCeiling);
 });
 
 test('an adopted member and a plain session come back as they were launched: a bare resume', () => {
