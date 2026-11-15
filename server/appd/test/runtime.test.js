@@ -252,3 +252,11 @@ test('the backoff ladder: 10 min, then 3x, 6x, 12x, 24x, 36x, and no further', (
   assert.strictEqual(rt.sweepBackoffMs(-3), m, 'nothing below the first step');
   assert.strictEqual(rt.sweepBackoffMs('x', 0), m, 'junk reads as the first step at the default base');
 });
+
+test('--autocompact only on a Claude Code that takes it; an unknown version is launched as before', () => {
+  const rt = require('../lib/runtime');
+  assert.equal('2.1.304', rt.AUTOCOMPACT_MIN_CLI);
+  for (const v of ['2.1.304', '2.1.322', '2.2.0', '3.0.1']) assert.equal(true, rt.takesAutocompact(v), v);
+  for (const v of ['2.1.303', '2.0.999', '1.9.0', null, '', 'unknown']) assert.equal(false, rt.takesAutocompact(v), String(v));
+  assert.equal(true, rt.cliAtLeast('2.1.10', '2.1.9'), 'numerically, not as text');
+});

@@ -122,7 +122,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.21.1';
+const VERSION = '3.22.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -1944,6 +1944,9 @@ async function listSessions({ preview = false, shared = false } = {}) {
   for (const r of rows) {
     const hit = membership.get(r.name);
     r.project = hit ? projectsLib.sessionProjectTag(hit.project, hit.member) : null;
+    // A project session launched under a context ceiling is measured against
+    // it, before contextPercent is read from it below (statuslineLib.withCeiling).
+    if (hit && r.context) r.context = statuslineLib.withCeiling(r.context, ceilingOfHit(hit));
   }
 
   // An ARCHIVED conversation is not a session any more. Normally this removes
@@ -6637,6 +6640,7 @@ async function captureScreen(name, {
       const live = statuslineLib.statusFor(STATE_DIR, name, {
         sessionId: sess && sess.sessionId ? sess.sessionId : null, paneLines: lines,
       });
+      live.context = statuslineLib.withCeiling(live.context, contextCeilingOf(name));
       return {
         liveModel: st.model, liveMode: st.mode, liveBranch: st.branch,
         contextPercent: live.context ? live.context.percent : st.contextPercent,
@@ -9423,14 +9427,50 @@ function cwdIsTrusted(dir) {
  * `resume` is a reboot restore's conversation id, uuid-checked by the caller
  * (projectRestoreCommand), the same check session-registry makes.
  */
-function claudeLaunchCommand({ claudeName, persona, model, effort, resume = null }) {
+function claudeLaunchCommand({ claudeName, persona, model, effort, resume = null, context = null }) {
   const parts = ['claude'];
   if (resume) parts.push('--resume', resume);
   parts.push('--name', claudeName);
   if (model) parts.push('--model', model);
   if (effort) parts.push('--effort', effort);
+  // Range-checked again at the last moment: a value Claude Code refuses makes
+  // `claude` exit at launch, and the pane would open on a bare shell.
+  if (Number.isInteger(context) && context >= projectsLib.CONTEXT_MIN && context <= projectsLib.CONTEXT_MAX) {
+    parts.push('--autocompact', String(context));
+  }
   parts.push('--append-system-prompt-file', persona);
   return `${parts.join(' ')}; exec "$SHELL" -l`;
+}
+
+/** Whether the Claude Code on this host takes `--autocompact`; false while its version is unknown. */
+function autocompactSupported() {
+  const rt = currentRuntime();
+  return runtimeLib.takesAutocompact((rt && rt.claude) || shortClaudeVersion(cachedClaudeVersion));
+}
+
+/**
+ * The ceiling to launch one project session with, or null: the role's own,
+ * else the project's (projectsLib.contextFor) — and null on a CLI that would
+ * refuse the flag.
+ */
+function launchCeiling(project, member) {
+  const want = projectsLib.contextFor(project, member);
+  return want !== null && autocompactSupported() ? want : null;
+}
+
+/**
+ * The ceiling a project session's RUNNING process was launched with, or null —
+ * what lets the context figure be a percentage of the ceiling rather than of
+ * the model's window (statuslineLib.withCeiling). From the record, which every
+ * launch path writes; a session outside every project has none.
+ */
+function ceilingOfHit(hit) {
+  if (!hit || !hit.member) return null;
+  const c = hit.member.contextCeiling;
+  return Number.isInteger(c) && c > 0 ? c : null;
+}
+function contextCeilingOf(name) {
+  try { return ceilingOfHit(projectsLib.membershipIndex(listProjects()).get(name)); } catch { return null; }
 }
 
 /**
@@ -9469,6 +9509,17 @@ function projectRestoreCommand(hit, entry, hasTranscript) {
   }
   const id = entry.claudeSessionId;
   const canResume = !!id && sessreg.UUID_RE.test(id) && !!hasTranscript;
+  // ⚠ THE CEILING IS PASSED EVERY TIME, like effort: a `--resume` does not keep
+  // `--autocompact` (measured, 2.1.322), so a restore without it would bring the
+  // session back on the full window. And the record says what was passed, which
+  // is what the context figure divides by.
+  const context = launchCeiling(project, member);
+  try {
+    updateProject(project.id, (p) => {
+      const row = lead ? p.lead : (p.members || []).find((x) => x.role === member.role);
+      if (row) row.contextCeiling = context;
+    });
+  } catch (e) { log(`session restore: ${entry.name}: the ceiling could not be recorded (${e.message})`); }
   return {
     canResume,
     command: claudeLaunchCommand({
@@ -9477,6 +9528,7 @@ function projectRestoreCommand(hit, entry, hasTranscript) {
       model: canResume ? null : member.model,
       effort: member.effort,
       resume: canResume ? id : null,
+      context,
     }),
   };
 }
@@ -9591,9 +9643,16 @@ async function spawnProject(project) {
  * roster change and the owner's direct add, so "spawned exactly as the initial
  * spawn does" is true by construction rather than by copy.
  */
-async function spawnMembers(project, sessions) {
+async function spawnMembers(project, sessions, { leaving = [] } = {}) {
   const spawned = [];
   const failed = [];
+  // The roster each new member is told about: who is running and staying, plus
+  // everyone this batch brings in — a member spawned first in a batch must know
+  // the ones spawned after it. `leaving` are the roles a change is winding down.
+  const roster = [
+    ...projectsLib.liveRoster(project).filter((m) => !leaving.includes(m.role)),
+    ...(sessions || []).filter((x) => x && x.role).map((x) => ({ role: x.role })),
+  ];
   for (const s of sessions || []) {
     const tmuxName = projectsLib.tmuxNameFor(project.slug, s.role);
     const claudeName = projectsLib.claudeNameFor(project.slug, s.role);
@@ -9613,19 +9672,22 @@ async function spawnMembers(project, sessions) {
       model: s.model || null,
       effort: s.effort || null,
       mode: s.mode || null,
+      context: typeof s.context === 'number' ? s.context : null,
+      contextCeiling: null,
       firstPrompt: s.firstPrompt,
       spawnedAt: null,
       endedAt: null,
     };
+    member.contextCeiling = launchCeiling(project, member);
     let persona;
     try {
-      persona = writePersona(project.id, s.role, projectsLib.memberPersona(project, member));
+      persona = writePersona(project.id, s.role, projectsLib.memberPersona(project, member, roster));
     } catch (e) {
       failed.push({ role: s.role, reason: `persona could not be written: ${e.message}` });
       continue;
     }
     const launched = await launchProjectSession(tmuxName, cwd, claudeLaunchCommand({
-      claudeName, persona, model: s.model, effort: s.effort,
+      claudeName, persona, model: s.model, effort: s.effort, context: member.contextCeiling,
     }));
     if (launched.error) {
       failed.push({ role: s.role, reason: launched.error });
@@ -9685,6 +9747,108 @@ async function softEndMember(project, member) {
 }
 
 /**
+ * Tell every RUNNING member who its peers are now.
+ *
+ * A member's persona lists its peers (so a hand-off can go member to member
+ * instead of through the lead), and a persona is read once, at launch — so a
+ * roster change is typed to the members that were already running. Only to a
+ * session with Claude Code's state on record: an adopted member may be a pane
+ * that is not running `claude`, and a line typed into a shell is a command.
+ * `except` are names that already know (members spawned by this change, whose
+ * persona was written with the new roster).
+ */
+function announceRoster(projectId, { except = [] } = {}) {
+  const project = loadProject(projectId);
+  if (!project || project.status === 'archived') return 0;
+  let told = 0;
+  for (const m of projectsLib.liveRoster(project)) {
+    if (!m.name || except.includes(m.name) || !readSessionState(m.name)) continue;
+    enqueueSend(m.name, projectsLib.rosterFrame(project, m), {
+      automated: true, origin: 'project', kind: 'roster',
+    }).catch((e) => log(`project ${project.slug}: ${m.role} roster update failed: ${e.message}`));
+    told++;
+  }
+  return told;
+}
+
+/**
+ * COMPACT BEFORE A RE-ROLE. A member that gets a new task carries the whole of
+ * its old one into every request of the new one; above this many tokens of
+ * context, appd types `/compact` first and the task after it.
+ */
+const REROLE_COMPACT_AT = 100_000;
+/**
+ * How long the task waits for the compaction to show in the transcript before
+ * it is sent anyway — a compaction that cannot be confirmed must not cost the
+ * member its task. TEST-ONLY knob, clamped.
+ */
+const REROLE_COMPACT_WAIT_MS = Math.max(200, Math.min(10 * 60 * 1000,
+  Number(process.env.HUGINN_APPD_REROLE_COMPACT_WAIT_MS) || 3 * 60 * 1000));
+
+/** Tokens of context a session's status line last reported, or null. */
+function contextUsedOf(name) {
+  const st = readSessionState(name);
+  const live = statuslineLib.statusFor(STATE_DIR, name, { sessionId: st && st.sessionId ? st.sessionId : null });
+  return live.context && Number.isFinite(live.context.used) ? live.context.used : null;
+}
+
+/**
+ * Resolves once a compaction is on record in the transcript after byte `from`
+ * — the `compact_boundary` system record Claude Code writes for a manual or an
+ * automatic compaction alike — or after `waitMs` regardless. A queue job, so
+ * nothing behind it (the task) is typed while it waits. Always `ok`: the task
+ * goes either way, and the log says which.
+ */
+async function awaitCompaction(name, file, from, waitMs) {
+  const until = Date.now() + waitMs;
+  const seen = () => {
+    if (!file) return false;
+    try {
+      const size = fs.statSync(file).size;
+      if (from === null || size <= from) return false;
+      const fd = fs.openSync(file, 'r');
+      try {
+        const len = Math.min(size - from, 4 * 1024 * 1024);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, size - len);
+        return buf.toString('utf8').includes('"compact_boundary"');
+      } finally { fs.closeSync(fd); }
+    } catch { return false; }
+  };
+  while (Date.now() < until) {
+    if (seen()) return { ok: true, compacted: true };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const compacted = seen();
+  if (!compacted) log(`project: ${name}: no compaction on record after ${Math.round(waitMs / 1000)}s; sending the new task anyway`);
+  return { ok: true, compacted };
+}
+
+/**
+ * Type a member's new task, compacting it first when its context is large.
+ * Every step rides the member's own send queue, in order: `/compact` (into an
+ * empty box, at a turn boundary), a job that waits for the compaction to land,
+ * then the framed task.
+ */
+async function sendRerole(project, member, frame) {
+  const used = contextUsedOf(member.name);
+  if (used !== null && used >= REROLE_COMPACT_AT) {
+    const file = transcriptPath(member.name);
+    const from = file ? transcriptSize(file) : null;
+    const c = await enqueueSend(member.name, '/compact', {
+      automated: true, origin: 'project', kind: 'rerole-compact', submit: true, bareCaret: true,
+    });
+    if (!(c.result && !c.result.ok) && !c.dropped) {
+      log(`project ${project.slug}: ${member.name} holds ${used} tokens; compacting before its new task`);
+      enqueueJob(member.name, () => awaitCompaction(member.name, file, from, REROLE_COMPACT_WAIT_MS), {
+        automated: true, origin: 'project', kind: 'rerole-compact-wait',
+      }).catch(() => { });
+    }
+  }
+  return enqueueSend(member.name, frame, { automated: true, origin: 'project', kind: 'rerole' });
+}
+
+/**
  * Carry out the roster change the owner approved, in the order that leaves the
  * fewest loose ends if one step fails: re-roles (a typed line), then the
  * additions (so the lead hears about them in the same frame), then the
@@ -9703,13 +9867,14 @@ async function applyPendingChange(project) {
       const m = (p.members || []).find((x) => x.role === c.role);
       if (m) m.firstPrompt = c.firstPrompt;
     });
-    enqueueSend(member.name, projectsLib.reroleFrame(project, c.role, c.firstPrompt), {
-      automated: true, origin: 'project', kind: 'rerole',
-    }).catch((e) => log(`project ${project.slug}: ${c.role} re-role failed: ${e.message}`));
+    sendRerole(project, member, projectsLib.reroleFrame(project, c.role, c.firstPrompt))
+      .catch((e) => log(`project ${project.slug}: ${c.role} re-role failed: ${e.message}`));
     reroled.push(member.claudeName);
   }
 
-  const { spawned, failed } = await spawnMembers(project, pc.added || []);
+  const { spawned, failed } = await spawnMembers(project, pc.added || [], {
+    leaving: (pc.removed || []).map((r) => r.role),
+  });
 
   const ended = [];
   const refused = [];
@@ -9745,6 +9910,8 @@ async function applyPendingChange(project) {
       spawned: spawned.map((m) => m.claudeName), ended, reroled, failed, refused,
     }), { automated: true, origin: 'project', kind: 'changeApplied' }).catch(() => { });
   }
+  // The members that stay hear who their peers are now; the new ones already do.
+  if (spawned.length || ended.length) announceRoster(project.id, { except: spawned.map((m) => m.name) });
   log(`project ${project.slug}: change rev ${pc.rev} applied — spawned ${spawned.length}, `
     + `re-roled ${reroled.length}, winding down ${ended.length}, failed ${failed.length}, refused ${refused.length}`);
   return {
@@ -16978,6 +17145,7 @@ async function handleRequest(req, res) {
       if (!(await requireSession(res, name))) return;
       const st = readSessionState(name);
       const live = statuslineLib.statusFor(STATE_DIR, name, { sessionId: st && st.sessionId ? st.sessionId : null });
+      live.context = statuslineLib.withCeiling(live.context, contextCeilingOf(name));
       const breakdown = contextBreakdownFor(name, st);
       return sendJson(res, 200, {
         context: live.context,
@@ -18252,6 +18420,10 @@ async function handleRequest(req, res) {
       }
       const badBrief = projectsLib.briefProblem(body.brief);
       if (badBrief) return sendErr(res, 400, badBrief);
+      // The context ceiling: absent is the default, null is "Claude Code's own".
+      const contextWindow = body.contextWindow === undefined ? projectsLib.CONTEXT_DEFAULT : body.contextWindow;
+      const badContext = projectsLib.contextProblem(contextWindow);
+      if (badContext) return sendErr(res, 400, badContext);
 
       // A directory the owner NAMED must exist; one they did not name is the
       // project's own, `<PROJECTS_HOME>/<slug>`, made below once nothing else
@@ -18311,11 +18483,13 @@ async function handleRequest(req, res) {
         status: 'drafting',
         brief: String(body.brief).trim().slice(0, projectsLib.MAX_BRIEF),
         cwd,
+        contextWindow,
         lead: {
           role: projectsLib.LEAD_ROLE,
           name: leadTmux,
           claudeName: projectsLib.claudeNameFor(slug, projectsLib.LEAD_ROLE),
           sessionId: null,
+          contextCeiling: null,
           spawnedAt: now,
           endedAt: null,
         },
@@ -18341,8 +18515,9 @@ async function handleRequest(req, res) {
         rev: 1,
       };
       const persona = writePersona(project.id, projectsLib.LEAD_ROLE, projectsLib.leadPersona(project));
+      project.lead.contextCeiling = launchCeiling(project, project.lead);
       const launched = await launchProjectSession(leadTmux, cwd,
-        claudeLaunchCommand({ claudeName: project.lead.claudeName, persona }));
+        claudeLaunchCommand({ claudeName: project.lead.claudeName, persona, context: project.lead.contextCeiling }));
       if (launched.error) {
         unlinkPersonas(project.id);
         // 503 when tmux could not be observed, as for any session route: nothing
@@ -18418,7 +18593,7 @@ async function handleRequest(req, res) {
           }
           const spec = projectsLib.parseManifest(
             `\`\`\`huginn-project owner\n${JSON.stringify({
-              summary: 'owner add', sessions: [{ role, firstPrompt: description, cwd: body.cwd ?? null, model: body.model ?? null, effort: body.effort ?? null, mode: body.mode ?? null }],
+              summary: 'owner add', sessions: [{ role, firstPrompt: description, cwd: body.cwd ?? null, model: body.model ?? null, effort: body.effort ?? null, mode: body.mode ?? null, context: body.context ?? null }],
             })}\n\`\`\``,
             'owner', { cwd: project.cwd },
           );
@@ -18438,6 +18613,7 @@ async function handleRequest(req, res) {
               automated: true, origin: 'project', kind: 'spawned',
             }).catch(() => { });
           }
+          announceRoster(projectId, { except: spawned.map((x) => x.name) });
           log(`project ${project.slug}: owner added ${spawned[0].name} (${role})`);
           return sendJson(res, 201, {
             ok: true, spawned: true, member: projectsLib.memberRow(spawned[0]), project: projectsLib.publicProject(saved),
@@ -18476,6 +18652,7 @@ async function handleRequest(req, res) {
           proj.members = [...(proj.members || []).filter((x) => x.role !== role), member];
         });
         if (!saved) return sendErr(res, 404, 'no such project');
+        announceRoster(projectId);
         log(`project ${project.slug}: adopted ${name} as ${role}`);
         return sendJson(res, 201, { ok: true, member, project: projectsLib.publicProject(saved) });
       }
@@ -18518,6 +18695,7 @@ async function handleRequest(req, res) {
               `[Huginn] The owner asked ${member.claudeName} to wrap up and end; it is leaving the project.`,
               { automated: true, origin: 'project', kind: 'memberEnding' }).catch(() => { });
           }
+          announceRoster(projectId);
           return sendJson(res, 200, {
             ok: true, dropped: member, ended: true, project: projectsLib.publicProject(saved),
           });
@@ -18532,6 +18710,7 @@ async function handleRequest(req, res) {
         // the same "orders from a ghost" the delete route unlinks for.
         try { fs.unlinkSync(projectRenderPath(projectId, roleInPath)); } catch { /* never was one */ }
         log(`project ${project.slug}: dropped ${member.name} (${roleInPath}); the session is still running`);
+        announceRoster(projectId);
         return sendJson(res, 200, {
           ok: true,
           dropped: member,
@@ -18571,9 +18750,7 @@ async function handleRequest(req, res) {
           if (x) x.firstPrompt = description;
         });
         if (!saved) return sendErr(res, 404, 'no such project');
-        const r = await enqueueSend(member.name, projectsLib.reroleFrame(project, roleInPath, description), {
-          automated: true, origin: 'project', kind: 'rerole',
-        });
+        const r = await sendRerole(project, member, projectsLib.reroleFrame(project, roleInPath, description));
         log(`project ${project.slug}: owner re-roled ${member.name} (${roleInPath})`);
         return sendJson(res, 200, {
           ok: true,
@@ -18652,6 +18829,14 @@ async function handleRequest(req, res) {
           const bad = projectsLib.transitionProblem(current.status, String(body.status));
           if (bad) return sendErr(res, 409, bad);
         }
+        // The ceiling for LAUNCHES from now on: a member spawned later, and every
+        // session at its next restore. A running `claude` keeps the window it was
+        // started with; nothing here restarts one.
+        const contextGiven = Object.prototype.hasOwnProperty.call(body, 'contextWindow');
+        if (contextGiven) {
+          const bad = projectsLib.contextProblem(body.contextWindow);
+          if (bad) return sendErr(res, 400, bad);
+        }
         let manifest = null;
         if (body.manifest != null) {
           // An edited manifest is re-validated with the SAME rules the parser
@@ -18669,6 +18854,7 @@ async function handleRequest(req, res) {
           if (name !== null) proj.name = name;
           if (typeof body.brief === 'string') proj.brief = body.brief.trim();
           if (body.status != null) proj.status = String(body.status);
+          if (contextGiven) proj.contextWindow = body.contextWindow;
           if (manifest) {
             proj.manifest = {
               ...proj.manifest,

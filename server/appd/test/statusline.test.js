@@ -159,3 +159,15 @@ test('clearStatus removes the record and tolerates its absence', () => {
   sl.clearStatus(dir, 'gone');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('a context under a CEILING is measured against it, and the model\'s window stays on the wire', () => {
+  // Claude Code 2.1.322 under `--autocompact 200k` still reports a 1M window and a
+  // percentage of it (measured 2026-11-15): 90k is "9%" there and 45% of the ceiling.
+  const ctx = { used: 90_000, window: 1_000_000, percent: 9, exceeds200k: false };
+  assert.deepEqual({ used: 90_000, window: 200_000, percent: 45, exceeds200k: false, modelWindow: 1_000_000 },
+    sl.withCeiling(ctx, 200_000));
+  assert.equal(ctx, sl.withCeiling(ctx, null), 'no ceiling: unchanged');
+  assert.equal(ctx, sl.withCeiling(ctx, 1_000_000), 'a ceiling at the window: unchanged');
+  assert.equal(null, sl.withCeiling(null, 200_000), 'no record before the first response: still none');
+  assert.equal(100, sl.withCeiling({ used: 250_000, window: 1_000_000, percent: 25 }, 200_000).percent, 'clamped');
+});

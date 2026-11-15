@@ -361,10 +361,35 @@ function sweepBackoffMs(level, base = 10 * 60_000) {
   return SWEEP_BACKOFF_STEPS[i] * (Number(base) > 0 ? Number(base) : 10 * 60_000);
 }
 
+/**
+ * The oldest Claude Code known to take `--autocompact`. The changelog never
+ * announced the flag; 2.1.304 is the first release whose notes name it. An
+ * older CLI refuses an unknown option and exits, so a launch there must look
+ * exactly as it did before the project context ceiling existed.
+ */
+const AUTOCOMPACT_MIN_CLI = '2.1.304';
+
+/** `2.1.322` against a floor, numerically; false for anything that does not parse. */
+function cliAtLeast(version, floor) {
+  const parse = (x) => {
+    const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(x || '').trim());
+    return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+  };
+  const a = parse(version);
+  const b = parse(floor);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+}
+
+/** Whether a Claude Code of this version takes `--autocompact`; false when the version is unknown. */
+function takesAutocompact(version) { return cliAtLeast(version, AUTOCOMPACT_MIN_CLI); }
+
 module.exports = {
   stableStringify, settingsDigest, mcpDigest, claudeFingerprint, genOf, claudeVersionFromPath,
   assignGen, runtimeFor,
   HOLD_WORDS, safePointHold, holdWord, pressureAvg10, pressureLull,
   looksLikeClaude, isShell, pickClaudePid, claudeArgs, replayArgs, shellQuote, relaunchCommand,
   sweepCandidates, sweepPick, sweepBackoffMs, SWEEP_BACKOFF_STEPS,
+  AUTOCOMPACT_MIN_CLI, cliAtLeast, takesAutocompact,
 };

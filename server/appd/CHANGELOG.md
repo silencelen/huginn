@@ -9,6 +9,33 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.22.0 — unreleased
+
+### Added
+- Project sessions are launched with a context ceiling, so each one compacts at 400k tokens by
+  default instead of near the end of a 1M window. Every request a session makes re-reads its whole
+  context, so a team riding the full window paid for half a million tokens on every message any of
+  them received. The ceiling is set per project (`contextWindow` on create and `PATCH`, 100000 to
+  1000000, `null` for Claude Code's own) and per role (`context` in the manifest, or on the owner's
+  direct add). It reaches each session's subagents, and it is passed again whenever a session is
+  restored, because a resumed conversation does not keep it. It is passed only to Claude Code
+  2.1.304 or later. Projects made before this version keep Claude Code's default until a ceiling is
+  set.
+- The context figure of a project session is a share of its ceiling. Claude Code's status line
+  goes on reporting the model's 1M window under a ceiling, so a session a quarter of the way to its
+  compaction read 4%. Rows carry the reported window as `context.modelWindow`.
+- The lead and member personas say what a message costs and how the team should work: one complete
+  message per finished task or blocker, results in a file, verification done once, a single
+  blocking wait with a timeout instead of sleep loops, and a fresh subagent for each task. The lead
+  is told not to run heartbeat loops, because a member's idle notice is the signal. The manifest
+  contract asks for a small team: split only where work is parallel or needs isolation, use the
+  cheapest model that fits, and leave effort unset unless a role needs more.
+- Members are told their peers' names, so a hand-off can go from member to member instead of
+  through the lead. When members are added, ended or dropped, each running member gets one
+  `[Huginn]` line with the new list.
+- A member given a new task while its context holds 100k tokens or more is compacted first. The
+  task follows once the compaction shows in the transcript, or after three minutes regardless.
+
 ## 3.21.1 — 2026-11-13
 
 ### Fixed
