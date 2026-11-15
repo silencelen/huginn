@@ -183,7 +183,11 @@ const SEND_FILE_TOOL = 'mcp__huginn__send_file';
 // start_session only ASKS the owner (its own card approves the session), so a
 // permission dialog on the tool call itself would be the same question twice.
 const START_SESSION_TOOL = 'mcp__huginn__start_session';
-const HUGINN_TOOLS = [SEND_FILE_TOOL, START_SESSION_TOOL];
+// report and reports only hand a few lines to the daemon for the project's lead
+// (lib/projectreports.js); a prompt on each would cost the owner a tap for
+// every finished task, the friction the channel exists to remove.
+const REPORT_TOOLS = ['mcp__huginn__report', 'mcp__huginn__reports'];
+const HUGINN_TOOLS = [SEND_FILE_TOOL, START_SESSION_TOOL, ...REPORT_TOOLS];
 
 /**
  * --allow-send-file: appends the send_file tool to `permissions.allow` when it is

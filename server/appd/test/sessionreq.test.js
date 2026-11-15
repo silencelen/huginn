@@ -241,7 +241,7 @@ test('start_session parks a request and BLOCKS; the owner declining comes back a
   const s = mcp({ HUGINN_APPD_STATE_DIR: state, HUGINN_SESSION_NAME: 'planner' });
   try {
     const list = await s.call('tools/list', {}).done;
-    assert.deepEqual(list.result.tools.map((t) => t.name), ['send_file', 'start_session']);
+    assert.deepEqual(list.result.tools.map((t) => t.name), ['send_file', 'start_session', 'report', 'reports']);
     const req = s.call('tools/call', { name: 'start_session', arguments: { directory: dir, prompt: 'hello there', name: 'Fresh' } });
     let live = [];
     for (let i = 0; i < 100 && !live.length; i++) { await wait(20); live = sr.liveRequests(state, SESSION); }

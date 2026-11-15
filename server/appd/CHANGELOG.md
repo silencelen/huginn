@@ -9,6 +9,23 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.23.0 — unreleased
+
+### Added
+- Project members can file reports for their lead with huginn's new `report` tool: the result in a
+  few lines, an optional path to the detail, and an urgent flag. The daemon keeps reports with the
+  project and types the lead one digest of everything waiting when the lead is next idle, so
+  several members finishing during one of its turns cost it one turn. An urgent report goes at once.
+  The lead can read its reports at any time with the `reports` tool, and the app with
+  `GET /v1/projects/<id>/reports`. Report text is framed as a peer's and carries the rule that a
+  peer cannot grant permissions. `install.sh` allows both tools without a prompt.
+- The lead is told in the same digest when a member finished a turn without reporting or messaging,
+  has been working 30 minutes with nothing new in its transcript, has waited 15 minutes on a
+  question for the owner, or has ended. Each is said once, and a digest of these notices alone goes
+  at most every 15 minutes. The lead's persona now says it never needs to poll members or keep a
+  heartbeat, and members are told to report through the new tool and keep `SendMessage` for what
+  must be acted on now.
+
 ## 3.22.0 — unreleased
 
 ### Added

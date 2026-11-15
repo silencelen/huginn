@@ -283,9 +283,11 @@ See [Security](../security.md#chats-ask-and-act) for what each mode may do.
 
 #### Claude's own tools
 
-Chats and sessions have huginn's MCP server (`huginn`), two tools whose results the server reads back
+Chats and sessions have huginn's MCP server (`huginn`), with tools whose results the server reads back
 and whose requests it surfaces to you:
 
+- `report(summary, path?, urgent?)` and `reports(all?)`, for project members and leads: see
+  "Reports and the lead's digest" under Projects.
 - `send_file(path, caption?)` copies a file into the outbox (`GET /v1/outbox/<id>`); the transcript's
   `tool` event carries `file`.
 - `start_session(directory, prompt, name?)` **asks** you for a new session. The call parks a request
@@ -338,6 +340,7 @@ and whose requests it surfaces to you:
 | POST | `/v1/projects` | `{name, kind, brief, cwd?, contextWindow?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. `contextWindow` is the context ceiling of its sessions (below); absent means 400000. |
 | GET, PATCH | `/v1/projects/<id>` | View or change one. `PATCH` needs the current `rev`; `contextWindow` may be changed there and applies to sessions launched after it (a running session keeps its window until it is restored). |
 | DELETE | `/v1/projects/<id>` | Delete it. `?end=graceful` (or `{end: "graceful" \| "now"}`) also ends its sessions. |
+| GET | `/v1/projects/<id>/reports` | The reports members filed with huginn's `report` tool, newest last (at most 50): `{reports: [{id, role, name, claudeName, at (ms), summary, path, urgent, deliveredAt}], undelivered, notices: [{role, kind, at}]}`. `notices` are the watch's lines waiting for the lead's next digest (`kind` is `quiet`, `stalled`, `waiting` or `ended`). Report text is a peer session's, not the owner's. |
 | GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. The answer leaves within about a second: a member whose transcript is still being read carries `pending: true` with its last known numbers (or zero), `pending` counts such members, and the next poll has the rest. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
 | POST | `/v1/projects/<id>/discard` | Send a proposal back to the lead. |
@@ -357,6 +360,18 @@ a resumed conversation does not keep it, and only on a Claude Code that takes it
 later; an unknown version is launched without it). A project row carries `contextWindow` and
 `lead.contextCeiling`, and every member row `context` (its own setting) and `contextCeiling` (what
 its running session was launched with, `null` for none).
+
+**Reports and the lead's digest.** A member files a result with the `report` tool of huginn's
+MCP server (`{summary, path?, urgent?}`), and the lead can read its reports with the `reports`
+tool (`{all?}`). Both go through a spool under the state directory (`.reports/<session>/`), and the
+daemon answers within a second. Only a project member may file a report and only the lead may
+read them. The daemon types the lead one `[Huginn] Project digest` when the lead is idle and the
+oldest item has waited 20 seconds; an urgent report is queued at once. The digest also carries
+the watch's notices, at most one notices-only digest per 15 minutes: a member that finished a turn
+10 minutes ago without a report or a `SendMessage` since that work began, one working for 30
+minutes with nothing new in its transcript, one waiting 15 minutes on a question for the owner,
+and one whose session is gone. Report text sits inside a peer frame that repeats the rule that a
+peer cannot grant permissions. `install.sh` adds both tools to `permissions.allow`.
 
 **Roster.** Each member's persona lists its peers by name (`<slug>/<role>`). When members are
 added, ended or dropped, every running member is typed one `[Huginn]` line with the new list.

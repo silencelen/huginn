@@ -555,20 +555,25 @@ test('--allow-send-file appends the rules once, keeps everything else, and leave
   const { applySendFileAllow, SEND_FILE_TOOL, START_SESSION_TOOL, HUGINN_TOOLS } = require('../install-hooks');
   assert.equal(SEND_FILE_TOOL, require('../lib/outbox').SEND_FILE_TOOL, 'one name for the tool');
   assert.equal(START_SESSION_TOOL, require('../lib/sessionreq').START_SESSION_TOOL, 'one name for the tool');
-  assert.deepEqual(HUGINN_TOOLS, [SEND_FILE_TOOL, START_SESSION_TOOL]);
+  assert.deepEqual(HUGINN_TOOLS, [SEND_FILE_TOOL, START_SESSION_TOOL, 'mcp__huginn__report', 'mcp__huginn__reports']);
   const s = { permissions: { allow: ['Bash(ls:*)'], deny: ['mcp__huginn__send_file'] }, model: 'opus' };
   assert.deepEqual(applySendFileAllow(s).changes, [
     { key: `permissions.allow:${SEND_FILE_TOOL}`, action: 'added' },
     { key: `permissions.allow:${START_SESSION_TOOL}`, action: 'added' },
+    { key: 'permissions.allow:mcp__huginn__report', action: 'added' },
+    { key: 'permissions.allow:mcp__huginn__reports', action: 'added' },
   ]);
-  assert.deepEqual(s, { permissions: { allow: ['Bash(ls:*)', SEND_FILE_TOOL, START_SESSION_TOOL], deny: ['mcp__huginn__send_file'] }, model: 'opus' });
+  assert.deepEqual(s, { permissions: { allow: ['Bash(ls:*)', SEND_FILE_TOOL, START_SESSION_TOOL, 'mcp__huginn__report', 'mcp__huginn__reports'], deny: ['mcp__huginn__send_file'] }, model: 'opus' });
   assert.ok(applySendFileAllow(s).changes.every((c) => c.action === 'kept'), 'a second run changes nothing');
   // A host set up before start_session existed gets only the rule it lacks.
   const older = { permissions: { allow: [SEND_FILE_TOOL] } };
-  assert.deepEqual(applySendFileAllow(older).changes.map((c) => c.action), ['kept', 'added']);
+  assert.deepEqual(applySendFileAllow(older).changes.map((c) => c.action), ['kept', 'added', 'added', 'added']);
+  // And one set up before the report channel gets the two report tools only.
+  const prereport = { permissions: { allow: [SEND_FILE_TOOL, START_SESSION_TOOL] } };
+  assert.deepEqual(applySendFileAllow(prereport).changes.map((c) => c.action), ['kept', 'kept', 'added', 'added']);
   const empty = {};
   applySendFileAllow(empty);
-  assert.deepEqual(empty, { permissions: { allow: [SEND_FILE_TOOL, START_SESSION_TOOL] } });
+  assert.deepEqual(empty, { permissions: { allow: [SEND_FILE_TOOL, START_SESSION_TOOL, 'mcp__huginn__report', 'mcp__huginn__reports'] } });
   const odd = { permissions: { allow: 'Bash' } };
   assert.equal(applySendFileAllow(odd).changes[0].action, 'kept');
   assert.deepEqual(odd, { permissions: { allow: 'Bash' } }, 'reported, not repaired');
@@ -580,6 +585,6 @@ test('--allow-send-file writes through main and refuses to be combined', () => {
   const file = path.join(dir, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ hooks: {} }));
   assert.equal(main(['--allow-send-file', '--settings', file]), 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow, ['mcp__huginn__send_file', 'mcp__huginn__start_session']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).permissions.allow, ['mcp__huginn__send_file', 'mcp__huginn__start_session', 'mcp__huginn__report', 'mcp__huginn__reports']);
   assert.throws(() => parseArgs(['--allow-send-file', '--uninstall']), /runs on its own/);
 });

@@ -240,6 +240,13 @@ into a question of kind `session` (`lib/sessionreq.js`, `lib/questions.js`). The
 tmux session from `TMUX_PANE` (`tmux display-message -p -t $TMUX_PANE '#S'`), which a session hosted
 in a background PTY may lack — such a call answers `started: false` rather than asking nobody.
 
+Its `report` and `reports` tools (project members and leads, `lib/projectreports.js`) use a second
+spool, `.reports/<tmux name>/<id>.req.json`, answered with `<id>.ans` within the daemon's one-second
+tick. The tool waits up to 10 s for that answer, then withdraws the request and says nothing was
+filed. The watch that adds notices to the lead's digest reads the title hook's state word
+(`running`, `idle`, `attention`), the last transcript record (`lastWorkAt`), and a `SendMessage`
+tool call (`"name":"SendMessage"`) in what a member's transcript gained since its run began.
+
 ### The headroom gate
 
 `huginn-headroom-gate` delays agent spawns while the daemon has armed a usage sentinel in
