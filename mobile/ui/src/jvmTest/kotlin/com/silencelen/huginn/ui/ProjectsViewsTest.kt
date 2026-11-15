@@ -1,6 +1,7 @@
 package com.silencelen.huginn.ui
 
 import com.silencelen.huginn.data.GraphTokens
+import com.silencelen.huginn.data.ProjectBudgetView
 import com.silencelen.huginn.data.GraphTotals
 import com.silencelen.huginn.data.ProjectDashboard
 import com.silencelen.huginn.data.ProjectDashboardMember
@@ -409,5 +410,29 @@ class ProjectsViewsTest {
         val actions = ProjectMemberActions(onAdopt = { role, name -> seen = role to name })
         actions.onAdopt("firmware", "scratch")
         assertEquals("firmware" to "scratch", seen)
+    }
+
+    @Test
+    fun `a member's disclosure says what it costs to run and what it exchanged`() {
+        // appd 3.24: spend follows the context each request re-reads, and the
+        // messages between sessions start the requests.
+        val m = dashMember("api", "idle").copy(
+            requests = 120, avgContext = 412_300, spendShare = 0.31,
+            messagesIn = 14, messagesOut = 9, reportsFiled = 3, compactions = 2,
+        )
+        val lines = memberDetailLines(m)
+        assertTrue("cost  412.3k tokens per request · 120 requests · 31% of the spend" in lines, lines.toString())
+        assertTrue("messages  14 in · 9 out · 3 reports · 2 compactions" in lines, lines.toString())
+        val quiet = memberDetailLines(dashMember("web", "idle"))
+        assertFalse(quiet.any { it.startsWith("cost") || it.startsWith("messages") }, "an older daemon's zeroes draw nothing")
+    }
+
+    @Test
+    fun `the budget line says spent of weekly, estimated and soft, and is absent without a budget`() {
+        val d = ProjectDashboard(project = row(), budget = ProjectBudgetView(weeklyUsd = 50.0, weekStart = 1L, spentUsd = 12.4, percent = 25))
+        assertEquals("budget \$12.40 of \$50.00 this week (25%) · estimated, soft", dashboardBudget(d))
+        assertEquals("budget \$50.00 a week · not measured yet",
+            dashboardBudget(ProjectDashboard(project = row(), budget = ProjectBudgetView(weeklyUsd = 50.0))))
+        assertNull(dashboardBudget(ProjectDashboard(project = row())))
     }
 }

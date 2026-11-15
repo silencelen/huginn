@@ -354,6 +354,14 @@ function newState(sessionId) {
       tokens: zeroTokens(),
       compactions: 0,
       droppedTokens: 0,
+      // Distinct API calls (the same dedupe as `tokens`), the context they carried,
+      // and the messages this session exchanged with other sessions: one
+      // `<cross-session-message>` enqueue per message received, one SendMessage
+      // call per message sent. What a project's dashboard divides by.
+      requests: 0,
+      contextTokens: 0,
+      messagesIn: 0,
+      messagesOut: 0,
     },
     files: new Set(),
     models: new Set(),
@@ -517,6 +525,15 @@ function consume(s, d) {
     s.lastTs = ts;
   }
 
+  // A message from another Claude session arrives through the queue first, as a
+  // `<cross-session-message …>` element, whether it then starts a turn or is
+  // absorbed into one — so the enqueue is counted, once per message.
+  if (d.type === 'queue-operation') {
+    if (d.operation === 'enqueue' && typeof d.content === 'string'
+      && d.content.trimStart().startsWith('<cross-session-message')) s.totals.messagesIn++;
+    return;
+  }
+
   if (d.type === 'system') {
     if (d.subtype === 'compact_boundary') {
       closeTurn(s);
@@ -620,6 +637,8 @@ function consume(s, d) {
 
   const tok = usageOnce(d, s.seenRequests);
   if (tok) {
+    s.totals.requests++;
+    s.totals.contextTokens += (tok.input || 0) + (tok.cacheRead || 0) + (tok.cacheCreation || 0);
     addTokens(s.totals.tokens, tok);
     addTokens(turn.tokensTail, tok);
     // Off the SAME deduped result, so the priced tokens and the displayed
@@ -649,6 +668,7 @@ function consume(s, d) {
     turn.tokensTail = zeroTokens();
     turn.toolCalls++;
     s.totals.toolCalls++;
+    if (b.name === 'SendMessage') s.totals.messagesOut++;
     turn.lastToolTs = ts;
     const name = b.name || 'tool';
     turn.tools.set(name, (turn.tools.get(name) || 0) + 1);
@@ -943,6 +963,10 @@ function buildWire(state, dir, agentCache, nowSec, size) {
       activeAgents: agents.filter((a) => a.status === 'running').length,
       compactions: state.totals.compactions,
       droppedTokens: state.totals.droppedTokens,
+      requests: state.totals.requests,
+      avgContext: state.totals.requests ? Math.round(state.totals.contextTokens / state.totals.requests) : 0,
+      messagesIn: state.totals.messagesIn,
+      messagesOut: state.totals.messagesOut,
       filesTouched: state.files.size,
       models: [...state.models],
       efforts: [...state.efforts],

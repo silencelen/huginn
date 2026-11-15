@@ -98,6 +98,7 @@ const tmuxSockLib = require('./lib/tmux-socket');
 // one look (lib/absence.js, 2026-11-06).
 const absenceLib = require('./lib/absence');
 const reportsLib = require('./lib/projectreports');
+const budgetLib = require('./lib/projectbudget');
 // The runtime GENERATION a session was launched under, and the pure half of
 // cycling a stale one onto the current wiring (lib/runtime.js, 2026-11-07).
 const runtimeLib = require('./lib/runtime');
@@ -123,7 +124,7 @@ const resumeLib = require('./lib/resume');
 // disagree about them; the file and the route live here.
 const quickLib = require('./lib/quickactions');
 
-const VERSION = '3.23.0';
+const VERSION = '3.24.0';
 const PORT = Number(process.env.HUGINN_APPD_PORT || 8787);
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
@@ -10333,6 +10334,7 @@ async function reconcileProjectsPass() {
     for (const key of ok.touched) touched.add(key);
     for (const note of ok.notes) log(`project ${project.slug}: ${note}`);
     try { watchProject(project, nowMs); } catch (e) { log(`project ${project.slug}: watch failed: ${e.message}`); }
+    await checkBudget(project, nowMs).catch((e) => log(`project ${project.slug}: budget check failed: ${e.message}`));
     if (!ok.drop.length && !plan.rebind.length && !ok.endProject) continue;
     // Re-read inside updateProject: the probes awaited, and the project may have
     // been changed through a route meanwhile.
@@ -10446,6 +10448,11 @@ async function projectDashboard(project) {
     capMs: DASHBOARD_CAP_MS,
   });
   const { totals, rate } = projectsLib.aggregateDashboard(rows);
+  const reportsByRole = {};
+  const reports = loadReports(project.id);
+  for (const r of reports) reportsByRole[r.role] = (reportsByRole[r.role] || 0) + 1;
+  totals.reports = reports.length;
+  const ctx = { totalUsd: totals.estCost ? totals.estCost.usd : null, reportsByRole };
   return {
     project: projectsLib.projectRow(project, joined),
     generatedAt: Math.floor(Date.now() / 1000),
@@ -10453,8 +10460,68 @@ async function projectDashboard(project) {
     rate,
     // How many members' numbers are still being read (their rows say `pending`).
     pending,
-    members: rows.map(projectsLib.dashboardMemberRow),
+    members: rows.map((r) => projectsLib.dashboardMemberRow(r, ctx)),
+    budget: budgetView(project),
   };
+}
+
+// ---- the soft budget (lib/projectbudget.js) --------------------------------
+
+/** The week's ledger: beside the project, never in the record (a write a minute would move its rev). */
+const BUDGET_STORE = path.join(PROJECTS_DIR, 'budget');
+function budgetPath(id) { return path.join(BUDGET_STORE, `${id}.json`); }
+function loadLedger(id) { try { return JSON.parse(fs.readFileSync(budgetPath(id), 'utf8')); } catch { return null; } }
+function saveLedger(id, ledger) {
+  fs.mkdirSync(BUDGET_STORE, { recursive: true, mode: 0o700 });
+  const tmp = `${budgetPath(id)}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(ledger), { mode: 0o600 });
+  fs.renameSync(tmp, budgetPath(id));
+}
+
+/** What the dashboard says about the budget: null without one; the week as last measured. */
+function budgetView(project) {
+  const b = budgetLib.cleanBudget(project.budget);
+  if (!b) return null;
+  const l = loadLedger(project.id);
+  let spent = null;
+  if (l && l.v === 1) {
+    spent = 0;
+    for (const [k, v] of Object.entries(l.last || {})) spent += Math.max(0, v - ((l.base || {})[k] ?? 0));
+    spent = Math.round(spent * 100) / 100;
+  }
+  return {
+    weeklyUsd: b.weeklyUsd,
+    weekStart: l && l.v === 1 ? l.start : null,
+    spentUsd: spent,
+    percent: spent === null ? null : Math.round((spent / b.weeklyUsd) * 100),
+  };
+}
+
+/**
+ * One look at a budgeted project's week, from the reconcile pass: the members'
+ * spend through the dashboard's own roll-up (cached on transcript size, so a
+ * quiet project costs a stat per member), the ledger moved on, and a threshold
+ * crossed for the first time this week said to the lead (in its next digest) and
+ * to the owner (a push that opens the project). Never a stop.
+ */
+async function checkBudget(project, nowMs) {
+  const b = budgetLib.cleanBudget(project.budget);
+  if (!b || project.status !== 'active') return;
+  const dash = await projectDashboard(project);
+  const members = (dash.members || []).filter((m) => !m.pending).map((m) => ({
+    key: `${m.role}|${m.sessionId || m.name}`, usd: typeof m.estCostUsd === 'number' ? m.estCostUsd : null,
+  }));
+  const step = budgetLib.budgetStep(loadLedger(project.id), members, { now: nowMs, weeklyUsd: b.weeklyUsd });
+  saveLedger(project.id, step.ledger);
+  if (!step.crossed.length) return;
+  const at = { percent: step.percent, spentUsd: step.spentUsd, weeklyUsd: b.weeklyUsd, weekStart: step.weekStart };
+  addLeadNotices(project.id, [{
+    key: `${project.id}\tbudget`, role: 'budget', claudeName: project.name, kind: 'budget',
+    text: budgetLib.budgetLine(project, at), forMs: 0, at: nowMs,
+  }]);
+  deliverPush(budgetLib.budgetPush(project, at))
+    .catch((e) => log(`project ${project.slug}: budget push failed: ${e.message}`));
+  log(`project ${project.slug}: ${step.percent}% of its weekly budget ($${step.spentUsd} of $${b.weeklyUsd})`);
 }
 
 /**
@@ -18614,6 +18681,9 @@ async function handleRequest(req, res) {
       const contextWindow = body.contextWindow === undefined ? projectsLib.CONTEXT_DEFAULT : body.contextWindow;
       const badContext = projectsLib.contextProblem(contextWindow);
       if (badContext) return sendErr(res, 400, badContext);
+      const budget = body.budget === undefined ? null : body.budget;
+      const badBudget = budgetLib.budgetProblem(budget);
+      if (badBudget) return sendErr(res, 400, badBudget);
 
       // A directory the owner NAMED must exist; one they did not name is the
       // project's own, `<PROJECTS_HOME>/<slug>`, made below once nothing else
@@ -18674,6 +18744,7 @@ async function handleRequest(req, res) {
         brief: String(body.brief).trim().slice(0, projectsLib.MAX_BRIEF),
         cwd,
         contextWindow,
+        budget: budgetLib.cleanBudget(budget),
         lead: {
           role: projectsLib.LEAD_ROLE,
           name: leadTmux,
@@ -19041,6 +19112,13 @@ async function handleRequest(req, res) {
           const bad = projectsLib.contextProblem(body.contextWindow);
           if (bad) return sendErr(res, 400, bad);
         }
+        // The soft budget: `{weeklyUsd}` or null. A new figure keeps the week's
+        // ledger, so what was spent already still counts against it.
+        const budgetGiven = Object.prototype.hasOwnProperty.call(body, 'budget');
+        if (budgetGiven) {
+          const bad = budgetLib.budgetProblem(body.budget);
+          if (bad) return sendErr(res, 400, bad);
+        }
         let manifest = null;
         if (body.manifest != null) {
           // An edited manifest is re-validated with the SAME rules the parser
@@ -19059,6 +19137,7 @@ async function handleRequest(req, res) {
           if (typeof body.brief === 'string') proj.brief = body.brief.trim();
           if (body.status != null) proj.status = String(body.status);
           if (contextGiven) proj.contextWindow = body.contextWindow;
+          if (budgetGiven) proj.budget = budgetLib.cleanBudget(body.budget);
           if (manifest) {
             proj.manifest = {
               ...proj.manifest,
@@ -19319,6 +19398,7 @@ async function handleRequest(req, res) {
         }
         try { fs.unlinkSync(projectPath(projectId)); } catch { /* already gone */ }
         try { fs.unlinkSync(reportsPath(projectId)); } catch { /* none filed */ }
+        try { fs.unlinkSync(budgetPath(projectId)); } catch { /* no budget */ }
         leadNotices.delete(projectId);
         unlinkPersonas(projectId);
         log(`project ${project.slug}: deleted${ended.length ? `, ended ${ended.join(', ')}` : ''}`

@@ -228,6 +228,7 @@ function noticeLine(n) {
     case 'stalled': return `${n.claudeName} has been working for ${mins} min with nothing new in its transcript (a long command, or stuck).`;
     case 'waiting': return `${n.claudeName} has been waiting ${mins} min on a question for the owner.`;
     case 'ended': return `${n.claudeName} has ended; its session is gone.`;
+    case 'budget': return String(n.text || 'the project has crossed a budget threshold.');
     default: return `${n.claudeName}: ${n.kind}.`;
   }
 }

@@ -3287,9 +3287,36 @@ data class ProjectDashboardMember(
     val estCostUsd: Double? = null,
     val agentCount: Int = 0,
     val lastActivityTs: Long? = null,
+    /**
+     * What this member costs, as appd 3.24 counts it: distinct API requests, the
+     * context each carried on average (spend follows it: every request re-reads
+     * it), the cross-session messages it received and sent, the reports it filed,
+     * its compactions, and its share of the project's estimated spend (0..1, null
+     * when nothing was priced). Zero from an older daemon.
+     */
+    val requests: Int = 0,
+    val avgContext: Long = 0,
+    val messagesIn: Int = 0,
+    val messagesOut: Int = 0,
+    val reportsFiled: Int = 0,
+    val compactions: Int = 0,
+    val spendShare: Double? = null,
     override val endedAt: Long? = null,
     override val spawnedAt: Long? = null,
 ) : ProjectMemberState
+
+/**
+ * A project's soft weekly budget as the dashboard reports it (appd 3.24): the
+ * figure the owner set, when the week began, and what was spent in it, as the
+ * same estimated cost the dashboard shows. Soft: nothing is ever stopped by it.
+ */
+@Serializable
+data class ProjectBudgetView(
+    val weeklyUsd: Double = 0.0,
+    val weekStart: Long? = null,
+    val spentUsd: Double? = null,
+    val percent: Int? = null,
+)
 
 /**
  * The cluster's pace, as the dashboard route reports it.
@@ -3333,6 +3360,8 @@ data class ProjectDashboard(
     val totals: GraphTotals? = null,
     val rate: ProjectRate? = null,
     val members: List<ProjectDashboardMember> = emptyList(),
+    /** Null when the project has no budget, or the daemon predates 3.24. */
+    val budget: ProjectBudgetView? = null,
 )
 
 /** One role a spawn could not create, with the daemon's own sentence about why. */

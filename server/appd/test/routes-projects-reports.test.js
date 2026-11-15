@@ -215,3 +215,38 @@ test('THE WATCH: a member that finished a turn without reporting is named in the
   assert.match(text, /\[Huginn\] rpt\/web finished a turn \d+ min ago and has not reported or messaged since it started that work\./);
   assert.doesNotMatch(text, /rpt\/api finished a turn/, 'a member that reported is not news');
 });
+
+test('THE SOFT BUDGET: a threshold crossed is said to the lead once, and the dashboard shows the week', async () => {
+  const bad = await api(`/v1/projects/${PROJECT_ID}`, { method: 'PATCH', body: JSON.stringify({ rev: 3, budget: { weeklyUsd: 0 } }) });
+  assert.equal(400, bad.status);
+  const cur = JSON.parse(fs.readFileSync(path.join(dataDir, 'projects', `${PROJECT_ID}.json`), 'utf8'));
+  const ok = await api(`/v1/projects/${PROJECT_ID}`, { method: 'PATCH', body: JSON.stringify({ rev: cur.rev, budget: { weeklyUsd: 0.5 } }) });
+  assert.equal(200, ok.status, JSON.stringify(ok.body));
+  assert.deepEqual({ weeklyUsd: 0.5 }, ok.body.budget);
+
+  // api's transcript: one priced request before the week's first look, more after.
+  const file = path.join(tmp, 'api.jsonl');
+  const call = (id, ctx) => JSON.stringify({
+    type: 'assistant', requestId: id, timestamp: new Date().toISOString(),
+    message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'x' }],
+      usage: { input_tokens: 10, output_tokens: 1000, cache_read_input_tokens: ctx, cache_creation_input_tokens: 0 } },
+  });
+  fs.writeFileSync(file, `${call('a1', 100_000)}\n`);
+  // A real member has a Claude session id; the dashboard's roll-up reads by it.
+  fs.writeFileSync(path.join(stateDir, 'rpt-api'), JSON.stringify({ state: 'idle', sessionId: '3b1f0c56-0d4e-4c1a-9a52-2f7e0c6a1b11', transcript: file, cwd: tmp, ts: Date.now() }));
+  await wait(1500);   // the week's first look: what api spent so far is not this week's
+  const lines = Array.from({ length: 20 }, (_, i) => call(`b${i}`, 300_000)).join('\n');
+  fs.appendFileSync(file, `${lines}\n`);
+
+  const text = await until('rpt-lead', /\[Huginn\] Project "Reports" has used \d+% of its weekly budget/, 15_000);
+  assert.match(text, /nothing is stopped/);
+  const dash = await api(`/v1/projects/${PROJECT_ID}/dashboard`);
+  assert.equal(200, dash.status);
+  assert.ok(dash.body.budget.percent >= 100, JSON.stringify(dash.body.budget));
+  assert.equal(0.5, dash.body.budget.weeklyUsd);
+  const row = dash.body.members.find((m) => m.role === 'api');
+  assert.equal(21, row.requests);
+  assert.equal(Math.round((100_010 + 20 * 300_010) / 21), row.avgContext);
+  assert.equal(3, row.reportsFiled);
+  assert.equal(1, row.spendShare, 'the only member that spent anything');
+});

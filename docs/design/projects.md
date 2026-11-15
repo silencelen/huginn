@@ -155,3 +155,14 @@ new in its transcript, has waited 15 minutes on a question for the owner, or is 
 is said once. A member first seen idle, as after a daemon restart, is not news, because the watch
 speaks only of runs it saw. A digest of notices alone goes at most once per 15 minutes. The lead's
 persona now says plainly that it never needs to poll members or keep a heartbeat.
+
+**E8. What each member costs, and a soft budget.** The dashboard now counts, per member, distinct
+requests, context per request (what spend follows), messages received (a `<cross-session-message>`
+enqueue) and sent (a `SendMessage` call), reports, compactions, and the member's share of the
+estimated spend. A project may carry `budget: {weeklyUsd}` in that same estimated unit. The owner
+asked for a soft budget, so crossing 50%, 80% or 100% tells the lead and the owner once a week and
+never stops anything. The week is measured from a per-member ledger
+(`<data>/projects/budget/<id>.json`) rather than as a difference of totals, because a project's
+total falls when a member leaves the record. The unit is an estimate at API prices. On a
+subscription it measures how heavy the work is, not a bill; the owner may prefer a share of the
+weekly limit from the headroom subsystem instead (an open question).
