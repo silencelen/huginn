@@ -136,3 +136,22 @@ most), then the task. A compaction that cannot be confirmed does not cost the me
 
 **Rejected:** holding or batching `SendMessage` traffic in the daemon: it never passes through
 appd, and it must not (see the module header). Step 2 adds a channel the daemon does carry.
+
+**E6. Reports, carried by the daemon.** A member files a result that the lead need not act on this
+minute with the `report` tool of huginn's MCP server. The daemon keeps it with the project
+(`<data>/projects/reports/<id>.json`, the newest 300) and types the lead one digest when the lead
+is next idle and the oldest item has waited 20 seconds, so members finishing together cost the lead
+one turn. An urgent report is queued at once. `SendMessage` stays for "act now". The MCP server
+learns its session the way `start_session` does (the pane's `#S`) and reaches the daemon through a
+spool under the state directory, so it needs neither the API token nor the data directory. The
+daemon decides who may file (a member of a running project, not its lead) and who may read (the
+lead). Report text is a peer's: the digest frames it with the peer disclaimer and keeps the
+daemon's own lines outside that frame. `peerMessageFrame` is still used, by the owner's relay route.
+
+**E7. A watch instead of a heartbeat.** The reconcile pass looks at each running member and adds a
+notice to the lead's next digest when a member finished a turn 10 minutes ago and has neither
+reported nor called `SendMessage` since that work began, has been working 30 minutes with nothing
+new in its transcript, has waited 15 minutes on a question for the owner, or is gone. Each episode
+is said once. A member first seen idle, as after a daemon restart, is not news, because the watch
+speaks only of runs it saw. A digest of notices alone goes at most once per 15 minutes. The lead's
+persona now says plainly that it never needs to poll members or keep a heartbeat.

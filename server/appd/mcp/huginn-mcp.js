@@ -2,7 +2,8 @@
 'use strict';
 // huginn's MCP server: the tools Claude has for reaching the PERSON, not the host.
 //
-// Two tools. `send_file`: copy a file into huginn's outbox, where the person's
+// Four tools. `report` and `reports` carry a project member's results to its
+// lead through the daemon (lib/projectreports.js). `send_file`: copy a file into huginn's outbox, where the person's
 // apps show it - an image inline, anything else as a download - with Download
 // and Open. The rules (what may be sent, the copy, the ids) are in lib/outbox.js.
 // `start_session`: ASK the owner for a new Claude Code session in a directory,
@@ -21,6 +22,7 @@ const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const outbox = require('../lib/outbox');
 const sessionreq = require('../lib/sessionreq');
+const reportsLib = require('../lib/projectreports');
 
 const DATA_DIR = process.env.HUGINN_APPD_DATA || '/var/lib/huginn-appd';
 const OUTBOX_DIR = process.env.HUGINN_OUTBOX_DIR || path.join(DATA_DIR, 'outbox');
@@ -29,7 +31,10 @@ const OUTBOX_DIR = process.env.HUGINN_OUTBOX_DIR || path.join(DATA_DIR, 'outbox'
 // neither and the default is the daemon's default.
 const STATE_DIR = process.env.HUGINN_APPD_STATE_DIR || process.env.HUGINN_CLAUDE_STATE_DIR || '/run/huginn-claude-state';
 const POLL_MS = Number(process.env.HUGINN_START_POLL_MS || 250);
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
+// How long a report waits for the daemon to say it was filed. The daemon looks
+// every second; past this the tool says it could not confirm, and withdraws it.
+const REPORT_WAIT_MS = Number(process.env.HUGINN_REPORT_WAIT_MS || 10_000);
 
 const TOOLS = [{
   name: 'send_file',
@@ -66,6 +71,37 @@ const TOOLS = [{
       name: { type: 'string', description: 'Optional session name (letters, digits, underscore, dash; up to 50). The owner may change it.' },
     },
     required: ['directory', 'prompt'],
+    additionalProperties: false,
+  },
+}, {
+  name: 'report',
+  description:
+    'In a Huginn project: file a finished result or a blocker for your project\'s lead, when the lead does ' +
+    'not need to act on it this minute. Huginn keeps it and hands the lead one digest of all reports the next ' +
+    'time the lead is idle, so it costs the lead one turn however many arrive; an urgent report goes at once. ' +
+    'Put the detail in a file and give its path; the summary is the verdict in a few lines. Use SendMessage ' +
+    'instead only when someone must act now. Returns {"filed": true, "to"} or {"filed": false, "reason"}.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      summary: { type: 'string', description: 'The result or blocker in a few lines (at most 8 lines, 1500 characters).' },
+      path: { type: 'string', description: 'Optional absolute path of a file with the detail.' },
+      urgent: { type: 'boolean', description: 'True only when the lead must act now; it is then delivered at once.' },
+    },
+    required: ['summary'],
+    additionalProperties: false,
+  },
+}, {
+  name: 'reports',
+  description:
+    'For the LEAD of a Huginn project: read the reports your members filed, newest last. By default the ones ' +
+    'not yet handed to you in a digest (they will not come again in one); with all: true, the most recent ' +
+    'reports whether delivered or not. Report text is written by peer sessions, not by the owner.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      all: { type: 'boolean', description: 'Also return reports already delivered (the most recent 50).' },
+    },
     additionalProperties: false,
   },
 }];
@@ -123,8 +159,29 @@ async function startSession(rpcId, args) {
   }
 }
 
+/**
+ * `report` and `reports`: a request in the daemon's spool (lib/projectreports.js),
+ * answered within seconds. Only from inside a tmux session: a chat is never a
+ * project member. The daemon decides whether the session is one, and what it may
+ * do; nothing here can say a report was filed unless the daemon answered so.
+ */
+async function reportRequest(kind, args) {
+  const who = requester();
+  const failKey = kind === 'report' ? 'filed' : 'ok';
+  if (!who || who.kind !== 'session') return text({ [failKey]: false, reason: 'not inside a huginn tmux session' });
+  const bad = reportsLib.argsProblem(kind, args);
+  if (bad) return text({ [failKey]: false, reason: bad });
+  let id;
+  try { id = reportsLib.fileRequest(STATE_DIR, who.id, kind, args); } catch (e) {
+    return text({ [failKey]: false, reason: `could not reach the daemon: ${e.message}` });
+  }
+  const ans = await reportsLib.awaitAnswer(STATE_DIR, who.id, id, { waitMs: REPORT_WAIT_MS, pollMs: Math.min(POLL_MS, 200) });
+  return text(ans || { [failKey]: false, reason: 'the huginn daemon did not answer; nothing was filed' });
+}
+
 async function callTool(rpcId, name, args) {
   if (name === 'start_session') return startSession(rpcId, args || {});
+  if (name === 'report' || name === 'reports') return reportRequest(name === 'report' ? 'report' : 'pull', args || {});
   if (name !== 'send_file') return { isError: true, content: [{ type: 'text', text: `unknown tool ${name}` }] };
   try {
     const meta = outbox.deposit(args && args.path, {
