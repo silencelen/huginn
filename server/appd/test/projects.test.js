@@ -994,3 +994,23 @@ test('the rows carry the ceilings: the project\'s, the lead\'s and each member\'
   assert.equal(200000, m.contextCeiling);
   assert.equal(null, projects.memberRow({ role: 'web' }).contextCeiling);
 });
+
+test('the dashboard says what each member costs: context per request, requests, messages, reports, its share', () => {
+  const ov = (usd, requests, avgContext, extra = {}) => ({
+    totals: { turns: 1, tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, estCost: { usd, unpricedTokens: 0 }, requests, avgContext, messagesIn: 3, messagesOut: 2, compactions: 1, ...extra },
+  });
+  const rows = [
+    { role: 'lead', lead: true, overview: ov(3, 10, 400_000) },
+    { role: 'api', overview: ov(1, 30, 200_000) },
+  ];
+  const { totals } = projects.aggregateDashboard(rows);
+  assert.equal(40, totals.requests);
+  assert.equal(250_000, totals.avgContext, 'weighted by requests, not by members');
+  assert.equal(6, totals.messagesIn);
+  assert.equal(4, totals.messagesOut);
+  const api = projects.dashboardMemberRow(rows[1], { totalUsd: 4, reportsByRole: { api: 5 } });
+  assert.deepEqual({ requests: 30, avgContext: 200_000, messagesIn: 3, messagesOut: 2, compactions: 1, reportsFiled: 5, spendShare: 0.25 },
+    { requests: api.requests, avgContext: api.avgContext, messagesIn: api.messagesIn, messagesOut: api.messagesOut, compactions: api.compactions, reportsFiled: api.reportsFiled, spendShare: api.spendShare });
+  const bare = projects.dashboardMemberRow({ role: 'web' });
+  assert.deepEqual([0, 0, 0, null], [bare.requests, bare.avgContext, bare.reportsFiled, bare.spendShare], 'a member not read yet still has every field');
+});

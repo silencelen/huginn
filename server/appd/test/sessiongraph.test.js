@@ -984,3 +984,31 @@ test('a pasted message is labelled with what was pasted, not the paste tag', () 
   assert.equal(user.label, 'bug: empty chats should auto delete');
   assert.ok(!user.detail.includes('pasted_content'), user.detail);
 });
+
+test('the cost figures: requests and context per request once per API call, messages in and out', () => {
+  // What a project's dashboard divides by (2026-11-15): spend follows the
+  // context each request carries, and cross-session messages start the requests.
+  resetCache();
+  const dir = tmpdir();
+  const peer = (at, from) => ({
+    type: 'queue-operation', operation: 'enqueue', timestamp: T(at),
+    content: `<cross-session-message from-name="${from}">do the thing</cross-session-message>`,
+  });
+  const file = write(dir, 'cost.jsonl', [
+    peer(0, 'p/lead'),
+    { type: 'queue-operation', operation: 'dequeue', timestamp: T(1) },
+    { type: 'queue-operation', operation: 'enqueue', timestamp: T(1), content: 'a person typed this while it worked' },
+    assistant('r1', 2, [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }], { i: 10, cr: 90_000, cc: 10_000 }),
+    // The same request written twice (one record per content block): counted once.
+    assistant('r1', 2, [{ type: 'text', text: 'listing' }], { i: 10, cr: 90_000, cc: 10_000 }),
+    toolResult('t1', 3),
+    assistant('r2', 4, [{ type: 'tool_use', id: 't2', name: 'SendMessage', input: { to: 'p/lead', message: 'done' } }], { i: 10, cr: 290_000, cc: 9_990 }),
+    toolResult('t2', 5),
+    peer(6, 'p/web'),
+  ]);
+  const t = sessionOverview(file, 'cost').totals;
+  assert.equal(2, t.requests);
+  assert.equal(200_005, t.avgContext, '(100,010 + 300,000) / 2');
+  assert.equal(2, t.messagesIn, 'two peer messages; a queued prompt of the owner\'s is not one');
+  assert.equal(1, t.messagesOut);
+});

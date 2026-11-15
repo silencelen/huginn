@@ -1,5 +1,15 @@
 # Huginn changelog
 
+## Unreleased
+
+### Added
+- A project's dashboard says what each member costs to run: the context each request carried on
+  average, how many requests it made and its share of the project's spend, and how many messages
+  it received and sent, the reports it filed and its compactions. When the project has a weekly
+  budget, the dashboard shows what was spent this week against it. Both are estimates. The budget
+  is soft and never stops anything. Needs huginn-appd 3.24.0 or newer; an older daemon shows the
+  dashboard as before.
+
 ## 3.20.0 — 2026-11-11
 
 ### Added

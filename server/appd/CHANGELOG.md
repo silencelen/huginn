@@ -9,6 +9,20 @@ appeared only as a side-note on the app releases it happened to ship with. Three
 undocumented, and the notes-cutting matcher could fuse two sections when an app and an appd
 version number collided. Entries below are reconstructed from the shipping commits.
 
+## 3.24.0 — unreleased
+
+### Added
+- The project dashboard says what each member costs: `requests` (distinct API calls), `avgContext`
+  (tokens of context per request, which is what spend follows), `messagesIn` and `messagesOut`
+  (messages received from and sent to other sessions), `reportsFiled`, `compactions` and
+  `spendShare` (its share of the project's estimated spend). The totals carry the same figures,
+  with the average weighted by requests.
+- A project can carry a soft weekly budget, `budget: {weeklyUsd}` on create and `PATCH`, in the
+  dashboard's estimated cost. The daemon measures the week from a ledger kept beside the project,
+  so a member that leaves still counts. The first time in a week the project crosses 50%, 80% and
+  100%, the lead gets a line in its next digest and the owner a `project_budget` push. Nothing is
+  ever stopped. The dashboard carries `budget: {weeklyUsd, weekStart, spentUsd, percent}`.
+
 ## 3.23.0 — unreleased
 
 ### Added

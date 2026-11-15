@@ -121,6 +121,14 @@ fun ProjectDashboardView(
                 modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp),
             )
         }
+        dashboardBudget(dashboard)?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 2.dp),
+            )
+        }
         // Only when the daemon actually walked the transcripts. A header of zeroes
         // is worse than no header: it reads as a cluster that has done nothing.
         dashboard.totals?.let {
@@ -587,6 +595,21 @@ fun dashboardPace(dashboard: ProjectDashboard): String? {
     return bits.joinToString(" · ")
 }
 
+/**
+ * The project's soft budget in words, or null when it has none.
+ *
+ * ⚠ AN ESTIMATE, AND SOFT. The figure is the dashboard's own estimated cost, and
+ * crossing it stops nothing; the line says both, so nobody reads it as a bill or
+ * a limit.
+ */
+fun dashboardBudget(dashboard: ProjectDashboard): String? {
+    val b = dashboard.budget ?: return null
+    if (b.weeklyUsd <= 0.0) return null
+    val spent = b.spentUsd ?: return "budget ${OverviewFormat.usd(b.weeklyUsd)} a week · not measured yet"
+    val pct = b.percent?.let { " ($it%)" } ?: ""
+    return "budget ${OverviewFormat.usd(spent)} of ${OverviewFormat.usd(b.weeklyUsd)} this week$pct · estimated, soft"
+}
+
 /** The line under a member's role: what it is doing and when it last did anything. */
 fun memberSubtitle(member: ProjectDashboardMember, nowMs: Long): String {
     val bits = mutableListOf(ProjectRules.memberWords(member))
@@ -630,6 +653,22 @@ fun memberDetailLines(member: ProjectDashboardMember): List<String> {
         work += PlanFormat.compactTokens(member.tokens.input + member.tokens.output)
         member.estCostUsd?.let { work += OverviewFormat.usd(it) }
         lines += "work  " + work.joinToString(" · ")
+    }
+    // What it costs to run (appd 3.24): spend follows the context each request
+    // re-reads, and cross-session messages start the requests.
+    if (member.requests > 0) {
+        val cost = mutableListOf(
+            "${PlanFormat.compactTokens(member.avgContext)} per request",
+            if (member.requests == 1) "1 request" else "${member.requests} requests",
+        )
+        member.spendShare?.let { cost += "${(it * 100).toInt()}% of the spend" }
+        lines += "cost  " + cost.joinToString(" · ")
+    }
+    if (member.messagesIn + member.messagesOut + member.reportsFiled + member.compactions > 0) {
+        val traffic = mutableListOf("${member.messagesIn} in", "${member.messagesOut} out")
+        if (member.reportsFiled > 0) traffic += if (member.reportsFiled == 1) "1 report" else "${member.reportsFiled} reports"
+        if (member.compactions > 0) traffic += if (member.compactions == 1) "1 compaction" else "${member.compactions} compactions"
+        lines += "messages  " + traffic.joinToString(" · ")
     }
     return lines
 }

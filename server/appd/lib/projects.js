@@ -1249,8 +1249,12 @@ function aggregateDashboard(rows) {
     filesTouched: 0,
     models: [],
     efforts: [],
+    requests: 0,
+    avgContext: 0,
+    messagesIn: 0,
+    messagesOut: 0,
   };
-  let usd = 0; let unpriced = 0; let priced = false;
+  let usd = 0; let unpriced = 0; let priced = false; let contextSum = 0;
   const models = new Set(); const efforts = new Set();
   let tokensPerMin10 = 0; let tokensPerMin60 = 0; let activeRecently = false;
 
@@ -1268,6 +1272,10 @@ function aggregateDashboard(rows) {
     totals.compactions += t.compactions || 0;
     totals.droppedTokens += t.droppedTokens || 0;
     totals.filesTouched += t.filesTouched || 0;
+    totals.requests += t.requests || 0;
+    contextSum += (t.avgContext || 0) * (t.requests || 0);
+    totals.messagesIn += t.messagesIn || 0;
+    totals.messagesOut += t.messagesOut || 0;
     for (const m of t.models || []) models.add(m);
     for (const e of t.efforts || []) efforts.add(e);
     if (t.estCost) { priced = true; usd += t.estCost.usd || 0; unpriced += t.estCost.unpricedTokens || 0; }
@@ -1285,6 +1293,8 @@ function aggregateDashboard(rows) {
   totals.models = [...models];
   totals.efforts = [...efforts];
   totals.estCost = priced ? { usd, unpricedTokens: unpriced } : null;
+  // Weighted by requests: the project's average is per request, not per member.
+  totals.avgContext = totals.requests ? Math.round(contextSum / totals.requests) : 0;
   if (totals.startedAt && totals.lastActivityTs) {
     totals.wallMs = Math.max(0, (totals.lastActivityTs - totals.startedAt) * 1000);
   }
@@ -1435,8 +1445,20 @@ function overviewAt(o, nowSec) {
 }
 
 /** One member's row as a client reads it: the join, plus its share of the spend. */
-function dashboardMemberRow(row) {
+/**
+ * One member on the dashboard. `ctx.totalUsd` is the project's estimated cost
+ * (for `spendShare`) and `ctx.reportsByRole` how many reports each role filed.
+ *
+ * The cost figures (2026-11-15): spend follows context, because every request
+ * re-reads it, so `avgContext` (tokens per request) and `requests` say more about
+ * a member's cost than its turns do; `messagesIn` and `messagesOut` are the
+ * cross-session traffic that starts those requests; `compactions` shows the
+ * ceiling working.
+ */
+function dashboardMemberRow(row, ctx = {}) {
   const t = row.overview && row.overview.totals ? row.overview.totals : null;
+  const usd = t && t.estCost ? t.estCost.usd : null;
+  const total = typeof ctx.totalUsd === 'number' ? ctx.totalUsd : null;
   return {
     role: row.role,
     name: row.name,
@@ -1461,6 +1483,14 @@ function dashboardMemberRow(row) {
     estCostUsd: t && t.estCost ? t.estCost.usd : null,
     agentCount: t ? t.agentCount : 0,
     lastActivityTs: t ? t.lastActivityTs ?? null : null,
+    requests: t ? t.requests || 0 : 0,
+    avgContext: t ? t.avgContext || 0 : 0,
+    messagesIn: t ? t.messagesIn || 0 : 0,
+    messagesOut: t ? t.messagesOut || 0 : 0,
+    compactions: t ? t.compactions || 0 : 0,
+    reportsFiled: (ctx.reportsByRole && ctx.reportsByRole[row.role]) || 0,
+    // This member's share of what the project spent, 0..1; null when unpriced.
+    spendShare: usd !== null && total ? Math.round((usd / total) * 1000) / 1000 : null,
     endedAt: row.endedAt ?? null,
     spawnedAt: row.spawnedAt ?? null,
   };
@@ -1529,6 +1559,7 @@ function projectRow(p, joined = null) {
     status: p.status,
     cwd: p.cwd,
     contextWindow: typeof p.contextWindow === 'number' ? p.contextWindow : null,
+    budget: p.budget && typeof p.budget.weeklyUsd === 'number' ? { weeklyUsd: p.budget.weeklyUsd } : null,
     memberCount: (p.members || []).length,
     alive: members.filter((r) => r.alive).length,
     busy: members.filter((r) => r.status === 'busy').length,

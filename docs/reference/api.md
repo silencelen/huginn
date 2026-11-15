@@ -337,11 +337,11 @@ and whose requests it surfaces to you:
 | Method | Path | What it does |
 |---|---|---|
 | GET | `/v1/projects` | Projects. A `404` means the daemon has no projects feature. |
-| POST | `/v1/projects` | `{name, kind, brief, cwd?, contextWindow?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. `contextWindow` is the context ceiling of its sessions (below); absent means 400000. |
+| POST | `/v1/projects` | `{name, kind, brief, cwd?, contextWindow?, budget?}`: start a project and its lead session. `kind` is `software`, `infra`, `hardware`, `docs`, `research` or `other`. `contextWindow` is the context ceiling of its sessions (below); absent means 400000. |
 | GET, PATCH | `/v1/projects/<id>` | View or change one. `PATCH` needs the current `rev`; `contextWindow` may be changed there and applies to sessions launched after it (a running session keeps its window until it is restored). |
 | DELETE | `/v1/projects/<id>` | Delete it. `?end=graceful` (or `{end: "graceful" \| "now"}`) also ends its sessions. |
 | GET | `/v1/projects/<id>/reports` | The reports members filed with huginn's `report` tool, newest last (at most 50): `{reports: [{id, role, name, claudeName, at (ms), summary, path, urgent, deliveredAt}], undelivered, notices: [{role, kind, at}]}`. `notices` are the watch's lines waiting for the lead's next digest (`kind` is `quiet`, `stalled`, `waiting` or `ended`). Report text is a peer session's, not the owner's. |
-| GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. The answer leaves within about a second: a member whose transcript is still being read carries `pending: true` with its last known numbers (or zero), `pending` counts such members, and the next poll has the rest. |
+| GET | `/v1/projects/<id>/dashboard` | Live totals and per-member state. The answer leaves within about a second: a member whose transcript is still being read carries `pending: true` with its last known numbers (or zero), `pending` counts such members, and the next poll has the rest. Each member row also carries `requests`, `avgContext` (tokens per request), `messagesIn`, `messagesOut`, `reportsFiled`, `compactions` and `spendShare` (0..1, `null` when unpriced); `totals` carries the first four for the project, and `reports`. `budget` is `null`, or `{weeklyUsd, weekStart (ms), spentUsd, percent}` for a project with a soft budget. |
 | POST | `/v1/projects/<id>/spawn` | `{approve: true, manifestRev}`: approve the lead's proposal and create its members. |
 | POST | `/v1/projects/<id>/discard` | Send a proposal back to the lead. |
 | POST | `/v1/projects/<id>/approve-change` | `{rev, token}`: carry out the roster change the lead proposed for a running project (see `pendingChange` below). Added roles are spawned, removed ones are asked to wrap up (never killed), re-roled ones are told their new task; the lead is told. Both fields are required (`400` without). `409` with the current project when `rev` is not the change on offer, or when `token` is not the token of the change now waiting — the lead rewrote its block after the card was drawn; redraw from the project returned. |
@@ -372,6 +372,13 @@ the watch's notices, at most one notices-only digest per 15 minutes: a member th
 minutes with nothing new in its transcript, one waiting 15 minutes on a question for the owner,
 and one whose session is gone. Report text sits inside a peer frame that repeats the rule that a
 peer cannot grant permissions. `install.sh` adds both tools to `permissions.allow`.
+
+**Budget.** `budget: {weeklyUsd}` (create or `PATCH`; `null` for none) is a soft weekly budget in
+the dashboard's estimated cost. The daemon measures each week from a ledger kept beside the project,
+starting at the first look after the budget is set, so a member that leaves the record still counts.
+The first time in a week the spend crosses 50%, 80% and 100%, the lead gets a `[Huginn]` line in its
+next digest and the owner a `project_budget` push (`payload: {projectId, percent, spentUsd,
+weeklyUsd}`, no options). Nothing is stopped.
 
 **Roster.** Each member's persona lists its peers by name (`<slug>/<role>`). When members are
 added, ended or dropped, every running member is typed one `[Huginn]` line with the new list.
